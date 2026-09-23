@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The company's own retrieval_limit, honoured. It was validated (1..20),
@@ -58,17 +60,15 @@ func TestQueryEpisodesFallsBackToTheShippedLimit(t *testing.T) {
 	}
 }
 
-// countingEpisodes records the limit it was asked for.
-type countingEpisodes struct{ limit int }
-
-func (c *countingEpisodes) Recent(_ context.Context, _ string, limit int) ([]learning.Episode, error) {
-	c.limit = limit
-	return nil, nil
+// countingEpisodes records the listing it was asked for.
+type countingEpisodes struct {
+	limit int
+	query learning.EpisodeQuery
 }
 
-func (c *countingEpisodes) ForConversation(_ context.Context, _, _ string, limit int) ([]learning.Episode, error) {
-	c.limit = limit
-	return nil, nil
+func (c *countingEpisodes) List(_ context.Context, q learning.EpisodeQuery) (learning.EpisodePage, error) {
+	c.limit, c.query = q.Limit, q
+	return learning.EpisodePage{}, nil
 }
 
 // The body cap. It was documented as a runaway guard — "Ceiling on a refined
@@ -360,32 +360,172 @@ func TestQueryEpisodesSaysWhenItCannotSearchByMeaning(t *testing.T) {
 	}
 }
 
-// The outcome filter, and the over-fetch that makes it usable: the search
-// ranks by similarity and the filter is applied to what came back, so asking
-// for two and keeping only the failures would otherwise return none.
-func TestQueryEpisodesFiltersByOutcome(t *testing.T) {
+// THE FILTERS REACH THE STORE, on both paths, rather than being applied to
+// what came back. Applied afterwards to a similarity search, "the failures like
+// this" is the failures among the nearest few turns — and the tool used to
+// widen the search fourfold to make that usable, which still told a seat whose
+// failures ranked below its successes that nothing like this had ever failed.
+func TestTheFiltersNarrowTheSearchRatherThanItsAnswer(t *testing.T) {
 	t.Parallel()
-	recall := &fakeRecall{hits: []learning.Hit{
-		{Episode: learning.Episode{TaskSummary: "one", ReviewOutcome: "done"}},
-		{Episode: learning.Episode{TaskSummary: "two", ReviewOutcome: "failed"}},
-		{Episode: learning.Episode{TaskSummary: "three", ReviewOutcome: "done"}},
-	}}
+	recall := &fakeRecall{}
+	episodes := &countingEpisodes{}
+	tool := registered(t, builtin.Deps{Episodes: episodes, Recall: recall},
+		builtin.QueryEpisodesTool)
+	turn := turnFor(t, "agent-ceo")
+
+	callFor(t, tool, turn, map[string]any{
+		"query": "anything", "outcome_filter": " FAILED ", "conversation": "jira:ENG-1",
+		"limit": 2, "offset": 4,
+	})
+	want := learning.EpisodeFilter{Conversation: "jira:ENG-1", Outcome: "failed"}
+	if recall.filter != want {
+		t.Errorf("the search was filtered on %+v, want %+v", recall.filter, want)
+	}
+	if recall.offset != 4 {
+		t.Errorf("the search started %d in, want the model's offset of 4", recall.offset)
+	}
+	// ONE PAST THE PAGE, as evidence the ranking goes on — never a
+	// multiple of it, which is what a filter over the answer needed.
+	if recall.limit != 3 {
+		t.Errorf("searched for %d hits on a limit of 2, want 3: the page and one "+
+			"row of evidence", recall.limit)
+	}
+
+	callFor(t, tool, turn, map[string]any{
+		"outcome_filter": "done", "conversation": "jira:ENG-1", "limit": 2, "offset": 4,
+	})
+	got := episodes.query
+	if got.Handle != "agent-ceo" || got.Filter != (learning.EpisodeFilter{
+		Conversation: "jira:ENG-1", Outcome: "done"}) || got.Offset != 4 || got.Limit != 2 {
+		t.Errorf("the listing asked for %+v", got)
+	}
+}
+
+// A SEARCH BY MEANING SAYS WHEN ITS RANKING GOES ON, from a hit it asked for
+// past the page rather than from a page that happens to be full.
+func TestASearchByMeaningSaysWhenMoreMatch(t *testing.T) {
+	t.Parallel()
+	hit := func(summary string) learning.Hit {
+		return learning.Hit{Episode: learning.Episode{TaskSummary: summary, ReviewOutcome: "done"}}
+	}
+	recall := &fakeRecall{hits: []learning.Hit{hit("first"), hit("second"), hit("third")}}
 	tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{}, Recall: recall},
 		builtin.QueryEpisodesTool)
+	turn := turnFor(t, "agent-ceo")
 
-	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{
-		"query": "anything", "outcome_filter": "FAILED", "limit": 2,
-	})
-	if strings.Contains(res.Output, "one") || strings.Contains(res.Output, "three") {
-		t.Errorf("output = %q, want only the failed turn", res.Output)
+	page := callFor(t, tool, turn, map[string]any{"query": "anything", "limit": 2})
+	if strings.Contains(page.Output, "third") || !strings.Contains(page.Output, "offset 2") {
+		t.Errorf("a page of two over three hits = %q, want two and the offset of the rest",
+			page.Output)
 	}
-	if !strings.Contains(res.Output, "two") {
-		t.Errorf("output = %q, want the failed turn", res.Output)
+	whole := callFor(t, tool, turn, map[string]any{"query": "anything", "limit": 3})
+	if strings.Contains(whole.Output, "offset") {
+		t.Errorf("a page holding every hit claimed there were more: %q", whole.Output)
 	}
-	if recall.limit <= 2 {
-		t.Errorf("searched for %d hits with a filter on a limit of 2 — a filter "+
-			"applied to what came back needs a wider search", recall.limit)
+	rest := callFor(t, tool, turn, map[string]any{"query": "anything", "limit": 2, "offset": 2})
+	if !strings.Contains(rest.Output, "third") || strings.Contains(rest.Output, "offset 4") {
+		t.Errorf("the page after = %q, want the last hit and nothing more", rest.Output)
 	}
+}
+
+// AN OUTCOME NO TURN IS REMEMBERED WITH IS REFUSED, naming the ones that
+// exist. Answered, it reads as "none of your turns ended that way" — true,
+// and a model that guessed `success` learns nothing from it.
+func TestAnOutcomeNoTurnCanHaveIsRefused(t *testing.T) {
+	t.Parallel()
+	episodes := &countingEpisodes{}
+	tool := registered(t, builtin.Deps{Episodes: episodes}, builtin.QueryEpisodesTool)
+
+	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"outcome_filter": "success"})
+	if !res.Failed {
+		t.Fatalf("an outcome no turn has was answered: %q", res.Output)
+	}
+	for _, outcome := range learning.SettledOutcomes() {
+		if !strings.Contains(res.Output, outcome) {
+			t.Errorf("the refusal does not name %q: %q", outcome, res.Output)
+		}
+	}
+	if episodes.limit != 0 {
+		t.Error("the refused call still read the store")
+	}
+}
+
+// A PAGE THAT IS NOT EVERY MATCHING TURN SAYS SO, and the offset it names reads
+// the rest. A silent page reads as the seat's whole history.
+func TestAPageOfTurnsSaysWhereTheRestIs(t *testing.T) {
+	t.Parallel()
+	store := &newestEpisodes{}
+	for i := range 5 {
+		store.episodes = append(store.episodes, learning.Episode{
+			Handle: "agent-ceo", TaskSummary: fmt.Sprintf("turn %d", 5-i),
+			ReviewOutcome: "done",
+		})
+	}
+	tool := registered(t, builtin.Deps{Episodes: store}, builtin.QueryEpisodesTool)
+	turn := turnFor(t, "agent-ceo")
+
+	first := callFor(t, tool, turn, map[string]any{"limit": 2})
+	if !strings.Contains(first.Output, "offset 2") {
+		t.Fatalf("a page of two over five turns does not name the offset of the "+
+			"rest:\n%s", first.Output)
+	}
+	var seen []string
+	for offset := 0; ; offset += 2 {
+		res := callFor(t, tool, turn, map[string]any{"limit": 2, "offset": offset})
+		for i := 5; i >= 1; i-- {
+			if strings.Contains(res.Output, fmt.Sprintf("turn %d\n", i)) {
+				seen = append(seen, strconv.Itoa(i))
+			}
+		}
+		if !strings.Contains(res.Output, fmt.Sprintf("offset %d", offset+2)) {
+			if offset+2 < 5 {
+				t.Fatalf("the page at offset %d stopped naming the rest:\n%s",
+					offset, res.Output)
+			}
+			break
+		}
+	}
+	if strings.Join(seen, ",") != "5,4,3,2,1" {
+		t.Errorf("paging read turns %v, want every one once, newest first", seen)
+	}
+
+	// And the page that IS the whole answer says nothing of more.
+	whole := callFor(t, tool, turn, map[string]any{"limit": 5})
+	if strings.Contains(whole.Output, "offset") {
+		t.Errorf("a page holding every turn claimed there were more:\n%s", whole.Output)
+	}
+}
+
+// A FOLDED ROW IS PRINTED AS WHAT IT IS. It has no task summary, so printed as a
+// turn it was a timestamp that said nothing — the one record left of the turns
+// it replaced, reading as none.
+func TestACompactedRowShowsItsPattern(t *testing.T) {
+	t.Parallel()
+	store := &newestEpisodes{episodes: []learning.Episode{{
+		Handle: "agent-ceo", Kind: learning.KindCompacted, Count: 14,
+		CommonTaskPattern: "triaged inbound bug reports", CommonOutcome: "mostly routed",
+		ReviewOutcome: "done",
+	}}}
+	tool := registered(t, builtin.Deps{Episodes: store}, builtin.QueryEpisodesTool)
+	res := callFor(t, tool, turnFor(t, "agent-ceo"), nil)
+	for _, want := range []string{"14 earlier turns", "triaged inbound bug reports", "mostly routed"} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("a compacted row renders without %q:\n%s", want, res.Output)
+		}
+	}
+}
+
+// newestEpisodes is a store whose episodes are already newest first, and
+// which pages them as the store does.
+type newestEpisodes struct{ episodes []learning.Episode }
+
+func (n *newestEpisodes) List(_ context.Context, q learning.EpisodeQuery) (learning.EpisodePage, error) {
+	rest := n.episodes[min(q.Offset, len(n.episodes)):]
+	page := learning.EpisodePage{Episodes: rest}
+	if len(rest) > q.Limit {
+		page.Episodes, page.Truncated = rest[:q.Limit], true
+	}
+	return page, nil
 }
 
 // refresh_memory's own escape hatch. It declared `limit` and nothing else, so
@@ -735,22 +875,28 @@ func notesIn(out string) string {
 
 // fakeRecall stands in for the turn-start prefetch's searches.
 type fakeRecall struct {
-	hits  []learning.Hit
-	notes []learning.DiaryEntry
-	err   error
-	text  string
-	hint  string
-	limit int
+	hits   []learning.Hit
+	notes  []learning.DiaryEntry
+	err    error
+	text   string
+	hint   string
+	filter learning.EpisodeFilter
+	offset int
+	limit  int
 	// memoryCalls counts what the ledger's cache is there to avoid.
 	memoryCalls int
 }
 
-func (f *fakeRecall) RecallEpisodes(_ context.Context, _ *org.Role, text string, limit int) ([]learning.Hit, error) {
-	f.text, f.limit = text, limit
+func (f *fakeRecall) RecallEpisodes(_ context.Context, _ *org.Role, text string,
+	filter learning.EpisodeFilter, offset, limit int,
+) ([]learning.Hit, error) {
+	f.text, f.filter, f.offset, f.limit = text, filter, offset, limit
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.hits, nil
+	// Paged as the store pages a ranking: offset in, at most limit.
+	rest := f.hits[min(offset, len(f.hits)):]
+	return rest[:min(limit, len(rest))], nil
 }
 
 func (f *fakeRecall) RecallMemories(_ context.Context, _ *org.Role, _, hint string) ([]learning.DiaryEntry, error) {
@@ -780,4 +926,106 @@ func (n *newestFirst) Write(context.Context, learning.DiaryEntry) error { return
 
 func (n *newestFirst) Recent(_ context.Context, _ string, _ time.Time, limit int) ([]learning.DiaryEntry, error) {
 	return n.notes[:min(limit, len(n.notes))], nil
+}
+
+// realDiary is the store's own diary over a fresh file, so a kind or a
+// deadline the store refuses is refused here too.
+func realDiary(t *testing.T) *learning.Diary {
+	t.Helper()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "diary.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return learning.NewDiary(db)
+}
+
+// EVERY KIND THE TOOL OFFERS IS ONE THE STORE KEEPS. The tool used to offer
+// `diary_short` in its schema, describe it as `short`, and give no note a
+// deadline — so the store refused `diary_short` for having none, and `short`
+// became a durable note nobody asked for. Held against the real diary, because
+// a fake that accepts anything is how that shipped.
+func TestEveryKindTheToolOffersIsOneTheStoreKeeps(t *testing.T) {
+	t.Parallel()
+	diary := realDiary(t)
+	tool := registered(t, builtin.Deps{Diary: diary}, builtin.ReflectAndPersistTool)
+	turn := turnFor(t, "agent-ceo")
+	agentID, _ := turn.Org.AgentIDFor(turn.Seat)
+
+	kinds := tool.Parameters()["properties"].(map[string]any)["kind"].(map[string]any)["enum"].([]any)
+	for _, kind := range kinds {
+		res := callFor(t, tool, turn, map[string]any{
+			"content": fmt.Sprintf("a %v fact", kind), "kind": kind,
+		})
+		if res.Failed {
+			t.Errorf("kind %v, which the tool offers, was refused: %s", kind, res.Output)
+		}
+	}
+	res := callFor(t, tool, turn, map[string]any{
+		"content": "the freeze runs this week", "kind": string(learning.DiaryShort), "ttl_days": 3,
+	})
+	if res.Failed {
+		t.Fatalf("a short note with its own duration was refused: %s", res.Output)
+	}
+	// A DURATION ALONE MAKES A SHORT NOTE, which is how the company's own
+	// guidance tells a seat to keep one: "pass ttl_days for facts that age
+	// out naturally".
+	res = callFor(t, tool, turn, map[string]any{"content": "the review waits on MR 7", "ttl_days": 5})
+	if res.Failed {
+		t.Fatalf("a note with a duration and no kind was refused: %s", res.Output)
+	}
+
+	now := time.Now().UTC()
+	kept, err := diary.Recent(t.Context(), agentID.String(), now, 10)
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	deadlines := map[string]time.Time{}
+	for _, e := range kept {
+		deadlines[e.Content] = e.TTLUntil
+		if e.Content == "a diary_short fact" && e.Kind != learning.DiaryShort {
+			t.Errorf("a short note was kept as %s", e.Kind)
+		}
+	}
+	within := func(got time.Time, days int) bool {
+		want := now.Add(time.Duration(days) * 24 * time.Hour)
+		return got.After(want.Add(-time.Minute)) && got.Before(want.Add(time.Minute))
+	}
+	if got := deadlines["a diary_short fact"]; !within(got, learning.ShortTTLDefaultDays) {
+		t.Errorf("a short note with no ttl_days expires %v, want the tier's %d-day default",
+			got, learning.ShortTTLDefaultDays)
+	}
+	if got := deadlines["the freeze runs this week"]; !within(got, 3) {
+		t.Errorf("a short note asked for 3 days expires %v", got)
+	}
+	if got := deadlines["the review waits on MR 7"]; !within(got, 5) {
+		t.Errorf("a note given 5 days and no kind expires %v", got)
+	}
+	if got := deadlines["a diary_long fact"]; !got.IsZero() {
+		t.Errorf("a durable note carries a deadline, %v", got)
+	}
+}
+
+// A KIND OR A DURATION THE TOOL CANNOT HONOUR IS REFUSED, naming what it
+// takes, rather than kept as something the model did not ask for.
+func TestANoteTheToolCannotKeepAsAskedIsRefused(t *testing.T) {
+	t.Parallel()
+	d := &diaryStore{}
+	tool := registered(t, builtin.Deps{Diary: d}, builtin.ReflectAndPersistTool)
+	turn := turnFor(t, "agent-ceo")
+	for name, args := range map[string]map[string]any{
+		"an unknown kind":          {"kind": "short"},
+		"a deadline on a long one": {"kind": string(learning.DiaryLong), "ttl_days": 5},
+		"too long to be short":     {"kind": string(learning.DiaryShort), "ttl_days": learning.ShortTTLMaxDays + 1},
+		"no time at all":           {"kind": string(learning.DiaryShort), "ttl_days": 0},
+	} {
+		args["content"] = "a fact"
+		res := callFor(t, tool, turn, args)
+		if !res.Failed {
+			t.Errorf("%s was kept: %s", name, res.Output)
+		}
+	}
+	if len(d.wrote) != 0 {
+		t.Errorf("refused notes were written: %+v", d.wrote)
+	}
 }

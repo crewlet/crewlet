@@ -13,9 +13,9 @@ import (
 
 // Subject identifies who a profile is about.
 //
-// The three fields are ” when absent rather than NULL — the opposite of the
-// nullable keys elsewhere in this package, and for a reason worth keeping:
-// they are PRIMARY KEY columns whose emptiness is meaningful. The composite is
+// The three fields are the empty string when absent rather than NULL — the
+// opposite of the nullable keys elsewhere in this package, and for a reason
+// worth keeping: they are PRIMARY KEY columns whose emptiness is meaningful. The composite is
 // what lets a resolved agent (Handle set) and an unmapped external human
 // (ExternalID plus Platform) coexist under one observer without colliding.
 // NULL here would make every such row distinct from every other, which is the

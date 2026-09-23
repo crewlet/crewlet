@@ -485,8 +485,9 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// answer — when the truth is "nobody looked".
 		"traffic_known": seen.known,
 		// The oldest delivery counted, so a count means something. The
-		// page is capped rather than time-bounded, so there is no fixed
-		// window to name; null when nothing was counted.
+		// counts are every delivery the event log still holds, which is
+		// its history window back from now; this is when the first of
+		// them arrived inside it. Null when nothing was counted.
 		"traffic_since": nil,
 	}
 	if !seen.since.IsZero() {
@@ -576,19 +577,30 @@ type traffic struct {
 	skipped   map[string]int
 	coalesced map[string]int
 
-	// since is the timestamp of the OLDEST delivery counted, which is what
-	// makes the counts mean something. The page is capped rather than time
-	// bounded, so "42 inbound" alone could span an hour or a year; "42
-	// since Tuesday" is a measurement. Zero when nothing was counted.
+	// since is the timestamp of the OLDEST delivery counted. The counts
+	// cover everything the event log still holds — [store.EventHistory]
+	// back from now, the floor every read of it applies — so "42 inbound"
+	// is "42 since this instant", and on a company whose deliveries began
+	// inside that window it says when they did. Zero when nothing was
+	// counted.
 	since time.Time
 }
 
+// deliveryTraffic counts every delivery the event log holds, per surface.
+//
+// A TALLY, NOT A PAGE. Counted from the rows of one listing page, the number
+// stops at the page size however many deliveries there were, and the outcome
+// counts beside it — from a second page, of a different category — cover
+// whatever span that page reaches, so the numbers on one row can describe
+// different time with nothing saying so. Each is one GROUP BY over the same
+// window, the log's own history floor to now, so nothing is cut and the three
+// numbers on a row describe the same span.
 func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 	if s.Events == nil {
 		return traffic{}
 	}
-	rows, err := s.Events.List(ctx, store.ListQuery{
-		Category: events.WebhookCategory, Limit: MaxEventPage,
+	groups, err := s.Events.Tally(ctx, store.TallyQuery{
+		ListQuery: store.ListQuery{Category: events.WebhookCategory},
 	})
 	if err != nil {
 		log.WarnContext(ctx, "integration_counts_unreadable", "error", err)
@@ -598,13 +610,13 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 		known: true, count: map[string]int{}, last: map[string]time.Time{},
 		skipped: map[string]int{}, coalesced: map[string]int{},
 	}
-	for _, row := range rows {
-		out.count[row.Source]++
-		if row.Time.After(out.last[row.Source]) {
-			out.last[row.Source] = row.Time
+	for _, g := range groups {
+		out.count[g.Source] += g.Count
+		if g.Newest.After(out.last[g.Source]) {
+			out.last[g.Source] = g.Newest
 		}
-		if out.since.IsZero() || row.Time.Before(out.since) {
-			out.since = row.Time
+		if out.since.IsZero() || g.Oldest.Before(out.since) {
+			out.since = g.Oldest
 		}
 	}
 	s.countOutcomes(ctx, &out)
@@ -613,46 +625,46 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 
 // countOutcomes adds the two per-integration outcome counts.
 //
-// A SECOND QUERY, on the notification category, because the outcomes are
+// A SECOND TALLY, on the notification category, because the outcomes are
 // engine events and the deliveries are edge rows: they live under different
-// categories and no single listing holds both. Its failure leaves the
-// outcome counts absent rather than zero — see [traffic] — because a zero
-// that means "unreadable" is the number an operator would act on.
+// categories and no single read groups both. It is asked for NO WINDOW OF ITS
+// OWN, so it covers exactly what the delivery tally covers — the log's
+// history floor to now. Its failure leaves the outcome counts absent rather
+// than zero — see [traffic] — because a zero that means "unreadable" is the
+// number an operator would act on.
 func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
-	rows, err := s.Events.List(ctx, store.ListQuery{
-		Category: "notification", Limit: MaxEventPage,
+	groups, err := s.Events.Tally(ctx, store.TallyQuery{
+		ListQuery: store.ListQuery{Category: "notification"},
+		Tag:       notificationSourceTag,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "integration_outcomes_unreadable", "error", err)
 		out.skipped, out.coalesced = nil, nil
 		return
 	}
-	for _, row := range rows {
+	for _, g := range groups {
 		// THE INTEGRATION, not the event's Source: the source of an
 		// engine-published event names the engine, and what the row has
 		// to line up with is the inbound count for one third-party app.
-		source := integrationOf(row)
+		// A row written before the tag existed carries none, and is left
+		// out rather than guessed at.
+		source := strings.TrimSpace(g.Tag)
 		if source == "" {
 			continue
 		}
-		switch row.Type {
+		switch g.Type {
 		case "notification_skipped":
-			out.skipped[source]++
+			out.skipped[source] += g.Count
 		case "notifications_coalesced":
-			out.coalesced[source]++
+			out.coalesced[source] += g.Count
 		}
 	}
 }
 
-// integrationOf reads the third-party app an outcome event concerns.
-//
-// FROM THE TAG, not the payload: a listing deliberately never selects the
-// payload column, so the tag is all a historical row carries — see
-// [store.RecordFor]. A row written before that tag existed carries none and
-// is skipped rather than guessed at.
-func integrationOf(row store.EventRecord) string {
-	return strings.TrimSpace(row.Tags["notification_source"])
-}
+// notificationSourceTag is the tag an outcome event names its integration by:
+// the payload's `notification_source`, which [store.RecordFor] copies into the
+// event's tags — the column [store.TallyQuery.Tag] groups on.
+const notificationSourceTag = "notification_source"
 
 // seatsFor lists the handles that carry this surface in their own config.
 //

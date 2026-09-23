@@ -40,9 +40,14 @@ func seedRuns(t *testing.T, runs ...sandbox.PendingRun) *sandbox.CoordStore {
 
 func askRuns(t *testing.T, store queries.PendingRuns) []map[string]any {
 	t.Helper()
+	return askRunsWith(t, store, nil)
+}
+
+func askRunsWith(t *testing.T, store queries.PendingRuns, params map[string]any) []map[string]any {
+	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Sandbox: store})
-	got, err := r.Answer(t.Context(), "sandbox_runs", nil, "")
+	got, err := r.Answer(t.Context(), "sandbox_runs", params, "")
 	if err != nil {
 		t.Fatalf("sandbox_runs: %v", err)
 	}
@@ -212,6 +217,10 @@ func (unreachableRuns) ListActive(context.Context) ([]sandbox.PendingRun, error)
 	return nil, fmt.Errorf("sandbox: list runs: %w", coord.ErrUnavailable)
 }
 
+func (unreachableRuns) BridgeCallPage(context.Context, sandbox.PendingRun, uint64, int) (sandbox.BridgeCallPage, error) {
+	return sandbox.BridgeCallPage{}, fmt.Errorf("sandbox: read the bridged calls: %w", coord.ErrUnavailable)
+}
+
 // The run board reads the fleet's coordination store, so a blip there is "ask
 // again in a moment" like any other, not a failure. It reached the client as
 // `query_failed` and a 500, where the reference promised a 503.
@@ -267,11 +276,12 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 		Reply:     "chat:C1",
 		SessionID: "sess-9", CommandID: "cmd-3",
 		DelegationChain: []string{"agent-pm", "agent-swe"},
-		BridgeCalls: []sandbox.BridgeCall{
-			{Name: "get_work_item", Args: `{"id":"ENG-1"}`, At: called},
-		},
-		BridgeCallsElided: 4,
 	})
+	if ok, err := store.AppendBridgeCall(t.Context(), "t-1", sandbox.BridgeCall{
+		Name: "get_work_item", Args: `{"id":"ENG-1"}`, At: called,
+	}); err != nil || !ok {
+		t.Fatalf("AppendBridgeCall = %v, %v", ok, err)
+	}
 	row := askRuns(t, store)[0]
 	switch {
 	case row["reply"] != "chat:C1":
@@ -280,9 +290,13 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 		t.Errorf("session_id = %v", row["session_id"])
 	case row["command_id"] != "cmd-3":
 		t.Errorf("command_id = %v", row["command_id"])
-	case row["bridge_calls_elided"] != 4:
-		t.Errorf("bridge_calls_elided = %v — a log that silently skips is a "+
-			"log that lies about what the run did", row["bridge_calls_elided"])
+	case row["bridge_calls_total"] != 1:
+		t.Errorf("bridge_calls_total = %v, want the one call", row["bridge_calls_total"])
+	case row["bridge_calls_elided"] != 0:
+		t.Errorf("bridge_calls_elided = %v on a log that drops nothing", row["bridge_calls_elided"])
+	}
+	if _, more := row["bridge_calls_next"]; more {
+		t.Errorf("bridge_calls_next = %v on a log that fits one page", row["bridge_calls_next"])
 	}
 	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
 	if !ok || len(calls) != 1 || calls[0].Name != "get_work_item" {
@@ -291,5 +305,102 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 	chain, ok := row["delegation_chain"].([]string)
 	if !ok || !slices.Equal(chain, []string{"agent-pm", "agent-swe"}) {
 		t.Fatalf("delegation_chain = %#v", row["delegation_chain"])
+	}
+}
+
+// A LONG RUN'S CALLS COME A PAGE AT A TIME, and every one of them is reachable.
+//
+// A bridged run can make thousands of calls, each carrying its output, so the
+// whole log in one answer is an answer of any size at all. The board carries
+// the first page and a cursor, and `turn_id` with `calls_after` reads on from
+// it — each call exactly once, in the order the run made them.
+func TestABridgedRunsCallsArePagedWithACursor(t *testing.T) {
+	t.Parallel()
+	store := seedRuns(t,
+		sandbox.PendingRun{TurnID: "t-long", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase},
+		sandbox.PendingRun{TurnID: "t-other", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase},
+	)
+	const total = 7
+	for i := range total {
+		if ok, err := store.AppendBridgeCall(t.Context(), "t-long", sandbox.BridgeCall{
+			Name: fmt.Sprintf("c%d", i),
+		}); err != nil || !ok {
+			t.Fatalf("AppendBridgeCall = %v, %v", ok, err)
+		}
+	}
+
+	var seen []string
+	params := map[string]any{"turn_id": "t-long", "calls_limit": 3.0}
+	for pages := 0; ; pages++ {
+		if pages > total {
+			t.Fatal("the pages never ended")
+		}
+		rows := askRunsWith(t, store, params)
+		if len(rows) != 1 || rows[0]["turn_id"] != "t-long" {
+			t.Fatalf("turn_id did not narrow the answer to the one run: %d rows", len(rows))
+		}
+		row := rows[0]
+		if row["bridge_calls_total"] != total {
+			t.Errorf("bridge_calls_total = %v, want %d on every page", row["bridge_calls_total"], total)
+		}
+		calls, _ := row["bridge_calls"].([]sandbox.BridgeCall)
+		if len(calls) > 3 {
+			t.Fatalf("a page of limit 3 carried %d calls", len(calls))
+		}
+		for _, call := range calls {
+			seen = append(seen, call.Name)
+		}
+		next, more := row["bridge_calls_next"]
+		if !more {
+			break
+		}
+		params = map[string]any{"turn_id": "t-long", "calls_limit": 3.0,
+			"calls_after": float64(next.(uint64))}
+	}
+	if want := []string{"c0", "c1", "c2", "c3", "c4", "c5", "c6"}; !slices.Equal(seen, want) {
+		t.Errorf("paged %q, want %q", seen, want)
+	}
+}
+
+// A CURSOR BELONGS TO ONE RUN'S LOG. Applied to the whole board it would start
+// every run's page at another run's place, so it is refused without a run to
+// belong to — as is a cursor no answer could have handed out.
+func TestACursorWithoutItsRunIsRefused(t *testing.T) {
+	t.Parallel()
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t-1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
+	})
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Sandbox: store})
+	for _, params := range []map[string]any{
+		{"calls_after": 3.0},
+		{"turn_id": "t-1", "calls_after": -1.0},
+	} {
+		if _, err := r.Answer(t.Context(), "sandbox_runs", params, ""); !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("params %v answered %v, want ErrBadParams", params, err)
+		}
+	}
+}
+
+// A RUN AN OLDER BUILD RECORDED still shows the calls it kept, and says how
+// many of them its bounded list dropped. Its calls are on the run's row rather
+// than in records of their own, and the board reads them from there.
+func TestARunAnOlderBuildRecordedShowsWhatItsRowDropped(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	raw := []byte(`{"turn_id":"t-older","status":"running","launch_id":"launch-older",` +
+		`"bridge_calls":[{"name":"get_work_item","at":"2026-06-01T10:00:00Z"}],` +
+		`"bridge_calls_elided":4}`)
+	if _, err := fleet.CreateSandboxRun(t.Context(), "t-older", raw); err != nil {
+		t.Fatalf("CreateSandboxRun: %v", err)
+	}
+	row := askRuns(t, sandbox.NewCoordStore(fleet))[0]
+	if row["bridge_calls_elided"] != 4 {
+		t.Errorf("bridge_calls_elided = %v — a log that silently skips is a "+
+			"log that lies about what the run did", row["bridge_calls_elided"])
+	}
+	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
+	if !ok || len(calls) != 1 || calls[0].Name != "get_work_item" {
+		t.Fatalf("bridge_calls = %#v, want the call the row kept", row["bridge_calls"])
 	}
 }

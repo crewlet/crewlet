@@ -130,9 +130,23 @@ type PagePatch struct {
 	// Labels, Watchers and Muted are carried WHOLE when touched, absent
 	// when not. A delta map could not represent a write that replaces the
 	// set, and every one of them is capped.
-	Labels   []string `json:"labels,omitempty"`
-	Watchers []string `json:"watchers,omitempty"`
-	Muted    []string `json:"muted,omitempty"`
+	//
+	// LABELS IS A POINTER because a save can empty it, and `omitempty`
+	// drops an empty slice exactly as it drops an absent one: carried as a
+	// plain slice, a save that removed a page's last label published a
+	// record with no labels field, and every applier left the labels
+	// where they were. The pointer must point at a NON-NIL slice for the
+	// same reason — a pointer to nil encodes as `null`, which decodes back
+	// to an absent field. [Store.patchOf] is the one writer.
+	//
+	// Watchers and Muted need neither: they travel as a PAIR — a write
+	// that touches one carries both, and the applier replaces both when
+	// either is present — and each of the writes that touch them
+	// ([applyWatch], [subscribeMentions]) leaves the handle it moved in
+	// one of the two, so a touched pair is never both empty.
+	Labels   *[]string `json:"labels,omitempty"`
+	Watchers []string  `json:"watchers,omitempty"`
+	Muted    []string  `json:"muted,omitempty"`
 
 	// Comment is one comment added, edited or removed. A comment rides the
 	// page for the reason the tracker's rides its task: it changes what
@@ -147,6 +161,42 @@ type PagePatch struct {
 	// deletes exactly the same rows at exactly the same position and no
 	// node deletes a durable row on its own authority.
 	RetiredRevisions []int `json:"retired_revisions,omitempty"`
+}
+
+// editKind is the one verb a card renders for a patch that changed the page's
+// own fields, and false for a patch that changed none of them.
+//
+// ONE FUNCTION OVER THE RECORD'S OWN FIELDS, called by the writer on the patch
+// it is about to publish and by the applier on the patch it decoded. The
+// writer's answer becomes the wake's kind ([Notify.Kind]) and the applier's
+// the history row's, which is what the activity feed renders and a `kinds`
+// filter matches — so the two are the same value only while they come from
+// the same function over the same value.
+//
+// THE ORDER IS THE POINT: a save that also moved a page or relabelled it is a
+// save, and a write that only changed watchers is a watch. Taking whichever
+// field was handled last makes the verb a property of the order a function
+// happens to test the fields in.
+//
+// A COMMENT IS NOT HERE. Whether it is a `comment` or a `comment_edited` is
+// decided by the apply, from whether the comment's row was new
+// ([Applier.applyComment]), and it outranks every field above: the only other
+// field a comment patch carries is the watcher pair a mention subscribes, and
+// that comment is still a comment.
+func (p PagePatch) editKind() (ChangeKind, bool) {
+	switch {
+	case p.Body != nil:
+		return ChangeSaved, true
+	case p.ParentID != nil:
+		return ChangeMoved, true
+	case p.Status != nil:
+		return ChangeStatus, true
+	case p.Labels != nil:
+		return ChangeLabels, true
+	case p.Watchers != nil || p.Muted != nil:
+		return ChangeWatchers, true
+	}
+	return "", false
 }
 
 // CommentPatch is one comment's create, edit or removal.

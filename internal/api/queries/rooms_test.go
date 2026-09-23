@@ -34,6 +34,10 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return nil, nil
 }
 
+func (memorySandbox) BridgeCallPage(context.Context, sandbox.PendingRun, uint64, int) (sandbox.BridgeCallPage, error) {
+	return sandbox.BridgeCallPage{}, nil
+}
+
 // declaration finds the ONE file under the dashboard tree whose source matches
 // `pattern`, and hands back its first capture.
 //

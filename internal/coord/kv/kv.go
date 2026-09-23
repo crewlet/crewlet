@@ -152,10 +152,11 @@
 //
 // Reading a whole bucket goes through [eachEntry], which hands over the KEY
 // AND THE VALUE TOGETHER in a single ordered pass, and narrows to one key
-// class at the BROKER where the caller wants one. walk.go is the authority on
-// that, including why the batched direct read that would drop even the
-// consumer is deliberately not used; what follows is why the obvious shape is
-// worse than either.
+// class at the BROKER where the caller wants one; a listing whose answer is
+// the keys alone takes the same pass with the values left at the broker
+// ([eachKeyUnder]). walk.go is the authority on that, including why the
+// batched direct read that would drop even the consumer is deliberately not
+// used; what follows is why the obvious shape is worse than either.
 //
 // A key listing is not a cheap read. The client implements ListKeys as a
 // watcher, so each call CREATES AND DELETES AN ORDERED EPHEMERAL CONSUMER —
@@ -174,8 +175,8 @@
 // not be reached" are three different facts, and a short list with no error
 // collapses the third into the second at every caller at once. For the trim's
 // published floor it is not a degraded read but a delete of records a node
-// still needs. Both walks end on one explicit marker and ONLY on it — the nil
-// entry, or the broker's end-of-batch — and anything else is
+// still needs. The walk ends on one explicit marker and ONLY on it — the nil
+// entry that closes the initial values — and anything else is
 // [coord.ErrUnavailable], named as such.
 //
 // The ordered walk also owns its watcher, so there is no early-return path

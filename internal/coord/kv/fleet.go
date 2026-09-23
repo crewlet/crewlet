@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // A BUCKET IS A STREAM, and provisioning a replicated one has the two hazards
@@ -75,7 +76,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
 	// A BREADCRUMB, because without one this is the silent step. A boot
-	// opens eighteen of these in a row and logs nothing between them, so a
+	// opens nineteen of these in a row and logs nothing between them, so a
 	// node that hung here emitted nothing at all until its budget expired —
 	// and the log could not say which bucket it was on.
 	//
@@ -291,7 +292,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why FIFTEEN buckets and not one
+// # Why SIXTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -327,6 +328,11 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	runs       none at all, a sharper version of the channels case: a run
 //	           parked on a person's answer waits DAYS, and its record is
 //	           the only thing that knows a billed box exists
+//	calls      none at all, for the runs' reason: a bridged run's tool
+//	           calls are what its resume is judged on, and that resume can
+//	           come days later. Its own bucket rather than a class in the
+//	           runs one, because every completion poll and seat recovery
+//	           reads the whole runs bucket and would read every call
 //	secrets    none at all, and this is the one where an age would be
 //	           actively dangerous: a credential is not short-horizon state,
 //	           and a bucket that expired one would de-authenticate a
@@ -373,6 +379,7 @@ const (
 	followsSuffix      = "_follows"
 	firesSuffix        = "_fires"
 	runsSuffix         = "_sandbox_runs"
+	callsSuffix        = "_bridge_calls"
 	secretsSuffix      = "_secrets"
 	integrationsSuffix = "_integrations"
 	mailboxesSuffix    = "_mailboxes"
@@ -492,6 +499,7 @@ type FleetStore struct {
 	secrets      jetstream.KeyValue
 	fires        jetstream.KeyValue
 	runs         jetstream.KeyValue
+	calls        jetstream.KeyValue
 	integrations jetstream.KeyValue
 	mailboxes    jetstream.KeyValue
 
@@ -535,7 +543,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, fifteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, sixteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -544,9 +552,27 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // sizing argument, and a sizing argument over the wrong number of buckets is
 // worse than none — see TestEveryBucketHasALifetimeClass, which holds every
 // "N buckets" in this file against the open table below.
+//
+// # The connection has to carry what the records are sized for
+//
+// A record is one message, and the records here are sized against the
+// contract's payload ceiling, [queue.MaxPayloadBytes] — a bridged call is
+// accepted up to [coord.MaxBridgeCallBytes], which is derived from it. The
+// embedded broker is configured at exactly that; an EXTERNAL cluster is
+// whatever its operator set, and nats-server's own default is 1 MiB. On such a
+// connection a record between the two is refused by the client at write time,
+// long after the value was sized, so a store that opened there would fail
+// writes its own contract promises. It refuses to open instead, naming the
+// server setting to change.
 func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore, error) {
 	if nc == nil {
 		return nil, errors.New("coord/kv: a NATS connection is required")
+	}
+	if accepts := nc.MaxPayload(); accepts < queue.MaxPayloadBytes {
+		return nil, fmt.Errorf("coord/kv: the NATS server this node is connected to accepts "+
+			"messages of at most %d bytes, and a coordination record may be up to %d "+
+			"(queue.MaxPayloadBytes): set max_payload to at least %d on every server of the cluster",
+			accepts, queue.MaxPayloadBytes, queue.MaxPayloadBytes)
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
@@ -610,6 +636,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			cfg.FireRetention},
 		{&store.runs, runsSuffix,
 			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
+		{&store.calls, callsSuffix,
+			"Crewlet bridged coding-run tool calls; NO TTL — purged with the run they belong to", 0},
 		{&store.secrets, secretsSuffix,
 			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
 		{&store.integrations, integrationsSuffix,

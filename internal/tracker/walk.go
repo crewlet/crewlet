@@ -60,7 +60,8 @@ func pace(bytes int) time.Duration {
 	return wait
 }
 
-// RespreadPlan is a project's whole re-spread, minted ONCE at its start.
+// RespreadPlan is a project's whole re-spread, minted in one piece before its
+// first batch.
 //
 // # Why the keys are all minted up front
 //
@@ -82,9 +83,26 @@ func pace(bytes int) time.Duration {
 // SAME position twice and the keys grow rather than shrink — the exact
 // condition the walk exists to remove. Downward, the floor moves with the
 // minimum and every walk takes an integer of its own.
+//
+// # And the plan knows which order it was minted from
+//
+// A walk takes minutes, and its keys are only right for the order they were
+// minted against: a card somebody drags between two batches is an order the
+// plan never saw, and the next batch would put that card back where the plan
+// had it — or place the rows around it so the drop no longer sits where it
+// was made. So the plan carries the order's version ([OrderVersion]) from the
+// same read as its rows, and every batch is published against the version
+// the batch before it produced ([Writer.MoveTasks] refuses anything else).
+// A refusal means the order moved: the walk mints a fresh plan from the order
+// as it now is, drop included, and starts again.
 type RespreadPlan struct {
 	// Project is whose order this rewrites.
 	Project string
+
+	// Order is the version of the project's order the plan was minted
+	// from, read in the same transaction as its rows — the value its first
+	// batch is published against.
+	Order int64
 
 	// Placements are every move the walk will make, in ascending key
 	// order. Batches are consecutive slices of it.
@@ -107,10 +125,9 @@ func (p RespreadPlan) Batch(k int) []Placement {
 
 // PlanRespread mints a project's whole re-spread.
 //
-// It reads ONE snapshot: every live row of the project, in ascending order,
-// and the project's current minimum. Everything after that is arithmetic —
-// which is what makes the assignment a pure function of the plan and therefore
-// identical on whichever node completes the walk.
+// It reads ONE snapshot: every row of the project, in ascending order, and
+// the order's version. Everything after that is arithmetic, so two nodes that
+// read the same order mint the same plan.
 //
 // EVERY ROW, NOT ONLY THE LONG ONES. The walk moves what it rewrites into a
 // reserve BELOW the project's minimum, so a row it left at its old key would
@@ -118,13 +135,25 @@ func (p RespreadPlan) Batch(k int) []Placement {
 // short ones would come back with the long run at its head. Rewriting every row
 // in ascending order is what makes each batch boundary the original order —
 // the moved rows the lowest originals, the untouched ones everything above.
+//
+// AND THAT INCLUDES THE REMOVED ONES. A restore brings a task back at the key
+// it had, so a removed row the walk skipped kept a key above every row the
+// walk moved: restored, it came back after all of them rather than where it
+// was. And a removed row's key may sit inside the integer the reserve takes,
+// where the walk's own keys would interleave with it. [rankAbove] counts a
+// removed task's key for the same reason.
 func PlanRespread(ctx context.Context, db *store.DB, project string) (RespreadPlan, error) {
 	var rows []Placement
 	var lowest Rank
+	var order int64
 	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		if order, err = OrderVersion(ctx, tx, project); err != nil {
+			return err
+		}
 		found, err := tx.QueryContext(ctx, `
 			SELECT id, rank FROM tracker_tasks
-			WHERE project_key = ? AND removed_at IS NULL
+			WHERE project_key = ?
 			ORDER BY rank, id`, project)
 		if err != nil {
 			return fmt.Errorf("tracker: read %s's re-spread rows: %w", project, err)
@@ -142,15 +171,10 @@ func PlanRespread(ctx context.Context, db *store.DB, project string) (RespreadPl
 		if err := found.Err(); err != nil {
 			return err
 		}
-		var min sql.NullString
-		if err := tx.QueryRowContext(ctx, `
-			SELECT MIN(rank) FROM tracker_tasks
-			WHERE project_key = ? AND removed_at IS NULL`, project).
-			Scan(&min); err != nil {
-			return fmt.Errorf("tracker: read %s's lowest rank: %w", project, err)
-		}
-		if min.Valid {
-			lowest = Rank(min.String)
+		// THE FIRST ROW IS THE MINIMUM: the read above is ordered by rank
+		// over every row of the project.
+		if len(rows) > 0 {
+			lowest = rows[0].Rank
 		}
 		return nil
 	})
@@ -158,7 +182,7 @@ func PlanRespread(ctx context.Context, db *store.DB, project string) (RespreadPl
 		return RespreadPlan{}, err
 	}
 	if len(rows) == 0 {
-		return RespreadPlan{Project: project}, nil
+		return RespreadPlan{Project: project, Order: order}, nil
 	}
 
 	reserve, err := reserveBelow(lowest)
@@ -178,7 +202,7 @@ func PlanRespread(ctx context.Context, db *store.DB, project string) (RespreadPl
 	for i, row := range rows {
 		placements = append(placements, Placement{Task: row.Task, Rank: keys[i]})
 	}
-	return RespreadPlan{Project: project, Placements: placements}, nil
+	return RespreadPlan{Project: project, Order: order, Placements: placements}, nil
 }
 
 // reserveBelow is the integer position the whole walk subdivides.
@@ -206,37 +230,119 @@ func reserveBelow(floor Rank) (Rank, error) {
 	return Rank(below), nil
 }
 
+// RespreadReport is what one re-spread did.
+type RespreadReport struct {
+	// Batches is how many records it published, across every plan.
+	Batches int
+
+	// Plans is how many plans it minted: one more than the number of times
+	// the order moved under it. See [RespreadPlans].
+	Plans int
+}
+
 // Respread runs a project's whole re-spread walk, paced.
 //
-// ONE RECORD PER BATCH on the project's own rank order subject, so every batch
-// is arbitrated against the last — two nodes running this walk contend at the
-// broker and exactly one proceeds, which is what stops them interleaving
-// batches into an order neither intended.
-func (w *Writer) Respread(ctx context.Context, opID, project string) (int, error) {
+// ONE RECORD PER BATCH on the project's own rank order subject, each published
+// against the version the one before it produced — see [RespreadPlan] — so
+// nothing else can land on the order between two batches without the next one
+// being refused. Two nodes running this walk at once refuse each other the
+// same way, which is what stops them interleaving batches into an order
+// neither intended.
+//
+// A REFUSED BATCH RE-PLANS rather than failing the walk: the order moved, and
+// the right keys are the ones minted from it as it now is. Every intermediate
+// state is still a correct board, because a batch either lands on the order
+// its plan was minted from or does not land at all. [RespreadPlans] bounds how
+// many times one call starts again before it leaves the rest to the next.
+func (w *Writer) Respread(ctx context.Context, opID, project string) (RespreadReport, error) {
 	if w.db == nil {
-		return 0, fmt.Errorf("tracker: this writer has no store, so it cannot " +
-			"read the order a re-spread rewrites")
+		return RespreadReport{}, fmt.Errorf("tracker: this writer has no " +
+			"store, so it cannot read the order a re-spread rewrites")
 	}
-	plan, err := PlanRespread(ctx, w.db, project)
-	if err != nil {
-		return 0, err
+	var report RespreadReport
+	for {
+		plan, err := PlanRespread(ctx, w.db, project)
+		if err != nil {
+			return report, err
+		}
+		report.Plans++
+		// A PLAN'S OWN OPERATION IDS: the second plan's batch k carries
+		// different keys from the first plan's, and an id it shared would
+		// resolve as the first plan's record having landed.
+		n, err := w.walk(ctx, stepID(opID, fmt.Sprintf("p%d", report.Plans)), plan)
+		report.Batches += n
+		if !errors.Is(err, errReplan) {
+			return report, err
+		}
+		if report.Plans == RespreadPlans {
+			return report, fmt.Errorf("tracker: re-spread %s: the order moved "+
+				"under %d plans in a row, so this walk stops and the next sweep "+
+				"plans again from where it is: %w", project, RespreadPlans, err)
+		}
 	}
+}
+
+// RespreadPlans bounds how many plans one re-spread mints before it stops.
+//
+// A plan is abandoned only when something else wrote the project's order
+// between two batches, and every new plan rewrites the whole project again —
+// so a walk that keeps losing is a walk beside somebody who is arranging that
+// board right now, re-publishing every row for each card they move. FOUR, so
+// a drop or two during a walk costs a re-plan each and a board being worked on
+// continuously costs four rewrites before the walk yields. It gives up nothing
+// by stopping: the applier keeps the project flagged while any of its keys is
+// still long, and the duty's next sweep plans again from the order as it then
+// is.
+const RespreadPlans = 4
+
+// errReplan is a walk whose plan no longer describes the order.
+var errReplan = errors.New("tracker: the re-spread plan no longer describes the order")
+
+// walk publishes one plan's batches, each against the version the last one
+// produced, and reports how many landed.
+func (w *Writer) walk(ctx context.Context, opID string, plan RespreadPlan) (int, error) {
+	against := plan.Order
+	writer := w
 	for batch := range plan.Batches() {
+		if batch > 0 {
+			// PACED BY WHAT THE LAST BATCH COST EVERY PEER: a walk
+			// competes with the company's own writes for the same
+			// serial applier on every node, so its cost is not its own
+			// latency but how long every other write waits behind it.
+			// Nothing waits after the last one, which has nothing
+			// behind it to pace.
+			select {
+			case <-ctx.Done():
+				return batch, ctx.Err()
+			case <-time.After(pace(len(plan.Batch(batch-1)) * respreadRecordBytes)):
+			}
+		}
 		placements := plan.Batch(batch)
-		if err := w.publishBatch(ctx,
-			stepID(opID, fmt.Sprintf("r%d", batch)), project, placements); err != nil {
+		res, err := writer.publishBatch(ctx,
+			stepID(opID, fmt.Sprintf("r%d", batch)), plan.Project, against,
+			placements)
+		switch {
+		case errors.Is(err, ErrOrderMoved):
+			return batch, fmt.Errorf("%w: batch %d of %d: %w", errReplan, batch,
+				plan.Batches(), err)
+		case err != nil:
 			return batch, fmt.Errorf("tracker: re-spread %s, batch %d of %d: %w",
-				project, batch, plan.Batches(), err)
+				plan.Project, batch, plan.Batches(), err)
+		case res.Outcome == statelog.OutcomeUnknown:
+			// THE CHAIN IS BROKEN rather than the order moved: the batch
+			// may or may not have landed, so there is no version to
+			// publish the next one against. A fresh plan is right either
+			// way — it reads whichever order exists, and if the batch
+			// lands after that read, the new plan's first batch is refused
+			// like any other write that came between.
+			return batch, fmt.Errorf("%w: batch %d of %d has an unknown "+
+				"outcome", errReplan, batch, plan.Batches())
 		}
-		// PACED BY WHAT IT JUST COST EVERY PEER: a walk competes with
-		// the company's own writes for the same serial applier on every
-		// node, so its cost is not its own latency but how long every
-		// other write waits behind it.
-		select {
-		case <-ctx.Done():
-			return batch, ctx.Err()
-		case <-time.After(pace(len(placements) * respreadRecordBytes)):
-		}
+		// THE NEXT BATCH IS DECIDED AFTER THIS ONE IS APPLIED HERE, and
+		// against the version it produced: the position it landed at is
+		// what the order's row records when this node applies it.
+		against = res.Position.Packed()
+		writer = w.After(res.Position)
 	}
 	return plan.Batches(), nil
 }
@@ -244,33 +350,34 @@ func (w *Writer) Respread(ctx context.Context, opID, project string) (int, error
 // publishBatch publishes one batch, waiting out this node's own lag rather
 // than failing on it.
 //
-// A WALK IS THE ONE WRITER THAT MUST NOT GIVE UP ON `behind`. Every batch
-// arbitrates against the last, so the second one cannot be decided until this
-// node has applied the first — which is ORDINARY during a walk rather than a
-// fault, and a caller told "behind" here would abandon a half-finished order
-// that a duty then has to be asked to complete.
+// A WALK IS THE ONE WRITER THAT MUST NOT GIVE UP ON `behind`. Every batch is
+// decided against the one before it, so the second cannot be decided until
+// this node has applied the first — which is ORDINARY during a walk rather
+// than a fault, and a caller told "behind" here would abandon a half-finished
+// order that a duty then has to be asked to complete.
 func (w *Writer) publishBatch(ctx context.Context, opID, project string,
-	placements []Placement) error {
+	against int64, placements []Placement) (WriteResult, error) {
 
 	for attempt := range walkRetries {
-		_, err := w.MoveTasks(ctx, opID, project, placements)
+		res, err := w.MoveTasks(ctx, opID, project, against, placements)
 		var unavailable *statelog.Unavailable
 		switch {
 		case err == nil:
-			return nil
+			return res, nil
 		case !errors.As(err, &unavailable) || unavailable.Reason != statelog.ReasonBehind:
-			return err
+			return res, err
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return WriteResult{}, ctx.Err()
 		case <-time.After(time.Duration(attempt+1) * WalkPace):
 		}
 	}
-	return fmt.Errorf("tracker: %s's re-spread could not publish a batch in %d "+
-		"attempts because this node stayed behind its own previous one — the "+
-		"applier is not draining, and the walk stops rather than leaving the "+
-		"order half rewritten by a node that cannot see it", project, walkRetries)
+	return WriteResult{}, fmt.Errorf("tracker: %s's re-spread could not publish "+
+		"a batch in %d attempts because this node stayed behind its own "+
+		"previous one — the applier is not draining, and the walk stops rather "+
+		"than leaving the order half rewritten by a node that cannot see it",
+		project, walkRetries)
 }
 
 // walkRetries is how many times a batch waits for this node's own applier.

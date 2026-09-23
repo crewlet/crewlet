@@ -981,6 +981,39 @@ func TestASeatsHistoryPagesOnTheCursorItHandsBack(t *testing.T) {
 	}
 }
 
+// A SEAT WITH EXACTLY A PAGE OF HISTORY OFFERS NO OLDER PAGE.
+//
+// A page that filled says nothing about what is beneath it — a seat with
+// exactly a page of history and one with a month of it answer with the same
+// rows — so the cursor follows the store's evidence row, not the count. One
+// offered here leads the seat page's "older" control to an empty page.
+func TestASeatWithExactlyAPageOfHistoryOffersNoCursor(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	for i := range store.AgentPhaseLimit {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID:      fmt.Sprintf("p-%03d", i),
+			Type:    "agent_phase_completed",
+			Source:  "engine",
+			Time:    base.Add(time.Duration(i) * time.Second),
+			Actor:   "Lead",
+			Tags:    map[string]string{"agent_role": "Lead", "agent_id": "agent-lead"},
+			Payload: json.RawMessage(`{"turn_id":"t-1","phase":"plan"}`),
+		}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+	if history, _ := got["llm_history"].([]store.EventRecord); len(history) != store.AgentPhaseLimit {
+		t.Fatalf("llm_history = %d rows, want the whole page of %d", len(history), store.AgentPhaseLimit)
+	}
+	if got["next"] != nil {
+		t.Errorf("next = %#v over a history that is exactly one page", got["next"])
+	}
+}
+
 // A DEAD LINK IS NOT A BROKEN NODE.
 //
 // `EventLog.ByID` answers `store.ErrNotFound`, which is not `queries.ErrNotFound`

@@ -673,7 +673,17 @@ func (w *Writer) chargeHandOff(current Task, patch TaskPatch) (TaskPatch, error)
 	}
 }
 
-// MoveTasks repositions tasks in a project's manual order.
+// ErrOrderMoved is a reposition refused because the project's manual order
+// changed after the read its placements were decided from.
+//
+// A CONFLICT, and it wraps [statelog.ErrConflict] for that reason: what the
+// caller does next is read the order again and decide again, which is what
+// every other lost race in this package asks for.
+var ErrOrderMoved = fmt.Errorf("%w: the project's manual order moved after "+
+	"the read these placements were decided from", statelog.ErrConflict)
+
+// MoveTasks repositions tasks in a project's manual order, AS DECIDED FROM ONE
+// READ OF IT.
 //
 // # Why the subject is the ORDER and not any of the tasks
 //
@@ -687,21 +697,87 @@ func (w *Writer) chargeHandOff(current Task, patch TaskPatch) (TaskPatch, error)
 // it places: every placement is a task in that project, so the container is
 // the one term that covers any set of them.
 //
+// # Why it takes the order's version, and every caller states one
+//
+// These placements are keys somebody computed from a read of the order — the
+// re-spread walk from its plan, the duplicate repair from the keys it found
+// shared — and that read is not this write's snapshot. The broker arbitrates
+// on the order's own subject, but the expectation it checks is formed inside
+// THIS snapshot, so on its own it would accept keys decided against an order
+// that has since moved: the pairing of an old decision with a new expectation
+// that the write authority exists to rule out. `against` closes that gap. It
+// is the version [OrderVersion] read beside the keys — the position of the
+// last rank-order record applied, zero for an order nothing has placed yet —
+// and the decide refuses with [ErrOrderMoved] unless the order is still
+// there. The broker's expectation, formed in the same snapshot as that check,
+// then covers the rest of the way to the append.
+//
+// The VERSION rather than the arbitration anchor, because it is the question
+// the decision depends on: whether the ROWS the keys were computed from have
+// moved. A gated record advances the anchor and writes nothing, and a check
+// against the anchor would send a caller to re-read an order that has not
+// changed.
+//
 // AT MOST [MaxBulkTasks] PLACEMENTS, which is one bulk gesture's bound and
-// what every caller in the tree stays inside: a drag places one task, and the
-// re-spread walk and the duplicate repair publish [WalkBatch] at a time.
+// what every caller in the tree stays inside: the re-spread walk and the
+// duplicate repair publish [WalkBatch] at a time.
 func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
-	placements []Placement) (WriteResult, error) {
+	against int64, placements []Placement) (WriteResult, error) {
 
 	switch {
-	case project == "":
-		return WriteResult{}, fmt.Errorf("tracker: a move names no project")
 	case len(placements) == 0:
 		return WriteResult{}, fmt.Errorf("tracker: a move places no task")
 	case len(placements) > MaxBulkTasks:
 		return WriteResult{}, fmt.Errorf("tracker: a move carries %d "+
 			"placements and one record carries at most %d — split it into "+
 			"records of that many", len(placements), MaxBulkTasks)
+	}
+	return w.reposition(ctx, opID, project, func(tx *sql.Tx) ([]Placement, error) {
+		version, err := OrderVersion(ctx, tx, project)
+		if err != nil {
+			return nil, err
+		}
+		if version != against {
+			return nil, fmt.Errorf("%w: %s's order is at version %d and these "+
+				"placements were decided at %d", ErrOrderMoved, project,
+				version, against)
+		}
+		return placements, nil
+	})
+}
+
+// OrderVersion is a project's manual order as of the transaction it reads in:
+// the position of the last rank-order record applied to it, and zero for an
+// order no placement has ever been applied to.
+//
+// It is the value [Writer.MoveTasks] checks, and a caller computing keys reads
+// it in the SAME transaction as the keys — a version read apart from them
+// could be newer than the order they were computed from.
+func OrderVersion(ctx context.Context, tx *sql.Tx, project string) (int64, error) {
+	var version int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT version FROM tracker_rank_orders WHERE project_key = ?`,
+		project).Scan(&version)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("tracker: read %s's order version: %w", project, err)
+	}
+	return version, nil
+}
+
+// reposition publishes one rank-order record whose placements are decided
+// inside the write's own snapshot.
+//
+// ONE PATH FOR THE TWO WAYS a placement is decided — from an earlier read and
+// checked here ([Writer.MoveTasks]), or from the rows here ([Writer.MoveTask])
+// — so the refusals every key is held to are written once.
+func (w *Writer) reposition(ctx context.Context, opID, project string,
+	decide func(*sql.Tx) ([]Placement, error)) (WriteResult, error) {
+
+	if project == "" {
+		return WriteResult{}, fmt.Errorf("tracker: a move names no project")
 	}
 	subject := RankOrderSubject(project)
 	scope := ScopeSet{Terms: []ScopeTerm{{Kind: TermContainer, ID: project}}}
@@ -714,6 +790,10 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			placements, err := decide(tx)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
 			for _, placement := range placements {
 				// THE LENGTH FIRST AND ON ITS OWN, because it is the one
 				// refusal a well-formed request reaches — a drag into a
@@ -1016,21 +1096,106 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 // bounded read found there would leave the rest at keys the fresh ones can
 // overtake: a reorder nobody asked for and nothing reports. Shortening keys
 // takes a fresh integer position, which only the walk takes ([PlanRespread]).
+//
+// # The neighbours are TASKS, and their keys are read inside the write
+//
+// `after` and `before` name the cards the drop landed between — either may be
+// empty for a drop at an end, not both — and their keys are read in the
+// write's own snapshot rather than handed in. A key the caller read earlier is
+// a decision formed outside the snapshot: a re-spread batch that moved both
+// neighbours in between leaves those keys naming a place in an order that no
+// longer exists, and the drop would land there, accepted, somewhere nobody
+// dropped it. Read here, the key is minted from the order the broker is about
+// to arbitrate against, and a batch that lands first sends this write round
+// again to read the new one.
+//
+// An OPEN END is bounded by the nearest key in the project, removed tasks
+// included — [rankAbove] says why a key past the last card must not come from
+// the create lattice, and a key before the first is bounded below the same
+// way — so a drop at either end of what the caller saw lands next to that
+// card rather than past a card the board was not showing.
 func (w *Writer) MoveTask(ctx context.Context, opID, project, taskID string,
-	after, before Rank) (WriteResult, error) {
+	after, before string) (WriteResult, error) {
 
 	switch {
-	case project == "":
-		return WriteResult{}, fmt.Errorf("tracker: a move names no project")
 	case taskID == "":
 		return WriteResult{}, fmt.Errorf("tracker: a move names no task")
+	case after == "" && before == "":
+		return WriteResult{}, fmt.Errorf("tracker: the drop of %s names neither "+
+			"the card it lands after nor the one it lands before, so it names "+
+			"no place in the order", taskID)
+	case after == taskID || before == taskID:
+		return WriteResult{}, fmt.Errorf("tracker: %s cannot land beside "+
+			"itself — name the cards on either side of where it goes", taskID)
 	}
-	key, err := KeyBetween(after, before)
-	if err != nil {
-		return WriteResult{}, fmt.Errorf("tracker: mint a key between %q and "+
-			"%q: %w", after, before, err)
+	return w.reposition(ctx, opID, project, func(tx *sql.Tx) ([]Placement, error) {
+		if _, err := cardRank(ctx, tx, project, taskID); err != nil {
+			return nil, err
+		}
+		lo, hi, err := dropBetween(ctx, tx, project, after, before)
+		if err != nil {
+			return nil, err
+		}
+		key, err := KeyBetween(lo, hi)
+		if err != nil {
+			return nil, fmt.Errorf("tracker: mint a key between %q and %q: %w",
+				lo, hi, err)
+		}
+		return []Placement{{Task: taskID, Rank: key}}, nil
+	})
+}
+
+// dropBetween is the two keys a drop lands between, read in the write's own
+// snapshot — see [Writer.MoveTask].
+func dropBetween(ctx context.Context, tx *sql.Tx, project, after, before string) (
+	Rank, Rank, error) {
+
+	var lo, hi Rank
+	var err error
+	if after != "" {
+		if lo, err = cardRank(ctx, tx, project, after); err != nil {
+			return "", "", err
+		}
 	}
-	return w.MoveTasks(ctx, opID, project, []Placement{{Task: taskID, Rank: key}})
+	if before != "" {
+		if hi, err = cardRank(ctx, tx, project, before); err != nil {
+			return "", "", err
+		}
+	}
+	switch {
+	case after != "" && before != "" && string(lo) > string(hi):
+		return "", "", fmt.Errorf("%w: %s is no longer above %s in %s's order, "+
+			"so the gap this drop names is not there", ErrOrderMoved, after,
+			before, project)
+	case after != "" && before != "" && lo == hi:
+		return "", "", fmt.Errorf("tracker: %s and %s share the key %q, so there "+
+			"is no gap between them — the duplicate repair gives one of them a "+
+			"fresh key, and the same drop lands once it has", after, before, lo)
+	case before == "":
+		hi, err = rankAbove(ctx, tx, project, lo)
+	case after == "":
+		lo, err = rankBelow(ctx, tx, project, hi)
+	}
+	return lo, hi, err
+}
+
+// cardRank is one live task's key in a project, or a refusal naming why a drop
+// cannot use it.
+func cardRank(ctx context.Context, tx *sql.Tx, project, id string) (Rank, error) {
+	var rank string
+	err := tx.QueryRowContext(ctx, `
+		SELECT rank FROM tracker_tasks
+		WHERE id = ? AND project_key = ? AND removed_at IS NULL`,
+		id, project).Scan(&rank)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", fmt.Errorf("tracker: %s is not a live task in %s — it was "+
+			"moved, removed or never there — so a drop cannot place it or land "+
+			"beside it; read the board again", id, project)
+	case err != nil:
+		return "", fmt.Errorf("tracker: read %s's key in %s: %w", id, project, err)
+	}
+	return Rank(rank), nil
 }
 
 // count records one of this package's own counters.

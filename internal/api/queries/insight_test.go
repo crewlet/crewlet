@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -317,14 +318,14 @@ func TestPhasesCarryPayloadsAndPage(t *testing.T) {
 	if phases[0]["payload"] == nil {
 		t.Fatalf("a phase record with no payload has nothing a reader came for: %v", phases[0])
 	}
-	// A FULL page offers a cursor; a short one is the end of the record and
+	// A PAGE WITH A RECORD PAST IT offers a cursor; the end of the record
 	// must not, or a client pages forever.
 	next, _ := got["next"].(map[string]any)
 	if next["before_id"] == nil || next["before_id"] == "" {
-		t.Errorf("a full page offers no cursor: %v", got["next"])
+		t.Errorf("a page that left a phase behind offers no cursor: %v", got["next"])
 	}
 	if got["exhausted"] != false {
-		t.Errorf("a full page claims to be exhausted: %v", got)
+		t.Errorf("a page that left a phase behind claims to be exhausted: %v", got)
 	}
 
 	last := asMap(t, answer(t, queries.Sources{Events: log}, "phases", map[string]any{
@@ -338,6 +339,14 @@ func TestPhasesCarryPayloadsAndPage(t *testing.T) {
 	}
 	if last["exhausted"] != true {
 		t.Errorf("a short page does not report the end of the record: %v", last)
+	}
+
+	// A PAGE THAT EXACTLY HOLDS THE RECORD is its end too: the store read no
+	// row past it, and a cursor here would lead a pager to an empty page.
+	whole := asMap(t, answer(t, queries.Sources{Events: log}, "phases", map[string]any{"limit": 3}))
+	if len(rows(t, whole["phases"])) != 3 || whole["exhausted"] != true {
+		t.Errorf("a page holding the whole record: %d phases, exhausted=%v, next=%v",
+			len(rows(t, whole["phases"])), whole["exhausted"], whole["next"])
 	}
 
 	// The role filter narrows server-side, so a busy company's other seats are
@@ -713,29 +722,101 @@ func TestTheTurnListsFailedFilterIsThreeValued(t *testing.T) {
 	}
 }
 
-// THE CURSOR IS ECHOED, not left for a client to assemble — the rule the event
-// list already follows, because a client building it from the last row's
-// fields would be reimplementing the one thing that must not drift.
-func TestTheTurnListEchoesItsCursor(t *testing.T) {
+// THE TURN LIST PAGES ON THE CURSOR IT HANDS BACK, and offers one only when
+// the window holds more.
+//
+// Echoed rather than left for a client to assemble — a client building it
+// from the last row's fields would be reimplementing the one thing that must
+// not drift — and a PAIR, because t-3 and t-2 begin at the same instant. The
+// page is ONE turn so the first boundary falls BETWEEN those two: a cursor on
+// the start alone would ask for turns that began before base+1s, answer t-1
+// on the second page, and never list t-2 at all. Offered only when the store
+// read a turn past the page, so a window that exactly fills a page ends there
+// instead of leading a pager to an empty one, and `truncated` says which a
+// page is before anything is drawn from it.
+func TestTheTurnListPagesOnTheCursorItHandsBack(t *testing.T) {
 	t.Parallel()
 	log := openStore(t).Events()
-	base := time.Now().UTC().Add(-time.Hour)
-	if err := log.Append(t.Context(), store.EventRecord{
-		ID: "t-1-p0", Type: "agent_phase_completed", Time: base,
-		Category: "lifecycle", Actor: "PM",
-		Tags: map[string]string{"turn_id": "t-1", "agent_role": "PM"},
-	}); err != nil {
-		t.Fatal(err)
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for _, turn := range []struct {
+		id string
+		at time.Time
+	}{
+		{"t-1", base},
+		{"t-2", base.Add(time.Second)},
+		{"t-3", base.Add(time.Second)},
+	} {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: turn.id + "-p0", Type: "agent_phase_completed", Time: turn.at,
+			Category: "lifecycle", Actor: "PM",
+			Tags: map[string]string{"turn_id": turn.id, "agent_role": "PM"},
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	got := asMap(t, answer(t, queries.Sources{Events: log}, "turns", nil))
-	if got["next"] == nil || got["next"] == "" {
-		t.Fatalf("next = %#v on a page with a turn on it", got["next"])
+	src := queries.Sources{Events: log}
+	idsOf := func(page map[string]any) []string {
+		var out []string
+		for _, row := range rows(t, page["turns"]) {
+			out = append(out, row["turn_id"].(string))
+		}
+		return out
+	}
+
+	// ORDER IS (start DESC, turn_id DESC), so of the two that share base+1s
+	// t-3 comes first and the first page's cursor sits between them.
+	first := asMap(t, answer(t, src, "turns", map[string]any{"limit": 1}))
+	if got := idsOf(first); !slices.Equal(got, []string{"t-3"}) {
+		t.Fatalf("first page = %v, want the newest", got)
+	}
+	if first["truncated"] != true {
+		t.Errorf("a page that left turns behind says truncated=%v", first["truncated"])
+	}
+	next, _ := first["next"].(map[string]any)
+	if next["before_id"] != "t-3" || next["before_time"] == nil {
+		t.Fatalf("next = %#v, want the last row's start and turn id", first["next"])
+	}
+
+	// THE TURN THAT SHARES THE BOUNDARY'S INSTANT is the next page, not
+	// the turn a second older.
+	second := asMap(t, answer(t, src, "turns", map[string]any{
+		"limit": 1, "before_time": next["before_time"], "before_id": next["before_id"],
+	}))
+	if got := idsOf(second); !slices.Equal(got, []string{"t-2"}) {
+		t.Fatalf("second page = %v, want t-2, which began at the same instant "+
+			"as the cursor", got)
+	}
+	next, _ = second["next"].(map[string]any)
+	if second["truncated"] != true || next["before_id"] != "t-2" {
+		t.Fatalf("second page: truncated=%v next=%#v, want a cursor at t-2",
+			second["truncated"], second["next"])
+	}
+
+	rest := asMap(t, answer(t, src, "turns", map[string]any{
+		"limit": 1, "before_time": next["before_time"], "before_id": next["before_id"],
+	}))
+	if got := idsOf(rest); !slices.Equal(got, []string{"t-1"}) {
+		t.Fatalf("third page = %v, want the one turn left", got)
 	}
 	// AND NOTHING TO RESUME FROM AT THE END, so a client walking the list
 	// stops rather than re-asking for the same page for ever.
-	empty := asMap(t, answer(t, queries.Sources{Events: openStore(t).Events()}, "turns", nil))
-	if empty["next"] != nil {
-		t.Errorf("next = %#v on an empty page", empty["next"])
+	if rest["next"] != nil || rest["truncated"] != false {
+		t.Errorf("the last page offers next=%#v, truncated=%v", rest["next"], rest["truncated"])
+	}
+
+	// A WINDOW THAT EXACTLY FILLS THE PAGE is not a cut one.
+	whole := asMap(t, answer(t, src, "turns", map[string]any{"limit": 3}))
+	if len(idsOf(whole)) != 3 || whole["next"] != nil || whole["truncated"] != false {
+		t.Errorf("a page holding the whole window: %d turns, next=%#v, truncated=%v",
+			len(idsOf(whole)), whole["next"], whole["truncated"])
+	}
+
+	// HALF A CURSOR IS REFUSED rather than read as the first page, which a
+	// pager would follow for ever.
+	if _, err := askNative(t, src, "turns", map[string]any{
+		"before_time": next["before_time"],
+	}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("a cursor with no turn id answered %v, want bad params", err)
 	}
 }
 
@@ -793,6 +874,89 @@ func TestATurnNamesEveryAttemptAtItsTrigger(t *testing.T) {
 	// first however the listing was ordered.
 	if attempts[0]["turn_id"] != "run-1" || attempts[1]["turn_id"] != "run-2" {
 		t.Errorf("attempts = %v, want run-1 then run-2", attempts)
+	}
+	if got["attempts_truncated"] != false {
+		t.Errorf("attempts_truncated = %v over every run of the trigger", got["attempts_truncated"])
+	}
+}
+
+// A LIST OF ATTEMPTS THAT IS NOT EVERY RUN SAYS SO, AND THE ROUTE IT NAMES
+// REACHES THE RUNS IT LEFT OUT.
+//
+// The list is counted from its first element — "attempt 2 of 3" — and it is
+// the NEWEST runs reversed, so one cut at the page would renumber every attempt
+// in it with nothing on the screen to say the first one shown was not the
+// first one run. The run left out is the OLDEST, placed here past the turns
+// list's default week and inside the thirty days the attempts read covers:
+// the route the answer documents — `turns` with `work_key=` and
+// `days=` store.MaxTurnDays, paged by `next` — must reach it, and the same
+// route without `days` must not, which is why `days` is part of it.
+func TestACutListOfAttemptsSaysItIsCut(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	now := time.Now().UTC()
+	base := now.Add(-time.Hour)
+	const runs = store.MaxTurnPage + 1
+	for i := range runs {
+		run := fmt.Sprintf("run-%03d", i)
+		at := base.Add(time.Duration(i) * time.Second)
+		if i == 0 {
+			at = now.Add(-10 * 24 * time.Hour)
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: run + "-p0", Type: "agent_phase_completed",
+			Time: at, Category: "lifecycle", Actor: "CEO",
+			Tags: map[string]string{"turn_id": run, "work_key": "wk-1", "agent_role": "CEO"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newest := fmt.Sprintf("run-%03d", runs-1)
+	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+		map[string]any{"turn_id": newest}))
+	attempts := rows(t, got["attempts"])
+	if len(attempts) != store.MaxTurnPage {
+		t.Fatalf("%d attempts, want the page of %d", len(attempts), store.MaxTurnPage)
+	}
+	if got["attempts_truncated"] != true {
+		t.Errorf("attempts_truncated = %v with %d runs held and %d listed",
+			got["attempts_truncated"], runs, len(attempts))
+	}
+	// THE NEWEST RUNS, so the one being read is on the list and the one
+	// left out is the first.
+	if attempts[len(attempts)-1]["turn_id"] != newest || attempts[0]["turn_id"] == "run-000" {
+		t.Errorf("attempts run %v … %v, want the newest %d ending at %s",
+			attempts[0]["turn_id"], attempts[len(attempts)-1]["turn_id"], store.MaxTurnPage, newest)
+	}
+
+	// THE ROUTE TO THE REST, followed to its end.
+	walk := func(params map[string]any) map[string]bool {
+		t.Helper()
+		seen := map[string]bool{}
+		for pages := 0; ; pages++ {
+			if pages > runs {
+				t.Fatal("the turns cursor never reached the end of the runs")
+			}
+			page := asMap(t, answer(t, queries.Sources{Events: log}, "turns", params))
+			for _, row := range rows(t, page["turns"]) {
+				seen[row["turn_id"].(string)] = true
+			}
+			next, _ := page["next"].(map[string]any)
+			if next == nil {
+				return seen
+			}
+			params = maps.Clone(params)
+			params["before_time"], params["before_id"] = next["before_time"], next["before_id"]
+		}
+	}
+	every := walk(map[string]any{"work_key": "wk-1", "days": store.MaxTurnDays})
+	if len(every) != runs || !every["run-000"] {
+		t.Errorf("turns with work_key and days=%d reached %d of %d runs (run-000: %t)",
+			store.MaxTurnDays, len(every), runs, every["run-000"])
+	}
+	if week := walk(map[string]any{"work_key": "wk-1"}); week["run-000"] {
+		t.Errorf("turns without days reached the ten-day-old run — the default " +
+			"window is no longer a week, and the documented route should say so")
 	}
 }
 

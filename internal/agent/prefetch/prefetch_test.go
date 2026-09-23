@@ -1024,11 +1024,10 @@ func (nilProvider) Model() string { return "nil-provider" }
 
 // WHAT THE FILTER PICKED IS A USE, and it is recorded.
 //
-// The trim that bounds a seat's durable memory orders by retrieval count
-// first, so an unmarked recall makes it evict the OLDEST entries — exactly
-// what a cap on worth rather than age exists to avoid. Nothing marked a
-// retrieval before this, so retrieval_count was permanently zero in every
-// deployment and the ordering was decorative.
+// The count is each note's `retrievals` on the seat's memory page, which is
+// how an operator tells a note that keeps proving useful from one written
+// once and never read. A recall that marked nothing would show every note as
+// never read.
 func TestTheMemoriesTheFilterPickedAreMarkedRetrieved(t *testing.T) {
 	t.Parallel()
 	log := &retrievalLog{}
@@ -1045,14 +1044,14 @@ func TestTheMemoriesTheFilterPickedAreMarkedRetrieved(t *testing.T) {
 	}
 	ids, calls := log.seen()
 	if calls == 0 {
-		t.Fatal("the recall marked nothing: the trim will evict by age instead of by use")
+		t.Fatal("the recall marked nothing, so every note reads as never recalled")
 	}
 	if !slices.Contains(ids, "m1") {
 		t.Errorf("marked %v, want the entry the filter picked", ids)
 	}
 	// A CANDIDATE IS NOT A USE. The pool is similarity union recency, so
 	// counting candidates would move the counter for every entry a seat
-	// owns on every turn and make the ordering meaningless the other way.
+	// owns on every turn, and a count every note shares tells nothing apart.
 	if slices.Contains(ids, "m2") {
 		t.Errorf("marked %v, which includes a candidate the filter passed over", ids)
 	}
@@ -1118,5 +1117,55 @@ func TestABuildingIndexIsNotAnEmptyCompany(t *testing.T) {
 	}
 	if len(pages.asked()) != 0 {
 		t.Error("a building index was searched anyway")
+	}
+}
+
+// recordingEpisodes keeps the recall it was asked for.
+type recordingEpisodes struct{ asked *learning.RecallQuery }
+
+func (r recordingEpisodes) Recall(_ context.Context, q learning.RecallQuery) ([]learning.Hit, error) {
+	*r.asked = q
+	return nil, nil
+}
+
+// THE PULL NARROWS WHAT THE STORE RANKS. The filter and the offset are handed
+// to the store's own recall rather than applied to what it returned, so the
+// limit is taken over the turns that match.
+func TestAPulledRecallCarriesItsFilterAndOffsetToTheStore(t *testing.T) {
+	t.Parallel()
+	var asked learning.RecallQuery
+	f := prefetch.New(prefetch.Sources{Episodes: recordingEpisodes{&asked}, Embed: embeds})
+	_, seat := company(t)
+	filter := learning.EpisodeFilter{Conversation: "jira:ENG-1", Outcome: "failed"}
+
+	if _, err := f.RecallEpisodes(t.Context(), seat, "a deploy", filter, 4, 3); err != nil {
+		t.Fatalf("RecallEpisodes: %v", err)
+	}
+	if asked.Filter != filter || asked.Offset != 4 || asked.Limit != 3 {
+		t.Errorf("the store was asked for %+v, want the filter, offset 4 and limit 3", asked)
+	}
+}
+
+// "NOTHING IS CONFIGURED" AND "THE PROVIDER FAILED" ARE DIFFERENT ANSWERS. The
+// first sends a model to another mode for good; the second is an outage worth
+// retrying, and naming it as the first sends the model away from a search that
+// would work a minute later.
+func TestAFailedEmbeddingIsNotReportedAsNoEmbeddings(t *testing.T) {
+	t.Parallel()
+	_, seat := company(t)
+	store := episodes{}
+
+	unconfigured := prefetch.New(prefetch.Sources{Episodes: store})
+	_, err := unconfigured.RecallEpisodes(t.Context(), seat, "a deploy", learning.EpisodeFilter{}, 0, 3)
+	if !errors.Is(err, prefetch.ErrNoSimilarity) {
+		t.Errorf("no embedder = %v, want ErrNoSimilarity", err)
+	}
+
+	outage := errors.New("provider is rate limited")
+	failing := prefetch.New(prefetch.Sources{Episodes: store,
+		Embed: func(context.Context, string) ([]float32, error) { return nil, outage }})
+	_, err = failing.RecallEpisodes(t.Context(), seat, "a deploy", learning.EpisodeFilter{}, 0, 3)
+	if errors.Is(err, prefetch.ErrNoSimilarity) || !errors.Is(err, outage) {
+		t.Errorf("a failing embedder = %v, want the provider's own error, not ErrNoSimilarity", err)
 	}
 }

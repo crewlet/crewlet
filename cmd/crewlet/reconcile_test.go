@@ -38,6 +38,25 @@ func seedStore(t *testing.T) *store.DB {
 	return db
 }
 
+// storedRevisions is every revision the store holds, newest first.
+//
+// EVERY ONE, OR THE TEST STOPS: each caller asserts how many revisions a seed
+// wrote, and a count over one page of a longer history would pass or fail on
+// the page size rather than on what was written. The store says when it left
+// revisions behind, so that is refused here rather than counted.
+func storedRevisions(t *testing.T, db *store.DB) []store.Revision {
+	t.Helper()
+	revisions, more, err := db.Configs().List(t.Context(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if more {
+		t.Fatalf("the store holds more revisions than one page of %d; a count "+
+			"over the page is not a count of what was written", len(revisions))
+	}
+	return revisions
+}
+
 func parse(t *testing.T, doc string) *config.Company {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(doc))
@@ -89,10 +108,7 @@ func TestAnUnchangedFileSeedsNothing(t *testing.T) {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	revisions, err := db.Configs().List(t.Context(), 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	revisions := storedRevisions(t, db)
 	if len(revisions) != 1 {
 		t.Fatalf("%d revisions for five boots of one file, want 1", len(revisions))
 	}
@@ -117,10 +133,7 @@ func TestAnOverrideImportsAnEditedFileOnce(t *testing.T) {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	revisions, err := db.Configs().List(t.Context(), 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	revisions := storedRevisions(t, db)
 	if len(revisions) != 2 {
 		t.Fatalf("%d revisions, want the original plus one for the edit", len(revisions))
 	}
@@ -161,10 +174,7 @@ func TestASealedStoreDoesNotReseedOnEveryBoot(t *testing.T) {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	revisions, err := db.Configs().List(t.Context(), 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	revisions := storedRevisions(t, db)
 	if len(revisions) != 1 {
 		t.Fatalf("%d revisions for four boots, want 1 — the seed is comparing "+
 			"ciphertext rather than the document", len(revisions))
@@ -201,10 +211,7 @@ func TestASealedStoreWithNoKeyringRefusesRatherThanReseeding(t *testing.T) {
 	if !strings.Contains(err.Error(), "sealed") {
 		t.Errorf("the error does not say what is wrong: %v", err)
 	}
-	revisions, err := db.Configs().List(t.Context(), 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	revisions := storedRevisions(t, db)
 	if len(revisions) != 1 {
 		t.Fatalf("%d revisions, want the sealed one left alone", len(revisions))
 	}
@@ -338,10 +345,7 @@ func TestABootstrapSeedDoesNotOverwriteAnExistingCompany(t *testing.T) {
 		}
 	}
 
-	revisions, err := db.Configs().List(t.Context(), 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	revisions := storedRevisions(t, db)
 	if len(revisions) != 1 {
 		t.Fatalf("%d revisions, want only the one that bootstrapped the store: "+
 			"a stale file rewrote a live company", len(revisions))
@@ -390,10 +394,7 @@ func TestNoSeedFileLeavesTheStoreAlone(t *testing.T) {
 	if err := seedCompany(t.Context(), db, fleet, nil, tierBSeed{Path: "company.yaml"}, nil, quiet()); err != nil {
 		t.Fatalf("seed with no file: %v", err)
 	}
-	revisions, err := db.Configs().List(t.Context(), 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	revisions := storedRevisions(t, db)
 	if len(revisions) != 1 {
 		t.Fatalf("%d revisions, want the store untouched", len(revisions))
 	}
@@ -416,10 +417,7 @@ func TestNoSeedAndNoRevisionIsNotAFailure(t *testing.T) {
 		tierBSeed{Path: "company.yaml"}, nil, quiet()); err != nil {
 		t.Fatalf("an unconfigured node failed to seed: %v", err)
 	}
-	revisions, err := db.Configs().List(t.Context(), 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	revisions := storedRevisions(t, db)
 	if len(revisions) != 0 {
 		t.Fatalf("%d revisions, want none", len(revisions))
 	}

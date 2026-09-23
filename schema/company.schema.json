@@ -160,7 +160,7 @@
           ]
         },
         "max_entries": {
-          "description": "Entries kept per conversation.",
+          "description": "Entries kept per conversation; older ones are deleted, and counted by each kept entry's ordinal.",
           "minimum": 0,
           "type": "integer"
         },

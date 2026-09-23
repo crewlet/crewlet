@@ -2152,3 +2152,53 @@ func TestEverySimilarityDecisionAgreesAtTheThreshold(t *testing.T) {
 		})
 	}
 }
+
+// A ROW A SUMMARY KEEPS AS ITS EXEMPLAR IS NEVER DELETED BY THE FOLD OR THE
+// SWEEP, whatever they were handed.
+//
+// Both decide from reads made before their own transaction, and a fold another
+// Lifecycle commits between the window read and the summaries read is exactly
+// the interleaving that hands the sweep a live exemplar as an orphan:
+// TestTwoNodesFoldingOneSeatWriteOneSummary hit it intermittently under -race.
+// This is that state built deliberately rather than raced for.
+func TestNeitherTheFoldNorTheSweepDeletesAnExemplar(t *testing.T) {
+	t.Parallel()
+	l, e, _ := newLife(t, Options{})
+	kept := rawEp("kept", daysAgo(50), "slack_post", "jira_get")
+	gone := rawEp("gone", daysAgo(51), "slack_post", "jira_get")
+	summary := rawEp("summary", daysAgo(50), "slack_post", "jira_get")
+	summary.Kind, summary.Count = KindCompacted, 4
+	summary.StartedAt = daysAgo(55)
+	summary.WorkKey = "compact:elsewhere"
+	summary.ExemplarTurnIDs = []string{"kept"}
+	write(t, e, kept, gone, summary)
+
+	// THE SWEEP, handed both as orphans: the exemplar stays.
+	n, err := l.sweepOrphans(t.Context(), "ceo", []Episode{kept, gone})
+	if err != nil {
+		t.Fatalf("sweepOrphans: %v", err)
+	}
+	rawRows, _ := snapshot(t, e)
+	if n != 1 || len(rawRows) != 1 || rawRows[0].ID != "kept" {
+		t.Errorf("the sweep deleted %d and left %v, want only the exemplar left",
+			n, clusterIDs([][]Episode{rawRows}))
+	}
+
+	// THE FOLD, handed a cluster whose doomed members include it.
+	cluster := []Episode{kept}
+	for i := range 3 {
+		member := rawEp(fmt.Sprintf("m%d", i), daysAgo(40-i), "slack_post", "jira_get")
+		write(t, e, member)
+		cluster = append(cluster, member)
+	}
+	// The fold keeps the NEWEST as exemplars, so "kept" — the oldest — is
+	// among the rows it means to delete.
+	if _, answered, err := l.foldCluster(t.Context(), "ceo", cluster); err != nil || !answered {
+		t.Fatalf("foldCluster: answered=%v err=%v", answered, err)
+	}
+	rawRows, _ = snapshot(t, e)
+	if !slices.ContainsFunc(rawRows, func(ep Episode) bool { return ep.ID == "kept" }) {
+		t.Errorf("the fold deleted another summary's exemplar; raw rows left %v",
+			clusterIDs([][]Episode{rawRows}))
+	}
+}

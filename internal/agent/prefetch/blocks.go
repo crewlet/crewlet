@@ -41,7 +41,9 @@ const (
 	// RENDERING rather than the record: the observations are worth
 	// keeping, the prompt is what has a budget. It says how many it
 	// dropped, so a reader is not misled into thinking that is all the
-	// seat knows.
+	// seat knows. Every trait is on the profile's row, and
+	// `GET /agents/{id}/memory` returns the traits of each profile it
+	// lists whole.
 	maxRenderedTraits = 24
 )
 

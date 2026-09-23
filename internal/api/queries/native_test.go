@@ -324,6 +324,34 @@ func TestTheItemQueryAsksForEveryPart(t *testing.T) {
 	}
 }
 
+// THE REST OF A THREAD IS REACHABLE FROM THIS SURFACE. The item answer carries
+// a page of comments and an excerpt of each body; the cursor the answer hands
+// back and a comment's own id are the two reads that reach what it left out,
+// and a surface that dropped either offered a screen the newest twenty
+// comments and the opening of each, with no way to the rest.
+func TestTheItemQueryReachesTheRestOfItsThread(t *testing.T) {
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_item", map[string]any{
+		"id": "ENG-1", "comments_cursor": "1700000000000000:c-20", "comment": "c-7",
+	}); err != nil {
+		t.Fatalf("work_item: %v", err)
+	}
+	if w.taskWants.CommentCursor != "1700000000000000:c-20" {
+		t.Errorf("the thread's cursor reached the reader as %q", w.taskWants.CommentCursor)
+	}
+	if w.taskWants.Comment != "c-7" {
+		t.Errorf("the comment to read whole reached the reader as %q", w.taskWants.Comment)
+	}
+
+	// A COMMENT THE TASK DOES NOT HOLD is a dead link, not a broken node.
+	w = &stubWork{err: fmt.Errorf("%w: c-7 on t-1", tracker.ErrNoComment)}
+	_, err := askNative(t, queries.Sources{Work: w}, "work_item",
+		map[string]any{"id": "ENG-1", "comment": "c-7"})
+	if !errors.Is(err, queries.ErrNotFound) {
+		t.Errorf("a comment the task does not hold answered %v, want not-found", err)
+	}
+}
+
 // EVERY FILTER REACHES THE READER. A filter honoured on one transport and
 // dropped on the other is the exact divergence this package exists to
 // prevent, and a board silently ignoring `assignee` looks like a board with

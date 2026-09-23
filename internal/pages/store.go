@@ -104,8 +104,8 @@ func NewStore(opts Options) (*Store, error) {
 	return s, nil
 }
 
-// newTimeOrderedID mints an id that sorts by creation time. UUIDv7, for the
-// reason [tracker] gives, falling back to v4 rather than failing a write.
+// newTimeOrderedID mints an id that sorts by creation time: UUIDv7, falling
+// back to v4 rather than failing a write.
 func newTimeOrderedID() string {
 	if id, err := uuid.NewV7(); err == nil {
 		return id.String()
@@ -248,7 +248,8 @@ var (
 	ErrReserved = errors.New("pages: that container is reserved")
 )
 
-// Actor is who is making a write, on [tracker.Writer]'s terms — except that it
+// Actor is who is making a write, on
+// [github.com/crewlet/crewlet/internal/tracker.Writer]'s terms — except that it
 // travels per CALL here rather than on the store, because one node's knowledge
 // base serves every seat and every operator through one write path.
 type Actor struct {
@@ -293,10 +294,19 @@ func (a Actor) validate() error {
 	return nil
 }
 
-// excerpt is what a card shows, cut at [MaxExcerpt] bytes without breaking a
-// rune.
+// excerpt is what a card shows: the text with its whitespace folded to single
+// spaces, and at most [MaxExcerpt] bytes of it.
+//
+// MARKED, AND THE MARKER COUNTED AGAINST THE CAP. A card is the text a woken
+// seat is shown under "What changed" — the parser hands it over as the
+// notification's body — so a comment cut unmarked at the cap reads as a
+// comment that ENDED there. [textcut.Within] rather than Ellipsis because the
+// cap is a ceiling the field states rather than a guide: [Notify.Excerpt] and
+// [Change.Excerpt] are documented as at most MaxExcerpt bytes, and Ellipsis
+// puts its marker's three bytes outside the budget. [MaxExcerpt] says where
+// the whole text is.
 func excerpt(text string) string {
-	return textcut.Ellipsis(strings.Join(strings.Fields(text), " "), MaxExcerpt)
+	return textcut.Within(strings.Join(strings.Fields(text), " "), MaxExcerpt)
 }
 
 // cleanList trims, drops empties and de-duplicates, keeping the caller's

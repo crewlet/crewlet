@@ -57,10 +57,13 @@ different fact from an open one and the same fact for anything counting.
 
 ### Spend is on the task
 
-Every turn an agent spends on a task adds to that task's own counters. That is
-what makes "what did this cost" a question about a piece of work rather than
-about a seat's month, and it is the number a founder actually wants when a
-task has been reopened four times.
+A task carries its own spend counters — turns, rounds, tokens and wall time —
+and a turn recorded against the task adds to them. That is what makes "what did
+this cost" a question about a piece of work rather than about a seat's month,
+and it is the number a founder actually wants when a task has been reopened
+four times. **Nothing in this build records one:** the engine does not call
+the tracker's turn record, so every task's counters read zero, and so do
+`sort=spend` and the `spend_*` totals.
 
 ## The catalogue
 
@@ -270,6 +273,17 @@ is carried forward on every save: a goal save is a whole post-state replace,
 and one that dropped the updates would destroy the only part of a goal written
 in prose.
 
+**A goal holds at most 64 updates, and none is ever dropped.** Every update a
+goal holds comes back whole when the goal is read, and nothing else returns
+them — so an update pushed off the front to make room would be readable
+nowhere. A save that would take a goal past 64 is refused, naming the cap, and
+nothing in it is saved. The goal's **health is its own field**: a save that
+sets `health` with no `update` still moves it and still tells the owners and
+members. A commitment that has outlived 64 assessments is one whose next
+stretch is better filed as a goal of its own. The number is not a preference: a
+goal is saved whole in one record, and 64 is sized so that a goal with every
+other part at its own limit still fits that record.
+
 Goals are **read** by every seat with `list_work_goals` and at
 `GET /work/goals`, and on the dashboard's Goals screen. **Writing** one is an
 operator gesture — `write_work_goal`, not a seat's: a seat setting its own
@@ -289,8 +303,12 @@ A **view** is a saved query with a shape. Five shapes:
   want when the question is "what is moving". A board is `group_by=`, and what
   comes back is **columns**: each one's count is over the whole set, never over
   the rows it carries, so a column of four hundred says four hundred and hands
-  you twenty. Loading one further is `group=<value>`, which narrows the whole
-  query — including its totals.
+  you twenty. Loading one further is `group=<value>`, which answers that column
+  as an ordinary **list** — rows, a `next_cursor` to page to its end, and a
+  total that is the column's own — and narrows everything else in the query
+  with it, totals included. `group=` with `subgroup=` names one swimlane the
+  same way. A board itself takes no `cursor`, and one column takes no
+  `group_limit` (its page is `limit`); both are refused rather than ignored.
 - **`calendar`** — by date, which is what you want when the question is "what
   is due". Its axis IS the `due` key, so the grid's own window spends the one
   key the grammar has for it: the fetch is bounded to the days on screen, the
@@ -443,21 +461,36 @@ furniture, and a seat's job is the work rather than the furniture around it.
 
 ### Manual order
 
-A board is drag-ordered, and the order is a real value on the task rather than
-a position in a list. Dragging one task writes one record; the key it mints
-sits between its new neighbours.
+A project's tasks have a manual order, and it is a real value on the task
+rather than a position in a list. A new task lands at the end. Placing a task
+between two others writes one record, and the key it mints sits between those
+two cards' keys **as they are when the record is written** — the engine reads
+them itself rather than trusting keys a screen read earlier, which may have
+moved since. No surface in this build places a card: the dashboard's board
+draws the order and does not edit it, and neither a seat's tools nor the
+operator routes move one. What follows is how the order behaves under the
+engine's own placements and repairs.
 
 Repeated insertion at the same point makes keys grow — about one character for
 every six drops into one gap — and past a threshold the engine **re-spreads**
 the project's whole order in the background, in batches, order-preserving. A
-drag does not wait for it: the drag lands with its long key and moves nothing
-but the card dragged, and the re-spread follows. Every intermediate state is
+drop does not wait for it: the drop lands with its long key and moves nothing
+but the card dropped, and the re-spread follows. Every intermediate state is
 the original order, so an interrupted re-spread leaves a correct board. The one
 drop that is refused is one whose key would pass the schema's 254-character
 ceiling — roughly a thousand more drops into one gap after it was handed to
 the re-spread, before the re-spread has run. The refusal names the length, the
 limit and the re-spread, and the same drop between the same two cards lands
 once the re-spread has given them short keys.
+
+A re-spread runs while the board is in use, and **a card placed while it runs
+stays where it was put.** Each batch is published against the order the batch
+before it left, so a placement in between refuses the next batch; the
+re-spread then plans again from the order as it now is, the placement included,
+and starts over. After four plans in a row it gives way to whoever is arranging
+the board and the next sweep tries again. A **removed** task is re-keyed with
+the rest, so restoring it brings it back where it was, and a task **moved to
+another project** meanwhile is left where its new project put it.
 
 Two concurrent drags into the same gap can mint the same key. That is repaired
 rather than refused: the engine gives all but one of the tasks sharing a key a
@@ -856,13 +889,12 @@ says rather than what it is about:
 |---|---|---|
 | `purged` | the lead of the project the task was filed in | nothing — the task is gone from every node and nothing restores it |
 
-`purge_task` is the one operation in this engine with no inverse, and for a
-long time it told **nobody**: a task, its comments, its revisions, its history
-and its turn records were destroyed on every node and the person accountable
-for that project heard nothing. The wake names the key, who ran it and their
-stated reason — and nothing else. It quotes neither the title nor the body,
-because the record outlives the rows: an excerpt of what was purged would keep
-a copy of exactly that, on the log, for its whole retention window.
+`purge_task` is the one operation in this engine with no inverse, so the
+person accountable for the project is told it happened. The wake names the
+key, who ran it and their stated reason — and nothing else. It quotes neither
+the title nor the body, because the record outlives the rows: an excerpt of
+what was purged would keep a copy of exactly that, on the log, for its whole
+retention window.
 
 Only `prioritised` **addresses** its recipient. A goal's owners are told so they can
 act in the work, not so they can reply — a wake that asked for an answer on
@@ -1041,6 +1073,36 @@ its whole retention window. What survives is that it happened, to which key,
 by whom, and the reason the operator gave — whole: a reason too long for the
 notification's line is refused, naming how many bytes fit, before anything is
 destroyed, rather than cut to fit.
+
+**What a purge leaves, exactly.** On every node that applies it:
+
+- **Gone:** the task and everything it owns — its comments, its body
+  revisions, its checklists, its custom field values, its tags, watchers and
+  collaborators, and every key it was ever known by — and every row through
+  which another task referred to it: relations, dependencies in both
+  directions, references, and the ancestry of its subtree (its children move,
+  see above).
+- **Kept, emptied:** its **history**. Every change it ever had is still in the
+  activity feed — who made it, when, what kind of change it was and in which
+  project — with its text and its field changes removed and the row marked
+  `content_purged`. The feed still answers `task=<the key it had>`. The
+  **inbox notices** about it are kept the same way: who was told and why, not
+  what was said.
+- **Kept, whole:** the purge's own row in the feed, which carries the purge's
+  line — the key, who purged it and the reason — whether or not the project
+  has a lead to tell; a **deletion marker** with the task's id and key, who
+  purged it, when and why, which is what drops any record about the task that
+  arrives later; any per-turn spend rows recorded against it (which turn,
+  which seat, what it cost); and a goal target that named it keeps its id and
+  no longer counts it.
+
+What a purge does not reach at all is anything outside a node's live tables:
+the **log** keeps every record about the task — its title and body among them
+— until it is trimmed past them; a node's snapshot taken before the purge
+keeps its copy until the next one replaces it, and a **backup** for as long as
+the backup is kept; and a node that holds a record it cannot read yet, because
+a newer build wrote it, keeps that record until a build that can read it
+arrives. See [Retention](retention.md#removal-deletion-and-what-a-purge-does-not-reach).
 
 The purge report gives no time guarantee, and that is honest rather than
 evasive: an offline or evicted disk keeps its copy until it replays, adopts a

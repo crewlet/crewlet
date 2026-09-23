@@ -81,18 +81,21 @@ type DiaryStore interface {
 const PersistSource = "persist_decider"
 
 const (
-	// shortTTLDefaultDays is what a SHORT tier gets when the model
-	// proposes no usable duration. A month outlives the operational
-	// context the tier is for — a sprint, an incident, someone's leave —
-	// without pinning a fact into the prompt for a quarter.
-	shortTTLDefaultDays = 30
+	// ShortTTLDefaultDays is what a SHORT note gets when its writer names
+	// no usable duration. A month outlives the operational context the
+	// tier is for — a sprint, an incident, someone's leave — without
+	// pinning a fact into the prompt for a quarter. Exported because the
+	// `reflect_and_persist` builtin writes the same tier and must give it
+	// the same default.
+	ShortTTLDefaultDays = 30
 
-	// shortTTLMaxDays caps what the model may propose. Beyond half a year
-	// a fact is not "short-lived with a known expiry", it is a LONG the
-	// model mislabelled, and an uncapped proposal turns one
-	// misclassification into a row that sits in the prompt effectively
-	// for ever.
-	shortTTLMaxDays = 180
+	// ShortTTLMaxDays caps a SHORT note's duration. Beyond half a year a
+	// fact is not "short-lived with a known expiry", it is a LONG one
+	// mislabelled, and an uncapped proposal turns one misclassification
+	// into a row that sits in the prompt effectively for ever. The
+	// decider clamps a proposal to it, having nobody to ask; the builtin
+	// refuses past it, naming it, because a model can choose again.
+	ShortTTLMaxDays = 180
 
 	// dedupPoolLimit bounds the memories rendered into the prompt for
 	// dedup. The signal saturates well before this: what the classifier
@@ -724,22 +727,22 @@ func coerceTTLDays(v any) int {
 	case json.Number:
 		parsed, err := n.Int64()
 		if err != nil {
-			return shortTTLDefaultDays
+			return ShortTTLDefaultDays
 		}
 		days = int(parsed)
 	case string:
 		parsed, err := strconv.Atoi(strings.TrimSpace(n))
 		if err != nil {
-			return shortTTLDefaultDays
+			return ShortTTLDefaultDays
 		}
 		days = parsed
 	default:
-		return shortTTLDefaultDays
+		return ShortTTLDefaultDays
 	}
 	if days < 1 {
-		return shortTTLDefaultDays
+		return ShortTTLDefaultDays
 	}
-	return min(days, shortTTLMaxDays)
+	return min(days, ShortTTLMaxDays)
 }
 
 // extractJSONObject reads a model's object out of a response.

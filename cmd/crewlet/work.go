@@ -55,16 +55,19 @@ func runWork(args []string, stdout, stderr io.Writer) error {
 // in the ticket they were asked to act on, so it has to be looked up — which is
 // the whole point of asking.
 //
-// The reason is required because it is the only thing that survives. The rows
-// are destroyed; what remains is the deletion marker, and its reason is the
-// entire account of what used to be at that key for whoever reads it a year
-// later.
+// The reason is required because the rows are destroyed and the reason is the
+// only account of why. The node that takes the purge logs it beside the key
+// (`task_purged`), and when the project has a lead it travels whole on the
+// notification the lead receives — which is why the node refuses one too long
+// to fit that line (`reason_too_long`, naming how many bytes do) rather than
+// cutting it, lead or no lead.
 func workPurge(args []string, stdout, stderr io.Writer) error {
 	id, rest := splitSubject(args)
 	var project, reason, confirm, opID *string
 	client, err := nodeClientFor(rest, "work purge", stderr, func(fs *flag.FlagSet) {
 		project = fs.String("project", "", "the task's project key; required")
-		reason = fs.String("reason", "", "why; recorded on the deletion marker")
+		reason = fs.String("reason", "", "why; required, and refused rather "+
+			"than cut if too long to travel whole")
 		confirm = fs.String("confirm", "",
 			"the task's KEY — this destroys the task and every row it produced")
 		opID = fs.String("op-id", "",
@@ -87,7 +90,7 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 			"the wrong one blocks writes to a project it is not about")
 	case strings.TrimSpace(*reason) == "":
 		return fmt.Errorf("state why in -reason: the rows are destroyed and " +
-			"the marker's reason is the only account of them that survives")
+			"the reason is the only account of why")
 	}
 
 	var answer struct {

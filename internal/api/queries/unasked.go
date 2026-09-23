@@ -99,12 +99,11 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 // workspace accumulates one per channel for as long as the retention sweep
 // keeps them.
 //
-// IT DOES NOT GOVERN A THREAD'S HISTORY, which is the correction: one page
-// size served both reads, and they are not the same question. A thread's
-// entries are bounded by the WRITER — `Record` trims to `conversation
-// .max_entries` on every write — so a second cut here bought nothing on a
-// default company (20 kept against a 50 asked for) and silently dropped a
-// conversation's OPENING on one that raised the knob, since `History` orders
+// IT DOES NOT GOVERN A THREAD'S HISTORY: one page size served both reads, and
+// they are not the same question. A thread's entries are bounded by the
+// WRITER — the ledger trims to `turn_engine.conversation_session.max_entries`
+// on every write — so a second cut here could only drop a conversation's
+// OPENING on a company that raised the knob, since `History` orders
 // newest-first to make `LIMIT` keep the recent turns and reverses afterwards.
 // It also tied the two together: asking for a longer channel roster changed
 // how much of a thread came back with it.
@@ -180,17 +179,29 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 		"conversations": rows,
 		"entries":       []ledger.Session{},
 		"available":     true,
-		// SAYS WHAT IS MISSING. Only the roster can be cut now — the
-		// entries below are what the ledger holds.
+		// SAYS WHAT IS MISSING. Only the roster is cut here — the entries
+		// below are what the ledger holds. The threads past the page are
+		// the ones this seat spoke in least recently: the roster is ordered
+		// by each thread's newest entry. A larger `limit` lists more of
+		// them, up to [MaxConversationPage]; PAST THAT NO ANSWER LISTS THEM,
+		// because the roster read takes no cursor, and `conversation=<key>`
+		// reads a thread only for a caller that already holds its key.
 		"truncated": truncated,
 	}
 	if key := strings.TrimSpace(p.String("conversation")); key != "" {
 		// WHAT THE SEAT ITSELF WOULD SEE: the same unbounded read the turn
 		// path takes on every turn, because the bound is the trim rather
 		// than a page. A number here could only ever be wrong — the value
-		// that would make it right is `conversation.max_entries`, which
-		// this layer does not hold — and being wrong low cuts a thread's
-		// opening off a screen whose whole purpose is reading the thread.
+		// that would make it right is
+		// `turn_engine.conversation_session.max_entries`, which this layer
+		// does not hold — and being wrong low cuts a thread's opening off a
+		// screen whose whole purpose is reading the thread.
+		//
+		// WHAT THE TRIM AND THE AGE SWEEP REMOVED IS COUNTED, not lost
+		// silently: each entry carries its `ordinal` in the conversation's
+		// whole record, so the oldest one's ordinal minus one is how many
+		// earlier turns this ledger no longer holds. Those are readable
+		// only in the thread itself, on the surface it was held on.
 		entries, err := s.Conversations.History(ctx, handle, key, 0)
 		if err != nil {
 			return nil, err

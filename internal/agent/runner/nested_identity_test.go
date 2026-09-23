@@ -121,3 +121,39 @@ func TestASubagentPhaseCarriesTheWorkersOwnWallClock(t *testing.T) {
 		t.Fatal("no subagent phase was published")
 	}
 }
+
+// A WORKER CUT OFF BY ITS OUTPUT CAP SAYS SO ON ITS OWN CARD.
+//
+// A length stop is a successful call with a short body, so a worker whose
+// answer stopped mid-sentence and one that finished are the same record unless
+// the flag rides it. The parent's model is told beside the answer; the phase
+// record is what an operator reads, and it has to carry the same fact.
+func TestASubagentPhaseSaysItsOutputWasCut(t *testing.T) {
+	t.Parallel()
+	for _, truncated := range []bool{true, false} {
+		pub := &collector{}
+		var mu sync.Mutex
+		base := emitter{
+			pub: pub, turn: Turn{RunID: "tn-1", AgentID: "agent-1"},
+			role: "Lead", tally: &Spend{}, mu: &mu,
+		}
+		base.nestedAt(1).subagentCompleted(context.Background(), subagent.Result{
+			ID: "research", Worker: "researcher", Status: subagent.StatusOK, Truncated: truncated,
+		})
+		var found bool
+		for _, ev := range pub.events {
+			done, ok := ev.Data.(*types.AgentPhaseCompleted)
+			if !ok || done.Phase != types.PhaseSubagent {
+				continue
+			}
+			found = true
+			if done.OutputTruncated != truncated {
+				t.Errorf("output_truncated = %v for a worker whose result said %v",
+					done.OutputTruncated, truncated)
+			}
+		}
+		if !found {
+			t.Fatal("no subagent phase was published")
+		}
+	}
+}

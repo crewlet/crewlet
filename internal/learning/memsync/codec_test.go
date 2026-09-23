@@ -639,10 +639,10 @@ func TestAnAppendOnlyRowIsNotRewrittenByASecondCarry(t *testing.T) {
 }
 
 // Two turns with NO ledgerable trigger in one conversation are two entries,
-// and they must still be two after they have travelled. Both carry ” for
-// work_key and for turn_id, so anything that mistakes that quadruple for the
-// row's identity collapses them — which is the same mistake the table's own
-// dedupe index avoids by being partial over `work_key <> ”`.
+// and they must still be two after they have travelled. Both carry the empty
+// string for work_key and for turn_id, so anything that mistakes that
+// quadruple for the row's identity collapses them — which is the same mistake the table's own
+// dedupe index avoids by being partial over a non-empty `work_key`.
 func TestTwoUnkeyedTurnsSurviveTheTripAsTwoEntries(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

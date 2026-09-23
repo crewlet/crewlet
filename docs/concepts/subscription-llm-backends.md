@@ -248,11 +248,28 @@ rescue path are shared. A run that stops without submitting is rescued as
 `incomplete` and judged on its record — the engine never reads the prose
 a CLI happened to end with as a delivery.
 
-Every bridged call is appended to the run's own durable row, bounded at
-200 with the **middle** dropped, because that log is the whole record a
-resume has: the process collecting a run may not be the one that launched
-it, and without it a restart mid-run would leave the reviewer judging a
-turn whose entire tool log is gone.
+Every bridged call is recorded durably as a record of its own in the
+fleet's coordination store, and the resume reads **every one** back,
+because that log is the whole record a resume has: the process collecting
+a run may not be the one that launched it, and without it a restart
+mid-run would leave the reviewer judging a turn whose entire tool log is
+gone. Nothing drops a call from it however long the run goes, so the
+submission's citations and the delivery check see a delivery made in the
+middle of a long run as surely as one made at its end. A call whose
+output is too large for one record keeps the head of it, marked; see
+[Code Sandbox § The tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
+for that, for the bounded copy the run's row still keeps for older
+builds during a rolling upgrade, and for how the run board pages a long
+log.
+
+The resumed phase's own record carries every one of those calls too. A
+phase record too large for one event (8 MiB) is not dropped: its longest
+texts are cut to a common level until it fits — the tool results first,
+then the tool arguments, then the prose — each ending in `…`, a cut tool
+call carrying its whole length as `result_bytes` (or `arguments_bytes`),
+and the record's notes say it was cut (`phase_record_fitted` in the log).
+Texts shorter than the level are left whole. What was cut is kept whole
+nowhere else: it was in the phase's own conversation when it ran.
 
 #### Code work inside the run
 

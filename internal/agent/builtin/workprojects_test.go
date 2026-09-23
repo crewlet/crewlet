@@ -274,3 +274,150 @@ func TestTaskActivityHandsBackThePositionSinceTakes(t *testing.T) {
 			"the one the first page already gave: %s", later.Output)
 	}
 }
+
+// EVERY CUT BLOCK OF MY_WORK NAMES ARGUMENTS WHOSE ANSWER HOLDS ALL OF IT,
+// and those arguments are ones list_work_items declares, takes and narrows on.
+//
+// A block stops at tracker.MyWorkRows and says so under `truncated`, and
+// `rest` is the only route a seat has to the rows past the cut. So each rest
+// has to narrow to its block's own people and dependencies, reach finished
+// work where the block does, and reach ARCHIVED work on every block — none of
+// them reads the archive, while the list leaves archived tasks and every task
+// in an archived project out unless it is asked. And every key has to be one
+// the list's schema declares, at the type it declares, or a client that
+// validates arguments against the schema refuses the rest before the tool
+// ever sees it.
+func TestEveryCutBlockOfMyWorkNamesWhereTheRestIs(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.myWork = tracker.MyWork{Handle: "eng", Truncated: tracker.MyWorkTruncated{
+		Priorities: true, Assigned: true, AskedOfMe: true, ChecklistItems: true,
+		Collaborating: true, WatchingRecent: true, UnblockedRecent: true,
+	}}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	list, held := reg.Lookup(tracker.ListWorkItemsTool)
+	if !held {
+		t.Fatalf("no %s tool", tracker.ListWorkItemsTool)
+	}
+	declared, _ := list.Tool.Parameters()["properties"].(map[string]any)
+
+	got := callWork(t, reg, tracker.MyWorkTool, nil)
+	var answer struct {
+		Rest map[string]map[string]any `json:"rest"`
+	}
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("my_work answered %q: %v", got.Output, err)
+	}
+	isEng := func(v []string) bool { return len(v) == 1 && v[0] == "eng" }
+	for block, narrows := range map[string]func(tracker.Query) bool{
+		"priorities": func(q tracker.Query) bool { return q.Preset == tracker.PresetPriorities },
+		"assigned":   func(q tracker.Query) bool { return isEng(q.Assignee) },
+		"asked_of_me": func(q tracker.Query) bool {
+			return q.AskedOf == "eng" && q.ShowClosed.All
+		},
+		"checklist_items": func(q tracker.Query) bool {
+			return isEng(q.ChecklistAssignee) && q.ShowClosed.All
+		},
+		"collaborating": func(q tracker.Query) bool { return isEng(q.Collaborator) },
+		"watching_recent": func(q tracker.Query) bool {
+			return isEng(q.Watcher) && q.ShowClosed.All
+		},
+		"unblocked_recent": func(q tracker.Query) bool {
+			return isEng(q.Assignee) && q.HasDependencies != nil && *q.HasDependencies &&
+				q.Blocked != nil && !*q.Blocked
+		},
+	} {
+		args, named := answer.Rest[block]
+		if !named {
+			t.Errorf("the cut %s block names no rest: %v", block, answer.Rest)
+			continue
+		}
+		for key, value := range args {
+			prop, known := declared[key].(map[string]any)
+			if !known {
+				t.Errorf("the %s block's rest names %q, which %s does not "+
+					"declare", block, key, tracker.ListWorkItemsTool)
+				continue
+			}
+			if want, have := prop["type"], jsonType(value); want != have {
+				t.Errorf("the %s block's rest sends %q as %s, and %s declares "+
+					"it %v", block, key, have, tracker.ListWorkItemsTool, want)
+			}
+		}
+		if listed := callWork(t, reg, tracker.ListWorkItemsTool, args); listed.Failed {
+			t.Errorf("the %s block's rest %v is refused by the list: %s",
+				block, args, listed.Output)
+			continue
+		}
+		if !narrows(trk.query) {
+			t.Errorf("the %s block's rest %v listed %+v, which is not that block",
+				block, args, trk.query)
+		}
+		if trk.query.Archived != tracker.ArchivedInclude {
+			t.Errorf("the %s block's rest %v lists archived=%q — the block "+
+				"holds archived work and the rest would never reach it",
+				block, args, trk.query.Archived)
+		}
+	}
+
+	// A BLOCK THAT WAS NOT CUT NAMES NOTHING, or "rest" would read as "more".
+	trk.myWork.Truncated = tracker.MyWorkTruncated{Assigned: true}
+	got = callWork(t, reg, tracker.MyWorkTool, nil)
+	answer.Rest = nil
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("my_work answered %q: %v", got.Output, err)
+	}
+	if len(answer.Rest) != 1 || answer.Rest["assigned"] == nil {
+		t.Errorf("rest = %v, want only the one cut block", answer.Rest)
+	}
+}
+
+// jsonType is the JSON Schema type a decoded JSON value has.
+func jsonType(value any) string {
+	switch v := value.(type) {
+	case bool:
+		return "boolean"
+	case string:
+		return "string"
+	case float64:
+		if v == float64(int64(v)) {
+			return "integer"
+		}
+		return "number"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	case nil:
+		return "null"
+	}
+	return "unknown"
+}
+
+// OPEN_ONLY FALSE LISTS FINISHED WORK. The grammar leaves done and cancelled
+// work out of every answer unless it is asked for, so a false that sent
+// nothing listed exactly what true did — and a seat checking whether a thing
+// had already been filed and finished was told it had not been filed.
+func TestOpenOnlyFalseListsFinishedWork(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	for _, tc := range []struct {
+		args       map[string]any
+		showClosed bool
+	}{
+		{map[string]any{}, false},
+		{map[string]any{"open_only": true}, false},
+		{map[string]any{"open_only": false}, true},
+	} {
+		if got := callWork(t, reg, tracker.ListWorkItemsTool, tc.args); got.Failed {
+			t.Fatalf("%v failed: %s", tc.args, got.Output)
+		}
+		if trk.query.ShowClosed.All != tc.showClosed {
+			t.Errorf("%v listed finished work = %v, want %v",
+				tc.args, trk.query.ShowClosed.All, tc.showClosed)
+		}
+	}
+}

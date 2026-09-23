@@ -182,9 +182,8 @@ func TestARecordCannotSayOneThingAndAnnounceAnother(t *testing.T) {
 // It told nobody. Every purge published with a nil notification, while
 // [tracker.Candidates] carried a `purged` branch and `ReasonPurged` sat in the
 // reason list — dead code on one side and silence on the other, each looking
-// like the other's explanation. A task and every comment, revision, history
-// row and turn record on it were destroyed and the only person accountable for
-// that project heard nothing.
+// like the other's explanation. A task, its comments and its revisions were
+// destroyed and the only person accountable for that project heard nothing.
 func TestAPurgeTellsTheProjectLead(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -247,6 +246,162 @@ func TestAPurgeExcerptKeepsNoCopyOfWhatItDestroyed(t *testing.T) {
 				want, excerpt)
 		}
 	}
+}
+
+// A PURGE LEAVES THE SKELETON OF THE TASK'S HISTORY AND NONE OF ITS CONTENT.
+//
+// A history row is the record that a change happened — who, when, what kind —
+// and a purge must leave that, or it erases that the work ever existed. But the
+// rows also carried what the task SAID: a create's excerpt is its description,
+// a comment's is its body, a title change's deltas name both titles, and every
+// row keeps the whole record it was written from. The purge deleted none of
+// them, so the feed went on showing the content the purge had been asked to
+// destroy. The inbox rows about the task carried the same excerpts.
+func TestAPurgeLeavesTheHistorysSkeletonAndNoneOfItsContent(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const (
+		title   = "the merger with Contoso"
+		body    = "terms are four point two per share"
+		remark  = "legal says wait for the filing"
+		renamed = "the Contoso deal, renamed"
+	)
+	task := newTask("t-1")
+	task.Title, task.Body, task.Assignee = title, body, "bob"
+	if _, err := r.writer.CreateTask(t.Context(), "op-create", task, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	r.drain()
+	key := r.strings(`SELECT key FROM tracker_tasks WHERE id = 't-1'`)[0]
+	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+			ID: "cm-1", Task: "t-1", Author: "ana",
+			AuthorKind: tracker.AuthorHuman, Body: remark, CreatedAt: wednesday,
+		}}, tracker.ChangeComment, &tracker.Notify{
+			Kind: tracker.ChangeComment, Excerpt: remark, CommentID: "cm-1",
+			Snapshot: tracker.Snapshot{
+				Key: key, Project: "ENG", Assignee: "bob",
+				CommentAuthorKind: tracker.AuthorHuman,
+			},
+		}); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.UpdateTask(t.Context(), "op-rename", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Title: ptr(renamed)},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	r.drain()
+
+	secrets := []string{title, body, remark, renamed}
+	// THE FIXTURE CARRIES THE CONTENT BEFORE THE PURGE, or the assertions
+	// below would pass against rows that never held it.
+	for _, secret := range secrets {
+		if contentRows(r, secret) == 0 {
+			t.Fatalf("no history or inbox row carries %q before the purge, so "+
+				"this case is not the shape it names", secret)
+		}
+	}
+
+	// NO PROJECT LEAD, so the purge carries no notification — and its own
+	// row in the feed still has to say what happened and why.
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "t-1", "ENG",
+		"asked for by legal"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	r.drain()
+	line := historyExcerpt(t, r, "task", "t-1")
+	for _, want := range []string{key, "was purged by ana", "asked for by legal"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("the purge's own row reads %q and does not say %q — with "+
+				"no lead to notify, nothing else a reader reaches holds it",
+				line, want)
+		}
+	}
+	// AND A REDELIVERY OF THE PURGE ITSELF, which runs the scrub again when
+	// the purge's own rows already exist — the one row it must never empty.
+	r.redeliver(r.consumed)
+	if again := historyExcerpt(t, r, "task", "t-1"); again != line {
+		t.Fatalf("a redelivered purge rewrote its own row from %q to %q", line, again)
+	}
+
+	for _, secret := range secrets {
+		if n := contentRows(r, secret); n != 0 {
+			t.Errorf("%d history or inbox rows still carry %q after the purge",
+				n, secret)
+		}
+	}
+
+	// THE SKELETON STAYS: every commit, its kind and who made it.
+	got := r.strings(`SELECT kind || ' by ' || actor FROM tracker_history
+		WHERE subject_kind = 'task' AND subject_id = 't-1' ORDER BY log_seq`)
+	want := []string{"created by ana", "comment by ana", "fields by ana", "purged by ana"}
+	if strings.Join(got, "; ") != strings.Join(want, "; ") {
+		t.Fatalf("the purged task's history reads %v, want %v — who did what "+
+			"and when is the part a purge leaves", got, want)
+	}
+
+	// AND THE FEED STILL REACHES IT BY THE KEY, says which rows lost their
+	// content, and keeps the purge's own line whole.
+	feed := r.activity(tracker.ActivityQuery{Task: key})
+	if len(feed.Records) != len(want) {
+		t.Fatalf("the feed for %s answered %d rows, want %d", key,
+			len(feed.Records), len(want))
+	}
+	for _, record := range feed.Records {
+		if record.SubjectKey != key {
+			t.Errorf("a %s row names the subject %q, want the purged key %q",
+				record.Kind, record.SubjectKey, key)
+		}
+		purgeRow := record.Kind == tracker.ChangePurged
+		if record.ContentPurged == purgeRow {
+			t.Errorf("the %s row says content_purged=%v — every row but the "+
+				"purge's own lost its content, and a reader cannot tell an "+
+				"emptied row from one that never had any without it",
+				record.Kind, record.ContentPurged)
+		}
+		if purgeRow && record.Excerpt != line {
+			t.Errorf("the feed renders the purge's own row as %q, want %q",
+				record.Excerpt, line)
+		}
+	}
+
+	// THE INBOX NOTICE KEEPS WHO WAS TOLD AND WHY, and not what was said.
+	inbox, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
+		Handle: "bob", IncludeSnoozed: true, Level: statelog.ReadStale,
+	}, wednesday)
+	if err != nil {
+		t.Fatalf("read bob's inbox: %v", err)
+	}
+	marked := 0
+	for _, notice := range inbox.Notices {
+		if notice.SubjectID != "t-1" {
+			continue
+		}
+		if notice.Excerpt != "" || !notice.ContentPurged {
+			t.Errorf("bob's %s notice reads %q with content_purged=%v",
+				notice.Kind, notice.Excerpt, notice.ContentPurged)
+		}
+		marked++
+	}
+	if marked == 0 {
+		t.Error("bob's notice about the purged task is gone — the purge " +
+			"empties what it said, not that he was told")
+	}
+}
+
+// contentRows counts the history and inbox rows holding text anywhere a row
+// keeps content.
+func contentRows(r *roundTrip, text string) int {
+	r.t.Helper()
+	like := "%" + text + "%"
+	return len(r.strings(`
+		SELECT id FROM tracker_history
+		WHERE excerpt LIKE ? OR fields_json LIKE ? OR CAST(document AS TEXT) LIKE ?
+		UNION ALL
+		SELECT record_id FROM tracker_notifications WHERE excerpt LIKE ?`,
+		like, like, like, like))
 }
 
 // AN UNBLOCKED NOTICE WITH NOBODY TO TELL IS REFUSED, never published.

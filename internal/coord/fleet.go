@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -120,6 +121,10 @@ const (
 	// record is the only thing that knows a billed box exists. A bucket
 	// age would reap it and leak the box for ever. The run's own reaper
 	// and its terminal delete are what end it.
+
+	// BridgeCallRetention is absent for the runs' own reason: a run's
+	// calls are what its resume is judged on, and the resume can come days
+	// later. See [BridgeCalls] for what ends them instead.
 
 	// ChannelRetention is deliberately absent too, and for a third
 	// reason: a channel's bucket can have NO age at all because an OPEN
@@ -787,6 +792,180 @@ type SandboxRuns interface {
 	DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error)
 }
 
+// BridgeCallRecord is one tool call a bridged coding run made, as the fleet
+// holds it.
+//
+// OPAQUE, for the reason [SandboxRuns] is: the call's name, arguments and
+// output are internal/sandbox's vocabulary, and coordination stores the bytes
+// that package composed. What coordination owns is the ADDRESS — the run, the
+// launch and the call's place in that launch's log.
+type BridgeCallRecord struct {
+	// TurnID is the run the call belongs to: the key of its [SandboxRuns]
+	// record.
+	TurnID string
+
+	// LaunchID is the job within that run that made the call. A run can hold
+	// more than one launch over its life, and each launch's log is its own.
+	LaunchID string
+
+	// Seq is the call's place in its launch's log: from 1, in the order the
+	// appends were allocated. An append that failed after taking a number
+	// leaves that number unused, so a reader orders by it and never counts by
+	// it.
+	Seq uint64
+
+	Value []byte
+}
+
+// BridgeLaunch names one launch that holds at least one key in the call log.
+type BridgeLaunch struct {
+	TurnID   string
+	LaunchID string
+}
+
+// BridgeCallQuery asks for one page of a launch's call log.
+type BridgeCallQuery struct {
+	TurnID   string
+	LaunchID string
+
+	// After is the cursor: the page holds only calls whose Seq is greater.
+	// Zero admits every call.
+	After uint64
+
+	// Last asks for the END of what After admits rather than its start: the
+	// newest calls, counted back from the newest one, and still returned in
+	// Seq order. It is how a reader shows how a log ENDS without reading the
+	// whole of it — a bridged run finishes by submitting, so its last call is
+	// the one that says what the run concluded.
+	Last bool
+
+	// Limit is the most calls the page carries. It must be at least one.
+	Limit int
+
+	// MaxBytes is the most the values a page carries may weigh together:
+	// the page stops before the call that would take it past, so a page of
+	// calls whose outputs are large is cut by what it weighs rather than by
+	// a count that says nothing about bytes. The first call a page reaches —
+	// the oldest one, or the newest on a [BridgeCallQuery.Last] page — is
+	// always carried, whatever it weighs, or a single heavy call would be a
+	// page nothing can ever read past. It must be at least one.
+	MaxBytes int
+}
+
+// BridgeCallPage is one page of a launch's call log.
+type BridgeCallPage struct {
+	// Calls are in Seq order.
+	Calls []BridgeCallRecord
+
+	// More reports that After admits calls this page does not carry: past
+	// its last call, so a reader asks again with After set to that call's
+	// Seq — or, on a [BridgeCallQuery.Last] page, BEFORE its first call.
+	More bool
+
+	// Total is how many calls the launch holds, whatever the page carries.
+	Total int
+}
+
+// ErrTooLarge reports a record longer than the transport can carry as one
+// message.
+//
+// PERMANENT, and distinguished from [ErrUnavailable] for that reason: the same
+// bytes are refused the same way on every attempt, so a caller that read it as
+// "try again" would retry for ever. Both backends refuse at the contract's own
+// ceiling ([MaxBridgeCallBytes]) before the transport is asked, and the KV
+// backend also answers it for the transport's own refusal.
+var ErrTooLarge = errors.New("coord: record too large for the transport")
+
+// MaxBridgeCallBytes is the largest value one call record may hold, in bytes.
+//
+// A record is ONE MESSAGE on its bucket's stream, and the ceiling on a message
+// is the transport's: [queue.MaxPayloadBytes]. The embedded broker is
+// configured to accept exactly that (internal/queue/jetstream/embedded.go),
+// and internal/coord/kv's OpenFleet refuses a connection whose server accepts
+// less — an external cluster left at nats-server's own 1 MiB default — so the
+// number is true of every connection a fleet store opens on. The NATS client
+// counts a message's HEADERS inside that limit, and a create carries one, so a
+// value at the full payload would be refused by the client; [bridgeCallHeadroom]
+// is what the headers get.
+//
+// Enforced by BOTH backends, and certified by the contract suite in both
+// directions: a value this long is stored, and a longer one is refused with
+// [ErrTooLarge] rather than stored cut. The memory twin has no transport of
+// its own, so without the ceiling stated here it would accept a record the
+// real broker refuses — the one direction a twin must never be wrong in.
+const MaxBridgeCallBytes = queue.MaxPayloadBytes - bridgeCallHeadroom
+
+// bridgeCallHeadroom is the room [MaxBridgeCallBytes] leaves under the
+// transport's ceiling for the headers a create's message carries.
+//
+// A create sends one header naming the sequence it expects, a few dozen bytes;
+// 64 KiB is three orders of magnitude past that, and under one percent of the
+// payload it is taken from.
+const bridgeCallHeadroom = 64 << 10
+
+// BridgeCalls is the fleet's log of the tool calls bridged coding runs make.
+//
+// # Why every call is its own record
+//
+// A bridged run's calls are made by a process outside the engine, minutes or
+// hours apart and possibly across a restart, and an agent-mode resume rebuilds
+// the whole phase from them: its submission, the delivery check and the
+// reviewer's evidence. As one list on the run's own [SandboxRuns] record the
+// log is one value rewritten whole on every change, so it has to be bounded,
+// and a delivery in the part a bound drops is one the resume cannot see: a
+// turn that had answered somebody could be sent round to answer them again. A
+// record per call has no list to bound: the log is as long as the run made it,
+// and a read returns every call.
+//
+// # CREATE-ONLY, and numbered by the store
+//
+// A call is never rewritten, so an append creates a record and nothing updates
+// one. The number is allocated by the backend, atomically, because the calls of
+// one run can land concurrently: a box may run tools in parallel, and two
+// appends numbering themselves from what each last read would collide.
+//
+// # No retention
+//
+// The bucket has no age, for the sandbox runs' reason: a run parked on a
+// person's answer waits days, and its calls are what its resume will be judged
+// on. A launch's records are PURGED by the run's own lifecycle — when the run
+// finishes, and when a second launch replaces it — and a sweep purges any the
+// lifecycle missed, which is the only thing that can end a record whose run
+// ended on a node that died between the two.
+//
+// # RAISES rather than answering empty
+//
+// "This run made no calls" is precisely the answer a delivery check reads as a
+// turn that reached nobody, so a read that failed must never be able to give
+// it.
+type BridgeCalls interface {
+	// AppendBridgeCall files one call under its launch and returns the Seq
+	// it was filed at.
+	//
+	// An empty turn id or launch id is an error, and a value longer than
+	// [MaxBridgeCallBytes] is [ErrTooLarge]: neither is ever stored, and
+	// neither is ever cut.
+	AppendBridgeCall(ctx context.Context, turnID, launchID string, value []byte) (uint64, error)
+
+	// BridgeCalls returns every call of one launch, in Seq order. A launch
+	// with none answers an empty slice and no error.
+	BridgeCalls(ctx context.Context, turnID, launchID string) ([]BridgeCallRecord, error)
+
+	// BridgeCallPage returns one page of one launch's calls. See
+	// [BridgeCallQuery] for what bounds it.
+	BridgeCallPage(ctx context.Context, q BridgeCallQuery) (BridgeCallPage, error)
+
+	// BridgeLaunches returns every launch that holds any key in the log,
+	// ordered by turn id and then launch id — the orphan sweep's read.
+	BridgeLaunches(ctx context.Context) ([]BridgeLaunch, error)
+
+	// PurgeBridgeCalls removes every record of one launch, and with them
+	// the launch's numbering: an append that lands afterwards starts again at
+	// 1, which is harmless because a purged launch is one no reader asks
+	// about, and the sweep purges what such an append leaves.
+	PurgeBridgeCalls(ctx context.Context, turnID, launchID string) error
+}
+
 // SecretRecord is one stored credential, as coordination holds it.
 //
 // SEALED BEFORE IT ARRIVES. Value is the envelope the Tier A keyring produced
@@ -1053,6 +1232,7 @@ type Fleet interface {
 	Follows
 	Fires
 	SandboxRuns
+	BridgeCalls
 	Secrets
 	Integrations
 	Mailboxes

@@ -561,32 +561,24 @@ func (d *Diary) MarkRetrieved(ctx context.Context, ids []string, at time.Time) {
 // their hands.
 //
 // A REFUSAL DOES NOT LIFT. Nothing in this build deletes a durable note —
-// [Diary.Expire] deletes only notes with a deadline, [Diary.Write] refuses a
-// durable note that carries one, and [Diary.TrimLong] deletes nothing — so a
-// seat that reaches the cap has every later durable note refused from then on.
+// [Diary.Expire] deletes only notes with a deadline, and [Diary.Write] refuses
+// a durable note that carries one — so a seat that reaches the cap has every
+// later durable note refused from then on.
 //
 // A SEAT CAN HOLD MORE, by one route: memsync's hydration writes a seat's rows
 // into this table directly rather than through [Diary.Write], so rows two
 // nodes each wrote before either had the other's can meet on one node. Such a
 // seat stays over the cap, and its durable notes are refused as at the cap.
+//
+// NO SWEEP TRIMS IT BACK, for two reasons. The seat is never told: a sweep
+// runs outside every turn, so a note dropped there is a fact the seat chose to
+// keep and goes on acting as if it still knew — the eviction this cap refuses
+// to make at the write. And it would not stay dropped: memsync carries a
+// seat's rows between nodes and carries no deletes, so a node that hydrates
+// the seat again inserts a dropped row again. A seat over the cap therefore
+// stays over it, which costs its recall scan the rows past the cap and costs
+// the seat nothing it knows.
 const DiaryLongCap = 500
-
-// TrimLong deletes nothing, and reports that it deleted nothing, whatever cap
-// it is handed.
-//
-// NO SWEEP DROPS A DURABLE NOTE, for two reasons. The seat is never told: a
-// sweep runs outside every turn, so a note dropped here is a fact the seat
-// chose to keep and goes on acting as if it still knew — the eviction
-// [DiaryLongCap] refuses to make at the write. And it would not stay dropped:
-// memsync carries a seat's rows between nodes and carries no deletes, so a
-// node that hydrates the seat again inserts a dropped row again. A seat over
-// the cap therefore stays over it, which costs its recall scan the rows past
-// the cap and costs the seat nothing it knows.
-//
-// IT STAYS ONLY FOR ITS CALLER: internal/maintenance's `agent_diary_long` job
-// calls it through that package's own DiaryStore seam, and deleting that job
-// and this method is one change across the two packages.
-func (d *Diary) TrimLong(context.Context, int) (int64, error) { return 0, nil }
 
 // Expire deletes short entries whose deadline has passed.
 func (d *Diary) Expire(ctx context.Context, now time.Time) (int64, error) {

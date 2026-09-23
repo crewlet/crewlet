@@ -161,7 +161,12 @@ type RevisionHistory struct {
 }
 
 // Revisions is one page of the history, newest first, metadata only.
+//
+// It takes the limit and offset AS THE CALLER SENT THEM and clamps them with
+// [pageBounds] itself, so GET /config/revisions and the socket's
+// `config_audit` answer one limit with one page.
 func (s *Service) Revisions(ctx context.Context, limit, offset int) (RevisionHistory, error) {
+	limit, offset = pageBounds(limit, offset)
 	revisions, truncated, err := s.configs.List(ctx, limit, offset)
 	if err != nil {
 		return RevisionHistory{}, err

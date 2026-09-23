@@ -1224,6 +1224,67 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 	}
 }
 
+// THE COUNTS ARE NOT A PAGE, AND THE THREE COVER ONE WINDOW.
+//
+// Counted from one listing page each, "inbound" stopped at the page size and
+// "skipped" at its own, over whatever spans those two pages happened to reach —
+// so on a busy company the three numbers on a row described different time and
+// the first one could never exceed the page. Every delivery and every outcome
+// the log holds is counted here, and `traffic_since` names the oldest delivery.
+func TestIntegrationTrafficCountsEveryDeliveryTheLogHolds(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	oldest := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	const deliveries, skipped = queries.MaxEventPage + 5, queries.MaxEventPage + 3
+	for i := range deliveries {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: "w" + strconv.Itoa(i), Type: "webhook:push",
+			Time:   oldest.Add(time.Duration(i) * time.Minute),
+			Source: "gitlab", Category: "webhook", Summary: "push",
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	for i := range skipped {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: "s" + strconv.Itoa(i), Type: "notification_skipped",
+			Time:   oldest.Add(time.Duration(i) * time.Minute),
+			Source: "engine", Category: "notification", Summary: "skipped",
+			Tags: map[string]string{"notification_source": "gitlab"},
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: log,
+	}, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	var gitlab map[string]any
+	for _, row := range rows {
+		if entry, _ := row.(map[string]any); entry["key"] == "gitlab" {
+			gitlab = entry
+		}
+	}
+	if gitlab == nil {
+		t.Fatalf("no gitlab row in %v", rows)
+	}
+	if got := gitlab["inbound"]; got != float64(deliveries) {
+		t.Errorf("inbound = %v, want every one of the %d deliveries", got, deliveries)
+	}
+	if got := gitlab["skipped"]; got != float64(skipped) {
+		t.Errorf("skipped = %v, want every one of the %d outcomes", got, skipped)
+	}
+	if got := body["traffic_since"]; got != oldest.Format(time.RFC3339) {
+		t.Errorf("traffic_since = %v, want the oldest delivery %s", got, oldest.Format(time.RFC3339))
+	}
+	wantLast := oldest.Add(time.Duration(deliveries-1) * time.Minute)
+	if got, _ := gitlab["last_at"].(string); got != wantLast.Format(time.RFC3339) {
+		t.Errorf("last_at = %v, want the newest delivery %s", got, wantLast.Format(time.RFC3339))
+	}
+}
+
 // NULL, NOT ZERO, when nothing was counted. An answer with no event log to
 // read cannot say how many deliveries were dropped, and reporting 0 would tell
 // an operator every one of them woke a seat.
@@ -1249,9 +1310,9 @@ func TestUncountedOutcomesAreNullRatherThanZero(t *testing.T) {
 // with no log to read at all, and for the same reason. A zero that means
 // "could not tell" is the number an operator would act on.
 //
-// A closed store fails the FIRST listing, so this covers the outer guard. The
+// A closed store fails the FIRST tally, so this covers the outer guard. The
 // narrower one inside countOutcomes applies the identical rule to a second
-// listing that fails on its own, which needs a transient store error this
+// tally that fails on its own, which needs a transient store error this
 // suite has no way to stage — it is defence in depth rather than a separate
 // contract.
 func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {

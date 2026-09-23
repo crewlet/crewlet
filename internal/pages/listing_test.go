@@ -2,7 +2,9 @@ package pages_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -467,16 +469,32 @@ func TestAFullPageOfPagesSaysSo(t *testing.T) {
 	}
 }
 
-// A PAGE WITH MORE CHILDREN THAN THE READ CARRIES SAYS SO.
+// A PAGE WITH MORE CHILDREN THAN THE READ CARRIES SAYS SO, AND SAYS WHERE THE
+// REST START.
 //
-// A detail read has NO paging parameter, so the flag is the whole of what a
-// caller gets — without it the child past the engine's own window was
-// unreachable through the read that claims to answer a page in full, and
-// invisible to whoever asked.
+// A detail read has NO paging parameter, so the flag and the cursor are the
+// whole of what a caller gets — without them the child past the engine's own
+// window was unreachable through the read that claims to answer a page in
+// full, and invisible to whoever asked.
+//
+// ONLY PUBLISHED CHILDREN, because the read is served to seats: a draft and a
+// trashed child that sort FIRST would otherwise take two of the window's
+// places, and put in front of an agent a page nobody considers current.
 func TestAPageWithMoreChildrenThanItCarriesSaysSo(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	parent := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	r.write(author("jane"), pages.NewPage{
+		Title: "A draft", Body: "prose", ParentID: parent.Page.ID,
+		Status: pages.StatusDraft,
+	})
+	binned := r.write(author("jane"), pages.NewPage{
+		Title: "A trashed page", Body: "prose", ParentID: parent.Page.ID,
+	})
+	if _, err := r.store.Trash(t.Context(), author("jane"), binned.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	r.drain()
 	for i := range pages.DefaultLimit + 1 {
 		r.write(author("jane"), pages.NewPage{
 			Title: fmt.Sprintf("Step %03d", i), Body: "prose",
@@ -489,8 +507,28 @@ func TestAPageWithMoreChildrenThanItCarriesSaysSo(t *testing.T) {
 		t.Fatalf("the read carries %d children, want the window of %d",
 			len(detail.Children), pages.DefaultLimit)
 	}
-	if !detail.ChildrenTruncated {
-		t.Error("the page has more children than it carries and does not say so")
+	for _, child := range detail.Children {
+		if child.Status != pages.StatusPublished {
+			t.Errorf("the page's children include %q, which is %s", child.Title,
+				child.Status)
+		}
+	}
+	if !detail.ChildrenTruncated || detail.ChildrenCursor == "" {
+		t.Fatalf("the page has more children than it carries and says "+
+			"truncated=%v with cursor %q", detail.ChildrenTruncated,
+			detail.ChildrenCursor)
+	}
+
+	// THE CURSOR RESUMES EXACTLY THERE: the listing it names is the same
+	// filter and the same order, so the rest is the one child left.
+	rest := r.list(pages.Filter{
+		ParentID: parent.Page.ID, Status: []pages.Status{pages.StatusPublished},
+		After: detail.ChildrenCursor,
+	})
+	want := fmt.Sprintf("Step %03d", pages.DefaultLimit)
+	if got := titles(rest); len(got) != 1 || got[0] != want || rest.Truncated {
+		t.Errorf("the children after the detail's cursor are %v (truncated=%v), "+
+			"want %s alone", got, rest.Truncated, want)
 	}
 
 	// AND A PAGE INSIDE THE WINDOW CLAIMS NOTHING.
@@ -498,7 +536,165 @@ func TestAPageWithMoreChildrenThanItCarriesSaysSo(t *testing.T) {
 	r.write(author("jane"), pages.NewPage{
 		Title: "One", Body: "prose", ParentID: few.Page.ID,
 	})
-	if got := r.get(few.Page.ID); got.ChildrenTruncated {
+	if got := r.get(few.Page.ID); got.ChildrenTruncated || got.ChildrenCursor != "" {
 		t.Error("a page with one child reports its children cut")
+	}
+}
+
+// A CHANGE'S EXCERPT IS MARKED, FITS ITS CAP, AND THE WHOLE TEXT IS WHERE THE
+// CAP SAYS IT IS.
+//
+// The excerpt is a card's text and a woken seat's notification body, and the
+// field is documented as at most [pages.MaxExcerpt] bytes. A cut that left the
+// marker outside that budget broke the field's own contract; a cut with no
+// marker read as a comment that ENDED at the cap; and a cut through a
+// two-byte character put a replacement character in front of every reader.
+// Two-byte runes throughout, so the cap always falls inside one.
+func TestAChangesExcerptIsMarkedInsideItsCapAndTheWholeIsReachable(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	opening := strings.Repeat("é", pages.MaxExcerpt)
+	page := r.write(author("jane"), pages.NewPage{
+		Title: "Runbook", Body: opening + "\n\nthe rest of it",
+	})
+	remark := strings.Repeat("ü", pages.MaxExcerpt)
+	if _, _, err := r.store.Comment(t.Context(), author("bob"), page.Page.ID,
+		pages.NewComment{Body: remark}); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	r.drain()
+
+	cut := map[pages.ChangeKind]string{}
+	for _, change := range r.activity(pages.PageActivityQuery{Page: page.Page.ID}).Changes {
+		cut[change.Kind] = change.Excerpt
+	}
+	for kind, whole := range map[pages.ChangeKind]string{
+		pages.ChangeCreated: opening, pages.ChangeComment: remark,
+	} {
+		got, ok := cut[kind]
+		switch {
+		case !ok:
+			t.Fatalf("the %s change left no entry", kind)
+		case len(got) > pages.MaxExcerpt:
+			t.Errorf("the %s excerpt is %d bytes, past its %d-byte cap",
+				kind, len(got), pages.MaxExcerpt)
+		case !strings.HasSuffix(got, "…"):
+			t.Errorf("the %s excerpt was cut and not marked: it reads as "+
+				"text that ended there", kind)
+		case !utf8.ValidString(got):
+			t.Errorf("the %s excerpt was cut through a character", kind)
+		case !strings.HasPrefix(whole, strings.TrimSuffix(got, "…")):
+			t.Errorf("the %s excerpt is not the opening of what was written", kind)
+		}
+	}
+
+	// THE WHOLE TEXT IS WHERE MaxExcerpt SAYS: a create's first line in the
+	// body of version 1, a comment on its own row.
+	first, held, err := r.reader.Revision(t.Context(), page.Page.ID, 1,
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil || !held {
+		t.Fatalf("Revision 1: held=%v err=%v", held, err)
+	}
+	if !strings.HasPrefix(first.Body, opening) {
+		t.Error("version 1 does not hold the first line the create's card cut")
+	}
+	comments := r.get(page.Page.ID).Comments
+	if len(comments) != 1 || comments[0].Body != remark {
+		t.Error("the comment's row does not hold the text its card cut")
+	}
+}
+
+// A TEXT THAT FITS IS NOT MARKED. The marker says something was cut, so a
+// comment of exactly the cap carrying one would claim a cut that never
+// happened.
+func TestAnExcerptThatFitsIsNotMarked(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	remark := strings.Repeat("x", pages.MaxExcerpt)
+	if _, _, err := r.store.Comment(t.Context(), author("bob"), page.Page.ID,
+		pages.NewComment{Body: remark}); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	r.drain()
+	for _, change := range r.activity(pages.PageActivityQuery{
+		Page: page.Page.ID, Kinds: []pages.ChangeKind{pages.ChangeComment},
+	}).Changes {
+		if change.Excerpt != remark {
+			t.Errorf("a comment of exactly the cap came back as %d bytes "+
+				"ending %q", len(change.Excerpt),
+				change.Excerpt[max(0, len(change.Excerpt)-8):])
+		}
+	}
+}
+
+// ONLY A BODY'S FIRST LINE AND A COMMENT CAN REACH THE CUT.
+//
+// [pages.MaxExcerpt] says where the whole text of a cut excerpt is, and it
+// names two places because only two kinds of text can be longer than the cap:
+// a save's message and a title are the other excerpts a change carries, and
+// they are refused at write above their own caps. Raise either cap past
+// MaxExcerpt and a message or a title becomes a third thing that is cut, with
+// no statement of where the rest of it is.
+func TestOnlyABodyAndACommentCanReachTheExcerptCut(t *testing.T) {
+	t.Parallel()
+	for name, limit := range map[string]int{
+		"MaxMessage": pages.MaxMessage, "MaxTitle": pages.MaxTitle,
+	} {
+		if limit > pages.MaxExcerpt {
+			t.Errorf("%s is %d and MaxExcerpt %d: an excerpt of one would be "+
+				"cut, and MaxExcerpt does not say where the rest is",
+				name, limit, pages.MaxExcerpt)
+		}
+	}
+}
+
+// A LISTING'S LARGEST PAGE FITS THE ONE STATEMENT ITS LABELS ARE READ IN.
+//
+// The labels of every page on a listing are read with ONE `IN` list of their
+// ids, so [pages.MaxLimit] is also a bound parameter count. internal/store
+// falls back to 999 parameters when its probe of the engine cannot tell, and a
+// full page past that is a refused statement at exactly the moment somebody
+// asked for everything.
+func TestTheLargestListingFitsTheStatementItsLabelsAreReadIn(t *testing.T) {
+	t.Parallel()
+	const conservativeParameters = 999 // internal/store's fallback
+	if pages.MaxLimit > conservativeParameters {
+		t.Errorf("MaxLimit is %d and a statement may carry %d parameters: a "+
+			"full page's label read would be refused", pages.MaxLimit,
+			conservativeParameters)
+	}
+}
+
+// A PARENT CHAIN IS READ WHOLE, HOWEVER DEEP IT IS.
+//
+// Nothing at write bounds a tree's depth, so a cap on the walk would drop the
+// outermost pages of a deep chain — the ones a breadcrumb exists to show —
+// with nothing on the answer saying so. Eighteen levels, so the chain above
+// the deepest page is past the sixteen the walk was once capped at.
+func TestAParentChainIsReadWholeHoweverDeepItIs(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const depth = 18
+	var chain []string
+	parent := ""
+	for i := range depth {
+		page := r.write(author("jane"), pages.NewPage{
+			Title: fmt.Sprintf("Level %02d", i), Body: "prose", ParentID: parent,
+		})
+		parent = page.Page.ID
+		chain = append(chain, parent)
+	}
+
+	got := r.get(parent).Ancestors
+	if len(got) != depth-1 {
+		t.Fatalf("the deepest page reports %d ancestors, want all %d above it",
+			len(got), depth-1)
+	}
+	for i, ancestor := range got {
+		if ancestor.ID != chain[i] {
+			t.Fatalf("ancestor %d is %s, want %s: the chain is outermost "+
+				"first", i, ancestor.ID, chain[i])
+		}
 	}
 }

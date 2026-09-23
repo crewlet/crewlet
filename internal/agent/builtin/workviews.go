@@ -141,15 +141,14 @@ func (t *saveWorkView) Parameters() map[string]any {
 				"additionalProperties": map[string]any{"type": "string"},
 				"description": "The query, in the grammar's own parameter " +
 					"names — which list_work_items spells differently for " +
-					"four of its arguments: " + AliasSentence() + ". A " +
-					"custom field is `f.<ref>`. Everything else — assignee, " +
-					"type, priority, due, updated, created, reporter, " +
-					"watcher, unit, goal, sort, limit, preset — is " +
-					"the same word. Refused if any key does not parse, and " +
-					"`view`, `cursor`, `read_level`, `max_lag_seconds`, " +
-					"`max_lag_seq` and `min_position` are refused " +
-					"outright: they are about the reader rather than the " +
-					"rows.",
+					"some of its arguments: " + AliasSentence() + ". A " +
+					"custom field is `f.<ref>`. These are the same word in " +
+					"both: " + SameWordSentence() + ". Refused if any key " +
+					"does not parse, and `view`, `preset`, `cursor`, " +
+					"`read_level`, `max_lag_seconds`, `max_lag_seq` and " +
+					"`min_position` are refused outright: a saved view may " +
+					"not expand into another, and the rest are about the " +
+					"reader rather than the rows.",
 			},
 			"owner": map[string]any{
 				"type": "string",

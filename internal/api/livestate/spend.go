@@ -138,8 +138,10 @@ type spendEntry struct {
 //
 // ZERO WHERE NOTHING CAN HAVE BEEN DROPPED, which is the common case: the
 // caller then keeps the window's own `since`, and nothing about an ordinary
-// company's heading changes. A seed that FILLED the cap counts as a drop
-// whether or not its store read left anything behind — see [History.Spend].
+// company's heading changes. A seed counts as a drop when the store says it
+// left older records of the window behind, or when it was handed more than
+// the cap — see [History.SpendTruncated]; one that merely filled the cap
+// does not.
 //
 // AN INSTANT, NOT THE RECORD'S OWN STRING. Records arrive in whichever of the
 // layouts [newStamp] accepts, and RFC 3339 with fractional seconds does not

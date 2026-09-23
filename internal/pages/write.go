@@ -133,7 +133,10 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternCreate,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			if err := checkParent(ctx, tx, page.ID, page.ParentID); err != nil {
+				return statelog.Decision{}, err
+			}
 			return s.decide(actor, subject, OpCreate, scope, opID, CreatePayload{
 				V: DocumentVersion, PageID: page.ID, Container: container,
 				Title: title, ParentID: page.ParentID, Body: page.Body,
@@ -232,6 +235,12 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 		return Written{}, invalid("status", "%q is not one of %v",
 			*save.Status, Statuses())
 	}
+	if save.ParentID != nil {
+		// TRIMMED as [Store.Create] trims it, so " p1" and "p1" are
+		// one parent rather than a move to a page that does not exist.
+		parent := strings.TrimSpace(*save.ParentID)
+		save.ParentID = &parent
+	}
 
 	at := s.now()
 	opID := s.newSeqID()
@@ -254,6 +263,11 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 				return statelog.Decision{}, fmt.Errorf(
 					"%w: this edit is against version %d and the page is at %d",
 					ErrStaleVersion, save.BaseVersion, head.Version)
+			}
+			if save.ParentID != nil && *save.ParentID != head.ParentID {
+				if err = checkParent(ctx, tx, pageID, *save.ParentID); err != nil {
+					return statelog.Decision{}, err
+				}
 			}
 			patch, kind, changed := s.patchOf(actor, &head, save, at)
 			// PATCHED OR NOT, THE HEAD IS THE ANSWER, and it is taken
@@ -600,13 +614,12 @@ func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) 
 // patchOf turns a save into a record's payload and reports what changed.
 //
 // IT MUTATES THE HEAD IT WAS GIVEN, so the caller's returned page is what the
-// apply will produce — and it reports the DOMINANT change kind, because a card
-// renders one verb and an edit that touched a body and a label is a save.
+// apply will produce — and it reports the patch's [PagePatch.editKind], the
+// one verb the applier derives from the same record for the history row.
 func (s *Store) patchOf(actor Actor, head *Page, save Save, at time.Time) (
 	PagePatch, ChangeKind, bool) {
 
 	patch := PagePatch{V: DocumentVersion}
-	kinds := map[ChangeKind]bool{}
 
 	if save.Body != nil && *save.Body != head.Body {
 		patch.Body = save.Body
@@ -616,25 +629,26 @@ func (s *Store) patchOf(actor Actor, head *Page, save Save, at time.Time) (
 		}
 		head.Body = *save.Body
 		head.Version++
-		kinds[ChangeSaved] = true
 		patch.RetiredRevisions = retiredRevisions(head.Version)
 	}
 	if save.ParentID != nil && *save.ParentID != head.ParentID {
 		patch.ParentID = save.ParentID
 		head.ParentID = *save.ParentID
-		kinds[ChangeMoved] = true
 	}
 	if save.Status != nil && *save.Status != head.Status {
 		patch.Status = save.Status
 		head.Status = *save.Status
-		kinds[ChangeStatus] = true
 	}
 	if save.Labels != nil {
 		labels := cleanList(*save.Labels)
 		if !sameSet(labels, head.Labels) {
-			patch.Labels = labels
+			// NEVER A NIL SLICE ON THE PATCH: cleanList answers nil for
+			// a save that removed every label, and a pointer to nil
+			// travels as `null` — an absent field, which leaves every
+			// node's labels where they were. See [PagePatch.Labels].
+			carried := append(make([]string, 0, len(labels)), labels...)
+			patch.Labels = &carried
 			head.Labels = labels
-			kinds[ChangeLabels] = true
 		}
 	}
 	// THE MUTATOR REPORTS WHAT IT MOVED, on [subscribeMentions]'s shape and
@@ -653,13 +667,68 @@ func (s *Store) patchOf(actor Actor, head *Page, save Save, at time.Time) (
 	if save.Watch != nil && applyWatch(head, actor.Handle, *save.Watch) {
 		patch.Watchers = head.Watchers
 		patch.Muted = head.Muted
-		kinds[ChangeWatchers] = true
 	}
-	if len(kinds) == 0 {
+	kind, changed := patch.editKind()
+	if !changed {
 		return patch, "", false
 	}
 	head.UpdatedAt = at
-	return patch, dominantKind(kinds), true
+	return patch, kind, true
+}
+
+// checkParent refuses a parent a page cannot have, inside the decision's own
+// snapshot: one this node holds no page for, the page itself, or a page
+// beneath it. Empty is the top of the container and always allowed.
+//
+// A PARENT THAT CLOSES A LOOP leaves the page and everything under it with a
+// parent chain that never reaches the top of its container — each breadcrumb
+// runs round the loop instead — and a parent nothing holds leaves a chain that
+// ends at a page nobody can open. So both are refused naming the field rather
+// than stored.
+//
+// WHAT THIS CANNOT REFUSE is a loop two writes close between them — each on
+// its own page's subject, each decided before the other applied — because
+// neither snapshot holds the other's move and the broker orders the two
+// subjects independently. [Reader.ancestors] keeps its record of visited
+// pages for that case.
+//
+// A PARENT ON ANOTHER CONTAINER IS NOT REFUSED: the detail read selects a
+// page's children by parent alone, whatever container each is in, so such a
+// child is still reachable from its parent.
+func checkParent(ctx context.Context, tx *sql.Tx, pageID, parentID string) error {
+	if parentID == "" {
+		return nil
+	}
+	if parentID == pageID {
+		return invalid("parent_id", "a page cannot be its own parent")
+	}
+	seen := map[string]bool{}
+	for id := parentID; id != "" && !seen[id]; {
+		seen[id] = true
+		var above string
+		err := tx.QueryRowContext(ctx,
+			`SELECT parent_id FROM pages_heads WHERE id = ?`, id).Scan(&above)
+		switch {
+		case errors.Is(err, sql.ErrNoRows) && id == parentID:
+			return invalid("parent_id", "there is no page %s on this node — "+
+				"a parent is named by its page id", parentID)
+		case errors.Is(err, sql.ErrNoRows):
+			// AN ANCESTOR THAT IS GONE ends the chain: the parent
+			// exists, and nothing above a missing page can be this
+			// one.
+			return nil
+		case err != nil:
+			return fmt.Errorf("pages: read the parent chain of %s: %w",
+				parentID, err)
+		}
+		if above == pageID {
+			return invalid("parent_id", "page %s is beneath this page, so "+
+				"putting this page under it would close a loop — move %s "+
+				"out from under this page first", parentID, parentID)
+		}
+		id = above
+	}
+	return nil
 }
 
 // retiredRevisions is the exact list of versions this save's apply deletes.
@@ -766,23 +835,6 @@ func applyWatch(page *Page, handle string, watch bool) bool {
 	page.Muted = append(page.Muted, handle)
 	slicesSort(page.Muted)
 	return true
-}
-
-// dominantKind is the one verb a card renders for an edit that touched
-// several things.
-//
-// THE ORDER IS THE POINT: a save that also moved a page is a save, and a write
-// that only changed watchers is a watch. Rendering the last-set kind would
-// make the verb depend on field order in a struct.
-func dominantKind(kinds map[ChangeKind]bool) ChangeKind {
-	for _, kind := range []ChangeKind{
-		ChangeSaved, ChangeMoved, ChangeStatus, ChangeLabels, ChangeWatchers,
-	} {
-		if kinds[kind] {
-			return kind
-		}
-	}
-	return ChangeSaved
 }
 
 // excerptOfSave is what a card shows for one edit.

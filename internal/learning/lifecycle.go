@@ -1027,13 +1027,14 @@ func (l *Lifecycle) anchors(ctx context.Context, handle string) ([]anchor, error
 // prevent. See [Lifecycle.foldCluster] for why that state should be
 // unreachable, and [Lifecycle.sweepOrphans] for why it is still handled.
 //
-// A RETIRED EXEMPLAR NEVER GETS HERE, and that is what keeps it from being
-// taken for one: [Lifecycle.candidates] leaves every id a summary's exemplar
+// A RETIRED EXEMPLAR IS KEPT OUT TWICE, because this coverage test alone would
+// call it an orphan: two summaries can claim overlapping spans with the same
+// tool shape, so one summary's exemplar can sit inside the other's span — or
+// inside its own, when a fold committed between the window read and the
+// summaries read. [Lifecycle.candidates] leaves every id a summary's exemplar
 // list names out of the window (see [retiredExemplars] for which lists name
-// one). Two summaries can claim overlapping spans with the same tool
-// shape, so one summary's exemplar can sit inside the other's span, where
-// this coverage test alone would call it an orphan and delete a live
-// drill-down anchor.
+// one), and [deleteUnanchored] re-checks inside the sweep's own transaction,
+// which is the check that holds when the two reads disagree.
 func splitOrphans(window []Episode, anchors []anchor, threshold float64) (live, orphans []Episode) {
 	for _, ep := range window {
 		if coveredBySummary(anchors, ep, threshold) {
@@ -1077,7 +1078,7 @@ func (l *Lifecycle) sweepOrphans(ctx context.Context, handle string, orphans []E
 		ids[i] = ep.ID
 	}
 	n, err := l.tx(ctx, "sweep orphaned episodes", func(tx *sql.Tx) (int64, error) {
-		return deleteEpisodes(ctx, tx, handle, ids)
+		return deleteUnanchored(ctx, tx, handle, ids)
 	})
 	if err != nil {
 		return 0, err
@@ -1122,18 +1123,16 @@ func (l *Lifecycle) sweepOrphans(ctx context.Context, handle string, orphans []E
 //     exclusively while it runs. A node with no broker or no store publishes
 //     nothing (memsync.New answers nil), and there the column is alone.
 //
-// NOTHING RENDERS THE COLUMN BACK TODAY, which is the honest other half and
-// was checked rather than assumed. `query_episodes` prints an episode's
-// `task_summary`, and a compacted row has none — [Lifecycle.buildCompacted]
-// writes the pattern and leaves the turn-shaped prose columns empty, because
-// this row is not a turn. Recall excludes compacted rows by default
+// THE SEAT READS IT BACK; A SCREEN DOES NOT. `query_episodes` prints a
+// compacted row's `common_task_pattern` whole, in its recency mode — its
+// similarity mode leaves compacted rows out, as recall does by default
 // ([RecallQuery.Kinds]). The projection the dashboard's memory rows are built
-// from leaves the column out too — it ships the turn-shaped fields and a
-// `compacted` flag, so a folded row reads there as an empty summary with a
-// count. So reading the sentence back means going to one of the two copies
-// above rather than to a screen. That is a gap in the READ side rather than a
-// reason to widen this budget — a log line sized to carry a value nobody can
-// look up is a log line pretending to be a store.
+// from leaves the column out — it ships the turn-shaped fields and a
+// `compacted` flag, and [Lifecycle.buildCompacted] leaves those empty because
+// this row is not a turn, so a folded row reads there as an empty summary with
+// a count. That is a gap in the dashboard's READ side rather than a reason to
+// widen this budget — a log line sized to carry a value nobody can look up is
+// a log line pretending to be a store.
 //
 // Contrast [modelAnswerDetail], which is larger for exactly the opposite
 // reason — what that one quotes has no copy at all, which is why its own
@@ -1222,7 +1221,7 @@ func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Ep
 		if err := insertEpisodeTx(ctx, tx, l.db, row); err != nil {
 			return 0, err
 		}
-		return deleteEpisodes(ctx, tx, handle, ids)
+		return deleteUnanchored(ctx, tx, handle, ids)
 	})
 	if err != nil {
 		return 0, false, err
@@ -1514,6 +1513,44 @@ func deleteEpisodes(ctx context.Context, tx *sql.Tx, handle string, ids []string
 	}
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM episodes WHERE agent_handle = ? AND id IN (`+placeholders(len(ids))+`)`,
+		args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// deleteUnanchored deletes one seat's raw rows by id, leaving any a summary
+// keeps as an exemplar — decided inside the caller's transaction, against
+// what is committed then.
+//
+// THE FOLD AND THE ORPHAN SWEEP DECIDE FROM READS MADE BEFORE THEIR
+// TRANSACTION, and that is where a retired exemplar gets in. [Lifecycle.compact]
+// reads the window and then the summaries as two statements, so a fold that
+// commits between them — a second Lifecycle over the same store, as a config
+// apply builds — leaves a window that still holds that fold's exemplars beside
+// a summary whose span covers them: [splitOrphans] calls the exemplar an
+// orphan, and the sweep deleted it, leaving the summary's drill-down pointing
+// at a row that no longer exists. TestTwoNodesFoldingOneSeatWriteOneSummary
+// caught it intermittently under -race. Re-reading the exemplars here closes it
+// for every interleaving: the write lock this transaction holds is the only
+// place a read cannot go stale before the delete lands.
+//
+// Not for [Lifecycle.evictCompacted], which deletes a summary's exemplars ON
+// PURPOSE, with the summary, in one transaction.
+func deleteUnanchored(ctx context.Context, tx *sql.Tx, handle string, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	args := make([]any, 0, len(ids)+2)
+	args = append(args, handle)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	args = append(args, handle)
+	res, err := tx.ExecContext(ctx,
+		`DELETE FROM episodes WHERE agent_handle = ? AND id IN (`+placeholders(len(ids))+`)
+		   AND id NOT IN (`+retiredExemplars+`)`,
 		args...)
 	if err != nil {
 		return 0, err

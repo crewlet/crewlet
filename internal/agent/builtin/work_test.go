@@ -1157,16 +1157,13 @@ func (f *fakeTracker) Depend(_ context.Context, _ string,
 	}}, nil
 }
 
-// EVERY FILTER THIS TOOL DECLARES REACHES THE QUERY, and the ones a seat
-// could not ask for at all were most of the grammar.
+// EVERY FILTER THIS TOOL DECLARES REACHES THE QUERY.
 //
-// The board's query language compiles forty-odd keys, every one indexed and
-// reachable from the dashboard and the REST route, and this tool forwarded
-// ten. So a seat could not ask for the bugs, for what is due this week, for
-// what moved since yesterday, for the subtasks of one item, for what it filed
-// or follows — or for a page after the first, which is the one that makes a
-// long answer usable at all. It also could not name a CUSTOM FIELD, which is
-// the whole point of a company declaring one.
+// A filter declared and not forwarded is one a model asks for, is not refused
+// for, and gets an unfiltered list back from: the bugs, what is due this week,
+// what moved since yesterday, the subtasks of one item, what it filed or
+// follows, archived work, a page after the first — and a CUSTOM FIELD, which
+// is the whole point of a company declaring one.
 func TestEveryDeclaredFilterReachesTheQuery(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1176,7 +1173,7 @@ func TestEveryDeclaredFilterReachesTheQuery(t *testing.T) {
 		"type": "bug", "priority": "high", "due": "thisweek",
 		"updated": "gte:-1d", "created": "gte:-7d", "parent": "ENG-1",
 		"reporter": "bo", "watcher": "ana", "unit": "platform",
-		"sort": "-updated", "cursor": "c1",
+		"archived": true, "sort": "-updated", "cursor": "c1",
 		"field_filters": map[string]any{"impact": "high"},
 	}); got.Failed {
 		t.Fatalf("the filtered list failed: %s", got.Output)
@@ -1188,7 +1185,7 @@ func TestEveryDeclaredFilterReachesTheQuery(t *testing.T) {
 		// column. See TestTheParentFilterIsResolvedToAnID.
 		"parent":   "i1",
 		"reporter": "bo", "watcher": "ana", "unit": "platform",
-		"sort": "-updated", "cursor": "c1", "f.impact": "high",
+		"archived": "true", "sort": "-updated", "cursor": "c1", "f.impact": "high",
 	} {
 		if got := trk.params[key]; got != want {
 			t.Errorf("the query carries %s=%q, want %q — a filter this tool "+

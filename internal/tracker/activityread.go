@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -74,15 +75,25 @@ type ActivityRecord struct {
 
 	// SubjectKey is the human-readable key of the task a row is about,
 	// resolved here because a feed of uuids is a feed nobody reads. Empty
-	// for a subject that has no key — a project, a view, a person.
+	// for a subject that has no key — a project, a view, a person. A
+	// PURGED task's key comes from its deletion marker, since the task row
+	// that held it is gone.
 	SubjectKey string `json:"subject_key,omitempty"`
 	Project    string `json:"project,omitempty"`
 
-	Excerpt   string           `json:"excerpt,omitempty"`
-	Fields    map[string]Delta `json:"fields,omitempty"`
-	CommentID string           `json:"comment_id,omitempty"`
-	BatchID   string           `json:"batch_id,omitempty"`
-	TurnID    string           `json:"turn_id,omitempty"`
+	Excerpt string           `json:"excerpt,omitempty"`
+	Fields  map[string]Delta `json:"fields,omitempty"`
+
+	// ContentPurged marks a row about a task that was later PURGED: the
+	// purge emptied its excerpt and fields, so their absence says nothing
+	// about the change itself. Who, when and what kind of change are what
+	// is left, and no read surface returns the rest. The purge's own row is
+	// not marked — it carries the purge's line whole.
+	ContentPurged bool `json:"content_purged,omitempty"`
+
+	CommentID string `json:"comment_id,omitempty"`
+	BatchID   string `json:"batch_id,omitempty"`
+	TurnID    string `json:"turn_id,omitempty"`
 
 	// Notified says whether the commit carried a notification — whether
 	// this change was ANNOUNCED. It is how a reader tells "nothing was
@@ -353,10 +364,17 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		       h.operator_id, h.subject_kind, h.subject_id, h.project_key,
 		       h.excerpt, h.fields_json, h.comment_id, h.batch_id, h.turn_id,
 		       h.notified, h.late,
-		       (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id)
+		       COALESCE(
+		           (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id),
+		           (SELECT d.task_key FROM tracker_deletions d
+		            WHERE h.subject_kind = ? AND d.task_id = h.subject_id)),
+		       EXISTS (SELECT 1 FROM tracker_deletions d
+		               WHERE h.subject_kind = ? AND d.task_id = h.subject_id
+		                 AND d.purge_record_id <> h.id)
 		FROM tracker_history h`+clause+`
 		ORDER BY h.log_seq DESC
-		LIMIT ?`, append(args, limit+1)...)
+		LIMIT ?`, append(append([]any{string(KindTask), string(KindTask)}, args...),
+		limit+1)...)
 	if err != nil {
 		return nil, "", fmt.Errorf("tracker: read the activity feed: %w", err)
 	}
@@ -378,12 +396,12 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		var kind, actorKind, subjectKind string
 		var fields string
 		var batch, key sql.NullString
-		var notified, late int
+		var notified, late, purged int
 		if err := rows.Scan(&record.ID, &packed, &record.LogStream,
 			&record.LogGeneration, &authored, &effective, &kind, &record.Actor,
 			&actorKind, &record.OperatorID, &subjectKind, &record.SubjectID,
 			&record.Project, &record.Excerpt, &fields, &record.CommentID,
-			&batch, &record.TurnID, &notified, &late, &key); err != nil {
+			&batch, &record.TurnID, &notified, &late, &key, &purged); err != nil {
 			return nil, "", fmt.Errorf("tracker: scan an activity row: %w", err)
 		}
 		record.LogSeq = uint64(packed) % statelog.GenerationStride
@@ -395,6 +413,7 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		record.BatchID = batch.String
 		record.SubjectKey = key.String
 		record.Notified, record.Late = notified != 0, late != 0
+		record.ContentPurged = purged != 0
 		if fields != "" && fields != "{}" {
 			if err := json.Unmarshal([]byte(fields), &record.Fields); err != nil {
 				// A ROW WHOSE DELTAS DO NOT DECODE IS STILL A ROW. The
@@ -419,6 +438,34 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 	return out, next, nil
 }
 
+// resolveActivitySubject is [resolveTaskID], and then the deletion markers.
+//
+// A PURGED TASK STILL HAS A HISTORY — its rows are scrubbed rather than
+// deleted, see [scrubPurgedContent] — and `task=` must reach it by the id or
+// key somebody holds. The task row and its key aliases went with the purge,
+// so what is left to resolve either is the marker, which records the id and
+// the key the task had when it was purged. Former keys do not resolve: the
+// aliases that held them are among the rows a purge removes.
+func resolveActivitySubject(ctx context.Context, tx *sql.Tx, idOrKey string) (string, error) {
+	id, err := resolveTaskID(ctx, tx, idOrKey)
+	if !errors.Is(err, ErrNoTask) {
+		return id, err
+	}
+	var purged string
+	switch err := tx.QueryRowContext(ctx, `
+		SELECT task_id FROM tracker_deletions WHERE task_id = ?
+		UNION ALL
+		SELECT task_id FROM tracker_deletions WHERE task_key = ?
+		LIMIT 1`, idOrKey, strings.ToUpper(idOrKey)).Scan(&purged); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", fmt.Errorf("%w: %s", ErrNoTask, idOrKey)
+	case err != nil:
+		return "", fmt.Errorf("tracker: resolve %q among the purged tasks: %w",
+			idOrKey, err)
+	}
+	return purged, nil
+}
+
 // compileActivity turns the query into a predicate.
 func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 	[]string, []any, error) {
@@ -434,7 +481,7 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 		// THE ID, RESOLVED FROM WHATEVER THE CALLER HELD. A feed asked
 		// for by a FORMER key must answer the same rows — the history is
 		// the one place a rename is most likely to be looked up from.
-		id, err := resolveTaskID(ctx, tx, task)
+		id, err := resolveActivitySubject(ctx, tx, task)
 		if err != nil {
 			return nil, nil, err
 		}

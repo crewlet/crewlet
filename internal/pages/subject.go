@@ -38,9 +38,9 @@ import (
 //
 // A NAMED STRING TYPE whose Valid is false for a kind this build has never
 // heard of — and the literal is RETAINED either way, for the reason
-// [tracker.ObjectKind] gives: a newer peer publishes a kind this build does
-// not know, and the deferral this build files it under forms a scope term out
-// of that literal.
+// [github.com/crewlet/crewlet/internal/tracker.ObjectKind] gives: a newer peer
+// publishes a kind this build does not know, and the deferral this build files
+// it under forms a scope term out of that literal.
 type ObjectKind string
 
 // The six kinds.

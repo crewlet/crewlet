@@ -243,7 +243,13 @@ Errors with ``no revision is active; run `crewlet config import` `` when nothing
 crewlet config revisions [-config PATH] [-limit 20]
 ```
 
-Lists recent revisions. The active revision is marked with `*`.
+Lists the newest revisions, 20 by default. The active revision is marked with
+`*`. When the store holds older revisions than the listing shows, it ends with
+a line saying so — the store reads one revision past the page to know, so a
+history of exactly `-limit` revisions is not reported as cut — and `-limit`
+takes a larger number to list them. The active revision can be one of those
+older ones, since `crewlet config activate` points the fleet at any stored
+revision, so a listing with no `*` in it does not mean nothing is active.
 
 ### `crewlet config diff`
 
@@ -646,11 +652,13 @@ gone.
 **The confirmation is the task's key**, not its id. The id is on the command
 line already, so repeating it confirms nothing; the key has to be looked up.
 **The reason is required** because the rows are destroyed and it is what
-explains the gap. It travels **whole** on the one line a purge leaves — the
-project lead's notification, whose excerpt the purge's row in the activity feed
-carries — beside the task's key and who purged it, and it is never cut to fit
-that line: a reason too long for it is refused, naming how many bytes fit, and
-nothing is purged. It is also written to the deletion marker.
+explains the gap. The node that takes the purge logs it beside the key
+(`task_purged`), and when the project has a lead it travels **whole** on the
+lead's notification — whose excerpt the purge's row in the activity feed
+carries — beside the task's key and who purged it. It is never cut to fit that
+line: a reason too long for it is refused (`400 reason_too_long`, naming how
+many bytes fit), whether or not the project has a lead, and nothing is purged.
+It is also written to the deletion marker.
 
 **Its children are moved, not destroyed.** Each direct child re-parents onto
 the purged task's own parent, or becomes a root when the purged task was one.

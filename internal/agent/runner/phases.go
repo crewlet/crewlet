@@ -165,20 +165,13 @@ type Resume struct {
 	Answer string
 
 	// Bridged is what an AGENT-MODE run called over the MCP bridge, read
-	// from the run's own durable row.
+	// from the run's own durable log.
 	//
-	// It has to come from the row rather than from memory: the process
-	// resuming may not be the one that launched, so its surface is fresh and
-	// has executed nothing. Ignored by a native resume, which replays the
-	// conversation instead.
-	//
-	// IT IS WHAT THE ROW KEPT, WHICH IS NOT ALWAYS EVERY CALL. Past
-	// [github.com/crewlet/crewlet/internal/sandbox.MaxBridgeCalls] the row
-	// holds the first and last halves of the run and only counts the calls
-	// between them, and an append the row cannot hold is not recorded at
-	// all; see that constant. Neither gap is visible here, so the
-	// submission's replay, the delivery check and the review's tool log all
-	// read this list as every call the run made.
+	// It is the whole record for that shape — every call the run made, in
+	// order — and it has to come from the log rather than from memory: the
+	// process resuming may not be the one that launched, so its surface is
+	// fresh and has executed nothing. Ignored by a native resume, which
+	// replays the conversation instead.
 	Bridged []ledger.Call
 
 	// Run describes the detached run this resume is collecting.
@@ -481,10 +474,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 
 	// VERBATIM. Review's evidence log takes the zero FormatOptions: the
 	// budgets belong to the cross-round ledger, and a reviewer judging an
-	// elided log is judging a summary and calling it evidence. What it is
-	// verbatim OF is w.Calls, which after an agent-mode resume is the run's
-	// bridged log — not always every call, with nothing here to mark the
-	// gap; see [Resume.Bridged].
+	// elided log is judging a summary and calling it evidence.
 	system := prompts.BuildReview(r.cfg.Seat, prompts.ReviewInput{
 		Intent:            w.Summary,
 		Outcome:           string(w.Outcome),

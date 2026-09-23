@@ -79,38 +79,31 @@ func (f *FleetStore) Mailbox(ctx context.Context, handle string) (coord.MailboxR
 }
 
 // Mailboxes returns every record, ordered by handle.
+//
+// ONE PASS through [FleetStore.each], never the client's key lister: that one
+// stops on the nil a closed subscription yields, so a listing cut off part way
+// comes back short with no error, and a short listing here is a sweep that
+// concludes a removed seat has no mailbox left to retire. See the package doc
+// for the rule and walk.go for the pass.
 func (f *FleetStore) Mailboxes(ctx context.Context) ([]coord.MailboxRecord, error) {
-	keys, err := f.mailboxes.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the mailbox records", err)
-	}
 	var out []coord.MailboxRecord
-	for key := range keys.Keys() {
-		handle, ok := decodeKey(key)
+	err := f.each(ctx, f.mailboxes, func(kve jetstream.KeyValueEntry) error {
+		handle, ok := decodeKey(kve.Key())
 		if !ok {
 			// A key this backend did not write. Skipped rather than
 			// guessed at: an invented handle would send a sweep to delete
 			// the mailbox of a seat nobody named.
-			continue
+			return nil
 		}
-		entry, err := f.mailboxes.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Deleted between the listing and the read, which is a
-			// retirement finishing. The outcome the reader would have
-			// acted towards, so it is skipped rather than raised.
-			continue
-		}
+		rec, err := decodeMailbox(handle, kve.Value(), kve.Revision())
 		if err != nil {
-			// RAISED, never skipped: a listing that quietly dropped a
-			// record is a sweep that concludes a removed seat has no
-			// mailbox left to retire.
-			return nil, unavailable("read a mailbox record", err)
-		}
-		rec, err := decodeMailbox(handle, entry.Value(), entry.Revision())
-		if err != nil {
-			return nil, err
+			return err
 		}
 		out = append(out, rec)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.MailboxRecord) int { return cmp.Compare(a.Handle, b.Handle) })
 	return out, nil

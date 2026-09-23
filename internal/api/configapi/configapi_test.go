@@ -201,8 +201,8 @@ func TestAnUnconfiguredNodeSaysSoRatherThanFailing(t *testing.T) {
 	if list.Code != http.StatusOK {
 		t.Fatalf("revisions got %d, want 200", list.Code)
 	}
-	if strings.TrimSpace(list.Body.String()) != "[]" {
-		t.Errorf("revisions = %s, want an empty list", list.Body)
+	if got := strings.TrimSpace(list.Body.String()); got != `{"revisions":[],"truncated":false}` {
+		t.Errorf("revisions = %s, want an empty, whole history", got)
 	}
 }
 
@@ -256,9 +256,10 @@ func TestTheConfigCanBeReadAsYAML(t *testing.T) {
 
 func TestTheHistoryIsMetadataOnly(t *testing.T) {
 	t.Parallel()
-	// A listing carrying every payload would move the whole history
-	// through the process to render a table of summaries, and the
-	// documents are the largest rows in the database.
+	// An ANSWER carrying every payload would put the largest rows in the
+	// database on the wire to render a table of summaries. (The store's
+	// listing still reads them — see configapi.MaxPage — so this pins the
+	// answer, not the read.)
 	s := newSurface(t, nil)
 	s.seed(t, companyDoc, nil)
 	s.seed(t, strings.Replace(companyDoc, "name: Acme", "name: Acme Two", 1), nil)
@@ -267,10 +268,7 @@ func TestTheHistoryIsMetadataOnly(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("got %d", res.Code)
 	}
-	var revisions []map[string]any
-	if err := json.Unmarshal(res.Body.Bytes(), &revisions); err != nil {
-		t.Fatal(err)
-	}
+	revisions := historyOf(t, res).Revisions
 	if len(revisions) != 2 {
 		t.Fatalf("%d revisions, want 2", len(revisions))
 	}
@@ -284,6 +282,55 @@ func TestTheHistoryIsMetadataOnly(t *testing.T) {
 	for _, field := range []string{"revision_id", "created_at", "created_by", "summary", "source"} {
 		if _, present := revisions[0][field]; !present {
 			t.Errorf("the listing omits %q, which is what an operator reads at 3am", field)
+		}
+	}
+}
+
+// historyOf decodes one GET /config/revisions answer.
+func historyOf(t *testing.T, res *httptest.ResponseRecorder) configapi.RevisionHistory {
+	t.Helper()
+	var out configapi.RevisionHistory
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatalf("the history is not a RevisionHistory: %v: %s", err, res.Body)
+	}
+	return out
+}
+
+// A PAGE SAYS WHETHER IT IS THE HISTORY. A list of exactly `limit` revisions
+// reads the same whether the node holds that many or a thousand, so the flag
+// is what tells a reader counting rows that older ones exist — and it is the
+// store's evidence row, not the count: a page that merely filled is not cut.
+func TestAPageOfTheHistorySaysWhetherOlderRevisionsExist(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+	s.seed(t, strings.Replace(companyDoc, "name: Acme", "name: Acme Two", 1), nil)
+	s.seed(t, strings.Replace(companyDoc, "name: Acme", "name: Acme Three", 1), nil)
+
+	for _, tc := range []struct {
+		query     string
+		rows      int
+		truncated bool
+	}{
+		{"?limit=2", 2, true},
+		// Exactly the history: the page filled and nothing is left.
+		{"?limit=3", 3, false},
+		// The rest is where `truncated` says it is.
+		{"?limit=2&offset=2", 1, false},
+		// A LIMIT OF ZERO OR BELOW NAMED NO SIZE and takes the default
+		// page — the rule `config_audit` pages by too — never one row.
+		{"?limit=0", 3, false},
+		{"?limit=-3", 3, false},
+		{"?limit=2&offset=-1", 2, true},
+	} {
+		res := s.do(t, http.MethodGet, "/config/revisions"+tc.query, "", nil)
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s: got %d: %s", tc.query, res.Code, res.Body)
+		}
+		got := historyOf(t, res)
+		if len(got.Revisions) != tc.rows || got.Truncated != tc.truncated {
+			t.Errorf("%s: %d revisions, truncated=%t; want %d, truncated=%t",
+				tc.query, len(got.Revisions), got.Truncated, tc.rows, tc.truncated)
 		}
 	}
 }
@@ -623,11 +670,7 @@ func TestARevertIsANewRevision(t *testing.T) {
 	if !strings.Contains(active.Body.String(), `"Acme"`) {
 		t.Errorf("the reverted company is not active: %s", active.Body)
 	}
-	revisions := s.do(t, http.MethodGet, "/config/revisions", "", nil)
-	var all []map[string]any
-	if err := json.Unmarshal(revisions.Body.Bytes(), &all); err != nil {
-		t.Fatal(err)
-	}
+	all := historyOf(t, s.do(t, http.MethodGet, "/config/revisions", "", nil)).Revisions
 	if len(all) != 3 {
 		t.Fatalf("%d revisions, want the two originals plus the revert", len(all))
 	}
@@ -1390,10 +1433,9 @@ func TestReloadRepublishesTheActiveDocumentUnchanged(t *testing.T) {
 	}
 
 	// And it says what it was, in the history an operator reads.
-	list := s.do(t, http.MethodGet, "/config/revisions", "", nil)
-	var revisions []map[string]any
-	if err := json.Unmarshal(list.Body.Bytes(), &revisions); err != nil {
-		t.Fatalf("decode revisions: %v", err)
+	revisions := historyOf(t, s.do(t, http.MethodGet, "/config/revisions", "", nil)).Revisions
+	if len(revisions) == 0 {
+		t.Fatal("the history is empty after a reload wrote a revision")
 	}
 	if revisions[0]["summary"] != "reload configuration" {
 		t.Errorf("summary = %v, want the default reload sentence", revisions[0]["summary"])

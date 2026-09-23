@@ -942,14 +942,28 @@ func bucketOf(task Task) string {
 	return "open"
 }
 
-// purgeTask is the one operation that removes rows, and it removes them
-// EVERYWHERE the task is named.
+// purgeTask is the one operation that removes rows: every row the task owns,
+// and every row through which another task refers to it.
 //
 // Its own rows and its OUTBOUND references go with it; so do the INBOUND ones,
 // with the alias rows that made the key resolvable at all — because a
 // reference to a key nothing resolves is a dangling link a reader cannot tell
 // from a typo. All in one transaction, and the marker it writes is what stops
 // a redelivery months later resurrecting any of it.
+//
+// # Its HISTORY is scrubbed rather than deleted
+//
+// A history row is the company's record that a change HAPPENED — who made it,
+// when, and what kind of change it was — and the activity feed reads it.
+// Deleting the task's rows would erase that the work ever existed, which is
+// the one fact a purge is meant to leave behind. But each row also carries
+// CONTENT: the excerpt a card showed (a comment's body, a new task's
+// description), the field deltas (the title before and after), and the whole
+// record it was written from. A purge that left those would leave the title
+// and an excerpt of every comment readable in the feed, which is the thing it
+// was asked to destroy. So the content columns are emptied and the skeleton
+// is kept — see [scrubPurgedContent] for exactly which is which — and the
+// inbox rows about the task lose their excerpt the same way.
 //
 // # Its CHILDREN are re-parented, not destroyed and not orphaned
 //
@@ -998,6 +1012,10 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		{`DELETE FROM tracker_task_tags WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_relations WHERE task_id = ? OR other_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_task_deps WHERE task_id = ? OR blocker_id = ?`, []any{id, id}},
+		// THE MIRROR OF A DEPENDENCY, in both directions, beside the edge
+		// it mirrors: the rows the purged task wrote as a blocker, and the
+		// rows naming it as somebody's dependent.
+		{`DELETE FROM tracker_task_dependents WHERE task_id = ? OR dependent_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
@@ -1037,6 +1055,10 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
+	scrubbed, err := scrubPurgedContent(ctx, tx, id, historyID(c))
+	if err != nil {
+		return 0, fmt.Errorf("tracker: scrub %s's history at %s: %w", id, c.position, err)
+	}
 	// A PURGE MOVES NO FIELD — the row is gone, and a delta naming what
 	// it used to hold would be the content the purge exists to destroy.
 	history, err := a.writeHistory(ctx, tx, c,
@@ -1044,7 +1066,96 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	return written + marker + moved + history, nil
+	line, err := a.purgeLine(ctx, tx, c, task)
+	if err != nil {
+		return 0, err
+	}
+	return written + marker + moved + scrubbed + history + line, nil
+}
+
+// purgeLine writes the purge's own line onto its history row when the record
+// carried no notification to bring it.
+//
+// A HISTORY ROW TAKES ITS EXCERPT FROM THE NOTIFICATION, and a purge carries
+// one only when its project has a lead to tell ([purgeWake]). Without one the
+// purge's row in the feed said nothing — not the key, not who, not the reason
+// — and no read surface returns the reason from anywhere else: it is also on
+// the record's payload and in the deletion marker's `reason` column, and
+// nothing reads either. So the applier writes the same line [purgeExcerpt]
+// builds for the lead, from the record's own actor and reason and the task
+// row it read before deleting it: inputs every node holds identically at this
+// position, so every node writes the same text.
+//
+// ONLY ONTO AN EMPTY EXCERPT, which is what makes a redelivery a no-op: the
+// task row is gone by then, and the line it would build names no key.
+func (a *Applier) purgeLine(ctx context.Context, tx *sql.Tx, c applyContext,
+	task Task) (int, error) {
+
+	if c.record.Notify != nil {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx,
+		`UPDATE tracker_history SET excerpt = ? WHERE id = ? AND excerpt = ''`,
+		purgeExcerpt(task, purgeReason(c), c.record.Actor), historyID(c))
+	if err != nil {
+		return 0, fmt.Errorf("tracker: write the purge's line at %s: %w", c.position, err)
+	}
+	return affected(res)
+}
+
+// scrubPurgedContent empties the content a purged task's history and inbox
+// rows carry, and keeps everything else on them.
+//
+// # What goes
+//
+//   - `excerpt` on both tables — the line a card showed, which for a comment is
+//     the start of its body and for a create the start of the description.
+//   - `fields_json` — the deltas, which name the title, the tags and the
+//     assignee before and after.
+//   - `document` on the history row — the whole record the row was written
+//     from, which for a create is the task itself.
+//
+// # What stays, and why each is not content
+//
+// Who made each change (`actor`, `actor_kind`, `operator_id`), when
+// (`created_at`, `effective_at` and the log position), what kind of change it
+// was (`kind`), which project it was in (`project_key`), and the ids that tie
+// a row to the rest of the audit (`comment_id`, `batch_id`, `turn_id`) —
+// identifiers and instants, none of which says what the task said. An inbox
+// row keeps who was told and why (`recipient`, `reason`) and the task's key.
+//
+// # Except the purge's OWN rows
+//
+// The purge's history row and the project lead's notice are written from the
+// purge record, whose excerpt is the key, who purged it and their reason —
+// the one line the purge exists to leave. They are excluded by id rather than
+// by order, because the applier runs this again on a redelivery of the purge
+// record, when those rows already exist.
+func scrubPurgedContent(ctx context.Context, tx *sql.Tx, taskID, purgeRow string) (int, error) {
+	history, err := tx.ExecContext(ctx, `
+		UPDATE tracker_history SET excerpt = '', fields_json = '{}', document = x''
+		WHERE subject_kind = ? AND subject_id = ? AND id <> ?
+		  AND (excerpt <> '' OR fields_json <> '{}' OR length(document) > 0)`,
+		string(KindTask), taskID, purgeRow)
+	if err != nil {
+		return 0, err
+	}
+	n, err := affected(history)
+	if err != nil {
+		return 0, err
+	}
+	inbox, err := tx.ExecContext(ctx, `
+		UPDATE tracker_notifications SET excerpt = ''
+		WHERE subject_id = ? AND record_id <> ? AND excerpt <> ''`,
+		taskID, purgeRow)
+	if err != nil {
+		return 0, err
+	}
+	m, err := affected(inbox)
+	if err != nil {
+		return 0, err
+	}
+	return n + m, nil
 }
 
 // reparent moves each child onto parent and rebuilds its subtree's ancestry.

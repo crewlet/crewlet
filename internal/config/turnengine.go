@@ -200,11 +200,18 @@ type ConversationSession struct {
 	// did not happen. The render bound that replaced them is a constant with
 	// its reasoning at the definition rather than a knob nobody had cause to
 	// set.
-	// Larger than what any prompt injects, so the dashboard can show a
-	// conversation's history beyond what a single turn carried. The trim
-	// is what bounds a DM, whose conversation key is the whole channel and
-	// so never stops receiving entries.
-	MaxEntries int `yaml:"max_entries,omitempty" json:"max_entries,omitempty" js:"min=0" desc:"Entries kept per conversation."`
+	//
+	// The trim is what bounds a DM, whose conversation key is the whole
+	// channel and so never stops receiving entries. A turn is shown every
+	// kept entry that fits under the render bound.
+	//
+	// WHAT THE TRIM DELETES IS COUNTED, NOT HIDDEN. Every entry is stamped
+	// with its `ordinal` — its place in the conversation's whole record —
+	// so the oldest kept entry says how many turns came before it, and the
+	// block a turn is shown says they are not there. The turns themselves
+	// can still be read where the conversation lives: the thread, issue or
+	// channel the conversation key names.
+	MaxEntries int `yaml:"max_entries,omitempty" json:"max_entries,omitempty" js:"min=0" desc:"Entries kept per conversation; older ones are deleted, and counted by each kept entry's ordinal."`
 
 	// RetentionDays is how long a conversation is remembered. It matches
 	// the event store's own horizon, so the engine's memory of a

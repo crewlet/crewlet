@@ -349,7 +349,7 @@ func listRevisions(ctx context.Context, cs *configStore, limit int, stdout io.Wr
 	if limit <= 0 {
 		return errors.New("config revisions needs a positive limit")
 	}
-	rows, err := cs.configs.List(ctx, limit, 0)
+	rows, more, err := cs.configs.List(ctx, limit, 0)
 	if err != nil {
 		return err
 	}
@@ -374,7 +374,20 @@ func listRevisions(ctx context.Context, cs *configStore, limit int, stdout io.Wr
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", marker, r.ID,
 			r.CreatedAt.Format(time.RFC3339), r.CreatedBy, r.Source, r.Summary)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if more {
+		// SAID, because the table alone cannot say it: a history of
+		// exactly `limit` revisions and one of a thousand print the same
+		// rows. The store read one revision past the page to know. The
+		// active revision can be among the unlisted ones, since `config
+		// activate` points the fleet at any stored revision, so a table
+		// with no `*` in it does not mean nothing is active.
+		fmt.Fprintf(stdout, "older revisions are not listed; this shows the newest %d "+
+			"(raise -limit to list more)\n", len(rows))
+	}
+	return nil
 }
 
 // diffRevisions compares two revisions, REDACTED on both sides.

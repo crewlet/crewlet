@@ -6,11 +6,11 @@ import (
 	"time"
 )
 
-// DocumentVersion is the shape version every record here carries, on the same
-// terms as [work.DocumentVersion]: a page is read, modified and written back
-// by whichever node the request landed on, so an older build's save would
-// strip a newer build's field out of the head. Unknown fields round-trip; an
-// unknown VERSION is refused rather than downgraded.
+// DocumentVersion is the shape version every record here carries: a page is
+// read, modified and written back by whichever node the request landed on, so
+// an older build's save would strip a newer build's field out of the head.
+// Unknown fields round-trip; an unknown VERSION is refused rather than
+// downgraded.
 const DocumentVersion = 1
 
 // Container is a space: a unit's, the org root's, or the skills container.
@@ -140,7 +140,7 @@ type TitleClaim struct {
 }
 
 // Change is one entry in the record a wake is derived from. Create-only and
-// never rewritten, for the reason [work.Change] is.
+// never rewritten: its insert does nothing when the row is already there.
 type Change struct {
 	V int `json:"v"`
 
@@ -211,10 +211,12 @@ func (e ErrUnknownVersion) Error() string {
 
 // ---- encoding --------------------------------------------------------- //
 
-// The known field names per record. Explicit rather than reflective, for the
-// reason [work] gives: a name missing here is decoded into the struct AND
-// carried as unknown, so the next encode writes the stale carried copy back
-// over what the caller set. A test asserts every declared name is covered.
+// The known field names per record. A name missing here is decoded into the
+// struct AND carried as unknown, and although [encode] lets a known field win,
+// an omitempty field the caller CLEARED is absent from the marshal — so the
+// stale carried copy is written back in its place. The zero value's names come
+// from marshalling it; the omitempty names are listed by hand, and
+// TestEveryFieldARecordDeclaresIsKnownToItsDecoder fails on one left out.
 var (
 	containerFields = fieldSet(Container{}, "name", "purpose")
 	pageFields      = fieldSet(Page{}, "parent_id", "body", "labels", "watchers",

@@ -189,3 +189,19 @@ func TestTheViewShapesTheToolOffersAreTheOnesTheEngineTakes(t *testing.T) {
 		}
 	}
 }
+
+// EVERY KEY SAVE_WORK_VIEW CALLS THE SAME WORD IS ONE A VIEW CAN CARRY: a
+// grammar key, and none of the keys a saved view refuses outright. The list
+// used to be typed beside the forwarding loop, named `preset` — which a view
+// refuses — and missed keys the loop forwarded.
+func TestTheSameWordKeysAreKeysAViewCanCarry(t *testing.T) {
+	t.Parallel()
+	for _, key := range strings.Split(builtin.SameWordSentence(), ", ") {
+		if !slices.Contains(tracker.QueryKeys, key) {
+			t.Errorf("%q is named as a view key and is not a query parameter", key)
+		}
+		if slices.Contains([]string{"view", "preset", "cursor"}, key) {
+			t.Errorf("%q is named as a view key and a saved view refuses it", key)
+		}
+	}
+}

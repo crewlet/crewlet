@@ -275,8 +275,30 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 			at.position, at.subject().ID)
 	}
 
+	// THE HISTORY ROW'S KIND IS THE PATCH'S OWN — the same function over
+	// the same record the writer took the wake's kind from, so the feed
+	// and the notification cannot name one change two ways.
+	changed, edited := p.editKind()
+	if !edited && p.Comment == nil {
+		// A PATCH THAT CHANGES NOTHING is not a record this build
+		// publishes — [Store.patchOf] answers "unchanged" for it — but a
+		// peer on another build can: one whose writer carried an emptied
+		// label set as an absent field published exactly this. APPLIED AS
+		// WHAT IT SAYS, which is nothing: no head write and no history
+		// row, because the only verb such a row could carry is one
+		// invented here. Skipped rather than refused: an apply error is
+		// retried for ever on every node that reads the record, and past
+		// the retry budget each of them stops serving reads
+		// ([statelog.Runner.Fault]). Skipping is a pure function of the
+		// record, so every node skips it alike.
+		log.WarnContext(ctx, "pages_patch_changes_nothing",
+			"position", at.position.String(), "page", at.subject().ID,
+			"detail", "a page patch named no field this build applies; "+
+				"nothing was written for it")
+		return 0, nil
+	}
+
 	rows := 0
-	changed := ChangeSaved
 	if p.Body != nil {
 		// REVISION N IS THE BODY AT VERSION N — so the head moves first
 		// and the revision is written at the version it produced.
@@ -299,20 +321,16 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	if p.ParentID != nil {
 		head.ParentID = *p.ParentID
-		changed = ChangeMoved
 	}
 	if p.Status != nil {
 		head.Status = *p.Status
-		changed = ChangeStatus
 	}
 	if p.Labels != nil {
-		head.Labels = sorted(p.Labels)
-		changed = ChangeLabels
+		head.Labels = sorted(*p.Labels)
 	}
 	if p.Watchers != nil || p.Muted != nil {
 		head.Watchers = sorted(p.Watchers)
 		head.Muted = sorted(p.Muted)
-		changed = ChangeWatchers
 	}
 	if p.Comment != nil {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml

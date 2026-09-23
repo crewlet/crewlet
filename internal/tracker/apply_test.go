@@ -397,6 +397,49 @@ func TestAPurgedTaskStaysPurged(t *testing.T) {
 	}
 }
 
+// A PURGE TAKES A DEPENDENCY'S MIRROR WITH THE EDGE IT MIRRORS.
+//
+// The purge deleted the derived edge in both directions and left the mirror
+// rows — the blocker's own list of who waits on it — naming a task that no
+// longer exists.
+func TestAPurgeTakesTheMirrorOfADependencyWithIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
+	filedTask(t, r, "later")
+	for _, edge := range []struct{ dependent, blocker string }{
+		{"dep", "blk"}, {"blk", "later"},
+	} {
+		if _, err := r.writer.Depend(t.Context(), "op-"+edge.dependent,
+			tracker.DependencyChange{
+				Task: edge.dependent, Project: "ENG",
+				WaitingOnAdd: []string{edge.blocker},
+			}, nil); err != nil {
+			t.Fatalf("Depend %s on %s: %v", edge.dependent, edge.blocker, err)
+		}
+		r.drain()
+	}
+	naming := func() []string {
+		return r.strings(`SELECT task_id || '<-' || dependent_id
+			FROM tracker_task_dependents
+			WHERE task_id = 'blk' OR dependent_id = 'blk'`)
+	}
+	if got := naming(); len(got) != 2 {
+		t.Fatalf("the fixture's mirrors naming blk are %v, want one each way, "+
+			"so this case is not the shape it names", got)
+	}
+
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "blk", "ENG",
+		"a duplicate import"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	r.drain()
+	if got := naming(); len(got) != 0 {
+		t.Errorf("the purged task is still named by the dependency mirrors %v", got)
+	}
+}
+
 // A PURGE DESTROYS ONE TASK, NOT A SUBTREE — AND LEAVES NO DANGLING PARENT.
 //
 // The purge deleted the row and everything naming it and left each child's

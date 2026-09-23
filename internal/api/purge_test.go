@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,6 +18,7 @@ type fakePurger struct {
 	operator, opID, id, project, reason string
 	calls                               int
 	outcome                             statelog.Outcome
+	err                                 error
 }
 
 func (f *fakePurger) PurgeAs(_ context.Context, operator, opID, id, project,
@@ -24,6 +26,9 @@ func (f *fakePurger) PurgeAs(_ context.Context, operator, opID, id, project,
 
 	f.calls++
 	f.operator, f.opID, f.id, f.project, f.reason = operator, opID, id, project, reason
+	if f.err != nil {
+		return tracker.WriteResult{}, f.err
+	}
 	outcome := f.outcome
 	if outcome == "" {
 		outcome = statelog.OutcomeApplied
@@ -111,6 +116,29 @@ func TestAPurgeMissingItsConfirmationProjectOrReasonNeverWrites(t *testing.T) {
 	}
 	if p.calls != 1 {
 		t.Errorf("a complete request reached the writer %d time(s)", p.calls)
+	}
+}
+
+// A REASON TOO LONG TO TRAVEL WHOLE IS THE CALLER'S TO FIX, and the route says
+// so: a 400 naming how many bytes fit, where a 500 would send the operator
+// looking for a server fault over a sentence they can shorten. Anything else
+// the writer refuses is still a failure.
+func TestAnOverLongPurgeReasonIsABadRequestNamingTheRoom(t *testing.T) {
+	p := &fakePurger{err: &tracker.ErrPurgeReasonTooLong{Key: "ENG-42", Bytes: 900, Room: 412}}
+	code, body := postPurge(t, purgeApp(t, p),
+		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=a+very+long+account")
+	if code != http.StatusBadRequest {
+		t.Fatalf("an over-long reason answered %d: %v", code, body)
+	}
+	if body["error"] != "reason_too_long" || body["room"] != float64(412) || body["bytes"] != float64(900) {
+		t.Errorf("the refusal = %v, want reason_too_long with bytes 900 and room 412", body)
+	}
+
+	// THE CONTROL: a writer failure of any other kind is not the caller's.
+	p = &fakePurger{err: errors.New("the log could not be reached")}
+	if code, body := postPurge(t, purgeApp(t, p),
+		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why"); code != http.StatusInternalServerError {
+		t.Errorf("a writer failure answered %d: %v", code, body)
 	}
 }
 

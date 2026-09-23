@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -251,14 +252,15 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	case reason == "":
-		// A REASON IS REQUIRED, unlike every other gesture here. It is
-		// the only thing that survives: the rows are gone, and the
-		// deletion marker's reason is what a person reads a year later
-		// when they ask what used to be at this key.
+		// A REASON IS REQUIRED, unlike every other gesture here: the rows
+		// are destroyed, so the reason is the only account of why. It is
+		// logged below beside the task's key, and when the project has a
+		// lead it travels whole on the notification the lead receives
+		// (tracker.purgeExcerpt).
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "reason_required",
 			"detail": "state why in ?reason= — the rows are destroyed and the " +
-				"marker's reason is the only account of them that survives",
+				"reason is the only account of why",
 		})
 		return
 	}
@@ -289,7 +291,23 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 		opID = uuid.NewString()
 	}
 	result, err := a.purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
-	if err != nil {
+	var tooLong *tracker.ErrPurgeReasonTooLong
+	switch {
+	case errors.As(err, &tooLong):
+		// THE CALLER'S TO FIX, so a 400 and not a server fault: nothing
+		// was purged, and the same request with a shorter reason
+		// succeeds. The reason is refused rather than cut because it
+		// travels whole or not at all — see tracker.purgeReasonRoom — and
+		// `room` is how many bytes fit, which differs from one task to the
+		// next with the length of its key.
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error":  "reason_too_long",
+			"detail": err.Error(),
+			"bytes":  tooLong.Bytes,
+			"room":   tooLong.Room,
+		})
+		return
+	case err != nil:
 		log.Warn("api_purge_failed", "task", id, "operator", operator,
 			"error", err)
 		writeJSON(w, http.StatusInternalServerError,

@@ -335,23 +335,20 @@ func diaryHitIDs(hs []learning.DiaryHit) []string {
 }
 
 // A seat over the cap — which a write never takes it to, but a hydration can —
-// keeps every durable note through the sweep. A note dropped by a sweep is a
-// fact the seat chose to keep and is never told it lost, and it would come
-// back on the next hydration anyway, since memory replication carries no
-// deletes.
-func TestTheSweepDropsNoDurableNote(t *testing.T) {
+// keeps every durable note through the one sweep the diary has. A note
+// dropped by a sweep is a fact the seat chose to keep and is never told it
+// lost, and it would come back on the next hydration anyway, since memory
+// replication carries no deletes.
+func TestASeatOverTheCapKeepsEveryNoteAndIsStillRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	d := fullDiary(t, learning.DiaryLongCap+5)
-	// Recalled notes and never-recalled ones alike: a sweep ranking by use
-	// would have a least-useful note to reach for.
-	d.MarkRetrieved(ctx, []string{"held-0", "held-1"}, base.Add(time.Hour))
 
-	for _, limit := range []int{0, 3} {
-		dropped, err := d.TrimLong(ctx, limit)
-		if err != nil || dropped != 0 {
-			t.Fatalf("TrimLong(%d) = %d, %v; want nothing dropped", limit, dropped, err)
-		}
+	// The expiry sweep, run far past any deadline: a durable note has none,
+	// so it is not the sweep's to take however many the seat holds.
+	dropped, err := d.Expire(ctx, base.AddDate(10, 0, 0))
+	if err != nil || dropped != 0 {
+		t.Fatalf("Expire = %d, %v; want no durable note dropped", dropped, err)
 	}
 	kept, err := d.Recent(ctx, "agent-a", base.Add(time.Hour), learning.DiaryLongCap+10)
 	if err != nil {

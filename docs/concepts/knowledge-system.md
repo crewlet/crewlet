@@ -383,7 +383,7 @@ An empty `backend` **derives** rather than defaulting blindly: a company that de
 
 > **The semantic half is computed and stored, and not yet queried.** Every piece of it exists — the embedding duty fills a vector per document, the state-log domain replicates them, and `Quantize` / `TwoStage` / `Fuse` are the arithmetic a fused answer would use — but no caller computes a QUERY embedding: the two production callers of the fan-out pass text, sources and a limit and never a vector, so every live search skips the semantic slice and answers lexical-only. `knowledge.vectors` has no reader. Until a query embedding is wired, treat every statement about fusion in this document as describing the design rather than the running system.
 
-Two properties differ from the vendor path and both are visible:
+What differs from the vendor path, and is visible:
 
 - **Every seat reads every page.** There is no per-seat credential, so `CanSearch` reduces to "is there an index at all" — the credential-less case below does not arise.
 - **An index that is still building says so.** It is a different fact from an empty company, and a seat is told which: "the knowledge base is not searchable from this node yet — ask a colleague rather than concluding nothing has been written down". A seat that read an empty result would act on it, by writing a page that already exists. The gate is this node's FIRST BUILD — one lap over every corpus — and not "nothing is waiting to be indexed": a page saved a moment ago is ordinary staleness, and reading the gate off a pending count made every empty search on a company with people in it answer "still building" instead. After the first lap a search is a true answer over slightly older rows, which is what a search always is.
@@ -399,7 +399,43 @@ Two properties differ from the vendor path and both are visible:
   space nobody declared looks like.
 - **A BODY HAS A HISTORY**, and revision N is the body at version N. The
   dashboard reads any one of them back and shows what a save changed against
-  the version before it, by line.
+  the version before it, by line. A page keeps its last 100 revisions, and a
+  page's detail lists every one it still holds.
+- **A LISTING IS ONE PAGE OF WHAT MATCHED, AND SAYS SO.** `list_pages` and the
+  `pages` query return 50 pages when no limit is named and at most 500, in
+  container-then-title order. When more match, the answer carries
+  `truncated: true` and `offset` reaches the rest — so the number of rows is
+  the page, never the count of what matched. An offset counts rows, so a page
+  ahead of it that leaves the listing between two reads — trashed out of
+  `list_pages`, renamed past it, purged — moves every later page up by one,
+  and the next read skips one.
+- **A PAGE'S DETAIL CARRIES ITS PUBLISHED CHILDREN**, the first 50 in
+  container-then-title order, with `children_truncated` when it has more. A
+  draft or trashed child is not among them, because a detail is read by seats
+  as well as people. `list_pages` with `parent` set to that page lists the same
+  children in the same order, so `offset: 50` continues exactly where the
+  detail stopped; the `pages` query with `parent` lists every child whatever
+  its status.
+- **A PAGE'S PARENT IS A PAGE, AND NEVER ONE BENEATH IT.** A create or a save
+  naming a parent this node has no page for, the page itself, or a page
+  below it is refused naming `parent_id`. Its breadcrumb (`ancestors`) is the
+  whole parent chain however deep it is. Two moves of two different pages
+  made at the same moment can still close a loop between them; a chain that
+  loops back on itself names each page on the loop once.
+- **A CHANGE HAS ONE KIND.** An edit that changes the body and anything else
+  — labels, parent, status — is a `saved` change, in the activity feed and in
+  the notification its watchers receive alike.
+- **A CHANGE'S CARD IS AN EXCERPT, MARKED WHERE IT WAS CUT.** The text a
+  change shows — in the activity feed, and under "What changed" in the
+  notification a watcher or a mentioned seat receives — is at most 600 bytes:
+  a create's or a save's first line, a save's message, a comment, or the
+  page's title for a save that carried neither a body nor a message. Only a
+  first line and a comment can be longer than that; they end in `…`, inside
+  the 600, and are whole elsewhere — a first line in the body of the version
+  the change produced (a create is version 1, and a notification names its
+  version), a comment on the page itself. A comment keeps no past versions,
+  so once it is edited again, an earlier edit's text survives only as that
+  excerpt.
 - **A body is MARKDOWN**, and the only format — see `internal/pages`. The
   dashboard renders it (headings, lists, tables, code, links), with raw HTML
   shown as its own text and a link's scheme restricted to `http(s):`,
@@ -423,6 +459,8 @@ Two properties differ from the vendor path and both are visible:
   already happened.
 
 The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
+
+`Query.ExcludeAncestors` applies here as it does on Confluence. The native searcher reads each hit's parent chain from this node's own page rows, as titles outermost first, and drops a hit whose chain names an excluded title at any depth — so with the default, a page anywhere under a page titled `Auto-Drafted Skills` is not returned. A hit with no chain to judge by (a page at the top of its container) is dropped by the `[Auto-draft] ` title prefix instead. A chain that cannot be read makes the whole search answer empty rather than answer without the exclusion.
 
 ### Confluence backend — the Confluence searcher
 
@@ -565,7 +603,7 @@ Key properties:
 
 There is no orchestrator object to construct. The two reads are wired independently by engine start:
 
-- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. (It does not fuse the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) today — see the note under [the native backend](#native-backend): the vectors are written but nothing queries them.) Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
+- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. (It does not fuse the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) today — see the note under [the native backend](#native-backend--the-engines-own-pages): the vectors are written but nothing queries them.) Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
 - **`learning.Diary`** is built over the node's store (`learning.NewDiary`), so a node with no store has no diary and the `## Personal memory` block stays empty without error. Writes are embedded when `providers.embeddings` is configured; without it the diary degrades to a pure recency list (vector candidate selection becomes a no-op) but writes and recency reads still work.
 
 The two are independent: an org can have knowledge search without reflection, or reflection without knowledge search.

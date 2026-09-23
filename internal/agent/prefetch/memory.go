@@ -41,8 +41,7 @@ const (
 	//
 	// Similarity finds what the task is about; recency finds the
 	// broadly-applicable rules that match no particular task and apply to
-	// all of them. Either alone misses a whole category — 50 and 50 leave
-	// the cap biting only on heavily-overlapping pools.
+	// all of them. Either alone misses a whole category.
 	memoryVectorLimit  = 50
 	memoryRecencyLimit = 50
 
@@ -235,13 +234,13 @@ func (f *Fetcher) filterMemories(ctx context.Context, r Request, candidates []le
 // turn-start block and refresh_memory's hinted re-filter, and because what
 // counts as a use is what the filter picked. A candidate is not a use: the
 // pool is similarity union recency, so counting candidates would move the
-// counter for every entry a seat owns on every turn and make the trim's
-// ordering meaningless in the other direction.
+// counter for every entry a seat owns on every turn, and a count every note
+// has in equal measure says nothing about any of them.
 //
-// The trim that bounds a seat's durable memory orders by retrieval count,
-// then last retrieval, then age — so with nothing marking a use it evicted
-// the OLDEST durable facts, which is precisely what a cap on worth rather
-// than age exists to avoid. Nothing called MarkRetrieved before this.
+// What reads it is `GET /agents/{id}/memory`, as each note's `retrievals`:
+// the difference between a note that keeps proving useful and one written
+// once and never read. Nothing ranks, trims or evicts by it —
+// [learning.DiaryLongCap] is enforced by refusing the next durable note.
 //
 // DETACHED and bounded: the turn's context is often cancelled the moment the
 // phase ends, and this write happens after the seat already had the benefit

@@ -37,7 +37,13 @@ type Seeded interface {
 //     than the payloads. The count is the projection's record cap, applied
 //     at the READ: a busy day past it was otherwise read in full inside the
 //     seed's time budget, only to be cut to the cap on arrival, and a read
-//     that ran out of budget seeded no spend at all.
+//     that ran out of budget seeded no spend at all. The store reads one
+//     record past the cap and says whether the window held more
+//     ([store.EventLog.PhaseTokenTail]); that answer travels to the
+//     projection as [livestate.History.SpendTruncated], which is what heads
+//     the rollup with the span the kept records cover rather than with the
+//     whole window. The older records are still in the store: the `tokens`
+//     answer asked for an explicit `since` reads the window from it whole.
 //
 // THE SPEND WINDOW IS ASKED FOR AS AN INSTANT, never as a day count. The two
 // are the same window only while [livestate.LiveSpendWindow] is a whole number

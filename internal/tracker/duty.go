@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -148,8 +149,18 @@ func (d *duty) respread(ctx context.Context, now, _ time.Time) (int64, error) {
 	var walked int64
 	for _, project := range projects {
 		opID := d.opID("respread", project, now)
-		batches, err := d.deps.Writer.Respread(ctx, opID, project)
-		walked += int64(batches)
+		report, err := d.deps.Writer.Respread(ctx, opID, project)
+		walked += int64(report.Batches)
+		if errors.Is(err, errReplan) {
+			// SOMEBODY IS ARRANGING THIS BOARD RIGHT NOW, and the walk
+			// yielded to them — see [RespreadPlans]. The project stays
+			// flagged and the next sweep plans from where they left it;
+			// the other flagged projects are not held up behind it.
+			d.deps.Logger.InfoContext(ctx, "tracker_respread_yielded",
+				"project", project, "batches", report.Batches,
+				"plans", report.Plans, "error", err)
+			continue
+		}
 		if err != nil {
 			return walked, err
 		}
@@ -160,7 +171,8 @@ func (d *duty) respread(ctx context.Context, now, _ time.Time) (int64, error) {
 		// owner, and a node whose applier had not caught up would clear
 		// a flag its own rows still justify.
 		d.deps.Logger.InfoContext(ctx, "tracker_respread_walked",
-			"project", project, "batches", batches)
+			"project", project, "batches", report.Batches,
+			"plans", report.Plans)
 	}
 	return walked, nil
 }
@@ -178,13 +190,23 @@ func (d *duty) clearDuplicates(ctx context.Context, now, _ time.Time) (int64, er
 	}
 	var fixed int64
 	for _, project := range projects {
-		placements, truncated, err := d.duplicatesIn(ctx, project)
+		placements, version, truncated, err := d.duplicatesIn(ctx, project)
 		if err != nil {
 			return fixed, err
 		}
 		if len(placements) > 0 {
-			if _, err := d.deps.Writer.MoveTasks(ctx,
-				d.opID("dedupe", project, now), project, placements); err != nil {
+			_, err := d.deps.Writer.MoveTasks(ctx,
+				d.opID("dedupe", project, now), project, version, placements)
+			if errors.Is(err, ErrOrderMoved) {
+				// THE ORDER MOVED UNDER THE KEYS this sweep minted, so
+				// they may no longer sit where the duplicates were. The
+				// project stays flagged — nothing below ran — and the
+				// next sweep mints from the order as it then is.
+				d.deps.Logger.InfoContext(ctx, "tracker_rank_duplicates_raced",
+					"project", project, "error", err)
+				continue
+			}
+			if err != nil {
 				return fixed, err
 			}
 			fixed += int64(len(placements))
@@ -208,7 +230,9 @@ func (d *duty) clearDuplicates(ctx context.Context, now, _ time.Time) (int64, er
 }
 
 // duplicatesIn mints a fresh key for every task but the first at each shared
-// rank, and says whether the project held more of them than one batch.
+// rank, and says whether the project held more of them than one batch —
+// with the order's version it read them at, which [Writer.MoveTasks] checks
+// so keys minted from this read land only on the order they were minted in.
 //
 // THE FIRST BY ID KEEPS ITS KEY, so every node computes the same repair from
 // the same rows — which is what makes running this twice a no-op rather than a
@@ -236,12 +260,17 @@ func (d *duty) clearDuplicates(ctx context.Context, now, _ time.Time) (int64, er
 // one minted, so what it moves lands below this sweep's and the order holds
 // across every sweep it takes.
 func (d *duty) duplicatesIn(ctx context.Context, project string) (
-	[]Placement, bool, error) {
+	[]Placement, int64, bool, error) {
 
 	var losers []Placement
+	var version int64
 	var truncated bool
 	ceilings := map[Rank]Rank{}
 	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		if version, err = OrderVersion(ctx, tx, project); err != nil {
+			return err
+		}
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.rank FROM tracker_tasks t
 			WHERE t.project_key = ? AND t.removed_at IS NULL
@@ -297,7 +326,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) (
 		return nil
 	})
 	if err != nil || len(losers) == 0 {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	// A FRESH KEY JUST ABOVE THE ONE THEY SHARE AND BELOW THE NEXT ONE UP,
 	// which keeps each duplicate adjacent to where somebody put it. The
@@ -313,13 +342,13 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) (
 		}
 		next, err := KeyBetween(floor, ceilings[loser.Rank])
 		if err != nil {
-			return nil, false, fmt.Errorf("tracker: mint a key between %q and "+
+			return nil, 0, false, fmt.Errorf("tracker: mint a key between %q and "+
 				"%q for %s: %w", floor, ceilings[loser.Rank], loser.Task, err)
 		}
 		minted[loser.Rank] = next
 		placements = append(placements, Placement{Task: loser.Task, Rank: next})
 	}
-	return placements, truncated, nil
+	return placements, version, truncated, nil
 }
 
 // rankAbove is the lowest key in the project strictly above rank, or — when
@@ -357,6 +386,27 @@ func rankAbove(ctx context.Context, tx *sql.Tx, project string, rank Rank) (Rank
 		return "", err
 	}
 	return Rank(next), nil
+}
+
+// rankBelow is the highest key in the project strictly below rank, or empty
+// when nothing is below it.
+//
+// [rankAbove]'s mirror, for a drop at the head of what somebody saw: a key
+// minted with no lower bound is the integer below `rank`'s own, which can
+// carry the card past a card the board was not showing, or land on its key.
+// Empty is safe where it is returned, because then nothing sits below `rank`
+// for a head placement to pass. A removed task's key counts, for
+// [rankAbove]'s reason.
+func rankBelow(ctx context.Context, tx *sql.Tx, project string, rank Rank) (Rank, error) {
+	var below sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT MAX(rank) FROM tracker_tasks
+		WHERE project_key = ? AND rank < ?`, project, string(rank)).
+		Scan(&below); err != nil {
+		return "", fmt.Errorf("tracker: read the key below %q in %s: %w",
+			rank, project, err)
+	}
+	return Rank(below.String), nil
 }
 
 // pendingMerges reads whether any task is mid-merge.

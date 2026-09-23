@@ -241,10 +241,7 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 		if err == nil || !strings.Contains(err.Error(), "duplicate seat name") {
 			t.Errorf("-import-company of a file with duplicate names = %v, want a refusal", err)
 		}
-		revisions, err := db.Configs().List(t.Context(), 0, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
+		revisions := storedRevisions(t, db)
 		if len(revisions) != 1 {
 			t.Errorf("%d revisions, want only the original: a refused import stores nothing", len(revisions))
 		}

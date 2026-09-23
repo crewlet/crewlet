@@ -37,6 +37,18 @@ type RecallQuery struct {
 	// cluster summarises many turns and reads in a prompt like one turn
 	// that did all of them.
 	Kinds []Kind
+
+	// Filter narrows the episodes ranked, in the statement and so BEFORE
+	// the limit — see [EpisodeFilter] for what a filter applied to the
+	// hits would answer instead. [Episodes.Recall] only: a diary note has
+	// no conversation and no outcome, and [Diary.Recall] reads neither
+	// this nor Offset.
+	Filter EpisodeFilter
+
+	// Offset is how many of the ranked hits the answer starts past, so a
+	// caller can read the ranking on from where a page stopped.
+	// [Episodes.Recall] only, like Filter.
+	Offset int
 }
 
 const (
@@ -85,6 +97,10 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	}
 	if len(q.Embedding) == 0 {
 		return nil, ErrNoEmbedding
+	}
+	if q.Offset < 0 {
+		return nil, fmt.Errorf("learning: recall for %s needs an offset of zero "+
+			"or more, got %d", q.Handle, q.Offset)
 	}
 	limit := q.Limit
 	if limit <= 0 {
@@ -214,8 +230,13 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	// The kind filter is a bound list of short literals rather than
 	// placeholders because it comes from a typed enum this package owns —
 	// see kindList.
-	rows, err := e.db.SQL().QueryContext(ctx, recallStatement(kinds),
-		widest, probe, q.Handle, width, width, width, probe, q.Handle, width, 1-floor, limit)
+	//
+	// THE EPISODE FILTER IS IN BOTH BRANCHES, so it narrows what is ranked
+	// rather than what the ranking returned: the LIMIT below is taken over
+	// the episodes that match it.
+	statement, args := recallStatement(kinds, q.Filter)
+	rows, err := e.db.SQL().QueryContext(ctx, statement,
+		recallArgs(args, widest, probe, q.Handle, width, 1-floor, limit, q.Offset)...)
 	if err != nil {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
 	}
@@ -340,7 +361,11 @@ func nearestWindow(query []float32, windows [][]float32) (float64, bool) {
 // TestRecallScansOneSeatRatherThanTheTable runs EXPLAIN QUERY PLAN over
 // exactly this text — and a statement a test has to retype is a statement the
 // test stops describing.
-func recallStatement(kinds []Kind) string {
+//
+// It returns the filter's own bind values beside the text, ONCE: the filter
+// appears in both branches, and [recallArgs] places a copy in each.
+func recallStatement(kinds []Kind, f EpisodeFilter) (string, []any) {
+	filter, filterArgs := f.where("e")
 	return `WITH RECURSIVE ord(k) AS MATERIALIZED (
 	     SELECT 0
 	     UNION ALL
@@ -355,7 +380,7 @@ func recallStatement(kinds []Kind) string {
 	          AND e.embedding IS NOT NULL
 	          AND e.embedding_windows = 1
 	          AND length(e.embedding) = ?
-	          AND e.kind IN (` + kindList(kinds) + `)
+	          AND e.kind IN (` + kindList(kinds) + `)` + filter + `
 	        UNION ALL
 	        SELECT e.id AS id, e.ended_at AS ended_at,
 	               (SELECT MIN(vector_distance_cos(
@@ -366,12 +391,31 @@ func recallStatement(kinds []Kind) string {
 	          AND e.embedding IS NOT NULL
 	          AND e.embedding_windows > 1
 	          AND length(e.embedding) = e.embedding_windows * ?
-	          AND e.kind IN (` + kindList(kinds) + `)
+	          AND e.kind IN (` + kindList(kinds) + `)` + filter + `
 	    )
 	    WHERE distance <= ?
 	    ORDER BY distance ASC, ended_at DESC, id DESC
-	    LIMIT ?
-	 )`
+	    LIMIT ? OFFSET ?
+	 )`, filterArgs
+}
+
+// recallArgs binds [recallStatement], in the order its placeholders appear:
+// the ordinal count, then each branch's own (the left one's probe, seat and
+// width; the right one's window stride, window width, probe, seat and width),
+// each followed by its copy of the filter, then the distance ceiling, the
+// limit and the offset.
+//
+// ONE FUNCTION for the order, because the statement binds POSITIONALLY and the
+// recall and its plan test both have to bind it — a second hand-written list
+// is a second chance to pair a placeholder with the wrong value.
+func recallArgs(filterArgs []any, widest int, probe any, handle string, width int,
+	maxDistance float64, limit, offset int,
+) []any {
+	args := []any{widest, probe, handle, width}
+	args = append(args, filterArgs...)
+	args = append(args, width, width, probe, handle, width)
+	args = append(args, filterArgs...)
+	return append(args, maxDistance, limit, offset)
 }
 
 // widestWindowStatement is the ordinal-count read, and it is named for the

@@ -160,8 +160,8 @@ func episodeInsertArgs(ep Episode, blob any, windows int) []any {
 //
 // An empty work key maps to SQL NULL, which the index treats as distinct from
 // every other NULL — so an unkeyed turn is never deduped against another. That
-// is the whole reason the column is nullable: ” would collide every unkeyed
-// turn a seat ever ran onto one row.
+// is the whole reason the column is nullable: the empty string would collide
+// every unkeyed turn a seat ever ran onto one row.
 //
 // Reports whether the row was WRITTEN. False means a duplicate was collapsed,
 // which is the guard working and not a failure.
@@ -342,18 +342,12 @@ func splitWindows(blob []byte, windows int) ([][]float32, error) {
 	return out, nil
 }
 
-// defaultEpisodeListing and defaultConversationListing are what [Episodes.Recent]
-// and [Episodes.ForConversation] return for a caller that names no limit.
+// defaultEpisodeListing is what [Episodes.Recent] returns for a caller that
+// names no limit.
 //
-// FLOORS, NOT POLICY, for the same reason [defaultDiaryListing] is: every
-// production caller passes an explicit limit. The conversation default is the
-// smaller of the two on purpose — "the previous turns on this same ticket" is
-// read to reconstruct one thread, where the useful answer is the last handful
-// and the rest is prompt weight.
-const (
-	defaultEpisodeListing      = 10
-	defaultConversationListing = 5
-)
+// A FLOOR, NOT POLICY, for the same reason [defaultDiaryListing] is: every
+// production caller passes an explicit limit.
+const defaultEpisodeListing = 10
 
 // Recent returns a seat's most recent episodes, newest first.
 func (e *Episodes) Recent(ctx context.Context, handle string, limit int) ([]Episode, error) {
@@ -370,30 +364,133 @@ func (e *Episodes) Recent(ctx context.Context, handle string, limit int) ([]Epis
 	return collectEpisodes(rows)
 }
 
-// ForConversation returns a seat's episodes on one conversation, newest first
-// — "the previous turn on this same ticket".
-func (e *Episodes) ForConversation(ctx context.Context, handle, conversation string, limit int) ([]Episode, error) {
-	if conversation == "" {
-		// A short-circuit, not a safety guard, and the difference is worth
-		// stating: SQL already refuses to match '' against the NULLs that
-		// mark turns with no conversation, so the dangerous reading — a
-		// seat reading unrelated work as this thread's history — is
-		// impossible either way. This just skips a round trip that can
-		// only come back empty.
-		return nil, nil
+// EpisodeFilter narrows which of a seat's episodes a read considers. The zero
+// value narrows nothing.
+//
+// IT IS APPLIED IN SQL, BEFORE THE LIMIT, on every read that takes one — which
+// is the whole reason it is a type rather than a loop over what came back. A
+// filter applied after a LIMIT answers a different question: asked for the
+// five newest failures, it returns the failures among the five newest turns,
+// and a seat whose last five turns all succeeded is told it has never failed.
+type EpisodeFilter struct {
+	// Conversation keeps the episodes of one conversation, by the
+	// `{source}:{local}` key the turn served. Empty keeps every episode,
+	// including those with no conversation — it never matches the turns
+	// that HAVE none, which is what a comparison against '' would do.
+	Conversation string
+
+	// Outcome keeps the episodes that ended this way, compared exactly
+	// against the stored `review_outcome`. The outcomes an episode is
+	// written with are [SettledOutcomes]; a caller taking the value from
+	// somebody else normalises and checks it before it gets here, so that
+	// a value no row can hold is refused rather than answered with nothing.
+	Outcome string
+}
+
+// where renders the filter as predicates over the episodes table under alias,
+// each beginning " AND ", with the values they bind in order.
+//
+// THE STATEMENT TEXT VARIES with which fields are set, rather than binding an
+// always-true alternative for each field left empty, so each statement states
+// exactly the predicate it means and nothing a planner has to see through.
+//
+// THE OUTCOME TERM CARRIES A UNARY `+`, which is SQLite's spelling for "this
+// term may not drive an index", and the driver honours it. Without it the
+// planner answers an outcome filter with a MULTI-INDEX AND over
+// episodes_outcome_ended_at_idx — an index led by the outcome, not the seat —
+// which reads every seat's rows with that outcome to find one seat's (seen in
+// the plan; TestAListingSeeksOneSeatWhateverItFilters and
+// TestRecallScansOneSeatRatherThanTheTable are the guards). Kept off it, the
+// term filters the rows the seat's own index seek returns.
+func (f EpisodeFilter) where(alias string) (string, []any) {
+	var sql string
+	var args []any
+	if f.Conversation != "" {
+		sql += " AND " + alias + ".conversation_key = ?"
+		args = append(args, f.Conversation)
 	}
-	if limit <= 0 {
-		limit = defaultConversationListing
+	if f.Outcome != "" {
+		sql += " AND +" + alias + ".review_outcome = ?"
+		args = append(args, f.Outcome)
 	}
-	rows, err := e.db.SQL().QueryContext(ctx,
-		`SELECT `+episodeColumns+` FROM episodes
-		 WHERE agent_handle = ? AND conversation_key = ?
-		 ORDER BY ended_at DESC, id DESC LIMIT ?`,
-		handle, conversation, limit)
+	return sql, args
+}
+
+// EpisodeQuery asks for one page of a seat's episodes, newest first.
+type EpisodeQuery struct {
+	Handle string
+	Filter EpisodeFilter
+
+	// Offset is how many matching episodes, newest first, the page starts
+	// past. Positions are counted afresh on each read, so an episode
+	// written between two reads moves the next page by one.
+	Offset int
+
+	// Limit is the page size, and it must be positive: a listing whose
+	// caller named no size has no honest default to take, because the
+	// caller is the one that knows what the rows are for.
+	Limit int
+}
+
+// EpisodePage is one page of a seat's episodes.
+type EpisodePage struct {
+	// Episodes is the page, newest first, at most [EpisodeQuery.Limit].
+	Episodes []Episode
+
+	// Truncated says more episodes match past this page. It is read off
+	// one row past the page rather than inferred from a full page, so a
+	// seat holding exactly Limit matching episodes is not told it holds
+	// more. The rest is the next page: the same query with Offset moved
+	// past this one.
+	Truncated bool
+}
+
+// List returns one page of a seat's episodes, newest first, narrowed by the
+// query's filter before its limit is applied.
+//
+// ONE ROW PAST THE PAGE IS READ AS EVIDENCE and never returned, which is what
+// [EpisodePage.Truncated] reports.
+func (e *Episodes) List(ctx context.Context, q EpisodeQuery) (EpisodePage, error) {
+	switch {
+	case q.Handle == "":
+		return EpisodePage{}, fmt.Errorf("learning: an episode listing needs a seat")
+	case q.Limit <= 0:
+		return EpisodePage{}, fmt.Errorf("learning: an episode listing for %s needs "+
+			"a positive limit, got %d", q.Handle, q.Limit)
+	case q.Offset < 0:
+		return EpisodePage{}, fmt.Errorf("learning: an episode listing for %s needs "+
+			"an offset of zero or more, got %d", q.Handle, q.Offset)
+	}
+	statement, filterArgs := listStatement(q.Filter)
+	args := append([]any{q.Handle}, filterArgs...)
+	args = append(args, q.Limit+1, q.Offset)
+	rows, err := e.db.SQL().QueryContext(ctx, statement, args...)
 	if err != nil {
-		return nil, fmt.Errorf("learning: conversation episodes for %s: %w", handle, err)
+		return EpisodePage{}, fmt.Errorf("learning: list episodes for %s: %w", q.Handle, err)
 	}
-	return collectEpisodes(rows)
+	found, err := collectEpisodes(rows)
+	if err != nil {
+		return EpisodePage{}, err
+	}
+	page := EpisodePage{Episodes: found}
+	if len(found) > q.Limit {
+		page.Episodes, page.Truncated = found[:q.Limit], true
+	}
+	return page, nil
+}
+
+// listStatement is [Episodes.List]'s query for one filter, binding the seat,
+// the filter's values, the limit and the offset in that order.
+//
+// NAMED rather than written at the call site for the reason [recallStatement]
+// is: its plan is asserted — the seat's newest-first walk must be a seek on
+// episodes_agent_ended_at_idx whatever the filter adds — and a test that
+// retyped the statement would stop describing it.
+func listStatement(f EpisodeFilter) (string, []any) {
+	filter, args := f.where("e")
+	return `SELECT ` + episodeColumns + ` FROM episodes e
+		 WHERE e.agent_handle = ?` + filter + `
+		 ORDER BY e.ended_at DESC, e.id DESC LIMIT ? OFFSET ?`, args
 }
 
 // EPISODES HAVE NO Purge, deliberately, and this note is here so the next
