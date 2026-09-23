@@ -95,6 +95,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -124,13 +125,6 @@ const IdempotencyHeader = "Idempotency-Key"
 // the more useful refusal; this bound exists so a body nothing could accept is
 // not read into memory first.
 const MaxBodyBytes = 2*pages.MaxBody + 64<<10
-
-// retryAfter is the Retry-After on this surface's 503s, in seconds.
-//
-// TWO, the identity surface's own value and for its reason: what a caller is
-// waiting for is this node's applier committing one more batch, or its chart
-// view catching up — both on the scale of one apply, not of an outage.
-const retryAfter = 2
 
 // decisionRead is the level a route reads a row at before deciding on it.
 //
@@ -311,7 +305,11 @@ func (s *Service) refuseDecision(w http.ResponseWriter, r *http.Request,
 	case how == iam.Anonymous:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 	case how == iam.Unknown:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryAfter)
+		// THE IDENTITY ESTATE'S OWN HINT, declared once beside it — this
+		// surface carried a private copy of the number, which is how three
+		// spellings of one hint come to disagree.
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
+			auth.RetryIdentitySeconds)
 	case d.Unknown():
 		unavailable(w, builtin.Refusal(string(action),
 			builtin.DecisionError(action, d)), nil)
@@ -324,11 +322,31 @@ func (s *Service) refuseDecision(w http.ResponseWriter, r *http.Request,
 
 // unavailable writes a 503 this caller should retry, with what to retry with.
 func unavailable(w http.ResponseWriter, detail string, extra map[string]any) {
+	unavailableFor(w, nil, detail, extra)
+}
+
+// unavailableFor is [unavailable] for a 503 whose CAUSE says whether, and
+// when, to come back — [statelog.RetryAfter]'s rule, which is every surface's.
+//
+// A REFUSAL WAITING CANNOT CLEAR CARRIES NO Retry-After: a write refused by an
+// evicted node or on a full log, a read refused by a node holding a record it
+// cannot decode, answer the same however often they are asked. Every one of
+// them went out as "come back in two seconds", and a client obeyed for as long
+// as nobody readmitted, upgraded or resized anything. A refusal that derived a
+// hint says that; anything else is [authz.RetryUndecidedSeconds], the scale of
+// this node applying one more batch or its chart view catching up — this
+// surface's own copy of that number is gone for the reason the identity
+// hint's is.
+func unavailableFor(w http.ResponseWriter, cause error, detail string,
+	extra map[string]any) {
+
 	body := httpjson.Detail{"detail": detail}
 	for k, v := range extra {
 		body[k] = v
 	}
-	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retryAfter, body)
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+		httpjson.RetrySeconds(statelog.RetryAfter(cause,
+			authz.RetryUndecidedSeconds*time.Second)), body)
 }
 
 // ---- calling a tool ---------------------------------------------------- //
@@ -539,7 +557,7 @@ func fail(w http.ResponseWriter, cause error, text, key string) {
 		errors.Is(cause, statelog.ErrConflict), errors.Is(cause, statelog.ErrExists):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeStale, detail)
 	case errors.Is(cause, statelog.ErrUnavailable):
-		unavailable(w, text, map[string]any{"op_id": key})
+		unavailableFor(w, cause, text, map[string]any{"op_id": key})
 	default:
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeRefused, detail)
 	}
@@ -563,7 +581,7 @@ func readFailed(w http.ResponseWriter, err error) {
 		return
 	}
 	log.Warn("api_work_read_failed", "error", err)
-	unavailable(w, "this node could not read what the decision is about: "+
+	unavailableFor(w, err, "this node could not read what the decision is about: "+
 		err.Error(), nil)
 }
 

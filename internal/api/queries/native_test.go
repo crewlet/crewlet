@@ -535,9 +535,10 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 			"server on a screen that would have worked in a few seconds", err)
 	}
 	// AND THE HINT IS THE REFUSAL'S OWN, derived from how far behind this
-	// node is over how fast it is draining. A flat five seconds is wrong
-	// in both directions on one fleet.
-	if got := queries.RetryAfter(err); got != 12*time.Second {
+	// node is over how fast it is draining, and it survives the wrapping:
+	// the REST answer reads it through [statelog.RetryAfter]. A flat five
+	// seconds is wrong in both directions on one fleet.
+	if got := statelog.RetryAfter(err, 5*time.Second); got != 12*time.Second {
 		t.Errorf("the retry hint is %s, want the refusal's own 12s", got)
 	}
 }

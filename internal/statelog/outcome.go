@@ -3,6 +3,7 @@ package statelog
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Outcome is what a write's caller is told, and there are exactly three
@@ -164,6 +165,57 @@ const (
 	// stream and means a store or stream was restored out of step.
 	ReasonSkew Reason = "skew"
 )
+
+// Retryable reports whether this refusal clears on THIS node without anybody
+// doing anything — the write-side twin of [ReadRefusal.Retryable], and for its
+// reason: a node that is behind catches up, while an evicted node, a deleted
+// object or a full log refuses the same write however long the caller waits.
+//
+// THREE CLEAR ON THEIR OWN, each by its own constant's words: a node BEHIND the
+// caller's previous write applies it, a node BELOW the trim floor catches up
+// or adopts a snapshot, and a floor that could not be read is read again.
+// [ReasonDeferred] is deliberately not one of them: ANOTHER node can serve the
+// write, and this one cannot until it is upgraded — so "come back here" is the
+// wrong instruction however soon it is given.
+func (r Reason) Retryable() bool {
+	switch r {
+	case ReasonBehind, ReasonBelowFloor, ReasonFloorUnknown:
+		return true
+	}
+	return false
+}
+
+// RetryAfter is how long a caller should wait before bringing the request err
+// refused back to THIS node: ZERO when waiting cannot change the answer, the
+// refusal's own derived hint where it has one, and otherwise when it is
+// retryable and derived nothing — or is not a refusal this package made at
+// all, which is the caller's to judge rather than this package's.
+//
+// ONE RULE FOR EVERY SURFACE that answers a refusal in a status code. Written
+// at each one, it drifted: /chart turned a refusal waiting cannot clear — a
+// node holding a record it cannot decode, an evicted one — into `Retry-After:
+// 2`, and the work surface did the same to every write refusal, so a client
+// polled every two seconds a node that would not answer until somebody
+// upgraded or readmitted it. And the zero is the only honest hint there is:
+// [Refused.RetryAfter] already says so for a read, and [Reason.Retryable]
+// says it for a write, which carries no hint of its own.
+func RetryAfter(err error, otherwise time.Duration) time.Duration {
+	var refused *Refused
+	if errors.As(err, &refused) {
+		switch {
+		case !refused.Code.Retryable():
+			return 0
+		case refused.RetryAfter > 0:
+			return refused.RetryAfter
+		}
+		return otherwise
+	}
+	var unavailable *Unavailable
+	if errors.As(err, &unavailable) && !unavailable.Reason.Retryable() {
+		return 0
+	}
+	return otherwise
+}
 
 // ErrUnavailable is what a refusal wraps, so a caller can tell a refusal from
 // a conflict with errors.Is before it looks at the reason.

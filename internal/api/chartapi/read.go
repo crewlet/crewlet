@@ -216,22 +216,22 @@ func (s *Service) readFailed(w http.ResponseWriter, err error) {
 		map[string]string{"detail": err.Error()})
 }
 
-// retryAfter is the Retry-After on one of this surface's retryable 503s, in
-// seconds.
+// retryAfter is the Retry-After on one of this surface's 503s, in seconds, and
+// zero — no header — on one waiting cannot clear.
 //
-// THE REFUSAL'S OWN HINT where it carries one — a read refused because this
-// node is behind derives how long from its backlog over its measured drain,
-// which a flat number is wrong about in both directions on one fleet — and
-// [authz.RetryUndecidedSeconds] otherwise, for that constant's reason: what
-// the caller waits for is this node applying the chart log one batch
-// further, or reading the fleet's shared state again, which is the scale of
-// one apply and not of an outage.
+// [statelog.RetryAfter]'s rule, which is every surface's: a refusal that
+// derived a hint — a node behind its log, from its backlog over its measured
+// drain — says that; one waiting cannot clear says NOTHING, because a node
+// holding a record it cannot decode, or evicted from the fleet, answers the
+// same however often it is asked; and anything else is
+// [authz.RetryUndecidedSeconds], for that constant's reason — the caller waits
+// for this node to apply the chart log one batch further, or to read the
+// fleet's shared state again. It used to fall back to that constant for every
+// refusal without a hint, so a node that would answer nothing until somebody
+// upgraded or readmitted it told every client to come back in two seconds.
 func retryAfter(err error) int {
-	var refused *statelog.Refused
-	if errors.As(err, &refused) && refused.RetryAfter > 0 {
-		return max(1, int(refused.RetryAfter.Round(time.Second)/time.Second))
-	}
-	return authz.RetryUndecidedSeconds
+	return httpjson.RetrySeconds(statelog.RetryAfter(err,
+		authz.RetryUndecidedSeconds*time.Second))
 }
 
 // viewOfUnit renders one unit at the posture this request gets.

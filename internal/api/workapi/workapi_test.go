@@ -4,8 +4,10 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/workapi"
@@ -78,6 +80,62 @@ func TestEachOutcomeIsItsOwnStatus(t *testing.T) {
 				got.header.Get("Retry-After") == "" {
 				t.Error("a 503 carried no Retry-After, which reads as a node " +
 					"that is down for good")
+			}
+		})
+	}
+}
+
+// A REFUSAL WAITING CANNOT CLEAR SAYS NOTHING ABOUT COMING BACK, and one that
+// can says when.
+//
+// Every statelog refusal went out as `Retry-After: 2`: a write refused by an
+// evicted node, a read refused by a node holding a record it cannot decode —
+// both answer the same however often they are asked, and a client told to come
+// back in two seconds polls them until somebody readmits or upgrades the node.
+func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name       string
+		setup      func(*rig)
+		method     string
+		target     string
+		body       any
+		retryAfter string
+	}{
+		{"a write refused by an evicted node",
+			func(r *rig) {
+				r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonEvicted}
+			}, http.MethodPost, "/work/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"}, ""},
+		{"a write refused because this node is behind",
+			func(r *rig) {
+				r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonBehind}
+			}, http.MethodPost, "/work/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"},
+			strconv.Itoa(authz.RetryUndecidedSeconds)},
+		{"a read refused by a node holding a record it cannot decode",
+			func(r *rig) {
+				r.reader.err = &statelog.Refused{Code: statelog.RefuseDeferred,
+					Level: statelog.ReadSession}
+			}, http.MethodPost, "/work/items/ENG-1/rank",
+			map[string]any{"after": "ENG-2"}, ""},
+		{"a read refused by a node behind its log, from its own backlog",
+			func(r *rig) {
+				r.reader.err = &statelog.Refused{Code: statelog.RefuseBehind,
+					Level: statelog.ReadSession, RetryAfter: 9 * time.Second}
+			}, http.MethodPost, "/work/items/ENG-1/rank",
+			map[string]any{"after": "ENG-2"}, "9"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			c.setup(r)
+			got := r.do(as(admin("ana")), c.method, c.target, c.body)
+			if got.status != http.StatusServiceUnavailable {
+				t.Fatalf("answered %d, want 503: %v", got.status, got.body)
+			}
+			if after := got.header.Get("Retry-After"); after != c.retryAfter {
+				t.Errorf("Retry-After = %q, want %q", after, c.retryAfter)
 			}
 		})
 	}

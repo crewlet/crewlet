@@ -936,6 +936,21 @@ func Unavailable(w http.ResponseWriter, code Code, retryAfterSeconds int) {
 	UnavailableWith(w, code, retryAfterSeconds, nil)
 }
 
+// RetrySeconds is a hint as the whole seconds a `Retry-After` carries: ROUNDED
+// UP, so a derived hint of 1.2s is never sent as "come back in one" before the
+// node could have got there, and zero — not retryable — stays zero, which
+// [Unavailable] writes as no header at all.
+//
+// ONE CONVERSION for every surface that has a hint as a duration, because
+// converting at each call site is how two of them came to round differently:
+// one rounded to the nearest second, and a 1.4s drain estimate went out as 1.
+func RetrySeconds(hint time.Duration) int {
+	if hint <= 0 {
+		return 0
+	}
+	return int((hint + time.Second - 1) / time.Second)
+}
+
 // UnavailableWith is [Unavailable] carrying a detail: what could not be read,
 // the operation id a retry must reuse, the setting to change.
 //

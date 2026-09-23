@@ -69,7 +69,13 @@ one JSON object, and it always has the same three parts in the same places:
   THIS node's configuration — `no_keyring`, `no_active_key`, a node that runs
   no identity domain asked a question only one that does can answer — carries
   NONE, because no wait installs a key: the header's absence is the answer,
-  and the `hint` names what to change.
+  and the `hint` names what to change. So does a refusal from the state log
+  that waiting cannot clear on THIS node — a node evicted from the fleet, one
+  holding a record it cannot decode, a log at its byte ceiling, a deleted
+  object — on every surface that answers one with a `503` (`/chart`, `/work`,
+  `/pages`): the same request is refused however often it is sent, so the
+  answer is to ask another node, or for an operator to readmit, upgrade or
+  resize, never to poll this one.
 
 `error` and `message` are RESERVED: a route's own detail can never displace
 them, so a client that branches on the code cannot find it missing because a
@@ -592,7 +598,9 @@ a node that cannot decide **authority** is `503` rather than `403`: a node that
 is booting or behind the log cannot say who leads a unit, and `403` would send
 somebody to ask for an authority they already hold. Every retryable `503` here
 carries a `Retry-After` — estimated from this node's own backlog when it is
-behind the chart log, a couple of seconds otherwise.
+behind the chart log, a couple of seconds otherwise — and one waiting cannot
+clear carries none: an evicted node, or one holding a chart record it cannot
+decode, answers the same however often it is asked.
 
 #### A rename keeps the old address working
 
@@ -3081,7 +3089,7 @@ both left the domain — so there is nothing to route.
 | `404` | The item, page or comment does not exist — or this node runs no such backend | |
 | `409` `stale` | Somebody changed it after you read it: a stale `If-Match`, a title taken, a race lost | `detail`: read it again |
 | `422` `refused` | The domain refused the write on its own rules | `detail`: the domain's own sentence |
-| `503` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), or cannot establish whether the write landed | a `Retry-After`, and — for an unknown outcome — the `op_id` to retry with |
+| `503` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), cannot establish whether the write landed, or its log refused the request | a `Retry-After`, and — for an unknown outcome — the `op_id` to retry with. A refusal waiting cannot clear on this node — it was evicted, it holds a record it cannot decode, the log is at its ceiling — carries **no** `Retry-After`: ask another node, or an operator |
 
 The `403` wording is the point of the second row: the three surfaces that serve
 these verbs refuse in ONE sentence, formed by one function, so a person told one

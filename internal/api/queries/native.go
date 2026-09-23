@@ -556,21 +556,6 @@ func badParams(field, got string, allowed []string) error {
 		ErrBadParams, field, got, strings.Join(allowed, ", "))
 }
 
-// RetryAfter is how long a caller should wait before asking again, or zero
-// when nothing here can say.
-//
-// DERIVED FROM THE REFUSAL rather than a constant, because the refusal derives
-// it from the observed drain: a flat hint sends a caller back too early on a
-// node grinding through a bulk apply and holds one waiting on a node that
-// caught up in milliseconds.
-func RetryAfter(err error) time.Duration {
-	var refused *statelog.Refused
-	if errors.As(err, &refused) {
-		return refused.RetryAfter
-	}
-	return 0
-}
-
 // ---- projects ----------------------------------------------------------- //
 
 // workProjects answers the company's projects with their maintained counts.

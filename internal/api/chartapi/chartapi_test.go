@@ -619,6 +619,30 @@ func TestAWriteThatDidNotLandSaysWhatToDoAboutIt(t *testing.T) {
 			retryAfter: strconv.Itoa(authz.RetryUndecidedSeconds),
 		},
 		{
+			// A NODE BEHIND THE CALLER'S OWN WRITE catches up, and a
+			// write refusal carries no hint of its own.
+			name: "a write refused because this node is behind says the undecidable scale",
+			err: fmt.Errorf("chart: publish: %w",
+				&statelog.Unavailable{Reason: statelog.ReasonBehind}),
+			status: http.StatusServiceUnavailable, code: httpjson.CodeUnavailable,
+			retryAfter: strconv.Itoa(authz.RetryUndecidedSeconds),
+		},
+		{
+			// AN EVICTED NODE publishes nothing anybody applies, however
+			// often it is asked: "come back in two seconds" would have a
+			// client poll it until somebody readmits it.
+			name: "a write refused for good says nothing about coming back",
+			err: fmt.Errorf("chart: publish: %w",
+				&statelog.Unavailable{Reason: statelog.ReasonEvicted}),
+			status: http.StatusServiceUnavailable, code: httpjson.CodeUnavailable,
+		},
+		{
+			name: "a read refusal waiting cannot clear says nothing about coming back",
+			err: &statelog.Refused{Code: statelog.RefuseDeferred,
+				Level: statelog.ReadSession},
+			status: http.StatusServiceUnavailable, code: httpjson.CodeUnavailable,
+		},
+		{
 			name:    "an unknown outcome is retried with the same id, and says when",
 			outcome: statelog.OutcomeUnknown,
 			status:  http.StatusServiceUnavailable, code: httpjson.CodeUnavailable,
@@ -642,6 +666,44 @@ func TestAWriteThatDidNotLandSaysWhatToDoAboutIt(t *testing.T) {
 			}
 			if body["message"] != c.code.Message() {
 				t.Errorf("message = %v, want the code's own sentence", body["message"])
+			}
+			if got := rec.Header().Get("Retry-After"); got != c.retryAfter {
+				t.Errorf("Retry-After = %q, want %q", got, c.retryAfter)
+			}
+		})
+	}
+}
+
+// A READ THIS NODE WILL NEVER SERVE SAYS NOTHING ABOUT COMING BACK, and one it
+// will serve soon says when — rounded UP, so a client is never sent back
+// before the node could have caught up.
+//
+// The read path fell back to the undecidable two seconds for every refusal
+// without a derived hint, and a refusal waiting cannot clear carries none by
+// design: a node holding a record it cannot decode told every client to poll
+// it every two seconds until somebody upgraded it.
+func TestAReadRefusalSaysWhetherAndWhenToComeBack(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name       string
+		err        error
+		retryAfter string
+	}{
+		{"a node holding a record it cannot decode",
+			&statelog.Refused{Code: statelog.RefuseDeferred, Level: statelog.ReadStale}, ""},
+		{"an evicted node",
+			&statelog.Refused{Code: statelog.RefuseEvicted, Level: statelog.ReadStale}, ""},
+		{"a node behind its log, from its own backlog",
+			&statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadStale,
+				RetryAfter: 1200 * time.Millisecond}, "2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := serve(t, &reader{err: c.err}, leadOf(iam.GrantStateRead), leads())
+			rec := httptest.NewRecorder()
+			r.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://x/chart", nil))
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("answered %d, want 503: %s", rec.Code, rec.Body)
 			}
 			if got := rec.Header().Get("Retry-After"); got != c.retryAfter {
 				t.Errorf("Retry-After = %q, want %q", got, c.retryAfter)

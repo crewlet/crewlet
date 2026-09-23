@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/static"
@@ -1162,18 +1163,16 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		//
 		// THE HINT IS THE REFUSAL'S OWN where it has one — derived from
 		// how far behind this node is over how fast it is actually
-		// draining — and five seconds otherwise. A flat hint is wrong in
-		// both directions on one fleet. The fallback is what an
+		// draining — and five seconds otherwise, by [statelog.RetryAfter]'s
+		// rule, which every surface answering a refusal reads. A flat hint
+		// is wrong in both directions on one fleet. The fallback is what an
 		// unreachable coordination store gets, since there is no drain to
 		// derive from, and it is the shared health tick's own cadence
 		// ([stream.HealthInterval]): a client that waits it out asks again
 		// having seen at most one newer health frame, which is the soonest
 		// it could learn the store is back.
-		after := int(stream.HealthInterval / time.Second)
-		if hint := queries.RetryAfter(err); hint > 0 {
-			after = max(1, int(hint.Round(time.Second)/time.Second))
-		}
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, after)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable,
+			httpjson.RetrySeconds(statelog.RetryAfter(err, stream.HealthInterval)))
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
 		// database path or a driver's own message, and nothing about

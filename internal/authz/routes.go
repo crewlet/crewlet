@@ -147,8 +147,9 @@ func (t *Router) Refusing(render Refusal) *Router {
 // RetryUndecidedSeconds is the `Retry-After` on a request this node could not
 // decide, in seconds.
 //
-// TWO, the value the identity surface and the work surface give their own
-// 503s and for their reason: what the caller waits for is this node's chart
+// TWO, the value the identity surface gives its own 503s — and the one the work
+// surface and /chart take from here rather than keeping a copy — and for its
+// reason: what the caller waits for is this node's chart
 // view catching up by one apply, or its identity read coming back — the scale
 // of one batch, not of an outage. Longer leaves a person staring at a screen
 // that could already answer; shorter turns a lagging node's every open tab

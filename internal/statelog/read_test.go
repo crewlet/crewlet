@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -372,6 +373,76 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 	}
 	if statelog.ReadRefusal("made_up").Valid() {
 		t.Error("an unknown refusal code reports itself valid")
+	}
+}
+
+// A REFUSAL WAITING CANNOT CLEAR IS NEVER TOLD TO COME BACK, on the read side
+// or the write side, and one that can is told when.
+//
+// [statelog.RetryAfter] is the one rule every surface answering a refusal in a
+// status code reads its Retry-After from. Each surface wrote its own, and /chart
+// and the work surface both turned a node holding a record it cannot decode —
+// or an evicted one — into "retry in two seconds", which a client obeys for as
+// long as nobody upgrades or readmits the node.
+func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
+	t.Parallel()
+	const otherwise = 2 * time.Second
+	for _, code := range statelog.ReadRefusals {
+		refused := &statelog.Refused{Code: code, Level: statelog.ReadSession,
+			RetryAfter: statelog.RetryHint(code, 1_000, 100)}
+		// WRAPPED, because a surface meets it inside whatever the domain
+		// said about it.
+		got := statelog.RetryAfter(fmt.Errorf("tracker: read: %w", refused), otherwise)
+		switch {
+		case !code.Retryable() && got != 0:
+			t.Errorf("read refusal %q says come back in %s, and waiting on "+
+				"this node cannot clear it", code, got)
+		case code.Retryable() && got != refused.RetryAfter:
+			t.Errorf("read refusal %q says %s, want its own derived %s",
+				code, got, refused.RetryAfter)
+		}
+	}
+	// A RETRYABLE REFUSAL THAT DERIVED NOTHING gets the caller's scale
+	// rather than no header at all, which would read as a node down for
+	// good.
+	bare := &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession}
+	if got := statelog.RetryAfter(bare, otherwise); got != otherwise {
+		t.Errorf("a retryable read refusal with no hint says %s, want %s",
+			got, otherwise)
+	}
+	for _, c := range []struct {
+		reason    statelog.Reason
+		retryable bool
+	}{
+		{statelog.ReasonBehind, true},
+		{statelog.ReasonBelowFloor, true},
+		{statelog.ReasonFloorUnknown, true},
+		{statelog.ReasonEvicted, false},
+		{statelog.ReasonDeferred, false},
+		{statelog.ReasonDeleted, false},
+		{statelog.ReasonGated, false},
+		{statelog.ReasonRetired, false},
+		{statelog.ReasonLogFull, false},
+		{statelog.ReasonSkew, false},
+	} {
+		want := time.Duration(0)
+		if c.retryable {
+			want = otherwise
+		}
+		refused := fmt.Errorf("chart: publish: %w",
+			&statelog.Unavailable{Reason: c.reason, Detail: "a detail"})
+		if got := statelog.RetryAfter(refused, otherwise); got != want {
+			t.Errorf("write refusal %q says come back in %s, want %s", c.reason,
+				got, want)
+		}
+		if c.reason.Retryable() != c.retryable {
+			t.Errorf("%q reports retryable = %v, want %v", c.reason,
+				c.reason.Retryable(), c.retryable)
+		}
+	}
+	// AND AN ERROR THIS PACKAGE DID NOT MAKE is the caller's to judge.
+	if got := statelog.RetryAfter(errors.New("a store blip"), otherwise); got != otherwise {
+		t.Errorf("a foreign error says %s, want the caller's own %s", got, otherwise)
 	}
 }
 
