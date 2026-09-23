@@ -520,6 +520,14 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
 					"on this node: %w", id, statelog.ErrUnavailable)
 			}
+			// THE PROJECT THE CALLER DECIDED ON IS STILL THIS TASK'S —
+			// see [stillIn]. A re-route is the project's own decision and
+			// the tag set, the scope and every lead check upstream were
+			// formed against it, so a task that moved in between is
+			// another project's write.
+			if moved := stillIn(current, project); moved != nil {
+				return statelog.Decision{}, moved
+			}
 			if current.Removed != nil {
 				// A TOMBSTONED TASK IS FROZEN — no comment, body, field
 				// or relation of it can change — which is what makes a

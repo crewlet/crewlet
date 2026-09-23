@@ -217,6 +217,11 @@ var subjectOf = map[string]subject{
 	// holder of the admin grant was refused as naming no project — a
 	// project's own lead could not take an item out of their own board,
 	// which is the one thing [authz.ClassDestructive] exists to let them do.
+	//
+	// The read the tool decides on is OUTSIDE the write's snapshot, so the
+	// project is passed to the writer as a PRECONDITION and the tracker
+	// refuses a task filed elsewhere by then with a conflict — the same
+	// holds for `update_work_item`'s re-route.
 	"remove_work_item":  {kind: authz.KindTask, inTool: true},
 	"restore_work_item": {kind: authz.KindTask, inTool: true},
 }

@@ -526,10 +526,14 @@ verb once the call is read, and each refusal names what it needed.
 
 An operator holds the same thirteen and more that no seat does, including the
 two below. `remove_work_item` puts an item
-in the **trash** and `restore_work_item` takes it out again, at any age. On the
-assistant both take `fleet:operate`: the tool names an item rather than the
-project it is filed in, so the project-lead half of the rule that governs them
-has no project to ask about. A removal hides an item from every list and board and destroys nothing — its
+in the **trash** and `restore_work_item` takes it out again, at any age. Both
+are decided by the item's **own** project: the lead of the project it is filed
+under, or `fleet:operate`. The tool names an item rather than a project, so it
+reads which project that is off the item and asks then — and the write checks
+it again when it lands, so an item moved to another project in between is
+refused as a **conflict** naming the project it is in now rather than removed
+on the say-so of a lead it no longer answers to. A re-route through
+`update_work_item` is held to the same check. A removal hides an item from every list and board and destroys nothing — its
 history is untouched and `list_work_items` with `removed: true` is the only
 thing that shows it. No seat holds either, because a seat that could hide work
 it did not want to do would be marking its own homework in the one way that

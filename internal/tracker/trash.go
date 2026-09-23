@@ -168,7 +168,15 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 			case !held:
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
 					"on this node: %w", id, statelog.ErrUnavailable)
-			case current.Removed != nil:
+			}
+			// THE PROJECT FIRST, before the no-op below: who may remove
+			// this task was decided on the project the caller read it
+			// in, and a task that has moved since is another project's
+			// to remove.
+			if moved := stillIn(current, project); moved != nil {
+				return statelog.Decision{}, moved
+			}
+			if current.Removed != nil {
 				// ALREADY IN THE TRASH IS NOTHING TO DO, and it is a
 				// SUCCESS rather than a conflict: a re-run of a removal
 				// that half-finished must be able to complete, and the
@@ -210,7 +218,11 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 			case !held:
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
 					"on this node: %w", id, statelog.ErrUnavailable)
-			case current.Removed == nil:
+			}
+			if moved := stillIn(current, project); moved != nil {
+				return statelog.Decision{}, moved
+			}
+			if current.Removed == nil {
 				// NOT IN THE TRASH IS NOTHING TO DO, on the removal's
 				// own rule: a re-run must be able to finish.
 				return statelog.Decision{}, nil
@@ -224,6 +236,35 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 			return decision, nil
 		},
 	})
+}
+
+// stillIn refuses a write whose authority was decided on a project the task
+// is no longer filed under.
+//
+// # Why the project a caller passes is checked INSIDE the snapshot
+//
+// Every caller of a task write resolved a key to reach the task and read its
+// project OFF THE ROW, outside this transaction — and then decided on that
+// project who may do what: a removal and a restore are the project lead's, and
+// a re-route is the project's own. A task moved to another project between
+// that read and this snapshot is somebody else's decision, and publishing
+// anyway lands one project lead's authority on another project's work, under
+// a scope naming the container the task left.
+//
+// So the project argument is a PRECONDITION, not a label, and it is checked
+// here — the one place the framework guarantees a single consistent read —
+// exactly as an if-match is. A CONFLICT rather than an ordinary refusal,
+// because nothing is wrong with the request: the caller reads the task again,
+// decides again on the project it is in now, and re-sends.
+func stillIn(current Task, project string) error {
+	if current.Project == project {
+		return nil
+	}
+	return fmt.Errorf("tracker: task %s (%s) is filed under project %s now, "+
+		"not %s where it was read — what this write may do was decided on a "+
+		"project the task has left, so read it again and decide on %s: %w",
+		current.Key, current.ID, current.Project, project, current.Project,
+		statelog.ErrConflict)
 }
 
 // subtreeOf reads a task's descendants before the first append.
