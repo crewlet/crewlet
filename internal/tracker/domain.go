@@ -107,6 +107,17 @@ func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind).InstallsGate() || OpKind(env.Op) == OpPurge
 }
 
+// NodeGate reports a node's eviction or readmission — the one record a write
+// flagged [statelog.Request.NodeGate] may carry.
+//
+// BY ITS KIND, which nothing but a node's eviction or readmission is published
+// under — and deliberately not InstallsGate: the purge is this log's other
+// gate, and it is an ordinary write that the gate reserve and the fences a
+// node gate is excused must hold.
+func (Domain) NodeGate(env statelog.Envelope) bool {
+	return ObjectKind(env.Kind) == KindEviction
+}
+
 // EvictionSubject is where a node's evictions and readmissions are published
 // on this log — the [statelog.EvictionProbe] half a node the fleet re-anchored
 // past reads its peers' standing through, since its applier never reaches an

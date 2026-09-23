@@ -62,6 +62,11 @@ type GateFactory func(t *testing.T) GateCandidate
 // one of them to be reported. This package has no control domain that
 // installs gates, so the candidate is its own control: a family that passes
 // a reader answering the eviction first certifies nothing about precedence.
+//
+// And it holds the domain's NODE-GATE answer to the same records
+// ([GateNodeGates]): its eviction and readmission are node gates, and its
+// purge — the other gate, which [NodeGates] has no record of — is not. That
+// case is bent the same way, through the domain rather than the reader.
 func RunGates(t *testing.T, new GateFactory) {
 	t.Helper()
 	t.Run("the reader reports the gate the rule names", func(t *testing.T) {
@@ -82,6 +87,23 @@ func RunGates(t *testing.T, new GateFactory) {
 				})
 				if err == nil {
 					t.Errorf("a reader that %s passed every gate case — the "+
+						"family cannot tell it from one that keeps the rule", name)
+				}
+			})
+		}
+	})
+	t.Run("only a node's eviction and readmission are node gates", func(t *testing.T) {
+		if err := GateNodeGates(new(t)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("the cases catch a domain that calls the wrong record a node gate", func(t *testing.T) {
+		for name, bend := range nodeGateLiars {
+			t.Run(name, func(t *testing.T) {
+				c := new(t)
+				c.Domain = bend(c.Domain)
+				if GateNodeGates(c) == nil {
+					t.Errorf("a domain that %s passed the node-gate case — the "+
 						"family cannot tell it from one that keeps the rule", name)
 				}
 			})

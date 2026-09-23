@@ -55,6 +55,25 @@ type Domain interface {
 	// above it.
 	InstallsGate(env Envelope) bool
 
+	// NodeGate reports whether this record EVICTS OR READMITS A NODE — the
+	// one record a write flagged [Request.NodeGate] may carry.
+	//
+	// A NARROWER QUESTION THAN [Domain.InstallsGate], and the publisher
+	// holds the flag to this one. Every node gate installs an apply gate,
+	// but not every apply gate is a node's: a purge is a permanent deletion
+	// marker on an object, published like any other write. The flag excuses
+	// three fences — the passed generation, a peer's truncated rows and the
+	// gate reserve — so held to the wider answer, a purge flagged by mistake
+	// would spend the room kept for the eviction that unpins a full log and
+	// pass every fence that stops an ordinary write.
+	//
+	// ANSWERED FROM THE ENVELOPE ALONE, for InstallsGate's reason: it is the
+	// half every build reads. A domain that keeps no eviction gate answers
+	// false for every record. statelogtest certifies both halves: the
+	// domain's own eviction and readmission answer true and install a gate,
+	// and nothing else does.
+	NodeGate(env Envelope) bool
+
 	// Tables is every table this domain writes, with the class that says
 	// what a snapshot, an identity claim and a local sweep each do with
 	// it. The framework derives all three from this map, so a table added

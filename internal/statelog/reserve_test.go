@@ -278,6 +278,33 @@ func (smallGatingDomain) Stream() statelog.StreamSpec {
 	return spec
 }
 
+// smallPurgingDomain is that log with a second gate beside the eviction: a
+// purge, which installs an apply gate and is not a node's — the shape of the
+// tracker's and the pages log's.
+type smallPurgingDomain struct{ smallGatingDomain }
+
+func (smallPurgingDomain) InstallsGate(env statelog.Envelope) bool {
+	return env.Kind == "eviction" || env.Op == "purge"
+}
+
+// purgeRecord is that purge, carrying body.
+func purgeRecord(stamp statelog.Stamp, opID, body string) []byte {
+	payload, err := json.Marshal(struct {
+		statelog.Envelope
+		Body string
+	}{
+		Envelope: statelog.Envelope{
+			V: 1, Kind: "object", Op: "purge", OpID: opID,
+			Gen: stamp.Gen, Writer: stamp.Writer,
+		},
+		Body: body,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("encode a purge record: %v", err))
+	}
+	return payload
+}
+
 // evictionRecord is a gate record on the probe log: an eviction, which
 // [gatingDomain] says installs a gate, carrying body.
 func evictionRecord(stamp statelog.Stamp, opID, body string) []byte {
@@ -320,7 +347,7 @@ func (h *harness) gate(node, opID, body string, record func(statelog.Stamp, stri
 // of the broker's own ceiling — and an eviction then lands PAST the ordinary
 // ceiling, in the reserve, where every ordinary write after it is still
 // refused. And a write that asks for the reserve with a record the domain
-// says installs no gate is refused outright, since a flag the caller sets
+// does not call a node gate is refused outright, since a flag the caller sets
 // alone would let any write spend it.
 func TestALogFullForOrdinaryWritesStillTakesAGateRecord(t *testing.T) {
 	t.Parallel()
@@ -359,12 +386,12 @@ func TestALogFullForOrdinaryWritesStillTakesAGateRecord(t *testing.T) {
 	// is landing in the reserve.
 	gateBody := strings.Repeat("g", int(soft-before.Bytes)+(1<<10))
 	if _, err := h.gate("node-b", "evict-1", gateBody, probeRecord); err == nil ||
-		!strings.Contains(err.Error(), "installs no gate") {
-		t.Fatalf("a write asking for the reserve with a record that installs no "+
+		!strings.Contains(err.Error(), "not a node's eviction or readmission") {
+		t.Fatalf("a write asking for the reserve with a record that is no node "+
 			"gate answered %v, want it refused", err)
 	}
 	if h.appends.appends.Load() != appended {
-		t.Fatal("a record that installs no gate reached the broker through the " +
+		t.Fatal("a record that is no node gate reached the broker through the " +
 			"reserve")
 	}
 	res, err := h.gate("node-b", "evict-1", gateBody, evictionRecord)
@@ -397,9 +424,14 @@ func TestALogFullForOrdinaryWritesStillTakesAGateRecord(t *testing.T) {
 // is the way out of both, so an eviction must pass each fence with the other up
 // — excused by one and refused by the other, it leaves the operator exactly the
 // loop either fence alone was built to end.
+//
+// AND THE LOG'S OTHER GATE DOES NOT: a purge installs an apply gate too, and
+// flagged a node gate by mistake it is refused before anything is sent, with
+// both fences up — the flag is held to the domain's NODE-gate answer, so a
+// purge can neither spend the reserve nor pass the truncation fence.
 func TestAnEvictionPassesTheTruncationFenceAndTheReserveTogether(t *testing.T) {
 	t.Parallel()
-	h := newHarnessFor(t, smallGatingDomain{})
+	h := newHarnessFor(t, smallPurgingDomain{})
 	h.applier.auto = true
 	body := strings.Repeat("x", 60<<10)
 	soft := statelog.OrdinaryCeiling(smallLogBytes, true)
@@ -427,6 +459,16 @@ func TestAnEvictionPassesTheTruncationFenceAndTheReserveTogether(t *testing.T) {
 	}
 
 	gateBody := strings.Repeat("g", int(soft-before.Bytes)+(1<<10))
+	appended := h.appends.appends.Load()
+	if _, err := h.gate("node-newer", "purge-1", gateBody, purgeRecord); err == nil ||
+		!strings.Contains(err.Error(), "not a node's eviction or readmission") {
+		t.Fatalf("a purge flagged a node gate on the truncated, full log answered "+
+			"%v, want it refused as no node gate", err)
+	}
+	if h.appends.appends.Load() != appended {
+		t.Fatal("a purge flagged a node gate reached the broker, past the " +
+			"truncation fence and into the reserve")
+	}
 	res, err := h.gate("node-newer", "evict-1", gateBody, evictionRecord)
 	if err != nil {
 		t.Fatalf("the eviction of the peer holding what the log lost, on a log "+

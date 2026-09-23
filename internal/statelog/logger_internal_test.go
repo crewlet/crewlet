@@ -125,6 +125,7 @@ func (loggerProbe) Stream() StreamSpec {
 func (loggerProbe) RecordVersion() int                { return 1 }
 func (loggerProbe) Envelope([]byte) (Envelope, error) { return Envelope{}, nil }
 func (loggerProbe) InstallsGate(Envelope) bool        { return false }
+func (loggerProbe) NodeGate(Envelope) bool            { return false }
 func (loggerProbe) Tables() map[string]TableClass     { return nil }
 func (loggerProbe) DeferredTable() string             { return "logger_probe_deferred" }
 func (loggerProbe) ScopeIndex() string                { return "logger_probe_scope" }

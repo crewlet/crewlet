@@ -11,9 +11,11 @@
 // must agree with its replay protocol, the apply that must produce the same
 // rows twice, the envelope that must not fail on a version this build cannot
 // read, the record that must name the node that wrote it and the generation it
-// was decided in, and the evictions a domain that claims identity must be able
-// to list — because the trim counts nodes per log, and a log whose evictions
-// nothing reads counts an evicted node for ever.
+// was decided in, the evictions a domain that claims identity must be able to
+// list — because the trim counts nodes per log, and a log whose evictions
+// nothing reads counts an evicted node for ever — and the node gate that is
+// the domain's own eviction and nothing else, because a write flagged one is
+// excused the fences and the reserve every other write is held to.
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //
@@ -51,8 +53,9 @@
 // [RunGates] is a second family, called beside [Run] by every domain whose
 // applier installs a deletion marker and an eviction window: it holds the
 // publisher-side reader, [statelog.Gates], to the one rule that interface
-// states. It has no control domain of its own, so it bends the candidate's own
-// reader each way a reader could break the rule and requires every bend to be
+// states, and the domain's node-gate answer to its own purge and eviction. It
+// has no control domain of its own, so it bends the candidate's own reader and
+// domain each way either could break its rule and requires every bend to be
 // reported.
 package statelogtest
 
@@ -119,6 +122,7 @@ func Run(t *testing.T, new Factory) {
 	t.Run("apply", func(t *testing.T) { runApply(t, new) })
 	t.Run("stamp", func(t *testing.T) { runStamp(t, new) })
 	t.Run("evictions", func(t *testing.T) { runEvictions(t, new) })
+	t.Run("node gates", func(t *testing.T) { runNodeGates(t, new) })
 }
 
 // openEstate brings up a replicated estate with the framework's tables and the

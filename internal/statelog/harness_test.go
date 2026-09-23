@@ -60,6 +60,7 @@ func (probeDomain) Envelope(payload []byte) (statelog.Envelope, error) {
 }
 
 func (probeDomain) InstallsGate(statelog.Envelope) bool { return false }
+func (probeDomain) NodeGate(statelog.Envelope) bool     { return false }
 
 func (probeDomain) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{

@@ -608,8 +608,12 @@ ordinary writes still takes an eviction, and once the evicted node's minute
 has passed the trim moves again. It takes it whatever else is refusing this
 node's ordinary writes — a peer holding what the log lost (`log_truncated`,
 below) or a generation the fleet moved past — because the eviction is the way
-out of each, and a log nothing can write to is a log nothing trims. A purge is not a gate record here: it frees
-nothing until the trim runs, and nothing bounds how many are run.
+out of each, and a log nothing can write to is a log nothing trims. A purge is
+not a gate record here: it frees nothing until the trim runs, and nothing
+bounds how many are run. The node holds that at the write: a record that asks
+for the reserve and is not a node's eviction or readmission — a purge included
+— is refused before anything is sent, and passes none of the fences an
+eviction is excused.
 
 | | tracker and pages logs | vector changelog |
 |---|---|---|

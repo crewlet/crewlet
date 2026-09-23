@@ -826,6 +826,11 @@ func (gatingDomain) InstallsGate(env statelog.Envelope) bool {
 	return env.Kind == "eviction"
 }
 
+// NodeGate answers that same eviction record is a node's.
+func (gatingDomain) NodeGate(env statelog.Envelope) bool {
+	return env.Kind == "eviction"
+}
+
 // A REDELIVERY IS ACKNOWLEDGED AND APPLIED ONCE.
 //
 // The checkpoint is what makes an apply idempotent at a position, and a

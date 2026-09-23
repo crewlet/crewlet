@@ -306,7 +306,8 @@ type Request struct {
 	// one flag, and a node gate passes every fence that could otherwise
 	// stand between an operator and the gesture that ends the fault. The
 	// publisher holds the flag to the record, refusing a NodeGate write
-	// whose record the domain says installs no gate ([Publisher.stamped]).
+	// whose record the domain does not call a node gate ([Domain.NodeGate],
+	// [Publisher.stamped]).
 	NodeGate bool
 
 	// Standing judges a retry this node's ledger already answers
@@ -804,17 +805,16 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 			"operation %q and the write is %q — the ledger an ambiguous publish "+
 			"is resolved by is keyed on the record's, so this write could never "+
 			"be answered for", p.domain.Name(), req.Subject, env.OpID, req.OpID)
-	case req.NodeGate && !p.domain.InstallsGate(env):
+	case req.NodeGate && !p.domain.NodeGate(env):
 		// A NODE GATE IS JUDGED FROM THE RECORD ITSELF, because the flag
 		// excuses three fences — the passed generation, a peer's truncated
 		// rows and the gate reserve — and one the caller set alone would
-		// let an ordinary write past all three. What the framework can ask
-		// is the domain's own gate predicate; it also answers true for the
-		// tracker's purge, which no caller flags, so this rules out every
-		// ordinary record rather than naming the one gate that is a node's.
+		// let an ordinary write past all three. Asked of the domain's NODE
+		// gate rather than its apply gate: a purge installs one too, and
+		// flagged by mistake it would spend the reserve and pass the fences.
 		return fmt.Errorf("statelog: the %s record decided for %s is a %s %q "+
-			"record, which installs no gate, and the write is flagged a node "+
-			"gate — only an eviction or a readmission may pass the fences a "+
+			"record, which is not a node's eviction or readmission, and the "+
+			"write is flagged a node gate — only those may pass the fences a "+
 			"node gate is excused",
 			p.domain.Name(), req.Subject, env.Kind, env.Op)
 	}

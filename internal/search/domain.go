@@ -122,6 +122,12 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 // tolerates by construction.
 func (Domain) InstallsGate(statelog.Envelope) bool { return false }
 
+// NodeGate reports a node's eviction or readmission: FALSE, ALWAYS. This
+// domain claims no identity, so no node is counted on its log and none is
+// evicted from it — a record here flagged a node gate is a mistake the
+// publisher refuses rather than one it lets past the fences.
+func (Domain) NodeGate(statelog.Envelope) bool { return false }
+
 // Tables is every durable table this domain writes, with its class.
 //
 // NOTHING IS `Replicated` HERE, and that is the point of the class existing.

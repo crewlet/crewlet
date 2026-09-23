@@ -197,6 +197,7 @@ func (controlBase) Envelope(payload []byte) (statelog.Envelope, error) {
 }
 
 func (controlBase) InstallsGate(statelog.Envelope) bool { return false }
+func (controlBase) NodeGate(statelog.Envelope) bool     { return false }
 
 func (controlBase) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
@@ -219,6 +220,10 @@ func (controlBase) FeedGroup() string     { return "" }
 type controlDomain struct{ controlBase }
 
 func (controlDomain) InstallsGate(env statelog.Envelope) bool {
+	return env.Kind == controlGateKind
+}
+
+func (controlDomain) NodeGate(env statelog.Envelope) bool {
 	return env.Kind == controlGateKind
 }
 
@@ -593,3 +598,71 @@ type listingCompacted struct{ compactedControl }
 func (listingCompacted) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
 	return controlDomain{}.Evictions(ctx, db)
 }
+
+// A DOMAIN THAT MISNAMES ITS NODE GATE IS CAUGHT.
+//
+// The publisher holds a write flagged a node gate to this answer, and the flag
+// excuses the passed-generation fence, a peer's truncated rows and the gate
+// reserve — so each arm is a defect that ships silently until the day it
+// matters: an eviction the publisher refuses on the log it was meant to
+// unpin, a node gate a lagging build defers instead of stopping on, or a log
+// that counts no node naming a record that may pass every fence.
+func TestTheSuiteCatchesADomainThatMisnamesItsNodeGate(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		mutate func(*statelogtest.Candidate)
+		names  string
+	}{
+		"an identity-claiming domain whose eviction is no node gate": {
+			mutate: func(c *statelogtest.Candidate) { c.Domain = evictionNotANodeGate{} },
+			names:  "does not call its eviction of a node a node gate",
+		},
+		"a node gate that installs no apply gate": {
+			mutate: func(c *statelogtest.Candidate) { c.Domain = nodeGateWithoutGate{} },
+			names:  "installs no apply gate",
+		},
+		"a domain that claims no identity and names a node gate": {
+			mutate: func(c *statelogtest.Candidate) {
+				c.Domain = compactedNodeGate{}
+				c.Rows = rowsOver(c.Domain)
+			},
+			names: "claims no identity",
+		},
+		"an identity-claiming candidate with no eviction record": {
+			mutate: func(c *statelogtest.Candidate) { c.EncodeGate = nil },
+			names:  "supplies no eviction record",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := control()
+			tc.mutate(&c)
+			err := statelogtest.NodeGates(c)
+			if err == nil {
+				t.Fatalf("the suite passed %s", name)
+			}
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Errorf("the suite objected, but to something else: %v", err)
+			}
+		})
+	}
+}
+
+// evictionNotANodeGate answers no to its own eviction, so the publisher would
+// refuse the gesture that unpins its log.
+type evictionNotANodeGate struct{ controlDomain }
+
+func (evictionNotANodeGate) NodeGate(statelog.Envelope) bool { return false }
+
+// nodeGateWithoutGate names its eviction a node gate and says it installs no
+// apply gate, so a build that cannot decode it would defer it.
+type nodeGateWithoutGate struct{ controlDomain }
+
+func (nodeGateWithoutGate) InstallsGate(statelog.Envelope) bool { return false }
+
+// compactedNodeGate counts no node and calls every record a node gate — an
+// apply gate as well, so what is caught is the identity half alone.
+type compactedNodeGate struct{ compactedControl }
+
+func (compactedNodeGate) InstallsGate(statelog.Envelope) bool { return true }
+func (compactedNodeGate) NodeGate(statelog.Envelope) bool     { return true }
