@@ -87,7 +87,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
 | `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
 | `POST` | `/work/retention/maintenance/exclude` | Record that a participant's process is stopped and holds no outstanding request |
-| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node whose operation ledger may have lost the first purge's row since — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build — answers the retry `unknown` again rather than purging twice. An id the engine did not mint is refused with `400 op_id_invalid`: it carries no instant, so no node could tell whether it already ran. **Operator-only**, and absent rather than 503 on a build with no tracker |
+| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node whose operation ledger may have lost the first purge's row since — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build — answers the retry `unknown` again rather than purging twice. An id the engine did not mint is refused with `400 op_id_invalid`: it carries no instant, so no node could tell whether it already ran. So is one over 128 bytes or holding anything but visible ASCII — a space included — since the broker carries the id in a header that trims its ends and rewrites a line break (see [the three retention gestures that write](#the-three-retention-gestures-that-write) for the whole rule). **Operator-only**, and absent rather than 503 on a build with no tracker |
 | `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo, and the case a reanchor would answer |
 | `POST` | `/work/retention/reanchor` | Adopt a recreated stream, or a broker restored from an older copy, at the next generation |
 | `GET` | `/work/views` | One container's **view strip**: the six every container has without anybody saving one, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) — a project key is upper-cased and a unit is resolved to its `id` where the chart gave it one, so a team's strip is one strip under either of its spellings and `?viewer=` is whose personal views and pins order the strip — **your own seat, or operator-only for anybody else's**, the same scope rule as `/work/my-work`; absent is the shared strip, which needs no credential |
@@ -2342,9 +2342,19 @@ comes, since the broker's two-minute duplicate window plays no part in it.
 Without `op_id` the route mints a fresh one, which is a second gesture rather
 than this one finished; an id carried from an eviction to the readmission after
 it is a different operation on every log, and one carried to another node is
-that node's own operation. An `op_id` the engine did not mint is refused with
-`400 op_id_invalid`: it carries no instant, so no node could tell whether it
-already ran.
+that node's own operation.
+
+An `op_id` is held to one rule, here and on the purge route, and anything else
+is `400 op_id_invalid` with nothing judged or written: an id **the engine
+minted**, of **at most 128 bytes** of **visible ASCII with no space**. One the
+engine did not mint carries no instant, so no node could tell whether it
+already ran. The rest of the rule is the broker's: only the id's leading uuid
+is minted and the rest is free text, while the whole id travels as the
+broker's message-id header, which trims its ends and turns a line break into a
+space — so such an id would be deduplicated at the broker as a different id
+from the one every log's ledger answers for. It is refused rather than
+cleaned, because a retry has to send back the id it holds, byte for byte; every
+id an answer carries already fits.
 
 **The gesture does not stop when its caller does.** The judgement runs under
 the request, so a request abandoned before it wrote nothing; once the first

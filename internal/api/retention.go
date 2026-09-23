@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -321,32 +322,79 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 // is [statelog.NewOpID]'s, and the id a caller brings back is the one the route
 // answered with, instant and all.
 //
-// AN ID THE ENGINE DID NOT MINT IS REFUSED rather than passed on, and false is
-// returned with the 400 already written. It carries no instant, so the state
-// log reads it as older than every loss its ledger has had — a retention sweep
-// that deleted anything, which every deployment older than the ledger's
-// retention has had, or a snapshot adopted from a donor that scrubbed its
-// ledger — and answers such a write `unknown` without publishing it, on the
-// first attempt as on every retry.
-// Passed on, it would be a gesture that can never run and never says why.
+// An id [checkCallerOpID] refuses is answered `400 op_id_invalid` and false is
+// returned with the response already written; nothing is judged or written.
 func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
-	opID := strings.TrimSpace(r.URL.Query().Get("op_id"))
+	opID := r.URL.Query().Get("op_id")
 	if opID == "" {
 		return statelog.NewOpID(time.Now(), name), true
 	}
-	if _, minted := statelog.OpMintedAt(opID); !minted {
+	if err := checkCallerOpID(opID); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "op_id_invalid",
-			"detail": "?op_id= is for finishing a gesture that came back " +
-				"`unknown` or partial, and takes back the op_id its answer " +
-				"returned, unchanged — this one is not an id this engine " +
-				"minted, so no node could tell whether it already ran. Omit " +
-				"it to start the gesture afresh",
+			"error": "op_id_invalid", "detail": err.Error(),
 		})
 		return "", false
 	}
 	return opID, true
 }
+
+// checkCallerOpID is the one rule an operation id a caller brings back is held
+// to: an id this engine minted, of at most [maxCallerOpIDBytes] bytes of
+// visible ASCII with no space. It is REFUSED rather than cleaned, because a
+// retry has to name the id the caller holds, byte for byte — and each clause
+// buys a failure that nothing downstream reports.
+//
+// MINTED BY THE ENGINE, because the id carries the instant it was minted and
+// the state log reads it to decide whether its ledger can vouch for the retry
+// ([statelog.OpMintedAt]). One with no instant is read as older than every
+// loss the ledger has had — a retention sweep that deleted anything, which
+// every deployment older than the ledger's retention has had, or a snapshot
+// adopted from a donor that scrubbed its ledger — and such a write is
+// answered `unknown` without being published, on the first attempt as on
+// every retry: a gesture that can never run and never says why.
+//
+// VISIBLE ASCII WITH NO SPACE, because only the id's first thirty-six bytes
+// are the minted uuid and the rest is free text nothing parses, while the
+// whole id travels as the broker's message-id header — and the client writing
+// that header trims its ends and turns a line break into a space. An id
+// carrying either was deduplicated at the broker as another id than the one
+// every ledger answers for, and the route's own trim answered with an id the
+// caller never sent.
+func checkCallerOpID(opID string) error {
+	const again = "send back the op_id an earlier answer returned, unchanged, " +
+		"or omit it to start the gesture afresh"
+	if len(opID) > maxCallerOpIDBytes {
+		return fmt.Errorf("?op_id= is %d bytes, and an operation id is at most "+
+			"%d: %s", len(opID), maxCallerOpIDBytes, again)
+	}
+	for i := 0; i < len(opID); i++ {
+		if c := opID[i]; c <= ' ' || c > '~' {
+			return fmt.Errorf("?op_id= %q holds %q at byte %d, and an operation "+
+				"id is visible ASCII with no space — the broker trims the ends "+
+				"of the header it travels in and rewrites a line break, so it "+
+				"would carry another id than the one every log answers for: %s",
+				opID, c, i, again)
+		}
+	}
+	if _, minted := statelog.OpMintedAt(opID); !minted {
+		return fmt.Errorf("?op_id= is for finishing a gesture that came back "+
+			"`unknown` or partial, and %q is not an id this engine minted, so "+
+			"no node could tell whether it already ran: %s", opID, again)
+	}
+	return nil
+}
+
+// maxCallerOpIDBytes bounds an operation id a caller brings back.
+//
+// A HUNDRED AND TWENTY-EIGHT BYTES, the longest id these routes mint rounded up
+// to a power of two: a gesture's id is a thirty-six-byte uuid, a dot and a name
+// ([statelog.NewOpID]) — `purge-` and a task's uuid is seventy-nine, and
+// `readmit-` and a node id at the sixty-four bytes one may be is a hundred and
+// nine — so every id an answer ever carried fits. And no more, because the gate
+// derives each log's own id from the caller's by appending its sign, the log
+// and the node, and every record, ledger row and message-id header of the
+// gesture carries the result.
+const maxCallerOpIDBytes = 128
 
 // gateVerb names a gate gesture in the fresh operation id it is minted under.
 func gateVerb(evict bool) string {

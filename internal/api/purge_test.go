@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,6 +178,67 @@ func TestAGestureRefusesAnOperationIdTheEngineDidNotMint(t *testing.T) {
 	}
 	if len(gate.asked) != 0 {
 		t.Errorf("the invented op_id still reached the gate: %+v", gate.asked)
+	}
+}
+
+// AN OPERATION ID THE BROKER WOULD CARRY AS ANOTHER IS REFUSED, ON BOTH ROUTES
+// THAT TAKE ONE, BEFORE ANYTHING IS WRITTEN — minted by the engine or not.
+//
+// Only an id's first thirty-six bytes are the minted uuid; the rest is free
+// text, and the whole id travels as the broker's message-id header, whose
+// writer trims its ends and turns a line break into a space. So an engine id
+// carrying either was deduplicated at the broker as another id than the one
+// every ledger answers for, and the route's own trim answered with an id the
+// caller never sent. The one an answer carried goes through byte for byte.
+func TestAnOperationIDTheBrokerWouldRewriteIsRefused(t *testing.T) {
+	minted := statelog.NewOpID(time.Now().Add(-time.Minute), "purge-t-1")
+	for name, opID := range map[string]string{
+		"a leading space":       " " + minted,
+		"a trailing space":      minted + " ",
+		"an inner space":        minted + ".a b",
+		"a line break":          minted + "\n",
+		"a tab":                 minted + ".\ttab",
+		"a byte past ASCII":     minted + ".\u00e9",
+		"one byte over the cap": minted + "." + strings.Repeat("a", 128-len(minted)),
+	} {
+		query := url.Values{"op_id": {opID}}.Encode()
+		p := &fakePurger{}
+		code, body := postPurge(t, purgeApp(t, p),
+			"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&"+query)
+		if code != http.StatusBadRequest || body["error"] != "op_id_invalid" {
+			t.Errorf("a purge under an op_id with %s answered %d %v, want 400 "+
+				"op_id_invalid", name, code, body)
+		}
+		if p.calls != 0 {
+			t.Errorf("a purge under an op_id with %s reached the writer", name)
+		}
+
+		b := closedPosture()
+		gate := &fakeNodeGate{}
+		code, body = postPurge(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+			"/work/retention/evict/node-4?confirm=node-4&"+query)
+		if code != http.StatusBadRequest || body["error"] != "op_id_invalid" {
+			t.Errorf("an eviction under an op_id with %s answered %d %v, want "+
+				"400 op_id_invalid", name, code, body)
+		}
+		if len(gate.asked) != 0 {
+			t.Errorf("an eviction under an op_id with %s reached the gate", name)
+		}
+	}
+
+	// THE CONTROL: a minted id at the cap, carrying punctuation from across
+	// the visible range, is the caller's and goes through verbatim.
+	good := minted + "." + strings.Repeat("a", 128-len(minted)-1-8) + "-_.:~!@9"
+	if len(good) != 128 {
+		t.Fatalf("the control is %d bytes, want exactly the cap", len(good))
+	}
+	p := &fakePurger{}
+	code, body := postPurge(t, purgeApp(t, p),
+		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&"+
+			url.Values{"op_id": {good}}.Encode())
+	if code != http.StatusOK || p.opID != good {
+		t.Fatalf("a purge under a valid op_id answered %d %v and ran under %q",
+			code, body, p.opID)
 	}
 }
 

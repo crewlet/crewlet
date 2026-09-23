@@ -1065,7 +1065,10 @@ operation ledger may have lost the first purge's row — to the ledger's
 thirty-day sweep, or to a snapshot adopted from a peer on an older build —
 and there it answers `unknown` again rather than purging twice. An id of your
 own making is refused (`op_id_invalid`): it carries no instant, so no node
-could tell whether it already ran.
+could tell whether it already ran. So is a printed one altered on the way back
+— trimmed, spaced, or grown past 128 bytes — because the broker carries the id
+in a header that trims its ends and rewrites a line break, and would
+deduplicate it as another operation.
 
 A purge names **one** task, so its **children are moved, not destroyed** —
 each direct child re-parents onto the purged task's own parent, or becomes a
