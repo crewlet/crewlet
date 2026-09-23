@@ -527,11 +527,129 @@ func TestARunnerStandsAtItsCheckpointBeforeItsLoopRuns(t *testing.T) {
 	// AND A CHECKPOINT ON ANOTHER STREAM IS REFUSED rather than stood at.
 	_, err = statelog.NewRunner(statelog.RunnerDeps{
 		Domain: probeDomain{}, Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
-		DB:         h.db.Replicated(),
+		Node: h.db, DB: h.db.Replicated(),
 		Checkpoint: statelog.Position{Stream: "CREWLET_SOMEONE_ELSES_LOG", Generation: 1},
 	})
 	if !errors.Is(err, statelog.ErrWrongStream) {
 		t.Fatalf("a runner handed another stream's checkpoint = %v, want %v",
 			err, statelog.ErrWrongStream)
+	}
+}
+
+// A DIVERGENCE SURVIVES A RESTART AFTER THE LOG HAS LOST THE RECORD IT WAS FOUND BY.
+//
+// The verdict was only ever in memory, and the comparison that re-derives it
+// needs the log to still hold a record at the checkpoint's sequence. Once that
+// record is gone — the node was evicted and the trim stopped counting it, a
+// stream was purged by hand, a broker restored again from an older copy — a
+// restarted node had nothing to compare, found its log replayable from its
+// checkpoint, and applied the other history on top of its rows. It is recorded
+// in the node estate when it is reached, and a runner standing at the same
+// checkpoint recalls it: the loop stops before it applies anything, and a
+// verification the boot runs — with no loop yet — refuses on it too.
+func TestADivergenceSurvivesARestartAfterTheLogLosesItsRecord(t *testing.T) {
+	t.Parallel()
+	h := appliedThrough(t, 3)
+	at := h.runner.Committed()
+	h.fetch.rewrite(3, otherHistory)
+	if established, err := h.runner.VerifyCheckpoint(t.Context()); err != nil || !established {
+		t.Fatalf("VerifyCheckpoint over another record at 3 = (%v, %v), want the "+
+			"divergence", established, err)
+	}
+
+	// THE RESTART, over a log that holds only the other history's records
+	// past the checkpoint: nothing at 3 is left to compare.
+	restart := func() {
+		h.rebuild(probeDomain{}, time.Time{})
+		h.fetch.offerStored(4, otherHistory.Add(time.Second), env(4, "edit", "4", "op-other-4", 1))
+		h.fetch.offerStored(5, otherHistory.Add(2*time.Second), env(5, "edit", "5", "op-other-5", 1))
+	}
+	restart()
+	if err := h.run(5); !errors.Is(err, statelog.ErrLogDiverged) {
+		t.Fatalf("the restarted loop returned %v, want the divergence stop — the "+
+			"record at the checkpoint is gone, and the rows are still the ones the "+
+			"log does not continue", err)
+	}
+	if appliedAt(h, 4) || appliedAt(h, 5) {
+		t.Fatal("the restarted node applied the other history on top of its rows")
+	}
+	if got := h.runner.Committed(); got != at {
+		t.Fatalf("the checkpoint moved to %s, want it held at %s", got, at)
+	}
+
+	// AND THE BOOT'S OWN VERIFICATION, before any loop has run, refuses on it:
+	// that is what stands between a write and these rows until the loop does.
+	restart()
+	if established, err := h.runner.VerifyCheckpoint(t.Context()); err != nil || !established {
+		t.Fatalf("a fresh runner's VerifyCheckpoint = (%v, %v), want the recalled "+
+			"divergence", established, err)
+	}
+	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrLogDiverged) || !h.runner.Diverged() {
+		t.Fatalf("the fresh runner's identity is %v, want the divergence — its "+
+			"reads and writes, and the position it publishes, turn on it",
+			h.runner.StreamIdentity())
+	}
+}
+
+// A CHECKPOINT MOVED BY A REANCHOR OR AN ADOPTION ENDS A RECORDED DIVERGENCE.
+//
+// The record is about the rows it was found against, and those two are what
+// replace them: a reanchor moves the checkpoint into a new generation, and an
+// adoption installs a checkpoint naming the log's own record. A runner standing
+// at such a checkpoint applies what follows it, and the record is gone — while
+// one standing at the SAME checkpoint, a join that replaced nothing, keeps it.
+func TestAMovedCheckpointEndsARecordedDivergence(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		move string // an UPDATE of the checkpoint row, as the event leaves it
+		ends bool
+	}{
+		{"a join that replaced nothing", "", false},
+		{"an adoption, whose checkpoint names the log's own record",
+			`UPDATE statelog_cursor SET stored_at = ?`, true},
+		{"a reanchor, into the next generation",
+			`UPDATE statelog_cursor SET generation = 2, stored_at = ?`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := appliedThrough(t, 3)
+			h.fetch.rewrite(3, otherHistory)
+			if established, err := h.runner.VerifyCheckpoint(t.Context()); err != nil || !established {
+				t.Fatalf("VerifyCheckpoint = (%v, %v), want the divergence", established, err)
+			}
+			if c.move != "" {
+				if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(t.Context(), c.move, store.EncodeTime(otherHistory))
+					return err
+				}); err != nil {
+					t.Fatalf("move the checkpoint: %v", err)
+				}
+			}
+			h.rebuild(probeDomain{}, time.Time{})
+			for seq := uint64(1); seq <= 3; seq++ {
+				h.fetch.offer(seq, env(seq, "edit", fmt.Sprint(seq), fmt.Sprintf("op-%d", seq), 1))
+			}
+			h.fetch.rewrite(3, otherHistory)
+			recalled, err := h.runner.VerifyCheckpoint(t.Context())
+			if err != nil {
+				t.Fatalf("VerifyCheckpoint: %v", err)
+			}
+			if recalled == c.ends || h.runner.Diverged() == c.ends {
+				t.Fatalf("after %s the runner's divergence is %v (recalled %v), want %v",
+					c.name, h.runner.Diverged(), recalled, !c.ends)
+			}
+			var rows int
+			if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
+				return tx.QueryRowContext(t.Context(),
+					`SELECT COUNT(*) FROM statelog_diverged`).Scan(&rows)
+			}); err != nil {
+				t.Fatalf("count the recorded divergences: %v", err)
+			}
+			if want := map[bool]int{true: 0, false: 1}[c.ends]; rows != want {
+				t.Fatalf("the node estate holds %d recorded divergence(s) after %s, "+
+					"want %d", rows, c.name, want)
+			}
+		})
 	}
 }

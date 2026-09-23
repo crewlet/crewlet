@@ -243,3 +243,77 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 			"case at the log's end, %d", view.Case, view.Cursor, view.Refusal, d.end)
 	}
 }
+
+// A DIVERGED NODE KEEPS ITS VERDICT AFTER THE RECORD IT WAS FOUND BY IS GONE.
+//
+// The verdict is found by comparing the record the checkpoint names with the
+// log's record at the same sequence, and the log can lose that record — the
+// trim removes it once the node is evicted and stops being counted, and a
+// stream can be purged by hand. A node restarted after that had nothing to
+// compare: it found its log replayable from its checkpoint, applied the other
+// history on top of its rows and published that the log no longer diverged,
+// which lifted every peer's truncation fence. The verdict is recorded in the
+// node estate when it is reached, so the restarted node still refuses, applies
+// nothing and tells the fleet.
+func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing.T) {
+	t.Parallel()
+	d := stageDivergedBroker(t)
+
+	// A MEETS THE DIVERGENCE AT BOOT, and records it.
+	e, back := bootNode(t, &d.a, d.cfg)
+	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	if err := running.runner.StreamIdentity(); !errors.Is(err, statelog.ErrLogDiverged) {
+		t.Fatalf("at boot the tracker's identity is %v, want the divergence", err)
+	}
+	e.Stop(context.Background())
+	back.Close(context.Background())
+
+	// THE RECORD AT A'S CHECKPOINT GOES, purged through B's node on the one
+	// broker both share.
+	eb, backB := bootNode(t, &d.b, d.cfg)
+	waitUntil(t, 20*time.Second, "node B to admit seats", eb.NativeHydrated)
+	logB := eb.native.Load().log.Domain(tracker.Domain{}.Name()).log
+	if err := logB.Purge(t.Context(), d.checkpoint.at.Seq+1); err != nil {
+		t.Fatalf("purge the log past A's checkpoint: %v", err)
+	}
+	stats, err := logB.Stats(t.Context())
+	if err != nil || stats.FirstSeq <= d.checkpoint.at.Seq {
+		t.Fatalf("the log starts at %d (%v), want past A's checkpoint %d", stats.FirstSeq,
+			err, d.checkpoint.at.Seq)
+	}
+	eb.Stop(context.Background())
+	backB.Close(context.Background())
+
+	// A AGAIN: the log holds nothing at its checkpoint to compare, and it
+	// still refuses.
+	e2, _ := bootNode(t, &d.a, d.cfg)
+	running2 := e2.native.Load().log.Domain(tracker.Domain{}.Name())
+	if err := running2.runner.StreamIdentity(); !errors.Is(err, statelog.ErrLogDiverged) {
+		t.Fatalf("after the restart the tracker's identity is %v, want the recorded "+
+			"divergence — the rows are still the ones the log does not continue", err)
+	}
+	waitUntil(t, 10*time.Second, "the tracker's applier to stop on the divergence", func() bool {
+		return errors.Is(running2.runner.Stopped(), statelog.ErrLogDiverged)
+	})
+	if got := taskState(t, e2, "t-1"); got != d.before {
+		t.Fatalf("the task is %+v and was %+v before the restore — the restarted "+
+			"node applied the other history on top of its rows", got, d.before)
+	}
+	title := "refused"
+	_, err = e2.native.Load().writer.UpdateTask(t.Context(), "op-refused-2", "t-1", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
+	if !errors.Is(err, statelog.ErrLogDiverged) {
+		t.Fatalf("a write on the restarted node returned %v, want the divergence", err)
+	}
+	e2.native.Load().log.publishPositions(t.Context())
+	rows, err := e2.backends.Fleet.Positions(t.Context())
+	if err != nil {
+		t.Fatalf("read the register: %v", err)
+	}
+	for _, row := range rows {
+		if row.NodeID == d.a.Node.ID && !row.Domains[tracker.Domain{}.Name()].LogDiverged {
+			t.Fatal("node A's own row no longer says the log diverged from its rows — " +
+				"every peer's truncation fence lifts on it")
+		}
+	}
+}

@@ -296,6 +296,12 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			"decides whether this is the restored case — check the broker and "+
 			"re-run: %w", statelog.ErrReanchorRefused, stream, err)
 	}
+	// OR THE VERDICT THE RUNNER HOLDS — found earlier, or recalled from the
+	// node estate after a restart — which is the one statement that survives
+	// the log losing the record at the checkpoint: the rows are the same rows
+	// either way, and a reanchor that asked only the log would find nothing
+	// to re-anchor over a node every read and write refuses.
+	in.Diverged = in.Diverged || running.runner.Diverged()
 	in.ClaimsIdentity = running.domain.ClaimsIdentity()
 	n := e.native.Load()
 	// AND WHAT FOLLOWING A RESTORED LOG FROM ITS END WOULD DISCARD: the

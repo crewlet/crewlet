@@ -134,6 +134,14 @@ type RunnerDeps struct {
 	// applies a restored log's new history on top of rows it is not.
 	Log CheckpointLog
 
+	// Node is this node's OWN estate, where the applier keeps what it has
+	// concluded about its rows that the log may not show it again: a log
+	// that diverged from them ([ErrLogDiverged]). REQUIRED, for the reason
+	// [NodeEstate] gives: a runner that cannot keep the verdict forgets it
+	// at a restart once the log no longer holds the record it was found by,
+	// and then applies the other history on top of these rows.
+	Node NodeEstate
+
 	// DB is the REPLICATED estate — the file this domain's rows, its
 	// operation ledger, its deferred records, its anchors and its
 	// checkpoint all live in, because contract 2 puts them in one
@@ -213,6 +221,7 @@ type Runner struct {
 	applier Applier
 	fetch   Fetcher
 	log     CheckpointLog
+	node    NodeEstate
 	db      Estate
 	tables  tables
 	spec    StreamSpec
@@ -376,7 +385,16 @@ type Runner struct {
 	// names the log's own record ([Runner.Reanchored]), an adoption replaces
 	// the rows ([Runner.Rejoined]), and a re-run over a checkpoint this
 	// runner no longer stands at drops it ([Runner.loadCursor]).
-	diverged *divergedLog
+	//
+	// AND DURABLE, in the node estate ([NodeEstate]), because the log may
+	// lose the record it was found by and a restart would then have nothing
+	// to find it again with: every verdict is recorded, and a runner
+	// recalls one recorded about the checkpoint it stands at
+	// ([Runner.recallDiverged]). divergedStored says whether this one has
+	// been; one that could not be is recorded again on the next
+	// verification, and on every one after it until it is.
+	diverged       *divergedLog
+	divergedStored bool
 
 	// truncated is the verdict that the log lost records a PEER's rows hold
 	// ([ErrLogTruncated]), nil while no reading of the positions register
@@ -446,6 +464,11 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 			"position, so it cannot establish that the record at its checkpoint " +
 			"is the one it consumed there — and without that a restored log " +
 			"written past its rows is applied on top of them")
+	case d.Node == nil:
+		return nil, fmt.Errorf("statelog: applier has no estate of this node's " +
+			"own to remember a log that diverged from its rows in, and would " +
+			"forget it at the first restart after the log lost the record it " +
+			"was found by")
 	case d.DB == nil:
 		return nil, fmt.Errorf("statelog: applier has no database")
 	}
@@ -476,6 +499,7 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		applier: d.Applier,
 		fetch:   d.Fetch,
 		log:     d.Log,
+		node:    d.Node,
 		db:      d.DB,
 		tables:  t,
 		spec:    spec,
@@ -594,7 +618,10 @@ func (r *Runner) Reanchored(at Position, created, storedAt time.Time) error {
 	r.created = created
 	r.cursor, r.checkpointAt = at, storedAt
 	r.rows++
-	r.foreign, r.ahead, r.diverged = nil, nil, nil
+	// THE DIVERGENCE TOO, and its record in the node estate is about the
+	// checkpoint this left, which [Runner.recallDiverged] removes the next
+	// time it reads it.
+	r.foreign, r.ahead, r.diverged, r.divergedStored = nil, nil, nil, false
 	// AND A PEER'S TRUNCATION, which was about peers in the generation this
 	// left: in the one it opened, this node's rows are the fleet's history.
 	r.truncated = nil
@@ -887,9 +914,69 @@ const (
 // it. And the engine's position heartbeat, every interval, which is what
 // catches a broker restored under a running node between two of those moments
 // and what a node whose loop has stopped for another reason still answers.
+//
+// # And what the log can no longer show
+//
+// A verdict is recorded in the node estate the moment it is reached, and this
+// recalls one recorded before a restart first — while it is about the
+// checkpoint this runner stands at ([Runner.recallDiverged]) — so a log that has
+// since lost the record at the checkpoint, and so offers nothing to compare,
+// cannot lift it. A verdict this runner holds and could not yet record is
+// recorded here, and so on every call until it is.
 func (r *Runner) VerifyCheckpoint(ctx context.Context) (bool, error) {
+	recalled, err := r.recallDiverged(ctx)
+	if err != nil {
+		return false, err
+	}
 	_, established, err := r.checkCheckpoint(ctx)
-	return established, err
+	return recalled || established, err
+}
+
+// recallDiverged makes this runner's divergence verdict durable, or adopts one
+// this node recorded before a restart, and answers true the one time it adopts
+// one.
+//
+// A HELD VERDICT NOT YET RECORDED is recorded. With none held, a recorded one is
+// adopted only while it is about the checkpoint this runner stands at — the
+// same position, naming the same record — because that is the statement that
+// these are the rows it was found against. Any other is about a file a
+// reanchor or an adoption has since replaced, and is removed: those are the
+// two things that end a divergence, and a reading of the log is never one.
+func (r *Runner) recallDiverged(ctx context.Context) (bool, error) {
+	r.mu.Lock()
+	at, consumed, held, stored, rows := r.cursor, r.checkpointAt, r.diverged,
+		r.divergedStored, r.rows
+	r.mu.Unlock()
+	if held != nil {
+		if stored {
+			return false, nil
+		}
+		if err := writeDiverged(ctx, r.node, r.spec.Name, *held, r.now()); err != nil {
+			return false, err
+		}
+		r.mu.Lock()
+		if r.diverged == held {
+			r.divergedStored = true
+		}
+		r.mu.Unlock()
+		return false, nil
+	}
+	recorded, found, err := readDiverged(ctx, r.node, r.spec.Name)
+	if err != nil || !found {
+		return false, err
+	}
+	if recorded.at != at || consumed.IsZero() || !sameRecord(recorded.consumed, consumed) {
+		return false, clearDiverged(ctx, r.node, r.spec.Name, recorded)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.rows != rows || r.diverged != nil {
+		// RE-KEYED UNDER THE READ, or reached meanwhile: the next call
+		// judges the row against what this runner then stands at.
+		return false, nil
+	}
+	r.diverged, r.divergedStored = &recorded, true
+	return true, nil
 }
 
 // checkCheckpoint is [Runner.VerifyCheckpoint], reporting which of the three
@@ -905,8 +992,8 @@ func (r *Runner) checkCheckpoint(ctx context.Context) (checkpointCheck, bool, er
 		return check, false, err
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.rows != rows || at.Generation < r.cursor.Generation {
+		r.mu.Unlock()
 		// THE ROWS WERE REPLACED OR RE-KEYED BETWEEN THE READS — a run
 		// that loaded another row, a reanchor, a join — so this is a
 		// finding about a copy this runner no longer holds. The next
@@ -916,37 +1003,21 @@ func (r *Runner) checkCheckpoint(ctx context.Context) (checkpointCheck, bool, er
 	established := r.diverged == nil
 	if established {
 		r.diverged = &divergedLog{at: at, consumed: consumed, held: held}
+		r.divergedStored = false
 	}
-	return checkpointDiverged, established, nil
-}
-
-// ObserveDiverged takes a finding, made before this runner's loop has loaded
-// its checkpoint, that the log holds another record at checkpoint at than the
-// one it names — consumed is the instant the checkpoint names, held the one the
-// log's record carries — and answers true the one time it establishes the
-// verdict.
-//
-// THE BOOT'S, for the reason [Runner.ObserveEnd] is handed the end there: a
-// broker restored from an older copy is met at a boot, and until the loop has
-// loaded the row nothing in this runner names the record the checkpoint does,
-// so a write arriving first would find nothing refusing it. The loop's own
-// load keeps the verdict for exactly the row it was reached about
-// ([Runner.loadCursor]).
-func (r *Runner) ObserveDiverged(at Position, consumed, held time.Time) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.diverged != nil || at.Generation < r.cursor.Generation {
-		return false
-	}
-	r.diverged = &divergedLog{at: at, consumed: consumed, held: held}
-	return true
+	r.mu.Unlock()
+	// RECORDED AT ONCE, in the node estate, so a restart after the log has
+	// lost the record this was found by cannot lift it. A failure leaves it
+	// held in memory — the loop refuses on it all the same — and recorded
+	// on the next verification ([Runner.recallDiverged]).
+	_, err = r.recallDiverged(ctx)
+	return checkpointDiverged, established, err
 }
 
 // CheckpointDiverged reports whether log holds, at checkpoint at, ANOTHER record
 // than the one the checkpoint names by consumed — and the instant of the one it
-// does hold there — for the readers of a checkpoint that are not its runner:
-// the boot, before the loop has loaded the row, and a reanchor deciding its
-// case from the row itself.
+// does hold there — for a reader of a checkpoint that is not its runner: a
+// reanchor deciding its case from the row itself.
 //
 // FALSE WHENEVER NOTHING CAN BE COMPARED — no record named, the log ending
 // below the checkpoint, the record gone below the log's first sequence or
@@ -1175,7 +1246,7 @@ func (r *Runner) Rejoined(at Position, keyed, live time.Time) error {
 	if moved {
 		r.checkpointAt = time.Time{}
 		if r.diverged != nil && r.diverged.at != at {
-			r.diverged = nil
+			r.diverged, r.divergedStored = nil, false
 		}
 	}
 	if (r.foreign == nil && errors.Is(r.stopped, ErrStreamRecreated)) ||
@@ -1502,24 +1573,34 @@ func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 	// nothing past it and would leave a diverged node answering reads and
 	// writes until the heartbeat looked. A log that does not reach the
 	// checkpoint leaves the verification owed ([Runner.verifyBeforeApplying]).
-	switch check, _, err := r.checkCheckpoint(ctx); {
-	case err != nil:
+	//
+	// A DIVERGENCE THIS NODE RECORDED about this very checkpoint first: the
+	// log may have lost the record it was found by, and then the comparison
+	// below finds nothing to compare while the rows are exactly the ones the
+	// log does not continue.
+	if _, err := r.recallDiverged(ctx); err != nil {
 		_ = w.Close()
 		return nil, err
-	case check == checkpointSettled:
-		r.mu.Lock()
+	}
+	check, _, checkErr := r.checkCheckpoint(ctx)
+	if checkErr != nil {
+		_ = w.Close()
+		return nil, checkErr
+	}
+	r.mu.Lock()
+	verdict := r.diverged
+	if verdict == nil && check == checkpointSettled {
 		r.verify = false
-		r.mu.Unlock()
+	}
+	r.mu.Unlock()
+	switch {
+	case verdict != nil:
+		_ = w.Close()
+		return nil, r.stop(ctx, fmt.Errorf("%w: %w", ErrStopped, verdict.err(r.spec.Name)))
 	case check == checkpointDiverged:
 		_ = w.Close()
-		r.mu.Lock()
-		verdict := r.diverged
-		r.mu.Unlock()
-		if verdict == nil {
-			return nil, fmt.Errorf("statelog: %s's checkpoint moved while its "+
-				"record was verified at start — verified again", r.spec.Name)
-		}
-		return nil, r.stop(ctx, fmt.Errorf("%w: %w", ErrStopped, verdict.err(r.spec.Name)))
+		return nil, fmt.Errorf("statelog: %s's checkpoint moved while its record "+
+			"was verified at start — verified again", r.spec.Name)
 	}
 	// WHAT AN EARLIER BUILD RETAINED, THIS ONE MAY NOW READ. A retained
 	// record is applied by the build that can decode it, and the only
@@ -1759,7 +1840,7 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		// the one before it.
 		if r.diverged != nil && found &&
 			(r.diverged.at != at || !sameRecord(row.storedAt, r.diverged.consumed)) {
-			r.diverged = nil
+			r.diverged, r.divergedStored = nil, false
 		}
 		if r.diverged != nil {
 			return fmt.Errorf("%w: %w", ErrStopped, r.diverged.err(r.spec.Name))

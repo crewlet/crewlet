@@ -319,7 +319,14 @@
 // what follows may be another history — at every start, after a failed fetch,
 // after a reading found the end below — and the heartbeat every interval
 // ([Runner.VerifyCheckpoint]): another record there is [ErrLogDiverged], which
-// refuses like the rest and, unlike an end, never lifts on a later reading.
+// refuses like the rest and, unlike an end, never lifts on a later reading —
+// nor across a restart. The log can lose the record the verdict was found by
+// (an evicted node's checkpoint stops pinning the trim; a stream is purged by
+// hand; a broker is restored again from an older copy still), after which a
+// restarted node would have nothing to compare, so the verdict is recorded in
+// the node estate when it is reached and recalled while the checkpoint names
+// the same record ([NodeEstate]): only a reanchor or an adoption, which move
+// the checkpoint, ends it.
 // The nodes whose rows are the copy's age see none of it — the log is their
 // own history — so what stops them writing records the restored reanchor of a
 // newer peer would apply nowhere is that peer's published position or flag

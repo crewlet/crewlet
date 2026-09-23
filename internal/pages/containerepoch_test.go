@@ -242,6 +242,7 @@ func TestAnOlderBuildRetainsAContainerRecord(t *testing.T) {
 		Applier: pages.NewApplier("node-older", nil, nil),
 		Fetch:   &logFetch{log: r.log, next: 1},
 		Log:     r.log,
+		Node:    older,
 		DB:      older.Replicated(),
 	})
 	if err != nil {

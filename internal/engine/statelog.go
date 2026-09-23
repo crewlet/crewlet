@@ -806,6 +806,9 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		// adoption row, which is deliberately not replicated), so the
 		// asymmetry here is real rather than an oversight.
 		DB: replicatedEstate{node: s.db},
+		// AND THE NODE'S OWN, where a log that diverged from these rows is
+		// remembered across a restart ([statelog.NodeEstate]).
+		Node: s.db,
 		// AT THE WHOLE CHECKPOINT, and the record it names: what this node
 		// publishes and verifies before its loop has loaded the row.
 		Checkpoint: at, CheckpointStoredAt: checkpoint.StoredAt,
@@ -845,11 +848,12 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	// the checkpoint, so the reading above finds nothing, and until something
 	// compares the record nothing in the runner holds the verdict a write would
 	// have to be refused over — the heartbeat's comparison is an interval away.
-	// A log that cannot be read here leaves the question to the loop, which
-	// will not apply past the checkpoint before it has answered it.
-	if held, diverged, readErr := statelog.CheckpointDiverged(ctx, appendTo, at,
-		checkpoint.StoredAt); readErr == nil && diverged &&
-		runner.ObserveDiverged(at, checkpoint.StoredAt, held) {
+	// Through the runner, which stands at the row from construction and also
+	// recalls a divergence this node recorded before it restarted, which a log
+	// that has since lost the record at the checkpoint cannot show again. A log
+	// or an estate that cannot be read here leaves the question to the loop,
+	// which will not apply past the checkpoint before it has answered it.
+	if established, readErr := runner.VerifyCheckpoint(ctx); readErr == nil && established {
 		s.logDiverged(ctx, domain.Name(), runner)
 	}
 
@@ -1368,8 +1372,10 @@ func (s *stateLog) logDiverged(ctx context.Context, domain string, runner *state
 		"error", runner.StreamIdentity().Error(),
 		"detail", "the log's record at this node's checkpoint is not the one it "+
 			"consumed there: the broker was restored from a copy older than these "+
-			"rows and has since been written past them, so the log continues a "+
-			"history they are not. This node applies nothing past its checkpoint, "+
+			"rows and another record has since been written at their checkpoint's "+
+			"sequence, so the log continues a history they are not. This node "+
+			"applies nothing past its checkpoint, remembers the finding across a "+
+			"restart, "+
 			"refuses every read and every write of the domain naming "+
 			"`wrong_stream`, and donates no snapshot of it; an operator re-anchors "+
 			"it (crewlet retention reanchor — the restored case) or replaces its "+

@@ -100,6 +100,10 @@ func TestMinAgeOnlyLowersTheTrimPoint(t *testing.T) {
 // The register has no expiry, so an offline counted node pins the floor
 // indefinitely and no age setting bounds what it still holds. The only exit is
 // an eviction — which advances the trim and deletes nothing on that machine.
+//
+// AND THE RECORD AT THE POSITION ITSELF IS KEPT, the bound being exclusive:
+// it is the record a node whose log diverged from its rows is judged by, and
+// every other term here licenses removing it.
 func TestACountedNodesPositionIsNeverTrimmedPast(t *testing.T) {
 	t.Parallel()
 	in := baseInputs()

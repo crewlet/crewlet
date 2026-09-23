@@ -31,7 +31,8 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 
 	runner, err := NewRunner(RunnerDeps{
 		Domain: loggerProbe{}, Applier: struct{ Applier }{},
-		Fetch: struct{ Fetcher }{}, Log: struct{ CheckpointLog }{}, DB: struct{ Estate }{},
+		Fetch: struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
+		Node: struct{ NodeEstate }{}, DB: struct{ Estate }{},
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)

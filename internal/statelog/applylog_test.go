@@ -32,6 +32,7 @@ func TestAStopIsWrittenOnceSayingWhatResumesIt(t *testing.T) {
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,
+		Node:       h.db,
 		DB:         h.db.Replicated(),
 		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    h.metrics,

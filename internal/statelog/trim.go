@@ -25,6 +25,14 @@ const (
 	// holding a record it cannot decode block the whole fleet's trim for
 	// ever. The committed sequence is safe because a deferred record's
 	// bytes are durable before the checkpoint moves over it.
+	//
+	// It keeps the record AT that sequence, the purge bound being
+	// exclusive — which is also what keeps a node's checkpoint record on
+	// the log while the log has DIVERGED from its rows ([ErrLogDiverged]),
+	// for as long as the node is counted. An evicted node stops being
+	// counted, and the trim may then remove it: the verdict does not rest
+	// on that record, being recorded in the node's own estate
+	// ([NodeEstate]).
 	TermApplied TermName = "applied"
 
 	// TermMinHold is the lowest live hold. A joining node holds the tail
