@@ -466,9 +466,14 @@ type Sweep struct {
 	Changes  uint64 `json:"changes,omitempty"`
 	Sessions uint64 `json:"sessions,omitempty"`
 
-	// Expired is the broker instant sessions, invitations and bootstrap
-	// codes are collected against once they are over. It is the BROKER's
-	// rather than the publisher's own clock for the reason above.
+	// Expired is the instant sessions, invitations and bootstrap codes
+	// are collected against once they are over — already net of
+	// [SessionRowGrace], so the applier compares and never subtracts.
+	//
+	// THE PUBLISHER READ IT, ONCE, and that is the whole of the clock
+	// this path is allowed: every node then compares the same carried
+	// value against the broker instants its rows already hold, so a node
+	// whose own clock is a year out deletes exactly what its peers do.
 	Expired time.Time `json:"expired,omitzero"`
 
 	Extra map[string]json.RawMessage `json:"-"`

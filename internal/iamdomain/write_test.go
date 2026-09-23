@@ -45,6 +45,10 @@ type writeRig struct {
 	// directory counts the applier's post-commit directory signals.
 	directory atomic.Int64
 
+	// keys is the fleet secret store this node's sealer and shredder use,
+	// held so a case can reach inside it — a person's key, a store blip.
+	keys *keyStore
+
 	drainMu sync.Mutex
 }
 
@@ -132,6 +136,7 @@ func newWriteRig(t *testing.T) *writeRig {
 		t: t, db: db, log: log, writer: writer, waiter: waiter,
 		events:   announced,
 		verifier: testVerifier(t),
+		keys:     keys,
 	}
 	// THE DIRECTORY SIGNAL IS COUNTED, so a case can say which records
 	// told this node its seats' standing may have moved.
@@ -156,26 +161,44 @@ func (r *writeRig) drain() {
 func (r *writeRig) drainTo() error {
 	r.drainMu.Lock()
 	defer r.drainMu.Unlock()
-	last, err := r.log.End(r.t.Context())
+	consumed, err := applyLog(r.t, r.log, r.verifier, r.db, r.applier,
+		r.consumed, brokerAt, r.waiter.reach)
+	r.consumed = consumed
+	return err
+}
+
+// applyLog applies every record past `from` into one node's estate, exactly as
+// the framework's own loop does, and reports how far it got.
+//
+// A FUNCTION OVER THE NODE rather than a method on the rig, because a second
+// node applying the SAME log into its OWN store is what a determinism case is
+// made of — and `now` is that node's batch clock, the one per-node instant an
+// apply is handed.
+func applyLog(t *testing.T, log *js.DomainLog, verifier *statelog.Verifier,
+	db *store.DB, applier *iamdomain.Applier, from uint64, now time.Time,
+	reached func(statelog.Position)) (uint64, error) {
+
+	last, err := log.End(t.Context())
 	if err != nil {
-		return fmt.Errorf("read the log's end: %w", err)
+		return from, fmt.Errorf("read the log's end: %w", err)
 	}
 	spec := iamdomain.Domain{}.Stream()
-	for seq := r.consumed + 1; seq <= last; seq++ {
-		_, payload, storedAt, ok, err := r.log.At(r.t.Context(), seq)
+	consumed := from
+	for seq := from + 1; seq <= last; seq++ {
+		_, payload, storedAt, ok, err := log.At(t.Context(), seq)
 		if err != nil {
-			return fmt.Errorf("read record %d: %w", seq, err)
+			return consumed, fmt.Errorf("read record %d: %w", seq, err)
 		}
 		if !ok {
 			continue
 		}
-		body, verdict := r.verifier.Open(payload)
+		body, verdict := verifier.Open(payload)
 		if verdict != statelog.Verified {
-			return fmt.Errorf("record %d did not verify: %s", seq, verdict)
+			return consumed, fmt.Errorf("record %d did not verify: %s", seq, verdict)
 		}
 		env, err := iamdomain.DecodeEnvelope(body)
 		if err != nil {
-			return fmt.Errorf("decode record %d: %w", seq, err)
+			return consumed, fmt.Errorf("decode record %d: %w", seq, err)
 		}
 		record := statelog.Record{
 			Envelope: statelog.Envelope{
@@ -192,27 +215,27 @@ func (r *writeRig) drainTo() error {
 			Payload:  body,
 			StoredAt: storedAt,
 		}
-		if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
-			reason, gated, err := r.applier.Gated(r.t.Context(), tx, record)
+		if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			reason, gated, err := applier.Gated(t.Context(), tx, record)
 			if err != nil {
 				return err
 			}
 			if gated {
-				r.t.Logf("record %d gated: %s", seq, reason)
+				t.Logf("record %d gated: %s", seq, reason)
 				return nil
 			}
-			if _, err := r.applier.Apply(r.t.Context(), tx, record,
-				statelog.ApplyOptions{Now: brokerAt, StoredAt: storedAt}); err != nil {
+			if _, err := applier.Apply(t.Context(), tx, record,
+				statelog.ApplyOptions{Now: now, StoredAt: storedAt}); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(r.t.Context(), `
+			if _, err := tx.ExecContext(t.Context(), `
 				INSERT INTO iam_ops (op_id, subject, position, applied_at)
 				VALUES (?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
 				env.OpID, env.Subject.String(), record.Position.Packed(),
 				store.EncodeTime(storedAt)); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(r.t.Context(), `
+			if _, err := tx.ExecContext(t.Context(), `
 				INSERT INTO statelog_anchor (stream, subject, anchor)
 				VALUES (?,?,?)
 				ON CONFLICT (stream, subject) DO UPDATE SET
@@ -222,7 +245,7 @@ func (r *writeRig) drainTo() error {
 				record.Position.Packed()); err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(r.t.Context(), `
+			_, err = tx.ExecContext(t.Context(), `
 				INSERT INTO statelog_cursor
 					(stream, generation, seq, stream_created_at, updated_at)
 				VALUES (?,?,?,0,0)
@@ -232,13 +255,15 @@ func (r *writeRig) drainTo() error {
 				int64(record.Position.Seq))
 			return err
 		}); err != nil {
-			return fmt.Errorf("apply record %d: %w", seq, err)
+			return consumed, fmt.Errorf("apply record %d: %w", seq, err)
 		}
-		r.applier.Committed(r.t.Context())
-		r.consumed = seq
-		r.waiter.reach(record.Position)
+		applier.Committed(t.Context())
+		consumed = seq
+		if reached != nil {
+			reached(record.Position)
+		}
 	}
-	return nil
+	return consumed, nil
 }
 
 func (r *writeRig) drainSafely() {
@@ -272,6 +297,17 @@ func (r *writeRig) draining(gesture func() error) error {
 	// each step waits for this node's applier to reach the step before it,
 	// so a rig that drained only afterwards would deadlock on the second
 	// claim.
+	return r.during(func() error {
+		_, err := r.writer.Enrol(r.t.Context(), in)
+		return err
+	})
+}
+
+// during runs one gesture with this node's applier consuming alongside it,
+// which any write that waits for its own apply needs — and drains what is left
+// once it returns.
+func (r *writeRig) during(gesture func() error) error {
+	r.t.Helper()
 	done := make(chan struct{})
 	stop := make(chan struct{})
 	go func() {
