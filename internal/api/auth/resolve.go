@@ -246,6 +246,11 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 			// PRESENT AND WRONG IS STILL ANONYMOUS, not unknown:
 			// this node checked and the answer was no. Unknown is
 			// reserved for the question it could not ask.
+			//
+			// AND IT IS A FAILED ATTEMPT, counted — never a row of its
+			// own, because whoever holds the wrong value decides how
+			// many of these there are. See audit.go.
+			g.refused(r, candidate)
 			return r.WithContext(iam.WithAnonymous(r.Context())), nil
 		}
 		principal, how, refusal := g.principalFor(r.Context(), entry, g.now())
@@ -257,10 +262,12 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 			return r.WithContext(
 				iam.WithUnresolved(r.Context(), errBindingUnavailable)), nil
 		}
-		return r.WithContext(iam.WithPrincipal(r.Context(), principal)), refusal
+		ctx := iam.WithPrincipal(r.Context(), principal)
+		return r.WithContext(withTierA(ctx, entry)), refusal
 	}
 	if g.sessions != nil {
-		principal, how, refusal, presented := g.sessions.resolve(w, r, g.ceiling)
+		principal, how, refusal, presented := g.sessions.resolve(w, r,
+			g.ceiling, g.Client)
 		if presented {
 			if how == iam.Resolved {
 				return r.WithContext(

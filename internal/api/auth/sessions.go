@@ -10,7 +10,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
@@ -149,9 +151,20 @@ type Sessions struct {
 	// `__Host-` prefix on exactly the deployments that need it.
 	external string
 
+	// audit is where a refused cookie is counted and the two session
+	// facts only this arm can see are recorded: a replay, and a deadline
+	// passing. See audit.go.
+	audit Audit
+
 	// onReuse is called when a bearer's rotation index proves a cookie was
 	// replayed past the overlap. It bumps the person's revocation epoch,
 	// which ends every session they hold.
+	//
+	// ONCE PER LINEAGE, on the same decision that records the replay: a
+	// replayed cookie is refused, and whoever holds it can present it
+	// again — before this, every presentation published another
+	// revocation, which is a write to the identity log paced by the holder
+	// of a cookie this node had already refused.
 	//
 	// A SEAM RATHER THAN A WRITE FROM HERE, which is internal/iam/session's
 	// own rule arriving one layer out: validation runs on every ingress
@@ -190,6 +203,13 @@ type SessionsDeps struct {
 	// Optional; see [Sessions.onReuse].
 	OnReuse func(ctx context.Context, person string)
 
+	// Audit records what this arm sees. REQUIRED, and not only for the
+	// rows: the revocation a replay triggers is taken on the same
+	// once-per-lineage decision that records it, so an arm with no trail
+	// would have nothing to stop a refused cookie writing a revocation
+	// every time it was presented.
+	Audit Audit
+
 	// Now is the clock. Nil takes UTC wall time.
 	Now func() time.Time
 }
@@ -209,10 +229,16 @@ func NewSessions(deps SessionsDeps) (*Sessions, error) {
 		return nil, errors.New("auth: the session arm needs a chart seam; " +
 			"a nil one would resolve every bound person as seatless, which " +
 			"is the one fall-through internal/iam/session forbids")
+	case deps.Audit == nil:
+		return nil, errors.New("auth: the session arm needs an audit trail; " +
+			"a replayed cookie's revocation is taken once per lineage on the " +
+			"trail's own decision, so without one every presentation of a " +
+			"refused cookie would write another")
 	}
 	s := &Sessions{
 		signer: deps.Signer, directory: deps.Directory, chart: deps.Chart,
-		external: deps.External, onReuse: deps.OnReuse, now: deps.Now,
+		external: deps.External, onReuse: deps.OnReuse, audit: deps.Audit,
+		now: deps.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -263,8 +289,14 @@ func needOf(method string) session.Need {
 // The bool is "this arm applies" rather than "it succeeded": a request with no
 // cookie falls through to the Tier A arm, and one with a cookie gets this
 // arm's answer whatever it is.
+//
+// client is the GUARD's resolver of the caller's own address, handed in
+// rather than held, because the guard is what reads `api.trusted_proxies`
+// and a second reading of it here would be a second answer to "is this peer
+// the proxy". It is called only on the paths that record something.
 func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
-	ceiling []iam.Grant) (iam.Principal, iam.Resolution, *Refusal, bool) {
+	ceiling []iam.Grant, client func(*http.Request) string) (
+	iam.Principal, iam.Resolution, *Refusal, bool) {
 
 	cookie := cookieOf(r)
 	if cookie == "" {
@@ -272,7 +304,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	}
 	v := s.signer.Validate(r.Context(), s.directory, cookie)
 	if v.Reuse {
-		s.reuse(r.Context(), v)
+		s.reuse(r, v, client(r))
 	}
 	switch v.Answer(needOf(r.Method)) {
 	case session.AnswerUnavailable:
@@ -289,6 +321,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// existed tells an attacker holding it the same.
 		log.InfoContext(r.Context(), "api_session_refused",
 			"row", string(v.Row), "detail", v.Detail)
+		s.refused(r, v, cookie, client)
 		for _, clear := range session.Clears(s.external) {
 			http.SetCookie(w, clear)
 		}
@@ -384,20 +417,81 @@ func personID(value string) uuid.UUID {
 	return parsed
 }
 
-// reuse reports a replayed cookie and asks for the person's epoch to be
-// bumped.
+// reuse records a replayed cookie and asks for the person's epoch to be
+// bumped — ONCE per lineage, for as long as the bearer could still be
+// presented.
 //
-// AT WARN AND ALWAYS, whether or not a writer is wired: the log line is the
-// evidence an investigation looks for, and a node with no publisher must not
-// make the event invisible as well as unactionable.
-func (s *Sessions) reuse(ctx context.Context, v session.Validation) {
+// THE ROW AND THE REVOCATION ARE ONE DECISION. The replayed bearer is refused
+// and nothing stops whoever holds it presenting it again, and the rotation
+// check that recognises a replay runs before any row is read, so every
+// presentation reaches here. Taken per presentation, the revocation was a
+// write to the identity log paced by the holder of a cookie this node had
+// already turned away; taken once, it has already ended every session the
+// person held, which is all a second one could do.
+//
+// THE WINDOW IS THE BEARER'S OWN REMAINING LIFETIME: past its absolute
+// deadline the deadline check refuses it before the rotation is looked at,
+// so it can never reach here again.
+func (s *Sessions) reuse(r *http.Request, v session.Validation, remote string) {
+	ctx := r.Context()
+	lineage := v.Bearer.Lineage.String()
+	window := v.Bearer.AbsoluteExpiresAt.Sub(s.now())
+	first := s.audit.EmitOnce(ctx, "session_reuse:"+lineage, window,
+		types.IAMSessionReuseDetected{
+			Person: v.Bearer.Person, Lineage: lineage,
+			Rotation: v.Bearer.Rotation, Remote: remote,
+		})
+	if !first {
+		log.DebugContext(ctx, "iam_session_reuse_repeated",
+			"lineage", lineage, "detail", "already recorded and acted on")
+		return
+	}
+	// AT WARN whether or not a writer is wired: the log line is the
+	// evidence an investigation looks for, and a node with no publisher
+	// must not make the event invisible as well as unactionable.
 	log.WarnContext(ctx, "iam_session_reuse_detected",
-		"person", v.Bearer.Person, "lineage", v.Bearer.Lineage.String(),
-		"detail", v.Detail)
+		"person", v.Bearer.Person, "lineage", lineage, "detail", v.Detail)
 	if s.onReuse == nil {
 		return
 	}
 	s.onReuse(ctx, v.Bearer.Person)
+}
+
+// refused records what a refusing row means for the audit trail — which, for
+// most rows, is nothing.
+//
+// A MALFORMED VALUE is a credential presented and refused: a forged cookie,
+// one signed under a key this deployment does not hold. It is a failed attempt
+// of method `bearer`, counted and never a row of its own.
+//
+// A DEADLINE is the one way a session ends that no record states — the idle
+// deadline lives in the bearer and nowhere else — so this is the only frame
+// that can ever say a session ended that way, and it says so ONCE PER LINEAGE
+// PER NODE: the cookie is cleared by this very answer, and a script that goes
+// on replaying it is not a second ending. Every OTHER ended row — the row
+// says so, the epoch or the generation moved, the person was suspended — was
+// ended by a record, and whoever wrote the record already said so; a second
+// announcement from every node a stale cookie reaches would name the wrong
+// cause.
+func (s *Sessions) refused(r *http.Request, v session.Validation, cookie string,
+	client func(*http.Request) string) {
+
+	switch {
+	case v.Row == session.RowMalformed:
+		s.audit.Failed(r.Context(), authevents.Failure{
+			Client: client(r), Method: types.FailBearer, Subject: cookie,
+		})
+	case v.Row == session.RowEnded && v.Deadline != "":
+		reason := types.EndIdle
+		if v.Deadline == session.DeadlineAbsolute {
+			reason = types.EndAbsolute
+		}
+		lineage := v.Bearer.Lineage.String()
+		s.audit.EmitOnce(r.Context(), "session_ended:"+lineage, 0,
+			types.IAMSessionEnded{
+				Person: v.Bearer.Person, Lineage: lineage, Reason: reason,
+			})
+	}
 }
 
 // errText is an error's message, or empty — so a log line carries the field

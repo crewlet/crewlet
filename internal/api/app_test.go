@@ -18,7 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
@@ -185,8 +187,22 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Backup == nil {
 		opts.Backup = &fakeBackup{}
 	}
+	if opts.AuthEvents == nil {
+		opts.AuthEvents = silentAudit{}
+	}
 	return opts
 }
+
+// silentAudit is an audit trail that records nothing, for the cases here that
+// are about something else; the guard's own reporting has its suite in
+// internal/api/auth, over the real trail.
+type silentAudit struct{}
+
+func (silentAudit) Emit(context.Context, events.Payload) {}
+func (silentAudit) EmitOnce(context.Context, string, time.Duration, events.Payload) bool {
+	return true
+}
+func (silentAudit) Failed(context.Context, authevents.Failure) {}
 
 // EVERY DEPENDENCY THE ENGINE SUPPLIES IS REQUIRED, and a missing one is
 // refused by name.
@@ -205,6 +221,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Budgets", "Retention", "Capacity", "Backup",
+		"AuthEvents",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

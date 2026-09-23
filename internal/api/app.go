@@ -224,6 +224,13 @@ type Options struct {
 	// resolve. Tier A tokens remain the whole of authentication there.
 	Sessions *auth.Sessions
 
+	// AuthEvents is where the guard counts a refused credential and
+	// records a Tier A token's use and overreach. REQUIRED: the engine
+	// running beside this API holds the node's audit trail, and a guard
+	// built without it would refuse a spray of wrong tokens and leave no
+	// count of it anywhere.
+	AuthEvents auth.Audit
+
 	// DevPrincipal is the identity an unauthenticated request resolves to
 	// on a development run, or nil.
 	//
@@ -432,7 +439,8 @@ func New(opts Options) (*App, error) {
 
 	a := &App{
 		guard: auth.New(opts.Bootstrap).BindSeats(opts.SeatBindings).
-			WithDevPrincipal(opts.DevPrincipal).WithSessions(opts.Sessions),
+			WithDevPrincipal(opts.DevPrincipal).WithSessions(opts.Sessions).
+			WithAudit(opts.AuthEvents),
 		csrf:         auth.NewCSRF(opts.Bootstrap),
 		secure:       servedOverHTTPS(opts.Bootstrap),
 		state:        state,
@@ -657,6 +665,7 @@ func (o Options) missing() error {
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
 		{"Backup", o.Backup == nil},
+		{"AuthEvents", o.AuthEvents == nil},
 	} {
 		if field.absent {
 			names = append(names, "Options."+field.name)

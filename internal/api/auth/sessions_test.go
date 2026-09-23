@@ -103,6 +103,7 @@ func (s *signedIn) guard(ceiling ...iam.Grant) *auth.Guard {
 		Signer: s.signer, Directory: s.dir, Chart: s.chart,
 		External: b.API.ExternalBase(),
 		OnReuse:  s.ended.record,
+		Audit:    newAuditTrail(s.t),
 		Now:      func() time.Time { return s.at },
 	})
 	if err != nil {

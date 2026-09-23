@@ -286,6 +286,10 @@ type Guard struct {
 	// sessions turns a browser's cookie into the person holding it, or
 	// nil on a node that mints none. See sessions.go.
 	sessions *Sessions
+
+	// audit is where a refused credential is counted and a Tier A
+	// token's use and overreach are recorded. See audit.go.
+	audit Audit
 }
 
 // BindSeats installs the seams that let a bound credential act as its seat, and
@@ -605,7 +609,21 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		log.Debug("api_auth_ok", "operator_id", OperatorID(principal), "route", path)
-		next.ServeHTTP(w, r)
+		entry, tierA := tierAOf(r.Context())
+		if !tierA {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// A TIER A TOKEN IS RECORDED AT THE REQUEST, and only here: the
+		// use as it arrives, and an overreach once the route has said
+		// no. See audit.go for why the resolution itself — which an
+		// open socket re-runs once a minute — records neither.
+		g.used(r, entry)
+		recorded := &statusWriter{ResponseWriter: w}
+		next.ServeHTTP(recorded, r)
+		if refusalStatus(recorded.status) {
+			g.overreached(r, entry, recorded.status)
+		}
 	})
 }
 

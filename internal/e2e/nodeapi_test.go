@@ -207,6 +207,9 @@ func wireAPI(
 		Retention: backends.Fleet,
 		Capacity:  e,
 		Backup:    copier,
+		// THE ENGINE'S OWN TRAIL, as cmd/crewlet hands it: the guard
+		// reports every refused bearer and every token use through it.
+		AuthEvents: e.AuthEvents(),
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,

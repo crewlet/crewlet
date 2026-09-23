@@ -229,6 +229,9 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		Chart:    engine.SeatViewOf(e),
 		External: boot.API.ExternalBase(),
 		OnReuse:  sessionReuse(e),
+		// The same trail, whose once-per-lineage decision is what
+		// OnReuse hangs on: a replayed cookie ends its sessions once.
+		Audit: e.AuthEvents(),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("api: the session arm: %w", err)

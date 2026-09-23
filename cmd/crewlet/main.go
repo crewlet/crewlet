@@ -1715,7 +1715,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// The OPERATOR MCP surface. Built here rather than in the engine
 		// because it is an API concern, and because its writer identity
 		// comes off an HTTP request's own credential.
-		Operator:     operatorMCP(e),
+		Operator: operatorMCP(e),
+		// THE ENGINE'S TRAIL, which the guard reports a refused bearer
+		// and every Tier A token use through.
+		AuthEvents:   e.AuthEvents(),
 		QueueBackend: e.Backends().Queue.Backend(),
 		// The read surface answers from this node's OWN store. A
 		// question it has no source for comes back unknown rather than
