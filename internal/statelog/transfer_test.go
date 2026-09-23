@@ -530,8 +530,9 @@ func TestACallersDeadlineIsNotBlamedOnTheDonor(t *testing.T) {
 
 // A FETCH WHOSE CALLER HAS ALREADY GIVEN UP ASKS NO DONOR TO SEND.
 //
-// The fetch is the expensive half of a join: the request starts a donor
-// streaming the whole artefact and holds one of its transfer slots until the
+// The fetch is the expensive half of a join: the request sets a donor sending
+// up to a full credit window of chunks into an inbox nobody will read, and ties
+// up a goroutine, an open artefact and a credit subscription on it until the
 // chunk wait runs out. A joiner being stopped between choosing an offer and
 // fetching it must not start that, so the request is never published — which
 // is only observable from the donor's side, hence the sentinel: the listener

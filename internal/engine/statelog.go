@@ -219,7 +219,9 @@ type stateLog struct {
 	// the log's floor while running; the engine sets it, because the
 	// join reaches the store bracket and the broker's own connection.
 	// The bookkeeping beside it is single-flight with a widening retry:
-	// a fleet with no donor is asked again, but not every ten seconds.
+	// a fleet that could not donate is asked again, but not every ten
+	// seconds — while a lost estate is reopened on every beat, which
+	// asks nobody. See [stateLog.requestRejoin].
 	rejoin      func(context.Context) error
 	rejoinMu    sync.Mutex
 	rejoining   bool
@@ -1343,6 +1345,14 @@ func (c *Company) Epoch() map[string]any {
 // claiming work it cannot answer for — which is the mechanism that already
 // exists for exactly this state.
 //
+// A join that LOST THIS NODE'S OWN DATABASE is not that, and is never reported
+// as it: an install that failed and whose rollback could not reopen the live
+// file — or an artefact installed and then not opened — leaves no replicated
+// estate at all, which is [statelog.ErrEstateNotRestored]. A boot stops on it,
+// naming both failures, rather than coming up with nothing to come up on; a
+// running node reopens it on its next heartbeat ([stateLog.restoreEstate]) and
+// asks the fleet again only when its retry interval allows.
+//
 // # And why it is the same join a running node makes
 //
 // Falling below the floor is not a boot-time event: it is what happens to a
@@ -1350,10 +1360,10 @@ func (c *Company) Epoch() map[string]any {
 // window, and such a node is RUNNING when it finds out. So this is one
 // function with two callers — the boot, before any applier exists, and
 // [Engine.rejoin], which ends the appliers first and starts them again after
-// — and it reports whether it adopted, because the runtime caller retries on a
+// — and it reports what it concluded, because the runtime caller retries on a
 // fleet that could not donate and the boot simply comes up.
 func (e *Engine) join(ctx context.Context, s *stateLog,
-	logs map[string]*jetstream.DomainLog) (adopted bool, err error) {
+	logs map[string]*jetstream.DomainLog) (joinOutcome, error) {
 
 	conn, ok := e.backends.Queue.(interface{ Conn() *nats.Conn })
 	if !ok || conn.Conn() == nil {
@@ -1361,15 +1371,15 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		// megabytes over request/reply rather than anything the queue
 		// contract carries. A backend with none is the memory twin, in
 		// a test, with no peer to donate anyway.
-		return false, nil
+		return joinNoDonor, nil
 	}
 
 	behind, want, err := s.replayable(ctx, logs)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if len(behind) == 0 {
-		return false, nil
+		return joinCurrent, nil
 	}
 	log.WarnContext(ctx, "statelog_below_the_floor",
 		"node", s.nodeID, "domains", behind,
@@ -1401,32 +1411,71 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		Logger: log,
 	})
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	manifest, err := adopter.Join(ctx)
 	switch {
 	case errors.Is(err, statelog.ErrNoOffer):
 		// NOT A FAILURE — see the doc comment. The node comes up on what
-		// it has and its coverage says what it cannot account for.
+		// it has and its coverage says what it cannot account for. The
+		// error rides along because it holds each donor's refusal, which
+		// is what an operator reads to learn why nobody could donate.
 		log.WarnContext(ctx, "statelog_no_snapshot_offered",
-			"node", s.nodeID, "domains", behind,
+			"node", s.nodeID, "domains", behind, "error", err.Error(),
 			"detail", "no peer could donate a usable snapshot, so this node "+
 				"comes up on the history it has; reads report the coverage "+
 				"they could not account for, the domains that gate seat "+
 				"admission keep it from claiming work it cannot answer for, "+
 				"and it asks again on a widening interval")
-		return false, nil
+		return joinNoDonor, nil
 	case err != nil:
-		return false, fmt.Errorf("engine: this node is below the log's floor on %v "+
+		return "", fmt.Errorf("engine: this node is below the log's floor on %v "+
 			"and the join failed: %w", behind, err)
 	}
 	log.InfoContext(ctx, "statelog_adopted",
 		"node", s.nodeID, "donor", manifest.NodeID, "sha256", manifest.SHA256,
 		"taken_at", manifest.TakenAt, "bytes", manifest.Bytes)
-	return true, nil
+	return joinAdopted, nil
 }
 
+// joinOutcome is what a join concluded, for the caller that acts on the
+// difference.
+//
+// THREE ANSWERS, because "adopted nothing" is two different facts to a running
+// node. Every domain could replay from the checkpoint its rows keep — nothing
+// was asked, and the consumers still belong at that checkpoint — or the node
+// is behind and nobody could donate, which is retried on a widening interval.
+// A bool reads the first as the second, and [Engine.rejoin] meets the first
+// when the estate under it holds an artefact an earlier rejoin installed and
+// could not open, which [stateLog.restoreEstate] has opened since: it would
+// report "no donor", widen its pause and leave every consumer where the
+// replaced file had it.
+//
+// Never read off the wire, so it carries no Valid: every value is one this
+// package's own join returned.
+type joinOutcome string
+
+const (
+	// joinCurrent — every domain can replay from where its rows say it
+	// is, so the fleet was not asked.
+	joinCurrent joinOutcome = "current"
+
+	// joinAdopted — a peer's snapshot is installed and complete.
+	joinAdopted joinOutcome = "adopted"
+
+	// joinNoDonor — this node is behind and no peer could donate, or it
+	// has no broker connection to ask one over.
+	joinNoDonor joinOutcome = "no_donor"
+)
+
 // rejoin is the runtime adoption: end the appliers, join, start them again.
+//
+// IT RUNS OVER AN OPEN ESTATE. A previous join that could not reopen the live
+// database after a failed install — or could not open the artefact it
+// installed — left the node with none ([statelog.ErrEstateNotRestored]), and
+// [stateLog.requestRejoin] reopens that with [stateLog.restoreEstate] before
+// it calls this, on a schedule of its own: a reopen asks nobody, and this
+// asks the fleet.
 //
 // # The order, and why each step is where it is
 //
@@ -1438,9 +1487,11 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 //  2. THE JOIN is the boot's own: what it needs, who can donate, fetch,
 //     verify, install. Nothing about it is different at runtime — that was
 //     the point of making the framework resolve its estate per call.
-//  3. THE CONSUMERS ARE RESET to the checkpoint the artefact keeps, because
-//     the broker will not move a consumer's start and one left at the old
-//     position would deliver every record in between to be dropped.
+//  3. THE CONSUMERS ARE RESET to the checkpoint the file keeps — see
+//     [stateLog.resetConsumers]. That includes a join that found every
+//     domain CURRENT: the file under it may be an artefact an earlier rejoin
+//     installed and could not open, which the heartbeat read as behind
+//     before the restored appliers had loaded its checkpoint.
 //  4. THE APPLIERS START AGAIN, whatever happened: a join that found no
 //     donor leaves the node as it was, below the floor and refusing, and a
 //     node with no appliers at all would be worse than that.
@@ -1458,32 +1509,76 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	for name, running := range s.domains {
 		logs[name] = running.log
 	}
-	adopted, err := e.join(ctx, s, logs)
+	outcome, err := e.join(ctx, s, logs)
 	switch {
 	case err != nil:
 		return err
-	case !adopted:
+	case outcome == joinNoDonor:
 		return errNoDonor
 	}
+	s.resetConsumers(ctx)
+	log.InfoContext(ctx, "statelog_rejoined", "node", s.nodeID, "outcome", string(outcome))
+	return nil
+}
+
+// restoreEstate reopens a replicated estate a failed join left closed, and
+// moves every consumer to the checkpoint the file it opened keeps.
+//
+// THE APPLIERS ARE HALTED AROUND IT, as around a join: a consumer is reset
+// only while nothing fetches from it, and the relaunch is what resumes each
+// runner from the checkpoint of the file now open.
+//
+// THE CONSUMERS MOVE because the file may not be the one they were left at. A
+// failed install whose rollback could not reopen leaves the live file, and the
+// reset changes nothing a record would notice; an installed artefact that did
+// not open leaves the DONOR'S file, whose checkpoint no consumer was ever
+// moved to — and when that file is current, no rejoin follows to move them,
+// because the heartbeat that finds the node caught up requests none.
+//
+// A failed reopen is [statelog.ErrEstateNotRestored], so every outcome that
+// leaves this node with no replicated database reads the same.
+func (s *stateLog) restoreEstate(ctx context.Context) error {
+	s.haltAppliers()
+	// ctx is the state log's own run context, for [Engine.rejoin]'s
+	// reason: the relaunched appliers outlive the heartbeat tick.
+	defer s.launchAppliers(ctx)
+	if err := s.db.ReopenReplicated(ctx); err != nil {
+		return fmt.Errorf("%w: %w", statelog.ErrEstateNotRestored, err)
+	}
+	log.WarnContext(ctx, "statelog_estate_restored", "node", s.nodeID,
+		"path", s.db.ReplicatedPath(),
+		"detail", "the replicated database an earlier join left closed is "+
+			"open again; the node asks the fleet for a snapshot only if it is "+
+			"still below the floor, and no sooner than its retry interval allows")
+	s.resetConsumers(ctx)
+	return nil
+}
+
+// resetConsumers moves every domain's consumer to the checkpoint the replicated
+// file now keeps, because the broker will not move a consumer's start and one
+// left at the old position would deliver every record in between to be
+// dropped.
+//
+// A FAILURE IS A LINE, NOT A FAILED CALL. Correctness is the checkpoint's and
+// the applier resumes from it regardless; what a consumer left behind costs is
+// the redeliveries between. So a checkpoint that cannot be read leaves that
+// consumer where it was, exactly as a failed reset does — and neither turns an
+// adoption that happened into one its caller reports as deferred and retries.
+//
+// THAT HOLDS BECAUSE THE HANDLE REPAIRS ITSELF. A reset deletes before it
+// creates, so a create that fails leaves the broker with no consumer at all —
+// and the appliers are relaunched after this either way.
+// [jetstream.DomainConsumer] clears the handle on that path and rebuilds it on
+// the next fetch, at the position it held before; without that this line would
+// be logging the start of a domain that never applies another record.
+func (s *stateLog) resetConsumers(ctx context.Context) {
 	for _, name := range s.order {
 		running := s.domains[name]
 		at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), running.domain.Stream().Name)
-		if err != nil {
-			return fmt.Errorf("engine: read %s's adopted checkpoint: %w", name, err)
+		if err == nil {
+			err = running.consumer.Reset(ctx, at.Seq)
 		}
-		if err := running.consumer.Reset(ctx, at.Seq); err != nil {
-			// CORRECTNESS IS THE CHECKPOINT'S and the applier resumes
-			// from it regardless; what a consumer left behind costs
-			// is the redeliveries between, which is worth a line.
-			//
-			// THAT HOLDS BECAUSE THE HANDLE REPAIRS ITSELF. A reset
-			// deletes before it creates, so a create that fails leaves
-			// the broker with no consumer at all — and the appliers
-			// are relaunched below either way. [jetstream.DomainConsumer]
-			// clears the handle on that path and rebuilds it on the
-			// next fetch, at the position it held before; without that
-			// this line would be logging the start of a domain that
-			// never applies another record.
+		if err != nil {
 			log.WarnContext(ctx, "statelog_consumer_not_reset",
 				"domain", name, "checkpoint", at.String(), "error", err.Error(),
 				"detail", "the consumer is rebuilt at its previous position by "+
@@ -1491,39 +1586,86 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 					"correctness")
 		}
 	}
-	log.InfoContext(ctx, "statelog_rejoined", "node", s.nodeID)
-	return nil
 }
 
-// requestRejoin runs one adoption at a time, and after one that found no
-// donor waits a widening interval before the next.
+// requestRejoin is what the heartbeat calls on a node below the floor: it
+// reopens a lost estate at once, and asks the fleet for a snapshot one attempt
+// at a time, waiting a widening interval after one that failed.
+//
+// # Two schedules, because they are two costs
+//
+// The widening bounds how often the fleet is asked. Each ask is an offer
+// window the node spends refusing, and one that finds a donor is a whole
+// artefact's transfer — so EVERY failed ask widens it, one that lost this
+// node's database on its way out included: that attempt fetched, and the next
+// would fetch again. Reopening this node's own database asks nobody, and until
+// it is open the node serves no replicated read and applies no record, so
+// [stateLog.restoreEstate] runs on the next heartbeat whatever the interval
+// says, and a reopen, failed or not, moves no schedule. A node the reopen
+// leaves below the floor asks when the interval allows and not before.
+//
+// A lost estate is said at ERROR on every attempt, naming the file, because it
+// is the one outcome here an operator may have to fix by hand.
+//
+// THE HEARTBEAT SEES A NODE WITH NO ESTATE AS BELOW, which is what makes it
+// the one to call this: only a join closes the estate, a runtime join runs
+// only below the floor, and the position the heartbeat reads is the runner's
+// in memory, which nothing moves while the file is closed.
 func (s *stateLog) requestRejoin(now time.Time) {
 	s.rejoinMu.Lock()
 	defer s.rejoinMu.Unlock()
-	if s.rejoin == nil || s.rejoining || now.Before(s.rejoinAfter) {
+	if s.rejoin == nil || s.rejoining {
+		return
+	}
+	lost := s.db.Replicated() == nil
+	ask := !now.Before(s.rejoinAfter)
+	if !lost && !ask {
 		return
 	}
 	s.rejoining = true
 	s.done.Add(1)
 	go func() {
 		defer s.done.Done()
-		err := s.rejoin(s.run)
+		var err error
+		if lost {
+			err = s.restoreEstate(s.run)
+		}
+		asked := err == nil && ask
+		if asked {
+			err = s.rejoin(s.run)
+		}
 		s.rejoinMu.Lock()
 		defer s.rejoinMu.Unlock()
 		s.rejoining = false
 		if err == nil {
-			s.rejoinPause = 0
+			if asked {
+				s.rejoinPause = 0
+			}
 			return
 		}
 		if s.run.Err() != nil {
 			return
 		}
-		if s.rejoinPause == 0 {
-			s.rejoinPause = PositionHeartbeat
-		} else {
-			s.rejoinPause = min(s.rejoinPause*2, RejoinRetryCeiling)
+		if asked {
+			if s.rejoinPause == 0 {
+				s.rejoinPause = PositionHeartbeat
+			} else {
+				s.rejoinPause = min(s.rejoinPause*2, RejoinRetryCeiling)
+			}
+			s.rejoinAfter = time.Now().Add(s.rejoinPause)
 		}
-		s.rejoinAfter = time.Now().Add(s.rejoinPause)
+		if errors.Is(err, statelog.ErrEstateNotRestored) {
+			log.ErrorContext(s.run, "statelog_estate_lost",
+				"node", s.nodeID, "path", s.db.ReplicatedPath(), "error", err.Error(),
+				"asks_fleet_again_in", max(0, time.Until(s.rejoinAfter)).Round(time.Second),
+				"detail", "this node has no replicated database open, so it "+
+					"serves no tracker, page or search read, applies no record "+
+					"and cannot keep its seats; it reopens the file on its next "+
+					"heartbeat, and if that keeps failing the error names the "+
+					"cause (the disk, the file's permissions, a file the store "+
+					"refuses to open) for an operator to fix")
+			return
+		}
 		log.WarnContext(s.run, "statelog_rejoin_deferred",
 			"node", s.nodeID, "retry_in", s.rejoinPause, "error", err.Error())
 	}()

@@ -661,6 +661,13 @@ func (d *DB) Path() string {
 // A caller measuring what a snapshot will cost is asking about the replicated
 // file — the artefact is a copy of it alone — and it should not have to know
 // whether it is holding the node handle or the replicated one to ask.
+//
+// A CLOSED PEER IS STILL SOMEWHERE. The node handle's peer is nil between an
+// adoption's close and its reopen, and after a join that could not open it
+// again — and that second window is exactly when an operator reading the path
+// needs it, because it names the file they have to go and look at. So the
+// answer is the path the peer is opened AT, which [DB.ReopenReplicated] opens
+// again, never the empty string a handle with no peer used to give.
 func (d *DB) ReplicatedPath() string {
 	if d == nil {
 		return ""
@@ -671,7 +678,7 @@ func (d *DB) ReplicatedPath() string {
 	if peer := d.Replicated(); peer != nil {
 		return peer.path
 	}
-	return ""
+	return ReplicatedPath(d.path, d.opened.ReplicatedPath)
 }
 
 // EmbeddingDim reports the configured vector width, or 0 when no embedding

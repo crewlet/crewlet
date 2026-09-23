@@ -158,6 +158,56 @@ func TestTheReplicatedPathIsBesideTheNodesUnlessNamed(t *testing.T) {
 	}
 }
 
+// A CLOSED REPLICATED ESTATE STILL NAMES ITS FILE.
+//
+// The node handle's peer is nil between an adoption's close and its reopen, and
+// stays nil after a join that could not open it again — the one state in which
+// an operator is told to go and look at that file. An empty path there logged
+// the lost estate against no file at all, and a snapshot measuring its size
+// stat'ed the empty string.
+func TestAClosedReplicatedEstateStillNamesItsFile(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		named bool
+	}{
+		{"derived beside the node's", false},
+		{"named explicitly", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			want := filepath.Join(dir, "crewlet-replicated.db")
+			var opts store.Options
+			if c.named {
+				want = filepath.Join(t.TempDir(), "fast.db")
+				opts.ReplicatedPath = want
+			}
+			db, err := store.Open(t.Context(), filepath.Join(dir, "index.db"), opts)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+			if got := db.ReplicatedPath(); got != want {
+				t.Fatalf("the open estate is at %q, want %q", got, want)
+			}
+			if err := db.CloseReplicated(); err != nil {
+				t.Fatalf("close the replicated estate: %v", err)
+			}
+			if got := db.ReplicatedPath(); got != want {
+				t.Fatalf("with the replicated estate closed its path is %q, want "+
+					"%q — the file it reopens at", got, want)
+			}
+			if err := db.ReopenReplicated(t.Context()); err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			if got := db.Replicated().Path(); got != want {
+				t.Fatalf("the estate reopened at %q, not the %q it was named at", got, want)
+			}
+		})
+	}
+}
+
 // PENDING REPORTS BOTH, because a deploy gate that named one estate would
 // pass while the other is behind.
 func TestPendingReportsEveryEstate(t *testing.T) {

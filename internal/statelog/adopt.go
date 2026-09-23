@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"slices"
 	"time"
 
@@ -64,6 +63,11 @@ type AdoptDeps struct {
 	// Close and Reopen bracket the install: both databases must be CLOSED
 	// when the rename happens, because this process's own claim is on the
 	// path rather than the inode.
+	//
+	// A FAILED CLOSE IS UNWOUND BY A REOPEN, as a failed install is: a
+	// close may take the database out of service before it reports its
+	// failure — the engine's does — and the join cannot tell which kind
+	// it got. So Reopen must do nothing to a database that is still open.
 	Close  func(ctx context.Context) error
 	Reopen func(ctx context.Context) error
 
@@ -143,8 +147,30 @@ func NewAdopter(d AdoptDeps) (*Adopter, error) {
 // It is a statement about the FLEET, so it is never the answer to a join whose
 // context ended: that comes back as an error wrapping ctx.Err() whichever step
 // it interrupted, because a caller acts on this one by carrying on without a
-// snapshot, and a caller that gave up is not carrying on at all.
+// snapshot, and a caller that gave up is not carrying on at all. Nor is it ever
+// the answer to a join that lost this node's own database — that is
+// [ErrEstateNotRestored], for the same reason: there is nothing to carry on
+// with.
 var ErrNoOffer = errors.New("statelog: no usable snapshot was offered")
+
+// ErrEstateNotRestored reports a join that closed the live database for an
+// install and could not open it again.
+//
+// A STATEMENT ABOUT THIS NODE, and the one outcome of a join that must never
+// reach its caller as [ErrNoOffer]. The engine answers that one by carrying on
+// without a snapshot — a boot comes up on the history it has — and a node
+// whose replicated estate is not open has no history to come up on: every
+// read, every applier and every hold answers [store.ErrNoEstate] until
+// something opens it again. So a boot must stop, naming why, and a running
+// node must reopen it before it asks the fleet for anything.
+//
+// IT ENDS THE JOIN rather than moving on to the next offer. Each offer is
+// installed through the same close-and-reopen bracket, and its hold — in the
+// engine's wiring — reads this node's checkpoint out of the very estate that
+// is gone, so every remaining donor would be logged as refusing a node that
+// could not have taken anything from it.
+var ErrEstateNotRestored = errors.New("statelog: the live replicated database " +
+	"a join closed for its install is not open again")
 
 // Join runs the whole sequence and reports the manifest it adopted.
 //
@@ -205,6 +231,15 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 			return Manifest{}, fmt.Errorf("statelog: the join was abandoned "+
 				"adopting %s's snapshot: %w: %w", offer.Manifest.NodeID, ctx.Err(), err)
 		}
+		// NOR IS A NODE THAT LOST ITS OWN DATABASE — see
+		// [ErrEstateNotRestored]. Filed as a refusal it would try every
+		// remaining offer against an estate that is not open and come
+		// back as [ErrNoOffer], which a boot answers by coming up with
+		// no replicated estate at all.
+		if errors.Is(err, ErrEstateNotRestored) {
+			return Manifest{}, fmt.Errorf("statelog: adopting %s's snapshot: %w",
+				offer.Manifest.NodeID, err)
+		}
 		refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
 		a.log.WarnContext(ctx, "statelog_adoption_refused",
 			"node", a.deps.NodeID, "donor", offer.Manifest.NodeID, "error", err.Error())
@@ -232,23 +267,28 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 	defer release()
 
 	part := a.deps.LivePath + AdoptPartSuffix
-	// A part file from a previous attempt is debris rather than a resume
-	// point: only this path is written here, and a partial one that
-	// survived would be refused as an existing destination for ever.
-	_ = os.Remove(part)
+	// A PART FILE FROM A PREVIOUS ATTEMPT IS DEBRIS rather than a resume
+	// point, and so are its sidecars: only this path is written here, a
+	// partial one that survived would be refused as an existing destination
+	// for ever, and a stale -wal beside a fresh artefact is applied to it
+	// the moment step 4 opens it. What a copy grows beside itself is the
+	// store's list, so [store.RemoveCopy] clears it rather than a name here.
+	if err = store.RemoveCopy(part); err != nil {
+		return Manifest{}, fmt.Errorf("statelog: clear an earlier attempt's "+
+			"artefact: %w", err)
+	}
 
 	// 3. TRANSFER.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := FetchArtefact(ctx, a.deps.Conn, offer, part); err != nil {
 		return Manifest{}, err
 	}
-	defer func() {
-		// Removed on every path that did not install it.
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if _, err := os.Stat(part); err == nil {
-			_ = os.Remove(part)
-		}
-	}()
+	// Discarded on every path, the install's included: the rename moves the
+	// file and leaves nothing of it behind for this to find, and every
+	// other path leaves the artefact and whatever step 4's reads opened
+	// beside it. A failure here is not the caller's — the next attempt's
+	// clear above reports it by name, and refuses to fetch over it.
+	defer func() { _ = store.RemoveCopy(part) }()
 
 	// 4. INSPECT, READ-ONLY, before anything migrates it.
 	schema, err := store.PendingEstate(ctx, store.EstateReplicated, part, store.Options{})
@@ -321,31 +361,25 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 	// on the PATH rather than the inode, so an open handle would be
 	// writing into a file that is no longer at that name.
 	if err := a.deps.Close(ctx); err != nil {
-		return Manifest{}, fmt.Errorf("statelog: close the database being replaced: %w", err)
+		// A CLOSE THAT FAILED MAY STILL HAVE CLOSED — the engine's takes
+		// the handle out of service before it closes it — and nothing
+		// was renamed, so it unwinds exactly as a failed install does.
+		return Manifest{}, a.rollback(ctx, part, fmt.Errorf("statelog: close "+
+			"the database being replaced: %w", err))
 	}
 	if err := store.AdoptFile(ctx, a.deps.LivePath, part); err != nil {
 		// The database is closed and the rename did not happen, so the
 		// live file is still the live file — reopening it is the
 		// recovery rather than an extra step.
-		//
-		// A ROLLBACK, so it takes [context.WithoutCancel]: the failure it
-		// undoes is routinely the cancellation itself — a Stop or a
-		// signal landing while the install checkpoints — and a reopen
-		// under that dead context fails too, leaving a node whose install
-		// never happened with no replicated estate open at all.
-		//
-		// AND ITS OWN FAILURE IS REPORTED rather than discarded, because
-		// that outcome is the worse of the two: the caller is told the
-		// install failed and must also be told the live database did not
-		// come back.
-		if reopenErr := a.deps.Reopen(context.WithoutCancel(ctx)); reopenErr != nil {
-			return Manifest{}, errors.Join(err, fmt.Errorf("statelog: reopen "+
-				"the live database after the failed install: %w", reopenErr))
-		}
-		return Manifest{}, err
+		return Manifest{}, a.rollback(ctx, part, err)
 	}
 	if err := a.deps.Reopen(ctx); err != nil {
-		return Manifest{}, fmt.Errorf("statelog: reopen after the install: %w", err)
+		// FORWARD PROGRESS, NOT A ROLLBACK, so it keeps the caller's
+		// context: the artefact is the live file now, and a node being
+		// stopped opens it at its next start. But the estate is not
+		// open, and that is what the caller has to be told.
+		return Manifest{}, fmt.Errorf("%w: the artefact is installed and "+
+			"opening it failed: %w", ErrEstateNotRestored, err)
 	}
 	if err := a.deps.Record(ctx, offer.Manifest.NodeID, offer.Manifest, AdoptionInstalled); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: record the install: %w", err)
@@ -359,6 +393,39 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 		"node", a.deps.NodeID, "donor", offer.Manifest.NodeID,
 		"bytes", offer.Manifest.Bytes, "domains", len(offer.Manifest.Domains))
 	return offer.Manifest, nil
+}
+
+// rollback undoes an install that stopped before its rename: the live file is
+// still the live file, so discarding the artefact at part and reopening the
+// live file is the whole recovery.
+//
+// A ROLLBACK, so it takes [context.WithoutCancel]: the failure it undoes is
+// routinely the cancellation itself — a Stop or a signal landing while the
+// install checkpoints — and a reopen under that dead context fails too,
+// leaving a node whose install never happened with no replicated estate open
+// at all.
+//
+// AND ITS OWN FAILURE IS [ErrEstateNotRestored], carrying both causes, because
+// that outcome is the worse of the two and the one the caller has to act on:
+// it is told the install failed, and must also be told the live database did
+// not come back.
+//
+// THE ABANDONED ARTEFACT GOES FIRST. It is a whole copy of the estate on the
+// live file's own volume, and nothing will ever install it, so a reopen run
+// beside it competes with it for room — on a full disk, exactly the room the
+// reopen needed. In the other order the reopen fails, the artefact is deleted
+// a moment later on the way out, and the node has lost its database to a file
+// it had already given up on.
+func (a *Adopter) rollback(ctx context.Context, part string, cause error) error {
+	// A failure to discard is not this unwind's to report: the reopen is
+	// what it is for, and the next attempt's clear names what it could not
+	// remove.
+	_ = store.RemoveCopy(part)
+	if err := a.deps.Reopen(context.WithoutCancel(ctx)); err != nil {
+		return fmt.Errorf("%w — %w; and reopening it failed: %w",
+			ErrEstateNotRestored, cause, err)
+	}
+	return cause
 }
 
 // verifyPositions re-reads every checkpoint FROM THE FILE and compares it with

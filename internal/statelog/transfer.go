@@ -410,12 +410,12 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 	}
 	// Bounded by the window as well: a broker that has not confirmed the
 	// ask by the time the window closes has asked nobody, which is a
-	// failure to ask rather than an answer.
+	// failure to ask rather than an answer — and it is the WINDOW's end,
+	// not the caller's, so it is named rather than wrapped.
 	if err := nc.FlushWithContext(collect); err != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("statelog: flush the offer request: %w", ctx.Err())
-		}
-		return nil, fmt.Errorf("statelog: flush the offer request: %w", err)
+		return nil, boundedWaitErr(ctx, err, "flush the offer request",
+			fmt.Errorf("statelog: the broker did not confirm the offer request "+
+				"within the %s offer window, so no donor was asked", window))
 	}
 
 	var out []Offer
@@ -464,12 +464,28 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 // dest must not exist: a partial file from a previous attempt is debris rather
 // than a resume point, and the path is deterministic so the debris is always
 // this function's own.
+//
+// Every wait in it is bounded by [TransferChunkWait] as well as by ctx, and
+// the two ends are reported differently — see [boundedWaitErr].
 func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string) (int64, error) {
+	return fetchArtefact(ctx, nc, offer, dest, TransferChunkWait)
+}
+
+// fetchArtefact is [FetchArtefact] with the transfer's own bound as a
+// parameter. Nothing in the engine passes anything but [TransferChunkWait];
+// a test of what happens when that bound fires needs it shorter, or it spends
+// thirty seconds proving one comparison.
+func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
+	wait time.Duration) (int64, error) {
+
 	// A CALLER THAT HAS ALREADY GIVEN UP FETCHES NOTHING, for
-	// [CollectOffers]'s reason one step later: a request published now
-	// starts a donor streaming gigabytes at a joiner that will not read
-	// them, and holds the donor's transfer slot until its chunk wait
-	// expires.
+	// [CollectOffers]'s reason one step later. A request published now
+	// sets a donor sending into an inbox this function lets go of as soon
+	// as it notices: the donor opens the artefact, starts a goroutine and a
+	// credit subscription, publishes up to a full credit window
+	// ([SnapshotTransferWindow] chunks of [SnapshotChunkBytes]) that nobody
+	// reads, and then holds all three for [TransferChunkWait] waiting for a
+	// credit that never comes, before it ends the transfer with a 408.
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("statelog: fetch the artefact: %w", err)
 	}
@@ -497,17 +513,18 @@ func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string)
 	// own ten seconds and by nothing the caller holds, so a Stop or a
 	// signal that landed while the broker was slow to confirm the request
 	// sat that out — the one wait in the transfer the caller could not
-	// end. [TransferChunkWait] rather than a figure of its own: a broker
-	// that has not confirmed the request in the time a donor is given to
-	// send a chunk is a stalled transfer by the same measure.
-	flushCtx, cancelFlush := context.WithTimeout(ctx, TransferChunkWait)
+	// end. The transfer's own bound rather than a figure of its own: a
+	// broker that has not confirmed the request in the time a donor is
+	// given to send a chunk is a stalled transfer by the same measure,
+	// and when that bound is what ends the wait it is reported by name,
+	// never as a deadline the caller did not set.
+	flushCtx, cancelFlush := context.WithTimeout(ctx, wait)
 	err = nc.FlushWithContext(flushCtx)
 	cancelFlush()
 	if err != nil {
-		if ctx.Err() != nil {
-			return 0, fmt.Errorf("statelog: flush the fetch: %w", ctx.Err())
-		}
-		return 0, fmt.Errorf("statelog: flush the fetch: %w", err)
+		return 0, boundedWaitErr(ctx, err, "flush the fetch",
+			fmt.Errorf("statelog: the broker did not confirm the fetch request "+
+				"to %s within %s", offer.Fetch, wait))
 	}
 
 	file, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -523,7 +540,7 @@ func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string)
 
 	var written int64
 	for {
-		chunk, err := nextTransferChunk(ctx, sub)
+		chunk, err := nextTransferChunk(ctx, sub, wait)
 		if err != nil {
 			_ = os.Remove(dest)
 			return 0, err
@@ -565,28 +582,48 @@ func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string)
 	return written, nil
 }
 
-// nextTransferChunk waits for the next message, bounded.
-//
-// THE CALLER'S END IS TOLD APART FROM THE DONOR'S, for [CollectOffers]'s
-// reason. The wait is a child of ctx, so a caller whose own deadline passed
-// sees DeadlineExceeded exactly as a stalled donor does — and reading only the
-// child's error blamed the donor for it, in a message that names a thirty-
-// second wait the caller never gave it.
-func nextTransferChunk(ctx context.Context, sub *nats.Subscription) (*nats.Msg, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, TransferChunkWait)
+// nextTransferChunk waits for the next message, bounded by wait as well as by
+// ctx.
+func nextTransferChunk(ctx context.Context, sub *nats.Subscription,
+	wait time.Duration) (*nats.Msg, error) {
+
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	msg, err := sub.NextMsgWithContext(waitCtx)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("statelog: receive a chunk: %w", ctx.Err())
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("statelog: the donor stopped sending "+
-				"mid-transfer (no chunk for %s)", TransferChunkWait)
-		}
-		return nil, fmt.Errorf("statelog: receive a chunk: %w", err)
+		return nil, boundedWaitErr(ctx, err, "receive a chunk",
+			fmt.Errorf("statelog: the donor stopped sending mid-transfer "+
+				"(no chunk for %s)", wait))
 	}
 	return msg, nil
+}
+
+// boundedWaitErr says whose end a bounded wait reached.
+//
+// EACH WAIT IT JUDGES IS BOUNDED TWICE — the ask's flush, the fetch's flush,
+// the wait for a chunk: by the caller's context, and by a limit of this
+// package's own (the offer window, the chunk wait) set as a child of it.
+// Whichever ends first, the wait fails through the child, so its error cannot
+// say whose end it was, and reading only that once blamed a donor for a
+// caller's own deadline in a message naming a thirty-second wait the caller
+// never gave it. So:
+//
+//   - The CALLER'S end is tested on the parent and wrapped: errors.Is against
+//     context.Canceled or context.DeadlineExceeded is how a caller learns its
+//     own context ended.
+//   - The package's OWN bound is returned as own — named, and deliberately
+//     NOT wrapping DeadlineExceeded, because in the chain that would claim
+//     the caller's deadline had passed when the caller set none.
+//   - Anything else — a closed connection, a dropped subscription — is the
+//     transport's own failure, and keeps its %w.
+func boundedWaitErr(ctx context.Context, err error, step string, own error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("statelog: %s: %w", step, ctx.Err())
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return own
+	}
+	return fmt.Errorf("statelog: %s: %w", step, err)
 }
 
 // transferVerdict reads the terminator's status.

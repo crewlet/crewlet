@@ -273,7 +273,22 @@ When a node reports `below_floor`:
    five minutes. Stopping a node mid-join — a signal during its boot, or a
    shutdown while it is asking or fetching — gives the join up at once rather
    than waiting out the five-second offer window, and is never reported as a
-   fleet with nothing to donate: the next start decides afresh.
+   fleet with nothing to donate: the next start decides afresh. Nor is a join
+   that loses the node's **own database** — an install that failed and whose
+   live file then could not be reopened, or an artefact installed and then not
+   opened. (A failed install deletes the artefact it fetched before it reopens
+   the live file, so the reopen never competes with it for room.) At boot the
+   node stops, naming both failures. While running it logs
+   `statelog_estate_lost` at error level, naming the file: the node serves no
+   tracker, page or search read and gives up its seats until the file opens.
+   It reopens the file on its next heartbeat rather than on the doubling
+   interval, because reopening its own file asks nobody — but it asks the
+   fleet again only on that interval, and a join that fetched an artefact
+   before it lost the file doubles it like any other failed ask, so a failure
+   the transfer itself causes, such as a full disk, never becomes a transfer
+   every heartbeat. If the line repeats, its error names what to fix — the
+   disk, the file's permissions — and the node reopens the file on the next
+   heartbeat after that.
 3. If none does, the skip reason says why. Fix that first: a fleet where every
    node is `lagging` has an applier problem, not a snapshot problem.
 4. If the fleet genuinely holds none — a single node, or every peer skipping —

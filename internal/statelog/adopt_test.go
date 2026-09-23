@@ -44,9 +44,25 @@ type joinHarness struct {
 	// the last moment before the install, which is where a case stages
 	// an interruption the rename must survive.
 	onClose func()
+	// closeErr is what step 8's close reports AFTER it has closed the live
+	// database, nil by default — which is the engine's close exactly: it
+	// takes the handle out of service before it closes it, so a failure
+	// there still leaves nothing open.
+	closeErr error
+	// reopenErr is what every reopen reports instead of opening anything,
+	// nil by default.
+	reopenErr error
 	// reopenCtxErr is what the context the last reopen ran under said
 	// about itself when it was called.
 	reopenCtxErr error
+	// debrisAtReopen is what of the fetched artefact was still beside the
+	// live file when the last reopen ran — the part file and anything the
+	// verification's reads grew beside it.
+	debrisAtReopen []string
+
+	// broker is the one the donor serves on, for a case that stands up
+	// another.
+	broker *js.Queue
 }
 
 func newJoinHarness(t *testing.T) *joinHarness {
@@ -90,7 +106,7 @@ func newJoinHarness(t *testing.T) *joinHarness {
 		t.Fatalf("seed the donor: %v", err)
 	}
 
-	h := &joinHarness{t: t, nc: q.Conn()}
+	h := &joinHarness{t: t, nc: q.Conn(), broker: q}
 	snapDir := filepath.Join(donorDir, "snapshots")
 	lag := uint64(0)
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
@@ -175,11 +191,18 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 			if h.onClose != nil {
 				h.onClose()
 			}
-			return h.joiner.Close()
+			if err := h.joiner.Close(); err != nil {
+				return err
+			}
+			return h.closeErr
 		},
 		Reopen: func(ctx context.Context) error {
 			h.reopens.Add(1)
 			h.reopenCtxErr = ctx.Err()
+			h.debrisAtReopen = h.debris(t)
+			if h.reopenErr != nil {
+				return h.reopenErr
+			}
 			db, err := store.Open(ctx, filepath.Join(filepath.Dir(h.joinPath), "node.db"),
 				store.Options{})
 			if err != nil {
@@ -198,6 +221,17 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 		t.Fatalf("NewAdopter: %v", err)
 	}
 	return a
+}
+
+// debris is every file of the fetched artefact's set beside the live file: the
+// part file, and whatever opening it grew beside it.
+func (h *joinHarness) debris(t *testing.T) []string {
+	t.Helper()
+	found, err := filepath.Glob(h.joinPath + statelog.AdoptPartSuffix + "*")
+	if err != nil {
+		t.Fatalf("list the artefact's files: %v", err)
+	}
+	return found
 }
 
 // A NODE BELOW THE FLOOR ADOPTS A PEER'S SNAPSHOT WHOLESALE, and every claim
@@ -272,9 +306,10 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 			t.Fatalf("the adoption recorded %v, want %v", h.phases, want)
 		}
 	}
-	// AND NO PART FILE SURVIVES.
-	if _, err := os.Stat(h.joinPath + statelog.AdoptPartSuffix); err == nil {
-		t.Error("the part file survives beside the live database")
+	// AND NOTHING OF THE PART FILE SURVIVES, the lock its inspection took
+	// included.
+	if left := h.debris(t); len(left) != 0 {
+		t.Errorf("%v survive beside the live database", left)
 	}
 }
 
@@ -302,8 +337,10 @@ func TestACorruptedArtefactIsRefusedAndTheLiveDatabaseSurvives(t *testing.T) {
 			"verification — the install is the one place a live database is " +
 			"replaced, and it must not be reached by a refused offer")
 	}
-	if _, err := os.Stat(h.joinPath + statelog.AdoptPartSuffix); err == nil {
-		t.Error("a refused artefact was left beside the live database")
+	// NOR ITS SIDECARS: a stale -wal beside the next attempt's artefact is
+	// applied to it the moment that attempt's inspection opens it.
+	if left := h.debris(t); len(left) != 0 {
+		t.Errorf("a refused artefact left %v beside the live database", left)
 	}
 	// AND THE HOLD WAS RELEASED, so a refused join does not pin the log.
 	if h.held.Load() != h.released.Load() {
@@ -394,6 +431,169 @@ func TestAnInterruptedInstallReopensTheLiveDatabase(t *testing.T) {
 	}
 }
 
+// A LIVE DATABASE THAT DID NOT COME BACK IS NEVER "NOBODY COULD DONATE".
+//
+// Every way a join can close the live database and then fail to open one
+// again ends in the same state: no replicated estate open at all, every read
+// and every applier answering ErrNoEstate. [statelog.ErrNoOffer] is the one
+// thing that must not say so, because the engine answers it by carrying on
+// without a snapshot — a boot comes up with nothing open to come up on, and a
+// rejoin waits out a widening interval before anything reopens it. So the join
+// comes back as [statelog.ErrEstateNotRestored], carrying the failure that
+// closed the estate AND the reopen's own, and it stops at that offer: every
+// later one would be installed through a bracket around an estate that is not
+// there, and each donor logged as refusing a node that could take nothing.
+//
+// Four doors reach the state, and each is staged with the reopen failing: an
+// install that failed while its caller still waited, one the caller's own
+// cancellation interrupted, a close that failed after it took the database out
+// of service, and an artefact installed and then not opened. A second donor
+// offers the same artefact in every case, so a join that moved on would be
+// seen closing the live database a second time.
+func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
+	t.Parallel()
+	reopenFailed := errors.New("the disk under the live database is gone")
+	closeFailed := errors.New("the close did not finish")
+	cases := []struct {
+		name string
+		// stage arranges the failure that closes the estate for good.
+		stage func(h *joinHarness, cancel context.CancelFunc)
+		// cause is text the error must carry about that failure.
+		cause string
+		// cancelled is whether the caller's own end is part of it.
+		cancelled bool
+		// installed is whether the rename happened, so the reopen is the
+		// artefact's own rather than a rollback's.
+		installed bool
+	}{
+		{
+			name: "an install that failed",
+			stage: func(h *joinHarness, _ context.CancelFunc) {
+				// A DIRECTORY WHERE THE PREPARED FILE WAS: the install's
+				// first step cannot open it, for a reason of this node's
+				// own rather than anything a donor sent.
+				h.onClose = func() {
+					part := h.joinPath + statelog.AdoptPartSuffix
+					if err := os.Remove(part); err != nil {
+						h.t.Errorf("remove the prepared file: %v", err)
+					}
+					if err := os.Mkdir(part, 0o700); err != nil {
+						h.t.Errorf("put a directory in its place: %v", err)
+					}
+				}
+			},
+			cause: "store: adopt",
+		},
+		{
+			name: "an install the caller interrupted",
+			stage: func(h *joinHarness, cancel context.CancelFunc) {
+				h.onClose = cancel
+			},
+			cause:     "store: adopt",
+			cancelled: true,
+		},
+		{
+			name: "a close that failed",
+			stage: func(h *joinHarness, _ context.CancelFunc) {
+				h.closeErr = closeFailed
+			},
+			cause: closeFailed.Error(),
+		},
+		{
+			name:      "an installed artefact that did not open",
+			stage:     func(*joinHarness, context.CancelFunc) {},
+			cause:     "the artefact is installed",
+			installed: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newJoinHarness(t)
+			h.addDonor(t, "donor-2")
+			h.reopenErr = reopenFailed
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			c.stage(h, cancel)
+
+			_, err := h.adopter(t).Join(ctx)
+			if !errors.Is(err, statelog.ErrEstateNotRestored) {
+				t.Fatalf("Join = %v, want ErrEstateNotRestored — the live database "+
+					"is not open, and nothing else in the error says so", err)
+			}
+			if errors.Is(err, statelog.ErrNoOffer) {
+				t.Fatalf("a join that lost the live database reported ErrNoOffer (%v) "+
+					"— the engine reads that as a fleet with nothing to donate and "+
+					"carries on with no estate open", err)
+			}
+			if !errors.Is(err, reopenFailed) {
+				t.Errorf("the error drops why the reopen failed: %v", err)
+			}
+			if !strings.Contains(err.Error(), c.cause) {
+				t.Errorf("the error drops what closed the estate (%q): %v", c.cause, err)
+			}
+			if c.cancelled && !errors.Is(err, context.Canceled) {
+				t.Errorf("the error drops the caller's own cancellation: %v", err)
+			}
+			if n := h.closes.Load(); n != 1 {
+				t.Fatalf("the live database was closed %d time(s), want once — the "+
+					"join went on to another offer with no estate open", n)
+			}
+			if n := h.reopens.Load(); n != 1 {
+				t.Fatalf("the live database was reopened %d time(s), want once", n)
+			}
+			// A ROLLBACK REOPENS WITH THE ARTEFACT ALREADY GONE: a whole
+			// copy of the estate on the live file's volume competes with
+			// the reopen for the room a full disk has run out of, and is
+			// deleted a moment later on the way out anyway.
+			if !c.installed && len(h.debrisAtReopen) != 0 {
+				t.Fatalf("the rollback reopened the live database beside %v — "+
+					"an artefact nothing will install, holding the room the "+
+					"reopen may need", h.debrisAtReopen)
+			}
+			if left := h.debris(t); len(left) != 0 {
+				t.Fatalf("the join left %v beside the live database", left)
+			}
+			if h.held.Load() != h.released.Load() {
+				t.Fatalf("the tail was held %d time(s) and released %d",
+					h.held.Load(), h.released.Load())
+			}
+		})
+	}
+}
+
+// addDonor stands up another donor on the harness's broker, offering the same
+// artefact, and returns once a joiner asking would hear both.
+func (h *joinHarness) addDonor(t *testing.T, nodeID string) {
+	t.Helper()
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: nodeID,
+		Dial:   func(context.Context) (*nats.Conn, error) { return h.broker.DialOwned() },
+		Newest: func() (statelog.Manifest, bool) { return h.manifest, true },
+		Path:   func(statelog.Manifest) string { return h.snapPath },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	served := make(chan struct{})
+	go func() { defer close(served); _ = donor.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-served })
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		offers, err := statelog.CollectOffers(t.Context(), h.nc,
+			statelog.OfferRequest{NodeID: "probe"}, 200*time.Millisecond)
+		if err != nil {
+			t.Fatalf("CollectOffers: %v", err)
+		}
+		if len(offers) >= 2 {
+			return
+		}
+	}
+	t.Fatalf("%s never answered beside the harness's donor", nodeID)
+}
+
 // AN ARTEFACT WHOSE MANIFEST DOES NOT MATCH THE FILE IS REFUSED.
 //
 // The checkpoint commits in the same transaction as the rows, so the position
@@ -481,5 +681,63 @@ func TestTheFetchedArtefactLandsBesideTheLiveFile(t *testing.T) {
 			"%s — the install is a rename, and across a filesystem boundary "+
 			"that becomes a copy: the one moment an interrupted adoption can "+
 			"leave a mixture", got, want)
+	}
+}
+
+// AN EARLIER ATTEMPT'S DEBRIS IS CLEARED BEFORE THE FETCH, SIDECARS AND ALL.
+//
+// Opening a database grows files beside it, so what an interrupted attempt
+// leaves at the part path is a SET: the part file, and whatever its opener
+// left beside it. Clearing the part file alone was the old shape, and a -wal
+// left beside the next attempt's fresh artefact is applied to it the moment
+// step 4 opens it — pages of a database that is gone, read as though they
+// were the donor's. The case plants exactly that: a truncated transfer, and a
+// -wal holding pages written by the last thing that had a database open at
+// that path. The artefact beside it is genuine, so a join that kept the -wal
+// refuses a good snapshot as corrupt; one that cleared the set adopts it and
+// leaves nothing behind.
+func TestAnEarlierAttemptsDebrisIsClearedBeforeTheFetch(t *testing.T) {
+	t.Parallel()
+	h := newJoinHarness(t)
+	part := h.joinPath + statelog.AdoptPartSuffix
+
+	// A -WAL THAT HOLDS PAGES, copied while its database is still open:
+	// a clean close would fold it in and remove it, and a crash is what
+	// does not.
+	earlier, err := store.OpenEstate(t.Context(), store.EstateReplicated, part, store.Options{})
+	if err != nil {
+		t.Fatalf("open a database at the part path: %v", err)
+	}
+	if err := earlier.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DELETE FROM statelog_cursor`)
+		return err
+	}); err != nil {
+		t.Fatalf("write a page to its -wal: %v", err)
+	}
+	wal, err := os.ReadFile(part + "-wal")
+	if err != nil {
+		t.Fatalf("read its -wal: %v", err)
+	}
+	if err := earlier.Close(); err != nil {
+		t.Fatalf("close it: %v", err)
+	}
+	for _, f := range h.debris(t) {
+		if err := os.Remove(f); err != nil {
+			t.Fatalf("clear %s: %v", f, err)
+		}
+	}
+	if err := os.WriteFile(part+"-wal", wal, 0o600); err != nil {
+		t.Fatalf("plant the -wal: %v", err)
+	}
+	if err := os.WriteFile(part, []byte("a transfer that stopped"), 0o600); err != nil {
+		t.Fatalf("plant the part file: %v", err)
+	}
+
+	if _, err := h.adopter(t).Join(t.Context()); err != nil {
+		t.Fatalf("Join over an earlier attempt's debris: %v — its -wal was read "+
+			"into the artefact this attempt fetched", err)
+	}
+	if left := h.debris(t); len(left) != 0 {
+		t.Fatalf("%v survive the adoption", left)
 	}
 }
