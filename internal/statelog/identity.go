@@ -168,6 +168,55 @@ var ErrAheadOfLog = errors.New("statelog: this node's checkpoint is past the log
 // peer's snapshot, on its own, through the ordinary join.
 var ErrGenerationPassed = errors.New("statelog: a peer re-anchored this log past this node's generation")
 
+// ErrLogDiverged reports a log whose record at this node's checkpoint is not the
+// record this node consumed there: the log continues a history these rows are
+// not.
+//
+// ITS OWN SENTINEL BESIDE [ErrAheadOfLog], because it is the finding that one
+// could not make. A broker restored from an older copy is seen from a node
+// whose rows are newer only while its log ENDS below their checkpoint; once
+// anything writes it past that — a node whose own rows were not ahead of the
+// copy — the end is an ordinary end again, and a node booting then never saw
+// it below at all. What still separates the two histories is the record at
+// the checkpoint's sequence, which on one stream never changes: the checkpoint
+// names it ([Runner.VerifyCheckpoint]), and a different record there means
+// everything past it was decided from rows these are not. Unlike a reading of
+// the end it cannot come from a member that has not caught up — a member that
+// lacks a record answers that it has none, never with another one — so it is
+// STICKY: nothing on the log can bring these rows level, and applying the log
+// past the checkpoint would put a second history on top of them.
+var ErrLogDiverged = errors.New("statelog: the log's record at this node's checkpoint is not the one it consumed")
+
+// divergedLog is what established that a log diverged from an applier's rows:
+// the checkpoint, the broker instant of the record the checkpoint names, and
+// the instant of the record the log holds at the same sequence.
+type divergedLog struct {
+	at             Position
+	consumed, held time.Time
+}
+
+// err is the one sentence every refusal over a diverged log carries — the
+// applier's stop, a read's `wrong_stream` and a write's.
+func (d divergedLog) err(stream string) error {
+	return fmt.Errorf("%w: this node's checkpoint on %s is at sequence %d, on the "+
+		"record the broker stored at %s, and the log's record at %d was stored at "+
+		"%s — the broker was restored from a copy older than these rows and has "+
+		"since been written past them, so the log continues a history they are "+
+		"not; nothing past the checkpoint is applied, neither a read nor a write "+
+		"can be answered from these rows, and an operator re-anchors them with "+
+		"`crewlet retention reanchor -stream %s` (the restored case) or replaces "+
+		"them with a peer's",
+		ErrLogDiverged, stream, d.at.Seq, d.consumed.UTC().Format(time.RFC3339Nano),
+		d.at.Seq, d.held.UTC().Format(time.RFC3339Nano), stream)
+}
+
+// sameRecord reports whether two broker instants name one record at one
+// sequence — at the resolution a checkpoint row keeps, for the reason
+// [identityResolution] gives.
+func sameRecord(a, b time.Time) bool {
+	return a.Truncate(identityResolution).Equal(b.Truncate(identityResolution))
+}
+
 // passedGeneration is what established that a peer re-anchored a domain past
 // this applier's rows: the checkpoint the rows stand at, and the generation the
 // fleet is on.

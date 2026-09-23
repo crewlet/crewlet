@@ -308,6 +308,13 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 			},
 			want: statelog.SkipAheadOfLog,
 		},
+		// AND THE ONE THAT ONE STOPS SEEING: a restored log written back
+		// past the checkpoint ends where a caught-up node's does, and
+		// holds another history from there.
+		"the log diverged from its rows": {
+			arrange: func(h *snapHarness) { h.health.LogDiverged = true },
+			want:    statelog.SkipLogDiverged,
+		},
 		"too far behind to be worth transferring": {
 			arrange: func(h *snapHarness) {
 				lag := uint64(statelog.SnapshotLagSlack + 1)

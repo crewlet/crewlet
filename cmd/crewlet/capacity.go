@@ -489,11 +489,13 @@ func reanchorCaseText(c statelog.ReanchorCase, cursor uint64) string {
 	}
 	if c == statelog.ReanchorRestored {
 		return fmt.Sprintf("This log was RESTORED from an older copy: it is the "+
-			"stream this node's rows are keyed to, and it ends at sequence %d, "+
-			"below their checkpoint. The rows already hold every record it kept, "+
-			"so it is followed from its END and none of them is replayed. %s "+
-			"What the rows hold past the copy is on no log, so every other node "+
-			"adopts a snapshot from this one.", cursor, common)
+			"stream this node's rows are keyed to, and past the copy it is not "+
+			"their history — it ends below their checkpoint, or it holds another "+
+			"record at it because it was written past them after the restore. The "+
+			"rows already hold every record the copy kept, so it is followed from "+
+			"its END, after sequence %d, and none of them is replayed. %s What the "+
+			"rows hold past the copy is on no log, so every other node adopts a "+
+			"snapshot from this one.", cursor, common)
 	}
 	return fmt.Sprintf("This log was RECREATED: it is not the stream this node's "+
 		"rows are keyed to, so it is followed from its first surviving record, "+

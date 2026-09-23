@@ -267,6 +267,22 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 			},
 			want: statelog.RefuseWrongStream,
 		},
+		// A LOG THAT DIVERGED FROM THE ROWS is not this node's history
+		// either, and its end has caught up with the checkpoint.
+		"a log that diverged from the rows": {
+			health: statelog.Health{
+				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(0),
+				LastSeq: ptr(100), Drained: true, LogDiverged: true,
+			},
+			want: statelog.RefuseWrongStream,
+		},
+		"a log that diverged from rows below the floor": {
+			health: statelog.Health{
+				Position: at(10), TrimFloor: ptr(50), FirstSeq: ptr(5), Lag: ptr(90),
+				LastSeq: ptr(100), LogDiverged: true,
+			},
+			want: statelog.RefuseWrongStream,
+		},
 		"a strict domain that is behind right now": {
 			health: statelog.Health{
 				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(3),
@@ -341,7 +357,7 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 	}
 }
 
-// HEALTH IS SIXTEEN FIELDS, DECLARED ONCE.
+// HEALTH IS SEVENTEEN FIELDS, DECLARED ONCE.
 //
 // The count is asserted because the failure is a copy: written out per reader
 // it becomes three lists that disagree, and the fields most likely to be
@@ -351,8 +367,8 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 func TestHealthCarriesEveryFieldItsContractsCite(t *testing.T) {
 	t.Parallel()
 	typ := reflect.TypeFor[statelog.Health]()
-	if got := typ.NumField(); got != 16 {
-		t.Fatalf("Health has %d fields, want 16 — this struct is cited from the "+
+	if got := typ.NumField(); got != 17 {
+		t.Fatalf("Health has %d fields, want 17 — this struct is cited from the "+
 			"framework's contracts, the readiness gate, the operator surface and "+
 			"the register's heartbeat, and a field added here without a reason "+
 			"is a field one of them will not know about", got)
@@ -432,6 +448,11 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 		// two above can see on a broker restored from an older copy: the
 		// log continues from that peer's rows, not these.
 		{"GenerationPassed", func(h *statelog.Health) { h.GenerationPassed = true },
+			statelog.RefuseWrongStream},
+		// AND A LOG THAT DIVERGED FROM THE ROWS: a restored broker written
+		// past the checkpoint, where the end is an ordinary end again and
+		// every other term reads healthy.
+		{"LogDiverged", func(h *statelog.Health) { h.LogDiverged = true },
 			statelog.RefuseWrongStream},
 	} {
 		h := serving()

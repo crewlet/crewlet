@@ -292,6 +292,35 @@ func TestAReanchorNamesTheCaseItAnswers(t *testing.T) {
 			}(),
 			refuse: "nothing to re-anchor",
 		},
+		// A RESTORED COPY WRITTEN PAST THE CHECKPOINT no longer ends below
+		// it, and holds another record at its sequence: still the restored
+		// case, followed from where the log now ends.
+		"a restored copy written past the checkpoint in another history": {
+			in: func() statelog.ReanchorInputs {
+				in := restored()
+				in.LastSeq, in.Diverged = in.Position+50, true
+				return in
+			}(),
+			want: statelog.ReanchorRestored, cursor: 9_050,
+		},
+		"a restored copy written exactly to the checkpoint in another history": {
+			in: func() statelog.ReanchorInputs {
+				in := restored()
+				in.LastSeq, in.Diverged = in.Position, true
+				return in
+			}(),
+			want: statelog.ReanchorRestored, cursor: 9_000,
+		},
+		// A REBUILT STREAM holds another record at every sequence, and it is
+		// the instant that says so first.
+		"a recreated stream is never read as a divergence": {
+			in: func() statelog.ReanchorInputs {
+				in := reanchorInputs()
+				in.FirstSeq, in.LastSeq, in.Diverged = 42, 60, true
+				return in
+			}(),
+			want: statelog.ReanchorRecreated, cursor: 41,
+		},
 		"the same stream continuing in a generation only an evicted node held": {
 			in: func() statelog.ReanchorInputs {
 				in := restored()
@@ -534,11 +563,12 @@ type reanchorRunner struct {
 	mu      sync.Mutex
 	at      []statelog.Position
 	created []time.Time
+	names   []time.Time
 	order   *[]string
 	during  func()
 }
 
-func (r *reanchorRunner) Reanchored(at statelog.Position, created time.Time) error {
+func (r *reanchorRunner) Reanchored(at statelog.Position, created, storedAt time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.order != nil {
@@ -549,6 +579,7 @@ func (r *reanchorRunner) Reanchored(at statelog.Position, created time.Time) err
 	}
 	r.at = append(r.at, at)
 	r.created = append(r.created, created)
+	r.names = append(r.names, storedAt)
 	return nil
 }
 
@@ -712,9 +743,10 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 
 	// AND ITS APPLIER RUNS: a runner built over the other domain's own live
 	// instant loads the untouched checkpoint and does not stop.
+	secondFetch := newProbeFetch()
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: secondProbeDomain{}, Applier: newProbeApplier(),
-		Fetch: newProbeFetch(), DB: f.db.Replicated(), Generation: 1,
+		Fetch: secondFetch, Log: secondFetch, DB: f.db.Replicated(), Generation: 1,
 		StreamCreatedAt: secondCreated,
 	})
 	if err != nil {
@@ -761,6 +793,10 @@ func TestARestoredLogIsReanchoredAtItsEnd(t *testing.T) {
 	in := reanchorInputs()
 	in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
 	in.FirstSeq, in.LastSeq = 1, 7_000
+	// THE RESTORED COPY'S LAST RECORD, at the sequence the new checkpoint
+	// goes to.
+	f.log.seq = 6_999
+	f.log.put("probe.object.last", "op-last", []byte(`{}`))
 
 	plan, err := statelog.Reanchor(t.Context(), deps, in, confirmed())
 	if err != nil {
@@ -769,6 +805,23 @@ func TestARestoredLogIsReanchoredAtItsEnd(t *testing.T) {
 	want := statelog.Position{Stream: probeStream, Generation: 2, Seq: 7_000}
 	if plan.Case != statelog.ReanchorRestored || plan.Cursor != want.Seq {
 		t.Fatalf("the plan is %+v, want the restored case at %d", plan, want.Seq)
+	}
+	// THE NEW CHECKPOINT NAMES THE LOG'S OWN RECORD there — in the row and
+	// in the runner — so what the applier verifies the log against from here
+	// on is the history it now follows, not the one the rows were derived
+	// from.
+	_, _, named, _, _ := f.log.At(t.Context(), want.Seq)
+	cp, _, err := statelog.CheckpointOf(t.Context(), f.db.Replicated(), probeStream)
+	if err != nil {
+		t.Fatalf("read the checkpoint: %v", err)
+	}
+	if named.IsZero() || !cp.StoredAt.Equal(named.Truncate(time.Microsecond)) {
+		t.Fatalf("the reanchored checkpoint names %s, want the log's record at "+
+			"%d, stored at %s", cp.StoredAt, want.Seq, named)
+	}
+	if len(f.runner.names) != 1 || !f.runner.names[0].Equal(named) {
+		t.Fatalf("the runner was told its checkpoint names %v, want %s",
+			f.runner.names, named)
 	}
 	if at, created := cursorOf(t, f.db, probeStream); at != want ||
 		statelog.IdentityOf(created, reanchorCreated, true) != statelog.StreamSame {

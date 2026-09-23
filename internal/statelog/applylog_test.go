@@ -31,6 +31,7 @@ func TestAStopIsWrittenOnceSayingWhatResumesIt(t *testing.T) {
 		Domain:     gatingDomain{},
 		Applier:    h.applier,
 		Fetch:      h.fetch,
+		Log:        h.fetch,
 		DB:         h.db.Replicated(),
 		Generation: 1,
 		Metrics:    h.metrics,

@@ -98,9 +98,34 @@ type cursorRow struct {
 	at      Position
 	created time.Time
 
+	// storedAt is the broker's own instant for the record at the
+	// checkpoint's sequence — the one this node consumed there — and zero
+	// where that is unknown: a row older than the column, a checkpoint at
+	// sequence 0, or one a reanchor placed where the log holds no record.
+	// It is what [Runner.VerifyCheckpoint] compares the log's record with.
+	storedAt time.Time
+
 	// void is the generations the reanchor that placed this checkpoint
 	// ABANDONED — see [ReanchorPlan.From].
 	void voidRange
+}
+
+// encodeInstant is a broker instant as a checkpoint column holds it: zero for
+// an unknown one, which [store.EncodeTime] would write as the year one and read
+// back as a real instant nothing could ever equal.
+func encodeInstant(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return store.EncodeTime(t)
+}
+
+// decodeInstant is [encodeInstant]'s inverse: zero is the zero instant.
+func decodeInstant(micros int64) time.Time {
+	if micros == 0 {
+		return time.Time{}
+	}
+	return store.DecodeTime(micros)
 }
 
 // voidRange is the generations strictly between after and before: the ones a
@@ -115,11 +140,11 @@ func (v voidRange) holds(gen uint32) bool { return gen > v.after && gen < v.befo
 // readCursor reads this domain's checkpoint, reporting false when the applier
 // has never committed on this stream.
 func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, error) {
-	var gen, seq, created, voidAfter, voidBefore int64
+	var gen, seq, created, storedAt, voidAfter, voidBefore int64
 	err := tx.QueryRowContext(ctx, `
-		SELECT generation, seq, stream_created_at, void_after, void_before
+		SELECT generation, seq, stream_created_at, stored_at, void_after, void_before
 		FROM statelog_cursor WHERE stream = ?`,
-		t.stream).Scan(&gen, &seq, &created, &voidAfter, &voidBefore)
+		t.stream).Scan(&gen, &seq, &created, &storedAt, &voidAfter, &voidBefore)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return cursorRow{at: Position{Stream: t.stream}}, false, nil
@@ -127,9 +152,10 @@ func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, er
 		return cursorRow{}, false, fmt.Errorf("statelog: read the cursor: %w", err)
 	}
 	return cursorRow{
-		at:      Position{Stream: t.stream, Generation: uint32(gen), Seq: uint64(seq)},
-		created: store.DecodeTime(created),
-		void:    voidRange{after: uint32(voidAfter), before: uint32(voidBefore)},
+		at:       Position{Stream: t.stream, Generation: uint32(gen), Seq: uint64(seq)},
+		created:  store.DecodeTime(created),
+		storedAt: decodeInstant(storedAt),
+		void:     voidRange{after: uint32(voidAfter), before: uint32(voidBefore)},
 	}, true, nil
 }
 
@@ -143,17 +169,25 @@ func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, er
 // is free. That is true while the source can always redeliver, and FALSE for a
 // log that gets trimmed: the replay it counts on is a replay of records the
 // trim has already removed.
-func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created time.Time, now time.Time) error {
+//
+// storedAt is the broker's instant for the record at p — the one this
+// transaction consumed there — which is how the checkpoint NAMES its record
+// ([cursorRow.storedAt]).
+func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, storedAt,
+	now time.Time) error {
+
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO statelog_cursor
+			(stream, generation, seq, stream_created_at, stored_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT (stream) DO UPDATE SET
 			generation        = excluded.generation,
 			seq               = excluded.seq,
 			stream_created_at = excluded.stream_created_at,
+			stored_at         = excluded.stored_at,
 			updated_at        = excluded.updated_at`,
 		t.stream, int64(p.Generation), int64(p.Seq),
-		store.EncodeTime(created), store.EncodeTime(now))
+		store.EncodeTime(created), encodeInstant(storedAt), store.EncodeTime(now))
 	if err != nil {
 		return fmt.Errorf("statelog: write the cursor at %s: %w", p, err)
 	}
@@ -161,7 +195,8 @@ func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created t
 }
 
 // reanchorCursor writes the checkpoint a reanchor places — at p, keyed to
-// created — together with the generations it abandoned: every one strictly
+// created, naming the log's record at p by storedAt (zero where the log holds
+// none there) — together with the generations it abandoned: every one strictly
 // between from and p's own ([ReanchorPlan.From]).
 //
 // ITS OWN STATEMENT rather than a flag on setCursor, because the two write
@@ -171,22 +206,23 @@ func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created t
 // reanchor must REPLACE it, since the range an earlier reanchor abandoned says
 // nothing about the log this one follows.
 func (t tables) reanchorCursor(ctx context.Context, tx *sql.Tx, p Position,
-	created time.Time, from uint32, now time.Time) error {
+	created, storedAt time.Time, from uint32, now time.Time) error {
 
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO statelog_cursor
-			(stream, generation, seq, stream_created_at, updated_at,
+			(stream, generation, seq, stream_created_at, stored_at, updated_at,
 			 void_after, void_before)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (stream) DO UPDATE SET
 			generation        = excluded.generation,
 			seq               = excluded.seq,
 			stream_created_at = excluded.stream_created_at,
+			stored_at         = excluded.stored_at,
 			updated_at        = excluded.updated_at,
 			void_after        = excluded.void_after,
 			void_before       = excluded.void_before`,
 		t.stream, int64(p.Generation), int64(p.Seq),
-		store.EncodeTime(created), store.EncodeTime(now),
+		store.EncodeTime(created), encodeInstant(storedAt), store.EncodeTime(now),
 		int64(from), int64(p.Generation))
 	if err != nil {
 		return fmt.Errorf("statelog: write the reanchored cursor at %s: %w", p, err)

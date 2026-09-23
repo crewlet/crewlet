@@ -49,9 +49,10 @@ import (
 // the rows are keyed to — holds none of what the rows came from, so the domain
 // follows it from its first surviving record. A RESTORED one — the broker
 // brought back from an older copy, same instant, ending below this node's
-// checkpoint — holds a prefix of exactly that history, which the rows already
-// have, so the domain follows it from its END: replaying the prefix into a new
-// generation would roll every object back to the copy. An ABANDONED one — the
+// checkpoint or written past it in another history — holds a prefix of exactly
+// the history the rows came from, which they already have, so the domain
+// follows it from its END: replaying the prefix into a new generation would
+// roll every object back to the copy. An ABANDONED one — the
 // rows' own stream, continuing in a generation only a peer the fleet has since
 // evicted held — is followed from the rows' own checkpoint, with that
 // generation's records void.
@@ -267,11 +268,29 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	// THE CHECKPOINT ROW, not the runner's memory of it: the generation the
 	// transition derives from and the instant the rows are keyed to are the
 	// durable ones, and the loop that would move them is halted.
-	at, keyed, _, err := statelog.CursorFor(ctx, e.backends.Store.Replicated(), stream)
+	checkpoint, _, err := statelog.CheckpointOf(ctx, e.backends.Store.Replicated(), stream)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, err
 	}
-	in := streamFacts(stream, stats, at, keyed)
+	in := streamFacts(stream, stats, checkpoint.At, checkpoint.KeyedTo)
+	// AND WHETHER THE LOG STILL HOLDS, at the checkpoint, THE RECORD THE ROW
+	// NAMES — read now rather than taken from the runner's verdict, because
+	// the case is decided from what the log holds when the operator asks, and
+	// a restored log written past this node's rows is the restored case even
+	// where no verification has run yet. Unreadable refuses, as the stream's
+	// own reading does: which case it is decides where the checkpoint goes.
+	//
+	// A REBUILT STREAM holds another record at every sequence too, and that
+	// is the recreated case: [statelog.ReanchorInputs.Case] decides it by the
+	// instant before it reads this.
+	_, in.Diverged, err = statelog.CheckpointDiverged(ctx, running.log, checkpoint.At,
+		checkpoint.StoredAt)
+	if err != nil {
+		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether %s still "+
+			"holds the record at this node's checkpoint could not be read, and it "+
+			"decides whether this is the restored case — check the broker and "+
+			"re-run: %w", statelog.ErrReanchorRefused, stream, err)
+	}
 	in.ClaimsIdentity = running.domain.ClaimsIdentity()
 	if !in.ClaimsIdentity {
 		// NO FLEET GUARD APPLIES, and no generation is anybody's but this

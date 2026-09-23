@@ -486,6 +486,7 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 		Domain:  versionOneTracker{},
 		Applier: tracker.NewApplier("node-older"),
 		Fetch:   &trackerLogFetch{log: r.log, next: 1},
+		Log:     r.log,
 		DB:      older.Replicated(),
 	})
 	if err != nil {

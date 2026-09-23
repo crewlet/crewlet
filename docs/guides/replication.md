@@ -526,6 +526,15 @@ heartbeat finding a log re-anchored past this node's generation, naming both
 `statelog_behind_a_reanchor` (`WARN`) is the join asking the fleet for a
 snapshot at the new generation, naming the domains and the generations it asks
 at. See [a node a peer re-anchored past](retention.md#a-node-a-peer-re-anchored-past).
+Two are about a broker restored from an older copy:
+`statelog_log_diverged` (`ERROR`) is the log holding, at this node's
+checkpoint, another record than the one it consumed there — the restored log
+was written past this node's rows — written once, at boot or by the heartbeat,
+from which point the domain applies nothing past its checkpoint and refuses
+until it is [re-anchored](retention.md#re-anchoring-a-recreated-or-restored-log)
+or its rows are replaced; and `statelog_checkpoint_unverified` (`WARN`) is a
+heartbeat that could not read the record at the checkpoint to compare it, which
+the applier asks again before it applies past it.
 
 ## Three things CI cannot prove
 

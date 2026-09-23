@@ -362,6 +362,17 @@ type Health struct {
 	// node's own adoption of a peer's snapshot.
 	GenerationPassed bool
 
+	// LogDiverged is a log whose record at this node's checkpoint is not the
+	// one it consumed there ([ErrLogDiverged]): a broker restored from an
+	// older copy and since written past these rows, so the log continues a
+	// history they are not. The identity's fourth half, observed like the
+	// others — by the applier before it applies past the checkpoint and by
+	// the heartbeat every interval — and errors.Is against the same answer
+	// the write path refuses on. It refuses exactly where a recreation does,
+	// and it is the one state [Health.AheadOfLog] used to lose the moment the
+	// restored log was written back past the checkpoint.
+	LogDiverged bool
+
 	// Coverage is COMPACTED domains only: the fraction of rows present
 	// against rows expected. A gap here is the compaction policy working
 	// rather than a fault, which is why it is a number and not a bool.
@@ -393,7 +404,7 @@ func (h Health) Refusal(now time.Time) ReadRefusal {
 		return RefuseFloorUnknown
 	case h.Floor.Effective(now) == FloorBelow:
 		return RefuseBelowFloor
-	case h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed:
+	case h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed || h.LogDiverged:
 		return RefuseWrongStream
 	case h.Err != "" || h.Stalled:
 		return RefuseStalled
@@ -466,7 +477,7 @@ func (h Health) AheadOfLog() bool {
 func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
 	floor := h.Floor.Effective(now)
 	if h.Err != "" || h.Evicted || floor == FloorBelow || floor == FloorUnknown ||
-		h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed {
+		h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed || h.LogDiverged {
 		return false
 	}
 	// A FROZEN PREFIX, which is the one term here that a lag resembles and
@@ -538,7 +549,7 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 			return false, RefuseBrokerUnreachable
 		case !Replayable(h.Position.Seq, *h.FirstSeq):
 			return false, RefuseBelowFloor
-		case h.AheadOfLog() || h.StreamRecreated:
+		case h.AheadOfLog() || h.StreamRecreated || h.LogDiverged:
 			return false, RefuseWrongStream
 		}
 		return false, RefuseBehind
@@ -549,7 +560,7 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 		// failure is silent.
 		return false, RefuseBrokerUnreachable
 	}
-	if h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed {
+	if h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed || h.LogDiverged {
 		return false, RefuseWrongStream
 	}
 	// THE LAG ITSELF, and it is non-nil by the check above: a node with

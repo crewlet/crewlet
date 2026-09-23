@@ -130,6 +130,17 @@ const (
 	// it was still allowed.
 	SkipAheadOfLog SkipReason = "ahead_of_log"
 
+	// SkipLogDiverged — the log holds, at this node's checkpoint, another
+	// record than the one it consumed there ([ErrLogDiverged]), so what it
+	// holds is a history the log does not continue.
+	//
+	// ITS OWN REASON beside [SkipAheadOfLog] because it is the state that one
+	// stops seeing: once a restored log has been written past the checkpoint
+	// nothing about the end is wrong, the caught-up term is true, and an
+	// artefact taken here would hand a recipient rows that disagree with the
+	// log at the very position it resumes from.
+	SkipLogDiverged SkipReason = "log_diverged"
+
 	// SkipFailed — the attempt RAN and errored, which is the one reason
 	// here that is not a declined precondition.
 	//
@@ -147,7 +158,8 @@ const (
 // rather than discovering them one production incident at a time.
 var SkipReasons = []SkipReason{
 	SkipLagging, SkipUnhydrated, SkipSoleNode,
-	SkipInsufficientSpace, SkipDeferred, SkipRecent, SkipAheadOfLog, SkipFailed,
+	SkipInsufficientSpace, SkipDeferred, SkipRecent, SkipAheadOfLog, SkipLogDiverged,
+	SkipFailed,
 }
 
 // Valid reports whether a skip reason off the wire is one this build knows.
@@ -581,6 +593,17 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 					"its rows are keyed to a sequence space this stream no "+
 					"longer has — a copy would name a position no recipient "+
 					"could replay from", name, h.Position.Seq, *h.LastSeq)}
+		}
+		// AND FOR THE SAME REASON a log that diverged from these rows: the
+		// end is an ordinary end again and every term below is satisfied,
+		// while the rows hold a history the log does not continue.
+		if h.LogDiverged {
+			return &ErrSkipped{Reason: SkipLogDiverged, Detail: fmt.Sprintf(
+				"the log's record at this node's %s checkpoint %d is not the one "+
+					"it consumed there, so its rows are a history the log does not "+
+					"continue — a copy would hand a recipient rows that disagree "+
+					"with the log at the position it resumes from",
+				name, h.Position.Seq)}
 		}
 		// THE HISTORY, and the term below is the DISTANCE. They were one
 		// bool once — assigned from the instantaneous lag — and this arm

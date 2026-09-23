@@ -207,7 +207,9 @@ reason, and makes the same split reads do:
 - `evicted` for a node the fleet has removed.
 - `wrong_stream` when the node's own checkpoint is past the log's end — judged
   on where the node's applier stands rather than on the state the write
-  decided from, because whatever it appends lands relative to the former. See
+  decided from, because whatever it appends lands relative to the former — or
+  when the log holds, at that checkpoint, another record than the one the node
+  consumed there. See
   [Re-anchoring a recreated or restored log](#re-anchoring-a-recreated-or-restored-log).
 
 None of them is a conflict: a conflict tells a caller somebody else is editing
@@ -269,6 +271,7 @@ answer rather than a silence:
 | `deferred` | this node holds a record it cannot decode |
 | `insufficient_space` | not enough disk in `store.snapshot_dir` |
 | `ahead_of_log` | this node's checkpoint is past the log's end, so its rows are keyed to a sequence space the stream no longer has |
+| `log_diverged` | the log holds, at this node's checkpoint, another record than the one it consumed there — a broker restored from an older copy and written past these rows — so they are a history the log does not continue |
 | `recent` | the newest artefact is younger than `snapshot_interval` and names every domain at the generation this node is on — but see below |
 | `failed` | the copy was attempted and errored; the engine log carries the error |
 
@@ -689,18 +692,33 @@ to refuse, not only its reads: whatever it appended would land at the log's
 next sequence, which is one its own applier has already passed and will never
 apply.
 
-That refusal lasts only while the log ends below the node's checkpoint — an end
-read from a stream member that has not caught up looks exactly the same, and a
-refusal nothing could lift would take a healthy node out over one leader
-election. So if anything writes the restored log past that checkpoint — a node
-whose own database was not ahead of it — the refusal lifts and the node carries
-on from rows the log does not contain. The engine cannot tell that from the
-harmless case, so it logs `statelog_ahead_of_log_cleared` saying both. **After
-restoring a broker, re-anchor the most caught-up node whose checkpoint was past
-the restored log's end, before anything else writes to it** — the verb below
-treats it as the *restored* case and follows the log from its end — and every
-other node, ahead of the restored end or not, then adopts from it on its own:
-see [a node a peer re-anchored past](#a-node-a-peer-re-anchored-past).
+That refusal of the end lifts when the end reaches the checkpoint again — an
+end read from a stream member that has not caught up looks exactly the same,
+and a refusal nothing could lift would take a healthy node out over one leader
+election — and the node logs `statelog_ahead_of_log_cleared`. **What decides
+whether it carries on is the record, not the end.** Every checkpoint names the
+record it stands on, by the broker's own storage instant for it, and before the
+node applies anything past its checkpoint it reads the record the log now holds
+at that sequence. The same record is the stale member it looked like, and the
+node carries on. Another record means the restored log has been written past
+this node's rows — by a node whose own database was not ahead of the copy — so
+the log continues a history these rows are not. The node then logs
+`statelog_log_diverged`, applies nothing past its checkpoint, refuses every
+read and every write of that domain as `wrong_stream`, donates no snapshot of
+it (`log_diverged`), and says so on its position row (`log_diverged`). That
+refusal does **not** lift on its own: a member that has not caught up answers
+that it holds no record at a sequence, never with another one. The node finds
+it the same way when it **boots** on a log already written past its rows — its
+checkpoint is then not past the end at all, and the record is the only thing
+that shows it — and when a broker is restored under it while it runs. It is
+compared for equality, so no clock is ever ordered against another.
+
+**After restoring a broker, re-anchor the most caught-up node whose checkpoint
+was past the restored log's end, before anything else writes to it** — the verb
+below treats it as the *restored* case and follows the log from its end, and it
+treats a node the log has diverged from the same way — and every other node,
+ahead of the restored end or not, then adopts from it on its own: see
+[a node a peer re-anchored past](#a-node-a-peer-re-anchored-past).
 
 **A rebuild under a node that never restarts is caught too**, wherever the node
 reads the stream's state: the position heartbeat does every ten seconds, and a
@@ -755,7 +773,7 @@ prints it before you confirm, and names it in its answer and in the
 | Case | What the broker holds | Where the new checkpoint goes |
 |---|---|---|
 | `recreated` | Another stream: its creation instant is not the one this node's rows are keyed to. It holds nothing the rows came from. | One below its **first surviving record**, so the domain applies everything it still holds. |
-| `restored` | The **same** stream — creation instant and all — brought back from an older copy, ending below this node's checkpoint. What it holds is a prefix of the history the rows came from. | At the log's **end**, so none of those records is applied again. |
+| `restored` | The **same** stream — creation instant and all — brought back from an older copy, ending below this node's checkpoint — or written past it since, so it holds another record there. What it holds up to the copy is a prefix of the history the rows came from. | At the log's **end**, so none of those records is applied again. |
 | `abandoned` | The **same** stream, holding everything the rows are missing — but continuing in a generation only an [evicted peer](#a-node-a-peer-re-anchored-past) held. | At this node's **own checkpoint**, in the generation after the evicted peer's, with every record of the generation it skips void. |
 
 **An evicted peer's generation only ever raises the number.** Whichever case it
@@ -769,8 +787,9 @@ The difference is not cosmetic. A restored copy replayed from its first record
 would be applied in a generation that outranks every row, so each object would
 roll back to the state it had when the copy was taken, and whatever the rows
 gained since would be written over. A same-stream log that ends at or past the
-checkpoint is neither case — it still holds every record the rows are missing —
-and the verb refuses it as having nothing to re-anchor.
+checkpoint, holding there the record the checkpoint names, is neither case — it
+still holds every record the rows are missing — and the verb refuses it as
+having nothing to re-anchor.
 
 **It moves one log.** Each domain — the tracker, the knowledge base, the
 vectors — has its own stream and its own generation, and a reanchor moves only

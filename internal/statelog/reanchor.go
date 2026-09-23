@@ -116,6 +116,14 @@ type ReanchorInputs struct {
 	FirstSeq uint64
 	LastSeq  uint64
 
+	// Diverged reports that the log holds, at this node's checkpoint,
+	// ANOTHER record than the one the checkpoint names ([ErrLogDiverged]) —
+	// read from the checkpoint row and the log's record at its sequence
+	// ([CheckpointDiverged]). It is the restored case by another route: the
+	// broker came back from an older copy and was written past these rows
+	// before this node looked, so the log no longer ENDS below them.
+	Diverged bool
+
 	// PeersReanchored is how many peers have already re-anchored THIS
 	// stream: they stand at a later generation of this domain than this
 	// node's checkpoint, and a generation moves only by a reanchor or by
@@ -210,7 +218,7 @@ type ReanchorInputs struct {
 // from it, so the checkpoint goes one below its first surviving sequence and
 // the domain applies everything it still holds.
 //
-// # Restored: the live stream IS the one the rows are keyed to, and it ends below the checkpoint
+// # Restored: the live stream IS the one the rows are keyed to, and it is not their history past a point
 //
 // The broker was brought back from an older copy of its store, which keeps the
 // stream's creation instant. Its surviving records are a PREFIX of the history
@@ -220,6 +228,12 @@ type ReanchorInputs struct {
 // higher generation outranks every version a row holds: every object would roll
 // back to the state it had when the copy was taken, and whatever the rows
 // gained since — the tail the copy never had — would be written over.
+//
+// It is met two ways: the log ENDS below the checkpoint, or it has been
+// written past it before this node looked and holds another record at the
+// checkpoint's sequence ([ReanchorInputs.Diverged]). The checkpoint goes at
+// the end either way, because either way the rows are the history the fleet
+// keeps and the log is followed from where it now stands.
 //
 // # Abandoned: the live stream is the rows' own, and it continues in a generation only an evicted node held
 //
@@ -236,9 +250,10 @@ type ReanchorInputs struct {
 // in this node's own generation before they learned of the move — is the
 // history these rows continue, and is kept.
 //
-// A same-instant stream that ends AT OR PAST the checkpoint and continues in no
-// abandoned generation is none of the three: it holds every record the rows are
-// missing, so there is nothing to re-anchor ([ReanchorInputs.Case] refuses it).
+// A same-instant stream that ends AT OR PAST the checkpoint, holds there the
+// record the checkpoint names, and continues in no abandoned generation is none
+// of the three: it holds every record the rows are missing, so there is nothing
+// to re-anchor ([ReanchorInputs.Case] refuses it).
 //
 // A named string for the reason every enum here is one: it travels — in the
 // log lines, the API's answer and the CLI's text — and an unknown value off the
@@ -304,7 +319,7 @@ func (in ReanchorInputs) Case() (ReanchorCase, uint64, error) {
 		}
 		return ReanchorRecreated, in.FirstSeq - 1, nil
 	}
-	if pastEnd(in.Position, in.LastSeq) {
+	if pastEnd(in.Position, in.LastSeq) || in.Diverged {
 		// AT THE LOG'S END, because the rows already hold every record the
 		// restored copy kept — see [ReanchorRestored] for what replaying
 		// them into a new generation does.
@@ -317,7 +332,8 @@ func (in ReanchorInputs) Case() (ReanchorCase, uint64, error) {
 	}
 	return "", 0, fmt.Errorf("%w: %s is the stream this node's rows are keyed "+
 		"to (created %s) and it ends at %d, at or past this node's checkpoint "+
-		"at %d — it still holds every record the rows are missing, so there is "+
+		"at %d, on the record the checkpoint names — it still holds every record "+
+		"the rows are missing, so there is "+
 		"nothing to re-anchor: the applier follows it, a node below its first "+
 		"surviving sequence adopts a peer's snapshot instead, and a node a peer "+
 		"re-anchored past adopts from that peer — or, if the peer is gone for "+
@@ -497,10 +513,11 @@ type ReanchorConsumer interface {
 }
 
 // ReanchorRunner is the targeted domain's applier, as the transition needs it:
-// re-keyed to the stream it adopted once the checkpoint has committed.
-// [Runner.Reanchored] is the implementation.
+// re-keyed to the stream it adopted, and to the record its new checkpoint
+// names, once the checkpoint has committed. [Runner.Reanchored] is the
+// implementation.
 type ReanchorRunner interface {
-	Reanchored(at Position, created time.Time) error
+	Reanchored(at Position, created, storedAt time.Time) error
 }
 
 // ReanchorDeps is everything the transition needs that it does not own.
@@ -696,16 +713,37 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 			plan.Cursor, err)
 	}
 
+	// THE RECORD THE NEW CHECKPOINT NAMES — the log's own at its sequence,
+	// which is what the applier verifies the log against from here on
+	// ([Runner.VerifyCheckpoint]). None where the log holds none there: one
+	// below a rebuilt stream's first record, or sequence 0. Read before the
+	// transaction because a broker read inside it would hold the writer for
+	// a round trip; the sequence is below the generation record, so nothing
+	// the log does meanwhile moves it.
+	var names time.Time
+	if plan.Cursor > 0 {
+		_, _, storedAt, ok, readErr := d.Stream.At(ctx, plan.Cursor)
+		if readErr != nil {
+			return ReanchorPlan{}, fmt.Errorf("statelog: read %s's record at sequence "+
+				"%d, which the new checkpoint names — nothing is committed, so "+
+				"re-running the reanchor repeats it: %w", d.Domain.Name(),
+				plan.Cursor, readErr)
+		}
+		if ok {
+			names = storedAt
+		}
+	}
+
 	// 6. THE ONE CHECKPOINT, alone in its transaction.
 	if err := d.DB.Tx(ctx, func(tx *sql.Tx) error {
-		return t.reanchorCursor(ctx, tx, at, in.StreamCreatedAt, plan.From, d.Now())
+		return t.reanchorCursor(ctx, tx, at, in.StreamCreatedAt, names, plan.From, d.Now())
 	}); err != nil {
 		return ReanchorPlan{}, fmt.Errorf("statelog: move %s's checkpoint into "+
 			"generation %d: %w", d.Domain.Name(), gen, err)
 	}
 
 	// 7. THE APPLIER, re-keyed to what just committed.
-	if err := d.Runner.Reanchored(at, in.StreamCreatedAt); err != nil {
+	if err := d.Runner.Reanchored(at, in.StreamCreatedAt, names); err != nil {
 		return ReanchorPlan{}, fmt.Errorf("statelog: re-key %s's applier to %s: %w",
 			d.Domain.Name(), at, err)
 	}

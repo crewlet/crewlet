@@ -178,19 +178,23 @@ const (
 	ReasonSkew Reason = "skew"
 
 	// ReasonWrongStream — the log under this domain's name is not the
-	// one this node's rows were derived from. Two findings, each with its
-	// own cause a caller can recognise without switching on the reason:
-	// the log was deleted and rebuilt, so it counts from 1 again at the
-	// same generation ([ErrStreamRecreated]); or this node's checkpoint is
-	// past the log's end ([ErrAheadOfLog]) — the broker was restored from a
-	// copy older than this node's rows, which keeps the stream's creation
-	// instant, so only the end shows it. Either way every expectation this
-	// node could form is a sequence from a history the broker does not
-	// hold, and whatever it appends lands where its own applier will never
-	// apply it. Waiting does not clear it — a restored log written past
-	// the checkpoint stops LOOKING wrong without becoming this node's
-	// history — and the remedy is an operator's re-anchor. The same word
-	// as the read refusal for the same facts, so a surface that meets both
+	// one this node's rows were derived from. Each finding has its own
+	// cause a caller can recognise without switching on the reason: the
+	// log was deleted and rebuilt, so it counts from 1 again at the same
+	// generation ([ErrStreamRecreated]); this node's checkpoint is past the
+	// log's end ([ErrAheadOfLog]) — the broker was restored from a copy
+	// older than this node's rows, which keeps the stream's creation
+	// instant, so only the end shows it; the log holds, at that checkpoint,
+	// another record than the one this node consumed there
+	// ([ErrLogDiverged]) — the same restore, written past this node's rows,
+	// where the end shows nothing and the record does; or a peer
+	// re-anchored the log past this node's generation
+	// ([ErrGenerationPassed]). Every expectation this node could form is a
+	// sequence from a history the broker does not hold, and whatever it
+	// appends lands where its own applier will never apply it. Waiting
+	// does not clear it, and the remedy is an operator's re-anchor — or,
+	// for a passed generation, this node's own adoption. The same word as
+	// the read refusal for the same facts, so a surface that meets both
 	// reads one.
 	ReasonWrongStream Reason = "wrong_stream"
 )

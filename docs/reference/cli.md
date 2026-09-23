@@ -708,7 +708,7 @@ Its own verb rather than a block of `status`, because the repository is per
 node: *which of my machines can donate, and how old is what they hold* is a
 disk question. A node with no artefact still gets a row, carrying the reason —
 `sole_node`, `lagging`, `unhydrated`, `deferred`, `insufficient_space`,
-`ahead_of_log` or `failed` — because the absence is the answer to "why did the join fail". A
+`ahead_of_log`, `log_diverged` or `failed` — because the absence is the answer to "why did the join fail". A
 node that holds a current artefact carries no reason at all: `recent` is the
 skip a healthy node takes, so it is never published as one.
 

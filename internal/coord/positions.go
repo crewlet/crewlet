@@ -66,6 +66,17 @@ type DomainPosition struct {
 	// applied. Zero on a healthy node, and the number an operator reads
 	// beside AppliedThrough to tell a lagging node from a stalled one.
 	Deferred int `json:"deferred,omitempty"`
+
+	// LogDiverged reports that the log holds, at this node's checkpoint,
+	// another record than the one it consumed there: a broker restored from
+	// an older copy and written past this node's rows, so they hold history
+	// the log lost and the log holds history they never saw.
+	//
+	// PUBLISHED because it is the one such node the fleet cannot otherwise
+	// see: its position is at or below the log's end, where a lagging node's
+	// is, so nothing else on this row says its rows and the log are two
+	// histories.
+	LogDiverged bool `json:"log_diverged,omitempty"`
 }
 
 // NodePositions is one node's row in the register: every domain it runs, and

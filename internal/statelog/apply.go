@@ -70,6 +70,22 @@ type Fetcher interface {
 	Pending(ctx context.Context) (uint64, error)
 }
 
+// CheckpointLog is the log as the applier reads it BY POSITION rather than by
+// following it: its two ends, and the record at one sequence.
+//
+// DECLARED HERE because the applier is the caller, and it needs exactly one
+// answer from it — whether the record the log holds at this node's checkpoint
+// is the one the checkpoint names ([Runner.VerifyCheckpoint]). A consumer
+// cannot answer that: it delivers what follows a position, never what is at
+// it.
+type CheckpointLog interface {
+	LogReader
+
+	// Bounds is the log's first surviving sequence and its last, in one
+	// answer.
+	Bounds(ctx context.Context) (first, last uint64, err error)
+}
+
 // ErrStopped reports an applier that halted rather than fell behind. The two
 // need different answers: a behind node catches up, and a stopped one needs a
 // different build.
@@ -110,6 +126,13 @@ type RunnerDeps struct {
 	Domain  Domain
 	Applier Applier
 	Fetch   Fetcher
+
+	// Log is the same stream read by position, which is how the applier
+	// establishes that the log still holds, at its checkpoint's sequence,
+	// the record it consumed there before it applies anything past it
+	// ([Runner.VerifyCheckpoint]). REQUIRED: a runner that cannot ask
+	// applies a restored log's new history on top of rows it is not.
+	Log CheckpointLog
 
 	// DB is the REPLICATED estate — the file this domain's rows, its
 	// operation ledger, its deferred records, its anchors and its
@@ -176,6 +199,7 @@ type Runner struct {
 	domain  Domain
 	applier Applier
 	fetch   Fetcher
+	log     CheckpointLog
 	db      Estate
 	tables  tables
 	spec    StreamSpec
@@ -202,6 +226,26 @@ type Runner struct {
 	// moved — and a loop resumed after a reanchor then placed the adopted
 	// stream's records in the generation it had just left.
 	cursor Position
+	// checkpointAt is the broker's instant for the record at the cursor's
+	// sequence — the one this node consumed there — and zero where that is
+	// unknown ([cursorRow.storedAt]). UNDER mu AND MOVED WITH cursor, never
+	// apart from it: [Runner.VerifyCheckpoint] reads the pair while the loop
+	// runs, and a sequence paired with another record's instant is a
+	// divergence that never happened.
+	checkpointAt time.Time
+	// rows counts the times the rows under the checkpoint may have been
+	// replaced or re-keyed — every load of the row, every reanchor, every
+	// join — so a verification that read the checkpoint before one of them
+	// and the log after it can tell that its finding is about a copy this
+	// runner no longer holds ([Runner.VerifyCheckpoint]).
+	rows uint64
+	// verify is a verification of the checkpoint's record the loop owes
+	// before it applies anything past it: set when a run starts, when a
+	// fetch fails, and when a reading finds the log ending below the
+	// checkpoint — the three moments after which what follows the
+	// checkpoint on the log may be another history — and cleared by a
+	// verification that settles it ([Runner.verifyBeforeApplying]).
+	verify bool
 	// void is the generations the reanchor that placed the checkpoint
 	// ABANDONED, read with it by [Runner.loadCursor]: a record written in
 	// one is consumed and applied into no row — see [ReanchorPlan.From].
@@ -299,11 +343,28 @@ type Runner struct {
 	// holds. A checkpoint this runner no longer stands at — a re-run over an
 	// adopted snapshot — drops it in [Runner.loadCursor] instead.
 	//
-	// What that costs is stated rather than hidden: once a restored log has
-	// been written past this node's checkpoint, nothing observable separates
-	// it from the history this node applied, the verdict clears, and so does
-	// the read side's — see [Runner.ObserveEnd].
+	// What clearing costs is nothing, because it is not the last word: once
+	// a restored log has been written past this node's checkpoint the end
+	// is an ordinary end again, and what separates the log from this node's
+	// history is the RECORD at the checkpoint — which the loop verifies
+	// before it applies past it, and which is [Runner.diverged] when it is
+	// another.
 	ahead *aheadOfLog
+
+	// diverged is the verdict that the log's record at this applier's
+	// checkpoint is not the one it consumed there ([ErrLogDiverged]) — a
+	// broker restored from an older copy and since written past these rows.
+	// Nil until a verification finds it ([Runner.VerifyCheckpoint]).
+	//
+	// STICKY, unlike ahead, because what establishes it cannot be a stale
+	// view: a member that has not caught up answers that it holds no record
+	// at a sequence, never with a different one. Nothing on the log brings
+	// these rows level, so the loop applies nothing past the checkpoint
+	// while it holds. A reanchor re-keys the runner to a checkpoint that
+	// names the log's own record ([Runner.Reanchored]), an adoption replaces
+	// the rows ([Runner.Rejoined]), and a re-run over a checkpoint this
+	// runner no longer stands at drops it ([Runner.loadCursor]).
+	diverged *divergedLog
 
 	// drain is this loop's measured records per second, smoothed.
 	//
@@ -356,6 +417,11 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		return nil, fmt.Errorf("statelog: applier has no state machine")
 	case d.Fetch == nil:
 		return nil, fmt.Errorf("statelog: applier has no fetcher")
+	case d.Log == nil:
+		return nil, fmt.Errorf("statelog: applier has no reader of its log by " +
+			"position, so it cannot establish that the record at its checkpoint " +
+			"is the one it consumed there — and without that a restored log " +
+			"written past its rows is applied on top of them")
 	case d.DB == nil:
 		return nil, fmt.Errorf("statelog: applier has no database")
 	}
@@ -376,6 +442,7 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		domain:  d.Domain,
 		applier: d.Applier,
 		fetch:   d.Fetch,
+		log:     d.Log,
 		db:      d.DB,
 		tables:  t,
 		spec:    spec,
@@ -466,7 +533,13 @@ func (r *Runner) KeyedTo() time.Time {
 // before the reanchor names the stream this re-keys to, which reads as the
 // same stream; a reading of the end paired with the old checkpoint is refused
 // by [Runner.ObserveEnd] because its generation is behind this one.
-func (r *Runner) Reanchored(at Position, created time.Time) error {
+//
+// storedAt is the broker's instant for the log's record at the new checkpoint,
+// zero where the log holds none there — the record the checkpoint now names,
+// and so what a diverged log is judged against from here on. A divergence
+// verdict is cleared with the others: it was about the record the OLD
+// checkpoint named.
+func (r *Runner) Reanchored(at Position, created, storedAt time.Time) error {
 	if at.Stream != r.spec.Name {
 		return fmt.Errorf("%w: a reanchor of %s named a checkpoint on %s",
 			ErrWrongStream, r.spec.Name, at.Stream)
@@ -483,17 +556,18 @@ func (r *Runner) Reanchored(at Position, created time.Time) error {
 			"generation it has not been in", r.spec.Name, at.Generation, r.cursor)
 	}
 	r.created = created
-	r.cursor = at
-	r.foreign, r.ahead = nil, nil
+	r.cursor, r.checkpointAt = at, storedAt
+	r.rows++
+	r.foreign, r.ahead, r.diverged = nil, nil, nil
 	if r.passed != nil && at.Generation >= r.passed.fleet {
 		r.passed = nil
 	}
-	// AND THE STOP THE RECREATION CAUSED, because the reanchor is what
-	// answers it — left in place until the loop's next run cleared it, the
-	// health would go on reporting a stopped applier for the moment in
-	// between. A stop for any other reason is a verdict about this build,
-	// which a reanchor does not change, and it stays.
-	if errors.Is(r.stopped, ErrStreamRecreated) {
+	// AND THE STOP THE RECREATION OR THE DIVERGENCE CAUSED, because the
+	// reanchor is what answers either — left in place until the loop's next
+	// run cleared it, the health would go on reporting a stopped applier for
+	// the moment in between. A stop for any other reason is a verdict about
+	// this build, which a reanchor does not change, and it stays.
+	if errors.Is(r.stopped, ErrStreamRecreated) || errors.Is(r.stopped, ErrLogDiverged) {
 		r.stopped = nil
 	}
 	return nil
@@ -580,17 +654,18 @@ func (r *Runner) RecreationStale(live time.Time) bool {
 // two reads, which on a busy company is every few milliseconds. Paired the
 // wrong way round, a healthy node refuses its own writes.
 //
-// # What it cannot see, stated where it is decided
+// # What it cannot see, and what sees it instead
 //
 // A broker restored from an older copy is caught here only while its log ends
 // below this node's checkpoint. Once something writes it past that — a peer
 // whose own checkpoint was not ahead — its sequences are ordinary sequences
-// again, the reading clears the verdict, and this applier resumes from a
-// checkpoint in a history the log does not hold. [Runner.StreamIdentity]'s
-// recreation half does not have that gap because a creation instant never
-// comes back; this half has nothing else to read, and a verdict that could
-// not clear would turn one stale member's answer into a permanent outage.
-// reached is what makes the transition visible rather than silent.
+// again and the reading clears the verdict: a verdict that could not clear
+// would turn one stale member's answer into a permanent outage, and an end is
+// all this has to read. So the reading that establishes the verdict also
+// leaves the loop OWING A VERIFICATION of the record at the checkpoint, which
+// it settles before it applies anything past it ([Runner.verifyBeforeApplying]):
+// the same record there is the stale member it looked like, and another is
+// [ErrLogDiverged], which does not clear.
 func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -606,6 +681,9 @@ func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool
 	if pastEnd(at.Seq, last) {
 		established = r.ahead == nil
 		r.ahead = &aheadOfLog{at: at, last: last}
+		// WHATEVER FOLLOWS THE CHECKPOINT NOW may be another history, and
+		// the loop must not apply it before it has looked.
+		r.verify = true
 		return established, false
 	}
 	if r.ahead == nil {
@@ -639,6 +717,10 @@ func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool
 //     applier's generation ([Runner.ObserveFleetGeneration], or a record
 //     written in a generation this applier never entered), so the log now
 //     continues from that peer's rows. Until an adoption.
+//   - wrapping [ErrLogDiverged]: the log's record at this applier's checkpoint
+//     is not the one it consumed there ([Runner.VerifyCheckpoint]) — a broker
+//     restored from an older copy and since written past these rows. Until a
+//     reanchor or an adoption.
 //   - wrapping [ErrAheadOfLog]: the last reading of the log's end found it below
 //     this applier's checkpoint ([Runner.ObserveEnd]) — a stream rebuilt and
 //     not yet re-read, or a broker restored from an older copy, which keeps its
@@ -654,17 +736,237 @@ func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool
 // node to apply.
 func (r *Runner) StreamIdentity() error {
 	r.mu.Lock()
-	foreign, passed, ahead := r.foreign, r.passed, r.ahead
+	foreign, passed, diverged, ahead := r.foreign, r.passed, r.diverged, r.ahead
 	r.mu.Unlock()
 	switch {
 	case foreign != nil:
 		return foreign.err(r.domain.Name(), r.spec.Name)
 	case passed != nil:
 		return passed.err(r.domain.Name(), r.spec.Name)
+	case diverged != nil:
+		// BEFORE THE END: a divergence is definitive where a checkpoint past
+		// the end may be one member's stale answer, and both can hold at
+		// once — a log written past this node's rows and then read from a
+		// member behind it.
+		return diverged.err(r.spec.Name)
 	case ahead != nil:
 		return ahead.err(r.spec.Name)
 	}
 	return nil
+}
+
+// Diverged reports whether this applier holds the verdict that the log diverged
+// from its rows ([ErrLogDiverged]), whatever else [Runner.StreamIdentity]
+// would answer first.
+func (r *Runner) Diverged() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.diverged != nil
+}
+
+// checkpointCheck is what one comparison of the checkpoint's record with the
+// log concluded.
+type checkpointCheck int
+
+const (
+	// checkpointSettled: the log holds the record the checkpoint names — or
+	// nothing can be compared, because the checkpoint names no record (a
+	// row older than the column, sequence 0), the record is gone below the
+	// log's first sequence, or a compacted log superseded it. None of those
+	// leaves a verification that could still find anything.
+	checkpointSettled checkpointCheck = iota
+
+	// checkpointUnreached: the log ends below the checkpoint, so there is no
+	// record at it to compare yet — the state [Runner.ObserveEnd] refuses
+	// on, and one the loop has nothing past the checkpoint to apply in.
+	checkpointUnreached
+
+	// checkpointDiverged: the log holds ANOTHER record at the checkpoint's
+	// sequence — [ErrLogDiverged].
+	checkpointDiverged
+)
+
+// VerifyCheckpoint compares the record the log holds at this applier's
+// checkpoint with the one the checkpoint names, and answers true the one time
+// that establishes that the log diverged from these rows ([ErrLogDiverged]).
+//
+// # Why the record, and why it settles what the end could not
+//
+// On one stream a sequence names one record for ever: the broker never
+// rewrites one in place, and a member that has not caught up answers that it
+// holds none rather than holding another. So the record at the checkpoint's
+// sequence being the one this node consumed there is exactly the statement that
+// the log is the history these rows came from up to that point — and a
+// different one is the statement that it is not, which a broker restored from
+// an older copy and then written past these rows produces and nothing else
+// does. Two broker instants compared for EQUALITY: no clock is ordered against
+// another, which is what every other reading of "is this the same history"
+// available here would have needed.
+//
+// # Who asks
+//
+// The loop, before it applies anything past the checkpoint whenever what
+// follows it may be another history ([Runner.verifyBeforeApplying]) — at every
+// start, after a failed fetch, and after a reading found the log ending below
+// it. And the engine's position heartbeat, every interval, which is what
+// catches a broker restored under a running node between two of those moments
+// and what a node whose loop has stopped for another reason still answers.
+func (r *Runner) VerifyCheckpoint(ctx context.Context) (bool, error) {
+	_, established, err := r.checkCheckpoint(ctx)
+	return established, err
+}
+
+// checkCheckpoint is [Runner.VerifyCheckpoint], reporting which of the three
+// outcomes it reached.
+func (r *Runner) checkCheckpoint(ctx context.Context) (checkpointCheck, bool, error) {
+	// THE PAIR, under one lock: a sequence and the instant of the record
+	// consumed there, read together or not at all.
+	r.mu.Lock()
+	at, consumed, rows := r.cursor, r.checkpointAt, r.rows
+	r.mu.Unlock()
+	check, held, err := compareCheckpoint(ctx, r.log, at, consumed)
+	if err != nil || check != checkpointDiverged {
+		return check, false, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.rows != rows || at.Generation < r.cursor.Generation {
+		// THE ROWS WERE REPLACED OR RE-KEYED BETWEEN THE READS — a run
+		// that loaded another row, a reanchor, a join — so this is a
+		// finding about a copy this runner no longer holds. The next
+		// verification reads the pair it does hold.
+		return checkpointSettled, false, nil
+	}
+	established := r.diverged == nil
+	if established {
+		r.diverged = &divergedLog{at: at, consumed: consumed, held: held}
+	}
+	return checkpointDiverged, established, nil
+}
+
+// ObserveDiverged takes a finding, made before this runner's loop has loaded
+// its checkpoint, that the log holds another record at checkpoint at than the
+// one it names — consumed is the instant the checkpoint names, held the one the
+// log's record carries — and answers true the one time it establishes the
+// verdict.
+//
+// THE BOOT'S, for the reason [Runner.ObserveEnd] is handed the end there: a
+// broker restored from an older copy is met at a boot, and until the loop has
+// loaded the row nothing in this runner names the record the checkpoint does,
+// so a write arriving first would find nothing refusing it. The loop's own
+// load keeps the verdict for exactly the row it was reached about
+// ([Runner.loadCursor]).
+func (r *Runner) ObserveDiverged(at Position, consumed, held time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.diverged != nil || at.Generation < r.cursor.Generation {
+		return false
+	}
+	r.diverged = &divergedLog{at: at, consumed: consumed, held: held}
+	return true
+}
+
+// CheckpointDiverged reports whether log holds, at checkpoint at, ANOTHER record
+// than the one the checkpoint names by consumed — and the instant of the one it
+// does hold there — for the readers of a checkpoint that are not its runner:
+// the boot, before the loop has loaded the row, and a reanchor deciding its
+// case from the row itself.
+//
+// FALSE WHENEVER NOTHING CAN BE COMPARED — no record named, the log ending
+// below the checkpoint, the record gone below the log's first sequence or
+// superseded on a compacted log — because each of those has its own answer
+// elsewhere and none of them is a second history.
+func CheckpointDiverged(ctx context.Context, log CheckpointLog, at Position,
+	consumed time.Time) (time.Time, bool, error) {
+
+	check, held, err := compareCheckpoint(ctx, log, at, consumed)
+	return held, check == checkpointDiverged, err
+}
+
+// compareCheckpoint is the one comparison of a checkpoint's record with the
+// log's record at the same sequence — see [Runner.VerifyCheckpoint].
+func compareCheckpoint(ctx context.Context, log CheckpointLog, at Position,
+	consumed time.Time) (checkpointCheck, time.Time, error) {
+
+	if at.Seq == 0 || consumed.IsZero() {
+		return checkpointSettled, time.Time{}, nil
+	}
+	first, last, err := log.Bounds(ctx)
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("statelog: read %s's ends to verify the "+
+			"record at the checkpoint %s: %w", at.Stream, at, err)
+	}
+	switch {
+	case pastEnd(at.Seq, last):
+		return checkpointUnreached, time.Time{}, nil
+	case at.Seq < first:
+		return checkpointSettled, time.Time{}, nil
+	}
+	_, _, held, ok, err := log.At(ctx, at.Seq)
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("statelog: read %s's record at the "+
+			"checkpoint %s to verify it: %w", at.Stream, at, err)
+	}
+	if !ok || sameRecord(held, consumed) {
+		return checkpointSettled, held, nil
+	}
+	return checkpointDiverged, held, nil
+}
+
+// verifyBeforeApplying settles a verification the loop owes before it applies
+// run, which holds a record past the checkpoint; nil means the run may be
+// applied.
+//
+// OWED, NOT PERIODIC: the loop is the hottest path this package has, and a
+// broker round trip per batch would be spent proving, almost always, that
+// nothing happened. What makes the next record past the checkpoint possibly
+// another history is one of three moments — a run starting (a boot is when a
+// node meets a restored broker), a fetch failing (a broker restored under a
+// running node takes its consumer with it), or a reading finding the log
+// ending below the checkpoint — and each leaves [Runner.verify] set, so the
+// loop asks exactly once after each, before the first record it would apply.
+//
+// A log that does not reach the checkpoint although the run holds a record
+// past it is two readings from members that disagree: the verification is left
+// owed and the run retried, never applied on the guess. A divergence STOPS the
+// loop — nothing past the checkpoint of rows the log diverged from may be
+// applied — and so does one the heartbeat established while this loop ran.
+func (r *Runner) verifyBeforeApplying(ctx context.Context, run []Record) error {
+	r.mu.Lock()
+	owed, cursor, diverged := r.verify, r.cursor, r.diverged
+	r.mu.Unlock()
+	if diverged == nil && (!owed || topRecord(run).Position.Packed() <= cursor.Packed()) {
+		return nil
+	}
+	check := checkpointDiverged
+	if diverged == nil {
+		var err error
+		if check, _, err = r.checkCheckpoint(ctx); err != nil {
+			return err
+		}
+	}
+	switch check {
+	case checkpointSettled:
+		r.mu.Lock()
+		r.verify = false
+		r.mu.Unlock()
+		return nil
+	case checkpointUnreached:
+		return fmt.Errorf("statelog: %s holds records past this node's checkpoint "+
+			"%s and its ends say it does not reach it — the log is read again "+
+			"before anything past the checkpoint is applied", r.spec.Name, cursor)
+	}
+	r.mu.Lock()
+	verdict := r.diverged
+	r.mu.Unlock()
+	if verdict == nil {
+		// RE-KEYED UNDER THE READ: the finding was about rows this runner
+		// no longer holds, and the next attempt verifies the ones it does.
+		return fmt.Errorf("statelog: %s's checkpoint moved while its record was "+
+			"verified — verified again before anything past it is applied",
+			r.spec.Name)
+	}
+	return fmt.Errorf("%w: %w", ErrStopped, verdict.err(r.spec.Name))
 }
 
 // ObserveFleetGeneration takes the generation the FLEET is on for this domain —
@@ -762,7 +1064,9 @@ func (r *Runner) Rejoined(at Position, keyed, live time.Time) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	moved := at != r.cursor
 	r.cursor = at
+	r.rows++
 	if IdentityOf(keyed, live, !keyed.IsZero()) == StreamRecreated {
 		// THE ROWS ARE STILL ANOTHER STREAM'S: the verdict holds, and is
 		// established here if nothing had yet.
@@ -782,8 +1086,25 @@ func (r *Runner) Rejoined(at Position, keyed, live time.Time) error {
 	if r.ahead != nil && r.ahead.at != at {
 		r.ahead = nil
 	}
+	// AND WHICH RECORD A MOVED CHECKPOINT NAMES is the row's to say, which
+	// the loop reads when it starts again: until then it is unknown, and a
+	// verification of the new position against the record the OLD
+	// checkpoint named would report a divergence between two files. A
+	// divergence verdict about a checkpoint this runner no longer stands at
+	// goes with it. One at the SAME position stays — a join that replaced
+	// nothing leaves rows the log has diverged from, and clearing it here
+	// would let a write through before the loop had looked again — and the
+	// loop re-derives it from the row it loads, by the record the row names
+	// ([Runner.loadCursor]).
+	if moved {
+		r.checkpointAt = time.Time{}
+		if r.diverged != nil && r.diverged.at != at {
+			r.diverged = nil
+		}
+	}
 	if (r.foreign == nil && errors.Is(r.stopped, ErrStreamRecreated)) ||
-		(r.passed == nil && errors.Is(r.stopped, ErrGenerationPassed)) {
+		(r.passed == nil && errors.Is(r.stopped, ErrGenerationPassed)) ||
+		(r.diverged == nil && errors.Is(r.stopped, ErrLogDiverged)) {
 		r.stopped = nil
 	}
 	return nil
@@ -1030,6 +1351,13 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		run, err := r.nextRun(ctx, tail, &buffer)
 		if err != nil {
+			// A FETCH THAT FAILED may be a broker restored under this
+			// running node, which takes the consumer with it: whatever
+			// is delivered past the checkpoint after it is verified
+			// first ([Runner.verifyBeforeApplying]).
+			r.mu.Lock()
+			r.verify = true
+			r.mu.Unlock()
 			if stopped := r.faulted(ctx, err); stopped != nil {
 				return stopped
 			}
@@ -1045,6 +1373,18 @@ func (r *Runner) Run(ctx context.Context) error {
 			r.markDrained()
 			r.recovered(ctx)
 			pause = 0
+			continue
+		}
+		if verifyErr := r.verifyBeforeApplying(ctx, run); verifyErr != nil {
+			if errors.Is(verifyErr, ErrStopped) {
+				verifyErr = r.stop(ctx, verifyErr)
+			}
+			if stopped := r.faulted(ctx, verifyErr); stopped != nil {
+				return stopped
+			}
+			// THE SAME RUN, for the reason a failed commit keeps it.
+			tail = run
+			pause = r.backOff(ctx, pause)
 			continue
 		}
 		consumed, err := r.applyRun(ctx, w, run)
@@ -1091,6 +1431,31 @@ func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 			return nil, r.stop(ctx, err)
 		}
 		return nil, err
+	}
+	// AND THE RECORD THE CHECKPOINT NAMES, before this run can apply
+	// anything past it — at once rather than when the first such record
+	// arrives, because a log written EXACTLY to this checkpoint delivers
+	// nothing past it and would leave a diverged node answering reads and
+	// writes until the heartbeat looked. A log that does not reach the
+	// checkpoint leaves the verification owed ([Runner.verifyBeforeApplying]).
+	switch check, _, err := r.checkCheckpoint(ctx); {
+	case err != nil:
+		_ = w.Close()
+		return nil, err
+	case check == checkpointSettled:
+		r.mu.Lock()
+		r.verify = false
+		r.mu.Unlock()
+	case check == checkpointDiverged:
+		_ = w.Close()
+		r.mu.Lock()
+		verdict := r.diverged
+		r.mu.Unlock()
+		if verdict == nil {
+			return nil, fmt.Errorf("statelog: %s's checkpoint moved while its "+
+				"record was verified at start — verified again", r.spec.Name)
+		}
+		return nil, r.stop(ctx, fmt.Errorf("%w: %w", ErrStopped, verdict.err(r.spec.Name)))
 	}
 	// WHAT AN EARLIER BUILD RETAINED, THIS ONE MAY NOW READ. A retained
 	// record is applied by the build that can decode it, and the only
@@ -1218,8 +1583,17 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		// over a peer's snapshot.
 		r.void = row.void
 		if found {
-			r.cursor = at
+			// THE CHECKPOINT AND THE RECORD IT NAMES, together — see
+			// [Runner.checkpointAt].
+			r.cursor, r.checkpointAt = at, row.storedAt
 		}
+		r.rows++
+		// A RUN THAT STARTS OWES A VERIFICATION of that record before it
+		// applies past it: a boot is exactly when a node meets a broker
+		// restored from an older copy, and one already written past this
+		// checkpoint looks, by its end, like the history these rows came
+		// from ([Runner.verifyBeforeApplying]).
+		r.verify = true
 		// A VERDICT ABOUT A CHECKPOINT THIS RUNNER NO LONGER STANDS AT is
 		// dropped. The runner is re-run over an adopted snapshot, whose
 		// checkpoint is the donor's — one it applied from the live log —
@@ -1312,6 +1686,19 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		if r.passed != nil {
 			return fmt.Errorf("%w: %w", ErrStopped,
 				r.passed.err(r.domain.Name(), r.spec.Name))
+		}
+		// AND A LOG THAT DIVERGED FROM THESE ROWS, judged by the record the
+		// row names: the same checkpoint naming the same record is the same
+		// rows, and a re-run from them would apply the other history past
+		// it. Anything else is a file an adoption replaced — a donor's
+		// checkpoint names the log's own record — and the verdict was about
+		// the one before it.
+		if r.diverged != nil && found &&
+			(r.diverged.at != at || !sameRecord(row.storedAt, r.diverged.consumed)) {
+			r.diverged = nil
+		}
+		if r.diverged != nil {
+			return fmt.Errorf("%w: %w", ErrStopped, r.diverged.err(r.spec.Name))
 		}
 		return nil
 	})
@@ -1630,6 +2017,7 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([]Record, error) {
 	var consumed []Record
 	var committedAt Position
+	var committedRecord time.Time
 	var tally results
 	var rows int
 	var boundBy string
@@ -1667,6 +2055,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// across attempts counts the abandoned one too — and the
 		// metrics would report work that was rolled back.
 		consumed, committedAt, tally, rows, boundBy = consumed[:0], Position{}, results{}, 0, ""
+		committedRecord = time.Time{}
 		txStart := r.now()
 
 		hasDeferred, err := r.anyDeferred(ctx, tx)
@@ -1799,7 +2188,15 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// because a run made ENTIRELY of redeliveries below the
 		// checkpoint has to be acknowledged without moving it at all.
 		committedAt = highest(consumed, r.Committed())
-		return r.tables.setCursor(ctx, tx, committedAt, r.StreamCreatedAt(), r.now())
+		// AND THE RECORD IT NAMES: the one consumed at that position, or
+		// — for a run of nothing but redeliveries — the one the checkpoint
+		// already named ([Runner.checkpointAt]).
+		committedRecord = r.checkpointRecord()
+		if top := topRecord(consumed); top.Position == committedAt {
+			committedRecord = top.StoredAt
+		}
+		return r.tables.setCursor(ctx, tx, committedAt, r.StreamCreatedAt(),
+			committedRecord, r.now())
 	})
 	if err != nil {
 		if errors.Is(err, ErrStopped) {
@@ -1825,7 +2222,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 			return nil, err
 		}
 	}
-	r.advance(at)
+	r.advance(at, committedRecord)
 	r.waiters.release(at)
 	r.applier.Committed(ctx)
 	r.ack(ctx, consumed)
@@ -1994,13 +2391,25 @@ func (r *Runner) refreshDeferred(ctx context.Context) error {
 }
 
 // advance moves the in-memory checkpoint the publisher's fast path reads.
-func (r *Runner) advance(at Position) {
+func (r *Runner) advance(at Position, record time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.cursor.Packed() < at.Packed() {
-		r.cursor = at
+		// THE PAIR MOVES TOGETHER — see [Runner.checkpointAt].
+		r.cursor, r.checkpointAt = at, record
+	} else if r.cursor == at && r.checkpointAt.IsZero() {
+		// A REDELIVERY OF THE CHECKPOINT'S OWN RECORD names it where the
+		// row did not: a checkpoint committed before the column existed.
+		r.checkpointAt = record
 	}
 	r.appliedAt = r.now()
+}
+
+// checkpointRecord is the instant of the record the committed checkpoint names.
+func (r *Runner) checkpointRecord() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.checkpointAt
 }
 
 // stop halts the applier and records why.

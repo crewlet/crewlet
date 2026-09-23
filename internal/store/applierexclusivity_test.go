@@ -107,6 +107,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 		`db.Writer(ctx)`,
 		`db.Tx(ctx, fn)`,
 		`statelog.CursorFor(ctx, s.db.Replicated(), name)`,
+		`statelog.CheckpointOf(ctx, s.db.Replicated(), name)`,
 	} {
 		if reachesReplicatedWrite(t, negative) {
 			t.Errorf("control: %q does not reach a write on the replicated "+
@@ -458,6 +459,9 @@ func allowanceFor(file string) (string, bool) {
 // next function of that name, whatever it wrote.
 var readOnlyOfReplicated = map[string]bool{
 	"CursorFor": true, // statelog.CursorFor reads a domain's checkpoint.
+	// statelog.CheckpointOf reads the same row whole, with the record the
+	// checkpoint names beside it.
+	"CheckpointOf": true,
 }
 
 // replicatedWriteAt reports whether one node reaches a write on the

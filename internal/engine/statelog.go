@@ -766,10 +766,11 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	// so it is the only durable statement of it — and resuming a consumer
 	// anywhere else is either a hole (at the head) or a million
 	// redeliveries (at the beginning).
-	at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), spec.Name)
+	checkpoint, _, err := statelog.CheckpointOf(ctx, s.db.Replicated(), spec.Name)
 	if err != nil {
 		return nil, err
 	}
+	at := checkpoint.At
 	// THE SEQUENCE'S CONTEXT, not the caller's: this is a replicated create
 	// like the stream above it, and the three domains share one ceiling so
 	// a wedged metadata group cannot spend a full per-create budget three
@@ -799,6 +800,10 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		// adoption row, which is deliberately not replicated), so the
 		// asymmetry here is real rather than an oversight.
 		DB: replicatedEstate{node: s.db}, Generation: at.Generation,
+		// THE SAME STREAM READ BY POSITION: how the applier establishes that
+		// the log still holds, at its checkpoint, the record it consumed
+		// there before it applies anything past it.
+		Log:             appendTo,
 		StreamCreatedAt: created, Epoch: epoch, Metrics: s.metrics,
 		// NO LOGGER, here or at any other statelog constructor: an absent
 		// one is the framework's own `component=statelog` logger. The
@@ -825,6 +830,19 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	// healthy log the row was committed under an end at least as high as the
 	// one read now, because the end only grows.
 	s.observeEnd(ctx, domain.Name(), runner, at, stats.LastSeq)
+	// AND WHETHER THE LOG STILL HOLDS, at that checkpoint, THE RECORD THE ROW
+	// NAMES — for the same reason and at the same moment. A restored broker
+	// that was written past this node's rows before it booted ends at or past
+	// the checkpoint, so the reading above finds nothing, and until the loop
+	// has loaded the row nothing in the runner names the record a write would
+	// have to be refused over. A log that cannot be read here leaves the
+	// question to the loop, which will not apply past the checkpoint before it
+	// has answered it.
+	if held, diverged, readErr := statelog.CheckpointDiverged(ctx, appendTo, at,
+		checkpoint.StoredAt); readErr == nil && diverged &&
+		runner.ObserveDiverged(at, checkpoint.StoredAt, held) {
+		s.logDiverged(ctx, domain.Name(), runner)
+	}
 
 	publisher, evicted, err := s.publisherFor(domain, appendTo, runner)
 	if err != nil {
@@ -1247,11 +1265,12 @@ func (s *stateLog) observeStream(ctx context.Context, domain string,
 //
 // BOTH, and the second is the one that would otherwise be silent. Past the end
 // is logged as the error it is. The end reaching the checkpoint again is either
-// nothing — a stale member's answer corrected by the next one — or the one
-// state this engine cannot see: a restored log written past this node's
-// checkpoint, which it now resumes from in a history the log does not hold.
-// Nothing observable separates the two, so the line says both and names the
-// remedy for the second.
+// nothing — a stale member's answer corrected by the next one — or a restored
+// log written past this node's checkpoint in another history. The END cannot
+// separate the two, and the line says so; the RECORD at the checkpoint can,
+// and the applier compares it before it applies anything past the checkpoint
+// ([statelog.Runner.VerifyCheckpoint]) — so the second is `statelog_log_diverged`
+// and a refusal that does not lift, never a node carrying on.
 func (s *stateLog) observeEnd(ctx context.Context, domain string,
 	runner *statelog.Runner, at statelog.Position, last uint64) {
 
@@ -1275,11 +1294,29 @@ func (s *stateLog) observeEnd(ctx context.Context, domain string,
 				"its writes are no longer refused on it. If the earlier reading "+
 				"came from a member that had not caught up, nothing was wrong. If "+
 				"the broker was restored from an older copy and has since been "+
-				"written past this checkpoint, this node's rows hold records the "+
-				"log does not and it is now applying a different history on top "+
-				"of them — re-anchor it with crewlet retention reanchor, or adopt "+
-				"a peer's snapshot")
+				"written past this checkpoint, the log holds another record at it: "+
+				"the applier compares that record with the one it consumed there "+
+				"before it applies anything past it, and a different one is "+
+				"statelog_log_diverged — a refusal that does not lift")
 	}
+}
+
+// logDiverged names the one transition a divergence has: established. Unlike a
+// reading of the end it is never cleared by a later reading — a member behind
+// the log answers that it holds no record, never with another one — so there is
+// no second line to write; a reanchor or an adoption is what ends it.
+func (s *stateLog) logDiverged(ctx context.Context, domain string, runner *statelog.Runner) {
+	log.ErrorContext(ctx, "statelog_log_diverged",
+		"node", s.nodeID, "domain", domain,
+		"error", runner.StreamIdentity().Error(),
+		"detail", "the log's record at this node's checkpoint is not the one it "+
+			"consumed there: the broker was restored from a copy older than these "+
+			"rows and has since been written past them, so the log continues a "+
+			"history they are not. This node applies nothing past its checkpoint, "+
+			"refuses every read and every write of the domain naming "+
+			"`wrong_stream`, and donates no snapshot of it; an operator re-anchors "+
+			"it (crewlet retention reanchor — the restored case) or replaces its "+
+			"rows with a peer's")
 }
 
 // Domain answers one running domain by name, or nil.
@@ -1468,6 +1505,10 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	// re-anchored this log past this node's rows, which is the one finding
 	// here a restored broker below this node's checkpoint cannot show.
 	health.GenerationPassed = errors.Is(identity, statelog.ErrGenerationPassed)
+	// AND ITS DIVERGED HALF — from the runner's own verdict rather than the
+	// first finding the identity names, so a node the log diverged from that
+	// a peer has also re-anchored past reports both.
+	health.LogDiverged = running.runner.Diverged()
 	lag := uint64(0)
 	if end > at.Seq {
 		lag = end - at.Seq
@@ -2401,9 +2442,10 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 			// which is the one state this count exists to surface.
 			row.Detail = "this node cannot read the domain's own position: " +
 				err.Error()
-		case health.StreamRecreated || health.GenerationPassed:
+		case health.StreamRecreated || health.GenerationPassed || health.LogDiverged:
 			// A REBUILT LOG FIRST — or a log a peer re-anchored past this
-			// node's generation — ahead of the stop it may also have
+			// node's generation, or one that diverged from its rows —
+			// ahead of the stop it may also have
 			// caused: the stop is a consequence (at boot it is this very
 			// finding; on a running node the consumer went with the old
 			// stream and its fetches fault), and this is the cause, with
@@ -3113,6 +3155,26 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			// what fence 0 refuses an ordinary write on, on a node whose
 			// broker came back from an older copy with its instant.
 			s.observeStream(ctx, name, running.runner, at, stats)
+			// AND WHETHER THE LOG STILL HOLDS, at this node's checkpoint,
+			// THE RECORD IT CONSUMED THERE. The loop asks before it applies
+			// past the checkpoint after every moment that could have
+			// changed it; this beat is what asks of a node whose loop has
+			// nothing to apply — a restored log written EXACTLY to its
+			// checkpoint — or has stopped for another reason, and of a
+			// broker restored under a running node between two of the
+			// loop's own moments. One direct read per domain per beat.
+			established, verifyErr := running.runner.VerifyCheckpoint(ctx)
+			if established {
+				s.logDiverged(ctx, name, running.runner)
+			}
+			if verifyErr != nil && ctx.Err() == nil {
+				log.WarnContext(ctx, "statelog_checkpoint_unverified",
+					"node", s.nodeID, "domain", name, "error", verifyErr.Error(),
+					"detail", "whether the log still holds the record at this "+
+						"node's checkpoint could not be read this beat; the "+
+						"applier asks again before it applies past it, and so "+
+						"does the next beat")
+			}
 			// AND A RECREATION VERDICT THE LIVE INSTANT CONTRADICTS: rows
 			// an adoption keyed to the stream the broker serves, under a
 			// runner whose re-key could not happen — see
@@ -3125,6 +3187,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			}
 		}
 		running.progress.observe(row.At, pos.AppliedThrough, behind, held)
+		// AND WHETHER THE LOG DIVERGED FROM THESE ROWS, for the peers: a
+		// node whose rows the log does not continue past its checkpoint is
+		// one whose history a write by any other node on this log would
+		// contradict — see [coord.DomainPosition.LogDiverged].
+		pos.LogDiverged = running.runner.Diverged()
 		row.Domains[name] = pos
 	}
 	if below {

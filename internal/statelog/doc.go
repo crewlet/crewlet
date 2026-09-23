@@ -310,8 +310,18 @@
 // ([ZeroFence]) — against the applier's LIVE checkpoint rather than C, because
 // where an append lands against where the applier stands is a property of the
 // node, and the applier only leads C — and the identity answers for it on
-// every other pattern ([Runner.ObserveEnd]). Its reanchor is the RESTORED case
-// ([ReanchorRestored]): the log is a prefix of the history the rows came from,
+// every other pattern ([Runner.ObserveEnd]). Once something writes that log
+// past the checkpoint — a node whose rows were not ahead of the copy — the end
+// is an ordinary end again and every sequence compares; what still breaks the
+// premise is the RECORD at the checkpoint, which on one stream never changes.
+// So a checkpoint names its record by the broker's instant for it, and the
+// applier verifies it before applying anything past the checkpoint whenever
+// what follows may be another history — at every start, after a failed fetch,
+// after a reading found the end below — and the heartbeat every interval
+// ([Runner.VerifyCheckpoint]): another record there is [ErrLogDiverged], which
+// refuses like the rest and, unlike an end, never lifts on a later reading.
+// Its reanchor is the RESTORED case
+// ([ReanchorRestored]): up to the copy the log is a prefix of the history the rows came from,
 // so the new generation's checkpoint goes at the log's END rather than one
 // below its first record, and replaying none of it is what keeps every object
 // from rolling back to the copy.

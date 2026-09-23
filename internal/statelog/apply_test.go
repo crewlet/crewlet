@@ -90,12 +90,22 @@ func (a *probeApplier) seen() []statelog.Position {
 }
 
 // probeFetch hands the loop whatever the test queued, and records what was
-// acknowledged.
+// acknowledged. It is the log read by POSITION as well ([statelog.CheckpointLog]):
+// every record ever offered stays readable at its sequence, the way a stream
+// keeps what a consumer has delivered.
 type probeFetch struct {
 	mu      sync.Mutex
 	queue   []statelog.Message
 	acked   map[uint64]int
 	fetches int
+
+	// log is every record offered, by sequence — a later offer at a
+	// sequence REPLACES the earlier one, which is what a broker restored
+	// from an older copy and written past a node's rows looks like from
+	// that node — and end, when set, the last sequence Bounds reports in
+	// place of the highest offered one.
+	log map[uint64]statelog.Message
+	end *uint64
 
 	// withhold is how many queued records the broker keeps back from
 	// every fetch while still counting them as pending — which is what a
@@ -125,19 +135,34 @@ func (f *probeFetch) afterFetch(n int, hook func()) {
 	f.after[n] = hook
 }
 
-func newProbeFetch() *probeFetch { return &probeFetch{acked: map[uint64]int{}} }
+func newProbeFetch() *probeFetch {
+	return &probeFetch{acked: map[uint64]int{}, log: map[uint64]statelog.Message{}}
+}
+
+// probeStoredAt is the broker instant the probe log stamps the record at seq
+// with.
+func probeStoredAt(seq uint64) time.Time {
+	return time.Unix(1_700_000_000, 0).UTC().Add(time.Duration(seq) * time.Second)
+}
 
 // offer queues one record at seq, encoded as the probe domain's envelope.
 func (f *probeFetch) offer(seq uint64, env statelog.Envelope) {
+	f.offerStored(seq, probeStoredAt(seq), env)
+}
+
+// offerStored is [probeFetch.offer] with the broker instant named: a record at
+// seq the broker stored at another moment than the one first offered there is
+// ANOTHER record at that sequence.
+func (f *probeFetch) offerStored(seq uint64, storedAt time.Time, env statelog.Envelope) {
 	body, err := json.Marshal(env)
 	if err != nil {
 		panic(err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.queue = append(f.queue, statelog.Message{
+	m := statelog.Message{
 		Seq:      seq,
-		StoredAt: time.Unix(1_700_000_000, 0).UTC().Add(time.Duration(seq) * time.Second),
+		StoredAt: storedAt,
 		Payload:  body,
 		Ack: func() error {
 			f.mu.Lock()
@@ -145,7 +170,55 @@ func (f *probeFetch) offer(seq uint64, env statelog.Envelope) {
 			f.acked[seq]++
 			return nil
 		},
-	})
+	}
+	f.queue = append(f.queue, m)
+	f.log[seq] = m
+}
+
+// rewrite replaces what the log holds at seq with another record, WITHOUT
+// delivering it — the log as a node finds it after a broker was restored from
+// an older copy and written past that node's rows.
+func (f *probeFetch) rewrite(seq uint64, storedAt time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.log[seq]
+	m.Seq, m.StoredAt = seq, storedAt
+	f.log[seq] = m
+}
+
+// endAt makes Bounds report last as the log's end, whatever was offered.
+func (f *probeFetch) endAt(last uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.end = &last
+}
+
+// Bounds is the lowest and highest sequence ever offered, or the end endAt set.
+func (f *probeFetch) Bounds(context.Context) (uint64, uint64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var first, last uint64
+	for seq := range f.log {
+		if first == 0 || seq < first {
+			first = seq
+		}
+		last = max(last, seq)
+	}
+	if f.end != nil {
+		last = *f.end
+	}
+	return first, last, nil
+}
+
+// At is the record the log holds at seq.
+func (f *probeFetch) At(_ context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, held := f.log[seq]
+	if !held {
+		return "", nil, time.Time{}, false, nil
+	}
+	return "probe", m.Payload, m.StoredAt, true, nil
 }
 
 // Fetch waits for the queue the way a real pull consumer waits for its
@@ -262,6 +335,7 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 		Domain:     domain,
 		Applier:    applier,
 		Fetch:      fetch,
+		Log:        fetch,
 		DB:         db.Replicated(),
 		Generation: 1,
 		Metrics:    recorder,
@@ -298,6 +372,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 		Domain:          domain,
 		Applier:         h.applier,
 		Fetch:           h.fetch,
+		Log:             h.fetch,
 		DB:              h.db.Replicated(),
 		Generation:      1,
 		StreamCreatedAt: created,
@@ -1859,14 +1934,15 @@ func TestACheckpointPastTheEndIsTheRunnersVerdictWhileTheEndStaysBelow(t *testin
 	}
 
 	// A CHECKPOINT THIS RUNNER NO LONGER STANDS AT drops the verdict: the
-	// row is rewritten to a donor's position below the log's end, as an
-	// adoption leaves it, and the loop loads it.
+	// row is rewritten to a donor's position below the log's end, naming the
+	// log's own record there, as an adoption leaves it, and the loop loads it.
 	if established, _ := h.runner.ObserveEnd(h.runner.Committed(), 2); !established {
 		t.Fatal("the verdict was not re-established for the adoption case")
 	}
 	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
-			`UPDATE statelog_cursor SET seq = 1 WHERE stream = ?`, probeStream)
+			`UPDATE statelog_cursor SET seq = 1, stored_at = ? WHERE stream = ?`,
+			store.EncodeTime(probeStoredAt(1)), probeStream)
 		return err
 	}); err != nil {
 		t.Fatalf("rewrite the checkpoint: %v", err)
@@ -2098,6 +2174,7 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 		Domain:     probeDomain{},
 		Applier:    h.applier,
 		Fetch:      h.fetch,
+		Log:        h.fetch,
 		DB:         flaky,
 		Generation: 1,
 		Metrics:    h.metrics,
