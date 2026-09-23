@@ -213,9 +213,16 @@ const (
 	// whatever is done at the app itself.
 	CodeNotProvisionable Code = "not_provisionable"
 
-	// CodeNoExternalURL is a WRITING pass with no address to register a
-	// webhook against. Refused by name rather than run to register nothing
-	// and report success.
+	// CodeNoExternalURL is a gesture that has to hand somebody this
+	// deployment's own address — a writing pass registering a webhook, an
+	// invitation link — on a node that has none. Refused by name rather than
+	// run to register nothing, or to mint a link nobody can follow, and
+	// report success.
+	//
+	// ITS MESSAGE NAMES NEITHER GESTURE, because both surfaces answer with
+	// it and the message is what a person is shown: worded for the webhook
+	// pass, it told somebody sending an invitation to "run the pass again".
+	// What each surface needed the address for is its own `detail`.
 	//
 	// It names the Tier A setting rather than the retired Tier B one, and
 	// the two differ in what an operator has to do: the old field was
@@ -587,9 +594,9 @@ var codes = map[Code]string{
 		"Wait for it to finish rather than starting a second one.",
 	CodeNotProvisionable: "This integration is not set up from here. Connect " +
 		"it at the third-party app itself, or with the crewlet command line.",
-	CodeNoExternalURL: "This deployment has no external address, so no webhook " +
-		"can be registered for it. Set the external URL in this node's own " +
-		"configuration file, restart it, and run the pass again.",
+	CodeNoExternalURL: "This deployment has no external address, so nothing " +
+		"that has to point back at it can be made. Set the external URL in " +
+		"this node's own configuration file and restart it.",
 	CodeRequirementsOutstanding: "This integration is still missing values it " +
 		"needs. Fill them in before running a pass.",
 	CodeRunNotFound: "That setup run is not held here. A run is remembered by " +

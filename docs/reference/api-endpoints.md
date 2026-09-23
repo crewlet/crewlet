@@ -34,7 +34,7 @@ one JSON object, and it always has the same three parts in the same places:
 ```json
 {
   "error": "no_external_url",
-  "message": "This deployment has no public address, so no webhook can be registered for it. Set the public base URL and run the pass again.",
+  "message": "This deployment has no external address, so nothing that has to point back at it can be made. Set the external URL in this node's own configuration file and restart it.",
   "config_path": "api.external_url",
   "hint": "set the HTTPS address third-party apps reach this deployment on; without it the pass can register no webhook"
 }

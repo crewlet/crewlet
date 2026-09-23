@@ -71,6 +71,7 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		// same reason authapi's provider start answers a fault as one.
 		httpjson.FailWith(w, http.StatusInternalServerError,
 			httpjson.CodeNoExternalURL, map[string]string{
+				"config_path": "api.external_url",
 				"detail": "this deployment has no api.external_url, so there " +
 					"is no address an invitation link could point at. Set it " +
 					"in this node's own configuration file and restart it.",

@@ -506,3 +506,29 @@ func TestAnUnavailableAnswerWithADetailCarriesBoth(t *testing.T) {
 			bare.Code, bare.Header().Get("Retry-After"))
 	}
 }
+
+// A CODE MORE THAN ONE SURFACE ANSWERS WITH SPEAKS FOR ALL OF THEM.
+//
+// `no_external_url` is answered by the setup surface's writing pass and by
+// the directory's invitation route, and its message is the one sentence a
+// person is shown. It was worded for the pass, so somebody sending an
+// invitation from a deployment with no address was told that no webhook could
+// be registered and to run the pass again. What each surface needed the
+// address for is its own `detail`; the message names neither gesture.
+func TestTheNoExternalURLMessageNamesNoOneSurface(t *testing.T) {
+	t.Parallel()
+	message := strings.ToLower(httpjson.CodeNoExternalURL.Message())
+	if message == "" {
+		t.Fatal("no_external_url has no message, so this case asserts nothing")
+	}
+	for _, surface := range []string{"webhook", "pass", "invitation", "invite"} {
+		if strings.Contains(message, surface) {
+			t.Errorf("the no_external_url message %q speaks of %q, and the "+
+				"code is answered by more than that one surface", message, surface)
+		}
+	}
+	if !strings.Contains(message, "external url") {
+		t.Errorf("the no_external_url message %q does not name the setting "+
+			"that fixes it", message)
+	}
+}
