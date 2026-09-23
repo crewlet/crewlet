@@ -223,3 +223,91 @@ func TestAScopeWithHundredsOfRootsIsProbedRatherThanRefused(t *testing.T) {
 		}
 	}
 }
+
+// THE COVERAGE PROBE ANSWERS IN BOTH DIRECTIONS, EXACTLY.
+//
+// A retained record is about an object; a probe asks about another. They
+// intersect when one CONTAINS the other, whichever way round — a record
+// deferred on a task beneath the project a write is rewriting, and a record
+// deferred on the project above the task a write is editing — and only then.
+//
+// The statement binds its prefixes in a CTE that comes FIRST in its text, and
+// the values were appended after the exact paths, so every `?` was off by the
+// number of roots: the CTE's LIKE patterns were the first exact paths and the
+// real prefixes sat in the IN list as literals. The descendant direction —
+// the one the package calls silent data loss when it is missing — never
+// matched anything, and the paths that did reach a LIKE matched case-blind and
+// read an `_` as a wildcard. Each probe below was wrong under that binding.
+func TestTheCoverageProbeFindsBothDirectionsAndNothingElse(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "probe.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	rep := db.Replicated()
+	tbl := tables{stream: "TEST", deferred: "probe_deferred", scope: "probe_scope"}
+	if err := rep.Tx(ctx, func(tx *sql.Tx) error {
+		for _, stmt := range []string{
+			`CREATE TABLE probe_deferred (
+				position INTEGER NOT NULL PRIMARY KEY,
+				subject TEXT NOT NULL, subject_kind TEXT NOT NULL,
+				subject_id TEXT NOT NULL, version INTEGER NOT NULL,
+				payload BLOB NOT NULL, stored_at INTEGER NOT NULL)`,
+			`CREATE TABLE probe_scope (
+				position INTEGER NOT NULL, path TEXT NOT NULL,
+				PRIMARY KEY (position, path))`,
+			`INSERT INTO probe_deferred VALUES (7, 's', 'task', 'T-1', 9, x'00', 0)`,
+			`INSERT INTO probe_scope VALUES (7, 'project/ENG_OPS/task/1')`,
+			`INSERT INTO probe_deferred VALUES (8, 's', 'team', 'teamxa', 9, x'00', 0)`,
+			`INSERT INTO probe_scope VALUES (8, 'teamxa')`,
+		} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("create the probe tables: %v", err)
+	}
+
+	// at is the position the probe must find, and zero is a probe that must
+	// find nothing.
+	for _, tc := range []struct {
+		name  string
+		probe string
+		at    uint64
+	}{
+		{"the object itself", "project/ENG_OPS/task/1", 7},
+		{"the container above it", "project/ENG_OPS", 7},
+		{"the root above that", "project", 7},
+		{"something inside it", "project/ENG_OPS/task/1/comment/3", 7},
+		{"the other record, below its own root", "teamxa/member/1", 8},
+		{"a neighbour", "project/ENG_OPS/task/2", 0},
+		{"another container", "project/OPS", 0},
+		{"an underscore in a stored path is a character", "project/ENGXOPS", 0},
+		{"a path is case-sensitive", "PROJECT/ENG_OPS/task/1", 0},
+		{"a prefix is a whole segment", "project/ENG_OP", 0},
+		{"an underscore in the probe is not a wildcard", "team_a/member/1", 0},
+		{"a probe's case is its own", "TEAMXA/member/1", 0},
+	} {
+		if err := rep.Read(ctx, func(tx *sql.Tx) error {
+			d, hit, err := tbl.deferredIn(ctx, tx, ScopeSet{Paths: []string{tc.probe}})
+			if err != nil {
+				return err
+			}
+			var got uint64
+			if hit {
+				got = d.Position.Seq
+			}
+			if got != tc.at {
+				t.Errorf("%s: a probe over %q found the record at %d (hit %v), "+
+					"want %d", tc.name, tc.probe, got, hit, tc.at)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("%s: probe: %v", tc.name, err)
+		}
+	}
+}

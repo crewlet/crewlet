@@ -510,13 +510,19 @@ func (t tables) deferredBelow(ctx context.Context, tx *sql.Tx, s ScopeSet, below
 	// The EXACT match stays an `IN` list, which is flat for the same reason
 	// and which the roots join: a root is both a path the query is about and
 	// a prefix of the paths beneath it.
-	args := make([]any, 0, len(closure)+len(roots)*2+1)
+	//
+	// THE BINDINGS FOLLOW THE TEXT. A `?` is positional, and the CTE that
+	// holds the prefixes is the FIRST thing in the statement — so its values
+	// are bound first, and the exact paths after them. Appended the other
+	// way round, the CTE was handed the first exact paths as its "prefixes"
+	// and the IN list ended in the real prefixes as literal strings: the
+	// descendant clause never matched a descendant at all, and the ancestor
+	// clause matched its first paths through LIKE — case-blind, and with an
+	// `_` in a path read as a wildcard.
 	exact := make([]string, 0, len(closure)+len(roots))
 	exact = append(exact, closure...)
 	exact = append(exact, roots...)
-	for _, p := range exact {
-		args = append(args, p)
-	}
+	args := make([]any, 0, len(roots)+len(exact)+1)
 	q := `SELECT d.position, d.version FROM ` + t.scope + ` s
 	      JOIN ` + t.deferred + ` d ON d.position = s.position
 	      WHERE (s.path IN (` + placeholders(len(exact)) + `)`
@@ -527,6 +533,9 @@ func (t tables) deferredBelow(ctx context.Context, tx *sql.Tx, s ScopeSet, below
 		for _, r := range roots {
 			args = append(args, store.LikePrefix(r+ScopeSeparator))
 		}
+	}
+	for _, p := range exact {
+		args = append(args, p)
 	}
 	q += `)`
 	if below != nil {
