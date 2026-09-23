@@ -5,6 +5,9 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // THE DEACTIVATION PROBE: how an off-boarding at the identity provider reaches
@@ -98,13 +101,27 @@ type Sessions interface {
 }
 
 // ReasonIdPRevoked is what a session ended by the probe records.
-const ReasonIdPRevoked = "idp_revoked"
+//
+// THE AUDIT TRAIL'S OWN SPELLING, taken from it rather than written twice: the
+// record's reason and the event's are one fact, and a reader joining
+// `iam_history` to the live feed matches on the word.
+const ReasonIdPRevoked = string(types.EndIdPRevoked)
+
+// Audit is where the probe announces a session it ended.
+//
+// CONSUMER-DEFINED and one method, the only part of the node's audit trail a
+// probe uses: its conclusion is authored by the engine's own duty, never by a
+// caller, so there is nothing here to count — only an ending to say out loud.
+type Audit interface {
+	Emit(ctx context.Context, payload events.Payload)
+}
 
 // Prober runs the duty.
 type Prober struct {
 	provider *Provider
 	sessions Sessions
 	logger   *slog.Logger
+	audit    Audit
 }
 
 // NewProber builds one.
@@ -113,6 +130,18 @@ func NewProber(provider *Provider, sessions Sessions, logger *slog.Logger) *Prob
 		logger = slog.Default()
 	}
 	return &Prober{provider: provider, sessions: sessions, logger: logger}
+}
+
+// WithAudit installs where an ended session is announced, and returns the
+// prober for chaining.
+//
+// CALLED ONCE, BY WHOEVER ARMS THE DUTY, before the first pass. Nil announces
+// nothing, which leaves the ending in `iam_history` alone — the record the
+// probe writes is what every node applies, and the event is the live feed
+// beside it.
+func (p *Prober) WithAudit(a Audit) *Prober {
+	p.audit = a
+	return p
 }
 
 // Interval is how often the duty should run.
@@ -158,6 +187,15 @@ func (p *Prober) Run(ctx context.Context) (checked, ended int, err error) {
 			p.logger.InfoContext(ctx, "iam_session_ended",
 				"lineage", session.Lineage, "person", session.Person,
 				"reason", ReasonIdPRevoked)
+			// ONLY ONCE THE RECORD LANDED, and naming nobody as its
+			// author: the provider said the account is gone, and the
+			// engine's duty acted on it.
+			if p.audit != nil {
+				p.audit.Emit(ctx, types.IAMSessionEnded{
+					Person: session.Person, Lineage: session.Lineage,
+					Reason: types.EndIdPRevoked,
+				})
+			}
 		case VerdictLive:
 			if rotated != "" && rotated != session.Refresh {
 				if err := p.sessions.Rotated(ctx, session.Lineage, rotated); err != nil {
