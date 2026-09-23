@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sort"
 	"time"
@@ -261,8 +262,9 @@ func (r *retention) replica() statelog.ReplicaReport {
 	return out
 }
 
-// reading is this node's alarm inputs, MINUS the two the report evaluates per
-// domain from the domain rows.
+// reading is this node's alarm inputs, MINUS the per-domain ones — the log's
+// headroom, its ceiling against its window, a blocked trim and what it keeps —
+// which the report evaluates from the domain rows.
 //
 // A FIELD THIS NODE CANNOT MEASURE IS LEFT AT ITS ZERO VALUE, which every
 // condition reads as "nothing to report" rather than as "at the floor" — see
@@ -288,6 +290,29 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		if running == nil {
 			continue
 		}
+		// THE DEFERRAL'S MEASURED AGE, from the two facts the shed itself
+		// reads — the applier holding a record it cannot decode NOW, and
+		// the position heartbeat's first sighting of it — through the one
+		// arithmetic both share ([statelog.DeferredSince.Age]). It stood
+		// the grace in for the age once, so a rule firing past the grace
+		// compared the grace with itself and could never fire.
+		//
+		// BEFORE THE HEALTH READ, and not skipped with it: both facts are
+		// this process's own memory, and a coordination blip that fails
+		// the health read says nothing about a deferral — skipping it there
+		// would clear a firing alarm for the length of the blip.
+		if deferral, holding := running.runner.Deferred(); holding {
+			if age := running.progress.deferredSinceValue().Age(now); age > out.DeferredAge {
+				out.DeferredAge = age
+				out.DeferredRecord = fmt.Sprintf("the %s log at %s, written at record "+
+					"version %d against the %d this build reads", name,
+					deferral.Position, deferral.Version, running.domain.RecordVersion())
+				// THE SAME QUESTION [stateLog.Healthy] ASKS before it
+				// lets a deferral shed seats, so the alarm says a
+				// node's seats move exactly where they do.
+				out.DeferredSheds = running.domain.ReadinessInput()
+			}
+		}
 		health, err := r.state.health(ctx, running)
 		if err != nil {
 			continue
@@ -296,19 +321,14 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		// NODE: a two-domain node whose second applier is wedged is a
 		// node that is behind, and averaging would hide it.
 		out.ApplyLag = max(out.ApplyLag, applyLagOf(health, running))
-		if health.Deferred > 0 {
-			out.DeferredAge = max(out.DeferredAge, statelog.DeferralGrace)
-		}
-		if health.TrimFloor == nil {
-			out.FloorUnknownFor = max(out.FloorUnknownFor, statelog.FloorCacheStale)
-		}
 	}
 	out.SemanticCoverage = r.semanticCoverage()
-	// THE HEARTBEAT'S OBSERVATION, read back rather than taken, for the same
-	// reason as the rates — and because a binding's age is an interval
-	// between observations, which one per poll would make whatever the poll
-	// rate is.
+	// THE HEARTBEAT'S OBSERVATIONS, read back rather than taken, for the same
+	// reason as the rates — and because a binding's age and an unreadable
+	// floor's are intervals between observations, which one per poll would
+	// make whatever the poll rate is.
 	r.bindings.fill(&out)
+	r.floors.fill(&out)
 	r.space(&out)
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)

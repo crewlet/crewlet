@@ -307,8 +307,13 @@ else.
 
 A record at a version this build cannot decode is retained, and everything
 whose scope meets it is retained too. That is bounded rather than open-ended:
-the **deferral grace** is 30 minutes, past which the alarm fires and names the
-position and the scope.
+the **deferral grace** is 30 minutes, past which `deferred_old` fires — naming
+the log, the position of the oldest record held and the record version it was
+written at against the one this build reads. Where that log gates seat
+admission (the tracker's, the knowledge base's and the chart's do; the identity
+estate's and the vectors' do not) the node's seats move to a peer at the same
+moment, because both are measured from one instant — the position heartbeat's
+first sighting of the record — and the alarm says which of the two it is.
 
 So a rolling upgrade should finish inside that window. An upgrade that stalls
 half-done leaves the old nodes holding records they cannot apply and refusing

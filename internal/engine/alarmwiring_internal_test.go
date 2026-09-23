@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,16 +13,19 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// THE TWO ALARMS THE IDENTITY DOMAIN BROUGHT FIRE THROUGH THE WIRING A RUNNING
-// NODE HAS — not through helpers a case calls directly.
+// EVERY ALARM WHOSE INPUT A NODE ASSEMBLES FOR ITSELF FIRES THROUGH THE WIRING
+// A RUNNING NODE HAS — not through helpers a case calls directly.
 //
 // Each has three links that a helper-level test cannot see: the retention loop
 // the engine builds has to hold the watch or the measurement, the evaluation it
 // runs has to take them, and the report every surface reads has to carry them
-// to the table. With any one of those gone, both alarms were dead on a real
-// node while every case beside them passed.
+// to the table. With any one of those gone an alarm is dead on a real node
+// while every case beside it passes — which is how `deferred_old` and
+// `floor_unknown` shipped unable to fire, and `trim_blocked` able to fire on
+// every fresh fleet.
 
 // A BINDING TO AN AGENT'S SEAT FIRES `iam_binding_dangling` — through the real
 // directory, the real chart view and the real alarm tracker.
@@ -225,6 +229,202 @@ func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 			t.Errorf("the %s row renders a block from generation %d as its own",
 				name, aged.Generation)
 		}
+	}
+}
+
+// A RECORD FROM A NEWER BUILD, HELD PAST THE DEFERRAL GRACE, FIRES
+// `deferred_old` — from a real deferral on a real applier, dated by the real
+// position heartbeat — and says whether this node's seats move for it.
+//
+// The alarm could not fire before: the report stood the grace in for the age
+// whenever a record was held, and the rule fires past the grace. The record
+// here is what a peer one build ahead would publish — signed under this
+// fleet's keyring, at a record version this build does not read — so the
+// applier retains it exactly as a rolling upgrade makes it. And it said "its
+// seats move" of every log, where only the logs that gate seat admission move
+// any: the identity estate's is held on the request path instead.
+func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		domain  string
+		version int
+		record  func(generation uint32) (statelog.Subject, []byte, error)
+		says    string
+	}{
+		"a log that gates seat admission": {
+			domain: tracker.Domain{}.Name(), version: tracker.RecordVersion,
+			record: func(generation uint32) (statelog.Subject, []byte, error) {
+				subject := tracker.TaskSubject("t-from-a-newer-build")
+				payload, err := tracker.MutationRecord{
+					RecordEnvelope: tracker.RecordEnvelope{
+						V: tracker.RecordVersion + 1, OpID: "op-from-a-newer-build",
+						Subject: subject, Op: tracker.OpCreate, Gen: generation,
+						CreatedAt: time.Now().UTC(), Writer: "node-b",
+						Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
+					},
+					Mutation: []byte(`{}`), Actor: "ana", ActorKind: tracker.AuthorHuman,
+				}.Encode()
+				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
+					payload, err
+			},
+			says: "and this node's seats move at",
+		},
+		"a log that gates none": {
+			domain: iamdomain.Domain{}.Name(), version: iamdomain.RecordVersion,
+			record: func(generation uint32) (statelog.Subject, []byte, error) {
+				person := uuid.Must(uuid.NewV7()).String()
+				subject := iamdomain.PersonSubject(person)
+				payload, err := iamdomain.Encode(iamdomain.MutationRecord{
+					RecordEnvelope: iamdomain.RecordEnvelope{
+						V: iamdomain.RecordVersion + 1, OpID: "op-from-a-newer-build",
+						Subject: subject, Op: iamdomain.OpEnrol, Gen: generation,
+						Writer: "node-b", Scope: iamdomain.PeopleScope(person),
+					},
+					Mutation: []byte(`{}`), Person: person,
+					Actor: "ana.admin", ActorKind: iam.KindPerson,
+				})
+				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
+					payload, err
+			},
+			says: "that log does not gate seat admission, so this record moves no seats",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			e := bootDirectoryNode(t, nil)
+			r := quietRetention(t, e)
+			running := r.state.domains[tc.domain]
+			if running == nil {
+				t.Fatalf("the node runs no %s domain", tc.domain)
+			}
+			subject, payload, err := tc.record(running.runner.Committed().Generation)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			signer, err := r.state.signerFor(running.domain)
+			if err != nil {
+				t.Fatalf("signer: %v", err)
+			}
+			address := running.domain.Stream().SubjectPrefix + "." + subject.String()
+			if _, _, err := running.log.Append(ctx, address, "op-from-a-newer-build",
+				nil, signer.Seal(payload)); err != nil {
+				t.Fatalf("append: %v", err)
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if _, held := running.runner.Deferred(); held {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the applier never retained a record written at a newer version")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			// THE HEARTBEAT DATES IT, as it does on every node every ten
+			// seconds.
+			r.state.publishPositions(ctx)
+			sighted := time.Now().UTC()
+
+			r.now = func() time.Time { return sighted.Add(statelog.DeferralGrace - time.Minute) }
+			r.beat(ctx)
+			if alarmed(r.Report(ctx), statelog.KindDeferredOld) {
+				t.Fatal("a deferral inside the grace raised deferred_old")
+			}
+			r.now = func() time.Time {
+				return sighted.Add(statelog.DeferralGrace + statelog.AlarmInterval)
+			}
+			r.beat(ctx)
+			var fired statelog.Alarm
+			for _, a := range r.Report(ctx).Alarms {
+				if a.Kind == statelog.KindDeferredOld {
+					fired = a
+				}
+			}
+			if fired.Kind == "" {
+				t.Fatal("a record from a newer build held a beat past the grace " +
+					"raised no deferred_old")
+			}
+			want := fmt.Sprintf("the %s log at %s@", tc.domain, running.domain.Stream().Name)
+			version := fmt.Sprintf("written at record version %d against the %d "+
+				"this build reads", tc.version+1, tc.version)
+			if !strings.Contains(fired.Detail, want) ||
+				!strings.Contains(fired.Detail, version) {
+				t.Errorf("the alarm reads %q; it names the log, the position and "+
+					"the version an operator upgrades to", fired.Detail)
+			}
+			if !strings.Contains(fired.Detail, tc.says) {
+				t.Errorf("the alarm reads %q; want it to say %q", fired.Detail, tc.says)
+			}
+			if got := alarmGauge(t, e, statelog.KindDeferredOld); got != 1 {
+				t.Errorf("the alarm gauge for %s reads %v, want 1",
+					statelog.KindDeferredOld, got)
+			}
+		})
+	}
+}
+
+// A FLOOR THIS NODE CANNOT USE FOR FOUR HEARTBEATS FIRES `floor_unknown` —
+// observed on the heartbeat, through the fleet's own published floors.
+//
+// The floor is one the fleet published at a LATER generation than this node's
+// applier, which every read on this node refuses on: what a fleet looks like
+// to a node that was not re-anchored with it. It could not fire before: the
+// branch that set its input was unreachable behind a health read that failed on
+// the same floor.
+func TestTheFloorUnknownAlarmFiresOnARunningNode(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e := bootDirectoryNode(t, nil)
+	r := quietRetention(t, e)
+	if r.floors == nil {
+		t.Fatal("the node's retention loop keeps no floor watch")
+	}
+	name := tracker.Domain{}.Name()
+	generation := r.state.domains[name].runner.Committed().Generation
+	ahead := coord.TrimFloor{Domain: name, Generation: generation + 1,
+		At: time.Now().UTC(), By: "node-b"}
+	if err := r.fleet.PutFloor(ctx, ahead); err != nil {
+		t.Fatalf("publish a floor ahead of this node: %v", err)
+	}
+
+	t0 := time.Now().UTC()
+	r.now = func() time.Time { return t0 }
+	r.beat(ctx)
+	if alarmed(r.Report(ctx), statelog.KindFloorUnknown) {
+		t.Fatal("one beat that could not use the floor raised floor_unknown")
+	}
+	r.now = func() time.Time { return t0.Add(statelog.FloorCacheStale + statelog.AlarmInterval) }
+	r.beat(ctx)
+	var fired statelog.Alarm
+	for _, a := range r.Report(ctx).Alarms {
+		if a.Kind == statelog.KindFloorUnknown {
+			fired = a
+		}
+	}
+	if fired.Kind == "" {
+		t.Fatal("a floor this node could not use for five heartbeats raised no " +
+			"floor_unknown")
+	}
+	if !strings.Contains(fired.Detail, name+": ") ||
+		!strings.Contains(fired.Detail, fmt.Sprintf("generation %d", generation+1)) {
+		t.Errorf("the alarm reads %q; it names the log and why its floor is unusable",
+			fired.Detail)
+	}
+	if got := alarmGauge(t, e, statelog.KindFloorUnknown); got != 1 {
+		t.Errorf("the alarm gauge for %s reads %v, want 1", statelog.KindFloorUnknown, got)
+	}
+
+	// THE FLEET PUBLISHES AT THIS NODE'S GENERATION AGAIN, and the next beat
+	// clears it.
+	ahead.Generation = generation
+	if err := r.fleet.PutFloor(ctx, ahead); err != nil {
+		t.Fatalf("publish the floor at this node's generation: %v", err)
+	}
+	r.now = func() time.Time { return t0.Add(statelog.FloorCacheStale + 2*statelog.AlarmInterval) }
+	r.beat(ctx)
+	if alarmed(r.Report(ctx), statelog.KindFloorUnknown) {
+		t.Error("a floor this node can use again still raises floor_unknown")
 	}
 }
 

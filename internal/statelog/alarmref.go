@@ -49,8 +49,10 @@ var alarmMeaning = map[Kind]string{
 		"would have removed, and growing toward its ceiling. A young fleet " +
 		"blocked on its first backup or snapshot donors does not raise it: " +
 		"nothing in its log is past the window yet.",
-	KindDeferredOld: "This node has been holding records it cannot apply for " +
-		"longer than the deferral grace. Its seats have moved.",
+	KindDeferredOld: "This node has been holding a record it cannot apply for " +
+		"longer than the thirty-minute deferral grace. Where that record's log " +
+		"gates seat admission — the tracker's, the knowledge base's and the " +
+		"chart's do — its seats have moved to a peer.",
 	KindFloorUnknown: "The trim floor has been unreadable for four " +
 		"heartbeats, so every read on this node refuses.",
 	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +

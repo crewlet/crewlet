@@ -234,6 +234,22 @@ type DeferredSince struct {
 	Held  bool
 }
 
+// Age is how long the oldest undecodable record has been held as of now, and
+// zero when none is — or when nothing has dated one yet.
+//
+// ONE ARITHMETIC FOR THREE READERS: the shed in [Health.Healthy], the
+// `deferred_old` alarm that tells an operator when it will happen, and the
+// gauge a collector scrapes. Each used to derive the age for itself, and the
+// alarm's copy was not a derivation at all — it stood the grace itself in for
+// the age whenever a record was held, so a condition written as "older than
+// the grace" compared the grace with itself and could never fire.
+func (d DeferredSince) Age(now time.Time) time.Duration {
+	if !d.Held || d.Since.IsZero() {
+		return 0
+	}
+	return now.Sub(d.Since)
+}
+
 // Serving reports whether this domain may answer a read at all.
 //
 // The order is the cheap local refusals first, so a doomed read never reaches
@@ -299,7 +315,7 @@ func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
 	if !h.CaughtUp || h.Stalled {
 		return false
 	}
-	if h.Deferred > 0 && deferredSince.Held && now.Sub(deferredSince.Since) > DeferralGrace {
+	if h.Deferred > 0 && deferredSince.Age(now) > DeferralGrace {
 		return false
 	}
 	return true

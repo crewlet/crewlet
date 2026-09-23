@@ -88,6 +88,54 @@ func TestADeferralShedsSeatsOnlyPastTheGrace(t *testing.T) {
 	}
 }
 
+// THE SHED AND THE ALARM READ ONE AGE, and it can reach the grace.
+//
+// `deferred_old` fires once a deferral is older than [statelog.DeferralGrace]
+// and tells the operator the node's seats move then; [statelog.Health.Healthy]
+// is what moves them. Both take the age from [statelog.DeferredSince.Age], so
+// the instant the alarm names is the instant the shed happens. The alarm's own
+// copy used to stand the grace in for the age, which a rule firing "past the
+// grace" can never reach — so this case holds the arithmetic to the table's own
+// rule, past the grace and at it.
+func TestTheShedAndTheAlarmReadOneDeferralAge(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		since statelog.DeferredSince
+		want  time.Duration
+	}{
+		"nothing held":             {statelog.DeferredSince{}, 0},
+		"held and never dated":     {statelog.DeferredSince{Held: true}, 0},
+		"dated and no longer held": {statelog.DeferredSince{Since: now.Add(-time.Hour)}, 0},
+		"held for exactly the grace": {statelog.DeferredSince{
+			Since: now.Add(-statelog.DeferralGrace), Held: true}, statelog.DeferralGrace},
+		"held since a minute past the grace": {statelog.DeferredSince{
+			Since: now.Add(-statelog.DeferralGrace - time.Minute), Held: true},
+			statelog.DeferralGrace + time.Minute},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := tc.since.Age(now); got != tc.want {
+				t.Fatalf("age = %s, want %s", got, tc.want)
+			}
+			_, fired := find(statelog.Evaluate(statelog.Reading{
+				DeferredAge: tc.since.Age(now)}), statelog.KindDeferredOld)
+			held := statelog.Health{
+				Position: statelog.Position{Stream: "S", Generation: 1, Seq: 10},
+				CaughtUp: true, Deferred: 1,
+				Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: now},
+			}
+			if shed := !held.Healthy(now, tc.since); shed != fired {
+				t.Errorf("the shed says %v and the alarm says %v about one "+
+					"deferral — the alarm tells an operator when the seats "+
+					"move, so the two must agree", shed, fired)
+			}
+			if fired != (tc.want > statelog.DeferralGrace) {
+				t.Errorf("deferred_old fired = %v for an age of %s", fired, tc.want)
+			}
+		})
+	}
+}
+
 // ESTABLISHED IS A TWO-SIDED INEQUALITY, and each side fails for its own
 // reason.
 //

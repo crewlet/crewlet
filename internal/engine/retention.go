@@ -140,6 +140,10 @@ type retention struct {
 	// domain. See bindings.go.
 	bindings *bindingWatch
 
+	// floors follows how long this node has been unable to read the trim
+	// floor, for `floor_unknown`. See floorwatch.go.
+	floors *floorWatch
+
 	// now is the clock every evaluation and every report reads. Nil reads
 	// the wall clock; a case sets it to put a log's first days behind it.
 	now func() time.Time
@@ -184,6 +188,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		coverage:    e.vectorCoverage,
 		pooled:      map[string]poolCounters{},
 		bindings:    newBindingWatch(e),
+		floors:      newFloorWatch(e.backends.Fleet.Floors),
 	}
 	// DETACHED from the caller's context, for the reason every other
 	// long-running loop here is: a loop bound to a signal context stops at
@@ -330,7 +335,8 @@ func (r *retention) evaluate(ctx context.Context) {
 // The expensive measurements stay on the trim's tick and are read back here;
 // what a beat reads is what the report reads — one listing of each fleet
 // fact and one state read per log — plus one observation of the bindings,
-// which reads nothing that has not moved (see bindings.go).
+// which reads nothing that has not moved (see bindings.go), and one of the
+// trim floor, which is a single listing (see floorwatch.go).
 func (r *retention) heartbeat(ctx context.Context) {
 	ticker := time.NewTicker(statelog.AlarmInterval)
 	defer ticker.Stop()
@@ -344,16 +350,37 @@ func (r *retention) heartbeat(ctx context.Context) {
 	}
 }
 
-// beat is one alarm evaluation: the bindings observed, and the table
-// evaluated against everything the report reads.
+// beat is one alarm evaluation: the bindings and the trim floor observed, and
+// the table evaluated against everything the report reads.
 func (r *retention) beat(ctx context.Context) {
 	r.beating.Lock()
 	defer r.beating.Unlock()
-	r.bindings.observe(ctx, r.clock())
+	now := r.clock()
+	r.bindings.observe(ctx, now)
+	r.floors.observe(ctx, now, r.floorSubjects())
 	if r.alarms == nil {
 		return
 	}
 	r.alarms.Observe(ctx, r.Report(ctx).Alarms)
+}
+
+// floorSubjects is every domain this node runs, at the generation its applier
+// is on — the generation a floor has to be published at for this node to use
+// it.
+func (r *retention) floorSubjects() []floorSubject {
+	if r.state == nil {
+		return nil
+	}
+	out := make([]floorSubject, 0, len(r.state.order))
+	for _, name := range r.state.order {
+		running := r.state.domains[name]
+		if running == nil || running.runner == nil {
+			continue
+		}
+		out = append(out, floorSubject{domain: name,
+			generation: running.runner.Committed().Generation})
+	}
+	return out
 }
 
 // fleetInputs is what one tick reads once and every domain shares.

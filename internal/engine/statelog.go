@@ -2619,12 +2619,8 @@ func (s *stateLog) deferralGauges(now time.Time) {
 		if running == nil {
 			continue
 		}
-		held := running.progress.deferredSinceValue()
-		age := 0.0
-		if held.Held && !held.Since.IsZero() {
-			age = now.Sub(held.Since).Seconds()
-		}
-		s.metrics.Set(metrics.StatelogDeferredOldestAgeSeconds, age,
+		age := running.progress.deferredSinceValue().Age(now)
+		s.metrics.Set(metrics.StatelogDeferredOldestAgeSeconds, age.Seconds(),
 			metrics.Attrs{"domain": name})
 	}
 }
