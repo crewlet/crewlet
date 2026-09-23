@@ -805,7 +805,10 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		// themselves ([tracker.NewGates] also reads this node's own
 		// adoption row, which is deliberately not replicated), so the
 		// asymmetry here is real rather than an oversight.
-		DB: replicatedEstate{node: s.db}, Generation: at.Generation,
+		DB: replicatedEstate{node: s.db},
+		// AT THE WHOLE CHECKPOINT, and the record it names: what this node
+		// publishes and verifies before its loop has loaded the row.
+		Checkpoint: at, CheckpointStoredAt: checkpoint.StoredAt,
 		// THE SAME STREAM READ BY POSITION: how the applier establishes that
 		// the log still holds, at its checkpoint, the record it consumed
 		// there before it applies anything past it.
@@ -839,11 +842,11 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	// AND WHETHER THE LOG STILL HOLDS, at that checkpoint, THE RECORD THE ROW
 	// NAMES — for the same reason and at the same moment. A restored broker
 	// that was written past this node's rows before it booted ends at or past
-	// the checkpoint, so the reading above finds nothing, and until the loop
-	// has loaded the row nothing in the runner names the record a write would
-	// have to be refused over. A log that cannot be read here leaves the
-	// question to the loop, which will not apply past the checkpoint before it
-	// has answered it.
+	// the checkpoint, so the reading above finds nothing, and until something
+	// compares the record nothing in the runner holds the verdict a write would
+	// have to be refused over — the heartbeat's comparison is an interval away.
+	// A log that cannot be read here leaves the question to the loop, which
+	// will not apply past the checkpoint before it has answered it.
 	if held, diverged, readErr := statelog.CheckpointDiverged(ctx, appendTo, at,
 		checkpoint.StoredAt); readErr == nil && diverged &&
 		runner.ObserveDiverged(at, checkpoint.StoredAt, held) {

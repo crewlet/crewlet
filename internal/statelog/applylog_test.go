@@ -33,7 +33,7 @@ func TestAStopIsWrittenOnceSayingWhatResumesIt(t *testing.T) {
 		Fetch:      h.fetch,
 		Log:        h.fetch,
 		DB:         h.db.Replicated(),
-		Generation: 1,
+		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    h.metrics,
 		Logger:     slog.New(slog.NewJSONHandler(logs, nil)),
 	})

@@ -414,10 +414,9 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		t.Fatal("the tracker domain is not running after the second boot")
 	}
 
-	// THE BOOT ESTABLISHED IT, before any heartbeat could have read a loaded
-	// checkpoint: the first beat reads the runner before its loop has loaded
-	// the row, so without the boot's own reading an ordinary write had a
-	// whole interval to land.
+	// THE BOOT ESTABLISHED IT, before any heartbeat could have read the end:
+	// without the boot's own reading an ordinary write had a whole interval
+	// to land.
 	if identity := running.runner.StreamIdentity(); !errors.Is(identity, statelog.ErrAheadOfLog) {
 		t.Fatalf("right after boot the runner's identity is %v, want %v",
 			identity, statelog.ErrAheadOfLog)
@@ -484,10 +483,11 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 //
 // Boot is when a broker restored from an older copy is met — the embedded one
 // runs in this process, so bringing its store back IS a restart — and nothing
-// else establishes the verdict in time: the first heartbeat reads the runner
-// before its loop has loaded the row, and that zero says nothing. Driven
-// through [stateLog.start] itself, which launches no loop and no heartbeat, so
-// the only reading that can have established it is the boot's own.
+// else establishes the verdict in time: the first heartbeat is an interval
+// away, and an ordinary write arriving first would find nothing refusing it.
+// Driven through [stateLog.start] itself, which launches no loop and no
+// heartbeat, so the only reading that can have established it is the boot's
+// own.
 func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

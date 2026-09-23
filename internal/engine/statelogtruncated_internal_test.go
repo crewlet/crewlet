@@ -13,9 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// publishLoaded boots a node, waits for its tracker's loop to load the
-// checkpoint want — so the position it publishes is its rows' own rather than
-// the zero a runner reports before — publishes, and stops it.
+// publishLoaded boots a node, waits for its tracker to stand at the checkpoint
+// want — the position it publishes, its rows' own — publishes, and stops it.
 func publishLoaded(t *testing.T, d divergedBroker, want statelog.Position) {
 	t.Helper()
 	e, back := bootNode(t, &d.a, d.cfg)

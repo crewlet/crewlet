@@ -492,3 +492,46 @@ func TestAPeersTruncationIsTheRunnersWriteFenceNotItsIdentity(t *testing.T) {
 		t.Fatalf("after a reanchor the truncation still refuses: %v", err)
 	}
 }
+
+// A RUNNER STANDS AT ITS CHECKPOINT FROM THE MOMENT IT IS BUILT.
+//
+// A runner built at its checkpoint's generation alone stood at sequence 0
+// until its loop had loaded the row. The first heartbeat of a boot published
+// that zero to the fleet — a node past a restored log's end, or diverged from
+// it, looked to every peer like one at the very beginning — and a verification
+// of the checkpoint's record, which the heartbeat runs whether or not the loop
+// has, compared nothing, because a zero sequence names no record. Built at the
+// whole checkpoint and the record it names, it answers both before its loop
+// has run at all.
+func TestARunnerStandsAtItsCheckpointBeforeItsLoopRuns(t *testing.T) {
+	t.Parallel()
+	h := appliedThrough(t, 3)
+	at := h.runner.Committed()
+
+	h.rebuild(probeDomain{}, time.Time{})
+	if got := h.runner.Committed(); got != at {
+		t.Fatalf("a runner built over rows at %s stands at %s before its loop has "+
+			"run — the heartbeat would publish that to the fleet", at, got)
+	}
+	for seq := uint64(1); seq <= 3; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprint(seq), fmt.Sprintf("op-%d", seq), 1))
+	}
+	h.fetch.rewrite(3, otherHistory)
+	established, err := h.runner.VerifyCheckpoint(t.Context())
+	if err != nil || !established {
+		t.Fatalf("VerifyCheckpoint before the loop ran = (%v, %v), want the "+
+			"divergence at 3 found — the runner must name the record its "+
+			"checkpoint stands on from construction", established, err)
+	}
+
+	// AND A CHECKPOINT ON ANOTHER STREAM IS REFUSED rather than stood at.
+	_, err = statelog.NewRunner(statelog.RunnerDeps{
+		Domain: probeDomain{}, Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
+		DB:         h.db.Replicated(),
+		Checkpoint: statelog.Position{Stream: "CREWLET_SOMEONE_ELSES_LOG", Generation: 1},
+	})
+	if !errors.Is(err, statelog.ErrWrongStream) {
+		t.Fatalf("a runner handed another stream's checkpoint = %v, want %v",
+			err, statelog.ErrWrongStream)
+	}
+}

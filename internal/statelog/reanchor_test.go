@@ -746,7 +746,8 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	secondFetch := newProbeFetch()
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: secondProbeDomain{}, Applier: newProbeApplier(),
-		Fetch: secondFetch, Log: secondFetch, DB: f.db.Replicated(), Generation: 1,
+		Fetch: secondFetch, Log: secondFetch, DB: f.db.Replicated(),
+		Checkpoint:      statelog.Position{Generation: 1},
 		StreamCreatedAt: secondCreated,
 	})
 	if err != nil {

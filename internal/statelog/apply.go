@@ -142,12 +142,25 @@ type RunnerDeps struct {
 	// node.
 	DB Estate
 
-	// Generation is THIS DOMAIN's generation as its checkpoint row holds
-	// it — each domain's log has its own. It is where the runner stands
-	// until its loop loads the row, which then answers for it; the one
-	// thing that moves it under a running process is a reanchor of this
-	// domain's own stream ([Runner.Reanchored]).
-	Generation uint32
+	// Checkpoint is THIS DOMAIN's committed checkpoint as its row holds it —
+	// the stream, its generation (each domain's log has its own) and the
+	// sequence — and CheckpointStoredAt the broker's instant for the record
+	// at it, zero where the row names none. It is where the runner stands
+	// from construction until its loop loads the row, which then answers
+	// for it; the one thing that moves it under a running process is a
+	// reanchor of this domain's own stream ([Runner.Reanchored]).
+	//
+	// THE WHOLE CHECKPOINT, never its generation alone. A runner built at
+	// the generation stood at sequence 0 until its loop had loaded the row,
+	// and everything that read it in between read that zero as this node's
+	// position: the first heartbeat published it to the fleet — so a node
+	// past a restored log's end, or diverged from it, looked to every peer
+	// like one at the very beginning, and a peer's truncation fence could
+	// lift on it — and a verification of the checkpoint's record compared
+	// nothing, because a zero sequence names no record. The empty stream is
+	// this domain's own; any other is refused.
+	Checkpoint         Position
+	CheckpointStoredAt time.Time
 
 	// StreamCreatedAt is the broker's own creation instant for this
 	// stream, AS THE BROKER REPORTS IT NOW, stored beside the checkpoint as
@@ -337,11 +350,10 @@ type Runner struct {
 	// which trails the truth, so a verdict nothing could clear would stop a
 	// healthy node's writes over one election for the life of the process. So
 	// a later reading clears it — but only one whose end has reached THIS
-	// verdict's checkpoint, never merely one paired with a lower checkpoint:
-	// the first heartbeat of a boot reads the runner before its loop has
-	// loaded the row, and that zero says nothing about the checkpoint the row
-	// holds. A checkpoint this runner no longer stands at — a re-run over an
-	// adopted snapshot — drops it in [Runner.loadCursor] instead.
+	// verdict's checkpoint, never merely one paired with a lower checkpoint,
+	// which says nothing about the one the verdict is about. A checkpoint
+	// this runner no longer stands at — a re-run over an adopted snapshot —
+	// drops it in [Runner.loadCursor] instead.
 	//
 	// What clearing costs is nothing, because it is not the last word: once
 	// a restored log has been written past this node's checkpoint the end
@@ -441,6 +453,15 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
+	checkpoint := d.Checkpoint
+	switch checkpoint.Stream {
+	case "":
+		checkpoint.Stream = spec.Name
+	case spec.Name:
+	default:
+		return nil, fmt.Errorf("%w: %s's applier was handed a checkpoint on %s",
+			ErrWrongStream, d.Domain.Name(), checkpoint.Stream)
+	}
 	t, err := newTables(d.Domain)
 	if err != nil {
 		return nil, err
@@ -466,7 +487,10 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 			ArbitratedKinds: spec.ArbitratedKinds,
 			Epoch:           d.Epoch,
 		},
-		cursor: Position{Stream: spec.Name, Generation: d.Generation},
+		// THE CHECKPOINT AND THE RECORD IT NAMES, together, for the reason
+		// [Runner.checkpointAt] gives.
+		cursor:       checkpoint,
+		checkpointAt: d.CheckpointStoredAt,
 	}, nil
 }
 
@@ -705,8 +729,7 @@ func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool
 		return false, false
 	}
 	if pastEnd(r.ahead.at.Seq, last) {
-		// STILL PAST IT: this reading was paired with a lower checkpoint —
-		// the zero a runner reports before its loop has loaded the row —
+		// STILL PAST IT: this reading was paired with a lower checkpoint
 		// and says nothing about the one the verdict is about, except
 		// where the log now ends. A NEW value, never a write through the
 		// shared pointer: [Runner.StreamIdentity] reads it after the lock

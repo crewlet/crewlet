@@ -337,7 +337,7 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 		Fetch:      fetch,
 		Log:        fetch,
 		DB:         db.Replicated(),
-		Generation: 1,
+		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    recorder,
 	})
 	if err != nil {
@@ -368,15 +368,26 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 		h.t.Fatalf("recorder: %v", err)
 	}
 	h.metrics = recorder
+	// AT THE CHECKPOINT THE ROWS HOLD, as the engine builds a restarting
+	// node's runner — generation 1 on a node that never committed.
+	checkpoint, found, err := statelog.CheckpointOf(h.t.Context(), h.db.Replicated(),
+		domain.Stream().Name)
+	if err != nil {
+		h.t.Fatalf("read the checkpoint: %v", err)
+	}
+	if !found {
+		checkpoint.At.Generation = 1
+	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:          domain,
-		Applier:         h.applier,
-		Fetch:           h.fetch,
-		Log:             h.fetch,
-		DB:              h.db.Replicated(),
-		Generation:      1,
-		StreamCreatedAt: created,
-		Metrics:         recorder,
+		Domain:             domain,
+		Applier:            h.applier,
+		Fetch:              h.fetch,
+		Log:                h.fetch,
+		DB:                 h.db.Replicated(),
+		Checkpoint:         checkpoint.At,
+		CheckpointStoredAt: checkpoint.StoredAt,
+		StreamCreatedAt:    created,
+		Metrics:            recorder,
 	})
 	if err != nil {
 		h.t.Fatalf("NewRunner: %v", err)
@@ -2192,7 +2203,7 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 		Fetch:      h.fetch,
 		Log:        h.fetch,
 		DB:         flaky,
-		Generation: 1,
+		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    h.metrics,
 	})
 	if err != nil {
