@@ -515,6 +515,19 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					"removed by %s at %s; restore it first",
 					id, current.Removed.By, current.Removed.At.Format(time.RFC3339))
 			}
+			if current.Project != project {
+				// THE SCOPE NAMES THE PROJECT THE CALLER SAID, and the
+				// record is filed and probed under it. A task in
+				// another one would be written under a container it is
+				// not in — so a deferral on its real project would not
+				// hold this write back, and one on the named project
+				// would hold back a write that never touches it. A bulk
+				// edit names one project for every task in it, which is
+				// where a task from elsewhere arrives.
+				return statelog.Decision{}, fmt.Errorf("tracker: task %s is in "+
+					"project %s, not %s — resolve it again and name the "+
+					"project it is in", id, current.Project, project)
+			}
 			if ifMatch != 0 && current.Version != ifMatch {
 				return statelog.Decision{}, fmt.Errorf("%w: task %s is at "+
 					"version %d and the edit was conditioned on %d — re-read "+

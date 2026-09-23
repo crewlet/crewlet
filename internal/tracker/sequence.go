@@ -146,8 +146,10 @@ type WriteResult struct {
 	Rank Rank
 
 	// Applied and Failed are a bulk gesture's per-task outcome. A bulk
-	// write is NOT atomic and never was: the caller re-runs the failures,
-	// which carry the current version in them.
+	// write is NOT atomic and never was: Applied is every task whose change
+	// is durable — applied here, or pending — and Failed says, per task,
+	// why the rest are not, including a change whose outcome is unknown.
+	// The caller re-runs the gesture under the same operation id.
 	Applied []string
 	Failed  map[string]string
 
@@ -1413,7 +1415,22 @@ var ErrBulkInFlight = errors.New("tracker: a bulk edit is already applying")
 //
 // CRASH RESIDUE: a partial batch — some tasks committed, some not. REPAIRER:
 // NOBODY, AND IT NEVER WAS ATOMIC. The result reports applied and failed per
-// task and the caller re-runs; the failures carry the current version in them.
+// task and the caller re-runs.
+//
+// # Re-running it
+//
+// Under the SAME operation id, and each task's own step answers for that task:
+// a change that landed is answered from the ledger, and only what did not is
+// decided. The step is named by the TASK rather than by its place in the list,
+// because the ledger answers a step's id with whatever record it recorded
+// under it — so a step numbered by position answered a re-run that named the
+// tasks in another order, or only the ones that failed, with ANOTHER task's
+// record, and reported that task changed when nothing had touched it.
+//
+// A task whose outcome is UNKNOWN is a failure, not an application: its record
+// may or may not be on the log, and the one answer that is true is that the
+// re-run will say. Counting it applied told a caller to stop retrying a change
+// that may never have landed.
 //
 // # Why it is admitted through a lease, and why that lease FAILS OPEN
 //
@@ -1486,11 +1503,18 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 	w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": "admitted"})
 
 	result := WriteResult{Failed: map[string]string{}}
-	for i, id := range subjects {
-		one, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("b%d", i)),
+	for _, id := range subjects {
+		one, err := w.UpdateTask(ctx, stepID(opID, "task-"+id),
 			id, project, NoIfMatch, patch, kind, notify)
-		if err != nil {
+		switch {
+		case err != nil:
 			result.Failed[id] = err.Error()
+			continue
+		case one.Outcome == statelog.OutcomeUnknown:
+			result.Failed[id] = fmt.Sprintf("whether this task's change landed "+
+				"is unknown (operation %s); re-run the edit under the same "+
+				"operation id, which answers what landed and applies what did "+
+				"not", one.OpID)
 			continue
 		}
 		result.Applied = append(result.Applied, id)
