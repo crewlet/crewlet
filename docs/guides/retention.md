@@ -334,7 +334,13 @@ below the published floor whose missing records the log still holds reports
    the transfer itself causes, such as a full disk, never becomes a transfer
    every heartbeat. If the line repeats, its error names what to fix — the
    disk, the file's permissions — and the node reopens the file on the next
-   heartbeat after that.
+   heartbeat after that. The file it reopens may be the artefact the failed
+   join installed, so the reopen re-keys every domain's applier to it and
+   wakes the snapshot loop, exactly as a completed adoption does; an applier
+   whose log could not be read at that moment judges the file again when it
+   resumes, and if that still leaves it refusing rows that are keyed to the
+   stream the broker serves, the next heartbeat notices and a join re-keys it
+   — `statelog_runner_not_rekeyed` is the line that says it happened.
 3. If none does, the skip reason says why. Fix that first: a fleet where every
    node is `lagging` has an applier problem, not a snapshot problem.
 4. If the fleet genuinely holds none — a single node, or every peer skipping —

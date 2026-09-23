@@ -694,3 +694,101 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 		}
 	})
 }
+
+// A RECREATION VERDICT ITS ROWS NO LONGER BEAR OUT IS RE-KEYED BY A JOIN.
+//
+// The join re-keys every runner to the file it leaves, against the live
+// instant it read; the restore of an estate a failed join left closed reads the
+// instant itself and cannot always. A runner whose re-key did not happen, over
+// rows keyed to a stream it has never read, judges them by the one instant it
+// has — and stops as recreated over rows that are the fleet's history, where a
+// reanchor refuses because the rows ARE keyed to the live stream. The heartbeat
+// reads the live instant every beat, so it is what names the verdict as stale
+// and asks for the join that re-keys it.
+//
+// The verdict is staged as a failed re-key leaves it: recorded against an
+// instant that is not the live stream's, over rows that are keyed to the live
+// stream.
+func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) {
+	t.Parallel()
+	e, _, _ := bootRejoinNode(t)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	s := e.native.Load().log
+	running := s.Domain(tracker.Domain{}.Name())
+	name := running.domain.Name()
+	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("a write for the rows to hold: %+v, %v", res, err)
+	}
+	stats, err := running.log.Stats(t.Context())
+	if err != nil {
+		t.Fatalf("read the tracker's log: %v", err)
+	}
+	live := stats.CreatedAt
+
+	s.haltApplier(name)
+	at, keyed, _, err := statelog.CursorFor(t.Context(), s.db.Replicated(),
+		running.domain.Stream().Name)
+	if err != nil {
+		t.Fatalf("read the checkpoint: %v", err)
+	}
+	never := live.Add(-time.Hour)
+	if err := running.runner.Rejoined(at, keyed, never); err != nil {
+		t.Fatalf("stage the verdict: %v", err)
+	}
+	s.resumeApplier(t.Context(), name)
+	waitUntil(t, 10*time.Second, "the tracker to stop as recreated", func() bool {
+		return errors.Is(running.runner.Stopped(), statelog.ErrStreamRecreated)
+	})
+
+	s.publishPositions(t.Context())
+	waitUntil(t, 30*time.Second, "the heartbeat's join to re-key the tracker", func() bool {
+		return running.runner.StreamIdentity() == nil && running.runner.Stopped() == nil
+	})
+	if got := running.runner.StreamCreatedAt(); statelog.IdentityOf(live, got, true) != statelog.StreamSame {
+		t.Fatalf("the tracker is keyed to %s after the join, want the live %s", got, live)
+	}
+	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-after", "node-y"); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("a write after the join: %+v, %v", res, err)
+	}
+}
+
+// A RESTORE WAITS FOR A RECOVERY IN PROGRESS.
+//
+// The restore re-keys every runner to the checkpoint the file it reopens keeps,
+// and relaunches every applier. A reanchor between its reopen and that re-key
+// would have its new checkpoint re-keyed back to the one the restore read
+// before it, and its halted applier relaunched in the middle of its transition
+// — so the restore takes the same exclusion the join and the reanchor take.
+func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
+	t.Parallel()
+	e, back, _ := bootRejoinNode(t)
+	s := e.native.Load().log
+	quietHeartbeat(s)
+	s.haltAppliers()
+	if err := back.Store.CloseReplicated(); err != nil {
+		t.Fatalf("close the replicated estate: %v", err)
+	}
+
+	s.recovering.Lock()
+	done := make(chan error, 1)
+	go func() { done <- s.restoreEstate(s.run) }()
+	select {
+	case err := <-done:
+		s.recovering.Unlock()
+		t.Fatalf("the restore ran to its end (%v) while a recovery held the node", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if back.Store.Replicated() != nil {
+		s.recovering.Unlock()
+		t.Fatal("the restore reopened the estate while a recovery held the node")
+	}
+	s.recovering.Unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("the restore, once the recovery ended: %v", err)
+	}
+	if back.Store.Replicated() == nil {
+		t.Fatal("the restore left the estate closed")
+	}
+}

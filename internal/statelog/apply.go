@@ -246,6 +246,11 @@ type Runner struct {
 	// adopted ([Runner.Reanchored]), and a snapshot adoption, which
 	// replaces them wholesale with rows keyed to the live stream
 	// ([Runner.Rejoined]). See [Runner.StreamIdentity].
+	//
+	// A re-run RE-DERIVES it rather than trusting it, though, against the
+	// row it loads ([Runner.loadCursor]): an adoption whose re-key did not
+	// happen has still replaced the rows, and a verdict about the rows the
+	// file used to hold says nothing about the ones it holds now.
 	foreign *foreignStream
 
 	// passed is the generation the FLEET is on for this domain, once it
@@ -259,7 +264,9 @@ type Runner struct {
 	// STICKY LIKE foreign, and for the same reason: it is a verdict about
 	// the positions the rows stand at, and nothing on the log can move
 	// those into the new generation — the re-anchoring peer's rows are what
-	// it continues from. An adoption replaces them ([Runner.Rejoined]).
+	// it continues from. An adoption replaces them ([Runner.Rejoined]), and
+	// a re-run judges it against the checkpoint it loads, as it does
+	// foreign.
 	passed *passedGeneration
 
 	// ahead is the verdict of the last reading that found this applier's
@@ -527,6 +534,30 @@ func (r *Runner) ObserveStream(live time.Time) bool {
 	}
 	r.foreign = &foreignStream{keyed: r.created, live: live}
 	return true
+}
+
+// RecreationStale reports whether this applier holds a recreation verdict that
+// a live reading of the stream's instant contradicts: its rows are keyed to
+// exactly the stream the broker serves.
+//
+// # How a verdict comes to be wrong, and why only a join can say so
+//
+// An instant is never reissued, so the broker cannot come back to the stream
+// the rows were keyed to — but the rows can come to the stream the broker
+// serves. An adoption replaces every row with a peer's, keyed to the live
+// stream, and re-keys this runner to them ([Runner.Rejoined]); when that
+// re-key could not happen — the restore of an estate a failed join left closed
+// could not read the live instant — the loop's own re-derivation
+// ([Runner.loadCursor]) has only the instants this runner has read, and a
+// stream it never read is one it judges as another. The loop then stops as
+// recreated over rows that are the fleet's history, and the reanchor an
+// operator would reach for refuses, because the rows ARE keyed to the live
+// stream. What releases it is the join re-keying it against a reading taken
+// now, so the engine asks for one when this answers true.
+func (r *Runner) RecreationStale(live time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.foreign != nil && IdentityOf(r.foreign.keyed, live, true) == StreamSame
 }
 
 // ObserveEnd takes one LIVE reading of the log's last sequence, paired with
@@ -923,7 +954,9 @@ func (r *Runner) Op(ctx context.Context, opID string) (Position, bool, error) {
 // from the checkpoint the new file keeps, with whatever it retained
 // reprocessed, and with a stop or a fault from the previous run re-evaluated
 // rather than remembered: they were verdicts about rows this node no longer
-// has.
+// has. So are the recreation and passed-generation verdicts, which are judged
+// again against the checkpoint the run loads — see [Runner.RecreationStale]
+// for the one case that judgement cannot reach alone.
 func (r *Runner) Run(ctx context.Context) error {
 	r.mu.Lock()
 	r.stopped, r.fault, r.faultSince, r.faultReported = nil, nil, time.Time{}, false
@@ -1207,23 +1240,52 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		// because the broker reports nanoseconds and the row keeps
 		// microseconds — compared exactly, every boot after the first
 		// would read as a recreation.
-		if !r.created.IsZero() {
-			if state := IdentityOf(created, r.created, found); state == StreamRecreated {
-				if r.foreign == nil {
-					r.foreign = &foreignStream{keyed: created, live: r.created}
-				}
-				return fmt.Errorf("%w: %w", ErrStopped,
-					r.foreign.err(r.domain.Name(), r.spec.Name))
-			}
+		//
+		// AGAINST THE LIVE INSTANT THIS RUNNER KNOWS BEST: the one a
+		// recreation verdict recorded, when one holds — a reading taken
+		// since the runner was built — and the instant it was built with
+		// otherwise. So a rebuild already established while the loop ran
+		// stops a re-run too: the row still names the instant this runner
+		// was built with, and resuming would apply the new stream's records
+		// into rows keyed to the one before it.
+		//
+		// # And a verdict is RE-DERIVED here, never merely remembered
+		//
+		// The row this loads may not be the one the verdict was reached
+		// about. A re-run follows an adoption, which replaces every row with
+		// a peer's, and the join re-keys this runner to them
+		// ([Runner.Rejoined]) — but not always: the restore of an estate a
+		// failed join left closed judges the file against a live instant it
+		// may be unable to read, and a re-key that did not happen would
+		// otherwise leave this loop stopping on every re-run over rows that
+		// are the fleet's history, with nothing but deleting the database to
+		// release it. So each verdict is judged against the row by the rule
+		// that established it. The recreation holds while the row is keyed
+		// to another stream than the live one, and a row keyed to the live
+		// one clears it: an instant is never reissued, so only an adoption
+		// or a reanchor writes a row keyed to a stream this runner did not
+		// start on. A passed generation holds while the row stands below the
+		// generation it recorded.
+		live := r.created
+		if r.foreign != nil {
+			live = r.foreign.live
 		}
-		// AND A REBUILD ALREADY ESTABLISHED WHILE THE LOOP RAN STOPS A
-		// RE-RUN TOO. The row still names the instant this runner was
-		// built with, so the comparison above passes — but a live reading
-		// has since found the broker serving another stream under the
-		// name, and resuming would apply that stream's records into rows
-		// keyed to the one before it. Only a reanchor or an adoption
-		// clears the verdict, and each re-keys the runner before the loop
-		// is started again.
+		switch {
+		case live.IsZero():
+		case !found:
+			// NO ROW TO JUDGE BY: nothing here says which stream the
+			// positions in memory belong to, so a verdict that holds
+			// stands and none is reached.
+		case IdentityOf(created, live, true) == StreamRecreated:
+			// A NEW VALUE, never a write through the shared pointer:
+			// [Runner.StreamIdentity] reads it after the lock is
+			// released. Keyed to the ROW'S instant, because that is
+			// what [Runner.KeyedTo] publishes to the fleet and what
+			// [Runner.RecreationStale] is judged by.
+			r.foreign = &foreignStream{keyed: created, live: live}
+		default:
+			r.created, r.foreign = live, nil
+		}
 		if r.foreign != nil {
 			return fmt.Errorf("%w: %w", ErrStopped,
 				r.foreign.err(r.domain.Name(), r.spec.Name))
@@ -1234,6 +1296,9 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		// starts the loop again, and this is what stops it at once, saying
 		// why — where a loop that was already running when the verdict
 		// landed is stopped by [Runner.decode] at its next record.
+		if r.passed != nil && found && at.Generation >= r.passed.fleet {
+			r.passed = nil
+		}
 		if r.passed != nil {
 			return fmt.Errorf("%w: %w", ErrStopped,
 				r.passed.err(r.domain.Name(), r.spec.Name))

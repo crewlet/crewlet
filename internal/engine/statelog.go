@@ -234,12 +234,15 @@ type stateLog struct {
 	applying  map[string]*applierRun
 	applyDone sync.WaitGroup
 
-	// recovering serialises the two operations that rewrite a domain's
-	// checkpoint under a running node: a runtime adoption, which replaces
-	// the replicated file whole, and a reanchor, which moves one domain's
-	// checkpoint to a stream it adopts. Either one interleaved with the
-	// other writes into a file the other is replacing, or relaunches a
-	// loop the other has just halted.
+	// recovering serialises the three operations that rewrite a domain's
+	// checkpoint, or re-key its runner, under a running node: a runtime
+	// adoption, which replaces the replicated file whole; the restore of an
+	// estate a failed adoption left closed, which reopens it and re-keys
+	// every runner to it; and a reanchor, which moves one domain's
+	// checkpoint to a stream it adopts. Any one interleaved with another
+	// writes into a file the other is replacing, re-keys a runner to a
+	// checkpoint the other has just moved, or relaunches a loop the other
+	// has just halted.
 	recovering sync.Mutex
 
 	// rejoin is what the heartbeat calls when it finds this node below
@@ -1787,8 +1790,10 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	log.WarnContext(ctx, "statelog_rejoin_started", "node", s.nodeID,
 		"detail", "this node cannot replay its way to where the fleet is — it is "+
 			"below a log's floor, or a peer re-anchored a log past its "+
-			"generation — so its appliers pause while it asks the fleet for a "+
-			"snapshot")
+			"generation — or an applier holds a recreation verdict its rows no "+
+			"longer bear out, so its appliers pause while it asks the fleet for "+
+			"a snapshot if it needs one and re-keys each applier to the rows it "+
+			"holds")
 	s.haltAppliers()
 	// ctx IS the state log's own run context here — [requestRejoin]
 	// starts this under it — so the relaunched appliers get the lifetime
@@ -1844,6 +1849,13 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 // A failed reopen is [statelog.ErrEstateNotRestored], so every outcome that
 // leaves this node with no replicated database reads the same.
 func (s *stateLog) restoreEstate(ctx context.Context) error {
+	// ONE RECOVERY AT A TIME, as around a join and a reanchor. A reanchor
+	// that ran between this reopen and the re-key below would have its new
+	// checkpoint re-keyed back to the one this read before it, and its
+	// halted applier relaunched with every other in the middle of its
+	// transition.
+	s.recovering.Lock()
+	defer s.recovering.Unlock()
 	s.haltAppliers()
 	// ctx is the state log's own run context, for [Engine.rejoin]'s
 	// reason: the relaunched appliers outlive the heartbeat tick.
@@ -1857,8 +1869,11 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 			"open again; the node asks the fleet for a snapshot only if it is "+
 			"still below the floor, and no sooner than its retry interval allows")
 	// NO JOIN RAN, so no instant was judged: each runner is re-keyed
-	// against a fresh read of its live stream, and one that cannot be read
-	// keeps its verdict until the rejoin that follows reads it.
+	// against a fresh read of its live stream. One that cannot be read is
+	// re-derived by its own loop against the instants it has read
+	// ([statelog.Runner.Run]), and a verdict that leaves wrong is
+	// named by the next heartbeat's reading, which asks for the join that
+	// re-keys it ([statelog.Runner.RecreationStale]).
 	s.resetConsumers(ctx, func(name string) (time.Time, error) {
 		stats, err := s.domains[name].log.Stats(ctx)
 		if err != nil {
@@ -1866,6 +1881,12 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 		}
 		return stats.CreatedAt, nil
 	})
+	// AND THE SNAPSHOT LOOP IS WOKEN, as after an adoption: the file this
+	// opened may be the artefact a failed join installed, at a generation
+	// the artefact this node holds does not name — see
+	// [stateLog.snapshotNudge]. Where it is the file the node already had,
+	// the loop's own gate finds its artefact current and declines.
+	s.nudgeSnapshot()
 	return nil
 }
 
@@ -1876,18 +1897,28 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 // consumer's start — one left at the old position would deliver every record
 // in between to be dropped.
 //
-// A FAILURE IS A LINE, NOT A FAILED CALL. Correctness is the checkpoint's and
-// the applier resumes from it regardless; what a consumer left behind costs is
-// the redeliveries between. So a checkpoint that cannot be read leaves that
-// consumer where it was, exactly as a failed reset does — and neither turns an
-// adoption that happened into one its caller reports as deferred and retries.
+// A FAILURE IS A LINE, NOT A FAILED CALL, and each half says why it can be.
 //
-// THAT HOLDS BECAUSE THE HANDLE REPAIRS ITSELF. A reset deletes before it
-// creates, so a create that fails leaves the broker with no consumer at all —
-// and the appliers are relaunched after this either way.
-// [jetstream.DomainConsumer] clears the handle on that path and rebuilds it on
-// the next fetch, at the position it held before; without that this line would
-// be logging the start of a domain that never applies another record.
+//   - THE CONSUMER: correctness is the checkpoint's and the applier resumes
+//     from it regardless; what a consumer left behind costs is the redeliveries
+//     between. So a checkpoint that cannot be read leaves that consumer where
+//     it was, exactly as a failed reset does — and neither turns an adoption
+//     that happened into one its caller reports as deferred and retries. THAT
+//     HOLDS BECAUSE THE HANDLE REPAIRS ITSELF. A reset deletes before it
+//     creates, so a create that fails leaves the broker with no consumer at
+//     all — and the appliers are relaunched after this either way.
+//     [jetstream.DomainConsumer] clears the handle on that path and rebuilds it
+//     on the next fetch, at the position it held before; without that this
+//     line would be logging the start of a domain that never applies another
+//     record.
+//   - THE RUNNER: a re-key that could not run — the live instant unreadable,
+//     or the checkpoint itself — leaves the verdict to the loop, which
+//     re-derives it against the row it loads when it is relaunched
+//     ([statelog.Runner.Run]) using the instants it has read. The one
+//     case that leaves wrong is a file keyed to a stream the runner never read,
+//     and the next heartbeat's reading of the live instant names it
+//     ([statelog.Runner.RecreationStale]) and asks for the join that re-keys
+//     it. So neither failure strands a node the adoption brought back.
 func (s *stateLog) resetConsumers(ctx context.Context, live func(name string) (time.Time, error)) {
 	for _, name := range s.order {
 		running := s.domains[name]
@@ -1898,17 +1929,19 @@ func (s *stateLog) resetConsumers(ctx context.Context, live func(name string) (t
 			// the file replaced would stop again on the very checkpoint
 			// it now holds — a node a peer re-anchored past with no way
 			// out but deleting its database.
+			const rederived = "the applier re-derives its verdicts from this " +
+				"checkpoint when it resumes, against the creation instants it has " +
+				"read; a row keyed to a stream it has not read is named by the " +
+				"next heartbeat, which asks for the join that re-keys it"
 			if instant, lerr := live(name); lerr != nil {
 				log.WarnContext(ctx, "statelog_runner_not_rekeyed",
 					"domain", name, "checkpoint", at.String(), "error", lerr.Error(),
 					"detail", "the live stream's creation instant could not be "+
-						"read, so the applier keeps the verdict it held; the next "+
-						"heartbeat finds it stopped and asks again")
+						"read; "+rederived)
 			} else if rerr := running.runner.Rejoined(at, keyed, instant); rerr != nil {
 				log.WarnContext(ctx, "statelog_runner_not_rekeyed",
 					"domain", name, "checkpoint", at.String(), "error", rerr.Error(),
-					"detail", "the applier keeps the verdict it held; the next "+
-						"heartbeat finds it stopped and asks again")
+					"detail", rederived)
 			}
 			err = running.consumer.Reset(ctx, at.Seq)
 		}
@@ -1917,7 +1950,8 @@ func (s *stateLog) resetConsumers(ctx context.Context, live func(name string) (t
 				"domain", name, "checkpoint", at.String(), "error", err.Error(),
 				"detail", "the consumer is rebuilt at its previous position by "+
 					"the next fetch, so this costs redeliveries rather than "+
-					"correctness")
+					"correctness; the applier re-derives its verdicts from the "+
+					"checkpoint it loads when it resumes")
 		}
 	}
 }
@@ -3072,6 +3106,16 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			// what fence 0 refuses an ordinary write on, on a node whose
 			// broker came back from an older copy with its instant.
 			s.observeStream(ctx, name, running.runner, at, stats)
+			// AND A RECREATION VERDICT THE LIVE INSTANT CONTRADICTS: rows
+			// an adoption keyed to the stream the broker serves, under a
+			// runner whose re-key could not happen — see
+			// [statelog.Runner.RecreationStale]. Nothing but a join
+			// re-keys it, and a reanchor refuses such rows, so the rejoin
+			// is asked for here; the join finds every domain current and
+			// re-keys each runner against the instant it reads.
+			if running.runner.RecreationStale(stats.CreatedAt) {
+				below = true
+			}
 		}
 		running.progress.observe(row.At, pos.AppliedThrough, behind, held)
 		row.Domains[name] = pos

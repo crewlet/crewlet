@@ -1484,3 +1484,153 @@ func TestAJoinReKeysTheRunnerOnlyToTheFleetsHistory(t *testing.T) {
 		t.Fatalf("the loop stands at %s, want generation 2 sequence 2", got)
 	}
 }
+
+// A RE-RUN JUDGES ITS VERDICTS AGAINST THE CHECKPOINT IT LOADS.
+//
+// An adoption replaces every row, and the join then re-keys the runner to them
+// — but the restore of an estate a failed join left closed judges the file
+// against a live instant it may be unable to read, and the re-key does not
+// happen. A loop that trusted the verdicts it held stopped again on every
+// re-run, over rows that were the fleet's history, and nothing short of deleting
+// the database released it. A row that still bears a verdict out keeps it.
+func TestARerunJudgesItsVerdictsAgainstTheCheckpointItLoads(t *testing.T) {
+	t.Parallel()
+	born := time.Date(2026, 9, 10, 12, 0, 0, 123_456_789, time.UTC)
+	rebuilt := born.Add(time.Hour)
+	fresh := func(t *testing.T) *applyHarness {
+		t.Helper()
+		h := newApplyHarness(t, probeDomain{})
+		h.rebuild(probeDomain{}, born)
+		h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+		if err := h.run(1); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		return h
+	}
+	own := statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}
+	adopted := statelog.Position{Stream: probeStream, Generation: 2, Seq: 1}
+
+	// THE PASSED GENERATION: rows still below it keep it, and rows at it — a
+	// file an adoption replaced — clear it.
+	h := fresh(t)
+	if !h.runner.ObserveFleetGeneration(2) {
+		t.Fatal("the peer's generation established nothing")
+	}
+	if err := runOnce(t, h.runner); !errors.Is(err, statelog.ErrGenerationPassed) {
+		t.Fatalf("a re-run over rows still in generation 1 = %v, want the passed "+
+			"generation", err)
+	}
+	seedCursor(t, h.db, probeStream, adopted, born)
+	h.fetch.offer(2, func() statelog.Envelope {
+		e := env(2, "edit", "b", "op-2", 1)
+		e.Gen = 2
+		return e
+	}())
+	if err := rerun(t, h, 2); err != nil {
+		t.Fatalf("a re-run over rows the fleet's generation replaced = %v — it "+
+			"stopped on a verdict about rows the file no longer holds", err)
+	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("after the re-run the identity is %v, want none", err)
+	}
+
+	// THE RECREATION, established while the loop ran: rows still keyed to the
+	// lost stream keep it, and rows keyed to the live one clear it and re-key
+	// the runner to that stream.
+	h = fresh(t)
+	if !h.runner.ObserveStream(rebuilt) {
+		t.Fatal("the rebuild established nothing")
+	}
+	if err := runOnce(t, h.runner); !errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("a re-run over rows keyed to the lost stream = %v, want the "+
+			"rebuild", err)
+	}
+	seedCursor(t, h.db, probeStream, own, rebuilt)
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := rerun(t, h, 2); err != nil {
+		t.Fatalf("a re-run over rows keyed to the live stream = %v", err)
+	}
+	if got := h.runner.StreamCreatedAt(); !got.Equal(rebuilt) {
+		t.Fatalf("the runner is keyed to %s after the re-run, want the live %s — "+
+			"the next reading would find the stream recreated again", got, rebuilt)
+	}
+	if got := h.runner.KeyedTo(); !got.Equal(rebuilt) {
+		t.Fatalf("the runner publishes its rows as keyed to %s, want %s", got, rebuilt)
+	}
+}
+
+// A RECREATION VERDICT THE LIVE INSTANT CONTRADICTS IS NAMED, AND ONLY THEN.
+//
+// A runner that never read the live instant — its re-key after an adoption did
+// not happen — judges rows keyed to that stream as another stream's, because
+// the only instant it has is the one it was built with. The loop then stops as
+// recreated and a reanchor refuses those rows, so the heartbeat has to be told
+// the verdict is wrong for the join that re-keys it to be asked for.
+func TestARecreationVerdictTheLiveInstantContradictsIsNamed(t *testing.T) {
+	t.Parallel()
+	born := time.Date(2026, 9, 10, 12, 0, 0, 123_456_789, time.UTC)
+	live := born.Add(time.Hour)
+	other := live.Add(time.Hour)
+	h := newApplyHarness(t, probeDomain{})
+	h.rebuild(probeDomain{}, born)
+	if h.runner.RecreationStale(live) {
+		t.Fatal("a runner holding no verdict reads as holding a stale one")
+	}
+	// THE DONOR'S FILE: rows keyed to the live stream, which this runner has
+	// never read.
+	at := statelog.Position{Stream: probeStream, Generation: 1, Seq: 4}
+	seedCursor(t, h.db, probeStream, at, live)
+	if err := runOnce(t, h.runner); !errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("the loop over rows keyed to a stream it never read = %v, want "+
+			"the recreation it judges them by", err)
+	}
+	switch {
+	case !h.runner.RecreationStale(live):
+		t.Fatal("the live instant the rows are keyed to does not contradict the verdict")
+	case h.runner.RecreationStale(born):
+		t.Fatal("the instant the runner was built with reads as contradicting it")
+	case h.runner.RecreationStale(other):
+		t.Fatal("a third stream reads as contradicting it — the rows are not its")
+	}
+	// AND THE JOIN'S RE-KEY, which is what the heartbeat asks for, clears it.
+	if err := h.runner.Rejoined(at, live.Truncate(time.Microsecond), live); err != nil {
+		t.Fatalf("Rejoined: %v", err)
+	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("after the re-key the identity is %v, want none", err)
+	}
+	if h.runner.RecreationStale(live) {
+		t.Fatal("a cleared verdict still reads as stale")
+	}
+}
+
+// rerun runs a loop that STOPPED before and waits for it to reach want, or
+// returns what ended it.
+//
+// NOT [applyHarness.run], which polls [statelog.Runner.Stopped] from the moment
+// it starts the loop: the previous run's stop is still recorded until the new
+// run clears it, so that poll can read the old stop as this run's.
+func rerun(t *testing.T, h *applyHarness, want uint64) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.runner.Committed().Seq >= want {
+			cancel()
+			<-errs
+			return nil
+		}
+		select {
+		case err := <-errs:
+			return err
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-errs
+	return fmt.Errorf("the applier reached %s, want sequence %d",
+		h.runner.Committed(), want)
+}
