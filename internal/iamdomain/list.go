@@ -82,6 +82,18 @@ type PersonRow struct {
 
 	// Version is the iam position that last wrote this row.
 	Version uint64
+
+	// Reserved reports a RESERVATION: an enrolment whose claims landed and
+	// whose content record has not — see [Sighting.Reserved]. It carries
+	// the claimed columns and nothing a person is: no kind, no stage, no
+	// grants, and nothing sealed that the content record would have
+	// placed.
+	//
+	// LISTED RATHER THAN HIDDEN, because it holds an address, a login or
+	// a seat nobody else can take, and an administrator whose enrolment
+	// was refused as "claimed" has to be able to find what claimed it.
+	// Decoded as a person, it failed the whole directory page instead.
+	Reserved bool
 }
 
 // PeopleQuery is one page of the directory.
@@ -255,16 +267,21 @@ func scanPerson(rows *sql.Rows) (PersonRow, error) {
 		&created, &updated, &version, &epoch); err != nil {
 		return PersonRow{}, fmt.Errorf("iamdomain: scan a directory row: %w", err)
 	}
-	person, err := DecodePerson(document)
-	if err != nil {
-		return PersonRow{}, fmt.Errorf("iamdomain: open person %q: %w", out.ID, err)
-	}
 	out.Kind = iam.Kind(kind)
 	out.Stage = iam.Stage(stage)
 	out.Shredded = shredded != 0
-	out.Grants = person.Grants
-	out.Colleague = person.Colleague
 	out.Epoch = uint64(epoch)
+	if reservation(kind) {
+		out.Reserved = true
+	} else {
+		person, err := DecodePerson(document)
+		if err != nil {
+			return PersonRow{}, fmt.Errorf("iamdomain: open person %q: %w",
+				out.ID, err)
+		}
+		out.Grants = person.Grants
+		out.Colleague = person.Colleague
+	}
 	out.CreatedAt = fromMillis(created)
 	out.UpdatedAt = fromMillis(updated)
 	out.Version = uint64(version)

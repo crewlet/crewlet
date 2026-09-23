@@ -1346,6 +1346,14 @@ the log and a deleted row would leave an address arbitrated to nobody the
 directory can name. `crewlet iam check` reports one older than an hour as
 `claim_orphaned`, and removing its id releases what it holds.
 
+That half-finished row is a **reservation**: it holds the address, login or
+seat its claims took, and it has no kind, no stage and no credential, so it
+may do nothing. Every reader reports it as one rather than as a person —
+`GET /iam/people` lists it with `"reserved": true`, a sign-in or a Tier A
+token binding through its login finds nobody who can act, a session naming it
+finds no person, and the first-person bootstrap does not count it as somebody
+enrolled. It is never a reason for a 503.
+
 > **If you are reading the schema and reaching for a unique index as a
 > backstop: don't.** A duplicate cannot arise from ordinary traffic, and it
 > *can* arise from a restore or a reanchor. Three **non-unique, partial**

@@ -42,6 +42,9 @@
 // arbitrate on. A sequence that stops halfway leaves a CLAIMED ADDRESS WITH NO
 // PERSON, which is a legal named state rather than corruption: the claim report
 // names it ([Reader.Claims]), and removing the reservation's id releases it.
+// Until then it is a RESERVATION to every reader — a row with no kind that acts
+// as nobody — and never a person whose document failed to decode, which is the
+// unknown answer and a 503 wherever it reaches a request.
 //
 // # What a record states that it is not the subject of
 //

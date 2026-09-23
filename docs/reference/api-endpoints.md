@@ -710,6 +710,12 @@ read. They are neither reported as dangling nor left out silently, so a report
 answered during a chart stall does not read as a clean directory; ask a node
 whose chart is current.
 
+A row marked `reserved` is an enrolment whose claims landed and whose person
+record has not: it holds its address, login or seat and has no kind, no stage
+and no grants. It is how an administrator whose enrolment was refused as
+claimed by an id they do not recognise finds what claimed it; it acts as
+nobody everywhere, and is never a reason for a 503.
+
 #### `GET /iam/audit` pages by position, never by time
 
 Two nodes' clocks are compared nowhere in this engine, so `since` and `before`

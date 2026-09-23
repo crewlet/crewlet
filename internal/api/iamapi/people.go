@@ -53,6 +53,13 @@ type personView struct {
 	// is a keyring somebody still has.
 	Sealed bool `json:"sealed,omitempty"`
 
+	// Reserved reports an enrolment whose claims landed and whose content
+	// record has not: the row holds an address, a login or a seat and is
+	// nobody yet. A STATE rather than a failure, and the answer to an
+	// administrator whose enrolment was refused as claimed by an id they
+	// do not recognise.
+	Reserved bool `json:"reserved,omitempty"`
+
 	Seat   string `json:"seat,omitempty"`
 	SeatAt uint64 `json:"seat_at,omitempty"`
 
@@ -73,7 +80,7 @@ func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personVie
 		Seat: row.Seat, SeatAt: row.SeatAt, Grants: row.Grants,
 		Colleague: row.Colleague, Epoch: row.Epoch,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
-		Version: row.Version,
+		Version: row.Version, Reserved: row.Reserved,
 	}
 	if row.Shredded {
 		// THE ROW ITSELF SAYS SO, without a fleet-secret read: a

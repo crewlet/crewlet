@@ -350,3 +350,93 @@ func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
 			"would be minted over and every address orphaned")
 	}
 }
+
+// A RESERVATION IS READ AS ONE, AND NEVER AS A PERSON THAT WILL NOT DECODE.
+//
+// An enrolment is a sequence — the claims, then the person — and one that
+// stops after a claim leaves a row with no kind, no stage and an empty
+// document. Every reader used to decode that document as a person and fail, so
+// the row turned into the UNKNOWN answer wherever it was touched: a Tier A
+// token whose machine enrolment stopped after its login claim answered 503 on
+// every guarded route, the directory listing failed whole, and the bootstrap
+// counted it as somebody and closed for good. It is nobody, and every read
+// here says so in its own shape.
+func TestAReservationIsReadAsOneAndNotAsAnUndecodablePerson(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+
+	// THE CLAIM ALONE, which is exactly what an enrolment that stopped
+	// after its address leaves behind.
+	id := uuid.New().String()
+	const blind = "reserved-blind"
+	if err := rig.claim(iamdomain.KindEmail, blind, id, "op-reserve"); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	rig.drain()
+
+	seen, err := reader.PersonByEmailBlind(t.Context(), blind)
+	if err != nil {
+		t.Fatalf("a reservation was read as an error: %v — a token bound "+
+			"through it answers 503 on every guarded route", err)
+	}
+	if seen.ID != id || !seen.Reserved {
+		t.Errorf("the reservation read as %+v, want person %s marked reserved",
+			seen, id)
+	}
+	if seen.Kind != "" || seen.Stage.MayAct() || len(seen.Credentials) != 0 {
+		t.Errorf("a reservation carries a kind %q, stage %q or credentials "+
+			"%v — it is nobody and may do nothing", seen.Kind, seen.Stage,
+			seen.Credentials)
+	}
+
+	anybody, err := reader.AnyPerson(t.Context())
+	if err != nil {
+		t.Fatalf("AnyPerson: %v", err)
+	}
+	if anybody {
+		t.Error("a reservation counts as somebody enrolled, so a founder " +
+			"whose bootstrap stopped after its address claim is refused the " +
+			"retry that would finish it")
+	}
+
+	page, err := reader.People(t.Context(), iamdomain.PeopleQuery{})
+	if err != nil {
+		t.Fatalf("the directory failed over a reservation: %v", err)
+	}
+	if len(page.People) != 1 || !page.People[0].Reserved ||
+		page.People[0].ID != id {
+		t.Errorf("the directory lists %+v, want the one reservation, marked",
+			page.People)
+	}
+	row, err := reader.Person(t.Context(), id)
+	if err != nil || !row.Reserved {
+		t.Errorf("Person(%s) = %+v, %v; want the reservation, marked", id, row, err)
+	}
+
+	// AND A BEARER NAMING IT FINDS NOBODY — not a person at no stage. The
+	// two answers are opposite on a node that has applied an enrolment's
+	// claims and not yet its person: absent lets the bearer's own start
+	// position say "behind", where "found, may not act" would sign
+	// somebody out on the one node that is merely late.
+	identity, err := reader.Resolve(t.Context(), "no-such-lineage", id)
+	if err != nil {
+		t.Fatalf("Resolve over a reservation: %v", err)
+	}
+	if identity.Person.Found {
+		t.Errorf("a reservation resolved as a person: %+v", identity.Person)
+	}
+
+	// AND A WRITE THAT FORMS THE NEXT DOCUMENT FROM IT IS REFUSED AS THE
+	// ABSENCE IT IS, which a caller answers as "name somebody this node
+	// holds" — not as a document that failed to open, which reads as a
+	// newer peer's row and sends an operator looking for an upgrade.
+	_, err = rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
+		PersonID: id, OpID: "op-update-reservation",
+		Apply: func(p iamdomain.Person) (iamdomain.Person, error) { return p, nil },
+	})
+	if !errors.Is(err, iamdomain.ErrNotFound) {
+		t.Errorf("updating a reservation answered %v, want %v", err,
+			iamdomain.ErrNotFound)
+	}
+}

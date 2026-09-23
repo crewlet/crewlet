@@ -197,6 +197,17 @@ func coversPerson(d statelog.Deferral, person string) bool {
 	return false
 }
 
+// reservation reports whether a row's kind column marks it as a RESERVATION:
+// the half of an enrolment its claims write before the content record fills
+// it in, with no kind, no stage and an empty document.
+//
+// THE KIND AND NOT THE DOCUMENT, because the kind is the column the content
+// record's apply sets and nothing else ever clears: an empty document could
+// also be a row some later build writes differently, and a reader deciding
+// from it would call a newer peer's person a reservation. A row whose kind is
+// set and whose document will not decode is still the unknown arm.
+func reservation(kind string) bool { return kind == "" }
+
 // readSessionRow fills one session's facts.
 func readSessionRow(ctx context.Context, tx *sql.Tx, lineage string,
 	out *session.SessionRow) error {
@@ -233,19 +244,28 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 		return nil
 	}
 	var (
-		stage, login, seat string
-		chartPosition      int64
-		document           []byte
+		kind, stage, login, seat string
+		chartPosition            int64
+		document                 []byte
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT stage, login, seat_id, chart_position, document
+		SELECT kind, stage, login, seat_id, chart_position, document
 		  FROM iam_people WHERE id = ?`, person).
-		Scan(&stage, &login, &seat, &chartPosition, &document)
+		Scan(&kind, &stage, &login, &seat, &chartPosition, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:
 		return fmt.Errorf("iamdomain: read the person row: %w", err)
+	case reservation(kind):
+		// A RESERVATION IS NOT THE PERSON, and it is reported as ABSENT
+		// rather than as a person who may not act. The two answers are
+		// opposite here: a node that has applied an enrolment's claims
+		// and not yet its content record holds exactly this row, and
+		// the bearer's start position is what turns "absent" into the
+		// right one of gone and behind — while "found, at no stage"
+		// would refuse with 401 on the one node that is merely behind.
+		return nil
 	}
 	doc, err := DecodePerson(document)
 	if err != nil {
@@ -443,6 +463,19 @@ type Sighting struct {
 	Colleague   iam.Colleague
 	Seat        string
 	SeatAt      uint64
+
+	// Reserved reports a RESERVATION: the row an enrolment's claims leave
+	// before its content record fills it in — see [reservation]. It holds
+	// the token that was looked up and nothing else: no kind, no stage and
+	// no credential, so it may do nothing at all, and every caller that
+	// asks what somebody may do reads it as nobody who can.
+	//
+	// AN ANSWER AND NOT AN ERROR. The row's document is empty by design,
+	// and decoding it used to fail as though a newer peer had written it:
+	// a Tier A token whose machine enrolment stopped after its login claim
+	// answered 503 on every guarded route until a sweep collected the
+	// row, for a binding that had never existed.
+	Reserved bool
 }
 
 // PersonByLogin resolves a login to the person who holds it.
@@ -567,14 +600,14 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	out *Sighting) error {
 
 	var (
-		stage, login, seat string
-		chartPosition      int64
-		document           []byte
+		kind, stage, login, seat string
+		chartPosition            int64
+		document                 []byte
 	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT id, stage, login, seat_id, chart_position, document
+		SELECT id, kind, stage, login, seat_id, chart_position, document
 		  FROM iam_people WHERE `+column+` = ? AND shredded = 0`, token).
-		Scan(&out.ID, &stage, &login, &seat, &chartPosition, &document)
+		Scan(&out.ID, &kind, &stage, &login, &seat, &chartPosition, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// NOBODY, and the zero value is the answer. See the doc on
@@ -583,6 +616,14 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 		return nil
 	case err != nil:
 		return fmt.Errorf("iamdomain: resolve a person: %w", err)
+	case reservation(kind):
+		// THE TOKEN IS HELD AND NOBODY HOLDS IT YET. The id and the
+		// claimed columns are the row's; everything a caller would
+		// decide with is absent, which is what makes a reservation act
+		// as nobody without every caller having to know the shape.
+		*out = Sighting{ID: out.ID, Login: login, Seat: seat,
+			SeatAt: uint64(chartPosition), Reserved: true}
+		return nil
 	}
 	doc, err := DecodePerson(document)
 	if err != nil {
@@ -608,12 +649,18 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 // stop working the moment it is not. It is a COUNT rather than a listing
 // precisely because it is asked by an unauthenticated route — the answer is
 // one bit, and a roster is what it must never become.
+//
+// A RESERVATION IS NOBODY. Counted, the first founder's enrolment stopping
+// after its address claim closed the bootstrap for good: the retry that would
+// have finished it was refused as `already_bootstrapped` by the half it was
+// retrying.
 func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		var count int
 		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM iam_people WHERE shredded = 0)`).
+			`SELECT EXISTS(SELECT 1 FROM iam_people
+			  WHERE shredded = 0 AND kind <> '')`).
 			Scan(&count); err != nil {
 			return fmt.Errorf("iamdomain: count people: %w", err)
 		}

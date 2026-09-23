@@ -1148,7 +1148,7 @@ func enrolledKindOf(ctx context.Context, tx *sql.Tx, personID string) (iam.Kind,
 	err := tx.QueryRowContext(ctx,
 		`SELECT kind FROM iam_people WHERE id = ?`, personID).Scan(&kind)
 	switch {
-	case errors.Is(err, sql.ErrNoRows), err == nil && kind == "":
+	case errors.Is(err, sql.ErrNoRows), err == nil && reservation(kind):
 		return "", fmt.Errorf("%w: this node holds no enrolled person %s, so it "+
 			"cannot say which grammar their login must follow — a person's is "+
 			"dotted and a machine's is coloned", ErrNotFound, personID)
@@ -1364,16 +1364,22 @@ func heldPerson(ctx context.Context, tx *sql.Tx, personID, forming string) (
 	Person, error) {
 
 	var (
-		document []byte
-		stage    string
+		document    []byte
+		kind, stage string
 	)
 	err := tx.QueryRowContext(ctx,
-		`SELECT document, stage FROM iam_people WHERE id = ?`, personID).
-		Scan(&document, &stage)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Person{}, fmt.Errorf("iamdomain: person %q is not held on this "+
-			"node, so %s cannot be formed here", personID, forming)
-	} else if err != nil {
+		`SELECT document, kind, stage FROM iam_people WHERE id = ?`, personID).
+		Scan(&document, &kind, &stage)
+	switch {
+	case errors.Is(err, sql.ErrNoRows), err == nil && reservation(kind):
+		// A RESERVATION HAS NO DOCUMENT TO FORM THE NEXT ONE FROM, and
+		// it is refused as the absence it is rather than as a document
+		// that failed to open: the enrolment it belongs to has not
+		// finished, and what the caller has to do is the same either
+		// way — name somebody this node holds.
+		return Person{}, fmt.Errorf("%w: person %q is not enrolled on this "+
+			"node, so %s cannot be formed here", ErrNotFound, personID, forming)
+	case err != nil:
 		return Person{}, fmt.Errorf("iamdomain: read person %q: %w", personID, err)
 	}
 	person, err := DecodePerson(document)
