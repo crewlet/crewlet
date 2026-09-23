@@ -231,6 +231,35 @@ var categories = map[string]placement{
 	"skill_telemetry_write_failed": {"system", RateEngine},
 	"subagent_batched":             {"system", RateEngine},
 
+	// Auth: who signed in and how, what ended a session, what changed
+	// about what a person may do, and whether a record on a fleet log was
+	// written by the fleet at all. The live half of a trail whose durable,
+	// fleet-wide half is `iam_history` — see internal/events/types' auth.go.
+	//
+	// EVERY RATE HERE IS SOMEBODY THIS ENGINE ALREADY TRUSTS, and the one
+	// that looks like it should not be is the proof: a failed sign-in is
+	// authored by whoever can reach the listener, so it is NOT a type — it
+	// is a metrics counter, and the row is iam_login_failures, one per
+	// client per minute, paced by the engine's own flush loop. The two
+	// signature verdicts are engine-rated for the same reason: a key id is
+	// whatever a frame says, so the node reports each (domain, key id)
+	// once, under a cap on how many distinct ids it will ever name.
+	"iam_session_started":           {"auth", RateAuthenticated},
+	"iam_session_ended":             {"auth", RateAuthenticated},
+	"iam_session_reuse_detected":    {"auth", RateAuthenticated},
+	"iam_login_failures":            {"auth", RateEngine},
+	"iam_stepup_completed":          {"auth", RateAuthenticated},
+	"iam_credential_minted":         {"auth", RateAuthenticated},
+	"iam_credential_revoked":        {"auth", RateAuthenticated},
+	"iam_grants_changed":            {"auth", RateAuthenticated},
+	"iam_token_first_use":           {"auth", RateAuthenticated},
+	"iam_token_overreach":           {"auth", RateAuthenticated},
+	"iam_recovery_code_used":        {"auth", RateAuthenticated},
+	"iam_mfa_reset":                 {"auth", RateAuthenticated},
+	"iam_session_generation_bumped": {"auth", RateAuthenticated},
+	"statelog_record_unverifiable":  {"auth", RateEngine},
+	"statelog_record_tampered":      {"auth", RateEngine},
+
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that
 	// traffic with one toggle.
@@ -261,6 +290,27 @@ var categories = map[string]placement{
 // completeness test prints it. The cause is the same fact in the form a WALK
 // can read: [AdmissionViolations] holds the estate to a rule, and a rule
 // cannot be stated in a sentence nothing parses.
+//
+// # Two facts that are kept out by having NO TYPE, and why they are not here
+//
+// A per-request AUTHORIZATION DECISION and a session TOUCH are both named by
+// the identity design as things the audit trail deliberately does not hold —
+// the first because it is orders of magnitude more voluminous than everything
+// else in the store and is a fact about a poll rather than about the company,
+// the second because it is a clock rather than an event. Neither is an entry
+// below, because an entry here is for a type something PUBLISHES and keeps out
+// of the estate: nothing in this build publishes either, and registering a
+// type only to exclude it would be a wire name with no producer, which reads
+// to the next person exactly like a type whose publisher was lost.
+//
+// What keeps them out is therefore the same rule [AdmissionViolations] states,
+// applied one step earlier: a refused request is a 403 the authority table
+// wrote and a log line, a request a Tier A token overreached on is the
+// COALESCED `iam_token_overreach`, and a session's use moves nothing at all —
+// its rotation is derived, so an hour of use writes nothing anywhere. A change
+// that wanted a row per decision or per touch would have to add the type, and
+// the type would have to state a rate author; an unauthenticated caller
+// authors the rate of both, so the walk refuses it there.
 var excluded = map[string]Exclusion{
 	"agent_turn_progress": {Cause: CauseIntermediate, Reason: "fires once per LLM round as a live-only signal; the " +
 		"matching agent_phase_completed is its durable record, so persisting " +

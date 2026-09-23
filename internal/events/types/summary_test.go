@@ -171,6 +171,54 @@ func TestSummaries(t *testing.T) {
 		payload: AgentTurnProgress{RoleName: "Dev", Phase: PhaseReview, RoundNum: 2},
 		want:    "Dev working (review, round 3)",
 	}, {
+		name: "a sign-in names its method and its second factor",
+		payload: IAMSessionStarted{Login: "jane.doe", Method: SignInPassword,
+			SecondFactor: FactorTOTP},
+		want: "jane.doe signed in (password + totp)",
+	}, {
+		name:    "a session ended by a deadline names nobody as its author",
+		payload: IAMSessionEnded{Person: "p-1", Lineage: "0192aabbccddeeff", Reason: EndIdle},
+		source:  "node-a",
+		want:    "Session 0192aabb of p-1 ended (idle)",
+	}, {
+		name:    "a sign-out everywhere says every session",
+		payload: IAMSessionEnded{Person: "p-1", Reason: EndLogoutAll, By: "jane.doe"},
+		want:    "Every session of p-1 ended (logout_all)",
+	}, {
+		// THE COUNT IS BOTH ARMS: an attacker the throttle turned away
+		// made those requests too, and a line counting only the verified
+		// ones reads as a quieter minute than it was.
+		name: "a minute of failures counts every arm and names the methods",
+		payload: IAMLoginFailures{Client: "203.0.113.9", Attempts: 4, Throttled: 2,
+			Methods: []FailureMethod{FailBearer, FailPassword}},
+		want: "6 failed attempt(s) from 203.0.113.9 in one minute (bearer, password; 2 throttled)",
+	}, {
+		name:    "the overflow row says how many clients it folded",
+		payload: IAMLoginFailures{Client: "*", Clients: 300, Attempts: 900},
+		want:    "900 failed attempt(s) from 300 clients past the per-minute cap in one minute",
+	}, {
+		name:    "a token's first use names where it was used from",
+		payload: IAMTokenFirstUse{Token: "ops", Route: "/secrets", Remote: "198.51.100.4"},
+		want:    "Token ops used (first use this hour) on /secrets from 198.51.100.4",
+	}, {
+		name: "an unverifiable record names the key and what the node holds",
+		payload: RecordUnverifiable{Domain: "iam", KeyID: "k3",
+			Held: []string{"k2", "k1"}},
+		want: `iam record signed under key "k3", which this node does not hold ` +
+			`(it holds k1, k2); retained until it does`,
+	}, {
+		name:    "a frame that is not a frame names no key",
+		payload: RecordTampered{Domain: "tracker", Position: "seq 918"},
+		want:    "tracker record at seq 918 fails its signature under no key (not a signed frame); the applier stopped",
+	}, {
+		name:    "a spent recovery code says how many are left",
+		payload: IAMRecoveryCodeUsed{Login: "jane.doe", Remaining: 0},
+		want:    "jane.doe used a recovery code (0 left)",
+	}, {
+		name:    "a grant change lists both directions",
+		payload: IAMGrantsChanged{Person: "p-1", Added: []string{"audit:read"}, Removed: []string{"config:write", "fleet:operate"}},
+		want:    "Grants of p-1 changed: +audit:read; -config:write, -fleet:operate",
+	}, {
 		name:    "a compaction pass names the seat it ran for",
 		payload: CompactionCompleted{SkippedReason: CompactionAlreadyRunning},
 		source:  "eng",

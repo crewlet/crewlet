@@ -283,6 +283,37 @@ prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # agent_phase_completed, and measuring them there
                            # means hauling every phase payload back
 
+# auth: who signed in and how, what ended a session, what changed about
+#       what a person may do, and whether a record on a fleet log was
+#       written by the fleet at all. The LIVE half of the trail: each row is
+#       the publishing node's, and the fleet-wide record is iam_history
+iam_session_started        # method, second factor, lineage, client address
+iam_session_ended          # logout / logout_all / idle / absolute / revoked
+                           # / idp_revoked / person_removed. An idle or
+                           # absolute end is noticed when the bearer is next
+                           # presented, once per session per node
+iam_session_reuse_detected # a cookie replayed past the rotation overlap;
+                           # every session the person held was ended
+iam_login_failures         # ONE per client per minute, from the engine's own
+                           # flush loop: counts, the distinct-subject count,
+                           # the methods (a rejected bearer is `bearer`), how
+                           # many the throttle turned away, and any person the
+                           # engine resolved. Never what was presented
+iam_stepup_completed       # a signed-in person confirming who they are
+iam_credential_minted, iam_credential_revoked, iam_mfa_reset
+iam_grants_changed         # one per person write, from the writer that
+                           # decided it: added, removed, by, record version
+iam_token_first_use        # a Tier A token used, once per token per hour
+                           # (per request with audit_every_use: true)
+iam_token_overreach        # a Tier A token refused by a route, coalesced the
+                           # same way
+iam_recovery_code_used     # and how many the person has left
+iam_session_generation_bumped   # every session in the company ended
+statelog_record_unverifiable    # a state-log record signed under a key this
+                                # node does not hold; retained until it does
+statelog_record_tampered        # a record whose signature fails under a key
+                                # this node holds; the applier stopped
+
 # webhook: no event type; the receiver writes the delivery's row itself,
 #          with the provider's exact bytes as the payload
 ```
@@ -340,10 +371,22 @@ estate.** A failed login is the worked example: anyone who can reach the API
 can author millions a day for nothing, so a row per attempt hands the size of
 the store — and of every artefact taken from it — to whoever is making the
 attempts, with no credential to revoke and no identity on the row. The
-per-attempt fact belongs on a metrics counter; what becomes a row is a
-**coalesced** event, one per source per minute, published by the engine's own
-loop and therefore rated by the engine. A type that must stay out for this
+per-attempt fact is the `crewlet.auth.attempts.failed` counter; what becomes a
+row is `iam_login_failures`, one per client per minute, published by the
+engine's own flush loop and therefore rated by the engine. It carries counts
+and never the presented value — not a mistyped login, not a password typed
+into the login box, and not an unsalted hash of either, which would reverse
+against the company's own roster in one pass. Past a fixed number of clients
+in one minute the rest fold into a single `*` row that says how many there
+were, so a distributed attack's size is recorded without its address pool
+deciding how many rows the minute writes. A type that must stay out for this
 reason is excluded with the cause `anonymous_rate`.
+
+Two facts are kept out by having **no type at all**: a per-request
+authorization decision (a fact about a poll rather than about the company; a
+Tier A token refused by a route is the coalesced `iam_token_overreach`
+instead) and a session touch (a clock, not an event). The exclusion map is
+for types something publishes, and nothing publishes either.
 
 The rule is enforced by a walk over the taxonomy rather than remembered: a type
 given a category while declaring an anonymous rate, and a type given a category

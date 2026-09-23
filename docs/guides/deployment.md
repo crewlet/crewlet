@@ -956,6 +956,7 @@ from that map — a guard test fails if the two drift.
 | Category | Event types |
 |---|---|
 | `a2a` | `a2a_channel_closed`, `a2a_channel_opened`, `a2a_message_sent` |
+| `auth` | `iam_credential_minted`, `iam_credential_revoked`, `iam_grants_changed`, `iam_login_failures`, `iam_mfa_reset`, `iam_recovery_code_used`, `iam_session_ended`, `iam_session_generation_bumped`, `iam_session_reuse_detected`, `iam_session_started`, `iam_stepup_completed`, `iam_token_first_use`, `iam_token_overreach`, `statelog_record_tampered`, `statelog_record_unverifiable` |
 | `decision` | `contribution_received`, `contribution_requested`, `decision_requested`, `decision_resolved` |
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `config_revision_activated`, `config_revision_applied`, `config_revision_scrubbed`, `org_started`, `org_stopped` |
@@ -993,11 +994,22 @@ is that nothing may be: this file is on a disk you sized, and every backup,
 every snapshot a lagging node installs and every integrity check taken before
 either counts is a copy of the whole of it. A failed login is the case to hold
 in mind — anyone who can reach the API can author millions a day for free — so
-the per-attempt fact belongs on a metrics counter, and what becomes a row is
-the coalesced event the engine publishes per source per minute, which the
-engine paces. A type kept out for this reason is excluded with the cause
+the per-attempt fact is the `crewlet.auth.attempts.failed` counter on the
+[metrics](../reference/metrics.md) exporter, and what becomes a row is
+`iam_login_failures`: one per client per minute, carrying counts and never
+what was presented, published by the engine's own flush loop and therefore
+paced by the engine. A type kept out for this reason is excluded with the cause
 `anonymous_rate`. The rule is enforced by a test over the taxonomy, not by
 review.
+
+Two facts the identity design names as deliberately unrecorded have no event
+type at all rather than an excluded one: a per-request **authorization
+decision** (orders of magnitude more voluminous than everything else here, and
+a fact about a poll rather than about the company — a Tier A token refused by
+a route is the coalesced `iam_token_overreach` instead) and a **session
+touch** (a clock rather than an event; a session's rotation is derived, so an
+hour of use writes nothing anywhere). The exclusion table lists types something
+publishes, and nothing publishes either of these.
 
 #### Querying events
 

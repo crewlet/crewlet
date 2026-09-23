@@ -59,6 +59,12 @@ func catalogue() []events.Payload {
 		ToolSkillPageChanged{},
 		// webhook.go
 		RawWebhook{},
+		// auth.go
+		IAMSessionStarted{}, IAMSessionEnded{}, IAMSessionReuseDetected{},
+		IAMLoginFailures{}, IAMStepUpCompleted{}, IAMCredentialMinted{},
+		IAMCredentialRevoked{}, IAMGrantsChanged{}, IAMTokenFirstUse{},
+		IAMTokenOverreach{}, IAMRecoveryCodeUsed{}, IAMMFAReset{},
+		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 	}
 }
 
@@ -87,6 +93,19 @@ var wireTypes = []string{
 	"counterparty_profile_updated",
 	"episode_written",
 	"external_notification",
+	"iam_credential_minted",
+	"iam_credential_revoked",
+	"iam_grants_changed",
+	"iam_login_failures",
+	"iam_mfa_reset",
+	"iam_recovery_code_used",
+	"iam_session_ended",
+	"iam_session_generation_bumped",
+	"iam_session_reuse_detected",
+	"iam_session_started",
+	"iam_stepup_completed",
+	"iam_token_first_use",
+	"iam_token_overreach",
 	"llm_unavailable",
 	"notification_skipped",
 	"notifications_coalesced",
@@ -112,6 +131,8 @@ var wireTypes = []string{
 	"skill_synthesized",
 	"skill_telemetry_write_failed",
 	"skill_used",
+	"statelog_record_tampered",
+	"statelog_record_unverifiable",
 	"subagent_batched",
 	"task_assigned",
 	"tool_skill_page_changed",
@@ -319,6 +340,21 @@ var wireTags = map[string][]string{
 	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":         {"backend", "container", "page_id"},
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers"},
+	"iam_session_started":             {"acr", "expires_at", "lineage", "login", "method", "person", "remote", "second_factor"},
+	"iam_session_ended":               {"by", "lineage", "person", "reason"},
+	"iam_session_reuse_detected":      {"lineage", "person", "remote", "rotation"},
+	"iam_login_failures":              {"attempts", "client", "clients", "methods", "minute", "people", "subjects", "throttled"},
+	"iam_stepup_completed":            {"lineage", "login", "person", "remote", "replaces", "second_factor"},
+	"iam_credential_minted":           {"by", "colleague", "credential", "expires_at", "grants", "kind", "owner", "reason"},
+	"iam_credential_revoked":          {"by", "credential", "kind", "owner", "reason"},
+	"iam_grants_changed":              {"added", "by", "person", "removed", "version"},
+	"iam_token_first_use":             {"every_use", "remote", "route", "token"},
+	"iam_token_overreach":             {"every_use", "remote", "route", "status", "token"},
+	"iam_recovery_code_used":          {"login", "person", "remaining", "remote"},
+	"iam_mfa_reset":                   {"by", "person", "reason"},
+	"iam_session_generation_bumped":   {"by", "generation", "reason"},
+	"statelog_record_unverifiable":    {"domain", "held", "key_id", "position"},
+	"statelog_record_tampered":        {"domain", "held", "key_id", "position"},
 }
 
 // TestPayloadTagsMatchTheWireContract pins every payload's keys, both ways: a
@@ -739,6 +775,12 @@ func (f *filler) fill(v reflect.Value, name string) {
 		// Only reached as the element of a []byte, which JSON carries as
 		// base64. Filling it like any other field is what makes the round
 		// trip prove the tag rather than prove that two empty slices match.
+		v.SetUint(uint64(f.next()))
+	case reflect.Uint, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		// A counter that can never be negative — a rotation index, a
+		// session generation — is unsigned on the wire as it is in the
+		// engine, and an unhandled kind here panics the whole suite rather
+		// than naming the payload.
 		v.SetUint(uint64(f.next()))
 	case reflect.Float32, reflect.Float64:
 		v.SetFloat(float64(f.next()) + 0.5)
