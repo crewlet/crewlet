@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -232,6 +233,59 @@ func TestWithoutAKeyringEveryWriteIsRefusedWithTheRemedy(t *testing.T) {
 	}
 	if !strings.Contains(body, "keygen") {
 		t.Errorf("the refusal does not say how to get a keyring: %s", body)
+	}
+}
+
+// EVERY REFUSAL HERE CARRIES ITS SENTENCE, AND A 503 FOR A MISSING KEY SAYS
+// NOTHING ABOUT WHEN.
+//
+// This surface built its own `{"error": code}` bodies, so the credential
+// screen rendered a code and no line a person could act on. And a node with
+// no keyring (or no active key) will have none after any wait: a Retry-After
+// there teaches a client to hammer a node that cannot answer until somebody
+// reconfigures it, so its ABSENCE is the answer — the hint says what to do.
+func TestARefusalCarriesItsSentenceAndAMissingKeyNoRetryAfter(t *testing.T) {
+	t.Parallel()
+	keyed, _ := surface(t, cipherFor(t, "k1"), "k1")
+	keyless, _ := surface(t, nil, "")
+	noActive, _ := surface(t, cipherFor(t, "k1"), "")
+	for _, c := range []struct {
+		name         string
+		h            http.Handler
+		method, path string
+		status       int
+		code         httpjson.Code
+	}{
+		{"a name no reference can name", keyed, http.MethodPut, "/secrets/not-a-name",
+			http.StatusBadRequest, httpjson.CodeInvalidName},
+		{"a rekey onto a key this node does not seal with", keyed, http.MethodPost,
+			"/secrets/rekey?key_id=k9", http.StatusConflict, httpjson.CodeKeyIDMismatch},
+		{"a write on a node with no keyring", keyless, http.MethodPut, "/secrets/A",
+			http.StatusServiceUnavailable, httpjson.CodeNoKeyring},
+		{"a rekey on a node naming no active key", noActive, http.MethodPost,
+			"/secrets/rekey", http.StatusServiceUnavailable, httpjson.CodeNoActiveKey},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			c.h.ServeHTTP(rec, httptest.NewRequest(c.method, c.path, strings.NewReader("v")))
+			if rec.Code != c.status {
+				t.Fatalf("answered %d, want %d: %s", rec.Code, c.status, rec.Body)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v: %s", err, rec.Body)
+			}
+			if body["error"] != string(c.code) {
+				t.Errorf("error = %v, want %s", body["error"], c.code)
+			}
+			if body["message"] != c.code.Message() {
+				t.Errorf("message = %v, want the code's own sentence", body["message"])
+			}
+			if got := rec.Header().Get("Retry-After"); got != "" {
+				t.Errorf("Retry-After = %q: no wait gives a node a key", got)
+			}
+		})
 	}
 }
 

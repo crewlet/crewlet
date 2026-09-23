@@ -51,16 +51,25 @@ one JSON object, and it always has the same three parts in the same places:
   rendered verbatim by the dashboard. It belongs to the *code*, not to the call
   site, so a refusal reads the same wherever it came from — and a route with
   more to say says it in the detail rather than rewording the sentence.
-  Never match on it: the wording is copy and can be improved at any time. A few
-  refusals still build their body themselves and answer with the code alone —
-  several under `/config` and `/secrets` — so a client renders `message` where
-  it is present and its own line for the code where it is not.
+  Never match on it: the wording is copy and can be improved at any time. Every
+  refusal carries one — `/config`, `/secrets`, `/setup` and `/chart` included,
+  which used to build their own bodies with the code alone.
 - **Everything else is the detail** — the machine-readable facts about *this*
   refusal, as typed JSON beside the two reserved keys rather than nested under
   one: `config_path` and `hint` above, `fields` on an integration that is
   missing values, `current_revision_id` on a lost update, `problems` on a
   refused configuration document. Values keep their own types,
   so a count is a number and a list of located problems is a list.
+- **A `503` says when, or says it will not help.** A `503` that waiting clears
+  — a node behind its log, a coordination store it could not reach, a write
+  whose outcome it cannot establish, an integration another pass is holding
+  (`surface_busy`) — carries a `Retry-After` in seconds, derived from the
+  refusal where the refusal knows (a node behind its log estimates from its
+  own backlog) and a few seconds otherwise. A `503` for a missing piece of
+  THIS node's configuration — `no_keyring`, `no_active_key`, a node that runs
+  no identity domain asked a question only one that does can answer — carries
+  NONE, because no wait installs a key: the header's absence is the answer,
+  and the `hint` names what to change.
 
 `error` and `message` are RESERVED: a route's own detail can never displace
 them, so a client that branches on the code cannot find it missing because a
@@ -513,10 +522,12 @@ first had in fact landed, which is the one thing the operation ledger exists to
 prevent.
 
 A refusal by the chart's own rules is `400`, a contention another writer won is
-`409` (re-read and write again), and a node that cannot decide **authority** is
-`503` rather than `403`: a node that is booting or behind the log cannot say who
-leads a unit, and `403` would send somebody to ask for an authority they already
-hold.
+`409 stale` (re-read and write again — nothing about the request was wrong), and
+a node that cannot decide **authority** is `503` rather than `403`: a node that
+is booting or behind the log cannot say who leads a unit, and `403` would send
+somebody to ask for an authority they already hold. Every retryable `503` here
+carries a `Retry-After` — estimated from this node's own backlog when it is
+behind the chart log, a couple of seconds otherwise.
 
 #### A rename keeps the old address working
 
@@ -1675,8 +1686,8 @@ organization's own app registration page whenever
 under a person's account cannot be installed on the organization that owns the
 repositories.
 
-Refusals: `400 bad_body`, `400 seat_required`, `409 no_active_revision`,
-`404 no_such_seat`, and `409 no_public_url` when
+Refusals: `400 invalid_body`, `400 seat_required`, `409 no_active_revision`,
+`404 no_such_seat`, and `409 no_external_url` when
 `api.external_url` is unset. The last one matters more than it
 looks: an app is created with its delivery, redirect and setup addresses baked
 in, and only a person at GitHub can change them afterwards, so creating one

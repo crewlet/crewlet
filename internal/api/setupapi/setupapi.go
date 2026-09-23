@@ -80,33 +80,20 @@ var log = logging.Get("api.setup")
 // has sent the wrong thing rather than a large one.
 const MaxBody = 64 << 10
 
-// The refusals this surface answers with, beyond the shared ones.
-const (
-	codeUnknownKind      = httpjson.Code("unknown_kind")
-	codeNoActiveRevision = httpjson.Code("no_active_revision")
-	codeBadBody          = httpjson.Code("bad_body")
-	codeSeatRequired     = httpjson.Code("seat_required")
-	codeNoSuchSeat       = httpjson.Code("no_such_seat")
-	codeNoPublicURL      = httpjson.Code("no_public_url")
-	codeRevisionAdvanced = httpjson.Code("revision_advanced")
-	codeLiteralInConfig  = httpjson.Code("literal_in_config")
-	codeValidationError  = httpjson.Code("validation_error")
-	codeInvalidInput     = httpjson.Code("invalid_input")
-	codeNoKeyring        = httpjson.Code("no_keyring")
+// THE REFUSALS THIS SURFACE ANSWERS WITH are all on internal/api/httpjson's
+// table, where each one carries the sentence a person is shown. They were
+// declared here, with none, so a screen rendering the envelope showed a code
+// and nothing a person could act on — and two of them were second spellings
+// of codes the table already held (`bad_body`, and `no_public_url`, named for
+// the retired Tier B field).
 
-	// codeSurfaceBusy is a disconnect refused because something else is
-	// writing at this surface right now — a reconcile tick, or an operator's
-	// own pass.
-	//
-	// ITS OWN CODE, because it is the one refusal here that is TRANSIENT and
-	// it was indistinguishable from the ones that are not. It answered
-	// `internal_error`, which a caller can only treat as terminal: the
-	// disconnect dialog submits one DELETE per kind in order and stopped at
-	// the first, so a refusal on the second of Atlassian's three left the
-	// tool half disconnected with no retry. Measured on a live disconnect,
-	// where a retry minutes later completed cleanly.
-	codeSurfaceBusy = httpjson.Code("surface_busy")
-)
+// retryBusySeconds is the Retry-After on [httpjson.CodeSurfaceBusy].
+//
+// THREE, the disconnect dialog's own cadence for the same refusal
+// (`BUSY_RETRY_EVERY_MS`): what holds a surface is a reconcile tick — seconds
+// — or an operator's pass, and a client that follows the header asks again as
+// often as the one screen that retries this already does.
+const retryBusySeconds = 3
 
 // Options wire the service.
 //
@@ -640,7 +627,7 @@ const (
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active; import one before connecting an integration",
 		})
 		return
@@ -724,14 +711,14 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
 	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
 	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
-		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"detail": "this build serves no setup for " + string(kind),
 			"hint":   "one of " + kindList(),
 		})
@@ -1966,14 +1953,14 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
 	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
 	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
-		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
 		})
 		return
@@ -2017,7 +2004,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !found {
-			httpjson.FailWith(w, http.StatusNotFound, codeInvalidInput, map[string]string{
+			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeInvalidInput, map[string]string{
 				"detail": "no seat called " + req.Seat + " takes per-seat setup for " + string(kind),
 			})
 			return
@@ -2030,20 +2017,20 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := mintInto(values, against, req.Generate); err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
 			"detail": err.Error(),
 		})
 		return
 	}
 	if len(values) == 0 {
-		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
 			"detail": "the submission carried no values",
 		})
 		return
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := refuseUngated(values, against); err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
 			"detail": err.Error(),
 			"hint": "the answer this submission gives needs that field; send " +
 				"it, or choose the answer that does not",
@@ -2052,7 +2039,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := refuseEmpty(values, against); err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
 			"detail": err.Error(),
 		})
 		return
@@ -2073,7 +2060,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// here closes that loop: the address arrives in the SAME write as the
 	// credentials, which is what makes the block valid the moment it exists.
 	if note := s.discoverSite(r.Context(), company, kind, against, values); note != "" {
-		httpjson.FailWith(w, http.StatusBadGateway, codeInvalidInput, map[string]string{
+		httpjson.FailWith(w, http.StatusBadGateway, httpjson.CodeInvalidInput, map[string]string{
 			"detail": note,
 		})
 		return
@@ -2143,14 +2130,14 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
 	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
 	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
-		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
 		})
 		return
@@ -2199,12 +2186,11 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 			// request can be repeated and may then work — but only this
 			// one is a race the caller should sit out and retry, and a
 			// caller cannot tell them apart from the status alone.
-			code := httpjson.CodeInternalError
+			code, after := httpjson.CodeUnavailable, authz.RetryUndecidedSeconds
 			if errors.Is(err, errSurfaceBusy) {
-				code = codeSurfaceBusy
+				code, after = httpjson.CodeSurfaceBusy, retryBusySeconds
 			}
-			httpjson.FailWith(w, http.StatusServiceUnavailable, code,
-				map[string]string{"detail": err.Error()})
+			httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": err.Error()})
 			return
 		}
 		log.InfoContext(r.Context(), "setup_disconnect_requested",
@@ -2266,7 +2252,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	var patchErr *configapi.PatchError
 	switch {
 	case errors.As(err, &literal):
-		httpjson.FailWith(w, http.StatusConflict, codeLiteralInConfig, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeLiteralInConfig, map[string]string{
 			"path": literal.Path,
 			"detail": "this field holds a value rather than a ${VAR} reference, so " +
 				"there is no variable to write the credential into",
@@ -2276,7 +2262,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		// REFUSED BEFORE ANYTHING WAS WRITTEN, which is the difference
 		// from the config surface's own raced answer: there is no stored
 		// revision to name, because nothing was stored.
-		httpjson.FailWith(w, http.StatusConflict, codeRevisionAdvanced, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, map[string]string{
 			"your_base": stale.Base, "current_revision_id": stale.Current,
 			"hint": "the configuration changed since you read it; re-read the " +
 				"setup state and submit again",
@@ -2293,7 +2279,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		if raced.Stored != "" {
 			extra["stored_revision_id"] = raced.Stored
 		}
-		httpjson.FailWith(w, http.StatusConflict, codeRevisionAdvanced, extra)
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, extra)
 	case errors.As(err, &invalid):
 		// THE CONFIG SURFACE'S OWN STRUCTURE, located problems and the
 		// derived hierarchy, so a screen placing a refusal on the field it
@@ -2304,16 +2290,16 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		fields["hint"] = "the values are checked as the whole company document they " +
 			"produce, so a field that is fine on its own is still refused " +
 			"when it leaves the company invalid"
-		httpjson.FailWithFields(w, http.StatusBadRequest, codeValidationError, fields)
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeValidationError, fields)
 	case errors.As(err, &patchErr):
 		// validation_error rather than the config surface's invalid_patch:
 		// the caller here submitted values, not a patch, and this surface
 		// built the patch they became.
 		fields := configapi.RefusalFields(err)
 		fields["detail"] = patchErr.Err.Error()
-		httpjson.FailWithFields(w, http.StatusBadRequest, codeValidationError, fields)
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeValidationError, fields)
 	case errors.Is(err, configapi.ErrNoActiveRevision):
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "import a company configuration first",
 		})
 	case errors.Is(err, secrets.ErrNoKeyring):
@@ -2322,7 +2308,9 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		// the generic case, so a screen that could have said "set
 		// secrets.keys" said internal_error and left the operator reading
 		// engine logs to find a one-line fix.
-		httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoKeyring, map[string]string{
+		// NO Retry-After: waiting installs no key — see
+		// [httpjson.CodeNoKeyring].
+		httpjson.UnavailableWith(w, httpjson.CodeNoKeyring, 0, httpjson.Detail{
 			"detail": "this node has no secrets.keys, so a credential cannot be sealed",
 			"hint": "run `crewlet secrets keygen`, put the key in secrets.keys in " +
 				"crewlet.yaml, and restart the engine",

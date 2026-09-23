@@ -173,7 +173,8 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_name"})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidName,
+			map[string]string{"detail": "the path names no secret"})
 		return
 	}
 	if r.URL.Query().Get("reveal") != "true" {
@@ -182,7 +183,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		case err != nil:
 			s.fail(w, "read the secret", err)
 		case !found:
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+			httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		default:
 			writeJSON(w, http.StatusOK, render(row))
 		}
@@ -201,7 +202,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	value, err := s.store.Get(r.Context(), name)
 	switch {
 	case errors.Is(err, secrets.ErrNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		return
 	case err != nil:
 		s.fail(w, "open the secret", err)
@@ -234,8 +235,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	// stay readable and, above all, removable, so get and delete take the
 	// name as given.
 	if err := secrets.CheckName(name); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error":  "invalid_name",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidName, map[string]string{
 			"detail": err.Error(),
 			"hint": "a secret is keyed by environment-variable name, because " +
 				"that is what a ${VAR} in the company config resolves through",
@@ -284,7 +284,8 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_name"})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidName,
+			map[string]string{"detail": "the path names no secret"})
 		return
 	}
 	removed, err := s.store.Unset(r.Context(), name)
@@ -312,8 +313,9 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.keyID == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "no_active_key",
+		// A 503 WITH NO Retry-After: this node lacks the configuration,
+		// and no wait gives it one — see [httpjson.Unavailable].
+		httpjson.UnavailableWith(w, httpjson.CodeNoActiveKey, 0, httpjson.Detail{
 			"hint": "this node's secrets.active_key_id is unset, so there is " +
 				"no key to re-seal onto",
 		})
@@ -326,8 +328,8 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 	// rows sealed under something else, which is exactly the state they
 	// are about to retire the old key on the strength of.
 	if want := r.URL.Query().Get("key_id"); want != "" && want != s.keyID {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "key_id_mismatch", "key_id": s.keyID, "your_key_id": want,
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeKeyIDMismatch, map[string]string{
+			"key_id": s.keyID, "your_key_id": want,
 			"hint": "this node seals under its own secrets.active_key_id; make " +
 				"the two configs agree before rekeying",
 		})
@@ -346,8 +348,8 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 		// are already under the new key.
 		log.ErrorContext(r.Context(), "secret_rekey_failed", "error", err,
 			"moved", moved, "operator", operator)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"error": "rekey_incomplete", "moved": moved,
+		httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeRekeyIncomplete, httpjson.Detail{
+			"moved": moved,
 			"hint": "a row could not be opened with this node's keyring; the " +
 				"key that sealed it is missing from secrets.keys",
 		})
@@ -363,8 +365,9 @@ func (s *Service) sealed(w http.ResponseWriter) bool {
 	if s.cipher != nil {
 		return true
 	}
-	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-		"error": "no_keyring",
+	// A 503 WITH NO Retry-After: waiting installs no key — see
+	// [httpjson.CodeNoKeyring].
+	httpjson.UnavailableWith(w, httpjson.CodeNoKeyring, 0, httpjson.Detail{
 		"detail": "this node has no secrets.keys, so it cannot seal or open a " +
 			"secret",
 		"hint": "run `crewlet secrets keygen` and install the key in Tier A",
@@ -394,7 +397,7 @@ func (s *Service) fail(w http.ResponseWriter, what string, err error) {
 		return
 	}
 	log.Error("secret_request_failed", "what", what, "error", err)
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
+	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }
 
 // writeJSON is [httpjson.Write] under this package's own name.

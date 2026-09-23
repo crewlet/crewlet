@@ -188,12 +188,12 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		Seat string `json:"seat"`
 	}
 	if err := json.Unmarshal(body, &in); err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, codeBadBody, map[string]string{"hint": err.Error()})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{"hint": err.Error()})
 		return
 	}
 	handle := strings.TrimSpace(in.Seat)
 	if handle == "" {
-		httpjson.FailWith(w, http.StatusBadRequest, codeSeatRequired, map[string]string{
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeSeatRequired, map[string]string{
 			"hint": "name the seat this app belongs to: one app is one agent's " +
 				"identity, so there is no company-wide app to create",
 		})
@@ -202,14 +202,14 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 
 	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
 	seat := seatByHandle(roster, handle)
 	if seat == nil {
-		httpjson.FailWith(w, http.StatusNotFound, codeNoSuchSeat, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchSeat, map[string]string{
 			"hint": fmt.Sprintf("this company has no agent seat %q", handle),
 		})
 		return
@@ -218,7 +218,8 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 	tier, _ := github.ParseTier(seatTier(seat))
 	base := s.publicBase()
 	if base == "" {
-		httpjson.FailWith(w, http.StatusConflict, codeNoPublicURL, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoExternalURL, map[string]string{
+			"config_path": "api.external_url",
 			"hint": "set api.external_url first: the app is created " +
 				"with its delivery address baked in, and only the operator can " +
 				"change that afterwards, so creating one now would need doing again",

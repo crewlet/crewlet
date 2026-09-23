@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -562,6 +565,75 @@ func TestAnUnknownOutcomeHandsBackTheIdThatMakesARetrySafe(t *testing.T) {
 	}
 	if r.writer.opIDs[1] != got {
 		t.Errorf("the retry published under %q, want %q", r.writer.opIDs[1], got)
+	}
+}
+
+// A WRITE THAT DID NOT LAND SAYS WHAT TO DO ABOUT IT: re-read, or wait and
+// for how long.
+//
+// A lost race was `409 bad_params` — a sentence about a query parameter,
+// telling the caller to change a request that only needed re-reading — and
+// every one of these 503s went out with no Retry-After, so a client was told
+// to come back and not when. The node that is behind its log knows roughly
+// how long it will take (its backlog over its measured drain), and a hint it
+// derived must survive the trip to the header rather than being flattened.
+func TestAWriteThatDidNotLandSaysWhatToDoAboutIt(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name       string
+		err        error
+		outcome    statelog.Outcome
+		status     int
+		code       httpjson.Code
+		retryAfter string
+	}{
+		{
+			name:   "a race another writer won is stale",
+			err:    fmt.Errorf("chart: unit engineering moved: %w", statelog.ErrConflict),
+			status: http.StatusConflict, code: httpjson.CodeStale,
+		},
+		{
+			name: "a node behind its log says how long, from its own backlog",
+			err: &statelog.Refused{Code: statelog.RefuseBehind,
+				Level: statelog.ReadSession, RetryAfter: 7 * time.Second},
+			status: http.StatusServiceUnavailable, code: httpjson.CodeUnavailable,
+			retryAfter: "7",
+		},
+		{
+			name:   "an unavailable log with no hint of its own gets the undecidable scale",
+			err:    fmt.Errorf("chart: publish: %w", statelog.ErrUnavailable),
+			status: http.StatusServiceUnavailable, code: httpjson.CodeUnavailable,
+			retryAfter: strconv.Itoa(authz.RetryUndecidedSeconds),
+		},
+		{
+			name:    "an unknown outcome is retried with the same id, and says when",
+			outcome: statelog.OutcomeUnknown,
+			status:  http.StatusServiceUnavailable, code: httpjson.CodeUnavailable,
+			retryAfter: strconv.Itoa(authz.RetryUndecidedSeconds),
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := serve(t, nil, leadOf(), leads())
+			r.writer.err, r.writer.outcome = c.err, c.outcome
+			rec := patch(r.mux, "/chart/units/engineering", `{"name":"E"}`)
+			if rec.Code != c.status {
+				t.Fatalf("answered %d, want %d: %s", rec.Code, c.status, rec.Body)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v: %s", err, rec.Body)
+			}
+			if body["error"] != string(c.code) {
+				t.Errorf("error = %v, want %s", body["error"], c.code)
+			}
+			if body["message"] != c.code.Message() {
+				t.Errorf("message = %v, want the code's own sentence", body["message"])
+			}
+			if got := rec.Header().Get("Retry-After"); got != c.retryAfter {
+				t.Errorf("Retry-After = %q, want %q", got, c.retryAfter)
+			}
+		})
 	}
 }
 

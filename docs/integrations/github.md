@@ -276,7 +276,7 @@ Together the card is normally correct by the time you switch back to it. If it i
   creation: where its deliveries go, where the browser returns after the
   creation, and where it returns after the install. Only a person at GitHub can
   change them afterwards, so the engine refuses to begin without a public base
-  (`409 no_public_url`) rather than create an app that would have to be created
+  (`409 no_external_url`) rather than create an app that would have to be created
   again. The reconcile loop reports the same gap for the org- and
   repository-level hooks: with no public base there is no address for GitHub to
   deliver to, so the integration is reported **degraded** naming that field

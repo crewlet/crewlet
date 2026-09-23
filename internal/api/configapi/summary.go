@@ -169,10 +169,8 @@ func takeSummary(w http.ResponseWriter, r *http.Request, body []byte, required b
 		// Required, because the history is what an operator reads at 3am
 		// to find the change that broke something. A list of revisions
 		// with no summaries is a list of uuids.
-		httpjson.Write(w, http.StatusBadRequest, map[string]string{
-			"error": "summary_required",
-			"hint":  hint,
-		})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeSummaryRequired,
+			map[string]string{"hint": hint})
 		return "", submitted{}, false
 	}
 	return summary, rest, true

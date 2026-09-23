@@ -349,10 +349,10 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 		company, revision, err := s.documentOf(r.Context())
 		switch {
 		case errors.Is(err, ErrNoActiveRevision):
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"error": "no_active_revision",
-				"hint":  "this node has no active company revision to read",
-			})
+			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoActiveRevision,
+				map[string]string{
+					"hint": "this node has no active company revision to read",
+				})
 			return
 		case err != nil:
 			s.fail(w, "read the active revision", err)
@@ -360,10 +360,10 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 		}
 		entity, found := entityKinds[kind].find(company, id)
 		if !found {
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"error": "no_such_entity",
-				"hint":  "no " + kind + " called " + id + " in the active revision",
-			})
+			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
+				map[string]string{
+					"hint": "no " + kind + " called " + id + " in the active revision",
+				})
 			return
 		}
 		// THE DOCUMENT'S TAG, because an entity is a slice of it: the
@@ -409,11 +409,11 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			// Nothing to splice into. Refused rather than treated as an
 			// empty company: creating the first revision through an entity
 			// route would build a company out of one seat.
-			writeJSON(w, http.StatusConflict, map[string]string{
-				"error": "no_active_revision",
-				"hint": "this node has no active company revision to edit: " +
-					"import one with `crewlet config import`",
-			})
+			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
+				map[string]string{
+					"hint": "this node has no active company revision to edit: " +
+						"import one with `crewlet config import`",
+				})
 			return
 		}
 		if _, ok := s.checkPrecondition(w, r, active, found); !ok {
@@ -450,18 +450,18 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 		// often a typo than an intent to add one, and adding through this
 		// route would let a caller grow the company without ever seeing the
 		// document they changed.
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": "no_such_entity",
-			"hint": "no " + kind + " called " + id + " in the active revision; " +
-				"add one through PUT /config, which shows the whole document",
-		})
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
+			map[string]string{
+				"hint": "no " + kind + " called " + id + " in the active revision; " +
+					"add one through PUT /config, which shows the whole document",
+			})
 	case errors.Is(err, ErrIdentityMismatch):
 		// A RENAME, REFUSED. Not coerced back to the path's id either:
 		// silently keeping the old identity would land every other edit in
 		// the body and leave the caller believing the rename took, which is
 		// the same surprise one revision later.
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "identity_mismatch", "detail": entityErr.Err.Error(),
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeIdentityMismatch, map[string]string{
+			"detail": entityErr.Err.Error(),
 			"hint": "the path is the address: send " + kind + "/" + id +
 				" back under the id it already has. Renaming is a " +
 				"full-document edit: a seat's durable id derives from its " +

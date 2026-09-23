@@ -247,7 +247,7 @@ func (s *Service) getActive(w http.ResponseWriter, r *http.Request) {
 	company, revision, err := s.documentOf(r.Context())
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 	case err != nil:
 		s.fail(w, "read the active revision", err)
 	default:
@@ -267,7 +267,7 @@ func (s *Service) references(w http.ResponseWriter, r *http.Request) {
 	refs, revision, err := s.References(r.Context())
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 	case err != nil:
 		s.fail(w, "read the active revision", err)
 	default:
@@ -401,14 +401,15 @@ func (s *Service) checkPatchMediaType(w http.ResponseWriter, r *http.Request) bo
 	// 415 WITH Accept-Patch, which is the pair RFC 5789 §2.2 names: the
 	// refusal has to say what would have worked.
 	w.Header().Set("Accept-Patch", acceptPatch)
-	writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{
-		"error": "unsupported_patch_media_type", "accept_patch": acceptPatch,
-		"you_sent": media,
-		"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396): an object " +
-			"shaped like the document. A JSON Patch (RFC 6902) list of " +
-			"operations is a different format this surface does not serve; " +
-			"editing one seat is PUT /config/roles/{handle}",
-	})
+	httpjson.FailWithFields(w, http.StatusUnsupportedMediaType,
+		httpjson.CodeUnsupportedPatchMediaType, httpjson.Detail{
+			"accept_patch": acceptPatch,
+			"you_sent":     media,
+			"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396): an object " +
+				"shaped like the document. A JSON Patch (RFC 6902) list of " +
+				"operations is a different format this surface does not serve; " +
+				"editing one seat is PUT /config/roles/{handle}",
+		})
 	return false
 }
 
@@ -433,7 +434,7 @@ func (s *Service) listRevisions(w http.ResponseWriter, r *http.Request) {
 // getRevision serves GET /config/revisions/{id} — one revision with its
 // redacted payload.
 func (s *Service) getRevision(w http.ResponseWriter, r *http.Request) {
-	revision, ok := s.lookup(w, r, r.PathValue("id"), "not_found")
+	revision, ok := s.lookup(w, r, r.PathValue("id"), httpjson.CodeNotFound)
 	if !ok {
 		return
 	}
@@ -458,11 +459,11 @@ func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		writeJSON(w, http.StatusOK, body)
 	case errors.Is(err, ErrNoActiveRevision):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 	case errors.Is(err, store.ErrNoRevision):
 		// WHICH side is missing, read off the error rather than guessed
 		// from the request — see [missingRevision].
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": missingSide(err)})
+		httpjson.Fail(w, http.StatusNotFound, missingSide(err))
 	default:
 		s.fail(w, "diff revisions", err)
 	}
@@ -479,7 +480,7 @@ func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 // A revision error from anywhere else is reported as the target's, which is
 // the honest default: every other producer of store.ErrNoRevision on this
 // path is looking up the id in the URL.
-func missingSide(err error) string {
+func missingSide(err error) httpjson.Code {
 	var missing *missingRevision
 	if errors.As(err, &missing) {
 		return missing.side
@@ -488,12 +489,6 @@ func missingSide(err error) string {
 }
 
 // --- writes ----------------------------------------------------------------
-
-// The machine-readable codes a refused document is answered with.
-const (
-	codeValidationError = httpjson.Code("validation_error")
-	codeInvalidPatch    = httpjson.Code("invalid_patch")
-)
 
 // dryRunOf reads `dry_run` from a write's query, answering the refusal itself.
 // ok is false when the request has been answered.
@@ -645,11 +640,11 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "no_active_revision",
-			"hint": "there is nothing to patch; import a company first, or " +
-				"use PUT /config to send a whole document",
-		})
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
+			map[string]string{
+				"hint": "there is nothing to patch; import a company first, or " +
+					"use PUT /config to send a whole document",
+			})
 		return
 	}
 	if _, ok := s.checkPrecondition(w, r, active, found); !ok {
@@ -713,8 +708,7 @@ func writeApplied(w http.ResponseWriter, applied Applied) {
 func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool) {
 	var raced *RacedError
 	if createOnly && errors.As(err, &raced) {
-		body := map[string]any{
-			"error": "already_configured",
+		body := httpjson.Detail{
 			"hint": "If-None-Match asked for this write to land only on a " +
 				"config that is not there; one was activated first",
 		}
@@ -729,7 +723,8 @@ func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool)
 		if raced.Stored != "" {
 			body["stored_revision_id"] = raced.Stored
 		}
-		writeJSON(w, http.StatusPreconditionFailed, body)
+		httpjson.FailWithFields(w, http.StatusPreconditionFailed,
+			httpjson.CodeAlreadyConfigured, body)
 		return
 	}
 	s.refuseApply(w, err)
@@ -745,14 +740,13 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	var invalid *ValidationError
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "no_active_revision",
-			"hint": "there is nothing to patch; import a company first, or " +
-				"use PUT /config to send a whole document",
-		})
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
+			map[string]string{
+				"hint": "there is nothing to patch; import a company first, or " +
+					"use PUT /config to send a whole document",
+			})
 	case errors.As(err, &raced):
-		body := map[string]any{
-			"error": "revision_advanced",
+		body := httpjson.Detail{
 			"hint": "another write activated first; re-read /config and send " +
 				"the edit again",
 		}
@@ -767,13 +761,13 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 		if raced.Current != "" {
 			body["current_revision_id"] = raced.Current
 		}
-		writeJSON(w, http.StatusConflict, body)
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, body)
 	case errors.As(err, &patchErr):
-		refuseDocument(w, codeInvalidPatch, patchErr.Err.Error(),
+		refuseDocument(w, httpjson.CodeInvalidPatch, patchErr.Err.Error(),
 			"the patched document was refused; an unknown key in a "+
 				"patch is refused here rather than ignored", err)
 	case errors.As(err, &invalid):
-		refuseDocument(w, codeValidationError, invalid.Err.Error(),
+		refuseDocument(w, httpjson.CodeValidationError, invalid.Err.Error(),
 			"the WHOLE document a write produces is validated, not only "+
 				"the part it changed, so a section that is fine on its own is "+
 				"still refused when the company it leaves is invalid", err)
@@ -818,7 +812,7 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 // can find later — and the epoch keeps advancing, which is what makes every
 // node reconcile onto it.
 func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
-	target, ok := s.lookup(w, r, r.PathValue("id"), "not_found")
+	target, ok := s.lookup(w, r, r.PathValue("id"), httpjson.CodeNotFound)
 	if !ok {
 		return
 	}
@@ -827,8 +821,8 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	// activating a document every node will fail to read.
 	document, company, err := s.openDocument(target)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "unreadable_revision", "detail": err.Error(),
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeUnreadableRevision, map[string]string{
+			"detail": err.Error(),
 			"hint": "the target revision is sealed under a key that is no longer " +
 				"in the keyring; restore it to the node's secrets.keys first",
 		})
@@ -858,7 +852,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	var invalid *ValidationError
 	switch {
 	case errors.As(err, &invalid):
-		refuseDocument(w, codeValidationError, invalid.Err.Error(),
+		refuseDocument(w, httpjson.CodeValidationError, invalid.Err.Error(),
 			"revision "+target.ID+" does not pass this build's "+
 				"validation, so it cannot be re-activated as it stands; send a "+
 				"corrected document with PUT /config instead", err)
@@ -946,11 +940,12 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 			return createOnly, !createOnly || s.checkFleetAbsent(w, r)
 		}
 		if matchesTag(none, etagOf(active)) {
-			writeJSON(w, http.StatusPreconditionFailed, map[string]any{
-				"error": "already_configured", "current_revision_id": active.ID,
-				"hint": "If-None-Match asked for this write to land only on a " +
-					"config that is not there; one is active",
-			})
+			httpjson.FailWithFields(w, http.StatusPreconditionFailed,
+				httpjson.CodeAlreadyConfigured, httpjson.Detail{
+					"current_revision_id": active.ID,
+					"hint": "If-None-Match asked for this write to land only on a " +
+						"config that is not there; one is active",
+				})
 			return createOnly, false
 		}
 		return createOnly, true
@@ -964,17 +959,15 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 		// no race to lose.
 		return false, true
 	case !found:
-		writeJSON(w, http.StatusPreconditionFailed, map[string]string{
-			"error": "no_active_revision",
-			"hint": "there is no revision to match against; retry without " +
-				"If-Match, or send If-None-Match: * to require that",
-		})
+		httpjson.FailWith(w, http.StatusPreconditionFailed, httpjson.CodeNoActiveRevision,
+			map[string]string{
+				"hint": "there is no revision to match against; retry without " +
+					"If-Match, or send If-None-Match: * to require that",
+			})
 		return false, false
 	case !matchesTag(expected, etagOf(active)):
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "revision_advanced", "current_revision_id": active.ID,
-			"your_base": expected,
-		})
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced,
+			httpjson.Detail{"current_revision_id": active.ID, "your_base": expected})
 		return false, false
 	default:
 		return false, true
@@ -1002,8 +995,8 @@ func (s *Service) checkFleetAbsent(w http.ResponseWriter, r *http.Request) bool 
 	case !found:
 		return true
 	}
-	writeJSON(w, http.StatusPreconditionFailed, map[string]any{
-		"error": "already_configured", "current_revision_id": target.RevisionID,
+	httpjson.FailWithFields(w, http.StatusPreconditionFailed, httpjson.CodeAlreadyConfigured, httpjson.Detail{
+		"current_revision_id": target.RevisionID,
 		"hint": "If-None-Match asked for this write to land only on a config " +
 			"that is not there; the fleet is running revision " + target.RevisionID +
 			", which this node has not caught up with yet. Read /config again " +
@@ -1042,9 +1035,11 @@ func (s *Service) openDocument(revision store.Revision) ([]byte, *config.Company
 }
 
 // lookup fetches a revision by id, answering the refusal itself.
-func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id, missing string) (store.Revision, bool) {
+func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id string,
+	missing httpjson.Code) (store.Revision, bool) {
+
 	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_revision_id"})
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidRevisionID)
 		return store.Revision{}, false
 	}
 	revision, found, err := s.configs.Get(r.Context(), id)
@@ -1053,7 +1048,7 @@ func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id, missing str
 		return store.Revision{}, false
 	}
 	if !found {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": missing})
+		httpjson.Fail(w, http.StatusNotFound, missing)
 		return store.Revision{}, false
 	}
 	return revision, true
@@ -1102,9 +1097,11 @@ func intParam(w http.ResponseWriter, r *http.Request, name string, fallback int)
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_pagination", "detail": name + " must be a number",
-		})
+		// THE QUERY VOCABULARY'S OWN CODE: this was `invalid_pagination`,
+		// a spelling of "a query parameter is not a value this route
+		// accepts" nothing else answered with.
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
+			map[string]string{"detail": name + " must be a number"})
 		return 0, false
 	}
 	return value, true
@@ -1117,7 +1114,7 @@ func intParam(w http.ResponseWriter, r *http.Request, name string, fallback int)
 // operator reaches from a browser.
 func (s *Service) fail(w http.ResponseWriter, what string, err error) {
 	log.Error("config_request_failed", "what", what, "error", err)
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
+	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }
 
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {

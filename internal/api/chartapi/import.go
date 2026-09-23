@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chart"
 )
 
@@ -203,8 +204,8 @@ func (s *Service) fleetReady(w http.ResponseWriter, r *http.Request) bool {
 	reason, err := s.fleet.ImportReady(r.Context())
 	switch {
 	case err != nil:
-		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			map[string]string{"detail": err.Error()})
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
+			httpjson.Detail{"detail": err.Error()})
 		return false
 	case reason != "":
 		// ITS OWN CODE, which the CLI and the fleet guide both name. It

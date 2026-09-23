@@ -34,6 +34,17 @@
 // them rather than nested under a `detail` key: one object with two reserved
 // words has exactly one place any given fact lives, where a nested container
 // offers two and leaves every client to look in both.
+//
+// # A 503 says when, or that waiting will not help
+//
+// A 503 is written by [Unavailable] or [UnavailableWith] and by nothing else,
+// because those are the only writers that set the `Retry-After` and the
+// envelope together: a dozen 503s written through [FailWith] told a client to
+// come back and never said when. Zero seconds writes NO header, and that is a
+// setting rather than an omission — a node missing its keyring will not have
+// one after any wait, and the header's absence is how a client learns not to
+// hammer it. `internal/api`'s source walk holds the settings surfaces to this,
+// to hand-built bodies, and to codes minted outside the table.
 package httpjson
 
 import (
@@ -226,6 +237,118 @@ const (
 	// CodeVendorRefused is a pass the third-party app refused. Nothing it
 	// had already done is undone, so re-running is safe.
 	CodeVendorRefused Code = "vendor_refused"
+
+	// THE REST OF `/setup`'s refusals, which were declared in the route
+	// file with no sentence behind them — so a screen that rendered the
+	// envelope showed the code and nothing a person could act on. Two
+	// spellings that route file had invented for codes this table already
+	// held are gone with them: `bad_body` is [CodeInvalidBody], and
+	// `no_public_url` — the retired Tier B field's name — is
+	// [CodeNoExternalURL].
+
+	// CodeUnknownKind is an integration this build does not know.
+	CodeUnknownKind Code = "unknown_kind"
+	// CodeSeatRequired is a per-seat gesture that named no seat.
+	CodeSeatRequired Code = "seat_required"
+	// CodeNoSuchSeat is a seat the org chart does not hold.
+	CodeNoSuchSeat Code = "no_such_seat"
+	// CodeLiteralInConfig is a credential the company document carries as a
+	// literal where a ${VAR} pointer belongs, which the setup surface will
+	// not write over.
+	CodeLiteralInConfig Code = "literal_in_config"
+	// CodeInvalidInput is a value the integration refused: a field it does
+	// not declare, a value outside its set, or one the vendor itself
+	// refused when it was checked.
+	CodeInvalidInput Code = "invalid_input"
+	// CodeSurfaceBusy is a write refused because something else is writing
+	// at this surface right now — a reconcile tick, or an operator's own
+	// pass. The one TRANSIENT refusal on `/setup`, so it is a 503 with a
+	// Retry-After and a client repeats it.
+	CodeSurfaceBusy Code = "surface_busy"
+)
+
+// The configuration set: `/config`'s refusals, and the ones `/setup` shares
+// with it because a connection is written onto the same document.
+//
+// Every one of them used to be a bare `{"error": code}` object written by the
+// route, so `/config` — the surface the org builder's every save goes through
+// — was the one whose refusals carried no `message`.
+const (
+	// CodeNoActiveRevision is a request that needs an active company
+	// configuration on a node that has none yet.
+	CodeNoActiveRevision Code = "no_active_revision"
+
+	// CodeRevisionAdvanced is a conditional write that lost: another write
+	// was activated after the one this was based on.
+	CodeRevisionAdvanced Code = "revision_advanced"
+
+	// CodeAlreadyConfigured is a create-only write (If-None-Match: *) that
+	// found a configuration where it expected none.
+	CodeAlreadyConfigured Code = "already_configured"
+
+	// CodeUnreadableRevision is a revision sealed under a key this
+	// deployment no longer holds.
+	CodeUnreadableRevision Code = "unreadable_revision"
+
+	// CodeInvalidRevisionID is a revision route with no revision named.
+	CodeInvalidRevisionID Code = "invalid_revision_id"
+
+	// CodeAgainstNotFound is a diff whose BASE is not held here. Its own
+	// code rather than [CodeNotFound], which names the target: a client
+	// has to know which of the two ids to correct.
+	CodeAgainstNotFound Code = "against_not_found"
+
+	// CodeUnsupportedPatchMediaType is a PATCH in a format `/config` does
+	// not serve. The detail carries the Accept-Patch it does.
+	CodeUnsupportedPatchMediaType Code = "unsupported_patch_media_type"
+
+	// CodeChartNotWritableHere is a settings write that carried the org
+	// chart, which lives on its own routes now.
+	CodeChartNotWritableHere Code = "chart_not_writable_here"
+
+	// CodeNoSuchEntity is an entity route naming something the active
+	// document does not hold.
+	CodeNoSuchEntity Code = "no_such_entity"
+
+	// CodeIdentityMismatch is an entity write whose body renames what its
+	// path names.
+	CodeIdentityMismatch Code = "identity_mismatch"
+
+	// CodeValidationError is a write whose resulting document is invalid.
+	CodeValidationError Code = "validation_error"
+
+	// CodeInvalidPatch is a patch that could not be applied to the document.
+	CodeInvalidPatch Code = "invalid_patch"
+
+	// CodeSummaryRequired is a configuration write carrying no audit
+	// summary.
+	CodeSummaryRequired Code = "summary_required"
+)
+
+// The credential set: `/secrets`' refusals, and the keyring refusal `/setup`
+// shares with it because a connection seals a credential through the same
+// store.
+const (
+	// CodeInvalidName is a name a credential cannot be stored under.
+	CodeInvalidName Code = "invalid_name"
+
+	// CodeNoKeyring is a node with no `secrets.keys`, which can neither
+	// seal a credential nor open one. A 503 with NO Retry-After: waiting
+	// does not install a key, and a client told to come back would hammer
+	// a node that cannot answer until somebody reconfigures it.
+	CodeNoKeyring Code = "no_keyring"
+
+	// CodeNoActiveKey is a rekey on a node whose keyring names no key to
+	// re-seal onto — a configuration fault, answered like [CodeNoKeyring].
+	CodeNoActiveKey Code = "no_active_key"
+
+	// CodeKeyIDMismatch is a rekey whose caller expects a different active
+	// key from the one this node seals under.
+	CodeKeyIDMismatch Code = "key_id_mismatch"
+
+	// CodeRekeyIncomplete is a rekey that moved some rows and stopped. The
+	// detail names the ones that moved.
+	CodeRekeyIncomplete Code = "rekey_incomplete"
 )
 
 // THE IDENTITY CODES, and why there are so few of them.
@@ -515,6 +638,60 @@ var codes = map[Code]string{
 	CodeFleetMixedVersion: "An upgrade is still rolling through the fleet, and " +
 		"an import is applied by every node, the older ones included. Finish " +
 		"the upgrade and import again.",
+
+	CodeUnknownKind: "This build does not know that integration.",
+	CodeSeatRequired: "Name the seat this is for. The detail says why one is " +
+		"needed.",
+	CodeNoSuchSeat: "The org chart has no seat by that name.",
+	CodeLiteralInConfig: "The configuration holds this credential written out " +
+		"rather than as a reference, so it was not overwritten. Move it into " +
+		"the secret store first — the detail says which field.",
+	CodeInvalidInput: "One of the values was not accepted, and nothing was " +
+		"saved. The detail names the value and what it may be.",
+	CodeSurfaceBusy: "Something else is writing to this integration right now. " +
+		"Try again in a moment; nothing was changed.",
+
+	CodeNoActiveRevision: "No company configuration is active on this node yet. " +
+		"Import one first — the detail says how.",
+	CodeRevisionAdvanced: "Somebody else's change to the configuration was " +
+		"activated first, so this one was not. Read the configuration again and " +
+		"make the change on top of it.",
+	CodeAlreadyConfigured: "This write was only to land where no configuration " +
+		"exists, and one does. Read it and edit that instead.",
+	CodeUnreadableRevision: "That revision is sealed under a key this " +
+		"deployment no longer holds, so it cannot be read. Put the key back in " +
+		"the node's keyring first.",
+	CodeInvalidRevisionID: "Name the revision this is about.",
+	CodeAgainstNotFound:   "The revision to compare against is not held here.",
+	CodeUnsupportedPatchMediaType: "This endpoint takes a JSON Merge Patch: an " +
+		"object shaped like the document. The detail lists the formats it " +
+		"accepts.",
+	CodeChartNotWritableHere: "The org chart is no longer part of the " +
+		"configuration, so nothing in this request was written. The detail " +
+		"names the chart's own routes.",
+	CodeNoSuchEntity: "The active configuration holds nothing by that name.",
+	CodeIdentityMismatch: "The body renames what the path names, and this " +
+		"route does not rename. Send it back under the name it already has.",
+	CodeValidationError: "The configuration this change would produce is not " +
+		"valid, so nothing was stored. The detail names what to fix.",
+	CodeInvalidPatch: "The change could not be applied to the configuration, " +
+		"so nothing was stored. The detail says why.",
+	CodeSummaryRequired: "This change needs a one-line summary for the " +
+		"configuration's history. Send it in the X-Summary header.",
+
+	CodeInvalidName: "That is not a name a credential can be stored under. The " +
+		"detail says what a name may be.",
+	CodeNoKeyring: "This node has no keyring, so it can neither seal a " +
+		"credential nor open one. Generate a key, add it to the node's " +
+		"configuration and restart it.",
+	CodeNoActiveKey: "This node's keyring names no active key, so there is " +
+		"nothing to re-seal onto. Set one in the node's configuration and " +
+		"restart it.",
+	CodeKeyIDMismatch: "This node seals under a different key from the one " +
+		"you expected. Make the two configurations agree before rekeying.",
+	CodeRekeyIncomplete: "The rekey stopped part of the way through. The detail " +
+		"names what moved, and running it again is safe once the missing key " +
+		"is back.",
 }
 
 // Codes is every code in the vocabulary, sorted.
@@ -716,9 +893,23 @@ func Refuse(w http.ResponseWriter, err error) {
 //
 // It is NOT a second Fail: the body is [FailWithFields]'s, so the envelope's
 // three parts are assembled in exactly one place however a refusal is reached.
+//
+// ZERO MEANS NOT RETRYABLE and writes no header: a node missing the
+// configuration a route needs will not have it after any wait, and saying
+// "come back" to a client is how it learns to hammer that node.
 func Unavailable(w http.ResponseWriter, code Code, retryAfterSeconds int) {
+	UnavailableWith(w, code, retryAfterSeconds, nil)
+}
+
+// UnavailableWith is [Unavailable] carrying a detail: what could not be read,
+// the operation id a retry must reuse, the setting to change.
+//
+// THE ONLY OTHER WAY a 503 is written, so a route with something to say beside
+// the code cannot reach for [FailWithFields] and drop the header — which is how
+// a dozen of them came to answer "come back" without saying when.
+func UnavailableWith(w http.ResponseWriter, code Code, retryAfterSeconds int, detail Detail) {
 	if retryAfterSeconds > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
 	}
-	FailWithFields(w, http.StatusServiceUnavailable, code, nil)
+	FailWithFields(w, http.StatusServiceUnavailable, code, detail)
 }

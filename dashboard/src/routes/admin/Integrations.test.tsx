@@ -1565,7 +1565,7 @@ test("a step this build cannot perform draws no control", () => {
 // a button that quietly did nothing would leave them pressing it again.
 test("the engine's refusal is reported beside the agent it was refused for", async () => {
   const sent: Sent[] = [];
-  stubFetch(sent, { error: "no_public_url", hint: "set api.external_url first" }, 409);
+  stubFetch(sent, { error: "no_external_url", hint: "set api.external_url first" }, 409);
   roster(seatOf({ step: "create_app" }));
 
   fireEvent.click(screen.getByRole("button", { name: "Create app on GitHub" }));

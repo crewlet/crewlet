@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -207,12 +208,30 @@ func (s *Service) freshness(r *http.Request) (statelog.Freshness, error) {
 // operator chasing a broken engine over a node that is merely catching up.
 func (s *Service) readFailed(w http.ResponseWriter, err error) {
 	if errors.Is(err, statelog.ErrUnavailable) {
-		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			map[string]string{"detail": err.Error()})
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retryAfter(err),
+			httpjson.Detail{"detail": err.Error()})
 		return
 	}
 	httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeInternalError,
 		map[string]string{"detail": err.Error()})
+}
+
+// retryAfter is the Retry-After on one of this surface's retryable 503s, in
+// seconds.
+//
+// THE REFUSAL'S OWN HINT where it carries one — a read refused because this
+// node is behind derives how long from its backlog over its measured drain,
+// which a flat number is wrong about in both directions on one fleet — and
+// [authz.RetryUndecidedSeconds] otherwise, for that constant's reason: what
+// the caller waits for is this node applying the chart log one batch
+// further, or reading the fleet's shared state again, which is the scale of
+// one apply and not of an outage.
+func retryAfter(err error) int {
+	var refused *statelog.Refused
+	if errors.As(err, &refused) && refused.RetryAfter > 0 {
+		return max(1, int(refused.RetryAfter.Round(time.Second)/time.Second))
+	}
+	return authz.RetryUndecidedSeconds
 }
 
 // viewOfUnit renders one unit at the posture this request gets.
@@ -314,11 +333,14 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 		// filtering against it would return EVERY human seat in the
 		// company under a parameter that promised the opposite — which
 		// is the one failure a screen renders as a finished answer.
-		httpjson.FailWith(w, http.StatusServiceUnavailable,
-			httpjson.CodeUnavailable, map[string]string{
-				"detail": "this node runs no identity domain, so it cannot " +
-					"say which seats nobody holds; ask a node that does",
-			})
+		//
+		// NO Retry-After, because waiting on THIS node never changes it:
+		// the answer is another node, and a header saying "come back"
+		// would send the caller back here.
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, 0, httpjson.Detail{
+			"detail": "this node runs no identity domain, so it cannot " +
+				"say which seats nobody holds; ask a node that does",
+		})
 		return
 	}
 	seats := make([]seatView, 0, len(got.Seats))

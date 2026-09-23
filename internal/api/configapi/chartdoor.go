@@ -8,6 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -106,8 +107,7 @@ func refuseChart(w http.ResponseWriter, doc *yaml.Node, method string) bool {
 	if len(held) == 0 {
 		return false
 	}
-	writeJSON(w, http.StatusBadRequest, map[string]any{
-		"error":  "chart_not_writable_here",
+	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeChartNotWritableHere, httpjson.Detail{
 		"fields": held,
 		"detail": fmt.Sprintf(
 			"%s /config writes the company's SETTINGS, and this body carries "+
@@ -238,8 +238,7 @@ func refuseChartEntity(w http.ResponseWriter, kind, id string) bool {
 		route = ChartRoutes.UnitContent + " for its content, " + ChartRoutes.Batch +
 			" to open or move one, " + ChartRoutes.RenameUnit + " for its key"
 	}
-	writeJSON(w, http.StatusBadRequest, map[string]any{
-		"error":  "chart_not_writable_here",
+	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeChartNotWritableHere, httpjson.Detail{
 		"fields": []string{kind},
 		"detail": fmt.Sprintf(
 			"a %s is not part of the company's settings any more, so this "+

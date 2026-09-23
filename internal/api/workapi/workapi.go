@@ -310,9 +310,7 @@ func (s *Service) refuseDecision(w http.ResponseWriter, r *http.Request,
 	case how == iam.Anonymous:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 	case how == iam.Unknown:
-		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-		httpjson.Fail(w, http.StatusServiceUnavailable,
-			httpjson.CodeIdentityUnavailable)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryAfter)
 	case d.Unknown():
 		unavailable(w, builtin.Refusal(string(action),
 			builtin.DecisionError(action, d)), nil)
@@ -325,13 +323,11 @@ func (s *Service) refuseDecision(w http.ResponseWriter, r *http.Request,
 
 // unavailable writes a 503 this caller should retry, with what to retry with.
 func unavailable(w http.ResponseWriter, detail string, extra map[string]any) {
-	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 	body := httpjson.Detail{"detail": detail}
 	for k, v := range extra {
 		body[k] = v
 	}
-	httpjson.FailWithFields(w, http.StatusServiceUnavailable,
-		httpjson.CodeUnavailable, body)
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retryAfter, body)
 }
 
 // ---- calling a tool ---------------------------------------------------- //

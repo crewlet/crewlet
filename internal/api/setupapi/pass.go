@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -99,14 +100,14 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	}
 	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
 	state, ok := s.state(company, roster, kind)
 	if !ok {
-		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
 		})
 		return
@@ -190,7 +191,9 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		}
 		sink, err := s.sink(operatorOf(r))
 		if err != nil {
-			httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoKeyring, map[string]string{
+			// NO Retry-After: waiting installs no key — see
+			// [httpjson.CodeNoKeyring].
+			httpjson.UnavailableWith(w, httpjson.CodeNoKeyring, 0, httpjson.Detail{
 				"detail": "this node has no secrets.keys, so a minted credential cannot be sealed",
 				"hint":   "run `crewlet secrets keygen` and install one",
 			})
@@ -229,8 +232,12 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		// There is nothing to record, because nothing was observed.
 		log.ErrorContext(r.Context(), "setup_pass_not_started",
 			"integration", kind, "error", err.Error(), "operator", operatorOf(r))
-		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeInternalError,
-			map[string]string{
+		// UNAVAILABLE AND NOT internal_error: the store could not say, which
+		// is transient, and a client told "internal error" treats it as
+		// terminal. Retried on the undecidable scale — a coordination blip
+		// is seconds, not an outage.
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
+			httpjson.Detail{
 				"hint": "the coordination store could not say whether another node " +
 					"is already provisioning this integration; try again",
 			})

@@ -179,12 +179,16 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 			map[string]string{"detail": err.Error()})
 		return
 	case errors.Is(err, statelog.ErrConflict):
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
+		// STALE, NOT bad_params: the write lost a race to somebody else's
+		// on the same object, and nothing about the request was wrong.
+		// `bad_params` told the caller to change a request that only
+		// needed re-reading, in a sentence about a query parameter.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeStale,
 			map[string]string{"detail": err.Error()})
 		return
 	case errors.Is(err, statelog.ErrUnavailable):
-		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			map[string]string{"detail": err.Error()})
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retryAfter(err),
+			httpjson.Detail{"detail": err.Error()})
 		return
 	case err != nil:
 		httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeInternalError,
@@ -204,8 +208,8 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 			"position to see it."
 		httpjson.Write(w, http.StatusAccepted, body)
 	case statelog.OutcomeUnknown:
-		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			map[string]string{
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
+			httpjson.Detail{
 				"detail": "this node cannot establish what happened to this " +
 					"change. Retry it with the SAME operation id — send it back " +
 					"as the " + IdempotencyHeader + " header — because a fresh " +

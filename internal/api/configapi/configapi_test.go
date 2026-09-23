@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -443,6 +444,47 @@ func TestAWriteNeedsASummary(t *testing.T) {
 	if decode(t, res)["error"] != "summary_required" {
 		t.Errorf("body = %s", res.Body)
 	}
+}
+
+// EVERY REFUSAL HERE CARRIES THE SENTENCE ITS CODE HAS.
+//
+// `/config` is the surface the org builder's every save goes through, and it
+// was the one whose refusals were hand-built `{"error": code}` objects: a
+// screen rendering the envelope showed the org builder a code and nothing a
+// person could act on. A refusal answered through internal/api/httpjson
+// carries the code's own sentence, so the three shapes a save meets most —
+// nothing configured, no summary, somebody else's change landed first —
+// are asserted on the sentence as well as the code.
+func TestEveryConfigRefusalCarriesItsSentence(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	check := func(what string, res *httptest.ResponseRecorder, status int, code httpjson.Code) {
+		t.Helper()
+		if res.Code != status {
+			t.Fatalf("%s: got %d, want %d: %s", what, res.Code, status, res.Body)
+		}
+		body := decode(t, res)
+		if body["error"] != string(code) {
+			t.Errorf("%s: error = %v, want %s", what, body["error"], code)
+		}
+		if body["message"] != code.Message() {
+			t.Errorf("%s: message = %v, want the code's own sentence", what, body["message"])
+		}
+	}
+	check("a read before anything is configured", s.do(t, http.MethodGet, "/config", "", nil),
+		http.StatusNotFound, httpjson.CodeNoActiveRevision)
+	check("a write with no summary", s.do(t, http.MethodPut, "/config", companyDoc, nil),
+		http.StatusBadRequest, httpjson.CodeSummaryRequired)
+
+	base := s.seed(t, companyDoc, nil)
+	if got := s.do(t, http.MethodPut, "/config", strings.Replace(companyDoc, "Acme", "Theirs", 1),
+		map[string]string{"X-Summary": "theirs"}).Code; got != http.StatusCreated {
+		t.Fatalf("the first write got %d", got)
+	}
+	check("a write somebody else's beat", s.do(t, http.MethodPut, "/config",
+		strings.Replace(companyDoc, "Acme", "Ours", 1),
+		map[string]string{"X-Summary": "ours", "If-Match": base}),
+		http.StatusConflict, httpjson.CodeRevisionAdvanced)
 }
 
 func TestAWriteActivatesANewRevision(t *testing.T) {

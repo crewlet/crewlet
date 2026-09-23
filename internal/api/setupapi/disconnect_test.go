@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
@@ -411,14 +414,22 @@ func TestADisconnectRefusedByAConcurrentPassSaysItIsRetryable(t *testing.T) {
 		t.Errorf("detail = %q, which does not say the request is worth "+
 			"repeating", detail)
 	}
+	// AND WHEN: the dialog's own cadence for this refusal, so a client that
+	// follows the header asks again as often as the screen that retries it.
+	if got := out.Header().Get("Retry-After"); got != "3" {
+		t.Errorf("Retry-After = %q, want 3", got)
+	}
 }
 
-// AND ONE REFUSED FOR ANY OTHER REASON DOES NOT.
+// AND ONE REFUSED FOR ANY OTHER REASON IS NOT A BUSY SURFACE.
 //
 // A status row the node cannot read is not a race another writer is about to
-// finish, and telling a caller to sit it out and retry sends them round a loop
-// the fault does not end. Both answers are 503; only one of them is a race.
-func TestADisconnectRefusedPermanentlyIsNotMarkedRetryable(t *testing.T) {
+// finish, and the dialog sits `surface_busy` out on its own — so reporting
+// this as busy sends a caller round a loop the fault may not end. Both
+// answers are 503 and both carry a Retry-After, because both may clear (a
+// coordination store that could not be reached usually comes back within
+// seconds); only one of them is a race worth retrying without being asked.
+func TestADisconnectRefusedForAnyOtherReasonIsNotABusySurface(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seedDocument(t, identityDoc)
@@ -430,8 +441,15 @@ func TestADisconnectRefusedPermanentlyIsNotMarkedRetryable(t *testing.T) {
 	if out.Code != http.StatusServiceUnavailable {
 		t.Fatalf("disconnect = %d: %s", out.Code, out.Body)
 	}
-	if got := decode(t, out)["error"]; got == "surface_busy" {
-		t.Error("a status row that could not be read was reported as busy, so a " +
-			"caller retries a refusal no amount of waiting ends")
+	body := decode(t, out)
+	if got := body["error"]; got != string(httpjson.CodeUnavailable) {
+		t.Errorf("error = %v, want unavailable: it was internal_error, which a "+
+			"caller reads as terminal, and surface_busy would be a race", got)
+	}
+	if body["message"] != httpjson.CodeUnavailable.Message() {
+		t.Errorf("message = %v, want the code's own sentence", body["message"])
+	}
+	if got := out.Header().Get("Retry-After"); got != strconv.Itoa(authz.RetryUndecidedSeconds) {
+		t.Errorf("Retry-After = %q, want the undecidable scale", got)
 	}
 }
