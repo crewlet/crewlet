@@ -754,12 +754,32 @@ func bodyWarnings(body string) []string {
 // promoted with no subtask behind it — a struck-through line pointing at
 // nothing, which no reader can tell from a subtask somebody purged.
 //
+// # Re-running it
+//
+// A RETRY under the same operation id is answered step by step from the
+// ledger: a counter step that landed is not minted again ([Writer.resumeCreate]
+// asks for the subtask instead), a subtask that landed is that one under the
+// key it took, and a parent step that landed is the retry's answer — so a
+// retry of a promotion that finished answers `applied` with the first run's
+// position and appends nothing.
+//
+// A RE-RUN under a new operation re-derives the same subtask id, because it is
+// a uuid5 over the item: its create is refused on the subtask's guarding row,
+// the answer is the subtask already filed, and the run proceeds to the parent
+// step. It spends a number on its own mint, which is the documented gap.
+//
+// # The parent's mark is decided on the PARENT'S OWN SNAPSHOT
+//
+// It is a [PromoteIntent] rather than a checklist set, resolved inside the
+// parent step's decide ([settlePromote]): the lists are carried whole, and a
+// set composed from the read the mint made discarded every checklist edit that
+// landed while the subtask was being filed. An item that already points at the
+// subtask needs no record, and one somebody deleted meanwhile is a warning.
+//
 // CRASH RESIDUE: a numbering gap, exactly as row 1; or a landed subtask whose
-// parent item is still un-marked. REPAIRER: nobody for the gap. The un-marked
-// parent needs none either, because the subtask's id is a uuid5 over the item:
-// a retry re-derives the same id, the create is refused as already existing on
-// its guarding row, and the retry proceeds to the parent commit. A subtask that
-// was PURGED is refused as deleted rather than resurrected.
+// parent item is still un-marked. REPAIRER: nobody for the gap, and the re-run
+// or retry above for the mark. A subtask that was PURGED is refused as deleted
+// rather than resurrected.
 func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	subtask Task, notify *Notify) (WriteResult, error) {
 
@@ -772,6 +792,9 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		return WriteResult{}, fmt.Errorf("tracker: a promotion mints no subtask "+
 			"id — it is a uuid5 over item %s, which is what makes a retry "+
 			"re-derive the same subtask rather than a second one", itemID)
+	case subtask.Project == "":
+		return WriteResult{}, fmt.Errorf("tracker: subtask %s names no project "+
+			"to take its key from", subtask.ID)
 	}
 	// THE SAME DEFAULT AS A PLAIN CREATE, and for the same reason: a
 	// checklist item carries no type, so a promotion that named none would
@@ -779,86 +802,117 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	if subtask.Type == "" {
 		subtask.Type = DefaultTaskType
 	}
+	subtask.Parent = &parentID
 
+	// WHAT THE MINT'S SNAPSHOT SETTLED, assigned on every run of its
+	// closure so the last run — the accepted one — is what survives.
 	var (
-		parent  Task
-		settled settledCreate
+		parentProject string
+		settled       settledCreate
 	)
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), subtask.Project, 1,
 		func(tx *sql.Tx) error {
-			current, held, err := readTask(ctx, tx, parentID)
-			switch {
-			case err != nil:
+			project, err := promotableParent(ctx, tx, parentID, itemID)
+			parentProject = project
+			if err != nil {
 				return err
-			case !held:
-				return fmt.Errorf("tracker: parent task %s is not on this "+
-					"node: %w", parentID, statelog.ErrUnavailable)
-			case current.Removed != nil:
-				return fmt.Errorf("tracker: task %s was removed by %s at %s; "+
-					"restore it before promoting anything out of it",
-					parentID, current.Removed.By,
-					current.Removed.At.Format(time.RFC3339))
 			}
-			if _, _, found := findItem(current, itemID); !found {
-				return fmt.Errorf("tracker: task %s has no checklist item %s",
-					parentID, itemID)
-			}
-			parent = current
 			// A PROMOTION'S SUBTASK CARRIES NO CUSTOM FIELDS — it is
 			// built from a checklist item, which has none — so the
-			// coerced map it answers with is empty and is dropped
-			// deliberately. Its PROJECT'S UNIT is not: a promoted
-			// subtask is work in a project like any other, and one
-			// filed into no unit is one that unit's lead is no
-			// fallback for.
+			// coerced map it answers with is empty. Its PROJECT'S
+			// UNIT is not: a promoted subtask is work in a project
+			// like any other, and one filed into no unit is one that
+			// unit's lead is no fallback for.
 			settled, err = w.refuseCreate(ctx, tx, subtask)
 			return err
 		})
-	if err != nil {
+	var created WriteResult
+	switch {
+	case errors.Is(err, errMintLanded):
+		created, err = w.resumeCreate(ctx, opID, subtask, notify)
+	case err != nil:
 		return WriteResult{Result: minted}, err
+	default:
+		created, err = w.fileTask(ctx, opID, subtask, n, settled, notify)
 	}
-	rank, err := IntegerAt(n)
+	if errors.Is(err, statelog.ErrExists) {
+		// THE SUBTASK IS ALREADY FILED, by an earlier run under another
+		// operation — its id is the item's — so it is that one, under the
+		// key IT took; this run's number is the gap.
+		created, err = w.landedTask(ctx, created.Result, subtask.ID)
+	}
 	if err != nil {
-		return WriteResult{}, fmt.Errorf("tracker: derive %s-%d's rank: %w",
-			subtask.Project, n, err)
-	}
-	at := w.Now()
-	subtask.Key = fmt.Sprintf("%s-%d", subtask.Project, n)
-	subtask.Rank = rank
-	subtask.Parent = &parentID
-	subtask.FiledUnit, subtask.RoutingUnit = filedUnit(
-		subtask.FiledUnit, subtask.RoutingUnit, settled.unit)
-	subtask.CreatedAt, subtask.UpdatedAt = at, at
-	if subtask.Status == "" {
-		subtask.Status = StatusTodo
-	}
-	subtask.StatusGroup = subtask.Status.Group()
-	if subtask.Priority == "" {
-		subtask.Priority = PriorityNone
-	}
-
-	created, err := w.writeTask(ctx, stepID(opID, "subtask"), subtask, notify, at)
-	created.Key, created.Rank = subtask.Key, subtask.Rank
-	if err != nil && !errors.Is(err, statelog.ErrExists) {
-		// ALREADY EXISTING IS THE RETRY'S OWN PATH, not a failure: the
-		// id is derived from the item, so a re-run finds its own subtask
-		// and carries on to the parent commit the first attempt did not
-		// reach.
 		return created, err
 	}
+	if parentProject == "" {
+		// THE MINT WAS ANSWERED, NOT DECIDED, so its snapshot never ran
+		// and the parent's project is read here: it is what the parent
+		// step's scope names.
+		if parentProject, err = w.taskProject(ctx, parentID); err != nil {
+			return created, err
+		}
+	}
 
-	lists := markPromoted(parent, itemID, subtask.ID)
 	marked, err := w.UpdateTask(ctx, stepID(opID, "parent"), parentID,
-		parent.Project, NoIfMatch, TaskPatch{Checklists: &lists},
+		parentProject, NoIfMatch,
+		TaskPatch{Promote: &PromoteIntent{Item: itemID, Subtask: subtask.ID}},
 		ChangeChecklist, nil)
 	if err != nil {
-		return created, fmt.Errorf("tracker: subtask %s was created and its "+
-			"item in %s is still un-marked; re-run the promotion, which "+
-			"re-derives the same subtask and completes: %w",
-			subtask.Key, parentID, err)
+		return created, fmt.Errorf("tracker: subtask %s is filed and its item "+
+			"in %s is not yet marked; retry the promotion under the same "+
+			"operation id, which completes it: %w", created.Key, parentID, err)
 	}
 	created.Result = marked.Result
+	created.Warnings = append(created.Warnings, marked.Warnings...)
 	return created, nil
+}
+
+// promotableParent is the refusals a promotion reads its parent for, inside
+// the mint's snapshot, and the project the parent is in.
+func promotableParent(ctx context.Context, tx *sql.Tx, parentID,
+	itemID string) (string, error) {
+
+	current, held, err := readTask(ctx, tx, parentID)
+	switch {
+	case err != nil:
+		return "", err
+	case !held:
+		return "", fmt.Errorf("tracker: parent task %s is not on this node: %w",
+			parentID, statelog.ErrUnavailable)
+	case current.Removed != nil:
+		return "", fmt.Errorf("tracker: task %s was removed by %s at %s; "+
+			"restore it before promoting anything out of it",
+			parentID, current.Removed.By, current.Removed.At.Format(time.RFC3339))
+	}
+	if _, _, found := findItem(current, itemID); !found {
+		return "", fmt.Errorf("tracker: task %s has no checklist item %s",
+			parentID, itemID)
+	}
+	return current.Project, nil
+}
+
+// taskProject is the project a task is in, read outside any decision — for a
+// sequence's later step, whose scope names the container and whose own decide
+// re-reads everything it acts on.
+func (w *Writer) taskProject(ctx context.Context, id string) (string, error) {
+	if w.db == nil {
+		return "", fmt.Errorf("tracker: this writer has no store to read task "+
+			"%s's project from", id)
+	}
+	var project string
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		task, held, err := readTask(ctx, tx, id)
+		switch {
+		case err != nil:
+			return err
+		case !held:
+			return fmt.Errorf("tracker: task %s is not on this node: %w",
+				id, statelog.ErrUnavailable)
+		}
+		project = task.Project
+		return nil
+	})
+	return project, err
 }
 
 // findItem locates a checklist item on a task.

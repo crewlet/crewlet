@@ -184,16 +184,25 @@ func TestARerunPromotionMarksTheParentItDidNotReach(t *testing.T) {
 	r.drain()
 
 	subtask := newTask("t-2")
-	if _, err := r.writer.PromoteItem(t.Context(), "op-2", "t-1", "i-1", subtask, nil); err != nil {
+	first, err := r.writer.PromoteItem(t.Context(), "op-2", "t-1", "i-1", subtask, nil)
+	if err != nil {
 		t.Fatalf("PromoteItem: %v", err)
 	}
 	r.drain()
 	// THE SAME PROMOTION AGAIN, which is what a re-run after a crash
 	// between the subtask and the parent commit does.
-	if _, err := r.writer.PromoteItem(t.Context(), "op-3", "t-1", "i-1", subtask, nil); err != nil {
+	rerun, err := r.writer.PromoteItem(t.Context(), "op-3", "t-1", "i-1", subtask, nil)
+	if err != nil {
 		t.Fatalf("the re-run: %v", err)
 	}
 	r.drain()
+	// ANSWERED WITH THE SUBTASK IT ALREADY FILED, under the key that one
+	// took — not the number the re-run's own mint spent, which is a key no
+	// task holds.
+	if rerun.Key != first.Key {
+		t.Errorf("the re-run answered with key %q, want the subtask's own %q",
+			rerun.Key, first.Key)
+	}
 
 	answer := r.ask(map[string]any{"container": "project:ENG"})
 	if len(answer.Rows) != 2 {

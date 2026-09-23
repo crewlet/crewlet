@@ -251,6 +251,33 @@ type lossyLog struct {
 	mu      sync.Mutex
 	pending int
 	refused string
+
+	// landed runs after an append to a subject ending in its suffix
+	// LANDS, on the appending goroutine — which is where a case puts
+	// somebody else's write that has to fall between two steps of one
+	// sequence.
+	landedOn string
+	landed   func()
+}
+
+// afterAppendTo runs fn once, after the next append to a subject ending in
+// suffix lands.
+func (l *lossyLog) afterAppendTo(suffix string, fn func()) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.landedOn, l.landed = suffix, fn
+}
+
+// takeLanded is the hook for subject, cleared as it is taken.
+func (l *lossyLog) takeLanded(subject string) func() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.landed == nil || !strings.HasSuffix(subject, l.landedOn) {
+		return nil
+	}
+	fn := l.landed
+	l.landed = nil
+	return fn
 }
 
 // refuse makes the broker refuse to store every append to a subject ending in
@@ -295,6 +322,11 @@ func (l *lossyLog) Append(ctx context.Context, subject, msgID string, expect *ui
 		}
 	}
 	seq, dup, err := l.Appender.Append(ctx, subject, msgID, expect, body)
+	if err == nil {
+		if fn := l.takeLanded(subject); fn != nil {
+			fn()
+		}
+	}
 	if err == nil && l.lose() {
 		return 0, false, errAnswerLost
 	}

@@ -704,6 +704,16 @@ type TaskPatch struct {
 	Relate *RelationIntent  `json:"-"`
 	Depend *DependentIntent `json:"-"`
 
+	// Promote is the PARENT's half of a checklist item's promotion — the
+	// same kind of gesture again, for the same reason: [TaskPatch.Checklists]
+	// is carried whole, and a promotion that composed it from the parent it
+	// read before minting the subtask's key discarded every checklist edit
+	// that landed between that read and the mark. Resolved by
+	// [settlePromote] inside the decide snapshot.
+	//
+	// NEVER ON THE WIRE, like Watch.
+	Promote *PromoteIntent `json:"-"`
+
 	// The collections, carried WHOLE when touched.
 	Collaborators *[]string                   `json:"collaborators,omitempty"`
 	Watchers      *[]string                   `json:"watchers,omitempty"`
@@ -763,6 +773,16 @@ type WatchIntent struct {
 	// because sixty-four other people are watching — a write refused for
 	// a reason that has nothing to do with what the writer asked for.
 	Auto bool
+}
+
+// PromoteIntent marks one checklist item as having become one task.
+//
+// AN ITEM AND A TASK, never a checklist: what a promotion knows is which line
+// became which subtask, and the lists as a whole belong to whatever the parent
+// holds when the mark is decided.
+type PromoteIntent struct {
+	Item    string
+	Subtask string
 }
 
 // RelationIntent is a gesture over a task's relation set, resolved inside the

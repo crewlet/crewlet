@@ -490,7 +490,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	// WARNINGS ARE COLLECTED FROM INSIDE THE DECIDE, which runs again on
 	// every round: the LAST run is the one whose record was published, so
 	// the slice is replaced rather than appended to.
-	var fieldWarnings []string
+	var fieldWarnings, promoteWarnings []string
 	result, err := w.published(ctx, statelog.Request{
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
@@ -551,6 +551,23 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			var note string
+			charged, note, err = settlePromote(current, charged)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			promoteWarnings = nil
+			if note != "" {
+				promoteWarnings = []string{note}
+			}
+			if patch.Promote != nil && charged.Empty() {
+				// NOTHING LEFT TO MARK: the item already points at
+				// this subtask, or is no longer on the parent. An
+				// empty decision is a success rather than a record
+				// saying nothing — which is what makes the parent
+				// step of a promotion re-runnable.
+				return statelog.Decision{Version: int64(current.Version)}, nil
+			}
 			if charged.Fields != nil {
 				// THE COERCION TABLE, and the required-field half that
 				// only ever ran on a create. A patch reaching here
@@ -604,7 +621,58 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 		result.Warnings = bodyWarnings(*patch.Body)
 	}
 	result.Warnings = append(result.Warnings, fieldWarnings...)
+	result.Warnings = append(result.Warnings, promoteWarnings...)
 	return result, err
+}
+
+// settlePromote resolves a promotion's mark into the parent's whole checklist
+// set, against the parent this decide read.
+//
+// INSIDE THE DECIDE SNAPSHOT for the reason [settleWatch] gives: the mark is a
+// change to ONE item of a collection carried whole, and composing the whole
+// from any other read loses whatever landed in between.
+//
+// Three outcomes besides the mark. The item ALREADY POINTS AT THIS SUBTASK —
+// an earlier run marked it — and there is nothing to write. The item is NO
+// LONGER THERE — somebody deleted the line after the subtask was minted — and
+// there is nothing to mark either: the subtask stands on its own, and the
+// caller is told rather than refused, because a refusal would make the
+// promotion unfinishable for a reason nothing can undo. And the item already
+// became ANOTHER task, which is refused: one line is one piece of work.
+//
+// It returns a COPY, like every settle here.
+func settlePromote(current Task, patch TaskPatch) (TaskPatch, string, error) {
+	if patch.Promote == nil {
+		return patch, "", nil
+	}
+	intent := *patch.Promote
+	switch {
+	case patch.Checklists != nil:
+		return patch, "", fmt.Errorf("tracker: this patch carries both a "+
+			"promotion of item %s and a whole checklist set — a caller states "+
+			"one or the other", intent.Item)
+	case intent.Item == "" || intent.Subtask == "":
+		return patch, "", fmt.Errorf("tracker: a promotion mark names item %q "+
+			"and subtask %q, and needs both", intent.Item, intent.Subtask)
+	}
+	patch.Promote = nil
+	l, i, found := findItem(current, intent.Item)
+	if !found {
+		return patch, fmt.Sprintf("checklist item %s is no longer on task %s, so "+
+			"nothing marks it as having become task %s; the subtask stands on "+
+			"its own", intent.Item, current.ID, intent.Subtask), nil
+	}
+	if to := current.Checklists[l].Items[i].PromotedTo; to != nil {
+		if *to == intent.Subtask {
+			return patch, "", nil
+		}
+		return patch, "", fmt.Errorf("tracker: checklist item %s of task %s "+
+			"already became task %s, so it cannot also become %s",
+			intent.Item, current.ID, *to, intent.Subtask)
+	}
+	lists := markPromoted(current, intent.Item, intent.Subtask)
+	patch.Checklists = &lists
+	return patch, "", nil
 }
 
 // settleWatch resolves a membership gesture into the whole watcher sets.
