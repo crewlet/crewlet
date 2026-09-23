@@ -336,6 +336,53 @@ func TestAMoveOnALaggingNodeTakesItsMarkDown(t *testing.T) {
 	}
 }
 
+// A SUBTASK LEFT IN ANOTHER PROJECT THAN ITS ROOT IS IN THE ATTENTION QUEUE,
+// and leaves it when the walk carries it.
+//
+// The flag shipped with the schema — a column, a filter value and a share of
+// the attention index — and nothing ever set it, so `flag=inconsistent_project`
+// answered nothing on every company, including one holding the split subtree
+// a stopped move leaves behind.
+func TestASubtaskOutsideItsRootsProjectIsFlagged(t *testing.T) {
+	t.Parallel()
+	r := moveFixture(t, "m-kid-a", "m-kid-b")
+	flagged := func() []string {
+		t.Helper()
+		// EVERY ROW ON ITS OWN, as list_work_items asks: the flag is a fact
+		// about a SUBTASK's row, and the collapsed mode filters roots.
+		answer, err := r.reader.Tasks(t.Context(), tracker.Query{
+			Scope: tracker.Scope{Workspace: true}, Flags: []string{"inconsistent_project"},
+			Subtasks: tracker.SubtasksSeparate, Level: statelog.ReadStale,
+		}, wednesday)
+		if err != nil {
+			t.Fatalf("the attention query: %v", err)
+		}
+		var ids []string
+		for _, row := range answer.Rows {
+			ids = append(ids, row.ID)
+		}
+		return ids
+	}
+	if got := flagged(); len(got) != 0 {
+		t.Fatalf("a subtree in one project is flagged: %v", got)
+	}
+
+	stopMoveAt(t, r, "m-kid-b")
+	if got := flagged(); len(got) != 1 || got[0] != "m-kid-b" {
+		t.Errorf("the attention queue holds %v, want m-kid-b — left in ENG under a "+
+			"root the move carried into OPS", got)
+	}
+
+	if _, err := trackerWorker(t, r).Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	r.drain()
+	if got := flagged(); len(got) != 0 {
+		t.Errorf("the attention queue still holds %v after the walk carried the "+
+			"subtree whole", got)
+	}
+}
+
 // A LEAF'S MOVE CARRIES NO MARK: it is one append, finished the moment it
 // lands, and a mark would be one more to take it down.
 func TestALeafsMoveIsOneRecord(t *testing.T) {

@@ -79,7 +79,12 @@ move's claim has lapsed, which is a minute after its last heartbeat and never
 while it is still running: the tasks still in the old project follow on fresh
 keys, which leaves a gap in the numbering like any other interrupted write. A
 task removed while the move was running is waited for — the root stays marked
-until it is restored, and the next pass carries it.
+until it is restored, and the next pass carries it. Until the walk is finished,
+every task still in the old project is in the attention queue as
+`flag=inconsistent_project`: a subtask filed in another project than its root
+is not drawn under that root on either board, which is also what a merge that
+re-parents a subtask onto an item in another project leaves until somebody
+moves it.
 
 A project nobody has filed work into reports **no last change at all**, rather
 than an instant borrowed from its own creation: "nothing has ever been filed
