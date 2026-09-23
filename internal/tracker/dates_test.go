@@ -99,6 +99,82 @@ func TestAnOffsetMovesWholeDaysFromMidnight(t *testing.T) {
 	}
 }
 
+// A DAY BEGINS AT THE FIRST INSTANT OF ITS DATE, even where the clock jumps
+// over midnight or repeats it.
+//
+// Santiago springs forward from 00:00 to 01:00 and Amman has fallen back from
+// 01:00 to 00:00, and time.Date answers either missing or repeated midnight
+// with whichever reading it likes: 23:00 the evening before in Santiago, the
+// second midnight in Amman. Resolved that way, "today" in Santiago took in
+// the last hour of yesterday — a task due at 23:30 on the 7th read as due
+// today and not overdue — and every token stepped from it inherited the hour.
+// The dates are past ones, so a newer time-zone database cannot move them.
+func TestADayBeginsAtTheFirstInstantOfItsDateWhereverTheClockJumps(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		zone, now string
+		tokens    map[string]string
+	}{
+		{"America/Santiago", "2024-09-08T12:00:00-03:00", map[string]string{
+			"today":      "2024-09-08T01:00:00-03:00",
+			"2024-09-08": "2024-09-08T01:00:00-03:00",
+			"yesterday":  "2024-09-07T00:00:00-04:00",
+			"tomorrow":   "2024-09-09T00:00:00-03:00",
+			"-1d":        "2024-09-07T00:00:00-04:00",
+		}},
+		{"America/Santiago", "2024-09-01T12:00:00-04:00", map[string]string{
+			"+7d": "2024-09-08T01:00:00-03:00",
+			"eow": "2024-09-02T00:00:00-04:00",
+		}},
+		{"Asia/Amman", "2021-10-29T12:00:00+02:00", map[string]string{
+			"today":      "2021-10-29T00:00:00+03:00",
+			"2021-10-29": "2021-10-29T00:00:00+03:00",
+			"tomorrow":   "2021-10-30T00:00:00+02:00",
+		}},
+	} {
+		loc, err := time.LoadLocation(c.zone)
+		if err != nil {
+			t.Fatalf("load %s: %v", c.zone, err)
+		}
+		now, err := time.Parse(time.RFC3339, c.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for token, want := range c.tokens {
+			got, err := tracker.ResolveDate(token, now, loc)
+			if err != nil {
+				t.Fatalf("%s %s: %v", c.zone, token, err)
+			}
+			if w, _ := time.Parse(time.RFC3339, want); !got.At.Equal(w) || !got.AllDay {
+				t.Errorf("%s at %s: %s resolves to %v (all day %v), want %s", c.zone,
+					c.now, token, got.At.In(loc), got.AllDay, want)
+			}
+		}
+	}
+}
+
+// AN OFFSET PAST THE YEARS A DATE CAN BE WRITTEN IN IS REFUSED.
+//
+// A resolved token becomes a task's due date, and a task record cannot carry
+// a date past year 9999 at all — its encoder refuses one — so "+4000000d" was
+// accepted here and failed later, somewhere further from the person who typed
+// it. An offset big enough to overflow the day arithmetic wrapped round
+// silently into an ordinary-looking date.
+func TestAnOffsetPastTheWritableYearsIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, token := range []string{"+4000000d", "-800000d", "+9223372036854775807d",
+		"-9223372036854775808d"} {
+		if got, err := tracker.ResolveDate(token, wednesday, berlin); err == nil {
+			t.Errorf("%s resolved to %v", token, got.At)
+		} else if !strings.Contains(err.Error(), "0000 to 9999") {
+			t.Errorf("%s is refused without naming the range: %v", token, err)
+		}
+	}
+	if got := at(t, "+2000000d"); got.Year() < 7000 || got.Year() > 9999 {
+		t.Errorf("an offset that stays inside the range resolves to %v", got)
+	}
+}
+
 // AN UNKNOWN TOKEN IS AN ERROR, NOT A ZERO INSTANT.
 //
 // The zero time is 1 January year one, so a filter that silently resolved to

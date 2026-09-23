@@ -271,6 +271,9 @@ internal/
 │                         #   engine's own, found by name and read by syntax;
 │                         #   every one lives in dashboard/src/contract/
 ├── e2e/                  # The end-to-end company, and the dashboard replay
+├── period/               # The company calendar: the day, ISO week and month a
+│                         #   moment falls in, named by a label every node
+│                         #   computes alike
 └── version/ logging/ redact/ envref/ envfile/ workkey/ backoff/  # small shared
                           #   grammars
 

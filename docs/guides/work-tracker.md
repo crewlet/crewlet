@@ -498,6 +498,13 @@ are the engine's rather than each screen's: cut in a browser they were cut on
 day differs from the company's, a task sat under Earlier on a row the same
 answer marked as due today and not overdue.
 
+"Midnight" means the first moment of the company's date, and in a few zones
+that is not 00:00. Chile, Cuba, Lebanon and Egypt start summer time by moving
+the clock from 00:00 straight to 01:00, so on that day the day — and "today",
+and a task's all-day due date — begins at 01:00; where a zone sets its clock
+back from 01:00 to 00:00, as Cuba does, midnight happens twice and the day
+begins at the first. The week is the ISO week, Monday to Monday.
+
 ### The timeline
 
 A task's `start` and `due` are its bar. A task carrying only one of them gets
@@ -683,7 +690,7 @@ input to something the tracker already reports:
 
 | Argument | What it sets |
 |---|---|
-| `due` | when the task is due. A date (`2031-04-16`), an instant, or one of the relative words the `due=` FILTER reads — `today`, `tomorrow`, `eow` (the week's end — midnight ending Sunday, since a week starts on Monday), `eom` (midnight ending the month), or an offset like `+7d`. One grammar for both, because a seat that can ask for "everything due this week" must be able to say "due this week" about one task. A token that named a DAY sets the all-day flag, so a renderer shows "16 April" rather than "16 April, 00:00" for a date nobody gave a time to. |
+| `due` | when the task is due. A date (`2031-04-16`), an instant, or one of the relative words the `due=` FILTER reads — `today`, `tomorrow`, `eow` (the week's end — midnight ending Sunday, since a week starts on Monday), `eom` (midnight ending the month), or an offset like `+7d` (refused if it lands outside the years 0000–9999, which is all a date can be written in). One grammar for both, because a seat that can ask for "everything due this week" must be able to say "due this week" about one task. A token that named a DAY sets the all-day flag, so a renderer shows "16 April" rather than "16 April, 00:00" for a date nobody gave a time to. |
 | `start` | when work on it should start, in the same spellings. |
 | `estimate_minutes` | how long it is expected to take. |
 | `points` | how big it is on the team's own scale. |
