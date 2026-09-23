@@ -238,7 +238,7 @@ func (c *rawClaims) UnmarshalJSON(data []byte) error {
 //
 // Providers disagree about it — `groups` at most, `roles` for an application's
 // own roles, a namespaced URL at the ones that insist custom claims carry one
-// — so the name is `api.auth.oidc.group_claim`'s to state. A LIST OF ALIASES
+// — so the name is `api.auth.oidc.groups_claim`'s to state. A LIST OF ALIASES
 // tried in turn would be a guess about which claim carries authority, and the
 // first alias an attacker could get a provider to emit would win. EMPTY READS
 // NO GROUPS AT ALL: a deployment that maps none does not have its logins'
