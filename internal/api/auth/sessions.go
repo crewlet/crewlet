@@ -484,8 +484,9 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 // proved who they are. The principal's [iam.Principal.ReauthAt] is the instant
 // that proof stops counting — the proof plus this node's window — so a
 // shortened window takes effect on the next request, and a session that
-// proved nothing (a Tier A token's exchanged cookie, or a row this node has
-// not applied) is never fresh.
+// proved nothing (a row this node has not applied) is never fresh. A Tier A
+// token's exchanged cookie never reaches here: the guard composes it from the
+// entry, exactly as it composes the token's bearer.
 func (s *Sessions) principal(v session.Validation, binding session.Binding,
 	ceiling []iam.Grant, stepUp time.Duration) iam.Principal {
 

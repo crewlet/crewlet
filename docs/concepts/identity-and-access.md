@@ -958,10 +958,13 @@ rather than leaving two live sessions — and it confirms the sign-in rather
 than repeating it: it keeps the replaced session's absolute deadline, or
 confirming a session would keep it alive for ever, and the grants its identity
 provider's groups conferred, or stepping up would cost the authority it was
-for. A session exchanged from
-a Tier A token records no proof at all, so its `reauth_at` is zero and every
-step-up surface refuses it. A node that has not yet applied the session's row
-— the read-only grace in the table above — claims no proof it cannot see.
+for. A session exchanged from a Tier A token is the one exception, and it is
+not a session's proof at all: the guard re-composes it from the token's entry
+on every request, exactly as it composes the bearer, so it is fresh by
+construction for as long as the entry is held — the break-glass credential
+must reach a sensitive gesture on the day the identity provider is down. A
+node that has not yet applied the session's row — the read-only grace in the
+table above — claims no proof it cannot see.
 
 **503 and never 401 on a node that is behind.** A browser reads 401 as "sign in
 again" and discards the cookie, so one stalled applier answering 401 would log
