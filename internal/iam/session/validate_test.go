@@ -727,3 +727,61 @@ func TestBothBehindArmsReissueTheCookie(t *testing.T) {
 		})
 	}
 }
+
+// A DEADLINE SAYS WHICH DEADLINE, AND NOTHING ELSE DOES.
+//
+// The idle deadline lives in the bearer and nowhere else, so the validation
+// that notices it passed is the only frame that can ever report a session
+// ending that way — the audit trail's `idle` and `absolute` reasons are read
+// from here. An end a RECORD decided (the row says ended, the epoch moved)
+// must NOT carry one: that end was already announced by whoever wrote the
+// record, and a second announcement from every node a stale cookie reaches
+// would name the wrong cause.
+//
+// Mutation: drop the Deadline from the idle arm and the first case fails; set
+// one on the row-ended arm and the last does.
+func TestADeadlineSaysWhichDeadlineEndedTheSession(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		world func(*signedIn)
+		want  session.Deadline
+	}{
+		{"idle past the idle window", func(s *signedIn) {
+			// A LIFETIME LONGER THAN THE IDLE WINDOW, which the rig's own
+			// is not: this is the session a person leaves open overnight.
+			cookie, err := s.signer.Mint(session.Mint{
+				Lineage: s.lineage, Person: personID, Epoch: 3, Generation: 1,
+				StartPosition:     startPos,
+				AbsoluteExpiresAt: s.clock.at.Add(30 * 24 * time.Hour),
+			})
+			if err != nil {
+				s.t.Fatalf("mint: %v", err)
+			}
+			s.cookie = cookie
+			s.clock.advance(session.Idle + time.Minute)
+		}, session.DeadlineIdle},
+		{"past the absolute lifetime", func(s *signedIn) {
+			s.clock.advance(absolute + time.Minute)
+		}, session.DeadlineAbsolute},
+		{"ended by a record", func(s *signedIn) {
+			s.dir.identity.Session.Ended = true
+		}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			tc.world(rig)
+			got := rig.validate()
+			if got.Row != session.RowEnded {
+				t.Fatalf("landed on %q, want ended: %s", got.Row, got.Detail)
+			}
+			if got.Deadline != tc.want {
+				t.Errorf("deadline = %q, want %q (%s)", got.Deadline, tc.want, got.Detail)
+			}
+			if !got.Deadline.Valid() {
+				t.Errorf("deadline %q is not one this build names", got.Deadline)
+			}
+		})
+	}
+}

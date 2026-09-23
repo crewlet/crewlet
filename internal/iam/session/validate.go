@@ -168,6 +168,30 @@ const (
 	RowMalformed Row = "malformed"
 )
 
+// Deadline is which of a bearer's own deadlines ended a session.
+//
+// A VALUE BESIDE [RowEnded] RATHER THAN TWO MORE ROWS, because the table's
+// answer is the same for both — refuse, and clear the cookie — and a row is a
+// decision about what a request may do. What differs is what the audit trail
+// says happened, and a deadline is the one way a session ends that no record
+// ever states: the idle deadline lives in the bearer and nowhere else, so the
+// frame that validates a bearer is the only one that can ever see it pass.
+type Deadline string
+
+const (
+	// DeadlineIdle is a session unused for [Idle].
+	DeadlineIdle Deadline = "idle"
+
+	// DeadlineAbsolute is a session past the lifetime it was minted with,
+	// which no re-issue moves.
+	DeadlineAbsolute Deadline = "absolute"
+)
+
+// Valid reports whether d is none or one of the two deadlines.
+func (d Deadline) Valid() bool {
+	return d == "" || d == DeadlineIdle || d == DeadlineAbsolute
+}
+
 // Rows are the seven, in the order the design's table states them.
 var Rows = []Row{
 	RowValid, RowEnded, RowReuse, RowGone, RowBehind, RowStalled, RowMalformed,
@@ -275,6 +299,11 @@ type Validation struct {
 
 	// Err is the read failure behind [RowStalled], when there was one.
 	Err error
+
+	// Deadline is which of the bearer's own deadlines ended it, set on a
+	// [RowEnded] a deadline decided and empty everywhere else — including
+	// the ends a RECORD decided, which already said so when it landed.
+	Deadline Deadline
 }
 
 // Answer is what this validation permits for one kind of request.
@@ -331,10 +360,10 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 	// recently it was used.
 	switch {
 	case !now.Before(b.AbsoluteExpiresAt):
-		return Validation{Row: RowEnded, Bearer: b,
+		return Validation{Row: RowEnded, Bearer: b, Deadline: DeadlineAbsolute,
 			Detail: "the absolute deadline has passed"}
 	case !now.Before(b.IdleExpiresAt):
-		return Validation{Row: RowEnded, Bearer: b,
+		return Validation{Row: RowEnded, Bearer: b, Deadline: DeadlineIdle,
 			Detail: "the idle deadline has passed"}
 	}
 
