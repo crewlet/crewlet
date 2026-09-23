@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -138,6 +139,65 @@ func TestTheSweepNeverExceedsOneTransactionsBudget(t *testing.T) {
 		t.Errorf("three more sweeps left %d rows of %d — a bucket past the cap "+
 			"must converge, or its retention never takes effect at all",
 			after, remaining)
+	}
+}
+
+// AND THE BUDGET IS THE RECORD'S, NOT EACH STATEMENT'S.
+//
+// The case above fills ONE table and so cannot tell a budget per record from a
+// budget per statement. This one puts just over half a budget behind each of
+// three predicates in one bucket — the change trail, the session trail and the
+// ended sessions — which a per-statement LIMIT deletes in full, one and a half
+// budgets in a transaction sized for one.
+func TestOneSweepRecordSharesItsBudgetAcrossEveryTable(t *testing.T) {
+	t.Parallel()
+	rig := sweepRig(t, brokerAt)
+	bucket := iamdomain.BucketOf(sweptPerson)
+	const each = iamdomain.MaxSweepRows/2 + 10
+	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		for i := range each {
+			for _, class := range []iamdomain.HistoryClass{
+				iamdomain.ClassChange, iamdomain.ClassSession,
+			} {
+				if _, err := tx.ExecContext(t.Context(), `
+					INSERT INTO iam_history
+						(id, class, object_kind, object_id, person_id, op,
+						 created_at, broker_at, bucket, version, document)
+					VALUES (?, ?, 'person', ?, ?, 'status', 1, 1, ?, ?, x'')`,
+					fmt.Sprintf("%s-%d", class, i), string(class), sweptPerson,
+					sweptPerson, int64(bucket), i+1); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO iam_sessions
+					(lineage, person_id, ended_at, ended_reason, bucket,
+					 created_at, version, document)
+				VALUES (?, ?, 1, 'logout', ?, 1, ?, x'')`,
+				fmt.Sprintf("lineage-%d", i), sweptPerson, int64(bucket),
+				i+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("fill the bucket: %v", err)
+	}
+
+	rows := rig.apply(sweepRecord(t, iamdomain.Sweep{
+		V: iamdomain.DocumentVersion, Bucket: bucket,
+		Changes: 1 << 40, Sessions: 1 << 40, Expired: brokerAt,
+	}), brokerAt)
+	if rows > iamdomain.MaxSweepRows {
+		t.Fatalf("one sweep record deleted %d rows across its statements and the "+
+			"budget is %d — a LIMIT per statement is a budget per statement, "+
+			"and this transaction holds the store's only writer", rows,
+			iamdomain.MaxSweepRows)
+	}
+	if rows < iamdomain.MaxSweepRows {
+		t.Errorf("one sweep record deleted %d rows with %d due — it stopped "+
+			"short of the budget, so a backlog converges slower than it has to",
+			rows, 3*each)
 	}
 }
 

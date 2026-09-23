@@ -49,6 +49,14 @@ const MaxSweepRows = statelog.ApplyTxRowBudget
 
 // applySweep deletes one bucket's expired rows below the positions the
 // publisher resolved.
+//
+// ONE BUDGET FOR THE WHOLE RECORD, shared by every statement below and spent
+// in order. It used to be a LIMIT per statement, which made [MaxSweepRows] a
+// bound on each of six deletes rather than on the transaction they share: a
+// bucket back from a lapse with every class overdue deleted six budgets' worth
+// in one apply, holding this store's only writer six times as long as the
+// framework sizes a transaction for. What one record leaves unspent the next
+// one collects, which is the convergence the cap already promised.
 func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	if at.record.Op != OpSweep {
 		return 0, fmt.Errorf("iamdomain: the record at %s is op %q on a sweep "+
@@ -66,8 +74,26 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 	}
 	bucket := int64(sweep.Bucket)
 	expired := millis(sweep.Expired)
+	budget := int64(MaxSweepRows)
 
 	var written int64
+	// spend runs one bounded delete against what is left of the budget,
+	// which is the LIMIT its subquery is handed as the last argument.
+	spend := func(what, query string, args ...any) error {
+		if budget <= 0 {
+			return nil
+		}
+		result, err := tx.ExecContext(ctx, query, append(args, budget)...)
+		if err != nil {
+			return fmt.Errorf("iamdomain: sweep %s in bucket %d: %w", what,
+				bucket, err)
+		}
+		n, _ := result.RowsAffected()
+		written += n
+		budget -= n
+		return nil
+	}
+
 	// THE TRAIL'S TWO HORIZONS, each a POSITION rather than an age. A zero
 	// position deletes nothing, which is the correct reading of "this
 	// company has no rows old enough yet" and is NOT the same as
@@ -82,32 +108,27 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 		if horizon.before == 0 {
 			continue
 		}
-		result, err := tx.ExecContext(ctx, `
+		if err := spend("the "+string(horizon.class)+" trail", `
 			DELETE FROM iam_history
 			WHERE rowid IN (
 				SELECT rowid FROM iam_history
 				WHERE bucket = ? AND class = ? AND version < ?
 				LIMIT ?)`,
-			bucket, string(horizon.class), int64(horizon.before), MaxSweepRows)
-		if err != nil {
-			return int(written), fmt.Errorf("iamdomain: sweep the %s trail in "+
-				"bucket %d: %w", horizon.class, bucket, err)
+			bucket, string(horizon.class), int64(horizon.before)); err != nil {
+			return int(written), err
 		}
-		n, _ := result.RowsAffected()
-		written += n
 	}
 
 	// AND THE THREE TABLES WHOSE ROWS ARE OVER RATHER THAN OLD. Each is
-	// collected against the BROKER's instant the record carries, never a
-	// node's own clock, for this file's whole reason.
-	//
-	// A LIMIT ON EACH, for MaxSweepRows' reason. The subquery is over the
-	// index each table ships for exactly this predicate.
+	// collected against the ONE instant the record carries, never a node's
+	// own clock, for this file's whole reason. The subquery is over the
+	// index each table ships for exactly this predicate, so every statement
+	// is a seek into one bucket's range.
 	if expired > 0 {
 		for _, collect := range []struct {
 			what, sql string
 		}{
-			{"sessions", `
+			{"ended sessions", `
 				DELETE FROM iam_sessions WHERE rowid IN (
 					SELECT rowid FROM iam_sessions
 					WHERE bucket = ? AND ended_at > 0 AND ended_at < ?
@@ -131,14 +152,9 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 					  AND expires_at > 0 AND expires_at < ?
 					LIMIT ?)`},
 		} {
-			result, err := tx.ExecContext(ctx, collect.sql, bucket, expired,
-				MaxSweepRows)
-			if err != nil {
-				return int(written), fmt.Errorf("iamdomain: collect %s in "+
-					"bucket %d: %w", collect.what, bucket, err)
+			if err := spend(collect.what, collect.sql, bucket, expired); err != nil {
+				return int(written), err
 			}
-			n, _ := result.RowsAffected()
-			written += n
 		}
 	}
 	return int(written), nil
