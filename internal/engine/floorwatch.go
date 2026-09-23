@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -78,6 +79,15 @@ func (w *floorWatch) observe(ctx context.Context, now time.Time, subjects []floo
 	floors, listErr := w.floors(ctx)
 	if listErr != nil && ctx.Err() != nil {
 		return
+	}
+	if listErr != nil {
+		// IN THE READ PATH'S OWN WORDS ([stateLog.trimFloor]), so the
+		// cause names what could not be read: the transport's error alone
+		// — a timeout, a closed connection — reached the alarm as the
+		// whole of its cause, with nothing in it saying it was the fleet's
+		// floors that were asked for, while the refusal a read met on the
+		// same node named them.
+		listErr = fmt.Errorf("engine: read the fleet's published trim floors: %w", listErr)
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()

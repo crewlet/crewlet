@@ -47,6 +47,13 @@ func TestAnUnreadableFloorIsAgedFromItsFirstFailingBeat(t *testing.T) {
 		!strings.Contains(got.FloorUnknownCause, "coordination unreachable") {
 		t.Fatalf("a first failing beat reads %+v; want an age of zero and the cause", got)
 	}
+	// AND THE CAUSE SAYS WHAT COULD NOT BE READ, in the read path's own
+	// words, rather than handing on a transport's error as the whole of it.
+	if got := floorReading(w, "tracker"); !strings.HasPrefix(got.FloorUnknownCause,
+		"engine: read the fleet's published trim floors: ") {
+		t.Errorf("the cause reads %q; want it to name the floors it could not list",
+			got.FloorUnknownCause)
+	}
 	if fired(statelog.Evaluate(floorReading(w, "tracker")), statelog.KindFloorUnknown) {
 		t.Fatal("one failing beat raised floor_unknown")
 	}
