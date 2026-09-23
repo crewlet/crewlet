@@ -359,9 +359,20 @@ test("a surface that is busy is retried rather than abandoning the rest", async 
       });
       if (path.endsWith("/jira") && refusals > 0) {
         refusals--;
+        // THE ENGINE'S OWN BUSY ANSWER: its code, its sentence, the
+        // detail and the Retry-After the disconnect route writes.
         return new Response(
-          JSON.stringify({ error: "surface_busy", detail: "try again in a moment" }),
-          { status: 503 },
+          JSON.stringify({
+            error: "surface_busy",
+            message:
+              "Something else is writing to this integration right now. " +
+              "Try again in a moment; nothing was changed.",
+            detail:
+              "setupapi: this surface is being written at: jira is being " +
+              "provisioned right now, so the disconnect was not started; try " +
+              "again in a moment",
+          }),
+          { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "3" } },
         );
       }
       return new Response(JSON.stringify({ key: "x", disconnecting: true }), { status: 202 });
@@ -399,8 +410,16 @@ test("a surface that is busy is retried rather than abandoning the rest", async 
  *
  * Retrying a status row the node could not write is a loop the fault does not
  * end, and the operator needs the banner and the way out rather than a spinner.
+ *
+ * THE ENGINE'S OWN ANSWER, verbatim: `503 unavailable` with its sentence and a
+ * `Retry-After` (internal/api/setupapi's disconnect route, through
+ * httpjson.UnavailableWith). It used to answer `internal_error`, and a fixture
+ * still stubbing that passed while exercising an answer nothing sends — so a
+ * dialog that started obeying the header here would have gone unnoticed. The
+ * clock is run well past the header to prove it is not obeyed.
  */
 test("a refusal that is not a race stops and offers the force", async () => {
+  vi.useFakeTimers();
   const sent: Sent[] = [];
   vi.stubGlobal(
     "fetch",
@@ -412,10 +431,15 @@ test("a refusal that is not a race stops and offers the force", async () => {
       });
       return new Response(
         JSON.stringify({
-          error: "internal_error",
-          detail: "the fleet status row could not be written",
+          error: "unavailable",
+          message:
+            "This node cannot answer that yet — something it reads is still " +
+            "catching up. Ask again in a moment.",
+          detail:
+            "setupapi: this node could not take jira to record the disconnect: " +
+            "the fleet status row could not be written",
         }),
-        { status: 503 },
+        { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "2" } },
       );
     }),
   );
@@ -423,7 +447,8 @@ test("a refusal that is not a race stops and offers the force", async () => {
   render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
-  await waitFor(() => expect(screen.getByText(/status row could not be written/)).toBeTruthy());
+  await vi.waitFor(() => expect(screen.getByText(/status row could not be written/)).toBeTruthy());
+  await vi.advanceTimersByTimeAsync(10_000);
   expect(screen.queryByText(/has to wait its turn/)).toBeNull();
   expect(sent.filter((s) => s.method === "DELETE")).toHaveLength(1);
 });
