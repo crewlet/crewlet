@@ -85,7 +85,8 @@ type TrimFloor struct {
 	// BlockedSince is when TrimTo last ADVANCED, and it is the field
 	// nothing else can supply: the duty moves between nodes on a lease, so
 	// a value held in the holder's memory would reset on every flap and
-	// the twenty-four-hour condition would never be reached.
+	// `trim_blocked`, which fires on how long a block has lasted, would
+	// never be reached.
 	BlockedSince time.Time `json:"blocked_since,omitzero"`
 
 	// Terms is every term's answer, so a blocked trim can be read without

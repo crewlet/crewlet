@@ -790,6 +790,7 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 		perDomain := Reading{
 			HeadroomFraction: d.HeadroomFraction,
 			TrimBlockedBy:    string(d.BlockedBy),
+			TrimPastWindow:   pastWindow(d),
 			// THE CEILING THE DOMAIN ROW CARRIES, which is set only
 			// where the stream answered and declares one: an unknown
 			// ceiling is not a small one, so the rule is silent
@@ -807,6 +808,37 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 		}
 	}
 	return out
+}
+
+// pastWindow is how many records a domain's log holds that are older than the
+// replay window — the ones the age term alone would release.
+//
+// THE AGE TERM'S OWN SEQUENCE against the log's first, both as the report has
+// them: the term is the published tick's search for the first record young
+// enough to keep, so everything below it that the log still holds is past the
+// window. The term is a tick old and the log's bounds are this instant's, and
+// that is the conservative pairing — the trim is what removes records, and a
+// blocked one has removed none since, so the count is at worst an
+// underestimate by the records that aged past the window during the tick.
+//
+// ZERO WHERE NOTHING IS KNOWN: a stream this node could not read carries no
+// bounds, an empty log holds nothing, and a published floor with no known age
+// term (one from a build that did not publish it) has nothing to compare.
+func pastWindow(d DomainReport) uint64 {
+	if d.LastSeq == 0 || d.LastSeq < d.FirstSeq {
+		return 0
+	}
+	for _, t := range d.Terms {
+		if t.Name != TermAgeFloor || t.State != TermKnown {
+			continue
+		}
+		keep := min(t.Seq, d.LastSeq+1)
+		if keep <= d.FirstSeq {
+			return 0
+		}
+		return keep - d.FirstSeq
+	}
+	return 0
 }
 
 // JoinSecondsPerGB and JoinFixedSeconds project how long a peer needs to

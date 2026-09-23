@@ -52,10 +52,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{BackupAge: 30 * time.Hour, BackupMaxAge: 24 * time.Hour},
 			"30h0m0s old",
 		},
-		"a trim that cannot advance": {
+		"a trim blocked past its window, keeping what a working one removes": {
 			statelog.KindTrimBlocked,
-			statelog.Reading{TrimBlockedFor: time.Hour, TrimBlockedBy: "snapshot_floor"},
-			"snapshot_floor",
+			statelog.Reading{
+				TrimBlockedFor: 8 * 24 * time.Hour, TrimBlockedBy: "snapshot_floor",
+				TrimPastWindow: 1200, ReplayWindow: 7 * 24 * time.Hour,
+			},
+			"snapshot_floor — and the log is keeping 1200 record(s)",
 		},
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,
@@ -298,6 +301,71 @@ func TestADanglingBindingYoungerThanTheGraceDoesNotFire(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, fired := find(statelog.Evaluate(tc.reading), statelog.KindBindingDangling)
+			if fired != tc.want {
+				t.Errorf("fired = %v, want %v", fired, tc.want)
+			}
+		})
+	}
+}
+
+// A BLOCKED TRIM ALARMS ONLY ONCE IT HAS KEPT SOMETHING A WORKING TRIM WOULD
+// HAVE REMOVED, and not while every young fleet's trim is blocked.
+//
+// The form this replaced fired on the block itself. Every fresh deployment is
+// blocked — on its first backup, on its first snapshot donors, on a log nobody
+// has written to — so `trim_blocked` rose within one heartbeat of boot and held
+// for days, and `crewlet retention status` exited non-zero on a fleet with
+// nothing wrong. The rule now borrows its threshold from `min_age` (ADR-0015),
+// the window the configuration already holds every sanctioned block under,
+// plus the one tick a block's clearing takes to be seen; and it measures the
+// other half, whether the log holds anything past that window at all.
+func TestABlockedTrimAlarmsOnlyOnceItHasKeptARecordPastTheWindow(t *testing.T) {
+	t.Parallel()
+	window := 7 * 24 * time.Hour
+	threshold := window + statelog.TrimInterval
+	for name, tc := range map[string]struct {
+		reading statelog.Reading
+		want    bool
+	}{
+		// THE YOUNG-FLEET CONTROL: blocked since boot on its first
+		// backup, for longer than the window by the clock — and holding
+		// nothing past the window, because nothing in its log is that
+		// old yet.
+		"a young fleet blocked on its first backup": {statelog.Reading{
+			TrimBlockedBy: "backup_floor", TrimBlockedFor: threshold + time.Hour,
+			ReplayWindow: window}, false},
+		// A LOG NOBODY WRITES TO is blocked for the life of the
+		// deployment — every node sits at position zero — and keeps
+		// nothing at all.
+		"an empty log blocked for a quarter": {statelog.Reading{
+			TrimBlockedBy: "applied", TrimBlockedFor: 90 * 24 * time.Hour,
+			ReplayWindow: window}, false},
+		// A SANCTIONED BLOCK ON A MATURE LOG: a joiner inside its rejoin
+		// window keeps records past the window, and has not been doing
+		// it for a window's worth.
+		"a mature log blocked for a day": {statelog.Reading{
+			TrimBlockedBy: "applied", TrimBlockedFor: 24 * time.Hour,
+			TrimPastWindow: 5000, ReplayWindow: window}, false},
+		"exactly the window and a tick": {statelog.Reading{
+			TrimBlockedBy: "snapshot_floor", TrimBlockedFor: threshold,
+			TrimPastWindow: 5000, ReplayWindow: window}, false},
+		"a second past it": {statelog.Reading{
+			TrimBlockedBy: "snapshot_floor", TrimBlockedFor: threshold + time.Second,
+			TrimPastWindow: 5000, ReplayWindow: window}, true},
+		// NO WINDOW, NO THRESHOLD: a reading with no replay window has
+		// nothing to borrow, and a rule with nothing to borrow is silent
+		// rather than firing at a tick.
+		"no replay window": {statelog.Reading{
+			TrimBlockedBy: "snapshot_floor", TrimBlockedFor: threshold + time.Hour,
+			TrimPastWindow: 5000}, false},
+		// AND A TRIM THAT IS NOT BLOCKED keeps records past the window
+		// all the time — the age term binds last — without alarming.
+		"not blocked": {statelog.Reading{
+			TrimBlockedFor: threshold + time.Hour, TrimPastWindow: 5000,
+			ReplayWindow: window}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, fired := find(statelog.Evaluate(tc.reading), statelog.KindTrimBlocked)
 			if fired != tc.want {
 				t.Errorf("fired = %v, want %v", fired, tc.want)
 			}

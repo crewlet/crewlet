@@ -51,19 +51,10 @@ import (
 // duty like the sweep, on the `worker:{duty}` lease, and a fleet whose nodes
 // all declare `roles: [seats]` deliberately does not trim.
 
-// RetentionInterval is how often the trim evaluates.
-//
-// FIFTEEN MINUTES, and the number comes from what the tick costs against what
-// it can save. The cost is one stream info, one register listing and — at most
-// — a binary search over the log for the age floor, per domain: a handful of
-// round trips. What it buys is that a term clearing (a backup landing, a
-// lagging node catching up) becomes disk within a quarter of an hour rather
-// than within whatever the next restart happened to be.
-//
-// It is also the resolution `blocked_since` has, which is what the
-// twenty-four-hour backup condition is measured in — so a longer interval
-// would make the alarm coarser for no saving that matters at this cost.
-const RetentionInterval = 15 * time.Minute
+// The trim ticks every [statelog.TrimInterval]. The number lives beside the
+// arithmetic rather than here because it is also the resolution of
+// `blocked_since`, which the `trim_blocked` alarm reads — see its definition
+// for why fifteen minutes.
 
 // retentionDutyName is the fleet singleton the trim claims.
 const retentionDutyName = "retention"
@@ -73,7 +64,7 @@ const retentionDutyName = "retention"
 // Three ticks, the ratio every other duty here uses: one missed tick must not
 // hand the trim to a peer, because two nodes purging and publishing at once is
 // exactly what the singleton avoids.
-const retentionDutyTTL = 3 * RetentionInterval
+const retentionDutyTTL = 3 * statelog.TrimInterval
 
 // retention is the trim loop.
 type retention struct {
@@ -124,7 +115,7 @@ type retention struct {
 	// a scan of the whole source corpus and a report is assembled on every
 	// operator request, every dashboard poll and every alarm beat. It and
 	// each log's daily intake are the ONLY alarm inputs measured at the
-	// trim's [RetentionInterval] — both are scans, and a quarter-hour is the
+	// trim's [statelog.TrimInterval] — both are scans, and a quarter-hour is the
 	// resolution each is honest at, since neither summarises anything that
 	// moves faster than a corpus or a day. Every other input the reading
 	// carries — apply lag, the backup register, the maintenance window,
@@ -250,7 +241,7 @@ func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
 // fleet that had just started would otherwise answer "no floor published" for
 // fifteen minutes — indistinguishable from a fleet whose duty is not running.
 func (r *retention) run(ctx context.Context) {
-	ticker := time.NewTicker(RetentionInterval)
+	ticker := time.NewTicker(statelog.TrimInterval)
 	defer ticker.Stop()
 	for {
 		if ctx.Err() != nil {
@@ -320,7 +311,7 @@ func (r *retention) tick(ctx context.Context) {
 // coverage and the logs' intake are measured HERE and nowhere else — each is
 // a scan a report assembled per dashboard poll must not repeat, and a
 // quarter-hour is the resolution every one of them is honest at (see
-// [RetentionInterval]). What the table is evaluated on between these ticks is
+// [statelog.TrimInterval]). What the table is evaluated on between these ticks is
 // [retention.heartbeat].
 func (r *retention) evaluate(ctx context.Context) {
 	r.capacity(ctx)
@@ -492,8 +483,9 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 // THE ONE PIECE OF STATE THAT SURVIVES A LEASE HANDOVER is `blocked_since`,
 // and it is carried through the register rather than in memory for exactly
 // that reason: the duty moves, and a value held by the holder would reset on
-// every flap — so the twenty-four-hour backup condition would never be
-// reached, which is the bug the field exists to close.
+// every flap — so `trim_blocked`, which fires only once a block has outlived
+// the `min_age` window, would never be reached on a fleet whose lease moved
+// even once a week, which is the bug the field exists to close.
 func (r *retention) publish(ctx context.Context, name string, generation uint32,
 	decision statelog.TrimDecision, shared fleetInputs) error {
 

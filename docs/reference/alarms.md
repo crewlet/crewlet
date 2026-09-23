@@ -24,7 +24,7 @@ below.
 | `log_headroom` | The log is within a tenth of its byte ceiling. A full log refuses writes rather than dropping records. | Raise the log's ceiling with `crewlet retention set-capacity` during a maintenance window, or find out why the trim is not advancing. A full log refuses writes; it does not drop records. |
 | `log_ceiling_short` | At the rate this log took in over the last day, its byte ceiling holds less than the `min_age` window the trim keeps, so it will fill and refuse writes with every trim term satisfied. | Raise the log's ceiling with `crewlet retention set-capacity` during a maintenance window, to at least the window's worth at this rate, or shorten `stream.tracker_retention.min_age` if the deployment does not need that window. Unblocking the trim cannot help: it never removes a record younger than min_age. |
 | `backup_age` | The newest verified backup is older than the policy asks for. The trim will not advance past it. | Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it. The trim will not advance past a backup this old. |
-| `trim_blocked` | The trim has a term it cannot satisfy, so the log is growing toward its ceiling. | The blocking term names what to fix. Until it is fixed the log grows toward its ceiling. |
+| `trim_blocked` | The trim has been blocked for longer than the log's `min_age` replay window plus one trim tick, and the log is keeping records older than that window — so it is holding what a working trim would have removed, and growing toward its ceiling. A young fleet blocked on its first backup or snapshot donors does not raise it: nothing in its log is past the window yet. | The blocking term names what to fix; `crewlet retention status` says what it has and what it wants. Until it is fixed the log grows toward its ceiling by a day of records every day. |
 | `deferred_old` | This node has been holding records it cannot apply for longer than the deferral grace. Its seats have moved. | This node is running a build that cannot decode records its peers are writing. Upgrade it; its seats have already moved. |
 | `floor_unknown` | The trim floor has been unreadable for four heartbeats, so every read on this node refuses. | Coordination cannot be reached from this node. Every read is refused until it can be. |
 | `prefetch_slow` | Turn-start context assembly is over its budget. Every turn on this node pays it before its first token. | Every turn on this node pays this before its first token. Check the store's own latency and the knowledge backend's. |
@@ -44,4 +44,5 @@ below.
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
 decides something — the grace that sheds a node, the grace that moves its
-seats, the budget a caller was promised.
+seats, the budget a caller was promised, the replay window a log's ceiling was
+sized to hold.

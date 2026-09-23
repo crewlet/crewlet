@@ -215,9 +215,25 @@ type Reading struct {
 	BackupAge, BackupMaxAge time.Duration
 
 	// TrimBlockedFor is how long the trim has been unable to advance, and
-	// TrimBlockedBy names the term holding it.
+	// TrimBlockedBy names the term holding it. Per DOMAIN, like
+	// HeadroomFraction.
 	TrimBlockedFor time.Duration
 	TrimBlockedBy  string
+
+	// TrimPastWindow is how many records the log holds that are older than
+	// ReplayWindow — the records the age term alone would release, and
+	// which a blocked trim is therefore keeping. Per DOMAIN.
+	//
+	// MEASURED, from the age term's own sequence against the log's first,
+	// rather than assumed from how long the block has lasted, because the
+	// two come apart in exactly the cases a healthy fleet is in: a log
+	// nobody has written to is blocked for ever (every node sits at
+	// position zero) and holds nothing, and a log whose first record
+	// arrived yesterday under a block a month old holds nothing past the
+	// window either. ZERO IS THE BENIGN END and so is unmeasured — a stream
+	// this node could not read — so it needs no pointer: both say the block
+	// is keeping nothing anybody knows of.
+	TrimPastWindow uint64
 
 	// DeferredAge is how old the oldest record this node could not apply
 	// is.
@@ -454,13 +470,44 @@ var table = []rule{
 			"advance past a backup this old.",
 	},
 	{
+		// A BLOCKED TRIM IS AN ORDINARY STATE until it has cost something,
+		// and every fresh deployment is in it: blocked on its first backup,
+		// on its first snapshot donors, on a log nobody has written to. The
+		// form this replaced fired on the block itself, so every young fleet
+		// raised it within one heartbeat and held it for days, and `crewlet
+		// retention status` exited non-zero on a fleet with nothing wrong.
+		//
+		// AT THE REPLAY WINDOW PLUS ONE TICK (ADR-0015), because `min_age`
+		// is the number the configuration already holds every SANCTIONED
+		// block under: a node joining inside its rejoin window (whose ceiling
+		// is the window's floor), a young fleet waiting for its donors (the
+		// cross-field rule keeps `snapshot_interval` × (kept + 1) below it),
+		// a trim waiting for its first backup (which `backup_age` raises on
+		// its own — from the first reading where none has been taken, at the
+		// policy's age where one has gone stale). The tick is the block's
+		// resolution
+		// — `blocked_since` moves only when the trim does — so a block that
+		// cleared at the window is seen to clear up to one tick later.
+		//
+		// AND ONLY WHILE THE LOG HOLDS A RECORD PAST THE WINDOW, which is
+		// the half that is measured rather than borrowed: a block that keeps
+		// nothing the age term would release has cost nothing, however long
+		// it has lasted — a knowledge base nobody writes to is blocked for
+		// the life of the deployment.
 		kind: KindTrimBlocked,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("the trim has not advanced for %s: %s",
-				round(r.TrimBlockedFor), r.TrimBlockedBy), r.TrimBlockedBy != ""
+			if r.TrimBlockedBy == "" || r.ReplayWindow <= 0 || r.TrimPastWindow == 0 {
+				return "", false
+			}
+			return fmt.Sprintf("the trim has not advanced for %s: %s — and the log "+
+					"is keeping %d record(s) older than its %s replay window",
+					round(r.TrimBlockedFor), r.TrimBlockedBy, r.TrimPastWindow,
+					round(r.ReplayWindow)),
+				r.TrimBlockedFor > r.ReplayWindow+TrimInterval
 		},
-		remedy: "The blocking term names what to fix. Until it is fixed the log " +
-			"grows toward its ceiling.",
+		remedy: "The blocking term names what to fix; `crewlet retention status` " +
+			"says what it has and what it wants. Until it is fixed the log grows " +
+			"toward its ceiling by a day of records every day.",
 	},
 	{
 		kind: KindDeferredOld,

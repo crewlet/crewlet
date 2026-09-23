@@ -101,11 +101,15 @@ const (
 	// At the reference company's rate — a few hundred structural records and
 	// a few thousand content records a year, a few kilobytes each, so under
 	// twenty mebibytes a year at the pessimistic end — this is FOUR YEARS of
-	// a COMPLETELY BLOCKED trim. A blocked trim is not a quiet state: it
-	// raises an alarm, holds the backup age against the operator and is the
-	// loudest thing the retention estate has to say. Four years past the
-	// point where somebody was told is not a window that refuses an append
-	// before anybody could act.
+	// a COMPLETELY BLOCKED trim. A blocked trim is not a quiet state: the
+	// retention screen names its term from the first tick, a backup behind
+	// it that is missing or past the policy raises `backup_age`, and a trim
+	// blocked for longer than `min_age` and a tick while its log keeps
+	// records older than `min_age` raises `trim_blocked` — so somebody has
+	// been told within `min_age` (ninety days at the most) and a couple of
+	// trim ticks of the log first keeping what a working trim would have
+	// removed, and four years past that is not a window that refuses an
+	// append before anybody could act.
 	//
 	// It took a gibibyte first, on the reasoning that a gibibyte is the
 	// framework's own minimum domain ceiling ([engine.MinDomainCeiling]) and
@@ -157,10 +161,13 @@ const (
 	// SIGNED record costs on the wire that is about 285 MB a year with
 	// everything else folded in. So this default is around eighteen months
 	// of a COMPLETELY BLOCKED trim at the pessimistic rate and about five
-	// years at a realistic one — and a blocked trim raises an alarm and
-	// holds the backup age against the operator from its first tick, so the
-	// question is how long somebody has to act on a firing alarm, not how
-	// long until anyone notices.
+	// years at a realistic one — and a blocked trim is named on the
+	// retention screen from its first tick and raises `trim_blocked` once it
+	// has been blocked for longer than `min_age` and a tick while its log
+	// keeps records older than `min_age` (a backup behind it that is missing
+	// or past the policy raises `backup_age` sooner), so the question is how
+	// long somebody has to act on a firing alarm, not how long until anyone
+	// notices.
 	//
 	// IT IS NOT 64 MiB. The chart's number is four years because a chart
 	// changes when somebody is hired, moved or promoted; this log moves

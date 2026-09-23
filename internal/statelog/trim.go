@@ -456,6 +456,25 @@ func (in TrimInputs) feed() Term {
 		Detail: fmt.Sprintf("the wake feed has scanned past %d", in.FeedAckFloor)}
 }
 
+// TrimInterval is how often the trim evaluates the six terms, applies what
+// they permit and publishes what it concluded.
+//
+// FIFTEEN MINUTES, and the number comes from what a tick costs against what it
+// can save. The cost is one stream info, one register listing and — at most —
+// a binary search over the log for the age floor, per domain: a handful of
+// round trips. What it buys is that a term clearing (a backup landing, a
+// lagging node catching up) becomes disk within a quarter of an hour rather
+// than within whatever the next restart happened to be.
+//
+// DECLARED HERE, beside the arithmetic, rather than beside the loop that ticks
+// on it, because it is also the RESOLUTION of everything the trim concludes:
+// `blocked_since` moves only on a tick, so a block is dated up to one interval
+// after it began and seen to clear up to one interval after it did. The
+// `trim_blocked` alarm adds exactly one of it to the window it fires at, and a
+// copy of the number beside the alarm would be the second opinion ADR-0015
+// forbids.
+const TrimInterval = 15 * time.Minute
+
 // TrimHoldStale is how old a hold may be before it is ignored and deleted.
 //
 // FOUR HEARTBEATS, the same derivation every other cached coordination fact

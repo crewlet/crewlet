@@ -210,7 +210,7 @@ func (r *retention) space(out *statelog.Reading) {
 // scan of the whole source corpus, and a report is assembled on every operator
 // request and every dashboard poll, so a report may only read what the tick
 // took. The form this replaced measured inside the report whenever the cached
-// figure was a whole [RetentionInterval] old — which the NEXT tick's report
+// figure was a whole [statelog.TrimInterval] old — which the NEXT tick's report
 // usually was not: the ticker fires on a fixed period, but the report starts
 // after the tick's other measurements, so whenever the previous tick's took
 // longer than this one's, the cached figure was a few milliseconds short of an

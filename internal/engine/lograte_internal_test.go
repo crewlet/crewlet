@@ -305,7 +305,7 @@ func TestATickThatCannotReadALogKeepsItsLastMeasurement(t *testing.T) {
 	}
 
 	iam.statsErr = errors.New("broker unreachable")
-	r.recordRates(t.Context(), rateNow.Add(RetentionInterval), logs)
+	r.recordRates(t.Context(), rateNow.Add(statelog.TrimInterval), logs)
 	if got := r.rateOf("iam"); got == nil || *got != 25*1024 {
 		t.Errorf("a tick that could not read the log left %v, want the last "+
 			"measurement standing", deref(got))

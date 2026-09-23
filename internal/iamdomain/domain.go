@@ -73,8 +73,10 @@ const SessionOpsRetention = time.Hour
 // is around 285 MB a year with everything else folded in. Half a gibibyte is
 // therefore about eighteen months of a COMPLETELY BLOCKED trim at the
 // pessimistic rate and about five years at a realistic one — and a blocked
-// trim is not a quiet state, it raises an alarm and holds the backup age
-// against the operator from the first tick.
+// trim is not a quiet state: the retention screen names it from the first
+// tick, and it raises `trim_blocked` once it has been blocked for longer than
+// `min_age` and a tick while its log keeps records older than `min_age`,
+// months before a log this size could fill.
 //
 // IT IS NOT THE CHART'S 64 MiB, because the chart genuinely does not grow: it
 // changes when somebody is hired, moved or promoted. This one grows every

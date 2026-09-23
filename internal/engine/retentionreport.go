@@ -104,7 +104,16 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		// THE TICK'S MEASUREMENT, read back rather than taken: see
 		// [retention.measureRates] for why a report never searches a log.
 		d.BytesPerDay = r.rateOf(name)
-		if floor, published := floors[name]; published {
+		// ONLY A FLOOR PUBLISHED AT THIS LOG'S GENERATION IS THIS LOG'S. A
+		// row from another generation is the trim's conclusion about a
+		// sequence space this log no longer has — or has not reached — so
+		// its terms, its point and its `blocked_since` would be rendered
+		// against sequences they do not describe: a re-anchored log would
+		// show the dead stream's block, dated from before the re-anchor,
+		// until the next tick replaced it. The read path draws the same
+		// line ([floorFor]) and refuses outright on a floor AHEAD of this
+		// node.
+		if floor, published := floors[name]; published && floor.Generation == d.Generation {
 			d.TrimFloor = floor.TrimTo
 			d.BlockedSince = floor.BlockedSince
 			d.Decision = decisionOf(floor)

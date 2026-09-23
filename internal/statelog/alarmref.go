@@ -43,8 +43,12 @@ var alarmMeaning = map[Kind]string{
 		"log refuses writes rather than dropping records.",
 	KindBackupAge: "The newest verified backup is older than the policy asks " +
 		"for. The trim will not advance past it.",
-	KindTrimBlocked: "The trim has a term it cannot satisfy, so the log is " +
-		"growing toward its ceiling.",
+	KindTrimBlocked: "The trim has been blocked for longer than the log's " +
+		"`min_age` replay window plus one trim tick, and the log is keeping " +
+		"records older than that window — so it is holding what a working trim " +
+		"would have removed, and growing toward its ceiling. A young fleet " +
+		"blocked on its first backup or snapshot donors does not raise it: " +
+		"nothing in its log is past the window yet.",
 	KindDeferredOld: "This node has been holding records it cannot apply for " +
 		"longer than the deferral grace. Its seats have moved.",
 	KindFloorUnknown: "The trim floor has been unreadable for four " +
@@ -106,5 +110,6 @@ const alarmFooter = `
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
 decides something — the grace that sheds a node, the grace that moves its
-seats, the budget a caller was promised.
+seats, the budget a caller was promised, the replay window a log's ceiling was
+sized to hold.
 `

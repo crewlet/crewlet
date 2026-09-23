@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -126,6 +127,109 @@ func TestTheCeilingAlarmFiresOnARunningNode(t *testing.T) {
 			statelog.KindLogCeilingShort, got)
 	}
 }
+
+// A FRESH NODE'S BLOCKED TRIM IS SILENT, AND A BLOCK THAT HAS KEPT RECORDS
+// PAST THE WINDOW FIRES `trim_blocked` — through the trim's own tick, the floor
+// it publishes and the report every surface reads.
+//
+// A fresh node is the young fleet: its trim is blocked from the first tick,
+// because nothing has been backed up. The report's clock is then put a whole
+// window and more ahead — so the block is older than the threshold by every
+// measure the clock has — and the alarm must stay down, because the age term
+// the tick published keeps every record the log holds. Then the published
+// floor is what the duty would publish once the records had aged — the same
+// block, its age term past the log's head — and the alarm must rise, naming
+// the log. A floor published at another generation must not be read as this
+// log's at all.
+func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e := bootDirectoryNode(t, nil)
+	r := quietRetention(t, e)
+
+	r.tick(ctx)
+	report := r.Report(ctx)
+	var name string
+	var at domainAt
+	for _, d := range report.Domains {
+		if d.BlockedBy != "" && d.LastSeq > 0 {
+			name, at = d.Domain, domainAt{First: d.FirstSeq, Last: d.LastSeq}
+			break
+		}
+	}
+	if name == "" {
+		t.Fatalf("no domain with records is blocked on a fresh node (%v), so this "+
+			"case is not exercising the young fleet it names", report.Blocked())
+	}
+
+	later := time.Now().UTC().Add(r.cfg.MinAge() + statelog.TrimInterval + time.Hour)
+	r.now = func() time.Time { return later }
+	r.beat(ctx)
+	if alarmed(r.Report(ctx), statelog.KindTrimBlocked) {
+		t.Fatal("a fresh node's trim, blocked on its first backup with nothing in " +
+			"its log past the window, raised trim_blocked")
+	}
+
+	// THE SAME BLOCK, AS THE DUTY PUBLISHES IT ONCE THE LOG HAS AGED: its
+	// age term keeps nothing the log holds.
+	floors, err := r.fleet.Floors(ctx)
+	if err != nil {
+		t.Fatalf("read the published floors: %v", err)
+	}
+	var aged coord.TrimFloor
+	for _, f := range floors {
+		if f.Domain == name {
+			aged = f
+		}
+	}
+	for i := range aged.Terms {
+		if aged.Terms[i].Name == string(statelog.TermAgeFloor) {
+			aged.Terms[i].Seq = at.Last + 1
+		}
+	}
+	if err := r.fleet.PutFloor(ctx, aged); err != nil {
+		t.Fatalf("publish the aged floor: %v", err)
+	}
+	r.beat(ctx)
+	var fired statelog.Alarm
+	for _, a := range r.Report(ctx).Alarms {
+		if a.Kind == statelog.KindTrimBlocked {
+			fired = a
+		}
+	}
+	if fired.Kind == "" {
+		t.Fatalf("a trim blocked past its window with %d record(s) past it raised "+
+			"no trim_blocked", at.Last-at.First+1)
+	}
+	if !strings.HasPrefix(fired.Detail, name+": ") {
+		t.Errorf("the alarm reads %q and does not name the %s log", fired.Detail, name)
+	}
+	if got := alarmGauge(t, e, statelog.KindTrimBlocked); got != 1 {
+		t.Errorf("the alarm gauge for %s reads %v, want 1", statelog.KindTrimBlocked, got)
+	}
+
+	// A FLOOR FROM ANOTHER GENERATION IS NOT THIS LOG'S: its terms and its
+	// clock describe a sequence space this log does not have.
+	aged.Generation++
+	if err := r.fleet.PutFloor(ctx, aged); err != nil {
+		t.Fatalf("publish the other generation's floor: %v", err)
+	}
+	r.beat(ctx)
+	after := r.Report(ctx)
+	if alarmed(after, statelog.KindTrimBlocked) {
+		t.Error("a floor published at another generation raised trim_blocked " +
+			"against this log's sequences")
+	}
+	for _, d := range after.Domains {
+		if d.Domain == name && d.BlockedBy != "" {
+			t.Errorf("the %s row renders a block from generation %d as its own",
+				name, aged.Generation)
+		}
+	}
+}
+
+// domainAt is a log's bounds as a case read them.
+type domainAt struct{ First, Last uint64 }
 
 // THE TABLE IS EVALUATED ON THE HEARTBEAT, not on the trim's quarter-hour.
 //

@@ -18,6 +18,10 @@ import (
 // flake.
 var reportAt = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 
+// replayWindow is the shipped `min_age`, which the trim-blocked cases hold a
+// block against.
+const replayWindow = 7 * 24 * time.Hour
+
 // healthyDomain is a domain where nothing is wrong: every term readable, the
 // age floor binding, plenty of headroom.
 func healthyDomain(name string, feed bool) statelog.DomainInputs {
@@ -421,18 +425,23 @@ func TestTheExitCodeIsTheAlarms(t *testing.T) {
 		t.Errorf("a healthy fleet reports %v blocked", got)
 	}
 
+	// BLOCKED PAST THE WINDOW, with a hundred records older than it: the
+	// trim has kept what a working one would have removed, which is the
+	// condition `trim_blocked` fires on.
 	blocked := healthyDomain("tracker", true)
-	in := statelog.TrimInputs{Now: reportAt, HoldsReadable: true, BackupMaxAge: 24 * time.Hour}
+	in := statelog.TrimInputs{Now: reportAt, HoldsReadable: true,
+		BackupMaxAge: 24 * time.Hour, AgeFloor: 800}
 	blocked.Decision = statelog.Trim(in.Terms())
-	blocked.BlockedSince = reportAt.Add(-90 * time.Minute)
+	blocked.BlockedSince = reportAt.Add(-(replayWindow + statelog.TrimInterval + time.Hour))
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID:           "node-1",
 		At:               reportAt,
 		RegisterReadable: true,
+		ReplayWindow:     replayWindow,
 		Domains:          []statelog.DomainInputs{blocked},
 	})
 	if !rep.ExitNonZero() {
-		t.Error("a fleet whose trim has been blocked for 90 minutes exits zero")
+		t.Error("a fleet whose trim has been blocked past its replay window exits zero")
 	}
 	if got := rep.Blocked(); len(got) != 1 || got[0] != "tracker" {
 		t.Errorf("Blocked() is %v, want [tracker]", got)
@@ -444,6 +453,76 @@ func TestTheExitCodeIsTheAlarms(t *testing.T) {
 	if rep.Domains[0].BlockedSince.IsZero() {
 		t.Error("a blocked domain carries no instant, so its alarm reports a " +
 			"duration measured from the zero time")
+	}
+}
+
+// WHAT A BLOCKED TRIM IS KEEPING PAST THE WINDOW IS READ OFF THE LOG, not off
+// the clock.
+//
+// The report has both halves of the count: the published age term's own
+// sequence — the first record young enough to keep — and the log's first. A
+// block the clock says is old enough is still silent while those say the log
+// holds nothing past the window, which is every young fleet, every log nobody
+// writes to, and a stream this node could not read (whose bounds it does not
+// have). And the count, when there is one, is the one the alarm prints.
+func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
+	t.Parallel()
+	old := reportAt.Add(-(replayWindow + statelog.TrimInterval + time.Hour))
+	blockedAt := func(ageFloor uint64, mutate func(*statelog.DomainInputs)) statelog.Report {
+		d := healthyDomain("tracker", true)
+		// THE BACKUP TERM BLOCKS, as it does on every fresh deployment.
+		in := statelog.TrimInputs{
+			Now: reportAt, HoldsReadable: true, CountedReadable: true,
+			Counted:      []statelog.NodePosition{{NodeID: "node-1", Seq: 900, At: reportAt}},
+			BackupMaxAge: 24 * time.Hour, HasFeed: true, FeedReadable: true,
+			FeedAckFloor: 890, AgeFloor: ageFloor, HoldStale: statelog.TrimHoldStale,
+		}
+		d.Decision = statelog.Trim(in.Terms())
+		d.BlockedSince = old
+		if mutate != nil {
+			mutate(&d)
+		}
+		return statelog.NewReport(statelog.ReportInputs{
+			NodeID: "node-1", At: reportAt, RegisterReadable: true,
+			ReplayWindow: replayWindow, Domains: []statelog.DomainInputs{d},
+		})
+	}
+
+	// THE CONTROL: the age term keeps from 800, the log starts at 700, so a
+	// hundred records are past the window — and the alarm says so.
+	fired, found := find(blockedAt(800, nil).Alarms, statelog.KindTrimBlocked)
+	if !found {
+		t.Fatal("a trim blocked past its window with a hundred records past it " +
+			"raised no trim_blocked, so every silence below proves nothing")
+	}
+	if !strings.Contains(fired.Detail, "keeping 100 record(s)") ||
+		!strings.HasPrefix(fired.Detail, "tracker: ") {
+		t.Errorf("the alarm reads %q; it names the log and what it is keeping", fired.Detail)
+	}
+
+	for name, rep := range map[string]statelog.Report{
+		// Everything the log holds is younger than the window: the age
+		// term keeps from the log's first record.
+		"a young log": blockedAt(700, nil),
+		// Nothing written at all.
+		"an empty log": blockedAt(1, func(d *statelog.DomainInputs) {
+			d.FirstSeq, d.LastSeq = 0, 0
+		}),
+		// A stream this node could not read carries no bounds.
+		"an unreadable stream": blockedAt(800, func(d *statelog.DomainInputs) {
+			d.StreamReadable, d.FirstSeq, d.LastSeq = false, 0, 0
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if a, found := find(rep.Alarms, statelog.KindTrimBlocked); found {
+				t.Errorf("raised %q while the log holds nothing past the window", a.Detail)
+			}
+			// AND IT IS STILL REPORTED AS BLOCKED: the alarm is quiet,
+			// the screen is not.
+			if got := rep.Blocked(); len(got) != 1 {
+				t.Errorf("Blocked() = %v; a quiet alarm must not hide the block", got)
+			}
+		})
 	}
 }
 

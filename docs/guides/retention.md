@@ -123,6 +123,33 @@ engine its value is the largest there is, because it is the identity for the
 minimum the trim takes across the six; that is a number chosen to lose a
 comparison, not a position, so the screen and the API say the word instead.
 
+### A blocked trim is ordinary until it has kept something
+
+Every fresh deployment's trim is blocked — on its first backup, on its first
+snapshot donors, and for as long as a log nobody writes to stays empty, since
+every node sits at position zero on it. `crewlet retention status` shows the
+block and the term holding it from the first tick, because that is what the
+screen is for. The **`trim_blocked` alarm** is quieter, and fires only when both
+of these hold:
+
+- the trim has been blocked for longer than `min_age` **plus one trim tick**
+  (fifteen minutes). `min_age` is the number the configuration already holds
+  every sanctioned block under: a joining node inside its rejoin window (whose
+  24-hour ceiling is `min_age`'s floor), a young fleet waiting for its donors
+  (the [cross-field rule](#the-cross-field-rule) keeps the snapshot cadence
+  below it), a first backup (which `backup_age` raises on its own — at once
+  where none has been taken, at the policy's age where one has gone stale). The
+  tick is the block's resolution: `blocked_since` moves only when the trim runs,
+  so a block that ended is seen to end up to a tick later;
+- **and** the log holds records older than `min_age` — the ones the age term
+  would release and the blocked trim is keeping. That is read off the log
+  itself, the published age term's sequence against the log's first, so a young
+  log and an empty one stay silent however long the block has lasted.
+
+Its detail names the log, the blocking term and how many records it is
+keeping; the term's row in `crewlet retention status` says what it has and what
+it wants.
+
 ### `min_age` is a floor on trimming, and therefore a *lower bound* on retention
 
 Raising `min_age` can only move the trim point **down**. It cannot shorten how

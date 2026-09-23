@@ -151,10 +151,9 @@ func floorFleet(t *testing.T) *retention {
 // `blocked_since` is published rather than held in memory.
 //
 // The trim is a fleet singleton on a lease. A value the holder kept would
-// reset on every handover, so the twenty-four-hour backup condition — the one
-// that turns "this company never backs up and therefore never trims" into
-// something that reaches a person — would never be reached on a fleet whose
-// lease flapped even once a day.
+// reset on every handover, so `trim_blocked` — the alarm that turns a trim
+// blocked past its `min_age` window into something that reaches a person —
+// would never be reached on a fleet whose lease flapped even once a week.
 func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	ctx := context.Background()
 	r := floorFleet(t)
@@ -193,7 +192,7 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	if !published[0].BlockedSince.Equal(first) {
 		t.Fatalf("blocked_since = %s after the duty moved, want the original %s "+
 			"— a clock that restarts on a handover never reaches the "+
-			"twenty-four-hour condition", published[0].BlockedSince, first)
+			"window trim_blocked fires at", published[0].BlockedSince, first)
 	}
 	if published[0].By != "node-b" {
 		t.Fatalf("the floor names %q as its writer, want node-b", published[0].By)
