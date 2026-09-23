@@ -80,12 +80,30 @@ type Writer struct {
 	// so the zero value is fail-closed rather than refused.
 	Grants []iam.Grant
 
-	// after is this writer's own high-water mark, handed from step to step
-	// by a gesture that writes more than once. An enrolment is exactly
-	// that: claim the address, claim the login, write the person, each on
-	// its own subject, each needing to decide from a state containing the
-	// one before it.
-	after statelog.Position
+	// seq is this writer's SEQUENCE — the high-water mark a party's
+	// successive writes hand forward, so each decides from a state
+	// containing the one before it — or nil on a SHARED writer.
+	//
+	// # Two kinds of writer, and why the shared one carries no mark
+	//
+	// [NewWriter] builds the SHARED writer: the node's own, handed to the
+	// identity duties, the sign-in surface and every request that acts as
+	// the deployment, concurrently. It used to carry the mark itself, and
+	// that was a data race — the sweep, the probe and every sign-in
+	// advanced one unguarded field from their own goroutines — and a wrong
+	// answer even where it did not race: one gesture's position became the
+	// session wait of an unrelated one, so a sign-in waited for the sweep's
+	// records to apply. So a shared writer holds nothing mutable, and each
+	// of its calls is a gesture of its own: a multi-step call (an
+	// enrolment is claim, claim, person) sequences its own steps and hands
+	// nothing to the next call.
+	//
+	// [Writer.As] builds a SEQUENCE: one party's writer, for one request,
+	// whose calls are ordered — the directory surface's enrol-then-bind is
+	// two calls, and the bind's decide reads the enrolment's row. A
+	// sequence is one goroutine's and is not safe for concurrent use; the
+	// surface derives one per request precisely so that it never is.
+	seq *sequence
 
 	// Now is the writer's clock, for the AUTHORED instant only. Nothing
 	// this clock produces reaches a row: every instant the applier stores
@@ -170,6 +188,8 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	if now == nil {
 		now = time.Now
 	}
+	// SHARED: no sequence, so nothing about one call survives into the
+	// next and the writer is safe for concurrent use. See [Writer.seq].
 	return &Writer{
 		publisher: deps.Publisher, db: deps.DB,
 		blinds: deps.Blinds, sealer: deps.Sealer,
@@ -178,11 +198,17 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	}, nil
 }
 
-// As is a writer for another party, sharing this one's plumbing.
+// As is a writer for another party, sharing this one's plumbing, whose calls
+// form ONE SEQUENCE.
 //
 // THE GRANTS REPLACE rather than accumulate, which is the whole point: a
 // surface serving many parties derives one writer per request, and grants that
 // carried forward would hand the next caller the last one's authority.
+//
+// THE SEQUENCE IS FRESH, and deriving one is safe from any goroutine: nothing
+// it copies is ever written after construction, so a sign-in publishing
+// through the shared writer and a request deriving its own from it at the same
+// instant touch no common state.
 func (w *Writer) As(actor string, kind iam.Kind, grants []iam.Grant) *Writer {
 	if w == nil {
 		return nil
@@ -191,8 +217,20 @@ func (w *Writer) As(actor string, kind iam.Kind, grants []iam.Grant) *Writer {
 	next.Actor = actor
 	next.ActorKind = kind
 	next.Grants = grants
-	next.after = statelog.Position{}
+	next.seq = &sequence{}
 	return &next
+}
+
+// sequence is one party's high-water mark across the calls of a request.
+type sequence struct{ after statelog.Position }
+
+// gesture is the mark one call's steps hand forward: the writer's own sequence
+// when it has one, and a fresh mark of the call's own when it is shared.
+func (w *Writer) gesture() *statelog.Position {
+	if w.seq != nil {
+		return &w.seq.after
+	}
+	return new(statelog.Position)
 }
 
 // announce publishes one decided fact once its record is known to have landed.
@@ -221,17 +259,6 @@ func grantDelta(before, after []iam.Grant) (added, removed []string) {
 	slices.Sort(added)
 	slices.Sort(removed)
 	return added, removed
-}
-
-// After is this writer's own high-water mark, which a multi-step gesture hands
-// from step to step so each decides from a state containing the one before it.
-func (w *Writer) After() statelog.Position { return w.after }
-
-// advance records a landed position as this writer's own mark.
-func (w *Writer) advance(at statelog.Position) {
-	if at.Packed() > w.after.Packed() {
-		w.after = at
-	}
 }
 
 // Can reports whether this writer's party holds a grant.
@@ -297,19 +324,29 @@ func (w *Writer) mayAdminister(op OpKind) error {
 // a stub writer.
 const AdminGrant = iam.GrantPeopleManage
 
-// publish runs one decide through the framework's own write authority.
+// publish runs one decide through the framework's own write authority, as a
+// gesture of its own on a shared writer or as the next step of a sequence.
 //
-// EVERY PATH IN THIS FILE GOES THROUGH IT, which is what makes the actor, the
-// clock and the writer's high-water mark impossible to forget: a decide that
-// built its own [statelog.Request] would be one append that did not carry them.
+// EVERY PATH IN THIS FILE GOES THROUGH IT or through [Writer.publishAt], which
+// is what makes the actor, the clock and the high-water mark impossible to
+// forget: a decide that built its own [statelog.Request] would be one append
+// that did not carry them.
 func (w *Writer) publish(ctx context.Context, req statelog.Request) (
 	statelog.Result, error) {
 
-	req.Session = w.after
+	return w.publishAt(ctx, w.gesture(), req)
+}
+
+// publishAt runs one STEP of a gesture that writes more than once, waiting for
+// the mark the steps before it left and advancing it.
+func (w *Writer) publishAt(ctx context.Context, at *statelog.Position,
+	req statelog.Request) (statelog.Result, error) {
+
+	req.Session = *at
 	req.MintedAt = w.Now()
 	result, err := w.publisher.Publish(ctx, req)
-	if err == nil {
-		w.advance(result.Position)
+	if err == nil && result.Position.Packed() > at.Packed() {
+		*at = result.Position
 	}
 	return result, err
 }

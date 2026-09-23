@@ -122,6 +122,9 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 		blinder = resolved
 	}
 
+	// ONE MARK FOR THE WHOLE GESTURE: each step decides from a state holding
+	// the one before it, whether this writer is shared or a sequence.
+	at := w.gesture()
 	if err := w.sealer.Mint(ctx, in.PersonID, w.Actor, w.Now()); err != nil {
 		return statelog.Position{}, err
 	}
@@ -147,8 +150,8 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 		// contested — two administrators adding one new joiner — so it
 		// is the one that should fail before anything else has
 		// happened.
-		if _, err := w.claim(ctx, KindEmail, blind, in.PersonID, sealedEmail,
-			in.OpID+":email", in.Kind); err != nil {
+		if _, err := w.claim(ctx, at, KindEmail, blind, in.PersonID,
+			sealedEmail, in.OpID+":email", in.Kind); err != nil {
 			return statelog.Position{}, err
 		}
 	}
@@ -159,7 +162,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	// would acknowledge the second claim as the first inside its duplicate
 	// window, and the person would be written holding the login they gave
 	// up rather than the one they chose.
-	if _, err := w.claim(ctx, KindLogin, in.Login, in.PersonID, "",
+	if _, err := w.claim(ctx, at, KindLogin, in.Login, in.PersonID, "",
 		in.OpID+":login:"+in.Login, in.Kind); err != nil {
 		return statelog.Position{}, err
 	}
@@ -200,7 +203,8 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	// it there. What makes a retry of the whole gesture land once is the
 	// operation ledger, which is the mechanism for that anyway — the
 	// guarding row never was.
-	result, err := w.publish(ctx, w.request(&rec, in.OpID, statelog.PatternArbitrated, decide))
+	result, err := w.publishAt(ctx, at,
+		w.request(&rec, in.OpID, statelog.PatternArbitrated, decide))
 	// AN ENROLMENT THAT CONFERS ANYTHING IS A GRANT CHANGE — from nothing
 	// to what it carries — and the first person a bootstrap code creates,
 	// holding the whole ceiling, is the one row of those an audit most
@@ -558,7 +562,7 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 	// caller: a login's grammar is the kind of whoever holds it, and a
 	// caller stating that kind would be stating what it read in another
 	// transaction — which is the one input this check cannot trust.
-	return w.claim(ctx, kind, token, personID, "", opID, "")
+	return w.claim(ctx, w.gesture(), kind, token, personID, "", opID, "")
 }
 
 // claim is the shared body, so an enrolment's own claims and an operator's
@@ -571,8 +575,9 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 // a login's grammar is judged against does not exist yet; the enrolment
 // validated the kind itself, and it is the one caller that knows it without
 // reading. Every other claim reads its holder's kind inside the snapshot.
-func (w *Writer) claim(ctx context.Context, kind ObjectKind, token, personID,
-	sealed, opID string, enrolling iam.Kind) (statelog.Position, error) {
+func (w *Writer) claim(ctx context.Context, at *statelog.Position,
+	kind ObjectKind, token, personID, sealed, opID string,
+	enrolling iam.Kind) (statelog.Position, error) {
 
 	if token == "" || personID == "" || opID == "" {
 		return statelog.Position{}, fmt.Errorf("iamdomain: a %s claim needs a "+
@@ -654,7 +659,8 @@ func (w *Writer) claim(ctx context.Context, kind ObjectKind, token, personID,
 		rec.Mutation = mutation
 		return nil
 	}
-	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternCreate, decide))
+	result, err := w.publishAt(ctx, at,
+		w.request(&rec, opID, statelog.PatternCreate, decide))
 	return result.Position, err
 }
 
@@ -725,7 +731,7 @@ func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
 			"on its own — every principal holds one, and it is the name their "+
 			"changes are recorded under. Rename it instead", ErrInvalidLogin)
 	}
-	return w.release(ctx, kind, token, holder, opID, reason, false)
+	return w.release(ctx, w.gesture(), kind, token, holder, opID, reason, false)
 }
 
 // release is [Writer.Release]'s body, shared with the second half of a
@@ -737,8 +743,9 @@ func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
 // than a refusal. What is still refused is somebody else holding it: between
 // the claim and this release another writer may have taken the freed token,
 // and a release publishes a clear of whoever holds the column.
-func (w *Writer) release(ctx context.Context, kind ObjectKind, token, holder,
-	opID, reason string, replaced bool) (statelog.Position, error) {
+func (w *Writer) release(ctx context.Context, at *statelog.Position,
+	kind ObjectKind, token, holder, opID, reason string, replaced bool) (
+	statelog.Position, error) {
 
 	if err := w.mayAdminister(OpRelease); err != nil {
 		return statelog.Position{}, err
@@ -783,7 +790,8 @@ func (w *Writer) release(ctx context.Context, kind ObjectKind, token, holder,
 		}
 		return nil
 	}
-	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, decide))
+	result, err := w.publishAt(ctx, at,
+		w.request(&rec, opID, statelog.PatternArbitrated, decide))
 	return result.Position, err
 }
 
@@ -846,11 +854,14 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 		return statelog.Position{}, fmt.Errorf("%w: %s already holds the %s "+
 			"%q, so there is nothing to move", ErrInvalid, personID, kind, to)
 	}
-	at, err := w.claim(ctx, kind, to, personID, "", opID+":"+string(kind), "")
+	// ONE MARK FOR THE MOVE, so the release decides from a state holding
+	// the claim that freed its token.
+	mark := w.gesture()
+	at, err := w.claim(ctx, mark, kind, to, personID, "", opID+":"+string(kind), "")
 	if err != nil || from == "" {
 		return at, err
 	}
-	released, err := w.release(ctx, kind, from, personID,
+	released, err := w.release(ctx, mark, kind, from, personID,
 		opID+":release-"+string(kind), reason, true)
 	var claimed *ErrClaimed
 	switch {
