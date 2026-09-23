@@ -217,7 +217,12 @@ func (s *Service) personRecord(w http.ResponseWriter, r *http.Request, verb stri
 	}
 	handle := strings.TrimSpace(r.PathValue("handle"))
 	principal, _ := iam.From(r.Context())
-	if handle == builtin.ActorOf(principal).Handle {
+	// EITHER OF THE CALLER'S OWN NAMES IS THEIR OWN RECORD, which the tool
+	// writes under the one name it is kept under ([iam.RecordOwner]). A
+	// bound person naming their LOGIN here was sent down the other path and
+	// wrote a record under that login — decided as theirs, and read back by
+	// nothing they look at.
+	if iam.NamesSelf(principal, handle) {
 		s.call(w, r, verb, args)
 		return
 	}

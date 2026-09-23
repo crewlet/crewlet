@@ -403,7 +403,7 @@ easier question:
 
 | The view | Who may save it |
 |---|---|
-| **Personal** — it names an `owner` | that owner, or a caller holding `fleet:operate`. Not their lead: it is a strip only its owner sees, and rearranging it is not a gesture anybody asked a lead to make |
+| **Personal** — saved with `personal: true` | its owner is always the **caller**, kept under their own record (their seat when bound, their login when not) — there is no naming somebody else's. Replacing one by `id` takes that owner, or `fleet:operate`. Not their lead: it is a strip only its owner sees, and rearranging it is not a gesture anybody asked a lead to make |
 | **Shared on a project** (`project:ENG`) | the project's lead, or `fleet:operate` |
 | **Shared on a unit** (`unit:engineering`) | whoever leads that unit, directly or from anywhere above it, or `fleet:operate` |
 | **Shared on a person's page** (`person:ana`) | that person, whoever leads them, or `fleet:operate` — it is a tab on a page other people read |
@@ -659,9 +659,12 @@ through `fleet:operate`.
 `/work/views`. Writes go through a seat's tools or the operator MCP, both of
 which are attributed to somebody. `/work` and `/work/views` answer their
 personal parts — `preset=my_queue`, `preset=priorities`, the pins and personal
-views that order a strip — for the **caller's own seat**, and take no
-parameter naming anybody else's: the engine already knows who is asking, and a
-caller bound to no seat gets the shared strip. The questions that are *about*
+views that order a strip — for the **caller's own record**, and take no
+parameter naming anybody else's: the engine already knows who is asking. A
+caller's own record is kept under the one name every write of theirs is made
+under — their seat when the directory binds them to one, their login when it
+does not — so an unbound caller's strip shows the pins their assistant set,
+rather than nobody's. The questions that are *about*
 one person — their record, their day, their inbox — do take a handle, and
 naming somebody else's is decided as reading their record is: that person,
 whoever leads them, or `fleet:operate`, with a `503` rather than a refusal

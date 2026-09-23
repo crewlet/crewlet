@@ -179,6 +179,7 @@ describe("the Inbox rail badge", () => {
           login: "U0FOUNDER",
           grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
           handle: "ada",
+          owner: "ada",
           name: "Ada",
           kind: "human",
         });

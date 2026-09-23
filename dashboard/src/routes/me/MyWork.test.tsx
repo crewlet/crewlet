@@ -80,6 +80,7 @@ test("with no handle it shows the viewer's own day, and says it is theirs", asyn
       login: "ops-1",
       grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
       handle: "ada",
+      owner: "ada",
       name: "Ada Okonkwo",
       kind: "human",
     },
@@ -104,6 +105,7 @@ test("an explicit handle names whose day it is, in the third person", async () =
       login: "ops-1",
       grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
       handle: "ada",
+      owner: "ada",
       name: "Ada Okonkwo",
       kind: "human",
     },
@@ -116,30 +118,39 @@ test("an explicit handle names whose day it is, in the third person", async () =
   expect(screen.queryByText("yours")).toBeNull();
 });
 
-// AND THE THREE VIEWER STATES TAKE THREE SENTENCES. Only one of them is
-// anybody's fault, and the other two have different remedies: a credential,
-// and a line of company configuration.
-test("an unbound token says what to bind, not that something is broken", async () => {
-  serving({
+// AN UNBOUND READER HAS A DAY OF THEIR OWN, kept under their login — the name
+// their assistant writes their priorities and marks under. The screen asked
+// for "mine" by the SEAT and showed an unbound reader nothing but a sentence
+// about binding, while the record sat under a name it never asked for. It shows
+// the day now, and says what binding would add above it.
+test("an unbound reader's own day is the one kept under their login", async () => {
+  const query = serving({
     viewer: {
-      login: "ops-7",
+      login: "token:ops-7",
       grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
       handle: "",
+      owner: "token:ops-7",
       name: "",
       kind: "",
     },
+    work_my_work: { ...emptyDay, handle: "token:ops-7" },
+    work_inbox: { ...emptyInbox, handle: "token:ops-7" },
   });
   mount();
-  await waitFor(() => expect(screen.getByText(/not bound to a seat/)).toBeTruthy());
-  // The login is NAMED, because it is the value `crewlet iam bind` takes.
-  expect(screen.getByText(/ops-7/)).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("yours")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Nothing has reached you")).toBeTruthy());
+  expect(query).toHaveBeenCalledWith("work_my_work", { handle: "token:ops-7" });
+  // AND WHAT BINDING WOULD ADD, naming the login — the value
+  // `crewlet iam bind` takes — rather than reporting a fault.
+  expect(screen.getByText(/binds/)).toBeTruthy();
+  expect(screen.getAllByText(/token:ops-7/).length).toBeGreaterThan(0);
 });
 
-test("no credential at all is a different sentence from an unbound one", async () => {
-  serving({ viewer: { login: "", grants: [], handle: "", name: "", kind: "" } });
+test("nobody signed in is a different sentence from an unbound reader", async () => {
+  serving({ viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" } });
   mount();
-  await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
-  expect(screen.queryByText(/not bound to a seat/)).toBeNull();
+  await waitFor(() => expect(screen.getByText(/Nobody is signed in/)).toBeTruthy());
+  expect(screen.queryByText(/to no seat/)).toBeNull();
 });
 
 /** One notice, with everything a row draws. */
@@ -166,6 +177,7 @@ const ada = {
   login: "ops-1",
   grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
   handle: "ada",
+  owner: "ada",
   name: "Ada Okonkwo",
   kind: "human",
 };

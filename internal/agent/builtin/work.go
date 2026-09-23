@@ -1274,7 +1274,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// THE ASSIGNEE IS RESOLVED BEFORE THE WATCHERS, so the canonical
 	// handle is what gets watched: a task watched under one spelling and
 	// assigned under another is a task whose assignee is not following it.
-	assignee, refusal := t.deps.resolveHandle(CreateWorkItemTool,
+	assignee, refusal := t.deps.resolveHandle(ctx, CreateWorkItemTool,
 		"`assignee`", task.Assignee)
 	if refusal != "" {
 		return failed(refusal), nil
@@ -1404,7 +1404,19 @@ func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (stri
 // A NIL ROSTER ADMITS EVERYTHING. A surface with no chart loaded cannot tell a
 // typo from a colleague, and refusing every handle there would be worse than
 // the hole this closes.
-func (d WorkDeps) resolveHandle(tool, field, arg string) (string, string) {
+//
+// # And a refusal names the roster only to a caller who may read it
+//
+// A miss used to list every seat in the company and an ambiguity the seats it
+// matched — to whoever asked. Reading the roster is a verb of its own
+// (`lookup_colleague`, [authz.ActionColleagueRead]), and a caller the table
+// refuses it could otherwise read the whole chart one misspelling at a time,
+// through a write it was allowed to attempt. So the names are in the refusal
+// when that same question would have been answered, and otherwise the refusal
+// says only that nobody, or more than one person, answers to the name.
+func (d WorkDeps) resolveHandle(ctx context.Context, tool, field,
+	arg string) (string, string) {
+
 	handle := strings.TrimSpace(arg)
 	if handle == "" || d.Seats == nil {
 		return handle, ""
@@ -1418,15 +1430,36 @@ func (d WorkDeps) resolveHandle(tool, field, arg string) (string, string) {
 	case len(found) == 1:
 		return found[0].Seat.Handle, ""
 	case len(found) == 0:
-		return "", fmt.Sprintf("%s names %s %q and there is nobody here by "+
-			"that name. Look them up with %s rather than guessing — a handle "+
-			"nobody has is stored, and then every notification to it is "+
-			"dropped in silence. The seats are: %s.",
-			tool, field, clip(handle), LookupColleagueTool,
+		missing := fmt.Sprintf("%s names %s %q and there is nobody here by "+
+			"that name — a handle nobody has is stored, and then every "+
+			"notification to it is dropped in silence.",
+			tool, field, clip(handle))
+		if !d.mayReadRoster(ctx) {
+			return "", missing
+		}
+		return "", fmt.Sprintf("%s Look them up with %s rather than guessing. "+
+			"The seats are: %s.", missing, LookupColleagueTool,
 			strings.Join(allHandles(seats), ", "))
+	}
+	if !d.mayReadRoster(ctx) {
+		return "", fmt.Sprintf("%s names %s %q and more than one person here "+
+			"answers to it. Name them by their exact handle.",
+			tool, field, clip(handle))
 	}
 	return "", fmt.Sprintf("%s names %s %q and it matches %s. Name one of them "+
 		"exactly.", tool, field, clip(handle), strings.Join(matchHandles(found), " or "))
+}
+
+// mayReadRoster reports whether this call's caller may read the company's
+// roster — the question `lookup_colleague` is decided on.
+//
+// AN UNDECIDABLE ANSWER IS A NO, which is the one direction this may fail in:
+// what hangs on it is only whether a refusal carries a list of names, and a
+// list withheld costs the caller a lookup where a list leaked costs the
+// company its chart.
+func (d WorkDeps) mayReadRoster(ctx context.Context) bool {
+	return d.Authorize != nil && d.Authorize(ctx, authz.ActionColleagueRead,
+		authz.Object{Kind: authz.KindPerson}) == nil
 }
 
 // matchHandles renders an ambiguous resolution's candidates.
@@ -1642,7 +1675,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		// The outer refusal was checked empty above and is next WRITTEN
 		// by declareLabels, so nothing reads a stale one.
 		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
-		assignee, refusal := t.deps.resolveHandle(UpdateWorkItemTool,
+		assignee, refusal := t.deps.resolveHandle(ctx, UpdateWorkItemTool,
 			"`assignee`", *patch.Assignee)
 		if refusal != "" {
 			return failed(refusal), nil
@@ -2075,7 +2108,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// open on the board for ever, addressed to a spelling.
 	ask := strings.TrimSpace(argString(args, "ask"))
 	if ask != "" {
-		resolved, refusal := t.deps.resolveHandle(CommentOnWorkTool, "`ask`", ask)
+		resolved, refusal := t.deps.resolveHandle(ctx, CommentOnWorkTool, "`ask`", ask)
 		if refusal != "" {
 			return failed(refusal), nil
 		}

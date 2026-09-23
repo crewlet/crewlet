@@ -205,7 +205,13 @@ var subjectOf = map[string]subject{
 	// why this row states a parser rather than a kind. This decides the
 	// view being WRITTEN; the one a save REPLACES is a stored row, and
 	// the tool asks the same action on it once it has read it.
-	"save_work_view": {kind: authz.KindView, owner: "owner", container: "container"},
+	//
+	// PERSONAL IS A FLAG AND NOT A NAME: the view's owner is the caller's
+	// own record — [iam.RecordOwner] — or nobody's. It was a free `owner`
+	// handle, so a bound person typing their login saved a view under a
+	// name no strip of theirs reads, and one that marked it protected was
+	// then refused their own next save.
+	"save_work_view": {kind: authz.KindView, personal: "personal", container: "container"},
 
 	// THE TRASH IS DECIDED BY THE TASK'S OWN PROJECT, which is a stored row
 	// and never an argument: the tools take a key or an id, and a key's
@@ -234,6 +240,11 @@ type subject struct {
 	// owner is the argument naming WHOSE record it is, empty on a verb
 	// that takes no handle.
 	owner string
+
+	// personal is the BOOLEAN argument that makes the object the caller's
+	// own record, on a verb that never takes a name for it — see
+	// `save_work_view`'s row.
+	personal string
 
 	// container is the argument naming the project, unit or container
 	// the call is inside.
@@ -265,7 +276,18 @@ func (s subject) objectFor(p iam.Principal, args map[string]any) authz.Object {
 		o.Owner = strings.TrimSpace(stringArg(args, s.owner))
 	}
 	if s.kind == authz.KindPerson && o.Owner == "" {
-		o.Owner = selfOf(p)
+		o.Owner = iam.RecordOwner(p)
+	}
+	if s.personal != "" && argBool(args, s.personal) {
+		o.Owner = iam.RecordOwner(p)
+		if o.Owner == "" {
+			// A PERSONAL OBJECT NOBODY CAN OWN NAMES NOTHING, which every
+			// class refuses. Left with its container it would be decided
+			// as SHARED — the one reading an owner-less view has — and
+			// the caller who has no record would be admitted to write a
+			// tab everybody sees.
+			return authz.Object{Kind: s.kind}
+		}
 	}
 	if s.container != "" {
 		o.ContainerKind, o.Container = containerArg(args, s.container)
@@ -274,28 +296,6 @@ func (s subject) objectFor(p iam.Principal, args map[string]any) authz.Object {
 		}
 	}
 	return o
-}
-
-// selfOf is the handle a personal verb that names nobody is about: the name
-// the caller's own record is WRITTEN under.
-//
-// DERIVED FROM [ActorOf], not written beside it. The gate decides a verb like
-// `mark_inbox` on this owner and the tool then writes the record under the
-// actor's handle, so the two must be ONE value — and as two functions they
-// already disagreed on a principal they could both be handed: this one read
-// the seat before the login, [iam.ActorFor] reads a machine's login and never
-// its seat, so a machine carrying a seat would have been decided on one
-// record and written into another. For every principal the engine mints today
-// they agree, which is exactly how two copies of one rule go on looking fine.
-//
-// A PRINCIPAL OF NO KNOWN KIND IS NOBODY, and answers empty rather than
-// [iam.AnonymousActor]: an empty owner is what every personal class refuses,
-// and a name would be one a caller could be decided as.
-func selfOf(p iam.Principal) string {
-	if !p.Kind.Valid() {
-		return ""
-	}
-	return ActorOf(p).Handle
 }
 
 // containerArg reads a container argument as its kind and its key.

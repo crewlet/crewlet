@@ -52,7 +52,7 @@ import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { AsksTag, Coverage, RowList, type RowChrome } from "~/components/work.tsx";
 import { Callout, Card, Count, EmptyState, Select, StatCard, StatGroup, Tag } from "@crewlethq/ui";
-import { ErrorGlyph, HelpGlyph, InboxGlyph, KeyGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
+import { ErrorGlyph, HelpGlyph, InboxGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -112,14 +112,19 @@ export function MyWork() {
   //
   // An explicit choice still wins — an operator reading a report's day is a
   // real thing to do, and the header says whose day it is either way.
+  //
+  // YOURS IS `owner`, NOT `handle`: the one name your own record is kept
+  // under, which is your seat when the directory binds you to one and your
+  // login when it does not. Read by `handle`, an unbound reader had no day at
+  // all here while their assistant wrote their priorities under their login.
   const viewer = useViewer();
-  const whose = handle || viewer.handle;
+  const whose = handle || viewer.owner;
   // WHOSE DAY DECIDES THE PRONOUN. This screen is read two ways — a person
   // reading their own day, and an operator reading a report's — and one
   // wording cannot serve both: "nothing has reached them" on your own inbox
   // reads as a screen describing somebody else, which is exactly the
   // confusion the `viewer` question exists to end.
-  const ownDay = whose !== "" && whose === viewer.handle;
+  const ownDay = whose !== "" && whose === viewer.owner;
   const they = ownDay ? "you" : "them";
   // NOT UNTIL SOMEBODY IS CHOSEN — the same guard the board takes. `whose`
   // is empty until the chart has loaded, and the engine
@@ -192,7 +197,7 @@ export function MyWork() {
           // registers, and the WORDS carry whose day it is: a name is stable,
           // legible, and does not run out at eight.
           //
-          // `ownDay` rather than a fourth spelling of `whose === viewer.handle`
+          // `ownDay` rather than a fourth spelling of `whose === viewer.owner`
           // — inside this guard `whose` is non-empty, so the two are the same
           // question, and one question spelled per prop is how one prop came to
           // disagree with the rule while its neighbours did not.
@@ -231,22 +236,27 @@ export function MyWork() {
         <Coverage answer={mine} />
       </div>
 
-      {/* THREE STATES, and they are not one empty state. A reader with no
-          token, a reader whose token names no seat, and a reader who simply
-          has not chosen somebody need three different sentences — and only
-          the last of them is a choice anybody can make on this screen. */}
+      {/* THREE STATES, and they are not one empty state. A reader nobody
+          has signed in, a reader the directory binds to no seat, and a reader
+          who simply has not chosen somebody need three different sentences.
+          The unbound reader is not an EMPTY state any more: they have a day
+          of their own, kept under their login, and what they lack is the
+          work the chart addresses to a seat — which is what the note says,
+          above the day rather than instead of it. */}
+      {ownDay && viewer.unbound && (
+        <Callout variant="info">
+          The directory binds <code className="inline">{viewer.login}</code> to no seat, so this is
+          the day kept under that login: what you follow, what names you, and your own priorities.
+          Work the org chart hands to a seat reaches you once{" "}
+          <code className="inline">crewlet iam bind</code> binds you to one.
+        </Callout>
+      )}
       {!whose &&
         (viewer.anonymous ? (
           <EmptyState
             icon={<KeyGlyph size={32} />}
-            title="No credential is presented"
-            description="A day belongs to a person, and this browser has not said who it is. Set an API token, or pick somebody below to read their day."
-          />
-        ) : viewer.unbound ? (
-          <EmptyState
-            icon={<PersonGlyph size={32} />}
-            title="You are not bound to a seat"
-            description={`${viewer.login} holds no seat in the org chart. Bind it with crewlet iam bind and this becomes their day. Until then, pick somebody below.`}
+            title="Nobody is signed in"
+            description="A day belongs to a person, and this browser has not said who it is. Sign in, or pick somebody below to read their day."
           />
         ) : (
           <EmptyState

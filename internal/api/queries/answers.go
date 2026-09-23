@@ -82,7 +82,7 @@ type Sources struct {
 
 	// Chart answers the lead relations the personal questions are scoped
 	// by, through the SAME seam internal/authz asks every other surface's
-	// through — see [Sources.viewerHandle]. Nil is a surface with no
+	// through — see [Sources.recordHandle]. Nil is a surface with no
 	// chart, which [authz.NoChart] reports as UNKNOWN rather than as
 	// "leads nobody": a 503 a caller retries, never a 403 that sends them
 	// to ask for authority they already hold.
@@ -454,8 +454,8 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_activity", iam.GrantStateRead, s.workActivity)
 		// AND ONE PERSON'S DAY, plus the notices that reached them.
 		//
-		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.viewerHandle].
-		// A caller reads the seat they are bound to, and naming anybody
+		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.recordHandle].
+		// A caller reads their own record, and naming anybody
 		// else's is the owner-or-lead rule the tools that WRITE these
 		// records are decided by: theirs, whoever leads them, or the
 		// deployment's admin grant. Registered operator-only, as `work_my_work` was, the
@@ -519,7 +519,7 @@ func Register(r *Registry, s Sources) {
 		// seat by [authz.ActionSeatTrailRead] — the same verb
 		// `agent_memory` asks, so the two halves of what a seat has said
 		// and remembered cannot answer one reader differently. An absent
-		// handle is the caller's own seat; see [Sources.viewerHandle].
+		// handle is the caller's own seat; see [Sources.seatHandle].
 		r.Register("conversations", iam.GrantAuditRead, s.conversations)
 	}
 	if s.Config != nil {

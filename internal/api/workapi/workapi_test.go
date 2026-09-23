@@ -179,18 +179,26 @@ func TestAnOversizedBodyIsRefusedBeforeItIsRead(t *testing.T) {
 // inbox to mark could mark anybody's — so the tools are not widened. What the
 // route adds is the administrator's path onto a departed person's record,
 // decided on the record the path names.
+//
+// AND A PERSON NAMING THEMSELVES BY THEIR LOGIN IS NAMING THEIR OWN RECORD,
+// which is kept under their seat: sent down the administrator's path, a bound
+// person's login wrote a second record under that login — decided as theirs,
+// and read back by nothing they look at.
 func TestSomebodyElsesInboxIsTheAdministratorsAlone(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name   string
-		who    iam.Principal
-		handle string
-		want   int
-		agent  bool
+		name    string
+		who     iam.Principal
+		handle  string
+		want    int
+		agent   bool
+		written string
 	}{
-		{"your own", colleague("ana"), "ana", http.StatusOK, false},
-		{"a colleague's", colleague("ana"), "bo", http.StatusForbidden, false},
-		{"an administrator on somebody's", admin("ana"), "bo", http.StatusOK, false},
+		{"your own", colleague("ana"), "ana", http.StatusOK, false, "ana"},
+		{"your own, by your login", colleague("ana"), "ana.person",
+			http.StatusOK, false, "ana"},
+		{"a colleague's", colleague("ana"), "bo", http.StatusForbidden, false, ""},
+		{"an administrator on somebody's", admin("ana"), "bo", http.StatusOK, false, "bo"},
 	} {
 		for _, route := range []string{"inbox", "pins"} {
 			t.Run(c.name+"/"+route, func(t *testing.T) {
@@ -208,8 +216,8 @@ func TestSomebodyElsesInboxIsTheAdministratorsAlone(t *testing.T) {
 				if route == "pins" {
 					written = r.writes.pins
 				}
-				if len(written) != 1 || written[0] != c.handle {
-					t.Errorf("wrote the record of %v, want %q", written, c.handle)
+				if len(written) != 1 || written[0] != c.written {
+					t.Errorf("wrote the record of %v, want %q", written, c.written)
 				}
 				if a := r.writes.authz[0]; !a.Authorized || a.Agent != c.agent {
 					t.Errorf("the writer was handed %+v", a)

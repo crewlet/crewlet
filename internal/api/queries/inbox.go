@@ -21,14 +21,14 @@ import (
 // better was found, and the person's own read and snooze marks. No commercial
 // tracker records why a notification reached you; this one always has.
 //
-// SCOPED, NOT GATED ON A GRANT OF ITS OWN. See [Sources.viewerHandle]: a
-// caller reads the seat they are bound to, and naming anybody else's is
+// SCOPED, NOT GATED ON A GRANT OF ITS OWN. See [Sources.recordHandle]: a
+// caller reads their own record, and naming anybody else's is
 // [authz.ActionInboxRead] — theirs, whoever leads them, or the deployment's
 // admin grant. Gated on a grant nobody but an administrator holds, the landing
 // screen would be the most-gated screen in the product, and the human teammate
 // — one of the two readers this dashboard is for — fictional.
 func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
-	handle, err := s.viewerHandle(ctx, authz.ActionInboxRead,
+	handle, err := s.recordHandle(ctx, authz.ActionInboxRead,
 		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err

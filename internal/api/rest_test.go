@@ -286,9 +286,9 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 // test must not depend on what a tracker would have said.
 type stubWorkReader struct{}
 
-func (stubWorkReader) Inbox(context.Context, tracker.InboxQuery, time.Time) (
+func (stubWorkReader) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (
 	tracker.InboxAnswer, error) {
-	return tracker.InboxAnswer{}, nil
+	return tracker.InboxAnswer{Handle: q.Handle}, nil
 }
 
 func (stubWorkReader) Routing(context.Context, tracker.RoutingQuery, time.Time) (
@@ -355,9 +355,9 @@ func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (
 //
 // Same hazard the burndown had, one route later: `/work/{id}` matches the
 // path, so a table entry with no route behind it answers 404 about a task
-// nobody named. The refusal proves the query was reached — `work_inbox`
-// refuses an unresolvable handle with `bad_params`, and the wildcard would
-// answer `not_found`.
+// nobody named. The answer proves the query was reached — `work_inbox` reads
+// the caller's own record, which for the fixture's unbound token is kept under
+// its login, and the wildcard would answer `not_found`.
 func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
@@ -369,17 +369,17 @@ func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
 	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/work/inbox", nil)))
 	res := rec.Result()
 
-	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("GET /work/inbox = %d, want 400: an anonymous caller names "+
-			"no seat and the question refuses, so any other status means "+
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET /work/inbox = %d, want 200: any other status means "+
 			"/work/{id} answered the path instead", res.StatusCode)
 	}
-	var body map[string]string
+	var body map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body["error"] != "bad_params" {
-		t.Errorf("error = %q, want bad_params; `not_found` is the wildcard "+
-			"answering about a task called \"inbox\"", body["error"])
+	if body["handle"] != "token:fixture" {
+		t.Errorf("handle = %v, want the fixture token's own record — a "+
+			"`not_found` is the wildcard answering about a task called "+
+			"\"inbox\"", body["handle"])
 	}
 }

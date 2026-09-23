@@ -144,7 +144,7 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 	// A SEAT'S TRAIL, and so the audit read whoever's seat it is — see
 	// [authz.ActionSeatTrailRead]. An absent handle is still the caller's
 	// own seat.
-	handle, err := s.viewerHandle(ctx, authz.ActionSeatTrailRead,
+	handle, err := s.seatHandle(ctx, authz.ActionSeatTrailRead,
 		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err

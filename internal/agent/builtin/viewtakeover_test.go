@@ -68,7 +68,7 @@ func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 	}
 	mine := map[string]any{
 		"container": "person:tester", "name": "Mine now", "type": "list",
-		"owner": "tester",
+		"personal": true,
 	}
 	for _, c := range []struct {
 		name    string

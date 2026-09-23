@@ -144,8 +144,10 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	// read out of the bag and deleted from it again — so a screen selected
 	// WHOSE queue to render by typing a handle, on a surface where
 	// `preset=my_queue`, `preset=priorities` and every personal expansion
-	// resolve against it. What the caller's own seat is has an answer now:
-	// the principal the guard resolved.
+	// resolve against it. Whose record that is has an answer now: the
+	// principal the guard resolved, under the name every tool writes their
+	// record with — [iam.RecordOwner] — so `preset=priorities` reads back
+	// the list `set_priorities` wrote for an unbound caller too.
 	//
 	// THE VIEWER'S OWN PROJECT comes from the chart, because
 	// `preset=my_queue` asks what is unclaimed in THEIR container and an
@@ -154,7 +156,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	if how == iam.Unknown {
 		return nil, unresolved(ctx, "work_items")
 	}
-	viewer := principal.Seat
+	viewer := iam.RecordOwner(principal)
 	q, err := s.Work.ExpandedQuery(ctx, p.Values(), tracker.Viewer{
 		Handle:  viewer,
 		Project: s.projectOf(viewer),
@@ -282,15 +284,18 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 // and their pins — and it used to be a `viewer=` parameter on the reasoning
 // that a screen reaches this before it knows who is looking.
 //
-// A screen knows now. The principal the guard resolved carries the seat, so
-// the parameter had exactly one honest value and any other was a free choice
-// of whose record to read: anybody could walk the org chart — which `org`
-// answers — and page through every seat's pinned views by handle.
+// A screen knows now. The principal the guard resolved names whose record it
+// is, so the parameter had exactly one honest value and any other was a free
+// choice of whose record to read: anybody could walk the org chart — which
+// `org` answers — and page through every seat's pinned views by handle.
 //
-// A CALLER WITH NO SEAT STILL GETS THE SHARED STRIP: no pins and no personal
-// views but the shared ones, which is the documented meaning of an empty
-// [tracker.ViewQuery.Viewer] and what the sidebar and the board ask for on
-// every poll. An unbound person is an ordinary state, not a refusal.
+// THE VIEWER IS [iam.RecordOwner]'s, the name `set_pins` and `save_work_view`
+// write under. It was the principal's SEAT, which is nothing for an unbound
+// person or a token — so their assistant pinned views and saved personal ones
+// under their login, and their strip, read under no name, showed the shared
+// views alone. A caller the engine can name nothing for still gets the shared
+// strip, which is the documented meaning of an empty
+// [tracker.ViewQuery.Viewer].
 func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	container, err := viewContainer(p)
 	if err != nil {
@@ -306,7 +311,7 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	if how == iam.Unknown {
 		return nil, unresolved(ctx, "work_views")
 	}
-	viewer := principal.Seat
+	viewer := iam.RecordOwner(principal)
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    viewer,
@@ -389,8 +394,8 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // workPerson answers one human's own state — their inbox, their queue and
 // their pins.
 //
-// SCOPED BY [Sources.viewerHandle], the same rule `work_my_work` and
-// `work_inbox` take: an absent handle is the caller's own seat, and naming
+// SCOPED BY [Sources.recordHandle], the same rule `work_my_work` and
+// `work_inbox` take: an absent handle is the caller's own record, and naming
 // anybody else's is [authz.ActionPersonRead] — theirs, whoever leads them, or
 // the deployment's admin grant.
 //
@@ -402,7 +407,7 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // to work on next, and who set that order. The parameter selected whose. A
 // scope rule two of the three personal questions follow is not a rule.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
-	handle, err := s.viewerHandle(ctx, authz.ActionPersonRead,
+	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
 		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
@@ -769,11 +774,11 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 
 // workMyWork answers everything one person is expected to look at.
 func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
-	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerHandle]. This
+	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.recordHandle]. This
 	// was registered operator-only and demanded a handle, which is why
 	// routes/MyWork.tsx picked the alphabetically first seat: there was no
 	// way for the screen to know whose day it was drawing.
-	handle, err := s.viewerHandle(ctx, authz.ActionMyWork,
+	handle, err := s.recordHandle(ctx, authz.ActionMyWork,
 		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err

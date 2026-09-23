@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -130,20 +131,30 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	handle := strings.TrimSpace(argString(args, "handle"))
-	if handle == "" {
-		handle = actor.Handle
+	// YOUR OWN QUEUE IS NEVER LOOKED UP. It is the record your writes are
+	// made under — the actor's name, which is [iam.RecordOwner]'s — and it
+	// was sent through the fuzzy colleague resolver like anybody else's: an
+	// unbound `jane.doe` holding the admin grant resolved to the seat `jane`
+	// and set THAT seat's priorities, the same caller without the grant was
+	// refused their own queue, and the refusal listed the company's roster
+	// to somebody who may not read it. Only a name the caller TYPED for
+	// somebody else is resolved; a caller naming themselves by either of
+	// their names is naming their own record.
+	handle := actor.Handle
+	if typed := strings.TrimSpace(argString(args, "handle")); typed != "" &&
+		!namesSelf(ctx, actor, typed) {
+
+		// A TYPED NAME IS RESOLVED AGAINST THE CHART, because a typo
+		// here writes a whole PERSON RECORD for somebody who does not
+		// exist — a queue nobody will ever read, and a wake routed to a
+		// handle Route drops in silence.
+		whose, unknown := t.deps.resolveHandle(ctx, tracker.SetPrioritiesTool,
+			"`handle`", typed)
+		if unknown != "" {
+			return failed(unknown), nil
+		}
+		handle = whose
 	}
-	// THE HANDLE IS RESOLVED AGAINST THE CHART, because a typo here writes
-	// a whole PERSON RECORD for somebody who does not exist — a queue
-	// nobody will ever read, and a wake routed to a handle Route drops in
-	// silence.
-	whose, unknown := t.deps.resolveHandle(tracker.SetPrioritiesTool,
-		"`handle`", handle)
-	if unknown != "" {
-		return failed(unknown), nil
-	}
-	handle = whose
 	// THE AUTHORITY IS ASKED HERE AND NOT AT THE GATE, because the
 	// ARGUMENT IS NOT THE OBJECT: a model types a name, an email or a
 	// handle and the line above resolves it against the chart, so a
@@ -421,12 +432,9 @@ func MarkInboxFor(ctx context.Context, deps WorkDeps, handle string,
 	if refusal != nil {
 		return *refusal
 	}
-	// THE HANDLE IS RESOLVED AGAINST THE CHART, for set_priorities' reason:
-	// a typo here writes a whole person record for somebody who does not
-	// exist.
-	whose, unknown := deps.resolveHandle(tracker.MarkInboxTool, "the person", handle)
-	if unknown != "" {
-		return failed(unknown)
+	whose, unowned := deps.decidedRecord(tracker.MarkInboxTool, handle)
+	if unowned != "" {
+		return failed(unowned)
 	}
 	return deps.writeInbox(ctx, actor, writer, whose, args, authority)
 }
@@ -439,11 +447,67 @@ func SetPinsFor(ctx context.Context, deps WorkDeps, handle string,
 	if refusal != nil {
 		return *refusal
 	}
-	whose, unknown := deps.resolveHandle(tracker.SetPinsTool, "the person", handle)
-	if unknown != "" {
-		return failed(unknown)
+	whose, unowned := deps.decidedRecord(tracker.SetPinsTool, handle)
+	if unowned != "" {
+		return failed(unowned)
 	}
 	return deps.writePins(ctx, actor, writer, whose, args, authority)
+}
+
+// decidedRecord is the record [MarkInboxFor] and [SetPinsFor] write: EXACTLY
+// the one their caller decided on, or the refusal.
+//
+// # Never resolved
+//
+// The authority was taken on this handle before either was called — the HTTP
+// route decides the owner-or-admin rule on the record its path names — so
+// resolving it afterwards writes into a record nobody decided on. Both used
+// to send it through the fuzzy colleague resolver, which turned a login into
+// the seat whose display name it resembled: a bound person admitted to their
+// own record by their login could write the pins of whichever seat that login
+// spelt, and an administrator unsticking an unbound person's queue — which is
+// kept under their login, see [iam.RecordOwner] — wrote into a seat's.
+//
+// # But refused when nobody could own it
+//
+// What the resolver did guard against is a record under a name nobody has.
+// So the handle must be a record owner's SHAPE: a login — a person's or a
+// machine's, which the directory holds and this package cannot read — or a
+// seat the chart has, exactly. A nil or empty roster admits a seat-shaped
+// name, for [WorkDeps.resolveHandle]'s reason.
+func (d WorkDeps) decidedRecord(tool, handle string) (string, string) {
+	handle = strings.TrimSpace(handle)
+	switch {
+	case handle == "":
+		return "", fmt.Sprintf("%s names nobody whose record to write.", tool)
+	case iam.ValidLogin(handle), iam.ValidMachineHandle(handle):
+		return handle, ""
+	}
+	if d.Seats == nil {
+		return handle, ""
+	}
+	seats := d.Seats()
+	if len(seats) == 0 {
+		return handle, ""
+	}
+	for _, seat := range seats {
+		if seat.Handle == handle {
+			return handle, ""
+		}
+	}
+	return "", fmt.Sprintf("%s names %q, and nobody's own record is kept "+
+		"under it: a record is under a seat's exact handle, or a person's or "+
+		"a machine's login.", tool, clip(handle))
+}
+
+// namesSelf reports whether a name a caller typed is one of their OWN — see
+// [iam.NamesSelf] — or, inside a turn, the seat the turn is.
+func namesSelf(ctx context.Context, actor Actor, typed string) bool {
+	if typed == actor.Handle {
+		return true
+	}
+	principal, how := iam.From(ctx)
+	return how == iam.Resolved && iam.NamesSelf(principal, typed)
 }
 
 // ownWrite is the authority a tool writing the CALLER's own record passes.

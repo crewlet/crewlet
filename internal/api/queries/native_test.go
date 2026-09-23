@@ -219,8 +219,8 @@ func (s *stubPages) Revision(_ context.Context, pageID string, version int,
 	return s.revision, s.revisionHeld, s.err
 }
 
-// personalQuestions are the four scoped by the caller's own seat — see
-// Sources.viewerHandle. They refuse an anonymous caller who names somebody
+// personalQuestions are the four scoped by the caller's own record or seat —
+// see Sources.recordHandle and Sources.seatHandle. They refuse an anonymous caller who names somebody
 // else, so a sweep that walks every native question has to present a
 // credential for these four. Named once rather than per sweep: the set grew
 // from one to four, and each sweep that spelled it as `== "work_my_work"`
@@ -642,13 +642,14 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 // `viewer=` used to select WHOSE pins and personal views order the strip, and
 // nothing checked it: on a node with anonymous reads a caller could take the
 // handles out of `org` and page through every seat's pinned views. The
-// parameter is gone — the strip is ordered by the principal's own seat — so
+// parameter is gone — the strip is ordered by the caller's own record — so
 // there is no handle to check and nothing to refuse.
 //
-// A CALLER WITH NO SEAT STILL GETS THE SHARED STRIP, which is the case the
-// separate rule existed for: a question ABOUT somebody refuses when the caller
-// names nobody and has no seat, and a strip is about a CONTAINER. Refusing it
-// would take the strip off the sidebar and the board for every unbound reader.
+// A CALLER WITH NO SEAT GETS THEIR OWN STRIP TOO, under the name their record
+// is kept under — the login `set_pins` and `save_work_view` write with. It was
+// read under no name at all, so an unbound caller's assistant pinned views
+// their strip never showed. And a strip is about a CONTAINER, so a caller the
+// engine can name nothing for still gets the shared one, never a refusal.
 func TestAStripIsPersonalisedByTheCallerAlone(t *testing.T) {
 	t.Parallel()
 
@@ -679,18 +680,18 @@ func TestAStripIsPersonalisedByTheCallerAlone(t *testing.T) {
 		t.Errorf("a `viewer` in the bag reached the reader as %q", w.views.Viewer)
 	}
 
-	// AND A CALLER WITH NO SEAT STILL GETS THE SHARED STRIP: a real
-	// answer with an empty viewer, never a refusal.
+	// AND AN UNBOUND CALLER'S STRIP IS THEIRS, under their login.
 	w = &stubWork{}
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: w})
 	if _, err := r.Answer(everyGrant(t), "work_views",
 		map[string]any{"container": "workspace"}); err != nil {
 
-		t.Fatalf("the shared strip, asked by an unbound caller: %v", err)
+		t.Fatalf("the strip, asked by an unbound caller: %v", err)
 	}
-	if w.views.Viewer != "" {
-		t.Errorf("an unbound caller's strip was personalised by %q", w.views.Viewer)
+	if w.views.Viewer != "token:test" {
+		t.Errorf("an unbound token's strip was personalised by %q, want its "+
+			"login — the name its own pins are written under", w.views.Viewer)
 	}
 }
 

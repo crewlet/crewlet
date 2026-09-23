@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -173,14 +174,17 @@ func (t *saveWorkView) Parameters() map[string]any {
 					"outright: they are about the reader rather than the " +
 					"rows.",
 			},
-			"owner": map[string]any{
-				"type": "string",
-				"description": "A handle makes the view PERSONAL: it appears " +
-					"in that person's strip and nobody else's. Omit to share it.",
+			"personal": map[string]any{
+				"type": "boolean",
+				"description": "True makes the view YOURS: it appears in " +
+					"your own strip and nobody else's. Omit to share it on " +
+					"its container. A personal view is always the caller's " +
+					"own — there is no naming somebody else's.",
 			},
 			"protected": map[string]any{
-				"type":        "boolean",
-				"description": "True stops anyone but the owner changing it.",
+				"type": "boolean",
+				"description": "On a personal view, true stops anyone but " +
+					"you changing it.",
 			},
 			"default": map[string]any{
 				"type": "boolean",
@@ -213,6 +217,21 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	container, refusal := parseContainerArg(argString(args, "container"))
 	if refusal != "" {
 		return failed(refusal), nil
+	}
+	// A PERSONAL VIEW IS THE CALLER'S OWN RECORD, under the one name every
+	// personal record of theirs is kept under — the name `list_work_views`
+	// and the dashboard's strip read it back by. It was a free `owner`
+	// handle, so a bound person typing their login saved a view no strip of
+	// theirs reads, and one who marked it protected was then refused their
+	// own next save, which the tracker checks against the writer's name.
+	var owner string
+	if argBool(args, "personal") {
+		principal, _ := iam.From(ctx)
+		if owner = iam.RecordOwner(principal); owner == "" {
+			return failed("A personal view is kept on its owner's own " +
+				"record, and this credential names nobody who has one. Save " +
+				"it shared instead."), nil
+		}
 	}
 	// THE CALLER'S ID WHEN IT HAS ONE, a fresh one when it does not. A
 	// verb that always minted would write a second view on every retry of
@@ -251,7 +270,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Name:      strings.TrimSpace(argString(args, "name")),
 		Type:      tracker.ViewType(strings.TrimSpace(argString(args, "type"))),
 		Params:    argStringMap(args, "params"),
-		Owner:     strings.TrimSpace(argString(args, "owner")),
+		Owner:     owner,
 		Protected: argBool(args, "protected"),
 		Default:   argBool(args, "default"),
 		Icon:      strings.TrimSpace(argString(args, "icon")),

@@ -11,11 +11,12 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// errNoSeat is the refusal a personal question makes of a caller bound to no
-// seat who named none. It is NOT an authorization failure — nobody was refused
-// anything — and its remedy is a row in the identity directory rather than a
-// different credential, which is why it is [ErrBadParams] and the authority
-// refusal beside it is a [Refusal] carrying the rule's own reason.
+// errNoSeat is the refusal a question about a SEAT's trail makes of a caller
+// bound to no seat who named none. It is NOT an authorization failure —
+// nobody was refused anything — and its remedy is a row in the identity
+// directory rather than a different credential, which is why it is
+// [ErrBadParams] and the authority refusal beside it is a [Refusal] carrying
+// the rule's own reason.
 //
 // THE BINDING IS NAMED WHERE IT LIVES. It used to say "in the org chart", which
 // was true while a seat's contact block carried the credential it was held by;
@@ -24,6 +25,16 @@ import (
 var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind "+
 	"its row in the identity directory to one (`crewlet iam bind`), or "+
 	"name a handle", ErrBadParams)
+
+// errNoRecord is the refusal a question about a PERSONAL RECORD makes of a
+// caller who has none and named nobody.
+//
+// RARER THAN [errNoSeat] and a different fact: every bound person, every
+// unbound person with a login and every token has a record of their own —
+// see [iam.RecordOwner] — so what reaches this is a principal the engine can
+// name nothing for, and the remedy is to name whose record to read.
+var errNoRecord = fmt.Errorf("%w: this credential names nobody whose own "+
+	"record there is — name a handle", ErrBadParams)
 
 // viewer answers who this caller is.
 //
@@ -55,6 +66,14 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		"handle": "",
 		"name":   "",
 		"kind":   "",
+		// THE NAME THE CALLER'S OWN RECORD IS KEPT UNDER — their inbox,
+		// pins, priorities and personal views. The seat for a bound
+		// person, and the login for everybody the directory binds to
+		// none, who has a record all the same: a screen that asked for
+		// "my" record by `handle` asked an unbound caller for nothing,
+		// while their assistant wrote it under this. See
+		// [iam.RecordOwner].
+		"owner": iam.RecordOwner(principal),
 	}
 	seat := s.seatOf(principal)
 	if seat == nil {
@@ -95,8 +114,18 @@ func (s Sources) seatOf(p iam.Principal) *org.Role {
 	return roster.SeatByHandle(p.Seat)
 }
 
-// viewerHandle is the handle a personal question answers for when the caller
+// recordHandle is the handle a question about somebody's PERSONAL RECORD —
+// their inbox, their day, their person record — answers for when the caller
 // named none, and the authority check when they named one.
+//
+// THE CALLER'S OWN IS [iam.RecordOwner]'s, the one name every tool writes
+// their record under. It was the principal's SEAT, which is that name for a
+// bound person and nothing at all for everybody else — so an unbound person
+// and every token had their pins, their inbox marks and their priorities
+// written under their login by their assistant and read back under no name,
+// refused as "not bound to a seat". And a caller naming either of their own
+// names ([iam.NamesSelf]) is answered their own record, rather than decided as
+// if they had named a colleague.
 //
 // THE SCOPE RULE IS THE AUTHORITY TABLE'S, asked with the question's OWN verb:
 // `work_inbox` asks [authz.ActionInboxRead], `work_my_work`
@@ -110,7 +139,33 @@ func (s Sources) seatOf(p iam.Principal) *org.Role {
 // reader of every seat's inbox.
 //
 // Returns the handle to read and an error to refuse with.
-func (s Sources) viewerHandle(ctx context.Context, action authz.Action,
+func (s Sources) recordHandle(ctx context.Context, action authz.Action,
+	asked string) (string, error) {
+
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return "", unresolved(ctx, "viewer")
+	}
+	own := iam.RecordOwner(principal)
+	switch {
+	case asked == "" && own == "":
+		return "", errNoRecord
+	case asked == "", iam.NamesSelf(principal, asked):
+		return own, nil
+	}
+	if err := s.mayRead(ctx, principal, action, asked); err != nil {
+		return "", err
+	}
+	return asked, nil
+}
+
+// seatHandle is [Sources.recordHandle] for a question about a SEAT's own
+// trail — its threads — rather than about a person's record.
+//
+// THE CALLER'S OWN IS THEIR SEAT and nothing else, because a seat's trail is
+// what the seat said on the company's surfaces: an unbound caller has none,
+// and a login is not a seat the ledger could hold threads for.
+func (s Sources) seatHandle(ctx context.Context, action authz.Action,
 	asked string) (string, error) {
 
 	principal, how := iam.From(ctx)
@@ -121,7 +176,7 @@ func (s Sources) viewerHandle(ctx context.Context, action authz.Action,
 	if asked == "" {
 		if own == "" {
 			// NOT AN AUTHORIZATION FAILURE. Nobody was refused: there is
-			// no person to answer about, and the remedy is a binding in
+			// no seat to answer about, and the remedy is a binding in
 			// the identity directory rather than a different credential.
 			return "", errNoSeat
 		}

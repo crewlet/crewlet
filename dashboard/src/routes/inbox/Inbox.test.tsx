@@ -99,6 +99,7 @@ function mount(answers: Record<string, unknown> = {}) {
         login: "U0FOUNDER",
         grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
         handle: "ada",
+        owner: "ada",
         name: "Ada",
         kind: "human",
       });
@@ -261,6 +262,7 @@ test("a figure whose query has not answered draws a dash, never a zero", async (
         login: "U0FOUNDER",
         grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
         handle: "",
+        owner: "U0FOUNDER",
         name: "",
       });
     }

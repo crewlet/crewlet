@@ -195,7 +195,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE EMPTY STRING IS NOT A HANDLE. It is a real setting here — it
 	// means triage — so it is left alone rather than resolved.
 	if edit.DefaultAssignee != nil && *edit.DefaultAssignee != "" {
-		who, unknown := t.deps.resolveHandle(tracker.WriteProjectTool,
+		who, unknown := t.deps.resolveHandle(ctx, tracker.WriteProjectTool,
 			"`default_assignee`", *edit.DefaultAssignee)
 		if unknown != "" {
 			return failed(unknown), nil

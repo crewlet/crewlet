@@ -180,11 +180,12 @@ to one seat — they contend and exactly one wins.
 
 What the binding buys:
 
-- **The personal screens are yours.** `#/inbox` — the dashboard's landing
-  screen — shows your notices, the one reason of eighteen that routed each one,
-  and what is waiting on a decision; `#/me` is your own work. Both ask the
-  engine who is looking, and the answer is the seat the directory binds you
-  to.
+- **The work the chart hands a seat reaches you.** `#/inbox` — the
+  dashboard's landing screen — shows your notices, the one reason of eighteen
+  that routed each one, and what is waiting on a decision; `#/me` is your own
+  work. Both ask the engine who is looking, and your own record is kept under
+  the seat the directory binds you to — which is where an assignment, a
+  mention and a lead's priority list are addressed.
 - **Your seat's lead relations are yours.** Every authority rule that asks "do
   you lead this" is asked about the bound seat — so the person holding a unit's
   lead seat may re-route that unit's project's work, declare its fields and set
@@ -192,15 +193,21 @@ What the binding buys:
   `fleet:operate`. See [the authority
   table](identity-and-access.md#the-authority-table-one-function-decides).
 
-It does not change **attribution** through your assistant: a write made over
-the operator tool server carries your own login (or the token's id) and the
-author kind `operator`, bound or not, and there is no way for a caller to name
-a seat to act as.
+- **Your writes are the seat's.** A write you make — on the dashboard's write
+  surface or through your assistant — is recorded under the seat's handle with
+  the author kind `human`, which is what keeps you out of the wake your own
+  change sends. There is still no way for a caller to name a seat to act as.
+  See [who a write is attributed
+  to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
 
 **Unbound is ordinary.** An operator outside the org chart, a pipeline, an
 automation — each acts as itself under its own login, decided by its grants
-alone, and is never refused for it. The screens say so, and name `crewlet iam
-bind`, rather than guessing whose queue to show.
+alone, and is never refused for it. It has a record of its own all the same:
+its pins, its inbox marks, its priorities and its personal views are kept
+under that **login**, which is the name every write it makes is attributed to
+and the name every personal read answers for — so what its assistant arranges
+is what its screens show. What it lacks is the work the chart addresses to a
+seat, and the screens say so, naming `crewlet iam bind`.
 
 Read and snooze marks are the assistant's to write, not the screen's: the
 dashboard is read-only, and every write in this engine is attributed to
@@ -373,8 +380,9 @@ sequenceDiagram
   screens — and it is the fallback, not the mechanism: a frame dropped under
   backpressure or lost to a reconnect is never re-sent.
 
-A person who is not bound to a seat has no inbox, so there is nothing to
-watch. See [Acting as your seat](#acting-as-your-seat-on-the-dashboard-and-the-api).
+A person who is not bound to a seat watches the record kept under their login
+— what they follow, and what names them. See [Acting as your
+seat](#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 ---
 

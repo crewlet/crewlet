@@ -34,6 +34,7 @@ func TestEveryObjectFieldIsOneItsToolDeclares(t *testing.T) {
 		}
 		for field, role := range map[string]string{
 			subj.owner: "owner", subj.container: "container",
+			subj.personal: "personal flag",
 		} {
 			if field == "" {
 				continue
@@ -78,6 +79,36 @@ func TestAPersonalVerbWithNoHandleIsAboutTheCaller(t *testing.T) {
 		t.Errorf("a view on project:eng decided against %s %q, want the "+
 			"project relation over the canonical key",
 			view.ContainerKind, view.Container)
+	}
+
+	// AND A PERSONAL ONE IS THE CALLER'S OWN RECORD, whoever the caller
+	// is: a bound person's under their seat, never the login they could
+	// have typed, and one the engine can name nothing for names NOTHING —
+	// which every class refuses — rather than falling back to the shared
+	// reading of an owner-less view.
+	for _, c := range []struct {
+		name   string
+		caller iam.Principal
+		owner  string
+		empty  bool
+	}{
+		{"a seat", caller, "ana", false},
+		{"a bound person", iam.Principal{Kind: iam.KindPerson,
+			Login: "ana.diaz", Seat: "ana"}, "ana", false},
+		{"an unbound person", iam.Principal{Kind: iam.KindPerson,
+			Login: "ana.diaz"}, "ana.diaz", false},
+		{"nobody", iam.Principal{Kind: iam.KindPerson}, "", true},
+	} {
+		got := subjectOf["save_work_view"].objectFor(c.caller,
+			map[string]any{"container": "project:eng", "personal": true})
+		if got.Owner != c.owner {
+			t.Errorf("%s's personal view is about %q, want %q", c.name,
+				got.Owner, c.owner)
+		}
+		if c.empty && got.Container != "" {
+			t.Errorf("%s's personal view kept its container %q, so it is "+
+				"decided as a SHARED tab", c.name, got.Container)
+		}
 	}
 }
 

@@ -3383,6 +3383,13 @@ export interface Viewer {
   name: string;
   /** That seat's kind — `human` or `agent` — or "" for no seat. */
   kind: string;
+  /**
+   * The name this caller's OWN record is kept under — their inbox, pins,
+   * priorities and personal views: the seat for a bound person, the login for
+   * everybody the directory binds to none. Every tool writes their record under
+   * it, so every personal read asks by it. "" for a caller with no record.
+   */
+  owner: string;
 }
 
 export interface QueryMap {

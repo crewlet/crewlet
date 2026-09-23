@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -279,19 +281,94 @@ func (c leadsChart) Leads(_ context.Context, actor, subject string) (bool, error
 	return actor == c.lead && subject == c.report, nil
 }
 
-// A CALLER NOBODY IS BOUND TO IS REFUSED FOR PARAMETERS, NOT FOR AUTHORITY.
-// Nobody was denied anything: there is no person to answer about, and telling
-// somebody to present a different credential is the wrong remedy for a company
-// that has not bound theirs. And the refusal NAMES THAT REMEDY WHERE IT LIVES —
-// a row in the identity directory, bound with `crewlet iam bind` — because the
-// org chart it used to point at has no field that binds a credential any more.
-func TestAnUnbindableCallerIsRefusedForWantOfAHandle(t *testing.T) {
+// A CALLER'S OWN RECORD IS READ UNDER THE NAME IT IS WRITTEN UNDER.
+//
+// The tools write a caller's inbox marks, pins, priorities and personal views
+// under [iam.RecordOwner] — a bound person's seat, an unbound person's login,
+// a token's login — and every personal question here read them back under the
+// principal's SEAT: the same name for a bound person, and nothing at all for
+// the other two, who were refused "not bound to a seat" for the record their
+// own assistant had just written. The three shapes of caller, over every
+// personal question and the strip, each read under exactly one name.
+func TestACallersOwnRecordIsReadUnderTheNameItIsWrittenUnder(t *testing.T) {
 	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		caller iam.Principal
+		want   string
+	}{
+		{"a bound person", iam.Principal{Kind: iam.KindPerson,
+			Login: "ana.diaz", Seat: "ana"}, "ana"},
+		{"an unbound person", iam.Principal{Kind: iam.KindPerson,
+			Login: "jane.doe"}, "jane.doe"},
+		{"an unbound token", iam.Principal{Kind: iam.KindMachine,
+			Login: "token:ops"}, "token:ops"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			c.caller.ID, c.caller.Stage = uuid.New(), iam.StageActive
+			c.caller.Grants = []iam.Grant{iam.GrantStateRead}
+			ctx := iam.WithPrincipal(t.Context(), c.caller)
+			if want := iam.ActorFor(c.caller).Name; want != c.want {
+				t.Fatalf("this caller writes under %q; the case wants %q", want, c.want)
+			}
+			work := &stubWork{}
+			r := queries.NewRegistry()
+			queries.Register(r, viewerSources(t, work))
+			for _, what := range []string{"work_my_work", "work_inbox", "work_person"} {
+				if _, err := r.Answer(ctx, what, nil); err != nil {
+					t.Fatalf("%s naming nobody: %v", what, err)
+				}
+			}
+			// AND NAMING THEMSELVES BY THEIR LOGIN IS STILL THEM: a
+			// bound person's login is theirs, and answering it as a
+			// colleague's name would read a record nothing writes.
+			if _, err := r.Answer(ctx, "work_inbox",
+				map[string]any{"handle": c.caller.Login}); err != nil {
+				t.Fatalf("work_inbox naming their own login: %v", err)
+			}
+			if _, err := r.Answer(ctx, "work_views",
+				map[string]any{"container": "workspace"}); err != nil {
+				t.Fatalf("work_views: %v", err)
+			}
+			if _, err := r.Answer(ctx, "work_items",
+				map[string]any{"preset": "priorities"}); err != nil {
+				t.Fatalf("work_items: %v", err)
+			}
+			viewer, err := r.Answer(ctx, "viewer", nil)
+			got := answerMap(t, viewer, err)
+			for question, read := range map[string]string{
+				"work_my_work": work.myWorkQuery.Handle,
+				"work_inbox":   work.inboxQuery.Handle,
+				"work_person":  work.personQuery.Handle,
+				"work_views":   work.views.Viewer,
+				"work_items":   work.expandViewer.Handle,
+				"viewer.owner": got["owner"].(string),
+			} {
+				if read != c.want {
+					t.Errorf("%s read %q's record, want %q — the name its "+
+						"own writes are made under", question, read, c.want)
+				}
+			}
+		})
+	}
+}
+
+// A SEAT'S TRAIL IS STILL THE SEAT'S. The threads a seat said things in are
+// the seat's, not a person record, so a caller bound to no seat who names none
+// is refused for want of a handle — and the refusal names the remedy where it
+// lives: a row in the identity directory, bound with `crewlet iam bind`,
+// because the org chart it used to point at has no field that binds a
+// credential any more.
+func TestAnUnbindableCallerHasNoSeatTrailOfItsOwn(t *testing.T) {
+	t.Parallel()
+	s := viewerSources(t, &stubWork{})
+	s.Conversations = &stubConversations{}
 	r := queries.NewRegistry()
-	queries.Register(r, viewerSources(t, &stubWork{}))
-	_, err := r.Answer(everyGrant(t), "work_my_work", nil)
+	queries.Register(r, s)
+	_, err := r.Answer(everyGrant(t), "conversations", nil)
 	if !errors.Is(err, queries.ErrBadParams) {
-		t.Fatalf("a seatless caller naming no handle = %v, want bad_params", err)
+		t.Fatalf("a seatless caller naming no seat = %v, want bad_params", err)
 	}
 	if errors.Is(err, queries.ErrUnauthorized) {
 		t.Error("refused as unauthorized; the remedy is a binding, not a credential")

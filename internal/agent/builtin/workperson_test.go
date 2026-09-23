@@ -163,21 +163,20 @@ func (p *personSpy) WritePriorities(_ context.Context, _, handle string,
 	}, nil
 }
 
-func (p *personSpy) WritePins(_ context.Context, _, _ string, _ []string,
+func (p *personSpy) WritePins(_ context.Context, _, handle string, _ []string,
 	_ []tracker.Favorite, authority tracker.PersonAuthority) (
 	tracker.WriteResult, error) {
 
-	p.authority = authority
-
+	p.handle, p.authority = handle, authority
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
-func (p *personSpy) WriteInbox(_ context.Context, _, _ string,
+func (p *personSpy) WriteInbox(_ context.Context, _, handle string,
 	_, _, _ []tracker.InboxEntry, reasons []tracker.Reason,
 	_ tracker.Position, authority tracker.PersonAuthority) (
 	tracker.WriteResult, error) {
 
-	p.authority, p.reasons = authority, reasons
+	p.handle, p.authority, p.reasons = handle, authority, reasons
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 

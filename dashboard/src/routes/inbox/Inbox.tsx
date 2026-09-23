@@ -159,20 +159,24 @@ export function Inbox() {
   const [reason, setReason] = useParam("reason", "");
   const [open, setOpen] = useParam("row", "");
 
+  // THE READER'S OWN RECORD, under `owner` — their seat when bound, their
+  // login when not — which is the name every notice routed to them, and every
+  // mark their assistant made, is kept under. Asked by `handle`, an unbound
+  // reader had no inbox here at all.
   const inbox = useQuery(
     "work_inbox",
-    viewer.handle
+    viewer.owner
       ? {
-          handle: viewer.handle,
+          handle: viewer.owner,
           limit: 50,
           unread: state === "unread",
           include_snoozed: state === "snoozed",
         }
       : undefined,
-    // PUSHED as well as polled: the shell watches the viewer's seat, so a
-    // notice lands here within half a second of its commit rather than up to
+    // PUSHED as well as polled: the shell watches the viewer's own record, so
+    // a notice lands here within half a second of its commit rather than up to
     // a poll later. See `refetchOnInboxOf`.
-    { enabled: viewer.handle !== "", pollMs: 30_000, refetchOnInboxOf: viewer.handle },
+    { enabled: viewer.owner !== "", pollMs: 30_000, refetchOnInboxOf: viewer.owner },
   );
   usePageCoverage(inbox.data);
 
@@ -245,7 +249,7 @@ export function Inbox() {
   return (
     <>
       <PageActions>
-        {viewer.handle && (
+        {viewer.owner && (
           <a className="t-link" href={href(["me"])}>
             My work →
           </a>
@@ -260,13 +264,14 @@ export function Inbox() {
       {viewer.anonymous ? (
         <Callout variant="warning">
           Nobody is signed in and no API token is presented, so this browser is nobody. The engine's
-          own conditions are below; a person's notices need a credential bound to their seat.
+          own conditions are below; your own notices appear once you sign in.
         </Callout>
       ) : viewer.unbound ? (
-        <Callout variant="warning">
+        <Callout variant="info">
           You are <code className="inline">{viewer.login}</code> and the directory binds you to no
-          seat. Bind it with <code className="inline">crewlet iam bind</code> and this becomes your
-          inbox.
+          seat, so the notices below are the ones kept under that login — what you follow and what
+          names you. Work the org chart hands to a seat reaches you once{" "}
+          <code className="inline">crewlet iam bind</code> binds you to one.
         </Callout>
       ) : null}
 
@@ -389,10 +394,8 @@ export function Inbox() {
             </Band>
           )}
 
-          {!viewer.handle && !viewer.loading && (
-            <PageNote>
-              With a credential bound to a seat, this screen also shows what reached that person.
-            </PageNote>
+          {!viewer.owner && !viewer.loading && (
+            <PageNote>Signed in, this screen also shows what reached you.</PageNote>
           )}
         </div>
 

@@ -18,12 +18,20 @@
  * THREE STATES, and a screen has to tell them apart:
  *
  *   - BOUND — a principal the directory binds to a seat. This person has an
- *     inbox, a queue, pins and favourites.
+ *     inbox, a queue, pins and favourites, kept under the seat.
  *   - UNBOUND — a principal with no seat. An ORDINARY state: an operator who is
- *     not in the chart, a pipeline, an automation. A screen says what to bind
- *     rather than reporting a fault.
+ *     not in the chart, a pipeline, an automation. They have a record all the
+ *     same — their pins, their inbox marks, their priorities — kept under their
+ *     LOGIN, which is where their assistant writes it; what they lack is the
+ *     work the chart addresses to a seat. A screen shows their record and says
+ *     what binding would add, rather than reporting a fault.
  *   - ANONYMOUS — nobody resolved at all. Every guarded surface is locked, and
  *     the lock says what it needs.
+ *
+ * WHOSE RECORD IS `owner`, never `handle`. The engine answers the one name the
+ * caller's own record is kept under, and a screen asking for "mine" by the
+ * SEAT asked an unbound caller for nothing while their assistant wrote it under
+ * their login.
  *
  * And a FOURTH that is not one of them: NOBODY SAID YET. The three above are
  * answers; a query that has not come back is the absence of one, and it is
@@ -55,6 +63,13 @@ export interface ViewerState {
   operatesFleet: boolean;
   /** The seat the directory binds this caller to, or "" — see the note above. */
   handle: string;
+  /**
+   * The name this caller's OWN record is kept under — their inbox, pins,
+   * priorities and personal views. Their seat when bound, their login when
+   * not; "" only for a caller with no record at all. Every personal read asks
+   * by this, never by `handle`.
+   */
+  owner: string;
   /** That seat's display name, or "". */
   name: string;
   kind: "agent" | "human" | "";
@@ -92,6 +107,7 @@ export function useViewer(): ViewerState {
     grants,
     operatesFleet: grants.includes("fleet:operate"),
     handle,
+    owner: data?.owner ?? "",
     name: data?.name ?? "",
     kind: (data?.kind as ViewerState["kind"]) ?? "",
     unbound: login !== "" && handle === "",

@@ -217,26 +217,30 @@ export function Shell({ children }: { children: ReactNode }) {
   // THE VIEWER'S OWN INBOX IS PUSHED, and the poll is what remains when a push
   // is not: a frame lost to backpressure or to a reconnect is never re-sent,
   // and a node that cannot decide the watch sends none until it can.
+  //
+  // UNDER `owner`, the one name the viewer's own record is kept under — their
+  // seat when bound, their login when not — so an unbound reader's badge counts
+  // the notices their record actually holds rather than nothing.
   const inbox = useQuery(
     "work_inbox",
-    viewer.handle ? { handle: viewer.handle, limit: 50 } : undefined,
+    viewer.owner ? { handle: viewer.owner, limit: 50 } : undefined,
     {
-      enabled: viewer.handle !== "",
+      enabled: viewer.owner !== "",
       pollMs: 60_000,
-      refetchOnInboxOf: viewer.handle,
+      refetchOnInboxOf: viewer.owner,
     },
   );
 
-  // WATCH THE VIEWER'S SEAT, which is what asks the engine for its
+  // WATCH THE VIEWER'S OWN RECORD, which is what asks the engine for its
   // `inbox_changed` frames. The shell owns it because the shell outlives every
   // screen: a watch taken by the Inbox screen would end the moment the reader
   // navigated away, and the rail's badge is what has to stay current. The
   // socket re-sends it on every reconnect.
   useEffect(() => {
-    if (viewer.handle === "") return;
-    socket.watch(viewer.handle);
+    if (viewer.owner === "") return;
+    socket.watch(viewer.owner);
     return () => socket.watch("");
-  }, [socket, viewer.handle]);
+  }, [socket, viewer.owner]);
 
   // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
   // dialog forever. Everything after that is the state bar.
