@@ -634,8 +634,13 @@ func (r *Receiver) body(w http.ResponseWriter, req *http.Request) ([]byte, bool)
 	// A read that failed part way is a client that hung up or a socket
 	// that broke. There is nothing to verify and nobody left to tell, but
 	// the status still has to be written or the handler returns 200.
+	//
+	// The vocabulary's code rather than a phrase: this answered
+	// `"unreadable body"` and `"invalid JSON"` below, two codes with spaces
+	// in them that no client could have found in the vocabulary it
+	// branches on, and with no sentence for a person.
 	log.Warn("webhook_body_unreadable", "path", req.URL.Path, "error", err)
-	writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unreadable body"})
+	httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeUnreadableBody)
 	return nil, false
 }
 
@@ -643,7 +648,8 @@ func (r *Receiver) body(w http.ResponseWriter, req *http.Request) ([]byte, bool)
 func parseBody(w http.ResponseWriter, raw []byte) (map[string]any, bool) {
 	body, ok := parseObject(raw)
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": "a delivery's body is one JSON object"})
 		return nil, false
 	}
 	return body, true

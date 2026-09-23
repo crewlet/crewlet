@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -439,10 +440,33 @@ func TestABodyThatIsNotAnObjectIsRefused(t *testing.T) {
 		if res.Code != http.StatusBadRequest {
 			t.Errorf("body %q got %d, want 400", body, res.Code)
 		}
+		if got := refusalCode(t, res); got != httpjson.CodeInvalidBody {
+			t.Errorf("body %q answered error %q, want the vocabulary's %q",
+				body, got, httpjson.CodeInvalidBody)
+		}
 	}
 	if e.published.count() != 0 {
 		t.Error("a non-object body was published")
 	}
+}
+
+// refusalCode reads a refusal's `error` and holds it to the vocabulary: a code
+// outside it is one no client can branch on and carries no sentence for a
+// person, which is what `"invalid JSON"` and `"unreadable body"` were.
+func refusalCode(t *testing.T, res *httptest.ResponseRecorder) httpjson.Code {
+	t.Helper()
+	var body struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("the refusal is not JSON: %v (%s)", err, res.Body)
+	}
+	code := httpjson.Code(body.Error)
+	if !code.Valid() || body.Message == "" {
+		t.Errorf("error %q is outside the vocabulary, or carries no message", body.Error)
+	}
+	return code
 }
 
 func TestABodyOverTheCapIsRefusedBeforeItIsBuffered(t *testing.T) {

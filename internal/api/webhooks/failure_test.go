@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 )
 
@@ -43,6 +44,9 @@ func TestABodyThatStopsMidWayIsNotHalfAccepted(t *testing.T) {
 
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.Code)
+	}
+	if got := refusalCode(t, res); got != httpjson.CodeUnreadableBody {
+		t.Errorf("error = %q, want the vocabulary's %q", got, httpjson.CodeUnreadableBody)
 	}
 	if e.published.count() != 0 || len(e.rows(t)) != 0 {
 		t.Error("a truncated body reached the queue or the store")
