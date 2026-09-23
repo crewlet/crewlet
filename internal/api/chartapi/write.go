@@ -130,29 +130,23 @@ func (s *Service) mayWriteRuntime(w http.ResponseWriter, r *http.Request,
 		authz.Object{Kind: authz.KindCompany})
 }
 
-// decide asks the authority table and renders a refusal.
+// decide asks the authority table about the verb the BODY turned out to need,
+// and renders a refusal. It reports whether the handler may go on.
 //
 // THREE OUTCOMES, and the middle one is the one a surface gets wrong: a node
 // that could not reach the chart cannot say who leads a unit, and answering
 // 403 there sends somebody to ask for an authority they already hold. It is
-// 503 with the reason, and the next attempt succeeds.
+// 503 with a Retry-After, and the next attempt succeeds.
+//
+// [authz.Admit], so the refusal is the router's own: this used to write its
+// own, which answered the reason without the grants — a lead refused the
+// runtime half was told `no_grant` and not that it needs `config:write` — and
+// a 503 with no Retry-After, where one refused at the pattern carries it.
 func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 	policy authz.Policy, object authz.Object) bool {
 
 	policy.Object = func(*http.Request) authz.Object { return object }
-	d := s.guard(r, policy)
-	switch {
-	case d.Unknown():
-		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			map[string]string{"detail": "this node cannot decide authority for " +
-				"this request yet: " + d.Err.Error()})
-		return false
-	case !d.Allowed:
-		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			map[string]string{"reason": string(d.Reason)})
-		return false
-	}
-	return true
+	return authz.Admit(w, r, s.guard, policy)
 }
 
 // answerWrite renders one chart write's outcome.

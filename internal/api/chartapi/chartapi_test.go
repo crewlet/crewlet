@@ -6,12 +6,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/chartapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -407,6 +409,42 @@ func TestAWriteThisNodeCannotDecideIsNotForbidden(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("answered %d, want 503 — a node that cannot tell has not refused",
 			rec.Code)
+	}
+	// WITH A Retry-After, which is what a client waits on: a 503 without
+	// one says "try again" and not when.
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("the undecidable write carries no Retry-After")
+	}
+}
+
+// A WRITE REFUSED ON ITS BODY NAMES THE GRANT IT NEEDS, exactly as one
+// refused at its pattern does.
+//
+// The body's decision wrote a refusal of its own that answered the reason
+// alone, so a lead refused the runtime half was told `no_grant` and not WHICH
+// grant — the one fact that says whom to ask.
+func TestAWriteRefusedOnItsBodyNamesTheGrant(t *testing.T) {
+	t.Parallel()
+	r := serve(t, nil, leadOf(), leads())
+	rec := patch(r.mux, "/chart/units/engineering",
+		`{"name":"Engineering","runtime":{"mcp_env":{"gitlab":{"T":"${X}"}}}}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("answered %d, want 403: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Error   string   `json:"error"`
+		Message string   `json:"message"`
+		Reason  string   `json:"reason"`
+		Grants  []string `json:"grants"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("the refusal is not JSON: %v (%s)", err, rec.Body)
+	}
+	if body.Error != string(httpjson.CodeUnauthorized) || body.Message == "" ||
+		body.Reason != string(authz.ReasonNoGrant) ||
+		!slices.Equal(body.Grants, []string{string(iam.GrantConfigWrite)}) {
+		t.Errorf("refusal = %+v, want unauthorized, its sentence, no_grant and "+
+			"[config:write]", body)
 	}
 }
 

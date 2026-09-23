@@ -444,6 +444,11 @@ So the two are decided differently, and the **payload picks the question**:
 | the public half alone | whoever **leads that object** — the unit's lead for a unit, the seat's lead for a seat |
 | anything under `runtime` | `config:write`, the company's own grant |
 
+A body refused on the second question answers exactly as a route refused at its
+pattern does: `403 unauthorized` with `reason` and the `grants` that would have
+admitted it — here `["config:write"]` — and a `503 unavailable` with a
+`Retry-After` when this node cannot decide.
+
 Reads split the same way and **default to stripped**. A caller asks for the
 runtime half with `?runtime=true` and gets it only if they also hold
 `config:read`; otherwise the answer is served **stripped rather than refused** —
