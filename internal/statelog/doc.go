@@ -116,22 +116,29 @@
 // the expectation of zero succeeds and the peer's write is silently
 // overwritten.
 //
-// Let C be this node's committed checkpoint and F the bound a writer reads:
+// Let C be the checkpoint this node's rows were at when the write DECIDED —
+// read in the snapshot's own transaction, beside the decision
+// ([Snap.Checkpoint]) — and F the bound a writer reads, at C's generation:
 // the HIGHER of the published trim floor and the log's own first surviving
-// sequence. The proof uses one property of F — every sequence the log has
-// lost, or may yet lose to a purge already licensed, is below it — and each
-// half of the maximum keeps that true where the other cannot. The published
-// floor is written BEFORE the purge it licenses and never moves down within a
-// generation, so it covers a purge in flight, one that failed and will be
-// retried, and one the stream's own answer has not caught up with; the first
-// sequence covers what the floor cannot see, a floor published at another
-// generation reading as zero. What neither may be is the trim's per-tick
-// conclusion: that is zero on every blocked tick and falls to the lowest
-// counted node's own position, and a bound derived from a minimum that
-// includes a node can never refuse it.
+// sequence. C is NOT the applier's live position. That only moves forward,
+// so it is the permissive answer: a record on this subject applied after the
+// snapshot and trimmed before the check passes against it, while the
+// decision about to be published at zero never saw it. The proof uses one
+// property of F — every sequence the log has lost, or may yet lose to a
+// purge already licensed, is below it — and each half of the maximum keeps
+// that true where the other cannot. The published floor is written BEFORE
+// the purge it licenses and never moves down within a generation, so it
+// covers a purge in flight, one that failed and will be retried, and one the
+// stream's own answer has not caught up with; the first sequence covers what
+// the floor cannot see, a floor published at another generation reading as
+// zero. What neither may be is the trim's per-tick conclusion: that is zero
+// on every blocked tick and falls to the lowest counted node's own position,
+// and a bound derived from a minimum that includes a node can never refuse
+// it.
 //
-// For a node the trim counted at every tick that raised F, the applied term
-// gives F <= C. THREE ENFORCED CLAUSES close the gaps that leaves, and the
+// For a node the trim counted at every tick that raised F, each of those ticks
+// having read a position this node held by its snapshot, the applied term
+// gives F <= C+1. THREE ENFORCED CLAUSES close the gaps that leaves, and the
 // proof needs all three, because C is the prefix SETTLED rather than APPLIED,
 // and because a counted set is a thing an operator can change — a node can be
 // counted BELOW F, readmitted, restored from an old backup, or up on its own
@@ -171,13 +178,38 @@
 //
 // Given all three: suppose a commit at sequence S on this object's subject
 // has been trimmed. Then S < F <= C+1, so S <= C, and by (i) it has been
-// APPLIED here; therefore this node's row already reflects S. Contradiction.
+// APPLIED in the rows the decision read; therefore the decision already
+// reflects S. Contradiction.
 //
 // A purge that lands between the check and the append is licensed by a tick
 // that published its floor first, from an applied term over a counted set
 // that holds every node from its presence lease at boot until its eviction
-// ([CountedSet]) — so it removes nothing at or above this node's C, and the
-// only writer it can pass is an evicted one, which is (iii)'s.
+// ([CountedSet]) — so it removes nothing this node had not applied when that
+// tick read its position, and the only writer it can pass is an evicted one,
+// which is (iii)'s. That bounds a purge by what this node had APPLIED, which
+// may be past C, so the term alone does not exclude a record on this subject
+// that this node applied after its snapshot. The ORDER OF THE WRITE'S OWN
+// READS does: a write learns the subject is empty from LastSeq — answered by
+// the stream's leader, because a log allows no direct gets — and only AFTER
+// that does the fence read either bound, on both roads to an expectation of
+// zero. A record R on this subject that the decision did not read, so R > C,
+// is one of three kinds:
+//
+//   - Still on the log when LastSeq answers: the subject is not empty, so the
+//     write waits for the subject's last record and decides again rather than
+//     taking zero.
+//   - Purged before LastSeq answered: the floor that licensed the purge was
+//     published before it, so the fence reads it afterwards as at least R+1 —
+//     as it does the stream's first sequence, once that answer has caught up —
+//     and F > C+1 fails (ii). A coordination read that answered stale here is
+//     (iii)'s case.
+//   - Appended after LastSeq answered: it is younger than the trim's minimum
+//     age — a day, at the least — by all but this write's own duration, and
+//     the age term, one of the six on every tick, never lets a purge cross a
+//     record that young; the broker still holds it when the append arrives,
+//     and refuses the expectation of zero. That rests on the trim holder's
+//     clock agreeing with the broker's storage timestamps to within the
+//     minimum age, and a clock that does not is (iii)'s frozen one.
 //
 // So a writer's expectation can only ever be stale ABOVE the floor, where the
 // anchor still exists and the broker arbitrates with a genuine sequence;

@@ -103,12 +103,15 @@ type Fence struct {
 	db     *store.DB
 	nodeID string
 
-	// Floor is the fleet's published trim floor and First the log's own
-	// first surviving sequence — the two bounds [Fence.ClearForZero] takes
-	// the higher of, for the reason the tracker's fence gives. The cursor
-	// they are compared against is passed per call, because it has to be
-	// the position the write's own snapshot was taken at.
-	Floor func(ctx context.Context) (uint64, error)
+	// Floor is the fleet's published trim floor at a generation and First
+	// the log's own first surviving sequence — the two bounds
+	// [Fence.ClearForZero] takes the higher of, for the reason the
+	// tracker's fence gives. The cursor they are compared against is
+	// passed per call, and the floor is read at that cursor's generation,
+	// because the cursor has to be the checkpoint the write's own snapshot
+	// read ([statelog.Snap.Checkpoint]) — see the tracker's fence for why
+	// neither may be the applier's live position.
+	Floor func(ctx context.Context, generation uint32) (uint64, error)
 	First func(ctx context.Context) (uint64, error)
 }
 
@@ -177,7 +180,7 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 			"an absent anchor means an unclaimed address rather than a claim " +
 			"trimmed beneath it")
 	}
-	floor, err := f.Floor(ctx)
+	floor, err := f.Floor(ctx, cursor.Generation)
 	if err != nil {
 		return fmt.Errorf("pages: read the published trim floor: %w — a floor "+
 			"that cannot be read is not a floor that is low, and publishing at "+

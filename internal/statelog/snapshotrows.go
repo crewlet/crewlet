@@ -12,8 +12,8 @@ import (
 // The framework's own implementation of [Rows], and why it is here rather than
 // in each domain.
 //
-// Three of the four things a snapshot returns are the FRAMEWORK's: the
-// arbitration anchor lives in its table, and the deferred record and its scope
+// Most of what a snapshot returns is the FRAMEWORK's: the arbitration anchor
+// and the checkpoint live in its tables, and the deferred record and its scope
 // index live in tables whose shape the framework writes. A domain implementing
 // this seam for itself would be a second copy of the two-clause containment
 // probe — the one piece of SQL in this design where getting a clause wrong is
@@ -73,6 +73,17 @@ func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSe
 			return err
 		}
 		snap.Decision = decision
+
+		// THE CHECKPOINT THESE ROWS ARE AT, from the same transaction:
+		// it commits with the rows, so this is exactly the prefix the
+		// decision saw. The expectation-zero fence compares it rather
+		// than the applier's live position, for the reason
+		// [Snap.Checkpoint] gives.
+		checkpoint, _, _, err := r.tables.readCursor(ctx, tx)
+		if err != nil {
+			return err
+		}
+		snap.Checkpoint = checkpoint
 
 		// The generation the anchor is read AT is the decision's own,
 		// because that is the generation the write will publish in: an

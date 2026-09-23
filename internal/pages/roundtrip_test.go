@@ -84,7 +84,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	// an absent anchor really does mean an unclaimed address. The log's own
 	// first sequence is the fence's other bound, read from the stream the
 	// way the engine reads it.
-	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
+	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
 	fence.First = func(ctx context.Context) (uint64, error) {
 		first, _, err := log.Bounds(ctx)
 		return first, err

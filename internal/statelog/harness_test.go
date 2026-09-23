@@ -215,6 +215,12 @@ type fakeRows struct {
 
 	// decideErr, when set, is what the domain's own decision returns.
 	decideErr error
+
+	// afterSnapshot, when set, runs once a snapshot has been taken and
+	// before the publisher acts on it — which is how a test lands a
+	// record on this node's applier between a decision and the checks
+	// made about it.
+	afterSnapshot func()
 }
 
 func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statelog.ScopeSet,
@@ -222,8 +228,13 @@ func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statel
 	r.mu.Lock()
 	snap, err := r.snap, r.decideErr
 	staged, override := r.override[subj.String()]
+	after := r.afterSnapshot
 	r.calls++
 	r.mu.Unlock()
+	// THE CHECKPOINT THE ROWS ARE AT, which a real snapshot reads in the
+	// same transaction as the decision: the checkpoint commits with the
+	// rows, so it is this node's committed position at this instant.
+	snap.Checkpoint = r.applier.Committed()
 	// THE ANCHOR IS WHATEVER THIS NODE'S APPLIER LAST WROTE for this
 	// subject. A staged override stands for a row the applier wrote
 	// BEFORE a trim or a reanchor and has not written since — so it holds
@@ -244,6 +255,9 @@ func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statel
 		return statelog.Snap{}, derr
 	}
 	snap.Decision = d
+	if after != nil {
+		after()
+	}
 	return snap, nil
 }
 
@@ -294,6 +308,9 @@ type fakeFence struct {
 	// instant to the applier, and so where a rebuild since the last
 	// heartbeat is first seen.
 	reads func()
+
+	// cursors is every cursor ClearForZero was asked about, in order.
+	cursors []statelog.Position
 }
 
 func (f *fakeFence) Evicted(context.Context) (bool, error) {
@@ -302,15 +319,23 @@ func (f *fakeFence) Evicted(context.Context) (bool, error) {
 	return f.evicted, f.evictErr
 }
 
-func (f *fakeFence) ClearForZero(_ context.Context, _ statelog.Position) error {
+func (f *fakeFence) ClearForZero(_ context.Context, cursor statelog.Position) error {
 	f.zeroes.Add(1)
 	f.mu.Lock()
+	f.cursors = append(f.cursors, cursor)
 	reads, err := f.reads, f.zeroErr
 	f.mu.Unlock()
 	if reads != nil {
 		reads()
 	}
 	return err
+}
+
+// asked is every cursor ClearForZero was asked about, in order.
+func (f *fakeFence) asked() []statelog.Position {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]statelog.Position(nil), f.cursors...)
 }
 
 // fakeGates answers the two questions that make an absent operation mean

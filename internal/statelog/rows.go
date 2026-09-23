@@ -126,6 +126,21 @@ type Snap struct {
 	// object exists, which is what still holds below the trim floor
 	// where the broker's own claim does not.
 	Guard bool
+
+	// Checkpoint is this node's committed checkpoint as the decision's own
+	// transaction read it: the prefix the rows the decision was made from
+	// reflect. A domain that has never committed on this stream is at the
+	// zero position, which is what an applier that has read nothing holds.
+	//
+	// IT IS WHAT THE EXPECTATION-ZERO FENCE COMPARES, and nothing later can
+	// stand in for it. The floor theorem in this package's doc concludes that
+	// a trimmed record on this subject is already reflected in THIS
+	// decision's rows, which needs C to be the position those rows were at.
+	// The live checkpoint only moves forward, so it is the permissive
+	// direction: a record applied after this snapshot, then trimmed, passes a
+	// check against the live position while the decision about to be
+	// published at zero never saw it — a lost update of exactly that record.
+	Checkpoint Position
 }
 
 // ErrNoDecision reports a domain that returned neither a payload nor an

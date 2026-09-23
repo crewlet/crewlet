@@ -118,7 +118,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	// an absent anchor really does mean an empty subject. The log's own
 	// first sequence is the fence's other bound, read from the stream the
 	// way the engine reads it.
-	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
+	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
 	fence.First = func(ctx context.Context) (uint64, error) {
 		first, _, err := log.Bounds(ctx)
 		return first, err
@@ -502,6 +502,60 @@ func TestATaskWrittenIsATaskRead(t *testing.T) {
 	answer = r.ask(map[string]any{"container": "project:ENG"})
 	if len(answer.Rows) != 1 || answer.Rows[0].Title != "wired" {
 		t.Fatalf("the patch did not reach the rows: %+v", answer.Rows)
+	}
+}
+
+// A SNAPSHOT CARRIES THE CHECKPOINT ITS ROWS ARE AT, and nothing later.
+//
+// The expectation-zero fence compares the snapshot's checkpoint against the
+// trim floor, because the floor theorem's conclusion is about the rows the
+// decision read. So the value has to come from the snapshot's own transaction
+// — the checkpoint commits with the rows — rather than from anything that
+// keeps moving while a write runs: a record on the log this node has not
+// applied must not move it, and applying that record must.
+func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	rows, err := tracker.NewRows(r.db)
+	if err != nil {
+		t.Fatalf("NewRows: %v", err)
+	}
+	checkpoint := func() statelog.Position {
+		t.Helper()
+		snap, err := rows.Snapshot(t.Context(), statelog.Subject{
+			Kind: string(tracker.KindTask), ID: "t-1",
+		}, statelog.ScopeSet{Paths: []string{"task:t-1"}},
+			func(*sql.Tx) (statelog.Decision, error) {
+				return statelog.Decision{Payload: []byte("{}")}, nil
+			})
+		if err != nil {
+			t.Fatalf("Snapshot: %v", err)
+		}
+		return snap.Checkpoint
+	}
+	at := func(seq uint64) statelog.Position {
+		return statelog.Position{Stream: tracker.Domain{}.Stream().Name, Seq: seq}
+	}
+
+	if got, want := checkpoint(), at(r.consumed); got != want {
+		t.Fatalf("a snapshot over rows applied through %d carries %s, want %s",
+			r.consumed, got, want)
+	}
+	applied := r.consumed
+	if _, err := r.writer.CreateTask(t.Context(), "op-create", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if got, want := checkpoint(), at(applied); got != want {
+		t.Fatalf("a record on the log this node has not applied moved the "+
+			"snapshot's checkpoint to %s, want %s — the rows have not changed", got, want)
+	}
+	r.drain()
+	if r.consumed == applied {
+		t.Fatal("the create never reached the applier, so this case shows nothing")
+	}
+	if got, want := checkpoint(), at(r.consumed); got != want {
+		t.Fatalf("after applying through %d a snapshot carries %s, want %s",
+			r.consumed, got, want)
 	}
 }
 

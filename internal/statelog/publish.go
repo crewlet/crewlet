@@ -126,6 +126,14 @@ type Fence interface {
 	// theorem in this package's doc is stated over. Either bound alone
 	// clears a node the other refuses.
 	//
+	// cursor is the write's own [Snap.Checkpoint] — the position the rows
+	// its decision was made from are at — and the published floor is read
+	// at cursor's GENERATION. Neither may be the applier's live position:
+	// that only moves forward, and a check against it clears a node whose
+	// decision predates a record it has since applied and the trim has
+	// since removed. And a floor read at another generation is a number
+	// in another sequence space, which says nothing about this cursor.
+	//
 	// A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is a deliberate
 	// departure from the fail-open rule a delivery claim uses. Failing
 	// open there is a duplicate delivery, which is recoverable; failing
@@ -503,7 +511,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 		// THE BROKER REFUSED THE EXPECTATION. Discriminate it: a
 		// trimmed anchor is retried ONCE at zero within this round, and
 		// anything else re-decides from a fresh snapshot.
-		zero, err := p.afterRejection(ctx, req, expect)
+		zero, err := p.afterRejection(ctx, req, snap, expect)
 		if err != nil {
 			return Result{Rounds: round}, err
 		}
@@ -698,8 +706,10 @@ func (p *Publisher) expectation(ctx context.Context, req Request, snap Snap, gen
 	if !found {
 		// The subject genuinely holds nothing. Publishing at zero is
 		// correct — and fenced, because being wrong here is a lost
-		// update rather than a refused write.
-		if err := p.clearForZero(ctx, req); err != nil {
+		// update rather than a refused write. Fenced at the SNAPSHOT's
+		// checkpoint, since that snapshot's decision is what gets
+		// published; see [Snap.Checkpoint].
+		if err := p.clearForZero(ctx, req, snap.Checkpoint); err != nil {
 			return nil, nil, err
 		}
 		zero := uint64(0)
@@ -712,8 +722,10 @@ func (p *Publisher) expectation(ctx context.Context, req Request, snap Snap, gen
 // afterRejection discriminates a rejection, which is the one place a trimmed
 // anchor and a lost race are told apart.
 //
-// It returns a non-nil expectation ONLY for the trimmed-anchor retry.
-func (p *Publisher) afterRejection(ctx context.Context, req Request, expect *uint64) (*uint64, error) {
+// It returns a non-nil expectation ONLY for the trimmed-anchor retry, and
+// that retry publishes snap's decision again — which is why snap is what the
+// fence is asked about.
+func (p *Publisher) afterRejection(ctx context.Context, req Request, snap Snap, expect *uint64) (*uint64, error) {
 	subject := p.subjectOf(req.Subject)
 
 	// ON EVERY REJECTION, and the cheap pre-filter that used to stand in
@@ -750,7 +762,13 @@ func (p *Publisher) afterRejection(ctx context.Context, req Request, expect *uin
 		// sequences on the stream this node's rows came from. That is
 		// why the clearance re-asks the identity after its own read of
 		// the log — see [Publisher.clearForZero].
-		if err := p.clearForZero(ctx, req); err != nil {
+		//
+		// AT THE SNAPSHOT'S CHECKPOINT, not the applier's live one: the
+		// retry publishes the decision this round's snapshot made, and
+		// the theorem's conclusion — the trimmed record is already in
+		// the rows — is about the rows that decision read. By now the
+		// applier may have moved past a record that snapshot never saw.
+		if err := p.clearForZero(ctx, req, snap.Checkpoint); err != nil {
 			return nil, err
 		}
 		zero := uint64(0)
@@ -978,6 +996,10 @@ func (p *Publisher) fence0(ctx context.Context, req Request) error {
 // clearForZero is the fence on an expectation of zero, and the identity asked
 // again after it.
 //
+// cursor is the checkpoint of the snapshot the write decided from — see
+// [Snap.Checkpoint] — and never the applier's live position, which only moves
+// forward and so clears a decision against records it never read.
+//
 // # Why again, and why here
 //
 // Fence 0 answers from the last reading of the stream's instant, and the
@@ -1000,8 +1022,8 @@ func (p *Publisher) fence0(ctx context.Context, req Request) error {
 // seconds until the next beat. Checking the instant on every append would put
 // a broker round trip on the hottest path the write authority has, to close a
 // window that bounded.
-func (p *Publisher) clearForZero(ctx context.Context, req Request) error {
-	if err := p.fence.ClearForZero(ctx, p.waiter.Committed()); err != nil {
+func (p *Publisher) clearForZero(ctx context.Context, req Request, cursor Position) error {
+	if err := p.fence.ClearForZero(ctx, cursor); err != nil {
 		return err
 	}
 	return p.checkIdentity(req)

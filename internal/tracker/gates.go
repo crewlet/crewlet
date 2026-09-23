@@ -80,12 +80,23 @@ type Fence struct {
 	db     *store.DB
 	nodeID string
 
-	// Floor is the fleet's published trim floor and First the log's own
-	// first surviving sequence: the two bounds the one check that costs a
-	// round trip takes the higher of — see [Fence.ClearForZero]. The cursor
-	// it compares them against is the caller's, passed per call, because
-	// it has to be the position the write's own snapshot was taken at.
-	Floor func(ctx context.Context) (uint64, error)
+	// Floor is the fleet's published trim floor at a generation and First
+	// the log's own first surviving sequence: the two bounds the one check
+	// that costs a round trip takes the higher of — see
+	// [Fence.ClearForZero].
+	//
+	// The cursor it compares them against is the caller's, passed per
+	// call, and the floor is read at THAT CURSOR'S GENERATION. The cursor
+	// is the checkpoint the write's own snapshot read
+	// ([statelog.Snap.Checkpoint]), because the floor theorem concludes
+	// that a trimmed record is already in the rows the decision was made
+	// from: the applier's live position only moves forward, so a check
+	// against it clears a node whose decision never saw a record it has
+	// applied since. And a floor published at another generation names
+	// another sequence space — read at the live one, a snapshot taken
+	// before an adoption moved this node would be compared against numbers
+	// that say nothing about it.
+	Floor func(ctx context.Context, generation uint32) (uint64, error)
 	First func(ctx context.Context) (uint64, error)
 }
 
@@ -170,7 +181,7 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 			"an absent anchor means an empty subject rather than a record " +
 			"trimmed beneath it")
 	}
-	floor, err := f.Floor(ctx)
+	floor, err := f.Floor(ctx, cursor.Generation)
 	if err != nil {
 		return fmt.Errorf("tracker: read the published trim floor: %w — a floor "+
 			"that cannot be read is not a floor that is low, and publishing at "+

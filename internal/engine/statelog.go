@@ -701,7 +701,7 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
 		fence := tracker.NewFence(s.db, s.nodeID)
-		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
+		fence.Floor = s.floorOf(domain.Name())
 		fence.First = s.firstSeqOf(domain.Name(), appendTo, runner)
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, tracker.NewGates(s.db)
 		evicted = fence.Evicted
@@ -721,7 +721,7 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
 		fence := pages.NewFence(s.db, s.nodeID)
-		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
+		fence.Floor = s.floorOf(domain.Name())
 		fence.First = s.firstSeqOf(domain.Name(), appendTo, runner)
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.db)
 		evicted = fence.Evicted
@@ -867,13 +867,28 @@ func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainL
 // A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is what the fence does with
 // the error: this is the one check where failing open is a lost update rather
 // than a duplicate.
-func (s *stateLog) trimFloor(domain string, generation func() uint32) func(context.Context) (uint64, error) {
-	return func(ctx context.Context) (uint64, error) {
-		floors, err := s.fleet.Floors(ctx)
-		if err != nil {
-			return 0, fmt.Errorf("engine: read the fleet's published trim floors: %w", err)
-		}
-		return floorFor(floors, domain, generation())
+func (s *stateLog) trimFloor(ctx context.Context, domain string, generation uint32) (uint64, error) {
+	floors, err := s.fleet.Floors(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("engine: read the fleet's published trim floors: %w", err)
+	}
+	return floorFor(floors, domain, generation)
+}
+
+// floorOf is [stateLog.trimFloor] for one domain, as a write fence reads it:
+// at the generation of the cursor the fence is comparing, which the fence
+// names per call.
+//
+// NOT AT THE APPLIER'S LIVE GENERATION, which is what this was once bound to.
+// The cursor a fence compares is the checkpoint the write's own snapshot read
+// ([statelog.Snap.Checkpoint]), and an adoption can move this node to another
+// generation between that snapshot and the check — a floor read there is a
+// number in another sequence space, which says nothing about the cursor.
+// Read at the cursor's own, a floor published at a higher generation is the
+// refusal [floorFor] gives every reader on a dead number space.
+func (s *stateLog) floorOf(domain string) func(context.Context, uint32) (uint64, error) {
+	return func(ctx context.Context, generation uint32) (uint64, error) {
+		return s.trimFloor(ctx, domain, generation)
 	}
 }
 
@@ -1215,8 +1230,7 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	// stalled since" half of the field: rows frozen for the stall grace
 	// stopped being a whole state the moment they stopped moving.
 	health.Drained = running.runner.Drained() && !health.Stalled
-	floor, err := s.trimFloor(running.domain.Name(),
-		func() uint32 { return at.Generation })(ctx)
+	floor, err := s.trimFloor(ctx, running.domain.Name(), at.Generation)
 	if err != nil {
 		return health, err
 	}
@@ -1735,7 +1749,7 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 				return nil, statelog.OfferRequest{}, err
 			}
 		}
-		floor, err := s.trimFloor(name, func() uint32 { return generation })(ctx)
+		floor, err := s.trimFloor(ctx, name, generation)
 		if err != nil {
 			return nil, statelog.OfferRequest{}, err
 		}
@@ -1845,7 +1859,7 @@ func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.D
 			return err
 		}
 		first := stats.FirstSeq
-		floor, err := s.trimFloor(name, func() uint32 { return at.Generation })(ctx)
+		floor, err := s.trimFloor(ctx, name, at.Generation)
 		if err != nil {
 			return err
 		}

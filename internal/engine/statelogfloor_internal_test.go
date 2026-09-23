@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
@@ -413,8 +414,7 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 
 	// AND THE PUBLISHED FLOOR CANNOT SEE IT: the one this node's own trim
 	// wrote at boot, before any of this, still clears the checkpoint.
-	floor, err := s.trimFloor(running.domain.Name(),
-		func() uint32 { return at.Generation })(t.Context())
+	floor, err := s.trimFloor(t.Context(), running.domain.Name(), at.Generation)
 	if err != nil {
 		t.Fatalf("read the published floor: %v", err)
 	}
@@ -575,4 +575,137 @@ func logFirstOf(t *testing.T, r *runningDomain) uint64 {
 		t.Fatalf("read %s's bounds: %v", r.domain.Name(), err)
 	}
 	return first
+}
+
+// A WRITE FENCE READS THE PUBLISHED FLOOR AT THE GENERATION IT NAMES, for the
+// domain it was built for, and at nothing else.
+//
+// The fence names the generation of the checkpoint its write's snapshot read,
+// and [stateLog.floorOf] is the one line between that name and the register.
+// Read a generation up, the floor published at the fence's own reads as a dead
+// number space's — zero — and the published-floor witness drops out of both
+// write fences; read a generation down, every current floor is a refusal; bound
+// to anything but its argument, it answers for a sequence space the cursor is
+// not in. One floor, published at one generation and asked about at three,
+// tells each of those apart.
+func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
+	t.Parallel()
+	fleet := coordmem.NewFleet()
+	s := &stateLog{fleet: fleet}
+	const generation = 4
+	if err := fleet.PutFloor(t.Context(), coord.TrimFloor{
+		Domain: tracker.Domain{}.Name(), Generation: generation, TrimTo: 700,
+		Floor: 700, At: time.Now().UTC(), By: "peer",
+	}); err != nil {
+		t.Fatalf("publish a floor: %v", err)
+	}
+	read := s.floorOf(tracker.Domain{}.Name())
+
+	if got, err := read(t.Context(), generation); err != nil || got != 700 {
+		t.Fatalf("the floor at the generation it was published at reads %d (err "+
+			"%v), want 700", got, err)
+	}
+	if got, err := read(t.Context(), generation+1); err != nil || got != 0 {
+		t.Fatalf("a floor from the generation before reads %d (err %v), want 0 — "+
+			"it names a dead number space", got, err)
+	}
+	if got, err := read(t.Context(), generation-1); err == nil {
+		t.Fatalf("a floor from the generation ahead reads %d, want a refusal — "+
+			"the cursor is the one on the dead number space", got)
+	}
+	if got, err := s.floorOf(pages.Domain{}.Name())(t.Context(), generation); err != nil || got != 0 {
+		t.Fatalf("the pages fence reads the tracker's floor as %d (err %v), want 0",
+			got, err)
+	}
+}
+
+// THE WRITE FENCES AS THE ENGINE WIRES THEM REFUSE ON THE PUBLISHED FLOOR
+// ALONE, in both identity-claiming domains, while the log still holds
+// everything.
+//
+// The fence takes the higher of two witnesses, and every other case here that
+// refuses a write at zero does it with the stream's first sequence — a purge
+// that has landed. The floor is the witness to one that has NOT: the trim
+// publishes it before the purge it licenses, so until that purge lands it is
+// the only thing that says a record this node never applied may be about to
+// go. Each domain's fence reaches it through its own wiring line, so each is
+// asked here with a floor one past its next record and a log that has lost
+// nothing, which the floor alone refuses, and then with the floor AT its next
+// record, which clears — the boundary [statelog.Replayable] draws.
+func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
+	t.Parallel()
+	e, back, _ := trimmedTracker(t)
+	s := e.native.log
+	if e.native.writer == nil || e.native.pages == nil {
+		t.Fatal("the node runs no tracker writer or no page store")
+	}
+	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a
+	// published floor may ask the fleet for a snapshot, and an adoption
+	// racing the writes below would be what they measured.
+	s.rejoinMu.Lock()
+	s.rejoin = func(context.Context) error { return nil }
+	s.rejoinMu.Unlock()
+
+	for _, tc := range []struct {
+		domain string
+		// zero is a write on a subject nobody has written, which is a
+		// write at an expectation of zero.
+		zero func(ctx context.Context, key string) error
+	}{
+		{domain: tracker.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
+			_, err := e.native.writer.EvictNode(ctx, "op-"+key, "node-"+key)
+			return err
+		}},
+		{domain: pages.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
+			_, _, err := e.native.pages.EnsureContainer(ctx, key, key, "")
+			return err
+		}},
+	} {
+		running := s.Domain(tc.domain)
+		if running == nil {
+			t.Fatalf("the %s domain is not running", tc.domain)
+		}
+		// CAUGHT UP, so the checkpoint a write's snapshot reads is the
+		// log's end, and a floor one past it is one record ahead.
+		first, last, err := running.log.Bounds(t.Context())
+		if err != nil {
+			t.Fatalf("read %s's bounds: %v", tc.domain, err)
+		}
+		waitUntil(t, 20*time.Second, tc.domain+" to apply its whole log", func() bool {
+			return running.runner.Committed().Seq >= last
+		})
+		at := running.runner.Committed()
+		if !statelog.Replayable(at.Seq, first) {
+			t.Fatalf("%s's log starts at %d past this node's %d, so the stream "+
+				"would refuse on its own and this case would not show the floor",
+				tc.domain, first, at.Seq)
+		}
+		publish := func(floor uint64) {
+			t.Helper()
+			if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
+				Domain: tc.domain, Generation: at.Generation,
+				TrimTo: floor, Floor: floor, At: time.Now().UTC(), By: "peer",
+			}); err != nil {
+				t.Fatalf("publish %s's floor: %v", tc.domain, err)
+			}
+		}
+
+		publish(at.Seq + 2)
+		if err := tc.zero(t.Context(), "REFUSED"); !errors.Is(err, statelog.ErrUnavailable) {
+			t.Fatalf("%s: a write at zero from a node one record short of the "+
+				"published floor answered %v, want %v — the log still holds that "+
+				"record, so the floor is the only witness", tc.domain, err,
+				statelog.ErrUnavailable)
+		}
+		if _, after, err := running.log.Bounds(t.Context()); err != nil || after != last {
+			t.Fatalf("%s's log ends at %d (err %v), want %d — the refused write "+
+				"was appended", tc.domain, after, err, last)
+		}
+
+		publish(at.Seq + 1)
+		if err := tc.zero(t.Context(), "CLEARED"); err != nil {
+			t.Fatalf("%s: a write at zero from a node holding everything the "+
+				"published floor licenses removing was refused: %v", tc.domain, err)
+		}
+	}
 }

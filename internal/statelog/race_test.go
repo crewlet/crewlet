@@ -164,6 +164,79 @@ func TestABelowFloorNodeIsRefusedRatherThanRetryingAtZero(t *testing.T) {
 	}
 }
 
+// THE ZERO FENCE IS ASKED ABOUT THE CHECKPOINT THE DECISION WAS MADE AT, on
+// both roads to an expectation of zero.
+//
+// The floor theorem concludes that a trimmed record on this subject is already
+// reflected in the rows the write decided from, so the C it verifies F <= C+1
+// against has to be the position THOSE rows were at. This node's applier keeps
+// moving while a write runs, and only forward, so its live position is the
+// permissive answer: a record applied after the snapshot and trimmed before the
+// check passes against it, and the decision published at zero — which never
+// saw that record — overwrites it. The staging lands a record on the applier
+// between the snapshot and the check, and the fence must be asked about the
+// snapshot's position rather than the one the applier moved to.
+func TestTheZeroFenceIsAskedAboutTheCheckpointTheDecisionRead(t *testing.T) {
+	t.Parallel()
+	for name, stage := range map[string]func(h *harness) statelog.Subject{
+		// No anchor and nothing on the broker: the expectation itself is
+		// zero, formed and fenced before the first append.
+		"a subject nobody has written": func(h *harness) statelog.Subject {
+			if _, err := h.write(probeSubject("busy"), "op-busy", "x"); err != nil {
+				h.t.Fatalf("a write elsewhere: %v", err)
+			}
+			return probeSubject("fresh")
+		},
+		// An anchor the trim removed: the append at it is refused, and
+		// the retry at zero publishes the same snapshot's decision.
+		"an anchor the trim removed": func(h *harness) statelog.Subject {
+			quiet, err := h.write(probeSubject("quiet"), "op-quiet", "once")
+			if err != nil {
+				h.t.Fatalf("the quiet object's only write: %v", err)
+			}
+			for i := range 3 {
+				if _, err := h.write(probeSubject("busy"), fmt.Sprintf("op-busy-%d", i), "x"); err != nil {
+					h.t.Fatalf("busy write %d: %v", i, err)
+				}
+			}
+			h.purgeBelow(quiet.Position.Seq + 2)
+			h.anchorAt(probeSubject("quiet"), quiet.Position.Seq)
+			return probeSubject("quiet")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			subject := stage(h)
+
+			decided := h.applier.Committed()
+			moved := statelog.Position{
+				Stream: probeStream, Generation: decided.Generation, Seq: decided.Seq + 7,
+			}
+			var once sync.Once
+			h.rows.mu.Lock()
+			h.rows.afterSnapshot = func() { once.Do(func() { h.applier.advance(moved) }) }
+			h.rows.mu.Unlock()
+
+			before := len(h.fence.asked())
+			if _, err := h.write(subject, "op-after", "again"); err != nil {
+				t.Fatalf("the write: %v", err)
+			}
+			asked := h.fence.asked()[before:]
+			if len(asked) == 0 {
+				t.Fatal("the write never reached the expectation-zero fence, so this " +
+					"case stages nothing")
+			}
+			if asked[0] != decided {
+				t.Fatalf("the fence was asked about %s, want %s — the checkpoint the "+
+					"decision's rows were at; %s is where the applier moved after "+
+					"the snapshot, and a record in between is one the decision "+
+					"published at zero never saw", asked[0], decided, moved)
+			}
+		})
+	}
+}
+
 // AN OLD GENERATION'S ANCHOR CANNOT EXIST ON A RECREATED STREAM, and the
 // probe is what says so rather than a cheap pre-filter.
 //
