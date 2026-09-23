@@ -145,9 +145,9 @@ func (c *nodeClient) do(ctx context.Context, method, path string, into any) erro
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("reach the node at %s: %w\n\n"+
+		return noAnswer{fmt.Errorf("reach the node at %s: %w\n\n"+
 			"This command acts on state the RUNNING engine holds. Start the node, "+
-			"or pass -url to name another one", c.base, err)
+			"or pass -url to name another one", c.base, err)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -162,7 +162,7 @@ func (c *nodeClient) do(ctx context.Context, method, path string, into any) erro
 	// mid-body is a different fact from a short answer.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxNodeResponseBytes+1))
 	if err != nil {
-		return fmt.Errorf("reading the node's answer to %s: %w", path, err)
+		return noAnswer{fmt.Errorf("reading the node's answer to %s: %w", path, err)}
 	}
 	if len(body) > maxNodeResponseBytes {
 		return fmt.Errorf(
@@ -182,6 +182,18 @@ func (c *nodeClient) do(ctx context.Context, method, path string, into any) erro
 	}
 	return nil
 }
+
+// noAnswer is a request the node never answered: it could not be reached, the
+// wait ran out, or its answer was cut off mid-body.
+//
+// A TYPE OF ITS OWN because it is the one failure that leaves what the node DID
+// unknown. A refusal the node sent is an answer — a 409 wrote nothing — while a
+// POST with no answer may have run to completion after the connection went, so
+// a command that writes has to say how to find out, which it can only do if it
+// can tell the two apart.
+type noAnswer struct{ error }
+
+func (e noAnswer) Unwrap() error { return e.error }
 
 // nodeError turns a non-200 into something an operator can act on.
 func nodeError(status int, body []byte, sentToken bool) error {

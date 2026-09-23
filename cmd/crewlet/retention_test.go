@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,21 @@ type fakeRetentionNode struct {
 	// gateResult what the gate answers with — every log applied when nil.
 	gateQuery  url.Values
 	gateResult *engine.GateResult
+
+	// hangUp makes a gate request go unanswered: the connection is closed
+	// with no response.
+	hangUp bool
+
+	// mu guards the gate fields for a reader that no response synchronises
+	// with — a request [fakeRetentionNode.hangUp] never answered.
+	mu sync.Mutex
+}
+
+// lastGate is the query the last gate request carried, read under the lock.
+func (n *fakeRetentionNode) lastGate() url.Values {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.gateQuery
 }
 
 func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
@@ -70,9 +86,21 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 	for _, verb := range []string{"evict", "readmit"} {
 		mux.HandleFunc("POST /work/retention/"+verb+"/{node}",
 			func(w http.ResponseWriter, r *http.Request) {
+				n.mu.Lock()
 				n.gated, n.confirm = r.PathValue("node"), r.URL.Query().Get("confirm")
 				n.gateKind = verb
 				n.gateQuery = r.URL.Query()
+				n.mu.Unlock()
+				if n.hangUp {
+					// NO ANSWER AT ALL: the connection goes the way a
+					// client timeout or a dropped link takes it.
+					if hj, ok := w.(http.Hijacker); ok {
+						if conn, _, err := hj.Hijack(); err == nil {
+							_ = conn.Close()
+						}
+					}
+					return
+				}
 				opID := r.URL.Query().Get("op_id")
 				if opID == "" {
 					opID = "op-minted"
@@ -105,6 +133,9 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 						entry["error"] = d.Err.Error()
 					default:
 						entry["outcome"], entry["position"] = d.Outcome, d.Position
+					}
+					if hint := d.Remedy(); hint != "" {
+						entry["retry"], entry["hint"] = d.Retry(), hint
 					}
 					domains = append(domains, entry)
 				}
@@ -424,25 +455,25 @@ func TestAGateGestureRequiresTheNodeIdTwice(t *testing.T) {
 }
 
 // A GESTURE THAT DID NOT REACH EVERY LOG EXITS NON-ZERO, SAYS WHICH LOG, AND
-// SAYS HOW TO FINISH IT.
+// SAYS HOW TO FINISH IT — WHERE RUNNING IT AGAIN CAN.
 //
 // An eviction is a record on every identity-claiming log and each log answers
 // on its own. A gesture that landed on the tracker's log and not the pages log
 // has lifted one pin and left the other, and the only honest thing to print is
-// both answers and the command that writes the missing one: the same gesture
-// under the operation id it answered with, which the log that already holds
-// the record answers from its own ledger.
+// both answers and what finishes the missing one. For an `unknown` outcome that
+// is the same gesture under the operation id it answered with — carrying
+// -force, or the retry is judged again against the lease the operator
+// overrode. For a full log it is NOT: the same command is refused the same way
+// for ever, and advising it anyway sent the operator round a loop.
 func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 	node := newFakeRetentionNode(t)
 	base := bootstrapForURL(t, node.server.URL)
-	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{
-		{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG", OpID: "op-9.evict.tracker",
-			Outcome:  statelog.OutcomeApplied,
-			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 918280002}},
+	applied := engine.DomainGate{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG",
+		OpID: "op-9.evict.tracker", Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 918280002}}
+	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{applied,
 		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: "op-9.evict.pages",
-			Err: fmt.Errorf("pages: %w", &statelog.Unavailable{
-				Reason: statelog.ReasonLogFull, Detail: "the broker refused to store it"})},
-	}}
+			Outcome: statelog.OutcomeUnknown}}}
 
 	stdout, _, err := cli(t, "retention", "evict", "node-4", base,
 		"-confirm", "node-4", "-op-id", "op-9", "-force")
@@ -458,15 +489,15 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 	}
 	for _, want := range []string{
 		"tracker: applied at CREWLET_TRACKER_LOG 918280002",
-		"pages: not written (log_full)",
-		"-op-id op-9",
+		"pages: unknown",
+		"-op-id op-9 -force",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the output never says %q:\n%s", want, stdout)
 		}
 	}
-	if !strings.Contains(err.Error(), "-op-id op-9") {
-		t.Errorf("the error never names the operation to finish: %v", err)
+	if !strings.Contains(err.Error(), "-op-id op-9 -force") {
+		t.Errorf("the error never names the command that finishes it: %v", err)
 	}
 	// AND IT DOES NOT CLAIM THE NODE STOPS BEING COUNTED, which is only true
 	// once every log holds the record.
@@ -475,10 +506,72 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 			"had taken effect:\n%s", stdout)
 	}
 
+	// A FULL LOG IS NOT OFFERED THE SAME COMMAND AGAIN, and says what makes
+	// room instead.
+	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{applied,
+		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: "op-9.evict.pages",
+			Err: fmt.Errorf("pages: %w", &statelog.Unavailable{
+				Reason: statelog.ReasonLogFull, Detail: "the broker refused to store it"})}}}
+	stdout, _, err = cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-op-id", "op-9")
+	if err == nil {
+		t.Fatalf("a gesture a full log refused exited zero:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "pages: not written (log_full)") ||
+		!strings.Contains(stdout, "set-capacity") {
+		t.Errorf("a full log's refusal never names the capacity verb:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "-op-id") || strings.Contains(err.Error(), "-op-id") {
+		t.Errorf("a full log was advised the retry it refuses for ever:\n%s\n%v",
+			stdout, err)
+	}
+
 	// A READMISSION HAS NO -force: it is refused as a flag rather than sent.
 	if _, _, err := cli(t, "retention", "readmit", "node-4", base,
 		"-confirm", "node-4", "-force"); err == nil {
 		t.Error("readmit accepted -force, which it has no meaning for")
+	}
+}
+
+// A GESTURE THE NODE NEVER ANSWERED STILL NAMES THE OPERATION THAT FINISHES
+// IT — WHICH THE COMMAND MINTED BEFORE ASKING.
+//
+// The node minted the id and sent it back in the answer, so a request that
+// timed out or dropped — after the node had very likely written every log —
+// left the operator no handle on the gesture but a second one under a fresh id.
+// And the wait was the ten seconds every other verb takes, which two of the
+// five-second resolutions a gesture legitimately makes use up between them.
+func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	node.hangUp = true
+
+	_, stderr, err := cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-force")
+	if err == nil {
+		t.Fatal("a gesture the node never answered exited zero")
+	}
+	sent := node.lastGate().Get("op_id")
+	if sent == "" {
+		t.Fatal("the request carried no op_id, so an unanswered gesture has no " +
+			"operation to finish it under")
+	}
+	// MINTED THE STATE LOG'S WAY, carrying its instant: the node refuses an
+	// id that carries none (`op_id_invalid`), since no ledger could vouch
+	// for it, so an id minted any other way is one the retry cannot use.
+	if _, minted := statelog.OpMintedAt(sent); !minted {
+		t.Errorf("the command sent op_id %q, which carries no mint instant — "+
+			"the node refuses it", sent)
+	}
+	if want := "-op-id " + sent + " -force"; !strings.Contains(stderr, want) {
+		t.Errorf("the unanswered gesture never says %q:\n%s", want, stderr)
+	}
+
+	// AND THE NODE'S OWN BOUND IS INSIDE THE WAIT, so its answer — not a
+	// client timeout that knows none of it — is what reaches the operator.
+	if gateRequestTimeout <= engine.GateBudget {
+		t.Fatalf("the command waits %s for a gesture the node bounds at %s",
+			gateRequestTimeout, engine.GateBudget)
 	}
 }
 

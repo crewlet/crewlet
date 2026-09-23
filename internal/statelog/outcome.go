@@ -211,6 +211,15 @@ const (
 	// the read refusal for the same facts, so a surface that meets both
 	// reads one.
 	ReasonWrongStream Reason = "wrong_stream"
+
+	// ReasonSuperseded — this operation's record landed, and a later record
+	// on the same object has undone or replaced it since, so a retry of the
+	// operation is not a new write of it and cannot be answered as though
+	// its record were still the one in force. A caller that still wants the
+	// effect starts a NEW operation, under a fresh id. Produced by a write's
+	// [Request.Standing] — the node gate's ([GateStanding]): an eviction
+	// retried under its id after a readmission has taken the node back.
+	ReasonSuperseded Reason = "superseded"
 )
 
 // ErrUnavailable is what a refusal wraps, so a caller can tell a refusal from

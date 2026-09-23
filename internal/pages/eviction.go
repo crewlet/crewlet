@@ -3,6 +3,7 @@ package pages
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -54,6 +55,11 @@ func (s *Store) ReadmitNode(ctx context.Context, actor Actor, opID, nodeID strin
 // gateNode publishes one eviction record, arbitrated on the node's own
 // subject so an eviction and the readmission that inverts it contend with each
 // other and with nothing else.
+//
+// A RETRY IS ANSWERED BY THE FRAMEWORK from this node's ledger, before this
+// decision runs ([statelog.Snap.Held]); what this write adds is whether the
+// record its operation landed is still in force, judged from the node's own
+// row in the same snapshot ([statelog.GateStanding]).
 func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 	readmit bool) (statelog.Result, error) {
 
@@ -77,6 +83,13 @@ func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 		OpID:     opID,
 		Pattern:  statelog.PatternArbitrated,
 		NodeGate: true,
+		Standing: func(tx *sql.Tx, held statelog.Position) error {
+			row, found, err := standingIn(ctx, tx, nodeID)
+			if err != nil {
+				return err
+			}
+			return statelog.GateStanding(opID, nodeID, readmit, held, row, found)
+		},
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return s.decide(stamp, actor, subject, OpEviction, scope, opID, Eviction{
 				V: GateRecordVersion, NodeID: nodeID,
@@ -84,6 +97,29 @@ func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 			}, nil, at)
 		},
 	})
+}
+
+// standingIn is nodeID's eviction row on this log, read in the transaction the
+// caller holds.
+func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.EvictionRow, bool, error) {
+	var from int64
+	var readmitted sql.NullInt64
+	err := tx.QueryRowContext(ctx, `
+		SELECT from_position, readmitted_position FROM pages_evictions
+		WHERE node_id = ?`, nodeID).Scan(&from, &readmitted)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return statelog.EvictionRow{}, false, nil
+	case err != nil:
+		return statelog.EvictionRow{}, false, fmt.Errorf("pages: read %s's "+
+			"eviction row: %w", nodeID, err)
+	}
+	return statelog.EvictionRow{
+		NodeID: nodeID, From: uint64(from), Readmitted: uint64(readmitted.Int64),
+		// THE COMPARISON [Fence.Evicted] MAKES, so a retry and the node's
+		// own fence can never disagree about whether it is back.
+		Back: readmitted.Valid && readmitted.Int64 > from,
+	}, true, nil
 }
 
 // Evictions is every eviction this log's applied rows hold — the rows the

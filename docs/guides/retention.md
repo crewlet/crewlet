@@ -470,18 +470,56 @@ live presence lease is refused, because it is still reaching the fleet and
 almost certainly running — an eviction would drop everything it writes and
 move its seats. Stop it and wait for its `LIVE` column in `crewlet retention
 status` to read `no`; `-force` overrides the refusal for a node wedged in a way
-that still renews its lease. A refusal writes nothing to either log.
+that still renews its lease. A refusal writes nothing to either log. If this
+node cannot read the presence leases at all — a coordination fault — the
+eviction is refused as one nobody could judge, and says so; `-force` takes it
+past that too, since the leases are the only thing the judgement reads, and
+the node's log records that the eviction was forced unjudged. A node id no node
+could run under (the [`node.id`](../concepts/configuration.md#nodeid) rule:
+alphanumeric first, then letters, digits, `.`, `_` or `-`, at most 64
+characters) is refused before anything is judged.
 
 Past the judgement the record goes to each log in turn, and each answers on
 its own line with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
 every write has — `applied`, `pending` or `unknown` — or `not written` with the
-reason that stopped that log (`log_full`, say). A log that answered holds its
-record whatever the other did. When **not every log holds it**, the command
-exits non-zero and prints the operation id; run the same command again with
-`-op-id <id>` to finish it. Each log's record is published under an id derived
-from that one, so a log that already holds the record answers from its own
-ledger at the position it already has, and only the missing log is written.
-A fresh id would be a second gesture rather than this one finished.
+reason that stopped that log. A log that answered holds its record whatever
+the other did, and the gesture runs to its end **whatever happens to the
+command**: once the first record is about to be written the node finishes the
+gesture under its own one-minute budget, so a dropped connection or a client
+timeout does not leave the node evicted on one log and counted on the other.
+
+When **not every log holds it**, the command exits non-zero, and under each
+log it did not finish prints what to do. Where running the gesture again can
+finish that log — an `unknown` outcome, a node still catching up, a lost race —
+it prints the command: the same one with `-op-id <id>` (and `-force` if the
+first run had it). Each log's record is published under an id derived from the
+gesture's, its sign, the log and the node, and each log's snapshot reads that
+id's [ledger row](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)
+before anything is decided, judging it against the node's own row in the same
+transaction: a log whose record is already the gate in force answers at the
+position it already has, and only a missing log is written — even through a
+node whose applier had not reached the first record yet, and however long
+after the first run the retry comes. A fresh id would be a second gesture
+rather than this one finished. The command mints the id **before** it asks —
+the engine's own way, carrying its instant, since the node refuses an id it
+did not mint — so a gesture the node never answered — the connection dropped,
+the wait ran out — still prints the `-op-id` that finishes it.
+
+Where running it again **cannot** finish a log, it says what can instead, and
+offers no `-op-id`:
+
+- `log_full` — that log is full, and a gate record is refused like any other
+  append: raise its ceiling with [`crewlet retention set-capacity`](#changing-a-logs-ceiling).
+- `evicted` — the node you ran it on is itself evicted and writes nothing: run
+  the gesture from a node the fleet still counts.
+- `wrong_stream` — the log was rebuilt under this node:
+  [re-anchor it](#re-anchoring-a-recreated-stream) first.
+- `superseded` — the operation's record landed and a later gate record on the
+  same node has undone it since (an eviction retried after a readmission took
+  the node back). Run a new gesture, without `-op-id`, if the node should
+  change again.
+- `op_reused` — the operation id already names a record on another object:
+  run the gesture without `-op-id`.
 
 It prints the watermark before and after, and the instant the eviction takes
 effect. **The evicted node stays counted for about a minute** on each log after

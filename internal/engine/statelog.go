@@ -880,8 +880,19 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.DomainLog,
 	runner *statelog.Runner) (*statelog.Publisher, func(context.Context) (bool, error), error) {
 
+	return s.publisherOver(domain, appendTo, appendTo, runner)
+}
+
+// publisherOver is [stateLog.publisherFor] with the appender the write
+// authority publishes through named apart from the log whose ends its fence
+// reads: one DomainLog in production, and in a case that has to see exactly
+// what reached the broker, that log behind a recorder.
+func (s *stateLog) publisherOver(domain statelog.Domain, publishTo statelog.Appender,
+	appendTo *jetstream.DomainLog,
+	runner *statelog.Runner) (*statelog.Publisher, func(context.Context) (bool, error), error) {
+
 	deps := statelog.Deps{
-		Domain: domain, Log: appendTo, Waiter: runner, NodeID: s.nodeID,
+		Domain: domain, Log: publishTo, Waiter: runner, NodeID: s.nodeID,
 		// THE RUNNER IS THE IDENTITY, for the reason it is the waiter:
 		// the positions a write forms its expectation from and resolves
 		// its record against are the runner's, so the answer to "are

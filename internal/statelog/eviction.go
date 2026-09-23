@@ -383,3 +383,92 @@ func PermitReadmission(nodeID string, register []coord.NodePositions,
 	}
 	return nil
 }
+
+// GateStanding judges a retried node gate that this node's ledger answers:
+// whether the record its operation landed at the held position is still what
+// the node's standing on this log rests on. It is a node gate's
+// [Request.Standing], handed the node's own eviction row read in the same
+// snapshot ([EvictionRow], and held false for a node this log has no row for).
+//
+// # Why a ledger hit is not simply "applied"
+//
+// The ledger says a record under this id landed; it does not say that record
+// is still in force. An eviction retried under its id after a readmission took
+// the node back was answered "applied" at the eviction's old position while
+// every row said the node was counted — a success reported for an operation
+// the retry never performed. So the hit is checked against the node's own row:
+// an eviction stands while the row's eviction is this record and no
+// readmission follows it, a readmission while the row's readmission is this
+// record and no eviction has come after. Anything later is [ReasonSuperseded],
+// and a row that contradicts the ledger it was written beside is an error
+// rather than a guess.
+//
+// # Why inside the snapshot, and not in front of the write
+//
+// The publisher reads the ledger and this row in the transaction the decision
+// would have run in ([Snap.Held]), so a same-node retry through an applier that
+// has not reached the first record is not answered here at all: its snapshot
+// holds no row, its append is arbitrated on the node's own eviction subject,
+// the broker refuses an expectation below the first record, the publisher
+// waits for this node's applier to reach it, and the next round's snapshot
+// finds the row. So it ends applied at the first record's position, or refused
+// `behind` — never with a second record — and the broker's duplicate window
+// plays no part in the argument.
+//
+// # What it cannot answer for
+//
+// An operation whose ledger row is gone — swept past [OpsRetention] — is not
+// held, and it is judged by the ledger's watermark instead ([Publisher.vouches]):
+// minted before it, the retry answers `unknown` rather than writing the gate a
+// second time.
+func GateStanding(opID, nodeID string, readmit bool, held Position,
+	row EvictionRow, found bool) error {
+
+	landed := uint64(held.Packed())
+	superseded := func(what string, at uint64) error {
+		return &Unavailable{
+			Reason: ReasonSuperseded,
+			Detail: fmt.Sprintf("operation %q's record for %s landed at %s and %s "+
+				"at composed position %d has superseded it, so retrying it is not "+
+				"a new gesture — start one, under a fresh operation id, if %s "+
+				"should change again", opID, nodeID, held, what, at, nodeID),
+			Position: held,
+			OpID:     opID,
+		}
+	}
+	inconsistent := func(detail string) error {
+		return fmt.Errorf("statelog: operation %q's record for %s landed at %s and "+
+			"%s — the row and the ledger were written by the same apply, so this "+
+			"estate is not one a retry can be judged against", opID, nodeID,
+			held, detail)
+	}
+	if !readmit {
+		switch {
+		case !found:
+			return inconsistent("no eviction row holds " + nodeID)
+		case row.From > landed:
+			return superseded("a later eviction", row.From)
+		case row.From < landed:
+			return inconsistent(fmt.Sprintf(
+				"the node's eviction row is at the earlier composed position %d", row.From))
+		case row.Back:
+			return superseded("a readmission", row.Readmitted)
+		}
+		return nil
+	}
+	switch {
+	case !found:
+		// A READMISSION OF A NODE THIS LOG NEVER EVICTED is a record that
+		// changed no row, and nothing since has made one: the node is
+		// counted, which is what the operation asked for.
+		return nil
+	case row.Back && row.Readmitted == landed:
+		return nil
+	case row.Readmitted > landed:
+		return superseded("a later readmission", row.Readmitted)
+	case row.From > landed:
+		return superseded("a later eviction", row.From)
+	}
+	return inconsistent(fmt.Sprintf("the node's row is evicted at composed "+
+		"position %d and readmitted at %d", row.From, row.Readmitted))
+}

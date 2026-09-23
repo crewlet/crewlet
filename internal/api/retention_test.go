@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -402,6 +403,17 @@ func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
 		t.Errorf("the pages entry is %v, want no outcome, reason log_full and "+
 			"the error — a refusal is not one of the three outcomes", pages)
 	}
+	// WHETHER THE SAME REQUEST AGAIN CAN FINISH A LOG, and what to do
+	// otherwise — on the log the gesture did not finish, and on no other.
+	if _, has := tracker["retry"]; has {
+		t.Errorf("the tracker's entry, which holds its record, carries retry: %v", tracker)
+	}
+	if hint, _ := pages["hint"].(string); pages["retry"] != false ||
+		!strings.Contains(hint, "set-capacity") {
+		t.Errorf("the full pages log answered retry=%v hint=%q, want no retry and "+
+			"the capacity verb — the same request refuses the same way for ever",
+			pages["retry"], pages["hint"])
+	}
 
 	// AND WITHOUT ONE, A FRESH OPERATION — which it answers with, because a
 	// retry needs it.
@@ -418,6 +430,35 @@ func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
 		t.Errorf("the route minted %q, which carries no mint instant — every "+
 			"log's id derived from it would be refused on a swept ledger",
 			gate.asked[1].OpID)
+	}
+}
+
+// A GATE REQUEST NOBODY COULD CARRY OUT IS THE CALLER'S TO FIX, AND A LEASE
+// LISTING THIS NODE COULD NOT READ IS THIS NODE'S — neither is an engine fault.
+//
+// Both answered `500 gate_failed`: a typo'd node id read as a broken engine,
+// and a coordination blip read the same while the way past it — `-force` for a
+// node the operator knows is gone — was nowhere in the answer.
+func TestAGateTheEngineCouldNotJudgeSaysWhose(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	gate := &fakeNodeGate{evict: fmt.Errorf("%w: \"node*\" is not a node id",
+		engine.ErrInvalidGate)}
+	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
+	if code, body := postAck(t, a, "/work/retention/evict/node*?confirm=node*"); code !=
+		http.StatusBadRequest || body["error"] != "invalid_gate" {
+		t.Fatalf("an invalid gate answered %d %v, want 400 invalid_gate", code, body)
+	}
+
+	unjudged := &engine.GateUnjudged{Node: "node-4", Err: errors.New("coordination is unreachable")}
+	gate.evict = unjudged
+	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4")
+	if code != http.StatusServiceUnavailable || body["error"] != "eviction_unjudged" {
+		t.Fatalf("an unjudged eviction answered %d %v, want 503 eviction_unjudged", code, body)
+	}
+	if hint, _ := body["hint"].(string); hint != unjudged.Remedy() ||
+		!strings.Contains(hint, "-force") {
+		t.Errorf("hint = %q, want the remedy naming -force", hint)
 	}
 }
 

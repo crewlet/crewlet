@@ -477,6 +477,11 @@ const NodeIDEnvVar = "CREWLET_NODE_ID"
 // and in broker consumer names, so it is restricted to what both accept.
 var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
+// ValidNodeID reports whether id is one a node could run under — the rule
+// [Node.ID] is resolved against, for a caller naming some OTHER node, such as
+// the operator gesture that evicts one.
+func ValidNodeID(id string) bool { return nodeIDPattern.MatchString(id) }
+
 // Node is Tier A identity of THIS process within the company.
 //
 // The id must be STABLE ACROSS RESTARTS, which is why it comes from the

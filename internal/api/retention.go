@@ -373,9 +373,15 @@ func gateVerb(evict bool) string {
 // about. Past the judgement the answer is 200 and PER LOG — each with its own
 // three-valued outcome, or the refusal that stopped that log — and `complete`
 // says whether every log now holds the record. An incomplete answer is not a
-// failure to report as one: the logs that answered hold their record, and the
-// same request sent again with the `op_id` it answered with writes only what
-// is missing.
+// failure to report as one: the logs that answered hold their record, and a
+// log the gesture did not finish carries `retry` — whether the same request
+// sent again with the `op_id` it answered with can finish it — and `hint`,
+// which says what to do where it cannot.
+//
+// A dropped request does not stop a gesture half-way: once its first record is
+// about to be written the engine finishes it under its own budget
+// ([engine.GateBudget]), and the caller that minted the `op_id` it sent can ask
+// again with it to read every log's answer.
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a.nodes == nil {
@@ -431,7 +437,29 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 		}
 		var readmission *statelog.ReadmissionRefusal
 		var eviction *statelog.EvictionRefusal
+		var unjudged *engine.GateUnjudged
 		switch {
+		case errors.Is(err, engine.ErrInvalidGate):
+			// A NODE ID NO NODE COULD RUN UNDER is a typo rather than a
+			// fault, and it is the caller's to fix: nothing was judged and
+			// nothing was written.
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "invalid_gate", "detail": err.Error(),
+			})
+			return
+		case errors.As(err, &unjudged):
+			// COORDINATION COULD NOT BE READ HERE, which is this node's
+			// condition rather than the target's — so a 503 carrying the
+			// way past it, not a 500 an operator reads as an engine bug.
+			log.Warn("retention_eviction_unjudged", "operator", operator,
+				"node", node, "error", unjudged.Err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error":  "eviction_unjudged",
+				"detail": unjudged.Error(),
+				"hint":   unjudged.Remedy(),
+				"node":   node,
+			})
+			return
 		case errors.As(err, &readmission):
 			// A REFUSAL IS AN ANSWER, NOT A FAULT, and it is the one
 			// this route promises: the node the operator asked for is
@@ -498,13 +526,28 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 				// difference between a node that has stopped writing
 				// and one that is about to.
 				entry["outcome"] = d.Outcome
-				entry["position"] = d.Position
+				// NO POSITION FOR UNKNOWN, which is the whole content
+				// of unknown: a zero position reads as a record at the
+				// log's origin.
+				if d.Outcome != statelog.OutcomeUnknown {
+					entry["position"] = d.Position
+				}
+			}
+			// WHETHER THE SAME REQUEST AGAIN CAN FINISH THIS LOG, and
+			// what to do instead where it cannot — the engine's one
+			// judgement, so this route and the command never advise
+			// two different things. Present only on a log the gesture
+			// did not finish.
+			if hint := d.Remedy(); hint != "" {
+				entry["retry"] = d.Retry()
+				entry["hint"] = hint
 			}
 			domains = append(domains, entry)
 		}
 		complete := result.Complete()
 		log.Info("retention_gate", "operator", operator, "node", node,
-			"evict", evict, "op_id", result.OpID, "complete", complete)
+			"evict", evict, "force", req.Force, "op_id", result.OpID,
+			"complete", complete)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"node": node, "evicted": evict, "op_id": result.OpID,
 			"complete": complete, "domains": domains,

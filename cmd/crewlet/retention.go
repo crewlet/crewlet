@@ -567,36 +567,81 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 			"node id in -confirm to run %s", verb)
 	}
 
+	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, when the operator
+	// brought none. A gesture writes one log after another and the node
+	// finishes it whatever happens to this connection, so a request that
+	// times out or drops has very likely done its work — and the id the
+	// node would have answered with is the only handle on it. Minted by the
+	// node, it was lost with the answer, and the only way on was a second
+	// gesture under a fresh id.
+	//
+	// THROUGH THE STATE LOG'S OWN MINT ([statelog.NewOpID]), under the name
+	// the route itself mints with, so the id carries its instant — the node
+	// refuses one that does not, since no ledger could vouch for it — and
+	// reads in the ledger exactly as a node-minted one would.
+	gesture := *opID
+	if gesture == "" {
+		gesture = statelog.NewOpID(time.Now(), verb+"-"+node)
+	}
+	forced := force != nil && *force
+	// THE COMMAND THAT FINISHES THIS GESTURE, with the flags that decide it:
+	// -force carried, because a retry without it is judged again against
+	// the very lease the operator overrode, and refused.
+	again := "-op-id " + gesture
+	if forced {
+		again += " -force"
+	}
+
 	// THE WATERMARK BEFORE AND AFTER, so an operator sees what the gesture
 	// did rather than being told it succeeded. The trim floor is what an
 	// eviction is FOR — it is how a floor an absent node is pinning gets
 	// to move — and a readmission can be refused by exactly that number.
 	before, beforeErr := retentionFloors(client)
 	var answer gateAnswer
-	query := url.Values{"confirm": {node}}
-	if *opID != "" {
-		query.Set("op_id", *opID)
-	}
-	if force != nil && *force {
+	query := url.Values{"confirm": {node}, "op_id": {gesture}}
+	if forced {
 		query.Set("force", "true")
 	}
 	path := fmt.Sprintf("/work/retention/%s/%s?%s", verb, url.PathEscape(node),
 		query.Encode())
-	if err := client.post(context.Background(), path, &answer); err != nil {
+	// PATIENTLY, for the reason [nodeClient.patiently] names: how long a
+	// gesture takes is a property of what it waits on — a write per log,
+	// each resolved against this node's applier — and not of the network.
+	if err := client.patiently(gateRequestTimeout).post(context.Background(), path,
+		&answer); err != nil {
+		var lost noAnswer
+		if errors.As(err, &lost) {
+			fmt.Fprintf(stderr, "The node did not answer, so what the %s did is "+
+				"unknown: it may have reached every log. Run the same command "+
+				"again with %s — every log that already holds the record answers "+
+				"from its own rows, and only a missing one is written.\n", verb, again)
+		}
 		return err
 	}
 	fmt.Fprintf(stdout, "%s %s (operation %s)\n", verb, node, answer.OpID)
-	pending := false
+	pending, retry := false, false
 	for _, d := range answer.Domains {
 		switch {
+		case d.Outcome == string(statelog.OutcomeUnknown):
+			// NO POSITION, which is the whole content of unknown: printed
+			// as "at 0" it read as a record landed at the log's origin.
+			fmt.Fprintf(stdout, "  %s: unknown — the record may or may not be "+
+				"on the log\n", d.Domain)
 		case d.Outcome != "":
 			fmt.Fprintf(stdout, "  %s: %s at %s %d\n", d.Domain, d.Outcome,
 				d.Position.Stream, d.Position.Seq)
-			pending = pending || d.Outcome == "pending"
+			pending = pending || d.Outcome == string(statelog.OutcomePending)
 		case d.Reason != "":
 			fmt.Fprintf(stdout, "  %s: not written (%s) — %s\n", d.Domain, d.Reason, d.Error)
 		default:
 			fmt.Fprintf(stdout, "  %s: no outcome — %s\n", d.Domain, d.Error)
+		}
+		// WHAT TO DO ABOUT A LOG THE GESTURE DID NOT FINISH, in the node's
+		// own words — and only where it has some: running the command
+		// again is the remedy for some refusals and a loop for others.
+		if d.Hint != "" {
+			fmt.Fprintf(stdout, "    %s\n", d.Hint)
+			retry = retry || d.Retry
 		}
 	}
 	if pending {
@@ -609,13 +654,20 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	}
 	if !answer.Complete {
 		// NOT A FAILURE TO RETRY BLINDLY: the logs that answered hold
-		// their record, and a fresh operation id would be a second
-		// gesture rather than this one finished.
+		// their record, a fresh operation id would be a second gesture
+		// rather than this one finished, and a log whose refusal no
+		// retry clears is not offered one — its own line above says
+		// what does.
+		if !retry {
+			return fmt.Errorf("the %s of %s did not reach every log, and running "+
+				"it again cannot finish it until what each log's line names is "+
+				"done", verb, node)
+		}
 		fmt.Fprintf(stdout, "  The gesture has not reached every log. Run it again "+
-			"with -op-id %s to finish it: a log that already holds the record "+
-			"answers from its own ledger and is not written twice.\n", answer.OpID)
+			"with %s to finish it: a log that already holds the record answers "+
+			"from its own rows and is not written twice.\n", again)
 		return fmt.Errorf("the %s of %s did not reach every log — run it again "+
-			"with -op-id %s", verb, node, answer.OpID)
+			"with %s", verb, node, again)
 	}
 	if evict {
 		fmt.Fprintf(stdout, "  %s stays COUNTED for about %s, so a live node is "+
@@ -662,7 +714,26 @@ type gateDomain struct {
 	} `json:"position"`
 	Reason string `json:"reason"`
 	Error  string `json:"error"`
+
+	// Retry and Hint are the node's own judgement of a log the gesture did
+	// not finish: whether running it again under the same operation id can
+	// finish it, and what to do either way. Absent on a finished log.
+	Retry bool   `json:"retry"`
+	Hint  string `json:"hint"`
 }
+
+// gateRequestTimeout is how long `retention evict` and `readmit` wait for the
+// node's answer.
+//
+// SEVENTY-FIVE SECONDS: the node bounds a gesture at a minute from its first
+// record to its last answer (engine.GateBudget), and the judgement before it
+// and the round trip around it are a coordination read and a request. Waiting
+// past the node's own bound is what makes its answer — every log's outcome and
+// what to do about the ones it could not finish — reach the operator rather
+// than a client timeout that knows none of it. The ten seconds every other
+// verb waits was two of the five-second resolutions a gesture legitimately
+// makes, back to back.
+const gateRequestTimeout = 75 * time.Second
 
 // evictionFenceWindow is how long an evicted node stays counted, as this
 // command says it.

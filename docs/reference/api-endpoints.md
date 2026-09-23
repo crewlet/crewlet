@@ -2260,13 +2260,15 @@ letting it write again are not reads, whatever a laptop deployment allows.
 | Route | What it does |
 |---|---|
 | `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
-| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail` and `hint`. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. |
+| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail` and `hint`. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. |
 | `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A position that could not be compared at all — the register or the floor unreadable, or this node behind a reanchor the fleet has made — is `500 gate_failed`, and refuses too. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
-`confirm` echoes the node id, and a mismatch is `400`. A request carrying no
-operator identity is `403 operator_required`, because every log's record names
-the operator who made the gesture and `crewlet retention status` prints it
-beside the eviction.
+`confirm` echoes the node id, and a mismatch is `400`. A node id no node could
+run under — the [`node.id`](../concepts/configuration.md#nodeid) rule, since the
+id becomes a subject token on every log — is `400 invalid_gate`, with nothing
+judged or written. A request carrying no operator identity is
+`403 operator_required`, because every log's record names the operator who made
+the gesture and `crewlet retention status` prints it beside the eviction.
 
 **The gesture is judged once, before any log is written**, and then its record
 goes to each identity-claiming log in turn. The trim counts nodes per log, so a
@@ -2281,37 +2283,66 @@ log**:
   "complete": false,
   "domains": [
     {"domain": "tracker", "stream": "CREWLET_TRACKER_LOG",
-     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.tracker",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.tracker:node-4",
      "outcome": "applied",
      "position": {"stream": "CREWLET_TRACKER_LOG", "generation": 1, "seq": 918280002}},
     {"domain": "pages", "stream": "CREWLET_PAGES_LOG",
-     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.pages",
-     "error": "statelog: unavailable (log_full): the broker refused to store the record: …",
-     "reason": "log_full"}
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.pages:node-4",
+     "outcome": "unknown",
+     "retry": true,
+     "hint": "its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not"}
   ]
 }
 ```
 
 Each entry is one log's own answer. `outcome` is the write's
 [three-valued outcome](../guides/replication.md#a-write-has-three-outcomes) —
-`applied`, `pending` or `unknown` — with the `position` the record holds: a gate
-the caller believes has landed and which is only `pending` is the difference
-between a node that has stopped writing and one that is about to. An entry with
-`error` in place of an `outcome` was **not written**, and `reason` names why in
-the vocabulary every write refusal uses (`log_full`, `evicted`, …). A log that
-answered holds its record whatever the other did.
+`applied`, `pending` or `unknown` — with the `position` the record holds, absent
+for `unknown`, which has none: a gate the caller believes has landed and which is only
+`pending` is the difference between a node that has stopped writing and one
+that is about to. An entry with `error` in place of an `outcome` was **not
+written**, and `reason` names why in the vocabulary every write refusal uses
+(`log_full`, `evicted`, …). A log that answered holds its record whatever the
+other did.
+
+A log the gesture did not finish also carries **`retry`** — whether the same
+request, sent again with the answer's `op_id`, can finish it — and **`hint`**,
+what to do. `retry` is true for an `unknown` outcome, a lost race and a refusal
+that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`).
+It is **false** where the same request is refused the same way for ever:
+`log_full` (raise the log's ceiling with `crewlet retention set-capacity`),
+`evicted` (this node is evicted itself; ask one the fleet still counts),
+`wrong_stream` (the log was rebuilt; re-anchor it), `skew`, and the two that
+are about the operation rather than the log — `superseded`, an operation whose
+record landed and a later gate record on the same node has undone since (an
+eviction retried after a readmission), and `op_reused`, an operation id that
+already names a record on another object. Both of those are a new gesture,
+without `op_id`.
 
 `complete` is true only when every log answered `applied` or `pending`. When it
-is false, send **the same request again with `op_id`** set to the operation id
-the answer carried. Each log's record is published under an id derived from it
-— the entry's own `op_id`, which also carries the gesture's sign — so a log
-whose ledger already holds the record answers from that ledger at the position
-it has and is not written twice, and only the missing log is written. Without
-`op_id` the route mints a fresh one, which is a second gesture rather than this
-one finished; and an id carried from an eviction to the readmission after it is
-a different operation on every log, never the eviction answered again. An
-`op_id` the engine did not mint is refused with `400 op_id_invalid`: it carries
-no instant, so no node could tell whether it already ran.
+is false and a log says `retry`, send **the same request again with `op_id`**
+set to the operation id the answer carried. Each log's record is published
+under an id derived from it — the entry's own `op_id`, which carries the
+gesture's sign, the log and the node — and each log's snapshot reads that id's
+ledger row before anything is decided: a log whose record is already the gate
+in force answers at the position it has and is not written twice, and only a
+missing log is written — through a node whose applier had not reached the
+first record yet as well, and however long after the first request the retry
+comes, since the broker's two-minute duplicate window plays no part in it.
+Without `op_id` the route mints a fresh one, which is a second gesture rather
+than this one finished; an id carried from an eviction to the readmission after
+it is a different operation on every log, and one carried to another node is
+that node's own operation. An `op_id` the engine did not mint is refused with
+`400 op_id_invalid`: it carries no instant, so no node could tell whether it
+already ran.
+
+**The gesture does not stop when its caller does.** The judgement runs under
+the request, so a request abandoned before it wrote nothing; once the first
+record is about to be written the node finishes the gesture under its own
+one-minute budget, so a dropped connection or a client timeout never leaves a
+node evicted on one log and counted on the other. A caller that sends its own
+`op_id` — `crewlet retention evict` always does — can ask again with it and
+read every log's answer.
 
 Every node running the state log serves both routes, whichever backends the
 company uses: a company on an external tracker still runs both logs. A node

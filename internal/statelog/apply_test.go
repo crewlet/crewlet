@@ -384,6 +384,16 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 	h.runner = runner
 }
 
+// ledgerHolds reports whether this node's operation ledger holds opID.
+func (h *applyHarness) ledgerHolds(opID string) (bool, error) {
+	var count int64
+	err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(),
+			`SELECT COUNT(*) FROM probe_ops WHERE op_id = ?`, opID).Scan(&count)
+	})
+	return count > 0, err
+}
+
 // retainedCount is how many records this node still holds that it could not
 // decode.
 func (h *applyHarness) retainedCount() int64 {
@@ -1305,7 +1315,7 @@ func TestTheOperationLedgerIsSwept(t *testing.T) {
 	if err := h.run(6); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if _, held, err := h.runner.Op(t.Context(), "op-3"); err != nil || !held {
+	if held, err := h.ledgerHolds("op-3"); err != nil || !held {
 		t.Fatalf("op-3 is not in the ledger after applying it (held=%v, %v)",
 			held, err)
 	}
@@ -1320,7 +1330,7 @@ func TestTheOperationLedgerIsSwept(t *testing.T) {
 	if swept != 6 {
 		t.Errorf("the sweep deleted %d of 6 operation rows", swept)
 	}
-	if _, held, err := h.runner.Op(t.Context(), "op-3"); err != nil || held {
+	if held, err := h.ledgerHolds("op-3"); err != nil || held {
 		t.Errorf("op-3 survived a sweep past its own instant (held=%v, %v)",
 			held, err)
 	}
@@ -1340,7 +1350,7 @@ func TestTheOperationLedgerIsSwept(t *testing.T) {
 		t.Errorf("a sweep at the real horizon deleted %d row(s) written "+
 			"moments ago", swept)
 	}
-	if _, held, err := h.runner.Op(t.Context(), "op-7"); err != nil || !held {
+	if held, err := h.ledgerHolds("op-7"); err != nil || !held {
 		t.Errorf("op-7 was swept inside its own retention (held=%v, %v)",
 			held, err)
 	}

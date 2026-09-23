@@ -63,7 +63,11 @@ process answered.
 
 Resolution order: `node.id` (`${VAR}` references work here like anywhere
 in Tier A) → the `CREWLET_NODE_ID` environment variable → `node-0`. You do
-not need to set it to run a single engine.
+not need to set it to run a single engine. It starts with a letter or a digit
+and holds only letters, digits, `.`, `_` and `-`, at most 64 characters,
+because it ends up in broker consumer names and subjects — and an operator
+gesture naming a node, such as `crewlet retention evict`, holds the id it is
+given to the same rule.
 
 It must be **stable across restarts**, which is why it comes from the
 deployment rather than being generated per boot: anything the process

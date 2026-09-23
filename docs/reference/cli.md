@@ -18,8 +18,8 @@ subcommand below is served by it.
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
-| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's and the pages log — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease (`-force` overrides). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing the operation id to finish it with `-op-id` |
-| `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of the tracker's or the pages log, and the refusal prints the numbers. Nothing is written to either log on a refusal; a partial readmission is finished with `-op-id` like an eviction |
+| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's and the pages log — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
+| `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of the tracker's or the pages log, and the refusal prints the numbers. Nothing is written to either log on a refusal; a partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
@@ -742,7 +742,7 @@ or `not written` and the reason that stopped it:
 
 ```
 $ crewlet retention evict node-4 -confirm node-4
-evict node-4 (operation 0b4c7f7e-6d52-4d0b-9a4e-2f0f4f3a9c11)
+evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   tracker: applied at CREWLET_TRACKER_LOG 918280002
   pages: applied at CREWLET_PAGES_LOG 4410
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
@@ -759,20 +759,41 @@ holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
 drop everything it writes and move its seats. Stop it and wait for its `LIVE`
 column in `crewlet retention status` to read `no`, or pass `-force` for a node
-wedged in a way that still renews its lease.
+wedged in a way that still renews its lease. A node that cannot read the
+presence leases at all answers `503 eviction_unjudged`; `-force` takes the
+eviction past that as well, since the leases are all the judgement reads. A
+node id no node could run under is refused `400 invalid_gate` before anything
+is judged.
 
-When **not every log holds the record** — one answered `unknown`, or was
-refused `log_full` — the command exits non-zero and names the operation:
+When **not every log holds the record**, the command exits non-zero, and under
+each log it did not finish it prints what to do. Where the same command can
+finish that log — an `unknown` outcome, a node still catching up — it names it,
+with `-force` carried over from a forced run:
 
 ```
+  pages: unknown — the record may or may not be on the log
+    its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not
   The gesture has not reached every log. Run it again with -op-id 01a0cd85-… to finish it: a log that already holds the record answers from its own ledger and is not written twice.
 ```
 
 Run it again with that `-op-id`. Each log's record is published under an id
-derived from it, so a log that already holds the record answers from its own
-ledger at the position it has and only the missing log is written; a fresh id
+derived from it, the sign, the log and the node, and each log's snapshot reads
+that id's ledger row before anything is decided — so a log whose record is
+already the gate in force answers at the position it has, and only the missing
+log is written, however long after the first run the retry comes. A fresh id
 would be a second eviction rather than this one finished, and an id the engine
-did not print is refused.
+did not print is refused. Where the same
+command **cannot** finish a log it offers no `-op-id` and says what can: a
+`log_full` log needs [`crewlet retention set-capacity`](#crewlet-retention-set-capacity);
+a node that is itself `evicted` cannot write, so run it from another; a
+`wrong_stream` log needs a [reanchor](#crewlet-retention-reanchor); and a
+`superseded` operation — an eviction retried after a readmission took the node
+back — is a new gesture, without `-op-id`.
+
+The command mints the operation id **before** it asks, and waits
+seventy-five seconds for the answer — past the minute the node allows a
+gesture, which it finishes even if the connection drops. So a gesture that got
+no answer at all still prints the `-op-id` that finishes it.
 
 `readmit` is the inverse commit rather than a delete, so the eviction's whole
 history survives a replay. It is **refused** while the node is below a trim

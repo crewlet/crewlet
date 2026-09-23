@@ -1309,18 +1309,6 @@ func (r *Runner) PurgeOps(ctx context.Context, cutoff time.Time) (int64, error) 
 	return r.tables.purgeOps(ctx, r.db, cutoff)
 }
 
-// Op answers where an operation was applied on this node, and on what.
-func (r *Runner) Op(ctx context.Context, opID string) (OpEntry, bool, error) {
-	var entry OpEntry
-	var ok bool
-	err := r.db.Read(ctx, func(tx *sql.Tx) error {
-		var err error
-		entry, ok, err = r.tables.op(ctx, tx, opID)
-		return err
-	})
-	return entry, ok, err
-}
-
 // Run drives the loop until the context ends or the applier stops.
 //
 // # It may be run AGAIN after it returns

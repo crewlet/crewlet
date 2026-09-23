@@ -471,6 +471,13 @@ func (w *Writer) ReadmitNode(ctx context.Context, opID, nodeID string) (WriteRes
 	return w.gateNode(ctx, opID, nodeID, true)
 }
 
+// gateNode publishes one eviction record.
+//
+// A RETRY IS ANSWERED BY THE FRAMEWORK from this node's ledger, before this
+// decision runs ([statelog.Snap.Held]); what this write adds is the one thing
+// the ledger cannot say — whether the record its operation landed is still in
+// force, judged from the node's own row in the same snapshot
+// ([statelog.GateStanding]).
 func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool) (WriteResult, error) {
 	if nodeID == "" {
 		return WriteResult{}, fmt.Errorf("tracker: an eviction names no node")
@@ -484,6 +491,13 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 		OpID:     opID,
 		Pattern:  statelog.PatternArbitrated,
 		NodeGate: true,
+		Standing: func(tx *sql.Tx, held statelog.Position) error {
+			row, found, err := standingIn(ctx, tx, nodeID)
+			if err != nil {
+				return err
+			}
+			return statelog.GateStanding(opID, nodeID, readmit, held, row, found)
+		},
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return w.decide(stamp, subject, OpEviction, "", scope, opID, Eviction{
 				V: GateRecordVersion, NodeID: nodeID,
@@ -491,4 +505,28 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 			}, nil, at)
 		},
 	})
+}
+
+// standingIn is nodeID's eviction row on this log, read in the transaction the
+// caller holds.
+func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.EvictionRow, bool, error) {
+	var from int64
+	var readmitted sql.NullInt64
+	err := tx.QueryRowContext(ctx, `
+		SELECT from_position, readmitted_position FROM tracker_evictions
+		WHERE node_id = ? AND log_stream = ?`,
+		nodeID, trackerStream).Scan(&from, &readmitted)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return statelog.EvictionRow{}, false, nil
+	case err != nil:
+		return statelog.EvictionRow{}, false, fmt.Errorf("tracker: read %s's "+
+			"eviction row: %w", nodeID, err)
+	}
+	return statelog.EvictionRow{
+		NodeID: nodeID, From: uint64(from), Readmitted: uint64(readmitted.Int64),
+		// THE COMPARISON [Fence.Evicted] MAKES, so a retry and the node's
+		// own fence can never disagree about whether it is back.
+		Back: readmitted.Valid && readmitted.Int64 > from,
+	}, true, nil
 }

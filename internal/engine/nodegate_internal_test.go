@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -12,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // AN EVICTION STOPS EVERY IDENTITY-CLAIMING LOG COUNTING THE NODE ONCE ITS
@@ -236,138 +234,6 @@ func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 	}
 }
 
-// A GESTURE THAT REACHED ONE LOG AND NOT THE OTHER SAYS SO, AND A RETRY UNDER
-// THE SAME OPERATION FINISHES IT WITHOUT WRITING ANY LOG TWICE.
-//
-// Two shapes, because an `unknown` answer is two different facts and the retry
-// has to be right for both: the pages record never landed, or it landed and the
-// answer was lost. In both, the tracker's log — which applied the first time —
-// answers the retry from its own ledger at the position it already holds, and
-// gains no record.
-func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
-	t.Parallel()
-	for name, landed := range map[string]bool{
-		"the pages record never landed":       false,
-		"the pages record landed, unanswered": true,
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			e, back, _ := trimmedTracker(t)
-			s := e.native.Load().log
-			const away = "node-away"
-			identity := identityLogs(t, s)
-
-			// THE ENGINE'S OWN GATE, with the pages log's write made to
-			// answer `unknown` once — the one fault a real broker hands a
-			// caller that nothing on this side can resolve.
-			flaky := *e.native.Load().gate
-			flaky.logs = slices.Clone(e.native.Load().gate.logs)
-			faulted := false
-			trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
-			for i := range flaky.logs {
-				if flaky.logs[i].domain != pagesName {
-					continue
-				}
-				write := flaky.logs[i].write
-				flaky.logs[i].write = func(ctx context.Context, by, opID, node string,
-					readmit bool) (statelog.Result, error) {
-
-					if faulted {
-						return write(ctx, by, opID, node, readmit)
-					}
-					faulted = true
-					if landed {
-						if _, err := write(ctx, by, opID, node, readmit); err != nil {
-							return statelog.Result{}, err
-						}
-					}
-					return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: opID}, nil
-				}
-			}
-			ends := func() map[string]uint64 {
-				t.Helper()
-				out := map[string]uint64{}
-				for _, running := range identity {
-					_, last, err := running.log.Bounds(t.Context())
-					if err != nil {
-						t.Fatalf("read %s's end: %v", running.domain.Name(), err)
-					}
-					out[running.domain.Name()] = last
-				}
-				return out
-			}
-
-			req := GateRequest{Node: away, OpID: "op-partial", By: "operator"}
-			first, err := flaky.Evict(t.Context(), req)
-			if err != nil {
-				t.Fatalf("evict: %v", err)
-			}
-			if first.Complete() {
-				t.Fatalf("a gesture whose pages write answered unknown reported "+
-					"itself complete: %+v", first)
-			}
-			byDomain := func(res GateResult) map[string]DomainGate {
-				out := map[string]DomainGate{}
-				for _, d := range res.Domains {
-					out[d.Domain] = d
-				}
-				return out
-			}
-			got := byDomain(first)
-			if got[trackerName].Outcome != statelog.OutcomeApplied ||
-				got[pagesName].Outcome != statelog.OutcomeUnknown {
-				t.Fatalf("the partial gesture answered %+v, want the tracker applied "+
-					"and the pages log unknown", first.Domains)
-			}
-			if got[trackerName].OpID != domainOpID(req.OpID, false, trackerName) ||
-				got[pagesName].OpID != domainOpID(req.OpID, false, pagesName) {
-				t.Fatalf("the logs' operations are %q and %q, want each derived from "+
-					"%q", got[trackerName].OpID, got[pagesName].OpID, req.OpID)
-			}
-			for _, running := range identity {
-				waitApplied(t, running)
-			}
-			before := ends()
-
-			second, err := flaky.Evict(t.Context(), req)
-			if err != nil || !second.Complete() {
-				t.Fatalf("the retry: %v (%+v)", err, second)
-			}
-			again := byDomain(second)
-			if again[trackerName].Position != got[trackerName].Position {
-				t.Fatalf("the tracker answered the retry at %s, want the %s it "+
-					"already held — a retry is the same operation",
-					again[trackerName].Position, got[trackerName].Position)
-			}
-			after := ends()
-			if after[trackerName] != before[trackerName] {
-				t.Fatalf("the retry wrote the tracker's log again (%d → %d), which "+
-					"already held the gesture", before[trackerName], after[trackerName])
-			}
-			wantPages := before[pagesName] + 1
-			if landed {
-				wantPages = before[pagesName]
-			}
-			if after[pagesName] != wantPages {
-				t.Fatalf("the pages log went from %d to %d on the retry, want %d — "+
-					"written once, whether or not the first attempt landed",
-					before[pagesName], after[pagesName], wantPages)
-			}
-			for _, running := range identity {
-				waitApplied(t, running)
-				rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store)
-				if err != nil {
-					t.Fatalf("read %s's evictions: %v", running.domain.Name(), err)
-				}
-				if len(rows) != 1 || rows[0].NodeID != away || rows[0].Back {
-					t.Fatalf("%s holds %+v after the retry, want %s evicted once",
-						running.domain.Name(), rows, away)
-				}
-			}
-		})
-	}
-}
-
 // AN EVICTION IS JUDGED ONCE, BEFORE ANY LOG IS WRITTEN: a node still holding
 // its presence lease is refused on every log, and only force overrides it.
 //
@@ -452,81 +318,6 @@ func containerRecord(t *testing.T, key, writer string) []byte {
 		t.Fatalf("encode the container record: %v", err)
 	}
 	return payload
-}
-
-// A LOG WHOSE OWN LEDGER ALREADY HOLDS THE GESTURE IS ANSWERED FROM IT AND NOT
-// WRITTEN AGAIN.
-//
-// The broker's duplicate window collapses a retry for two minutes, and it is an
-// optimisation rather than a mechanism: an operator finishes a partial eviction
-// when they read the answer, which is routinely later than that. Past the
-// window a second record under the same operation id lands, every applier
-// applies it — moving the eviction's position and restarting its fence window —
-// and only the answer is right. The log's own ledger is what makes the retry
-// write nothing, and a ledger that cannot be read is not one that said no: the
-// write is attempted, and its own snapshot of the same estate says why not.
-func TestALogThatAlreadyHoldsTheGestureIsAnsweredFromItsLedger(t *testing.T) {
-	t.Parallel()
-	held := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 2, Seq: 41}
-	var written []string
-	write := func(domain string, seq uint64) func(context.Context, string, string,
-		string, bool) (statelog.Result, error) {
-		return func(_ context.Context, _, opID, _ string, _ bool) (statelog.Result, error) {
-			written = append(written, domain)
-			return statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID,
-				Position: statelog.Position{Stream: domain, Seq: seq}}, nil
-		}
-	}
-	g := &NodeGate{
-		live: func(context.Context) ([]statelog.Presence, error) { return nil, nil },
-		logs: []gateLog{{
-			domain: "tracker", stream: "CREWLET_TRACKER_LOG",
-			applied: func(_ context.Context, opID string) (statelog.OpEntry, bool, error) {
-				return statelog.OpEntry{Position: held}, opID == "op-1.evict.tracker", nil
-			},
-			write: write("tracker", 99),
-		}, {
-			domain: "pages", stream: "CREWLET_PAGES_LOG",
-			applied: func(context.Context, string) (statelog.OpEntry, bool, error) {
-				return statelog.OpEntry{}, false, errors.New("the ledger is unreadable")
-			},
-			write: write("pages", 7),
-		}},
-	}
-	res, err := g.Evict(t.Context(), GateRequest{Node: "node-away", OpID: "op-1", By: "operator"})
-	if err != nil || !res.Complete() {
-		t.Fatalf("evict: %v (%+v)", err, res)
-	}
-	if !slices.Equal(written, []string{"pages"}) {
-		t.Fatalf("the gesture wrote %v, want only the pages log — the tracker's "+
-			"ledger already holds this operation", written)
-	}
-	if got := res.Domains[0]; got.Outcome != statelog.OutcomeApplied || got.Position != held {
-		t.Fatalf("the tracker answered %+v, want applied at the %s its ledger holds",
-			got, held)
-	}
-	if got := res.Domains[1]; got.Outcome != statelog.OutcomeApplied || got.Position.Seq != 7 {
-		t.Fatalf("the pages log answered %+v, want the write's own answer", got)
-	}
-
-	// THE SAME ID CARRIED TO THE OPPOSITE GESTURE IS A DIFFERENT OPERATION
-	// on every log. Answered from the eviction's own entry, a readmission
-	// would report the node back on the tracker's log while its applier
-	// still dropped every record the node wrote.
-	written = nil
-	g.readmissible = func(context.Context, string) error { return nil }
-	back, err := g.Readmit(t.Context(), GateRequest{Node: "node-away", OpID: "op-1", By: "operator"})
-	if err != nil || !back.Complete() {
-		t.Fatalf("readmit: %v (%+v)", err, back)
-	}
-	if !slices.Equal(written, []string{"tracker", "pages"}) {
-		t.Fatalf("a readmission under the eviction's id wrote %v, want both logs — "+
-			"the tracker's ledger holds the eviction, not this", written)
-	}
-	if got := back.Domains[0]; got.Position == held || got.OpID != "op-1.readmit.tracker" {
-		t.Fatalf("the tracker answered the readmission %+v, want its own write "+
-			"under op-1.readmit.tracker rather than the eviction's entry", got)
-	}
 }
 
 // THE NODE BLOCK SHOWS A NODE EVICTED ONLY WHERE EVERY LOG HOLDS ITS TOMBSTONE,

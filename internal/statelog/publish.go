@@ -298,6 +298,19 @@ type Request struct {
 	// that peer's eviction — see [Publisher.checkIdentity].
 	NodeGate bool
 
+	// Standing judges a retry this node's ledger already answers
+	// ([Snap.Held]), for a write whose landed record a LATER write can
+	// undo: nil when the operation's record is still the one in force, a
+	// refusal ([ReasonSuperseded]) when it is not. It runs in the snapshot's
+	// own transaction, handed where the record landed, and only after the
+	// row was found to be this write's ([Publisher.heldHere]).
+	//
+	// Nil for every write whose record nothing undoes, where a ledger row
+	// is the whole answer. A node gate sets it ([GateStanding]): an
+	// eviction a readmission has since inverted landed, and answering its
+	// retry `applied` reports a node stopped that every row counts.
+	Standing func(tx *sql.Tx, held Position) error
+
 	// Decide runs inside the snapshot's transaction and returns the
 	// record to publish. It may run more than once — each round takes a
 	// fresh snapshot — and must decide only from rows it reads there.
@@ -661,7 +674,15 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 // the same transaction read.
 func (p *Publisher) snapshot(ctx context.Context, req Request) (Snap, error) {
 	return p.rows.Snapshot(ctx, req.Subject, req.Scope, req.OpID,
-		func(_ *sql.Tx, held OpEntry) error { return p.heldHere(req, held) },
+		func(tx *sql.Tx, held OpEntry) error {
+			if err := p.heldHere(req, held); err != nil {
+				return err
+			}
+			if req.Standing != nil {
+				return req.Standing(tx, held.Position)
+			}
+			return nil
+		},
 		func(tx *sql.Tx, checkpoint Position) (Decision, error) {
 			return req.Decide(tx, p.stampAt(checkpoint))
 		})
