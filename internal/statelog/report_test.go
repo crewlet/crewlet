@@ -495,7 +495,7 @@ func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
 		t.Fatal("a trim blocked past its window with a hundred records past it " +
 			"raised no trim_blocked, so every silence below proves nothing")
 	}
-	if !strings.Contains(fired.Detail, "keeping 100 record(s)") ||
+	if !strings.Contains(fired.Detail, "keeping up to 100 record(s)") ||
 		!strings.HasPrefix(fired.Detail, "tracker: ") {
 		t.Errorf("the alarm reads %q; it names the log and what it is keeping", fired.Detail)
 	}

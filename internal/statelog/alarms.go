@@ -220,9 +220,13 @@ type Reading struct {
 	TrimBlockedFor time.Duration
 	TrimBlockedBy  string
 
-	// TrimPastWindow is how many records the log holds that are older than
-	// ReplayWindow — the records the age term alone would release, and
-	// which a blocked trim is therefore keeping. Per DOMAIN.
+	// TrimPastWindow is how many of the log's SEQUENCES lie below the age
+	// term — the records older than ReplayWindow that the age term alone
+	// would release, and which a blocked trim is therefore keeping. Per
+	// DOMAIN. Exactly that many records on a strict log, whose sequences are
+	// dense above its first; AT MOST that many on a compacted one, whose
+	// superseded records are already gone from the span, which is why the
+	// detail says "up to".
 	//
 	// MEASURED, from the age term's own sequence against the log's first,
 	// rather than assumed from how long the block has lasted, because the
@@ -528,9 +532,9 @@ var table = []rule{
 		// a trim waiting for its first backup (which `backup_age` raises on
 		// its own — from the first reading where none has been taken, at the
 		// policy's age where one has gone stale). The tick is the block's
-		// resolution
-		// — `blocked_since` moves only when the trim does — so a block that
-		// cleared at the window is seen to clear up to one tick later.
+		// resolution — `blocked_since` moves only when the trim does — so a
+		// block that cleared at the window is seen to clear up to one tick
+		// later.
 		//
 		// AND ONLY WHILE THE LOG HOLDS A RECORD PAST THE WINDOW, which is
 		// the half that is measured rather than borrowed: a block that keeps
@@ -544,7 +548,7 @@ var table = []rule{
 				return "", false
 			}
 			return fmt.Sprintf("the trim has not advanced for %s: %s — and the log "+
-					"is keeping %d record(s) older than its %s replay window",
+					"is keeping up to %d record(s) older than its %s replay window",
 					round(r.TrimBlockedFor), r.TrimBlockedBy, r.TrimPastWindow,
 					round(r.ReplayWindow)),
 				r.TrimBlockedFor > r.ReplayWindow+TrimInterval

@@ -863,6 +863,11 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 // blocked one has removed none since, so the count is at worst an
 // underestimate by the records that aged past the window during the tick.
 //
+// A COUNT OF SEQUENCES, not of records: a compacted log's span has holes where
+// superseded records were removed, so there it is an upper bound on what the
+// block keeps, and zero is still exactly "nothing" — a span below the age term
+// that is not empty starts at the log's first record, which is present.
+//
 // ZERO WHERE NOTHING IS KNOWN: a stream this node could not read carries no
 // bounds, an empty log holds nothing, and a published floor with no known age
 // term (one from a build that did not publish it) has nothing to compare.

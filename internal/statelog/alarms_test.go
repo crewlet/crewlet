@@ -61,7 +61,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 				TrimBlockedFor: 8 * 24 * time.Hour, TrimBlockedBy: "snapshot_floor",
 				TrimPastWindow: 1200, ReplayWindow: 7 * 24 * time.Hour,
 			},
-			"snapshot_floor — and the log is keeping 1200 record(s)",
+			"snapshot_floor — and the log is keeping up to 1200 record(s)",
 		},
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,

@@ -150,9 +150,10 @@ when both of these hold:
   itself, the published age term's sequence against the log's first, so a young
   log and an empty one stay silent however long the block has lasted.
 
-Its detail names the log, the blocking term and how many records it is
-keeping; the term's row in `crewlet retention status` says what it has and what
-it wants.
+Its detail names the log, the blocking term and up to how many records it is
+keeping — exactly that many on a strict log, at most that many on the vectors'
+compacted one, whose superseded records are already gone; the term's row in
+`crewlet retention status` says what it has and what it wants.
 
 ### `min_age` is a floor on trimming, and therefore a *lower bound* on retention
 
