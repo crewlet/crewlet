@@ -6,8 +6,32 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
+
+// A LOGIN IS EXACTLY AS WIDE AS A SEAT HANDLE, and this is the one package
+// that can say so.
+//
+// internal/iam bounds a person's login and a machine's handle at MaxLogin for
+// the reasons this package bounds a key: each is a SUBJECT TOKEN the broker
+// indexes for the life of the deployment, and each lands in the author column
+// a seat handle does — the tracker's, the knowledge base's, this chart's own
+// history and the identity trail's — so the three names share one width
+// wherever a screen renders who did something. That package is a leaf and
+// cannot import this one, so it RESTATES the number, and a restatement nothing
+// compares is the silent drift internal/textcut, internal/whsec and
+// internal/jsprovision each record: a handle widened here would stop sharing
+// a width with a login and nothing would fail. This package already imports
+// internal/iam, so the comparison lives here.
+func TestALoginIsExactlyAsWideAsASeatHandle(t *testing.T) {
+	t.Parallel()
+	if chart.MaxKey != iam.MaxLogin {
+		t.Fatalf("a seat handle is bounded at %d bytes and a login at %d — "+
+			"they share an author column and a subject index, so they share "+
+			"one width: change both, together", chart.MaxKey, iam.MaxLogin)
+	}
+}
 
 // A KEY IS FOLDED INTO SOMETHING A SUBJECT AND A PATH CAN BOTH CARRY.
 //

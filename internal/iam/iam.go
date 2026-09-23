@@ -152,7 +152,9 @@ var handlePattern = regexp.MustCompile(`^` + segment + `(?::` + segment + `)+$`)
 //
 // SIXTY-FOUR, which is the bound a seat handle already has (internal/chart's
 // MaxKey), for the reasons that bound it — restated here because this package
-// is a leaf and cannot import the chart:
+// is a leaf and cannot import the chart, and HELD to it by the chart's own
+// suite (TestALoginIsExactlyAsWideAsASeatHandle), because a restatement
+// nothing compares is one that drifts the day the other side moves:
 //
 //   - a login is a SUBJECT TOKEN: `iam.login.<login>` is the claim it
 //     arbitrates on, so the broker keeps it in a per-subject index for the
