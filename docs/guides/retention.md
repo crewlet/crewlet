@@ -821,8 +821,8 @@ the first purge's position, rather than finding the task gone and refusing.
 Pass it back exactly as printed: the id carries the
 instant it was minted, which is what a node that has since adopted a snapshot
 judges the retry by — there it answers `unknown` again rather than purging
-twice. An id of your own making carries no instant and is read as older than
-any adoption.
+twice. An id of your own making is refused (`op_id_invalid`): it carries no
+instant, so no node could tell whether it already ran.
 
 A purge names **one** task, so its **children are moved, not destroyed** —
 each direct child re-parents onto the purged task's own parent, or becomes a
@@ -861,7 +861,11 @@ I published land here?" — is swept at **30 days**. The horizon comes from the
 client that actually re-asks: a machine retry lives inside a five-second wait,
 but a seat carries an operation id forward and re-asks on its next wake, hours
 or a weekend later. An operation id older than that resolves `unknown` rather
-than `applied`, which is the honest answer once the row is gone.
+than `applied`, which is the honest answer once the row is gone — and it is
+never applied a second time: each pass records the cutoff it deleted before,
+and a write whose operation was minted earlier than that, with no row left to
+say whether it already landed, is answered `unknown` without being published
+(see [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
 
 A person's **inbox** — one row per routed change per recipient — is swept at
 `tracker.native.inbox_retention_days`, **365 days** by default and settable

@@ -77,6 +77,15 @@ second copy of something that already landed. So such a write is answered
 **`unknown`** on that node — before anything is published — rather than decided
 a second time. A write minted after the adoption is judged exactly as before.
 
+The ledger also **forgets**: each node deletes its rows thirty days after
+applying them, and records how far back each pass deleted. An operation minted
+before that point is judged the same way — `unknown` unless its row is still
+there — so a retry a month on is never applied twice either. The thirty days
+are sized for the slowest real retrier, a seat that only runs on a schedule
+carrying an operation id across a long weekend; a write that is retried later
+than that is told `unknown`, and the operation's own record, if it landed, is
+on the log.
+
 What decides it is the instant the operation was **minted**, and that instant
 travels inside the operation id itself: every id the engine mints is a
 time-ordered one whose leading bits are its mint time, followed by a name
@@ -84,9 +93,10 @@ saying what the operation is (`01a0…-7…-….update-<task>`). A retry reuses 
 id, so it reuses the instant — including a turn re-run on another node, whose
 writes derive their ids from the unit of work and the instant it began rather
 than from the run. An operation id the engine did not mint carries no instant
-and is read as older than every adoption: on a node that ever adopted a
-snapshot, a retry under it answers `unknown` unless that node's ledger holds its
-row. A peer that did not adopt since can still answer it.
+and is read as older than everything the ledger ever lost: on a node that ever
+adopted a snapshot or swept a row, a write under it answers `unknown` unless
+that node's ledger holds its row — which is why the one route that accepts an
+operation id from outside, a purge's retry, refuses one it did not mint.
 
 The instant is compared with the adoption across nodes, so the fleet's clocks
 are assumed to agree to within the few seconds between a donor finishing the
@@ -477,7 +487,7 @@ replication:
 | `statelog_record_gated` | `WARN` | A durable record applied nowhere, naming the gate. |
 | `statelog_write_gated` | `WARN` | The same, seen by the write that published it. |
 | `statelog_publish_unknown` | `WARN` | A write could not tell whether its record landed. The operation id is in the line; retry under that id, never a fresh one. |
-| `statelog_write_unvouched` | `WARN` | A write was answered `unknown` without being published, because its operation was minted (`minted_at`) before this node adopted a snapshot and its ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node that did not adopt since can answer it, and the operation's own record — if it landed — is on the log. |
+| `statelog_write_unvouched` | `WARN` | A write was answered `unknown` without being published, because its operation was minted (`minted_at`) before this node's operation ledger lost rows — to an adopted snapshot or to the ledger's thirty-day sweep — and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |
 | `statelog_reanchor_started`, `statelog_reanchored` | `WARN` | A generation transition of ONE domain. Both name the domain (`domain`), the one stream it moved (`stream`), the new generation, the stream's live creation instant (`stream_created_at`), the case (`case`: `recreated`, followed from its first surviving record, or `restored`, followed from its end) and the new checkpoint (`cursor`); the start also names the instant the rows were keyed to before (`keyed_to`), this node's checkpoint (`position`) and where the log ends (`last_seq`), and the completion gives the stream's high-water mark before the reanchor (`prev_last_seq_seen`). No other domain's checkpoint moves, and the domain's applier resumes without a restart. |
 
 The snapshotter, the donor and the adopter write under the same component. The

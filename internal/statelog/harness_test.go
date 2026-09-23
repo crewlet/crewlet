@@ -82,6 +82,10 @@ type applier struct {
 	committed statelog.Position
 	ops       map[string]statelog.Position
 
+	// lost is the instant the ledger last lost rows before — zero while it
+	// never has. See [harness.sweep].
+	lost time.Time
+
 	// auto makes this node apply its own record the instant it is
 	// acknowledged, which is the ordinary branch. Off, the node is
 	// behind and every resolution has to say so.
@@ -197,6 +201,13 @@ func (a *applier) Op(_ context.Context, opID string) (statelog.Position, bool, e
 	defer a.mu.Unlock()
 	at, ok := a.ops[opID]
 	return at, ok, nil
+}
+
+// LostBefore answers the cutoff [harness.sweep] last forgot rows before.
+func (a *applier) LostBefore(context.Context) (time.Time, bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lost, !a.lost.IsZero(), nil
 }
 
 // fakeRows hands back one snapshot the test composed.
@@ -419,6 +430,15 @@ func (g *fakeGates) AdoptedAt(context.Context) (time.Time, bool, error) {
 // adopt is what installing a donated snapshot does to this node's ledger: the
 // artefact arrives with the ledger SCRUBBED, so every row this node's applier
 // had written is gone, and the adoption is recorded at `at`.
+// sweep is this node's retention sweep deleting every ledger row, as a sweep
+// whose cutoff is after all of them does, and recording that cutoff.
+func (h *harness) sweep(cutoff time.Time) {
+	h.applier.mu.Lock()
+	defer h.applier.mu.Unlock()
+	h.applier.ops = map[string]statelog.Position{}
+	h.applier.lost = cutoff
+}
+
 func (h *harness) adopt(at time.Time) {
 	h.applier.mu.Lock()
 	h.applier.ops = map[string]statelog.Position{}

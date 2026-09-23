@@ -133,7 +133,52 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		}
 	})
 
-	t.Run("an id that carries no instant is vouched for only where nothing was scrubbed", func(t *testing.T) {
+	// THE SWEEP IS THE LEDGER'S OTHER LOSS. A row applied more than the
+	// ledger's retention ago is deleted by this node's own sweep, and a
+	// retry of its operation — an operator repeating an `unknown` a month
+	// on, a seat carrying an id across a long pause — finds the same
+	// silence an adoption leaves, over rows that already hold the first
+	// application.
+	t.Run("minted before the ledger's sweep and retried after it, it answers unknown and publishes nothing", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		minted := time.Now().Add(-time.Hour)
+		op := statelog.NewOpID(minted, "write-a")
+		first, err := h.write(probeSubject("a"), op, "one")
+		if err != nil || first.Outcome != statelog.OutcomeApplied {
+			t.Fatalf("the first application = (%+v, %v), want applied", first, err)
+		}
+		h.sweep(minted.Add(time.Minute))
+		appended := h.appends.appends.Load()
+
+		res, err := h.write(probeSubject("a"), op, "one")
+		if err != nil {
+			t.Fatalf("the retry: %v", err)
+		}
+		if res.Outcome != statelog.OutcomeUnknown {
+			t.Fatalf("outcome = %q, want unknown — the row that would say "+
+				"whether the first application landed was swept, and deciding "+
+				"again applies the operation twice", res.Outcome)
+		}
+		if got := h.appends.appends.Load() - appended; got != 0 {
+			t.Fatalf("the retry appended %d record(s) past the sweep", got)
+		}
+	})
+
+	t.Run("minted after the sweep's cutoff, an absent row is conclusive and it publishes", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		swept := time.Now().Add(-time.Hour)
+		h.sweep(swept)
+		res, err := h.write(probeSubject("a"), statelog.NewOpID(swept.Add(time.Second), "write-a"), "one")
+		if err != nil || res.Outcome != statelog.OutcomeApplied {
+			t.Fatalf("a first write minted after the sweep's cutoff = (%+v, %v), "+
+				"want applied — every copy of it is applied after its mint, so "+
+				"no sweep so far can have deleted its row", res, err)
+		}
+	})
+
+	t.Run("an id that carries no instant is vouched for only where nothing was lost", func(t *testing.T) {
 		t.Parallel()
 		never := newHarness(t)
 		res, err := never.write(probeSubject("a"), "caller-chosen", "one")
@@ -142,16 +187,22 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 				"(%+v, %v), want applied — that ledger has lost nothing", res, err)
 		}
 
-		adopted := newHarness(t)
-		adopted.adopt(time.Now())
-		res, err = adopted.write(probeSubject("a"), "caller-chosen", "one")
-		if err != nil {
-			t.Fatalf("an id with no instant on a node that adopted: %v", err)
-		}
-		if res.Outcome != statelog.OutcomeUnknown {
-			t.Fatalf("outcome = %q, want unknown — an id whose age nobody can "+
-				"read may predate the adoption, and reading it as recent is the "+
-				"one reading that can re-decide it", res.Outcome)
+		for name, lose := range map[string]func(*harness){
+			"adopted": func(h *harness) { h.adopt(time.Now()) },
+			"swept":   func(h *harness) { h.sweep(time.Now()) },
+		} {
+			h := newHarness(t)
+			lose(h)
+			res, err = h.write(probeSubject("a"), "caller-chosen", "one")
+			if err != nil {
+				t.Fatalf("an id with no instant on a node that %s: %v", name, err)
+			}
+			if res.Outcome != statelog.OutcomeUnknown {
+				t.Fatalf("on a node that %s, outcome = %q, want unknown — an "+
+					"id whose age nobody can read may predate the loss, and "+
+					"reading it as recent is the one reading that can "+
+					"re-decide it", name, res.Outcome)
+			}
 		}
 	})
 }

@@ -87,7 +87,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
 | `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
 | `POST` | `/work/retention/maintenance/exclude` | Record that a participant's process is stopped and holds no outstanding request |
-| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node that has adopted a peer's snapshot since answers the retry `unknown` again rather than purging twice. An id the engine did not mint carries no instant and is read as older than any adoption. **Operator-only**, and absent rather than 503 on a build with no tracker |
+| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node that has adopted a peer's snapshot since answers the retry `unknown` again rather than purging twice. An id the engine did not mint is refused with `400 op_id_invalid`: it carries no instant, so no node could tell whether it already ran. **Operator-only**, and absent rather than 503 on a build with no tracker |
 | `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo, and the case a reanchor would answer |
 | `POST` | `/work/retention/reanchor` | Adopt a recreated stream, or a broker restored from an older copy, at the next generation |
 | `GET` | `/work/views` | One container's **view strip**: the six every container has without anybody saving one, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) — a project key is upper-cased and a unit is resolved to its `id` where the chart gave it one, so a team's strip is one strip under either of its spellings and `?viewer=` is whose personal views and pins order the strip — **your own seat, or operator-only for anybody else's**, the same scope rule as `/work/my-work`; absent is the shared strip, which needs no credential |
@@ -2277,15 +2277,15 @@ log**:
 {
   "node": "node-4",
   "evicted": true,
-  "op_id": "0b4c7f7e-6d52-4d0b-9a4e-2f0f4f3a9c11",
+  "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4",
   "complete": false,
   "domains": [
     {"domain": "tracker", "stream": "CREWLET_TRACKER_LOG",
-     "op_id": "0b4c7f7e-6d52-4d0b-9a4e-2f0f4f3a9c11.evict.tracker",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.tracker",
      "outcome": "applied",
      "position": {"stream": "CREWLET_TRACKER_LOG", "generation": 1, "seq": 918280002}},
     {"domain": "pages", "stream": "CREWLET_PAGES_LOG",
-     "op_id": "0b4c7f7e-6d52-4d0b-9a4e-2f0f4f3a9c11.evict.pages",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.pages",
      "error": "statelog: unavailable (log_full): the broker refused to store the record: …",
      "reason": "log_full"}
   ]
@@ -2309,7 +2309,9 @@ whose ledger already holds the record answers from that ledger at the position
 it has and is not written twice, and only the missing log is written. Without
 `op_id` the route mints a fresh one, which is a second gesture rather than this
 one finished; and an id carried from an eviction to the readmission after it is
-a different operation on every log, never the eviction answered again.
+a different operation on every log, never the eviction answered again. An
+`op_id` the engine did not mint is refused with `400 op_id_invalid`: it carries
+no instant, so no node could tell whether it already ran.
 
 Every node running the state log serves both routes, whichever backends the
 company uses: a company on an external tracker still runs both logs. A node

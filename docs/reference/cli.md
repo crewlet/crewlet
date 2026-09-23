@@ -649,7 +649,8 @@ second record. A retry whose first purge did land answers `applied`, at the
 position that purge landed at, rather than finding the task already gone. Pass
 the id exactly as printed: it carries the instant it was minted, and a node
 that has adopted a peer's snapshot since judges the retry by it — answering
-`unknown` again rather than purging twice.
+`unknown` again rather than purging twice. An id the engine did not print is
+refused.
 
 What it does **not** reach: a node that is offline or evicted keeps its copy
 until it replays, adopts a snapshot, is replaced or is destroyed. There is no
@@ -763,13 +764,14 @@ When **not every log holds the record** — one answered `unknown`, or was
 refused `log_full` — the command exits non-zero and names the operation:
 
 ```
-  The gesture has not reached every log. Run it again with -op-id 0b4c7f7e-… to finish it: a log that already holds the record answers from its own ledger and is not written twice.
+  The gesture has not reached every log. Run it again with -op-id 01a0cd85-… to finish it: a log that already holds the record answers from its own ledger and is not written twice.
 ```
 
 Run it again with that `-op-id`. Each log's record is published under an id
 derived from it, so a log that already holds the record answers from its own
 ledger at the position it has and only the missing log is written; a fresh id
-would be a second eviction rather than this one finished.
+would be a second eviction rather than this one finished, and an id the engine
+did not print is refused.
 
 `readmit` is the inverse commit rather than a delete, so the eviction's whole
 history survives a replay. It is **refused** while the node is below a trim

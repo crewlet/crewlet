@@ -557,7 +557,7 @@ to the adopted log.
 | **`tracker_tasks`** · `tracker_comments` · `tracker_history` · … | The company's work — the tracker's whole state, derived from `CREWLET_TRACKER_LOG` |
 | **`pages_heads`** · `pages_revisions` · `pages_titles` · … | The company's knowledge base, derived from `CREWLET_PAGES_LOG`: a page's current body, the immutable revisions behind it, and the title claim that is what makes a name an address |
 | **`kb_vectors`** · `kb_vectors_bin` | Page and task embeddings and their 1-bit codes, derived from `CREWLET_TRACKER_VECTORS`. The fleet pays the provider bill **once** and every node holds the answer, which is precisely why these are not in the node's own file |
-| `statelog_cursor` · each domain's operation ledger and deferred records | Where this node is on each log, which operations it has already applied, and any record a newer build wrote that this one cannot decode |
+| `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` | Where this node is on each log, which operations it has already applied — and how far back its sweep has deleted that record, so a retry older than it is answered `unknown` rather than applied twice — and any record a newer build wrote that this one cannot decode |
 
 **The whole company — coordination KV.**
 

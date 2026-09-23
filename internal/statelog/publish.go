@@ -589,12 +589,14 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 			p.logger.WarnContext(ctx, "statelog_write_unvouched",
 				"domain", p.domain.Name(), "subject", req.Subject.String(),
 				"op_id", req.OpID, "minted_at", mintedAt(req.OpID),
-				"detail", "this operation was minted before this node "+
-					"adopted a donated snapshot, and the snapshot arrived "+
-					"without the ledger that says whether it already "+
-					"applied — so it is answered unknown rather than "+
-					"decided a second time; another node that did not "+
-					"adopt since can answer it")
+				"detail", "this operation was minted before this node's "+
+					"operation ledger lost rows — to an adopted snapshot, "+
+					"which arrives without the donor's ledger, or to the "+
+					"ledger's retention sweep — and it holds no row saying "+
+					"whether the operation already applied, so it is "+
+					"answered unknown rather than decided a second time; "+
+					"a node whose ledger lost nothing that far back can "+
+					"answer it")
 			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round}, nil
 		}
 
@@ -1220,6 +1222,8 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 //
 // # Why the ledger can lose a row, and what that costs a retry
 //
+// TWO WAYS, and the bound is the later of them.
+//
 // The ledger is this node's own and is SCRUBBED out of every donated
 // snapshot, so a node that adopted one holds no row for any operation the
 // donor applied — [AdoptedAt] is the instant before which that loss reaches.
@@ -1228,6 +1232,15 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 // applier applies and writes a row for: absence is conclusive. An operation
 // minted before it may have landed inside the artefact with its row scrubbed,
 // and absence says nothing.
+//
+// And the ledger is SWEPT: a row applied more than [OpsRetention] ago is
+// deleted by this node's own retention job, which records the cutoff of every
+// sweep that deleted anything ([Rows.LostBefore]). Every copy of an operation is
+// applied at or after the instant it was minted, so one minted at or after
+// that cutoff cannot have lost its row to the sweep; one minted before it may
+// have, and absence again says nothing. Without this half, a retry a month on
+// — an operator repeating an `unknown`, a seat carrying an operation id across
+// a long pause — was decided again and published a second copy.
 //
 // That is why this runs BEFORE A DECISION IS PUBLISHED and not only in the
 // resolution of an ambiguous one. A retry — a turn re-run after a crash, a
@@ -1248,29 +1261,56 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 // # Where it is cheap
 //
 // The adoption record is one aggregate over a table with a row per join this
-// node ever made, and the ledger row is read only for an operation minted
-// before the bound — which on a node that never adopted is no operation at
-// all. A domain with no ledger has nothing to vouch with and nothing that
-// reads it, so it is answered without either read.
+// node ever made, the sweep's is one row by key, and the ledger row is read
+// only for an operation minted before the bound — which on a node that never
+// adopted and whose sweep never deleted anything is no operation at all. A
+// domain with no ledger has nothing to vouch with and nothing that reads it,
+// so it is answered without any read.
 func (p *Publisher) vouches(ctx context.Context, req Request) (bool, error) {
 	if p.domain.OpsTable() == "" {
 		return true, nil
 	}
-	adopted, ever, err := p.gates.AdoptedAt(ctx)
+	bound, lost, err := p.ledgerLoss(ctx)
 	if err != nil {
-		return false, fmt.Errorf("statelog: read the adoption record: %w", err)
+		return false, err
 	}
-	if !ever || !mintedAt(req.OpID).Before(adopted) {
+	if !lost || !mintedAt(req.OpID).Before(bound) {
 		return true, nil
 	}
-	// MINTED BEFORE THE ADOPTION, so only the row itself can speak — and
-	// it is read AFTER the bound, so an adoption landing between the two
-	// reads is one whose scrubbed table this read sees.
+	// MINTED BEFORE THE BOUND, so only the row itself can speak — and it
+	// is read AFTER the bound, so an adoption or a sweep landing between
+	// the two reads is one whose effect on the table this read sees.
 	_, held, err := p.rows.Op(ctx, req.OpID)
 	if err != nil {
 		return false, fmt.Errorf("statelog: read the operation ledger: %w", err)
 	}
 	return held, nil
+}
+
+// ledgerLoss is the instant before which this node's operation ledger may
+// have lost rows — the later of its latest adoption and its sweep's latest
+// cutoff — reporting false when it has lost none. See [Publisher.vouches].
+func (p *Publisher) ledgerLoss(ctx context.Context) (time.Time, bool, error) {
+	adopted, everAdopted, err := p.gates.AdoptedAt(ctx)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("statelog: read the adoption record: %w", err)
+	}
+	swept, everSwept, err := p.rows.LostBefore(ctx)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("statelog: read the ledger's sweep record: %w", err)
+	}
+	switch {
+	case everAdopted && everSwept:
+		if swept.After(adopted) {
+			return swept, true, nil
+		}
+		return adopted, true, nil
+	case everAdopted:
+		return adopted, true, nil
+	case everSwept:
+		return swept, true, nil
+	}
+	return time.Time{}, false, nil
 }
 
 // fence0 is every refusal this node can make from what it already knows,

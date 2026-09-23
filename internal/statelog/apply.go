@@ -881,7 +881,9 @@ func (r *Runner) Anchor(ctx context.Context, subject string) (Position, error) {
 // hours later, and after a weekend
 // for a seat that only runs on a schedule. An op id that outlives its row
 // resolves `unknown` rather than `applied`, which sends a turn to re-decide
-// work it already did.
+// work it already did — and never a second copy of the operation: the sweep
+// records the cutoff of every pass that deleted a row, and the publisher reads
+// that record before trusting the ledger's silence ([Rows.LostBefore]).
 //
 // It costs about 29 MB steady at the census rate (6 518 commits a day, ~150
 // bytes a row) against 357 MB a year kept for ever — and "for ever" is what

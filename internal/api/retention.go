@@ -285,7 +285,10 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 	// and a retry with a FRESH id would append a second purge of a task the
 	// first one may already have destroyed. The gate routes beside this
 	// take one for the same reason.
-	opID := callerOpID(r, "purge-"+id)
+	opID, ok := callerOpID(w, r, "purge-"+id)
+	if !ok {
+		return
+	}
 	result, err := a.purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
 	if err != nil {
 		log.Warn("api_purge_failed", "task", id, "operator", operator,
@@ -316,16 +319,32 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 // THE ID CARRIES THE INSTANT IT WAS MINTED, which is what the state log reads
 // to decide whether its ledger can vouch for the retry — so the one minted here
 // is [statelog.NewOpID]'s, and the id a caller brings back is the one the route
-// answered with, instant and all. An id the engine did not mint carries none
-// and is read as minted before every adoption: on a node that has adopted a
-// donated snapshot since, a retry under it is answered `unknown` rather than
-// applied a second time, and a node that never adopted answers it as it would
-// any other.
-func callerOpID(r *http.Request, name string) string {
-	if opID := strings.TrimSpace(r.URL.Query().Get("op_id")); opID != "" {
-		return opID
+// answered with, instant and all.
+//
+// AN ID THE ENGINE DID NOT MINT IS REFUSED rather than passed on, and false is
+// returned with the 400 already written. It carries no instant, so the state
+// log reads it as older than every loss its ledger has had — an adopted
+// snapshot, or a retention sweep that deleted anything, which every deployment
+// older than the ledger's retention has had — and answers such a write
+// `unknown` without publishing it, on the first attempt as on every retry.
+// Passed on, it would be a gesture that can never run and never says why.
+func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
+	opID := strings.TrimSpace(r.URL.Query().Get("op_id"))
+	if opID == "" {
+		return statelog.NewOpID(time.Now(), name), true
 	}
-	return statelog.NewOpID(time.Now(), name)
+	if _, minted := statelog.OpMintedAt(opID); !minted {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "op_id_invalid",
+			"detail": "?op_id= is for finishing a gesture that came back " +
+				"`unknown` or partial, and takes back the op_id its answer " +
+				"returned, unchanged — this one is not an id this engine " +
+				"minted, so no node could tell whether it already ran. Omit " +
+				"it to start the gesture afresh",
+		})
+		return "", false
+	}
+	return opID, true
 }
 
 // gateVerb names a gate gesture in the fresh operation id it is minted under.
@@ -394,8 +413,12 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			})
 			return
 		}
+		opID, ok := callerOpID(w, r, gateVerb(evict)+"-"+node)
+		if !ok {
+			return
+		}
 		req := engine.GateRequest{
-			Node: node, OpID: callerOpID(r, gateVerb(evict)+"-"+node), By: operator,
+			Node: node, OpID: opID, By: operator,
 			Force: evict && r.URL.Query().Get("force") == "true",
 		}
 		var result engine.GateResult

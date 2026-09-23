@@ -216,6 +216,14 @@ const OpsPurgeBatch = 2000
 // BATCHED, AND EACH BATCH ITS OWN TRANSACTION. One transaction over the whole
 // backlog would hold the writer the applier is queued behind for the length of
 // it, which on a first tick after a long absence is the whole month.
+//
+// A BATCH THAT DELETED ANYTHING RECORDS WHAT IT FORGOT, in its own
+// transaction ([tables.markLost]): the watermark is how the publisher tells a
+// row that was never written from one that was swept ([tables.lostBefore]),
+// and one written after the delete it describes — or in another transaction —
+// could trail the rows actually gone, which is the one direction that
+// re-decides an operation that already landed. A batch that deleted nothing
+// records nothing, because nothing was forgotten.
 func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int64, error) {
 	if t.ops == "" {
 		return 0, nil
@@ -232,7 +240,10 @@ func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int6
 				return err
 			}
 			deleted, err = res.RowsAffected()
-			return err
+			if err != nil || deleted == 0 {
+				return err
+			}
+			return t.markLost(ctx, tx, cutoff)
 		})
 		if err != nil {
 			return total, fmt.Errorf("statelog: sweep %s: %w", t.ops, err)
@@ -246,6 +257,49 @@ func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int6
 			return total, nil
 		}
 	}
+}
+
+// markLost records that the ops table may have lost rows applied before
+// before, in the caller's transaction — which must be the one that loses them.
+//
+// MONOTONE, so a later loss with an earlier instant — a sweep after a clock
+// stepped back, a shorter horizon — never un-forgets rows an earlier one lost.
+func (t tables) markLost(ctx context.Context, tx *sql.Tx, before time.Time) error {
+	if t.ops == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO statelog_ops_lost (ops_table, lost_before)
+		VALUES (?, ?)
+		ON CONFLICT (ops_table) DO UPDATE SET
+			lost_before = MAX(lost_before, excluded.lost_before)`,
+		t.ops, store.EncodeTime(before))
+	if err != nil {
+		return fmt.Errorf("statelog: record that %s lost rows before %s: %w",
+			t.ops, before.UTC().Format(time.RFC3339Nano), err)
+	}
+	return nil
+}
+
+// lostBefore answers the instant before which the ops table may have lost
+// rows, reporting false when it has lost none — see [Rows.LostBefore] and
+// migration 0017.
+func (t tables) lostBefore(ctx context.Context, tx *sql.Tx) (time.Time, bool, error) {
+	if t.ops == "" {
+		return time.Time{}, false, nil
+	}
+	var before int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT lost_before FROM statelog_ops_lost WHERE ops_table = ?`,
+		t.ops).Scan(&before)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return time.Time{}, false, nil
+	case err != nil:
+		return time.Time{}, false, fmt.Errorf("statelog: read how far back %s "+
+			"may have lost rows: %w", t.ops, err)
+	}
+	return store.DecodeTime(before), true, nil
 }
 
 // op answers where an operation was applied on this node.

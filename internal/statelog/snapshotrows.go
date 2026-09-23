@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -177,6 +178,21 @@ func (r *SnapshotRows) Op(ctx context.Context, opID string) (Position, bool, err
 		return Position{}, false, nil
 	}
 	return at, true, nil
+}
+
+// LostBefore answers how far back the domain's ledger may have lost rows — see
+// [Rows.LostBefore].
+func (r *SnapshotRows) LostBefore(ctx context.Context) (time.Time, bool, error) {
+	var (
+		before time.Time
+		ok     bool
+	)
+	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		before, ok, err = r.tables.lostBefore(ctx, tx)
+		return err
+	})
+	return before, ok, err
 }
 
 // CheckTables reports whether a domain's declared tables accept the

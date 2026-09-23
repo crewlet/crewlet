@@ -98,27 +98,29 @@
 //
 // # An operation id carries the instant it was minted
 //
-// Layer 1 has a hole the other two cannot fill: the ops table is this node's
-// own and is SCRUBBED out of every donated snapshot, so after an adoption it
-// holds no row for any operation the donor applied. A retry of such an
-// operation — a turn re-run under its derived id, a caller repeating an
-// `unknown` — finds no row, decides again on rows that already hold the first
-// application, and publishes a second copy the broker has no reason to
+// Layer 1 has two holes the other two cannot fill. The ops table is this
+// node's own and is SCRUBBED out of every donated snapshot, so after an
+// adoption it holds no row for any operation the donor applied; and it is
+// SWEPT, so a row applied more than [OpsRetention] ago is gone. A retry of
+// such an operation — a turn re-run under its derived id, a caller repeating
+// an `unknown` — finds no row, decides again on rows that already hold the
+// first application, and publishes a second copy the broker has no reason to
 // refuse: the expectation is current and the duplicate window long past.
 //
 // So before a decision is published the publisher asks whether its ledger can
 // VOUCH for the operation (Publisher.vouches): it cannot for one minted before
-// this node's latest adoption ([AdoptedAt]) whose row it does not hold, and
-// such a write is answered `unknown` instead — the one answer that is true,
-// and the one a retry can do nothing wrong with. The resolution of a lost
-// acknowledgement asks the same question. The instant is the operation id's
-// OWN — a UUIDv7 whose leading bits are its mint time, recovered with
-// [OpMintedAt] and minted only by [NewOpID], [DeriveOpID] and [StepOpID] —
-// because every retry reuses the id, and a value a caller stamped beside it
-// was the CALL's: after the adoption on every retry, which is precisely the
-// case the question exists for. An id that carries no instant is read as
-// minted before every adoption. opid.go states the grammar, the clock it is
-// read off and what that assumes of the fleet.
+// the ledger may have lost rows — the later of this node's latest adoption
+// ([AdoptedAt]) and its sweep's latest cutoff ([Rows.LostBefore]) — whose row it
+// does not hold, and such a write is answered `unknown` instead: the one
+// answer that is true, and the one a retry can do nothing wrong with. The
+// resolution of a lost acknowledgement asks the same question. The instant is
+// the operation id's OWN — a UUIDv7 whose leading bits are its mint time,
+// recovered with [OpMintedAt] and minted only by [NewOpID], [DeriveOpID] and
+// [StepOpID] — because every retry reuses the id, and a value a caller stamped
+// beside it was the CALL's: after the adoption on every retry, which is
+// precisely the case the question exists for. An id that carries no instant
+// is read as minted before every such loss. opid.go states the grammar, the
+// clock it is read off and what that assumes of the fleet.
 //
 // # A record this build cannot decode is RETAINED, with one exception
 //

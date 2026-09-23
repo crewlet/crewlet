@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -103,3 +104,79 @@ func adoptASnapshot(t *testing.T, r *roundTrip, ledger string) {
 		t.Fatalf("scrub the ledger: %v", err)
 	}
 }
+
+// A WRITE RETRIED AFTER ITS LEDGER ROW WAS SWEPT IS NOT APPLIED A SECOND TIME,
+// through the real writer, the real publisher, the real ledger and the real
+// sweep.
+//
+// The ledger keeps a row for thirty days, and a retry is judged by it — so a
+// retry of an operation whose row the sweep deleted used to find the same
+// silence as an operation that never ran, decide again on rows that already
+// held the first application, and publish a second copy. The sweep now
+// records how far back it forgot, and the publisher reads that before it
+// trusts the silence.
+func TestAWriteRetriedAfterItsLedgerRowWasSweptIsNotAppliedTwice(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	created := r.createTask("who owns the rollback")
+
+	comment := func(op, id string) (tracker.WriteResult, error) {
+		return r.writer.UpdateTask(t.Context(), op, created.ID, "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+				ID: id, Task: created.ID, Author: "ana",
+				AuthorKind: tracker.AuthorHuman, Body: "I do.",
+				CreatedAt: wednesday,
+			}}, tracker.ChangeComment, nil)
+	}
+	op := statelog.NewOpID(time.Now().Add(-time.Hour), "comment-"+created.ID)
+	if first, err := comment(op, "cm-1"); err != nil || first.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the first application = (%+v, %v), want applied", first.Result, err)
+	}
+	r.drain()
+
+	// THE SWEEP, with a cutoff past the row — the arithmetic of a month
+	// passing, done by the job that runs it.
+	sweep, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain: tracker.Domain{}, Applier: r.applier, Fetch: noFetch{},
+		DB: r.db.Replicated(),
+	})
+	if err != nil {
+		t.Fatalf("build the ledger's owner: %v", err)
+	}
+	if n, err := sweep.PurgeOps(t.Context(), time.Now()); err != nil || n == 0 {
+		t.Fatalf("the sweep = (%d, %v), want the ledger's rows", n, err)
+	}
+	end := r.logEnd(t)
+
+	retry, err := comment(op, "cm-1")
+	if err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if retry.Outcome != statelog.OutcomeUnknown {
+		t.Fatalf("the retry answered %q, want unknown — the row that would say "+
+			"whether the first application landed was swept", retry.Outcome)
+	}
+	if got := r.logEnd(t); got != end {
+		t.Fatalf("the retry put %d record(s) on the log — a second application "+
+			"of one operation, applied by every node", got-end)
+	}
+
+	// AND THE CONTROL: an operation minted after the sweep's cutoff is
+	// judged by its row as ever, or the sweep would refuse every write.
+	fresh, err := comment(statelog.NewOpID(time.Now(), "comment-"+created.ID), "cm-2")
+	if err != nil || fresh.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("a fresh operation after the sweep = (%+v, %v), want applied",
+			fresh.Result, err)
+	}
+}
+
+// noFetch is a log nothing is pulled from: the sweep's owner is built only to
+// sweep.
+type noFetch struct{}
+
+func (noFetch) Fetch(context.Context, int, int, time.Duration) ([]statelog.Message, error) {
+	return nil, nil
+}
+
+func (noFetch) Pending(context.Context) (uint64, error) { return 0, nil }

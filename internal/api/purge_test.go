@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -121,13 +123,15 @@ func TestAPurgeMissingItsConfirmationProjectOrReasonNeverWrites(t *testing.T) {
 func TestAPurgeRetryReusesTheOperationIdItWasGiven(t *testing.T) {
 	p := &fakePurger{}
 	a := purgeApp(t, p)
+	given := statelog.NewOpID(time.Now().Add(-time.Minute), "purge-t-1")
 	if code, _ := postPurge(t, a,
-		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&op_id=op-abc"); code != http.StatusOK {
+		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&op_id="+
+			url.QueryEscape(given)); code != http.StatusOK {
 		t.Fatalf("the route answered %d", code)
 	}
-	if p.opID != "op-abc" {
+	if p.opID != given {
 		t.Errorf("the retry was written under %q rather than the id it was "+
-			"given", p.opID)
+			"given, %q", p.opID, given)
 	}
 	// AND WITHOUT ONE IT MINTS ITS OWN, or two operators purging two
 	// tasks would share an operation id.
@@ -135,8 +139,44 @@ func TestAPurgeRetryReusesTheOperationIdItWasGiven(t *testing.T) {
 		"/work/t-2/purge?confirm=ENG-43&project=ENG&reason=why"); code != http.StatusOK {
 		t.Fatalf("the route answered %d", code)
 	}
-	if p.opID == "op-abc" || p.opID == "" {
+	if p.opID == given || p.opID == "" {
 		t.Errorf("a call with no operation id was written under %q", p.opID)
+	}
+	if _, minted := statelog.OpMintedAt(p.opID); !minted {
+		t.Errorf("the route minted %q, which carries no mint instant", p.opID)
+	}
+}
+
+// AN OPERATION ID THE ENGINE DID NOT MINT IS REFUSED, not passed on — by the
+// purge and by the node gate, the two routes that take one.
+//
+// It carries no instant, so the state log reads it as older than every loss
+// its ledger has had — and on any deployment old enough to have swept its
+// ledger once, that answers the gesture `unknown` without publishing it, on
+// the first attempt as on every retry: a gesture that can never run and never
+// says why.
+func TestAGestureRefusesAnOperationIdTheEngineDidNotMint(t *testing.T) {
+	p := &fakePurger{}
+	code, body := postPurge(t, purgeApp(t, p),
+		"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why&op_id=op-abc")
+	if code != http.StatusBadRequest || body["error"] != "op_id_invalid" {
+		t.Fatalf("an invented purge op_id answered %d %v, want 400 op_id_invalid",
+			code, body)
+	}
+	if p.calls != 0 {
+		t.Errorf("the invented op_id still reached the purge")
+	}
+
+	b := closedPosture()
+	gate := &fakeNodeGate{}
+	code, body = postPurge(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+		"/work/retention/evict/node-4?confirm=node-4&op_id=op-abc")
+	if code != http.StatusBadRequest || body["error"] != "op_id_invalid" {
+		t.Fatalf("an invented gate op_id answered %d %v, want 400 op_id_invalid",
+			code, body)
+	}
+	if len(gate.asked) != 0 {
+		t.Errorf("the invented op_id still reached the gate: %+v", gate.asked)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 // Rows is what the PUBLISHER reads from this node's own durable tables, and
@@ -66,6 +67,16 @@ type Rows interface {
 	// out of the snapshot I arrived with". Either read as "somebody else
 	// won" republishes a write that already landed.
 	Op(ctx context.Context, opID string) (Position, bool, error)
+
+	// LostBefore answers the instant before which the domain's ops table
+	// may have lost rows, reporting false when it has lost none: every row
+	// it no longer holds was applied before it, so "absent" is conclusive
+	// only for an operation minted at or after it. The retention sweep is
+	// what loses them here, and records the cutoff of every pass that
+	// deleted anything, in the same transaction as the delete — the
+	// sweep's half of what [Gates.AdoptedAt] is for an adoption. See
+	// [Publisher.vouches].
+	LostBefore(ctx context.Context) (time.Time, bool, error)
 }
 
 // Decision is what a domain decided, inside the snapshot, from rows it read

@@ -20,7 +20,9 @@ import (
 // and both times the question is the same: can this node's operation ledger
 // vouch for it? It cannot for an operation minted before this node's latest
 // adoption of a donated snapshot, because the ledger is scrubbed out of every
-// one ([AdoptedAt], [Publisher.vouches]). An operation id is minted ONCE and
+// one ([AdoptedAt]), nor for one minted before its retention sweep's latest
+// cutoff, because every row applied before that is gone ([Rows.LostBefore]) — see
+// [Publisher.vouches]. An operation id is minted ONCE and
 // reused by every retry of the operation, including retries in another call,
 // another run of the same turn and another process on another node. So "when
 // was this minted" is a property of the ID, and anything that states it
@@ -65,13 +67,14 @@ import (
 //
 // An id the engine did not mint — a caller's own string, a test's literal —
 // has no instant to recover, and it is read as minted at the zero instant:
-// before every adoption this node has recorded. The ledger vouches for it only
-// on a node that has never adopted a snapshot, which is the one ledger that
-// has lost nothing; anywhere else an absent row answers `unknown` rather than
+// before every adoption and every sweep this node has recorded. The ledger
+// vouches for it only on a node that has never adopted a snapshot and whose
+// sweep has never deleted a row, which is the one ledger that has lost
+// nothing; anywhere else an absent row answers `unknown` rather than
 // "somebody else won". That is the only reading under which an id of unknown
-// age can never be re-decided across an adoption, and the price — a caller's
-// own id cannot be retried to a conclusion on a node that adopted — falls on
-// the caller that invented it, never on a colleague's write.
+// age can never be re-decided across a loss, and the price — a caller's own
+// id cannot be retried to a conclusion on a node whose ledger has lost rows —
+// falls on the caller that invented it, never on a colleague's write.
 //
 // # Whose clock
 //

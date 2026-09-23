@@ -2221,3 +2221,72 @@ func waitForDrain(t *testing.T, h *applyHarness, want bool, what string) {
 	}
 	t.Fatalf("waited 15s for %s: Drained() = %v", what, h.runner.Drained())
 }
+
+// THE SWEEP RECORDS HOW FAR BACK IT FORGOT, and only when it forgot anything.
+//
+// The ledger's silence about an operation means "it never applied here" only
+// where the sweep has not deleted the row that would have said otherwise, so
+// the publisher reads this record before it trusts that silence. A watermark
+// that trailed the rows actually deleted would re-decide an operation that
+// already landed; one written by a pass that deleted nothing would refuse
+// operations whose rows are all still here.
+func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	rows, err := statelog.NewRows(h.db, probeDomain{}, nil)
+	if err != nil {
+		t.Fatalf("build the read seam: %v", err)
+	}
+	swept := func() (time.Time, bool) {
+		t.Helper()
+		before, ok, err := rows.LostBefore(t.Context())
+		if err != nil {
+			t.Fatalf("read the sweep record: %v", err)
+		}
+		return before, ok
+	}
+	seed := func(appliedAt time.Time) {
+		t.Helper()
+		if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), `
+				INSERT INTO probe_ops (op_id, subject, position, applied_at)
+				VALUES (?, 'probe.o1', 1, ?)`,
+				fmt.Sprintf("op-%d", appliedAt.UnixNano()),
+				store.EncodeTime(appliedAt))
+			return err
+		}); err != nil {
+			t.Fatalf("seed the ledger: %v", err)
+		}
+	}
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+	// A PASS THAT DELETED NOTHING FORGOT NOTHING.
+	seed(day)
+	if _, err := h.runner.PurgeOps(t.Context(), day); err != nil {
+		t.Fatalf("PurgeOps: %v", err)
+	}
+	if before, ok := swept(); ok {
+		t.Fatalf("a sweep that deleted nothing recorded %s — every operation "+
+			"minted before it is then refused although its row is here", before)
+	}
+
+	// A PASS THAT DELETED A ROW records its cutoff.
+	cutoff := day.Add(time.Hour)
+	if n, err := h.runner.PurgeOps(t.Context(), cutoff); err != nil || n != 1 {
+		t.Fatalf("PurgeOps = (%d, %v), want the one row", n, err)
+	}
+	if before, ok := swept(); !ok || !before.Equal(cutoff) {
+		t.Fatalf("the sweep record = (%s, %v), want %s — an operation minted "+
+			"before it whose row it deleted is decided again", before, ok, cutoff)
+	}
+
+	// AND IT NEVER MOVES BACK: a later pass with an earlier cutoff — a
+	// clock stepped back — does not un-forget what the first deleted.
+	seed(day.Add(-time.Hour))
+	if n, err := h.runner.PurgeOps(t.Context(), day); err != nil || n != 1 {
+		t.Fatalf("PurgeOps = (%d, %v), want the one row", n, err)
+	}
+	if before, _ := swept(); !before.Equal(cutoff) {
+		t.Fatalf("the sweep record moved back to %s from %s", before, cutoff)
+	}
+}

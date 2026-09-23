@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -359,19 +360,21 @@ func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
 				Reason: statelog.ReasonLogFull, Detail: "the broker refused"})},
 	}}}
 	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
+	op := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
 
-	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4&op_id=op-1")
+	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4&op_id="+
+		url.QueryEscape(op))
 	if code != http.StatusOK {
 		t.Fatalf("a partial gesture answered %d %v, want 200 — the logs that "+
 			"answered hold their record", code, body)
 	}
-	if body["complete"] != false || body["op_id"] != "op-1" {
-		t.Fatalf("complete = %v, op_id = %v, want false and the caller's own op-1",
-			body["complete"], body["op_id"])
+	if body["complete"] != false || body["op_id"] != op {
+		t.Fatalf("complete = %v, op_id = %v, want false and the caller's own %s",
+			body["complete"], body["op_id"], op)
 	}
-	if len(gate.asked) != 1 || gate.asked[0].OpID != "op-1" || gate.asked[0].By != "founder" {
-		t.Fatalf("the engine was asked %+v, want op-1 run by the token's operator "+
-			"founder — every log's record names who ran it", gate.asked)
+	if len(gate.asked) != 1 || gate.asked[0].OpID != op || gate.asked[0].By != "founder" {
+		t.Fatalf("the engine was asked %+v, want %s run by the token's operator "+
+			"founder — every log's record names who ran it", gate.asked, op)
 	}
 	domains, _ := body["domains"].([]any)
 	if len(domains) != 2 {
@@ -402,6 +405,11 @@ func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
 	if opID, _ := body["op_id"].(string); opID == "" || opID != gate.asked[1].OpID {
 		t.Fatalf("the answer's op_id %v is not the one the engine ran, %q",
 			body["op_id"], gate.asked[1].OpID)
+	}
+	if _, minted := statelog.OpMintedAt(gate.asked[1].OpID); !minted {
+		t.Errorf("the route minted %q, which carries no mint instant — every "+
+			"log's id derived from it would be refused on a swept ledger",
+			gate.asked[1].OpID)
 	}
 }
 
