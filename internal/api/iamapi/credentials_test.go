@@ -351,8 +351,11 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: signer, Chart: noSeats{}, External: b.API.ExternalBase(),
 		Audit: quietAudit{}, Now: func() time.Time { return at },
+		// PROVED A MOMENT AGO on the clock the route's step-up check
+		// reads, which is the wall clock: minting a credential is a
+		// sensitive gesture, and this case is about WHO mints, not when.
 		Directory: sessionRows{session.Identity{Applied: 10,
-			Session: session.SessionRow{Found: true, Epoch: 1, ProvedAt: at},
+			Session: session.SessionRow{Found: true, Epoch: 1, ProvedAt: time.Now()},
 			Person: session.PersonRow{Found: true, Epoch: 1,
 				Stage: iam.StageActive, Login: "bob.sre",
 				Grants: []iam.Grant{iam.GrantStateRead}},
@@ -389,8 +392,16 @@ type quietAudit struct{}
 
 func (quietAudit) Emit(context.Context, events.Payload) {}
 
-func (quietAudit) EmitOnce(context.Context, string, time.Duration, events.Payload) bool {
+func (quietAudit) EmitOnce(context.Context, authevents.OnceClass, string,
+	time.Duration, events.Payload) bool {
+
 	return true
+}
+
+func (quietAudit) Claim(context.Context, authevents.OnceClass, string,
+	time.Duration) (func(), bool) {
+
+	return func() {}, true
 }
 
 func (quietAudit) Failed(context.Context, authevents.Failure) {}
