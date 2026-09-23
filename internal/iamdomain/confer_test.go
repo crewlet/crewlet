@@ -123,7 +123,8 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 		return rig.draining(func() error {
 			_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
 				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
-				Name: "A joiner", Email: address, Grants: grants,
+				Name: "A joiner", Email: address, Login: iam.LoginFromAddress(address),
+				Grants:    grants,
 				Colleague: colleague, Invitation: invitation,
 				OpID: "op-redeem-" + person, Reason: "redeemed an invitation",
 			})
@@ -229,6 +230,7 @@ func TestTheFirstPersonMayCarryTheCeilingAndNobodyAfterThem(t *testing.T) {
 			_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
 				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 				Name: "The founder", Email: login + "@example.com",
+				Login:  login + ".founder",
 				Grants: iam.AllGrants, Colleague: iam.ColleagueWrite,
 				BootstrapCode: code,
 				OpID:          "op-first-" + person, Reason: "the first operator",
@@ -266,8 +268,9 @@ func TestTheFirstPersonMayCarryTheCeilingAndNobodyAfterThem(t *testing.T) {
 	if err := rig.draining(func() error {
 		_, err := nodeWriter(rig).Enrol(rig.t.Context(), iamdomain.Enrolment{
 			PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
-			Name: "Nobody", Email: "nobody@example.com", Grants: iam.AllGrants,
-			OpID: "op-nobasis", Reason: "no basis",
+			Name: "Nobody", Email: "nobody@example.com", Login: "nobody.here",
+			Grants: iam.AllGrants,
+			OpID:   "op-nobasis", Reason: "no basis",
 		})
 		return err
 	}); !errors.Is(err, iamdomain.ErrRefused) {
