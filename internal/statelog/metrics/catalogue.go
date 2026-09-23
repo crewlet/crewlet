@@ -486,6 +486,21 @@ func Catalogue() []Instrument {
 				"budget: every second here is a second in which reads are " +
 				"behind and writes are pending on every node.",
 		},
+		// ---- authentication -------------------------------------------
+		{
+			Name: AuthAttemptsFailed, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"method", "outcome"},
+			Shows: "Every failed attempt to prove an identity, as it happens: " +
+				"a sign-in, a step-up, a founder code, a provider round trip " +
+				"that ended in nobody, or a bearer presented and refused " +
+				"(`method`), and whether the attempt was verified and wrong " +
+				"or turned away at the throttle's ceiling (`outcome`). It is " +
+				"the ONLY per-attempt record there is, by design: an " +
+				"unauthenticated caller authors this rate, so the event log " +
+				"gets one coalesced `iam_login_failures` row per client per " +
+				"minute and the rate itself lives here, where a guessing run " +
+				"costs a counter increment rather than a row in every backup.",
+		},
 		// ---- alarms ---------------------------------------------------
 		{
 			Name: AlarmActive, Kind: KindGauge, Unit: UnitCount,

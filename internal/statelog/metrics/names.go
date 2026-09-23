@@ -16,6 +16,7 @@ package metrics
 // the declaration; these are its identifiers.
 const (
 	AlarmActive                      = "crewlet.alarm.active"
+	AuthAttemptsFailed               = "crewlet.auth.attempts.failed"
 	BackupAge                        = "crewlet.backup.age"
 	BackupDuration                   = "crewlet.backup.duration"
 	BackupHolds                      = "crewlet.backup.holds"
