@@ -343,6 +343,16 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		if err != nil {
 			return 0, err
 		}
+		if n > 0 {
+			// A ROW THIS TRANSACTION WROTE, and only then: a redelivery
+			// wrote nothing, so it moved nobody's inbox. See
+			// inboxmove.go for what the movement is for.
+			a.noteInbox(inboxNote{
+				record: historyID(c), handle: candidate.Handle,
+				subject: c.subject().ID, reason: candidate.Reason,
+				position: c.packed,
+			})
+		}
 		written += n
 	}
 	return written, nil

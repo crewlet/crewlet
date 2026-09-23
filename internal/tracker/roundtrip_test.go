@@ -171,7 +171,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
-	r.writer, r.applier = writer, tracker.NewApplier("node-a")
+	r.writer, r.applier = writer, tracker.NewApplier("node-a", nil)
 	r.reader, r.waiter = reader, waiter
 	r.verifier = testVerifier(t, tracker.Domain{})
 	return r

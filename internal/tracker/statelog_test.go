@@ -25,7 +25,7 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
 			Domain:  tracker.Domain{},
-			Applier: tracker.NewApplier("suite-node"),
+			Applier: tracker.NewApplier("suite-node", nil),
 			// Migrate is nil: the tracker's tables ship in the
 			// replicated estate's own migration, so a fresh store
 			// already has them. A domain that created its tables from

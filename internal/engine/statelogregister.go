@@ -150,7 +150,7 @@ func register() []registration {
 		{
 			Domain: tracker.Domain{},
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
-				return tracker.NewApplier(s.nodeID), nil
+				return tracker.NewApplier(s.nodeID, nil), nil
 			},
 			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
 				rows, err := tracker.NewRows(s.db)
