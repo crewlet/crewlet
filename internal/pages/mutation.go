@@ -201,12 +201,35 @@ type ContainerPayload struct {
 // a shape changed and nowhere else. A domain that raised every record to its
 // newest version would stall every older node's knowledge base for the whole
 // upgrade.
+//
+// AND A RE-STAMP STAYS AT 1 TOO ([restampPayload]): settings the row already
+// holds, carried under a later activation. The first upgraded node re-stamps
+// every chart-named container — a row an older build wrote carries no stamp
+// at all, and every later activation moves it — so written at 2 those
+// records held back every page write in every one of those spaces on every
+// older node for the whole upgrade. An older build applies a re-stamp whole:
+// the one field it drops is the stamp, and what it stores is what it already
+// held.
 func recordVersionOf(payload any) int {
-	if _, container := payload.(ContainerPayload); container {
+	switch payload.(type) {
+	case restampPayload:
+		return baseRecordVersion
+	case ContainerPayload:
 		return containerEpochVersion
 	}
 	return baseRecordVersion
 }
+
+// restampPayload is a container record that changes nothing but the
+// activation stamp: the settings the row already holds, under a later
+// activation. See [recordVersionOf] for why that one shape is written at
+// version 1.
+//
+// IT ENCODES EXACTLY AS A [ContainerPayload] — the embedded struct's fields,
+// and nothing of its own — so every build decodes it as one, and the only
+// thing the type carries is the writer's knowledge that the settings did not
+// change.
+type restampPayload struct{ ContainerPayload }
 
 // StatusPayload is a trash, a restore or a purge — the three ops that change
 // what a reader sees without changing what a page says.

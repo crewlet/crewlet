@@ -229,8 +229,27 @@ func TestAnOlderBuildRetainsAContainerRecord(t *testing.T) {
 		"."+pages.BarrierSubject().String(), "", nil, barrier); err != nil {
 		t.Fatalf("append a barrier: %v", err)
 	}
-	end := r.logEnd()
+	count := r.olderNodeApplies()
+	if n := count(`SELECT COUNT(*) FROM pages_containers WHERE key = 'ENG'`); n != 0 {
+		t.Errorf("the older node applied the container record — %d row(s), with "+
+			"no epoch on it and no guard behind it", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM pages_log_deferred`); n != 1 {
+		t.Errorf("the older node retained %d record(s), want the container's one "+
+			"— and never the barrier", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM pages_heads WHERE container = 'OPS'`); n != 1 {
+		t.Errorf("the older node holds %d page(s) in OPS, want the one it can read", n)
+	}
+}
 
+// olderNodeApplies runs a node of a build that reads only record version 1
+// over this harness's log, through the real framework loop, until it has
+// consumed everything on it — and hands back a counter over its rows.
+func (r *roundTrip) olderNodeApplies() func(query string) int {
+	t := r.t
+	t.Helper()
+	end := r.logEnd()
 	older, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "older.db"),
 		store.Options{PinnedWriters: 1})
 	if err != nil {
@@ -263,8 +282,7 @@ func TestAnOlderBuildRetainsAContainerRecord(t *testing.T) {
 	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("the older node's loop: %v", err)
 	}
-
-	count := func(query string) int {
+	return func(query string) int {
 		t.Helper()
 		var n int
 		if err := older.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
@@ -274,16 +292,64 @@ func TestAnOlderBuildRetainsAContainerRecord(t *testing.T) {
 		}
 		return n
 	}
-	if n := count(`SELECT COUNT(*) FROM pages_containers WHERE key = 'ENG'`); n != 0 {
-		t.Errorf("the older node applied the container record — %d row(s), with "+
-			"no epoch on it and no guard behind it", n)
+}
+
+// A CONTAINER WHOSE SETTINGS DID NOT CHANGE IS RE-STAMPED WITHOUT HOLDING AN
+// OLDER NODE BACK — and a change to them still is.
+//
+// A row an older build wrote carries no stamp, and every later activation
+// moves it, so the first upgraded node re-stamps every chart-named container
+// on its first apply. Written at version 2, each of those records was retained
+// by every node still on the previous build, and with it every page write in
+// that space, for the whole of the rolling upgrade: the knowledge base of
+// every unit stalled on every older node although no setting had changed.
+func TestARestampDoesNotHoldBackAnOlderNode(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	// THE ROW AN OLDER BUILD WROTE: the settings, and no stamp.
+	r.publishRaw(pages.MutationRecord{
+		RecordEnvelope: pages.RecordEnvelope{
+			V: 1, OpID: statelog.NewOpID(time.Now(), "older"),
+			Subject: pages.ContainerSubject("ENG"), Op: pages.OpPatch,
+			CreatedAt: wednesday, Writer: "node-older",
+			Scope: pages.ScopeSet{Subject: true},
+		},
+		Mutation: []byte(`{"v":1,"key":"ENG","name":"Engineering"}`),
+	})
+	r.drain()
+
+	if !r.ensure(activation(1), "ENG", "Engineering", "") {
+		t.Fatal("the premise: an unstamped row is re-stamped by the first activation")
 	}
-	if n := count(`SELECT COUNT(*) FROM pages_log_deferred`); n != 1 {
-		t.Errorf("the older node retained %d record(s), want the container's one "+
-			"— and never the barrier", n)
+	if env := r.envelopeAt(r.logEnd()); env.V != 1 {
+		t.Errorf("a re-stamp of unchanged settings carries version %d, want 1 — an "+
+			"older node retains a version-2 record and every page write in its space", env.V)
 	}
-	if n := count(`SELECT COUNT(*) FROM pages_heads WHERE container = 'OPS'`); n != 1 {
-		t.Errorf("the older node holds %d page(s) in OPS, want the one it can read", n)
+	if c := r.container("ENG"); c.ChartEpoch == 0 {
+		t.Error("the re-stamp did not stamp the row on a node that reads the stamp")
+	}
+	r.write(pages.Actor{Handle: "ops-1", Kind: pages.AuthorOperator},
+		pages.NewPage{Container: "ENG", Title: "a page"})
+
+	count := r.olderNodeApplies()
+	if n := count(`SELECT COUNT(*) FROM pages_log_deferred`); n != 0 {
+		t.Errorf("the older node retained %d record(s) for a container nobody renamed", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM pages_heads WHERE container = 'ENG'`); n != 1 {
+		t.Errorf("the older node holds %d page(s) in ENG, want the one written there", n)
+	}
+
+	// THE GUARD STILL HOLDS on the row the re-stamp stamped: an activation
+	// older than it leaves the settings alone.
+	if r.ensure(activation(0), "ENG", "Walked Back", "") {
+		t.Error("an activation older than the re-stamp rewrote the container")
+	}
+	// AND A REAL CHANGE IS STILL WRITTEN AT THE VERSION THAT CARRIES ITS STAMP.
+	if !r.ensure(activation(2), "ENG", "Platform", "") {
+		t.Fatal("a rename under a later activation wrote nothing")
+	}
+	if env := r.envelopeAt(r.logEnd()); env.V != 2 {
+		t.Errorf("a change to a container's settings carries version %d, want 2", env.V)
 	}
 }
 

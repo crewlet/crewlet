@@ -574,8 +574,8 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 	opID := s.newSeqID()
 	subject := ContainerSubject(key)
 	var (
-		changed bool
-		out     Container
+		changed, restamp bool
+		out              Container
 	)
 
 	result, err := s.publish(ctx, statelog.Request{
@@ -588,7 +588,7 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 			// lost the broker's arbitration is followed by one that
 			// finds the winner's value already there, and only the last
 			// round says what this call did.
-			changed = false
+			changed, restamp = false, false
 			out = Container{V: DocumentVersion, Key: key, Name: name,
 				Purpose: purpose, ChartEpoch: epoch, CreatedAt: at}
 			var document []byte
@@ -624,14 +624,25 @@ func (s *Store) EnsureContainer(ctx context.Context, activatedAt time.Time,
 					return statelog.Decision{}, nil
 				}
 				out.CreatedAt = held.CreatedAt
+				restamp = held.Name == name && held.Purpose == purpose
 			}
 			changed = true
+			payload := ContainerPayload{
+				V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
+				ChartEpoch: epoch,
+			}
+			// A LATER ACTIVATION OVER THE SAME SETTINGS IS A RE-STAMP, and
+			// it goes out at the version an older build applies whole —
+			// see [recordVersionOf]. The stamp still lands on every node
+			// that can read it, so the guard above holds against the
+			// older activation that would otherwise follow.
+			var record any = payload
+			if restamp {
+				record = restampPayload{payload}
+			}
 			return s.decide(stamp, Actor{Handle: "system", Kind: AuthorOperator},
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
-				ContainerPayload{
-					V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
-					ChartEpoch: epoch,
-				}, nil, at)
+				record, nil, at)
 		},
 	})
 	if err != nil {
