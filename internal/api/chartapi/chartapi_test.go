@@ -807,6 +807,18 @@ func TestAnImportIsRefusedWhileTheFleetIsMixedVersion(t *testing.T) {
 
 				t.Errorf("the refusal does not name the lagging node: %s", rec.Body)
 			}
+			// ITS OWN CODE, which the CLI and the fleet guide name: it
+			// was written into the detail beside `bad_params`, where the
+			// envelope's reserved key overwrote it.
+			var answer struct {
+				Error string `json:"error"`
+			}
+			_ = json.Unmarshal(rec.Body.Bytes(), &answer)
+			if c.want == http.StatusConflict &&
+				answer.Error != string(httpjson.CodeFleetMixedVersion) {
+
+				t.Errorf("error = %q, want %q", answer.Error, httpjson.CodeFleetMixedVersion)
+			}
 		})
 	}
 }

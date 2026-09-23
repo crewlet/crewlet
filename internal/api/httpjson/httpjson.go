@@ -379,6 +379,13 @@ const (
 	// CodeMaintenanceUnreadable is a capacity window whose state could not
 	// be read.
 	CodeMaintenanceUnreadable Code = "maintenance_unreadable"
+
+	// CodeFleetMixedVersion is a whole-chart import refused while a rolling
+	// upgrade is in progress: every node applies the import, the older one
+	// included, under its own reading of what a placement means. 409 rather
+	// than 503, because the remedy is finishing the upgrade and not waiting.
+	// The detail names the node still on the older protocol.
+	CodeFleetMixedVersion Code = "fleet_mixed_version"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -505,6 +512,9 @@ var codes = map[Code]string{
 		"and names the operation already open when there is one.",
 	CodeMaintenanceUnreadable: "The maintenance window's state could not be " +
 		"read. The detail says why.",
+	CodeFleetMixedVersion: "An upgrade is still rolling through the fleet, and " +
+		"an import is applied by every node, the older ones included. Finish " +
+		"the upgrade and import again.",
 }
 
 // Codes is every code in the vocabulary, sorted.

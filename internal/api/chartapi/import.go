@@ -207,8 +207,13 @@ func (s *Service) fleetReady(w http.ResponseWriter, r *http.Request) bool {
 			map[string]string{"detail": err.Error()})
 		return false
 	case reason != "":
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
-			map[string]string{"error": "fleet_mixed_version", "detail": reason})
+		// ITS OWN CODE, which the CLI and the fleet guide both name. It
+		// used to be spelled into the DETAIL beside `bad_params`, where
+		// the envelope's reserved `error` overwrote it — so every client
+		// was told the parameters were bad, and nothing could branch on
+		// the one refusal whose remedy is finishing an upgrade.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeFleetMixedVersion,
+			map[string]string{"detail": reason})
 		return false
 	}
 	return true
