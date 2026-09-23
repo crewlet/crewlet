@@ -327,27 +327,44 @@ func TestAReanchorNamesTheCaseItAnswers(t *testing.T) {
 // ---- the transition's fakes ------------------------------------------ //
 
 // reanchorLog is a live log as the transition sees it: create-only appends per
-// subject, the per-subject probe, and a creation instant read on every call.
+// subject, the per-subject probe, a read of one record back by its sequence,
+// and a creation instant read on every call.
 type reanchorLog struct {
-	mu       sync.Mutex
-	subjects map[string][]byte
-	seq      uint64
-	appends  int
-	created  []time.Time // one per CreatedAt call; the last one repeats
-	reads    int
-	order    *[]string
+	mu      sync.Mutex
+	bySeq   map[uint64]reanchorRecord
+	last    map[string]uint64 // subject → its last sequence
+	ids     map[string]uint64 // message id → the sequence it landed at
+	seq     uint64
+	appends int
+	created []time.Time // one per CreatedAt call; the last one repeats
+	reads   int
+	order   *[]string
 	// lose makes the next append go unanswered, having landed or not.
 	lose, loseLanded bool
+	// dedupeFirst is the CLUSTERED broker's order: a message id already in
+	// the duplicate window is acknowledged as a duplicate of the record it
+	// landed as before any expectation is checked. The solo broker — the
+	// default here — checks the expectation first and refuses instead.
+	dedupeFirst bool
+}
+
+// reanchorRecord is one record on the fake log.
+type reanchorRecord struct {
+	subject string
+	body    []byte
 }
 
 func newReanchorLog(order *[]string, created ...time.Time) *reanchorLog {
 	if len(created) == 0 {
 		created = []time.Time{reanchorCreated}
 	}
-	return &reanchorLog{subjects: map[string][]byte{}, created: created, order: order}
+	return &reanchorLog{
+		bySeq: map[uint64]reanchorRecord{}, last: map[string]uint64{},
+		ids: map[string]uint64{}, created: created, order: order,
+	}
 }
 
-func (l *reanchorLog) Append(_ context.Context, subject, _ string, expect *uint64,
+func (l *reanchorLog) Append(_ context.Context, subject, msgID string, expect *uint64,
 	body []byte) (uint64, bool, error) {
 
 	l.mu.Lock()
@@ -359,29 +376,53 @@ func (l *reanchorLog) Append(_ context.Context, subject, _ string, expect *uint6
 	if l.lose {
 		l.lose = false
 		if l.loseLanded {
-			l.seq++
-			l.subjects[subject] = body
+			l.landLocked(subject, msgID, body)
 		}
 		return 0, false, errors.New("the broker did not answer")
 	}
-	if _, held := l.subjects[subject]; held && expect != nil && *expect == 0 {
+	if seq, seen := l.ids[msgID]; seen && l.dedupeFirst {
+		return seq, true, nil
+	}
+	if _, held := l.last[subject]; held && expect != nil && *expect == 0 {
 		return 0, false, &natsjs.APIError{
 			ErrorCode: natsjs.JSErrCodeStreamWrongLastSequence,
 			Code:      400, Description: "wrong last sequence",
 		}
 	}
+	return l.landLocked(subject, msgID, body), false, nil
+}
+
+// landLocked stores one record. The caller holds mu.
+func (l *reanchorLog) landLocked(subject, msgID string, body []byte) uint64 {
 	l.seq++
-	l.subjects[subject] = body
-	return l.seq, false, nil
+	l.bySeq[l.seq] = reanchorRecord{subject: subject, body: body}
+	l.last[subject] = l.seq
+	l.ids[msgID] = l.seq
+	return l.seq
+}
+
+// put lands a record as a PEER'S append would, outside the transition.
+func (l *reanchorLog) put(subject, msgID string, body []byte) uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.landLocked(subject, msgID, body)
 }
 
 func (l *reanchorLog) LastSeq(_ context.Context, subject string) (uint64, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if _, held := l.subjects[subject]; held {
-		return l.seq, true, nil
+	seq, held := l.last[subject]
+	return seq, held, nil
+}
+
+func (l *reanchorLog) At(_ context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	rec, held := l.bySeq[seq]
+	if !held {
+		return "", nil, time.Time{}, false, nil
 	}
-	return 0, false, nil
+	return rec.subject, rec.body, reanchorCreated.Add(time.Duration(seq) * time.Second), true, nil
 }
 
 func (l *reanchorLog) CreatedAt(context.Context) (time.Time, error) {
@@ -398,7 +439,7 @@ func (l *reanchorLog) CreatedAt(context.Context) (time.Time, error) {
 func (l *reanchorLog) records() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.subjects)
+	return len(l.bySeq)
 }
 
 // probeGeneration is the probe domain's generation record: its own subject, and a
@@ -411,7 +452,7 @@ func (p probeGeneration) GenerationRecord(f statelog.GenerationFacts) (statelog.
 	}
 	return statelog.GenerationRecord{
 		Subject: statelog.Subject{Kind: "generation", ID: fmt.Sprint(f.Generation)},
-		OpID:    fmt.Sprintf("reanchor:%d", f.Generation),
+		OpID:    f.OpID(),
 		Payload: []byte(fmt.Sprintf(`{"gen":%d,"by":%q,"writer":%q}`,
 			f.Generation, f.By, f.Writer)),
 	}, true, nil
@@ -1633,4 +1674,123 @@ func rerun(t *testing.T, h *applyHarness, want uint64) error {
 	<-errs
 	return fmt.Errorf("the applier reached %s, want sequence %d",
 		h.runner.Committed(), want)
+}
+
+// A GENERATION ANOTHER NODE OPENED IS NEVER OPENED AGAIN, FORCE OR NO FORCE.
+//
+// Two nodes that re-anchor independently each derive the same next generation
+// from their own checkpoints — the register could not be read and both forced,
+// or each read it before the other's row said anything. Exactly one generation
+// record lands on the subject, and the other append loses. The transition used
+// to read "the subject is taken" as its own earlier attempt and carry on, so
+// both committed a checkpoint in the generation over their own rows: two
+// histories under one number, which nothing on the log could reconcile. Now the
+// record that landed is read back, and one this node did not write refuses —
+// however the loss was reported: refused outright, unanswered and found by the
+// probe, or acknowledged as a duplicate by a clustered broker whose window
+// matched a message id before it checked the expectation.
+func TestAGenerationAnotherNodeOpenedIsNeverOpenedAgain(t *testing.T) {
+	t.Parallel()
+	peer := func(t *testing.T, writer string) statelog.GenerationRecord {
+		t.Helper()
+		rec, _, err := probeGeneration{keeps: true}.GenerationRecord(statelog.GenerationFacts{
+			Generation: 2, By: "ops-2", Writer: writer,
+		})
+		if err != nil {
+			t.Fatalf("encode the peer's generation record: %v", err)
+		}
+		return rec
+	}
+	subject := func(rec statelog.GenerationRecord) string {
+		return probeDomain{}.Stream().SubjectPrefix + "." + rec.Subject.String()
+	}
+	// THE MOST PERMISSIVE THE GUARD CAN BE: the register unreadable and the
+	// operator forcing it, so nothing but the read-back stands in the way.
+	forced := func() (statelog.ReanchorInputs, statelog.ReanchorGuard) {
+		in := reanchorInputs()
+		in.RegisterReadable = false
+		guard := confirmed()
+		guard.Force = true
+		return in, guard
+	}
+	for _, c := range []struct {
+		name  string
+		stage func(t *testing.T, f *reanchorFixture)
+	}{
+		{"refused outright", func(t *testing.T, f *reanchorFixture) {
+			rec := peer(t, "node-b")
+			f.log.put(subject(rec), rec.OpID, rec.Payload)
+		}},
+		{"unanswered, and found by the probe", func(t *testing.T, f *reanchorFixture) {
+			rec := peer(t, "node-b")
+			f.log.put(subject(rec), rec.OpID, rec.Payload)
+			f.log.lose = true
+		}},
+		{"acknowledged as a duplicate of the peer's", func(t *testing.T, f *reanchorFixture) {
+			// A MESSAGE ID BOTH NODES WOULD HAVE USED, as the domains' ids
+			// once were: the clustered broker matches it in its window
+			// and never reaches the expectation.
+			rec := peer(t, "node-b")
+			own, _, err := probeGeneration{keeps: true}.GenerationRecord(statelog.GenerationFacts{
+				Generation: 2, Writer: "node-a",
+			})
+			if err != nil {
+				t.Fatalf("encode this node's record: %v", err)
+			}
+			f.log.put(subject(rec), own.OpID, rec.Payload)
+			f.log.dedupeFirst = true
+		}},
+		{"written by a node that did not say who it was", func(t *testing.T, f *reanchorFixture) {
+			rec := peer(t, "")
+			f.log.put(subject(rec), rec.OpID, rec.Payload)
+		}},
+		{"a record whose envelope does not decode", func(t *testing.T, f *reanchorFixture) {
+			rec := peer(t, "node-b")
+			f.log.put(subject(rec), rec.OpID, []byte("not an envelope"))
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newReanchorFixture(t)
+			before := statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}
+			seedCursor(t, f.db, probeStream, before, keyedCreated)
+			c.stage(t, f)
+			in, guard := forced()
+			_, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), in, guard)
+			if !errors.Is(err, statelog.ErrReanchorRefused) {
+				t.Fatalf("a reanchor onto a generation another node opened = %v, "+
+					"want a refusal", err)
+			}
+			if strings.Contains(c.name, "refused outright") && !strings.Contains(err.Error(), "node-b") {
+				t.Errorf("the refusal does not name the node that opened it: %v", err)
+			}
+			if at, _ := cursorOf(t, f.db, probeStream); at != before {
+				t.Fatalf("the checkpoint moved to %s over another node's generation", at)
+			}
+			if len(f.consumer.after) != 0 || len(f.runner.at) != 0 {
+				t.Fatalf("the consumer was moved to %v and the runner re-keyed to %v "+
+					"over another node's generation", f.consumer.after, f.runner.at)
+			}
+		})
+	}
+
+	// AND THIS NODE'S OWN EARLIER RECORD IS STILL CARRIED ON FROM, whichever
+	// way the broker reports it: the re-run of an interrupted transition.
+	for _, dedupe := range []bool{false, true} {
+		f := newReanchorFixture(t)
+		seedCursor(t, f.db, probeStream,
+			statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, keyedCreated)
+		own := peer(t, "node-a")
+		f.log.put(subject(own), own.OpID, own.Payload)
+		f.log.dedupeFirst = dedupe
+		in, guard := forced()
+		plan, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), in, guard)
+		if err != nil {
+			t.Fatalf("a re-run finding its own record (duplicate window first: %v) "+
+				"= %v", dedupe, err)
+		}
+		if at, _ := cursorOf(t, f.db, probeStream); at.Generation != plan.Generation {
+			t.Fatalf("the re-run left the checkpoint at %s", at)
+		}
+	}
 }

@@ -384,16 +384,30 @@ type GenerationEncoder interface {
 }
 
 // ReanchorStream is the live log as the transition needs it: the append, the
-// per-subject probe that tells a lost race from nothing at all, and a LIVE
-// reading of the stream's creation instant.
+// per-subject probe that tells a lost race from nothing at all, a read of the
+// record a lost race lost to, and a LIVE reading of the stream's creation
+// instant.
 //
 // DECLARED HERE because the transition is the caller.
 type ReanchorStream interface {
 	Appender
+	LogReader
 
 	// CreatedAt is the stream's creation instant as the broker reports it
 	// NOW — read on every call, never cached.
 	CreatedAt(ctx context.Context) (time.Time, error)
+}
+
+// LogReader reads one record of a log back by its sequence: its subject, its
+// bytes and the broker's own instant for it, and false with a nil error for a
+// sequence the log no longer holds.
+//
+// DECLARED HERE because the framework is the caller, and for the paths that
+// address the log rather than follow it — a consumer is how records are
+// delivered, and nothing here needs one to answer "what is at this sequence".
+type LogReader interface {
+	At(ctx context.Context, seq uint64) (subject string, payload []byte,
+		storedAt time.Time, ok bool, err error)
 }
 
 // ReanchorConsumer is this node's own reader of the targeted log, as the
@@ -474,8 +488,10 @@ func (d ReanchorDeps) resolved() ReanchorDeps {
 //     expectation of zero on its own subject. A crash after the append leaves
 //     the record on the stream: the re-run derives the SAME generation —
 //     nothing below has moved the checkpoint — races itself, is refused, finds
-//     the record there and carries on, first-writer-wins used for the one
-//     thing it is perfectly suited to. Then read the stream's instant AGAIN:
+//     its OWN record there and carries on, first-writer-wins used for the one
+//     thing it is perfectly suited to. A record another node wrote there is a
+//     refusal, force or no force: that node opened the generation from its own
+//     rows ([appendGeneration]). Then read the stream's instant AGAIN:
 //     the same instant before and after the append is the same stream
 //     throughout, because an instant never comes back.
 //  5. Move this node's consumer to the case's checkpoint: one below the
@@ -584,7 +600,7 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 			"record: %w", d.Domain.Name(), gen, err)
 	}
 	if keeps {
-		if err := appendGeneration(ctx, d.Stream, spec, record); err != nil {
+		if err := appendGeneration(ctx, d, spec, gen, record); err != nil {
 			return ReanchorPlan{}, fmt.Errorf("statelog: publish %s's generation "+
 				"%d: %w", d.Domain.Name(), gen, err)
 		}
@@ -645,7 +661,8 @@ func reanchoredDetail(c ReanchorCase) string {
 }
 
 // appendGeneration appends a domain's generation record at an expectation of
-// zero on its own subject.
+// zero on its own subject, and establishes that the record the subject then
+// holds is THIS node's.
 //
 // # Why this is not an ordinary write through the domain's publisher
 //
@@ -666,34 +683,56 @@ func reanchoredDetail(c ReanchorCase) string {
 //     fence 0 asks.
 //   - THE FLOOR THEOREM is not in play. It protects an object whose record was
 //     trimmed from a writer whose rows are stale; the generation subject is
-//     written by nothing but a reanchor to that generation, whose every
-//     record says the same thing, so the worst a stale expectation of zero can
-//     do here is land a second copy of it — and the audit row it applies as is
-//     create-only.
+//     written by nothing but a reanchor to that generation, and the one record
+//     on it is what the arbitration below decides.
 //   - THE RESOLUTION is not waited for. The applier that would resolve it is
 //     the one this transition is about to point at the stream, and it applies
 //     the record the moment it resumes, from the case's checkpoint — which the
 //     record is above, because the first sequence and the end that checkpoint
 //     was taken from were both read before the append.
 //
-// A REFUSAL IS THE SUBJECT ALREADY HOLDING THE RECORD — a re-run racing its own
-// earlier append, or the operator who got there first — and the transition
-// carries on, which is what first-writer-wins is for. An answer that is no
-// answer is resolved by asking the subject, exactly as the write authority
-// resolves one.
-func appendGeneration(ctx context.Context, stream ReanchorStream, spec StreamSpec,
+// # A record already there is carried on from only if it is this node's own
+//
+// The subject holds at most one record, so an append that did not land — the
+// broker refused the expectation, or its answer never arrived and the probe
+// found the subject taken — or that the broker acknowledged as a DUPLICATE of
+// a record already in its window has lost to whatever the subject holds. That
+// is this node's own earlier attempt when a re-run races itself, and the
+// transition carries on: first-writer-wins, used for the one thing it is
+// perfectly suited to.
+//
+// It is ANOTHER node's record when two nodes opened the generation
+// independently — the register could not be read and both forced, or each
+// read it before the other's row said anything — and carrying on from it was
+// the defect. Both committed a checkpoint in the generation, each over its own
+// rows: two histories under one number, which the identity claim forbids and
+// nothing on the log could ever reconcile, since every node applies the same
+// records into whichever rows it holds. So the record is READ BACK and its
+// writer compared with this node's, whatever the guard allowed: no force and
+// no unreadable register reaches past it, because nothing the operator could
+// know makes two openings of one generation safe. The duplicate case needs the
+// read too — the broker checks its window before the expectation on a
+// clustered stream, so a message id that collided with a peer's would be
+// acknowledged as though it had landed; the domains' message ids name their
+// writer, and this does not rely on it.
+func appendGeneration(ctx context.Context, d ReanchorDeps, spec StreamSpec, gen uint32,
 	record GenerationRecord) error {
 
 	subject := spec.SubjectPrefix + "." + record.Subject.String()
 	zero := uint64(0)
-	_, _, err := stream.Append(ctx, subject, record.OpID, &zero, record.Payload)
+	seq, duplicate, err := d.Stream.Append(ctx, subject, record.OpID, &zero, record.Payload)
 	switch f, detail := classify(err); f {
 	case faultNone:
-		return nil
+		if !duplicate {
+			// LANDED AT ZERO: the subject held nothing, so nobody's
+			// record is there but this one.
+			return nil
+		}
+		return generationIsOurs(ctx, d, subject, seq, gen)
 	case faultFull:
 		return fmt.Errorf("the broker refused to store the record: %s", detail)
 	case faultRejected, faultUnknown:
-		_, found, probe := stream.LastSeq(ctx, subject)
+		held, found, probe := d.Stream.LastSeq(ctx, subject)
 		switch {
 		case probe != nil:
 			return fmt.Errorf("the append was not acknowledged (%v) and whether "+
@@ -702,9 +741,58 @@ func appendGeneration(ctx context.Context, stream ReanchorStream, spec StreamSpe
 			return fmt.Errorf("the append was not acknowledged and %s holds "+
 				"nothing, so nothing landed — re-run the reanchor: %w", subject, err)
 		}
-		return nil
+		return generationIsOurs(ctx, d, subject, held, gen)
 	}
 	return err
+}
+
+// generationIsOurs reads the record a generation subject holds at seq and
+// refuses unless this node wrote it — see [appendGeneration].
+//
+// EVERY ANSWER BUT "OURS" STOPS THE TRANSITION BEFORE ANYTHING COMMITS: a
+// record that cannot be read is an error to re-run, and one that cannot say who
+// wrote it is refused, because the one thing this read exists to rule out is a
+// record this node cannot vouch for.
+func generationIsOurs(ctx context.Context, d ReanchorDeps, subject string, seq uint64,
+	gen uint32) error {
+
+	got, payload, _, ok, err := d.Stream.At(ctx, seq)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%s already holds a record, at sequence %d, and it could "+
+			"not be read to learn whose it is — nothing was committed; re-run "+
+			"the reanchor: %w", subject, seq, err)
+	case !ok:
+		return fmt.Errorf("%s held a record at sequence %d and the log no longer "+
+			"has it, so whose it was is unknown — nothing was committed; re-run "+
+			"the reanchor", subject, seq)
+	case got != subject:
+		return fmt.Errorf("the broker named sequence %d as %s's and holds a record "+
+			"of %s there — nothing was committed; re-run the reanchor", seq,
+			subject, got)
+	}
+	env, err := d.Domain.Envelope(payload)
+	if err != nil {
+		return fmt.Errorf("%w: %s's generation %d is already opened by a record at "+
+			"sequence %d of %s whose envelope does not decode (%v), so whether "+
+			"this node wrote it cannot be told — and a second opening of one "+
+			"generation is the one thing this must not do", ErrReanchorRefused,
+			d.Domain.Name(), gen, seq, d.Domain.Stream().Name, err)
+	}
+	if env.Writer == d.NodeID {
+		return nil
+	}
+	writer := env.Writer
+	if writer == "" {
+		writer = "a writer that did not say who it was"
+	}
+	return fmt.Errorf("%w: %s's generation %d was already opened by %s — its "+
+		"record is at sequence %d of %s. It opened it from its own rows, and a "+
+		"second opening from this node's would put two histories under one "+
+		"generation number, which nothing on the log could ever reconcile; "+
+		"this node adopts a snapshot from a node in that generation instead",
+		ErrReanchorRefused, d.Domain.Name(), gen, writer, seq,
+		d.Domain.Stream().Name)
 }
 
 // stillConfirmed reads the stream's instant again and refuses unless it is the

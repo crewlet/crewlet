@@ -38,6 +38,12 @@ type GenerationRecord struct{}
 // create-only on the generation's own subject so two operators deriving the
 // same number race at the broker and exactly one record lands.
 //
+// THE OPERATION ID NAMES THE WRITER ([statelog.GenerationFacts.OpID]), for
+// the tracker's reason: two nodes deriving the same number are two operations,
+// and one id between them let the broker's duplicate window acknowledge the
+// second as though it had landed. The transition reads back whose record
+// landed ([statelog.Reanchor]).
+//
 // THE OPERATOR IS THE AUTHOR, recorded the way every operator write here is:
 // the token's own name and author kind `operator`, never a seat.
 func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
@@ -47,9 +53,8 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 		return statelog.GenerationRecord{}, false, err
 	}
 	// THE STATE LOG'S OWN GRAMMAR ([statelog.GenerationFacts.OpID]), so
-	// the record's id carries the instant a retry is judged by and two
-	// operators deriving this generation from this stream name one
-	// operation.
+	// the record's id carries the instant a retry is judged by, names the
+	// node that writes it, and is the same operation on every re-run there.
 	opID := f.OpID()
 	actor := Actor{Kind: AuthorOperator, OperatorID: f.By}
 	body, err := json.Marshal(Generation{

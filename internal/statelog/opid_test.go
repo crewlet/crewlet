@@ -132,3 +132,42 @@ func TestAnOperationIDCarriesTheInstantItWasMinted(t *testing.T) {
 		}
 	})
 }
+
+// A GENERATION RECORD'S ID IS ONE OPERATION PER NODE: the same on every re-run
+// of one node's reanchor, and a different one for a peer deriving the same
+// generation from the same stream.
+//
+// A clustered broker checks its duplicate window before the append's
+// expectation, so a peer sharing the id was acknowledged as a duplicate of the
+// first node's record — as though its own had landed — and opened the
+// generation over its own rows too. The transition reads back whose record
+// landed whatever the broker answered; this is the id no longer inviting it.
+func TestAGenerationRecordsIDIsOneOperationPerNode(t *testing.T) {
+	t.Parallel()
+	created := time.Date(2026, 9, 23, 10, 11, 12, 345_678_901, time.UTC)
+	facts := func(writer string) statelog.GenerationFacts {
+		return statelog.GenerationFacts{Generation: 2, Writer: writer, By: "ops-1",
+			Inputs: statelog.ReanchorInputs{StreamCreatedAt: created}}
+	}
+	one := facts("node-a").OpID()
+	if again := facts("node-a").OpID(); again != one {
+		t.Fatalf("a re-run on one node derived %q after %q — the re-run must "+
+			"find its own earlier attempt as the same operation", again, one)
+	}
+	if peer := facts("node-b").OpID(); peer == one {
+		t.Fatalf("two nodes deriving generation 2 from one stream share the id %q "+
+			"— a clustered broker acknowledges the second as a duplicate of the "+
+			"first's record", one)
+	}
+	next := facts("node-a")
+	next.Generation = 3
+	if next.OpID() == one {
+		t.Fatal("one node's reanchors to two generations derived one id")
+	}
+	got, ok := statelog.OpMintedAt(one)
+	if !ok || !got.Equal(created.Truncate(time.Millisecond)) {
+		t.Fatalf("OpMintedAt = (%s, %v), want the adopted stream's creation %s — "+
+			"an instant every operator reads identically off the broker",
+			got, ok, created.Truncate(time.Millisecond))
+	}
+}

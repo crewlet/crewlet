@@ -948,3 +948,63 @@ func jetStreamOn(t *testing.T, back *Backends) natsjs.JetStream {
 	}
 	return js
 }
+
+// TWO NODES CANNOT OPEN ONE GENERATION.
+//
+// A peer that re-anchored the same rebuilt log a moment earlier — before its
+// position row said so, which is what leaves this node's guard with nothing to
+// refuse on — has its generation record on the subject this node's append
+// contends for. The append loses, and the transition used to read the taken
+// subject as its own earlier attempt: it committed its checkpoint in the same
+// generation over its own rows. Through the real log, the record that landed is
+// read back and the peer named, and nothing moves.
+func TestTwoNodesCannotOpenOneGeneration(t *testing.T) {
+	t.Parallel()
+	e, js := aRunningNode(t)
+	s := e.native.Load().log
+	running := s.Domain(tracker.Domain{}.Name())
+	spec := running.domain.Stream()
+	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("a write before the rebuild: %+v, %v", res, err)
+	}
+	own := running.runner.Committed()
+	rebuildLog(t, js, spec)
+	s.publishPositions(t.Context())
+	view, err := e.ReanchorStatus(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v", err)
+	}
+
+	// THE PEER'S OPENING, on the subject this node's reanchor contends for.
+	rec, _, err := tracker.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
+		Generation: own.Generation + 1, Case: statelog.ReanchorRecreated,
+		Inputs: statelog.ReanchorInputs{Stream: spec.Name, StreamCreatedAt: view.CreatedAt},
+		By:     "ops-2", Writer: "node-b", At: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("encode the peer's generation record: %v", err)
+	}
+	zero := uint64(0)
+	if _, _, err := running.log.Append(t.Context(), spec.SubjectPrefix+"."+rec.Subject.String(),
+		rec.OpID, &zero, rec.Payload); err != nil {
+		t.Fatalf("land the peer's generation record: %v", err)
+	}
+
+	_, err = e.Reanchor(t.Context(), ReanchorRequest{
+		Stream: spec.Name, Confirm: statelog.ConfirmationOf(view.CreatedAt),
+		By: "ops-1", Force: true,
+	})
+	if !errors.Is(err, statelog.ErrReanchorRefused) || !strings.Contains(err.Error(), "node-b") {
+		t.Fatalf("a forced reanchor onto the generation node-b opened = %v, want a "+
+			"refusal naming node-b", err)
+	}
+	if row := readCursorRow(t, e, running.domain.Name()); row.at.Generation != own.Generation {
+		t.Fatalf("the checkpoint moved to generation %d over node-b's opening of it",
+			row.at.Generation)
+	}
+	if err := running.runner.StreamIdentity(); !errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("after the refusal the tracker's identity is %v, want the rebuild "+
+			"still — the runner was re-keyed over another node's generation", err)
+	}
+}

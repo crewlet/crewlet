@@ -68,6 +68,14 @@ func generationReason(c statelog.ReanchorCase) string {
 // for the one thing it is perfectly suited to: two operators deriving the same
 // generation number race at the broker and exactly one record lands.
 //
+// THE OPERATION ID NAMES THE WRITER ([statelog.GenerationFacts.OpID]). Two
+// nodes deriving the same number are two operations, and with one id between
+// them the broker's duplicate window
+// acknowledged the second as though its record had landed — so it carried on
+// and opened the generation over its own rows too. A re-run on one node is
+// still the same operation. Whose record landed is read back and compared by
+// the transition itself ([statelog.Reanchor]), which does not rely on this.
+//
 // THE OPERATOR IS THE AUTHOR. The record went out through the node's own
 // writer once, which is the SYSTEM actor, so the audit row said the engine had
 // reanchored itself; who ran the verb is the one fact a later reader of
@@ -76,9 +84,8 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	subject := GenerationSubject(f.Generation)
 	scope := ScopeSet{Subject: true}
 	// THE STATE LOG'S OWN GRAMMAR ([statelog.GenerationFacts.OpID]), so
-	// the record's id carries the instant a retry is judged by and two
-	// operators deriving this generation from this stream name one
-	// operation.
+	// the record's id carries the instant a retry is judged by, names the
+	// node that writes it, and is the same operation on every re-run there.
 	opID := f.OpID()
 	author, kind, operator := f.By, AuthorOperator, f.By
 	if author == "" {

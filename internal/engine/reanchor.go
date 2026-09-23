@@ -203,6 +203,10 @@ func (r reanchorStream) LastSeq(ctx context.Context, subject string) (uint64, bo
 	return r.log.LastSeq(ctx, subject)
 }
 
+func (r reanchorStream) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	return r.log.At(ctx, seq)
+}
+
 func (r reanchorStream) CreatedAt(ctx context.Context) (time.Time, error) {
 	stats, err := r.log.Stats(ctx)
 	if err != nil {

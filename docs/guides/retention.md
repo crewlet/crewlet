@@ -768,6 +768,16 @@ first. The
 vectors are exempt from both: their coverage legitimately differs node to node,
 so every node re-anchors its own copy.
 
+**And one generation is only ever opened once.** Two nodes that re-anchor the
+same log at the same moment — each before the other's position row says so, or
+both forced while the register could not be read — derive the same next
+generation, and exactly one generation record lands. The other reanchor reads
+back whose record it is, refuses naming the node that opened it, and commits
+nothing: two openings of one generation would put two histories under one
+number, which no force makes safe. That node adopts from the one that got there
+first. A reanchor that failed part-way still finishes when it is run again,
+because the record it finds there is its own.
+
 ## Proving a restore
 
 ```

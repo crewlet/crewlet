@@ -164,18 +164,28 @@ func StepOpID(opID string, steps ...string) string {
 
 // OpID is the operation id of the generation record a reanchor to f appends.
 //
-// DERIVED, from the new generation and the stream it adopts, so two operators
-// who derive the same generation from the same stream name the same operation
-// and contend for one record rather than landing two. Its instant is the
-// adopted stream's creation — the earliest moment the transition could exist,
-// and a value every operator reads identically off the broker, which a
-// reanchor's own clock is not.
+// DERIVED, from the new generation, the stream it adopts and the node that
+// writes it, so a re-run of an interrupted reanchor on one node reproduces the
+// id of its own earlier attempt. Its instant is the adopted stream's creation —
+// the earliest moment the transition could exist, and a value every operator
+// reads identically off the broker, which a reanchor's own clock is not.
+//
+// THE WRITER IS PART OF THE IDENTITY, because two nodes that derive the same
+// generation are two operations, not one retried. The subject holds one record
+// either way — the append expects nothing on it — but a clustered broker checks
+// its duplicate window before that expectation, so one id between two nodes
+// had the second acknowledged as a duplicate of the first's record, as though
+// its own had landed, and it opened the generation over its own rows too. With
+// the writer in the id the second is refused on the subject instead; and the
+// transition reads back whose record landed whichever answer it got
+// ([Reanchor]), so it does not rest on this.
 func (f GenerationFacts) OpID() string {
 	return DeriveOpID(f.Inputs.StreamCreatedAt,
 		"reanchor-"+strconv.FormatUint(uint64(f.Generation), 10),
 		"crewlet.statelog.reanchor",
 		strconv.FormatUint(uint64(f.Generation), 10),
-		strconv.FormatInt(f.Inputs.StreamCreatedAt.UTC().UnixNano(), 10))
+		strconv.FormatInt(f.Inputs.StreamCreatedAt.UTC().UnixNano(), 10),
+		f.Writer)
 }
 
 // OpMintedAt recovers the instant an operation id was minted at, reporting
