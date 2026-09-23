@@ -16,6 +16,15 @@ sometimes will not run.
 crewlet retention status
 ```
 
+**Every `crewlet retention` command that talks to a node needs
+`fleet:operate`** — all of them but `verify --restore`, which opens a snapshot
+directory on disk — reads included:
+the `retention` question and every `/work/retention*` route take it, because a
+map of which machine holds what and the value a reanchor must echo describe the
+deployment rather than the company. The commands authenticate with
+`CREWLET_API_TOKEN`, and a credential without the grant is refused `403`
+naming it.
+
 Four figures per domain, and no others:
 
 | Figure | What it is |

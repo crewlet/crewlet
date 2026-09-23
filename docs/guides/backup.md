@@ -25,6 +25,13 @@ bucket crewlet_budgets   streams/KV_crewlet_budgets.snapshot   512 B      3 mess
 …
 ```
 
+**It needs `fleet:operate`.** The command authenticates with
+`CREWLET_API_TOKEN` like every command that talks to a running node, and
+`POST /backup` refuses a credential without that grant with `403` naming it —
+copying the node's whole durable state, every credential and every seat's
+memory included, to a directory the caller names operates the deployment
+rather than reading the company.
+
 The path is on the **engine's host**, not yours — this writes files where the
 node runs and downloads nothing. Any node produces one, whatever its roles:
 every node holds its own store and, on the embedded topology, its own broker.
