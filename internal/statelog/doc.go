@@ -326,7 +326,11 @@
 // restarted node would have nothing to compare, so the verdict is recorded in
 // the node estate when it is reached and recalled while the checkpoint names
 // the same record ([NodeEstate]): only a reanchor or an adoption, which move
-// the checkpoint, ends it.
+// the checkpoint, ends it. A checkpoint that names NO record — committed before
+// checkpoints named theirs — is named from this node's own ledgers, never from
+// the log's record, which is the thing in question; where nothing names it,
+// that is said and the applier goes on until its next batch names one
+// ([Runner.nameCheckpoint]).
 // The nodes whose rows are the copy's age see none of it — the log is their
 // own history — so what stops them writing records the restored reanchor of a
 // newer peer would apply nowhere is that peer's published position or flag

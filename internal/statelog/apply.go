@@ -261,6 +261,12 @@ type Runner struct {
 	// and the log after it can tell that its finding is about a copy this
 	// runner no longer holds ([Runner.VerifyCheckpoint]).
 	rows uint64
+	// unnamed is a checkpoint whose record this node's own evidence could not
+	// name, with the count of the rows it was judged against
+	// ([Runner.nameCheckpoint]) — so the attempt is made once per copy of
+	// the rows, and the warning once per checkpoint, rather than on every
+	// verification.
+	unnamed *unnamedCheckpoint
 	// verify is a verification of the checkpoint's record the loop owes
 	// before it applies anything past it: set when a run starts, when a
 	// fetch fails, and when a reading finds the log ending below the
@@ -1006,7 +1012,12 @@ func (r *Runner) recallDiverged(ctx context.Context) (bool, error) {
 	if err != nil || !found {
 		return false, err
 	}
-	if recorded.at != at || consumed.IsZero() || !sameRecord(recorded.consumed, consumed) {
+	// THE SAME RECORD — or, for a checkpoint that names none, the same
+	// absence: such a verdict was found by the operation this node's ledger
+	// names at the checkpoint ([Runner.nameCheckpoint]), and a checkpoint row
+	// naming a record since is another file's.
+	if recorded.at != at || recorded.consumed.IsZero() != consumed.IsZero() ||
+		(!consumed.IsZero() && !sameRecord(recorded.consumed, consumed)) {
 		return false, clearDiverged(ctx, r.node, r.spec.Name, recorded)
 	}
 	r.mu.Lock()
@@ -1028,9 +1039,33 @@ func (r *Runner) checkCheckpoint(ctx context.Context) (checkpointCheck, bool, er
 	r.mu.Lock()
 	at, consumed, rows := r.cursor, r.checkpointAt, r.rows
 	r.mu.Unlock()
-	check, held, err := compareCheckpoint(ctx, r.log, at, consumed)
-	if err != nil || check != checkpointDiverged {
-		return check, false, err
+	var (
+		check checkpointCheck
+		held  time.Time
+		err   error
+	)
+	if at.Seq > 0 && consumed.IsZero() {
+		// A CHECKPOINT THAT NAMES NO RECORD is named from this node's own
+		// evidence where it has some, and compared like any other then —
+		// or found to stand on another operation than the log's record
+		// there carries, which is the same finding without an instant.
+		n, nameErr := r.nameCheckpoint(ctx, at, rows)
+		switch {
+		case nameErr != nil:
+			return 0, false, nameErr
+		case n.check == checkpointDiverged:
+			check, held = n.check, n.held
+		case n.named.IsZero():
+			return n.check, false, nil
+		default:
+			consumed = n.named
+		}
+	}
+	if check != checkpointDiverged {
+		check, held, err = compareCheckpoint(ctx, r.log, at, consumed)
+		if err != nil || check != checkpointDiverged {
+			return check, false, err
+		}
 	}
 	r.mu.Lock()
 	if r.rows != rows || at.Generation < r.cursor.Generation {
@@ -1053,6 +1088,187 @@ func (r *Runner) checkCheckpoint(ctx context.Context) (checkpointCheck, bool, er
 	// on the next verification ([Runner.recallDiverged]).
 	_, err = r.recallDiverged(ctx)
 	return checkpointDiverged, established, err
+}
+
+// unnamedCheckpoint is a checkpoint whose record this node's own evidence could
+// not name, and the count of the rows it was judged against.
+type unnamedCheckpoint struct {
+	at   Position
+	rows uint64
+}
+
+// naming is what [Runner.nameCheckpoint] concluded: the record it named, or
+// what the comparison it stands in for would have answered — settled with
+// nothing named (nothing to compare, or no evidence), unreached, or diverged,
+// with the instant of the record the log holds instead.
+type naming struct {
+	check checkpointCheck
+	named time.Time
+	held  time.Time
+}
+
+// nameCheckpoint names the record a checkpoint that names none stands on — from
+// this node's OWN evidence, and only from that — writing it into the checkpoint
+// row, and answers the zero instant where it cannot.
+//
+// # Where such a checkpoint comes from
+//
+// A row committed before its column existed (`0020_a_checkpoint_names_its_record`
+// defaults every existing row to zero), and a reanchor placed where the log held
+// no record. The next batch this node commits names its own record, but an IDLE
+// domain commits no batch — and while the checkpoint names nothing, nothing
+// separates a restored log written past these rows from the history they came
+// from: the comparison has no instant to compare, and the loop applies the other
+// history the moment it arrives.
+//
+// # Why the log's record alone is never evidence
+//
+// It is exactly the thing in question. Naming the checkpoint by whatever the log
+// holds at its sequence adopts the other history's record as the one this node
+// consumed, and every comparison after it reads settled. That is also why a
+// REDELIVERY of the record at the checkpoint no longer names it: on a broker
+// restored from an older copy the consumer is restored with it, and what it
+// redelivers at the checkpoint is the log's record, whichever history that is.
+//
+// # What is
+//
+// What this node wrote about the record when it consumed it, in the same file
+// as the rows ([tables.consumedAt]): its operation ledger's row at exactly this
+// position — naming the record by its own instant where the row keeps one, and
+// otherwise by its operation being the one the log's record carries — or its
+// retained copy of a record it could not decode, at this position. A ledger row
+// here naming ANOTHER operation than the log's record carries, and no instant,
+// is evidence too, of the opposite: the log holds another record at this
+// checkpoint than the one this node applied there, which is [ErrLogDiverged]
+// with the one term it cannot give — the instant of the record consumed. The
+// one residue is stated rather than hidden:
+// a ledger row older than its own instant column vouches by operation and
+// position alone, which a caller's retry of that very operation, landing at that
+// very sequence as the first write after a restore, would also satisfy — a
+// record deciding the same operation against the same rows, since the restored
+// log ended just below it.
+//
+// # And where there is none
+//
+// The checkpoint stays unnamed and it is SAID, once per checkpoint, as
+// `statelog_checkpoint_unnamed`: the operation at the checkpoint was swept from
+// the ledger, the record there wrote no ledger row (a read barrier, a
+// duplicate, a record a gate kept out of the rows), or the log holds another
+// operation there. The applier then goes on as a checkpoint naming nothing
+// always has — it applies what follows, and the first batch it commits names
+// its record — because refusing would stop every idle domain of every node the
+// first time it booted this build, over a question that almost always has the
+// ordinary answer. A checkpoint the log holds no record at — below its first
+// surviving sequence, or a sequence it skipped — is neither named nor said:
+// there is nothing on the log to compare it with, as there is not for a named
+// one there. And one past the log's end is left for a later reading, answered
+// unreached exactly as a named one is.
+//
+// THE EVIDENCE AND THE WRITE SHARE ONE TRANSACTION, so what is written into the
+// checkpoint row is what that same file's ledger said — an adoption replacing
+// the file between the two cannot pair one file's evidence with the other's
+// row — and the write is conditioned on the row still standing at this
+// checkpoint and still naming nothing, which makes it a no-op for a runner that
+// has moved on.
+func (r *Runner) nameCheckpoint(ctx context.Context, at Position, rows uint64) (naming, error) {
+	r.mu.Lock()
+	judged := r.unnamed != nil && r.unnamed.at == at && r.unnamed.rows == rows
+	r.mu.Unlock()
+	if judged {
+		return naming{}, nil
+	}
+	first, last, err := r.log.Bounds(ctx)
+	if err != nil {
+		return naming{}, fmt.Errorf("statelog: read %s's ends to name the record "+
+			"at the checkpoint %s: %w", r.spec.Name, at, err)
+	}
+	switch {
+	case pastEnd(at.Seq, last):
+		return naming{check: checkpointUnreached}, nil
+	case at.Seq < first:
+		return naming{}, nil
+	}
+	_, payload, held, ok, err := r.log.At(ctx, at.Seq)
+	if err != nil {
+		return naming{}, fmt.Errorf("statelog: read %s's record at the checkpoint "+
+			"%s to name it: %w", r.spec.Name, at, err)
+	}
+	if !ok {
+		return naming{}, nil
+	}
+	// THE OPERATION THE LOG'S RECORD CARRIES, where its envelope — which
+	// every build reads — decodes: the key the ledger is asked by. One that
+	// does not decode can still be this node's retained copy.
+	opID := ""
+	if env, decodeErr := r.domain.Envelope(payload); decodeErr == nil {
+		opID = env.OpID
+	}
+	var found consumed
+	if err := r.db.Tx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if found, err = r.tables.consumedAt(ctx, tx, at, opID, held); err != nil ||
+			found.storedAt.IsZero() {
+			return err
+		}
+		return r.tables.nameCursor(ctx, tx, at, found.storedAt)
+	}); err != nil {
+		return naming{}, fmt.Errorf("statelog: name the record at %s's checkpoint "+
+			"%s: %w", r.spec.Name, at, err)
+	}
+	named := found.storedAt
+	r.mu.Lock()
+	if r.cursor != at || r.rows != rows || !r.checkpointAt.IsZero() {
+		r.mu.Unlock()
+		// MOVED UNDER THE READ: the checkpoint this runner stands at now
+		// is named by its own commit, or judged on the next verification.
+		return naming{}, nil
+	}
+	if found.otherOp != "" {
+		r.mu.Unlock()
+		// ANOTHER OPERATION THAN THE LOG'S, at this very position: the log
+		// holds another record here than the one this node applied.
+		r.logger.WarnContext(ctx, "statelog_checkpoint_other_operation",
+			"domain", r.domain.Name(), "stream", r.spec.Name, "checkpoint", at.String(),
+			"applied_op_id", found.otherOp, "log_op_id", opID,
+			"stored_at", held.UTC().Format(time.RFC3339Nano),
+			"detail", "this node's checkpoint names no record, and its operation "+
+				"ledger says the record it applied there carried another operation "+
+				"than the log's record at that sequence does — so the log holds "+
+				"another record at this node's checkpoint, and it is refused as "+
+				"diverged")
+		return naming{check: checkpointDiverged, held: held}, nil
+	}
+	if named.IsZero() {
+		// JUDGED AGAIN for every copy of the rows — each load of the row
+		// is one, and an adoption can install another file at the same
+		// checkpoint — but SAID once per checkpoint: the boot's own
+		// verification and the loop's first one are two judgements of
+		// one fact.
+		said := r.unnamed != nil && r.unnamed.at == at
+		r.unnamed = &unnamedCheckpoint{at: at, rows: rows}
+		r.mu.Unlock()
+		if said {
+			return naming{}, nil
+		}
+		r.logger.WarnContext(ctx, "statelog_checkpoint_unnamed",
+			"domain", r.domain.Name(), "stream", r.spec.Name, "checkpoint", at.String(),
+			"op_id", opID, "stored_at", held.UTC().Format(time.RFC3339Nano),
+			"detail", "this node's checkpoint names no record — it was committed "+
+				"before checkpoints named theirs, or placed by a reanchor where the "+
+				"log held none — and nothing this node kept about the record it "+
+				"consumed there (its operation ledger, its retained records) names "+
+				"it either, so whether the log still holds that record cannot be "+
+				"told; a broker restored from an older copy and written past these "+
+				"rows would not be noticed until the first batch this node commits "+
+				"names its record")
+		return naming{}, nil
+	}
+	r.checkpointAt, r.unnamed = named, nil
+	r.mu.Unlock()
+	r.logger.InfoContext(ctx, "statelog_checkpoint_named",
+		"domain", r.domain.Name(), "stream", r.spec.Name, "checkpoint", at.String(),
+		"stored_at", named.UTC().Format(time.RFC3339Nano), "evidence", found.evidence)
+	return naming{named: named}, nil
 }
 
 // CheckpointDiverged reports whether log holds, at checkpoint at, ANOTHER record
@@ -2383,12 +2599,16 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// The floor is this node's committed cursor rather than zero,
 		// because a run made ENTIRELY of redeliveries below the
 		// checkpoint has to be acknowledged without moving it at all.
-		committedAt = highest(consumed, r.Committed())
+		before := r.Committed()
+		committedAt = highest(consumed, before)
 		// AND THE RECORD IT NAMES: the one consumed at that position, or
 		// — for a run of nothing but redeliveries — the one the checkpoint
-		// already named ([Runner.checkpointAt]).
+		// already named ([Runner.checkpointAt]). NEVER A REDELIVERY'S OWN,
+		// even of the checkpoint's record onto a checkpoint that names
+		// none: what a restored consumer redelivers there is the log's
+		// record, whichever history it is ([Runner.nameCheckpoint]).
 		committedRecord = r.checkpointRecord()
-		if top := topRecord(consumed); top.Position == committedAt {
+		if top := topRecord(consumed); top.Position == committedAt && committedAt != before {
 			committedRecord = top.StoredAt
 		}
 		return r.tables.setCursor(ctx, tx, committedAt, r.StreamCreatedAt(),
@@ -2599,10 +2819,6 @@ func (r *Runner) advance(at Position, record time.Time) {
 	if r.cursor.Packed() < at.Packed() {
 		// THE PAIR MOVES TOGETHER — see [Runner.checkpointAt].
 		r.cursor, r.checkpointAt = at, record
-	} else if r.cursor == at && r.checkpointAt.IsZero() {
-		// A REDELIVERY OF THE CHECKPOINT'S OWN RECORD names it where the
-		// row did not: a checkpoint committed before the column existed.
-		r.checkpointAt = record
 	}
 	r.appliedAt = r.now()
 }

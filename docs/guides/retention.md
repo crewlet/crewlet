@@ -809,6 +809,29 @@ checkpoint is then not past the end at all, and the record is the only thing
 that shows it — and when a broker is restored under it while it runs. It is
 compared for equality, so no clock is ever ordered against another.
 
+A checkpoint written before checkpoints named their record — or placed by a
+reanchor where the log held none — names nothing, and the next batch the node
+commits names its own. An **idle** domain commits no batch, so the node names
+such a checkpoint itself, at boot, from what it kept when it consumed that
+record and **never** from the log's record, which is exactly the thing in
+question: its operation ledger's row at the checkpoint (by the record's own
+instant, or — for a row older than that — by the operation being the one the
+log's record carries), or its retained copy of a record it could not decode. It
+writes the name back and logs `statelog_checkpoint_named` with the evidence
+(`ledger_instant`, `ledger_operation` or `retained`), and compares from then on
+like any other. A ledger row there naming **another** operation than the log's
+record carries is a divergence, logged as `statelog_checkpoint_other_operation`
+and then refused like one. Where nothing names it — the ledger's retention swept
+the row, or the record there wrote none (a read barrier, a repeated operation, a
+record a gate kept out of the rows) — the node logs
+`statelog_checkpoint_unnamed` (`WARN`) once and carries on: refusing would stop
+every idle domain on its first boot of this build over a question that almost
+always has the ordinary answer, but it is the one state in which a restored log
+written past these rows goes unnoticed until the next batch names a record. If
+the broker behind such a node was restored from an older copy, re-anchor or
+replace it rather than waiting for that batch. A checkpoint the log holds no
+record at is neither named nor said, since there is nothing to compare it with.
+
 **The rest of the fleet stops writing to it too.** A node whose rows were the
 copy's age sees a log that is its own history, so nothing about its own log
 refuses it — yet every write it makes after the restore is one the restored

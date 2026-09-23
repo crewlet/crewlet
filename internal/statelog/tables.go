@@ -483,6 +483,119 @@ func (t tables) appliedRecord(ctx context.Context, tx *sql.Tx, opID string, p Po
 	return packed == p.Packed() && !named.IsZero() && sameRecord(named, storedAt), nil
 }
 
+// consumed is what this node's own ledgers say about the record it consumed at
+// one position ([tables.consumedAt]): its broker instant and which evidence
+// named it, or — where the operation ledger names at that position another
+// operation than the log's record carries, and keeps no instant — that
+// operation.
+type consumed struct {
+	storedAt time.Time
+	evidence string
+	otherOp  string
+}
+
+// consumedAt answers, from this node's own ledgers in tx, what it consumed at
+// position p — given that the log's record there carries operation opID (empty
+// where its envelope did not decode) and was stored at held. See
+// [Runner.nameCheckpoint].
+//
+//   - `ledger_instant`: the operation ledger's row at p keeps its record's
+//     instant. That instant is the answer whether or not it is the log's —
+//     another one is exactly the divergence the caller compares for.
+//   - `ledger_operation`: the row at p predates the instant column and names
+//     opID, so the operation and the position agreeing is the evidence, and
+//     the log's instant the answer.
+//   - `retained`: this node kept a record it could not decode at p, with its
+//     instant.
+//   - otherOp: the row at p predates the instant column and names another
+//     operation than opID — the log's record at p is not the one this node
+//     applied there.
+//
+// No row at p is not evidence either way: the record there may have written
+// none (a read barrier, a repeat of an operation applied earlier, a record a
+// gate kept out of the rows), or the sweep may have taken it.
+//
+// BY THE LOG'S OPERATION FIRST, which is the table's primary key and the
+// ordinary answer; BY POSITION only where that misses, which no index serves —
+// a scan of a ledger the sweep bounds to its retention window, asked once per
+// copy of the rows of a checkpoint that names nothing, and never on the apply
+// path.
+func (t tables) consumedAt(ctx context.Context, tx *sql.Tx, p Position, opID string,
+	held time.Time) (consumed, error) {
+
+	if t.ops != "" {
+		named := func(recorded int64, op string) (consumed, bool) {
+			switch {
+			case recorded != 0:
+				return consumed{storedAt: decodeInstant(recorded), evidence: "ledger_instant"}, true
+			case opID == "":
+				// NOTHING TO COMPARE the ledger's operation with.
+				return consumed{}, false
+			case op == opID:
+				return consumed{storedAt: held, evidence: "ledger_operation"}, true
+			}
+			return consumed{otherOp: op}, true
+		}
+		if opID != "" {
+			var packed, recorded int64
+			err := tx.QueryRowContext(ctx,
+				`SELECT position, stored_at FROM `+t.ops+` WHERE op_id = ?`, opID).
+				Scan(&packed, &recorded)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+			case err != nil:
+				return consumed{}, fmt.Errorf("statelog: read operation %q: %w", opID, err)
+			case packed == p.Packed():
+				if c, ok := named(recorded, opID); ok {
+					return c, nil
+				}
+			}
+		}
+		var op string
+		var recorded int64
+		err := tx.QueryRowContext(ctx,
+			`SELECT op_id, stored_at FROM `+t.ops+` WHERE position = ? LIMIT 1`, p.Packed()).
+			Scan(&op, &recorded)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return consumed{}, fmt.Errorf("statelog: read the operation applied at %s: %w", p, err)
+		default:
+			if c, ok := named(recorded, op); ok {
+				return c, nil
+			}
+		}
+	}
+	if t.deferred != "" {
+		var recorded int64
+		err := tx.QueryRowContext(ctx,
+			`SELECT stored_at FROM `+t.deferred+` WHERE position = ?`, p.Packed()).
+			Scan(&recorded)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return consumed{}, fmt.Errorf("statelog: read the retained record at %s: %w", p, err)
+		case recorded != 0:
+			return consumed{storedAt: store.DecodeTime(recorded), evidence: "retained"}, nil
+		}
+	}
+	return consumed{}, nil
+}
+
+// nameCursor writes storedAt as the record the checkpoint at p names — only
+// while the row stands at p and names none, so a write for a checkpoint that
+// has since moved, or been named by a commit, changes nothing.
+func (t tables) nameCursor(ctx context.Context, tx *sql.Tx, p Position, storedAt time.Time) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE statelog_cursor SET stored_at = ?
+		WHERE stream = ? AND generation = ? AND seq = ? AND stored_at = 0`,
+		encodeInstant(storedAt), t.stream, int64(p.Generation), int64(p.Seq))
+	if err != nil {
+		return fmt.Errorf("statelog: name the record at the cursor %s: %w", p, err)
+	}
+	return nil
+}
+
 // retainedRecord answers whether this node consumed and RETAINED the record at
 // position p stored by the broker at storedAt: a record this build could not
 // read is held here byte for byte, and is these rows' history as much as one

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -410,30 +411,228 @@ func TestAReanchorEndsTheDivergenceAndAJoinThatReplacedNothingDoesNot(t *testing
 	})
 }
 
-// A CHECKPOINT THAT NAMES NO RECORD IS NEVER CALLED DIVERGED.
-//
-// A row older than the column names nothing, and comparing nothing with the
-// log's record would stop every node the first time it booted this build.
-func TestACheckpointThatNamesNoRecordIsNeverCalledDiverged(t *testing.T) {
-	t.Parallel()
-	h := appliedThrough(t, 3)
+// unname makes the checkpoint row name no record — a row committed before its
+// column existed — and, with the ledger's too, makes every operation ledger row
+// keep no instant, as one written before that column did.
+func unname(t *testing.T, h *applyHarness, ledger bool) {
+	t.Helper()
+	stmts := []string{`UPDATE statelog_cursor SET stored_at = 0 WHERE stream = '` + probeStream + `'`}
+	if ledger {
+		stmts = append(stmts, `UPDATE probe_ops SET stored_at = 0`)
+	}
 	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(),
-			`UPDATE statelog_cursor SET stored_at = 0 WHERE stream = ?`, probeStream)
-		return err
+		for _, stmt := range stmts {
+			if _, err := tx.ExecContext(t.Context(), stmt); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
-		t.Fatalf("clear the record the checkpoint names: %v", err)
+		t.Fatalf("clear what the checkpoint names: %v", err)
 	}
+}
+
+// rebuildLogged is [applyHarness.rebuild] with the runner's log captured.
+func rebuildLogged(h *applyHarness) *lockedBuffer {
+	h.t.Helper()
 	h.rebuild(probeDomain{}, time.Time{})
-	h.fetch.offerStored(3, otherHistory, env(3, "edit", "3", "op-3", 1))
-	h.fetch.offer(4, env(4, "edit", "4", "op-4", 1))
-	if err := h.run(4); err != nil {
-		t.Fatalf("a checkpoint naming no record stopped: %v", err)
+	cp, _, err := statelog.CheckpointOf(h.t.Context(), h.db.Replicated(), probeStream)
+	if err != nil {
+		h.t.Fatalf("read the checkpoint: %v", err)
 	}
-	// AND THE BATCH IT COMMITS NAMES ONE FROM THEN ON.
-	if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(4)) {
-		t.Fatalf("the checkpoint names %s after a batch, want %s", got, probeStoredAt(4))
+	logs := &lockedBuffer{}
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain: probeDomain{}, Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
+		Node: h.db, DB: h.db.Replicated(),
+		Checkpoint: cp.At, CheckpointStoredAt: cp.StoredAt,
+		Metrics: h.metrics, Logger: slog.New(slog.NewJSONHandler(logs, nil)),
+	})
+	if err != nil {
+		h.t.Fatalf("NewRunner: %v", err)
 	}
+	h.runner = runner
+	return logs
+}
+
+// offerThrough offers records 1..n as the ones this node consumed.
+func offerThrough(h *applyHarness, n uint64) {
+	for seq := uint64(1); seq <= n; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprint(seq), fmt.Sprintf("op-%d", seq), 1))
+	}
+}
+
+// A CHECKPOINT THAT NAMES NO RECORD IS NAMED BY THIS NODE'S OWN EVIDENCE, AND
+// NEVER BY THE LOG'S.
+//
+// A row committed before checkpoints named their record names none, and until
+// a batch committed one nothing was compared — so an IDLE domain never got its
+// divergence detection back, and a restored log written past its rows was
+// applied the moment it arrived. The checkpoint is now named, and the name
+// written back, from what the node kept when it consumed that record: its
+// operation ledger's row at the checkpoint, by the record's own instant or, in
+// a row older than that column, by the operation agreeing. A ledger naming
+// another operation there is a divergence. And where nothing names it, that is
+// said, and the loop goes on as before rather than stopping every idle domain
+// on its first boot of this build — but a redelivery of the log's record at
+// the checkpoint no longer names it, since on a restored broker the consumer
+// redelivers whichever history the log holds.
+func TestAnUnnamedCheckpointIsNamedByThisNodesOwnEvidence(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the ledger's instant names it, with no batch", func(t *testing.T) {
+		t.Parallel()
+		h := appliedThrough(t, 3)
+		unname(t, h, false)
+		logs := rebuildLogged(h)
+		offerThrough(h, 3)
+		if established, err := h.runner.VerifyCheckpoint(t.Context()); err != nil || established {
+			t.Fatalf("VerifyCheckpoint = (%v, %v), want the checkpoint named and settled",
+				established, err)
+		}
+		if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(3)) {
+			t.Fatalf("the checkpoint row names %s, want the record the ledger names, %s — "+
+				"an idle domain commits no batch to name it", got, probeStoredAt(3))
+		}
+		if got := h.runner.Stance().StoredAt; !got.Equal(probeStoredAt(3)) {
+			t.Fatalf("the runner stands on %s, want %s", got, probeStoredAt(3))
+		}
+		named := logRecords(t, logs.Bytes(), "statelog_checkpoint_named")
+		if len(named) != 1 || named[0]["evidence"] != "ledger_instant" {
+			t.Fatalf("statelog_checkpoint_named lines = %v, want one naming the ledger's instant", named)
+		}
+	})
+
+	t.Run("and the divergence an idle domain could not see is found", func(t *testing.T) {
+		t.Parallel()
+		h := appliedThrough(t, 3)
+		unname(t, h, false)
+		h.rebuild(probeDomain{}, time.Time{})
+		offerThrough(h, 2)
+		h.fetch.offerStored(3, otherHistory, env(3, "edit", "other", "op-other-3", 1))
+		if established, err := h.runner.VerifyCheckpoint(t.Context()); err != nil || !established {
+			t.Fatalf("VerifyCheckpoint over another record at 3 = (%v, %v), want the "+
+				"divergence — the ledger names the record consumed there", established, err)
+		}
+		if !errors.Is(h.runner.StreamIdentity(), statelog.ErrLogDiverged) {
+			t.Fatalf("the identity is %v, want the divergence", h.runner.StreamIdentity())
+		}
+	})
+
+	t.Run("an older ledger names it by the operation", func(t *testing.T) {
+		t.Parallel()
+		h := appliedThrough(t, 3)
+		unname(t, h, true)
+		logs := rebuildLogged(h)
+		offerThrough(h, 3)
+		if established, err := h.runner.VerifyCheckpoint(t.Context()); err != nil || established {
+			t.Fatalf("VerifyCheckpoint = (%v, %v), want the checkpoint named and settled",
+				established, err)
+		}
+		if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(3)) {
+			t.Fatalf("the checkpoint row names %s, want the log's record at the operation "+
+				"the ledger names there, %s", got, probeStoredAt(3))
+		}
+		named := logRecords(t, logs.Bytes(), "statelog_checkpoint_named")
+		if len(named) != 1 || named[0]["evidence"] != "ledger_operation" {
+			t.Fatalf("statelog_checkpoint_named lines = %v, want one naming the operation", named)
+		}
+	})
+
+	t.Run("an older ledger naming another operation is a divergence a restart keeps", func(t *testing.T) {
+		t.Parallel()
+		h := appliedThrough(t, 3)
+		at := h.runner.Committed()
+		unname(t, h, true)
+		h.rebuild(probeDomain{}, time.Time{})
+		offerThrough(h, 2)
+		h.fetch.offerStored(3, otherHistory, env(3, "edit", "other", "op-other-3", 1))
+		if established, err := h.runner.VerifyCheckpoint(t.Context()); err != nil || !established {
+			t.Fatalf("VerifyCheckpoint over another operation at 3 = (%v, %v), want the "+
+				"divergence", established, err)
+		}
+		if err := h.runner.StreamIdentity(); !errors.Is(err, statelog.ErrLogDiverged) ||
+			!strings.Contains(err.Error(), "another operation") {
+			t.Fatalf("the identity is %v, want the divergence saying the ledger names "+
+				"another operation", err)
+		}
+		if got := storedAtOf(t, h.db); !got.IsZero() {
+			t.Fatalf("the checkpoint row names %s — the log's record is not this node's "+
+				"and must never be written as the one it consumed", got)
+		}
+		// THE RESTART, over a log that no longer holds record 3.
+		h.rebuild(probeDomain{}, time.Time{})
+		h.fetch.offerStored(4, otherHistory.Add(time.Second), env(4, "edit", "4", "op-other-4", 1))
+		h.fetch.offerStored(5, otherHistory.Add(2*time.Second), env(5, "edit", "5", "op-other-5", 1))
+		if err := h.run(5); !errors.Is(err, statelog.ErrLogDiverged) {
+			t.Fatalf("the restarted loop returned %v, want the recalled divergence", err)
+		}
+		if appliedAt(h, 4) || appliedAt(h, 5) || h.runner.Committed() != at {
+			t.Fatalf("the restarted node applied the other history (at %s)", h.runner.Committed())
+		}
+	})
+
+	t.Run("nothing to name it by is said once, and the loop goes on", func(t *testing.T) {
+		t.Parallel()
+		h := appliedThrough(t, 3)
+		unname(t, h, true)
+		if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), `DELETE FROM probe_ops`)
+			return err
+		}); err != nil {
+			t.Fatalf("sweep the ledger: %v", err)
+		}
+		logs := rebuildLogged(h)
+		h.fetch.offerStored(3, otherHistory, env(3, "edit", "3", "op-3", 1))
+		h.fetch.offer(4, env(4, "edit", "4", "op-4", 1))
+		if established, err := h.runner.VerifyCheckpoint(t.Context()); err != nil || established {
+			t.Fatalf("VerifyCheckpoint with nothing to name the checkpoint by = (%v, %v), "+
+				"want nothing established", established, err)
+		}
+		if got := storedAtOf(t, h.db); !got.IsZero() {
+			t.Fatalf("the checkpoint row names %s with no evidence — the log's record "+
+				"is the thing in question", got)
+		}
+		if err := h.run(4); err != nil {
+			t.Fatalf("a checkpoint nothing names stopped: %v", err)
+		}
+		if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(4)) {
+			t.Fatalf("the checkpoint names %s after a batch, want %s", got, probeStoredAt(4))
+		}
+		if said := logRecords(t, logs.Bytes(), "statelog_checkpoint_unnamed"); len(said) != 1 ||
+			said[0]["level"] != "WARN" || said[0]["checkpoint"] == "" {
+			t.Fatalf("statelog_checkpoint_unnamed lines = %v, want one WARN naming the "+
+				"checkpoint — the boot's verification and the loop's are one fact", said)
+		}
+	})
+
+	t.Run("a redelivery of the log's record names nothing", func(t *testing.T) {
+		t.Parallel()
+		h := appliedThrough(t, 3)
+		unname(t, h, true)
+		if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), `DELETE FROM probe_ops`)
+			return err
+		}); err != nil {
+			t.Fatalf("sweep the ledger: %v", err)
+		}
+		h.rebuild(probeDomain{}, time.Time{})
+		h.fetch.offerStored(3, otherHistory, env(3, "edit", "3", "op-3", 1))
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+		errs := make(chan error, 1)
+		go func() { errs <- h.runner.Run(ctx) }()
+		for h.fetch.ackCount(3) < 1 && ctx.Err() == nil {
+			time.Sleep(2 * time.Millisecond)
+		}
+		cancel()
+		<-errs
+		if h.fetch.ackCount(3) < 1 {
+			t.Fatal("the redelivery was never consumed")
+		}
+		if got := storedAtOf(t, h.db); !got.IsZero() {
+			t.Fatalf("a redelivery named the checkpoint by the log's record, %s — what a "+
+				"restored consumer redelivers is whichever history the log holds", got)
+		}
+	})
 }
 
 // A PEER'S TRUNCATION IS THE RUNNER'S WRITE FENCE, NOT ITS IDENTITY.

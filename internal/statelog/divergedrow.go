@@ -33,7 +33,10 @@ import (
 // SAME record ([Runner.recallDiverged]): a reanchor moves the checkpoint into a
 // new generation and an adoption installs another checkpoint, and each of those
 // is a file the verdict was never about — so the row is removed then, and
-// never on any reading of the log.
+// never on any reading of the log. A consumed instant of zero is a checkpoint
+// that names no record, found diverged by the operation this node's ledger says
+// it applied there ([Runner.nameCheckpoint]); it is recalled while the
+// checkpoint row stands at that position and still names none.
 //
 // # Why the node estate
 //

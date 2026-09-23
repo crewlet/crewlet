@@ -189,7 +189,9 @@ var ErrLogDiverged = errors.New("statelog: the log's record at this node's check
 
 // divergedLog is what established that a log diverged from an applier's rows:
 // the checkpoint, the broker instant of the record the checkpoint names, and
-// the instant of the record the log holds at the same sequence.
+// the instant of the record the log holds at the same sequence. A consumed
+// instant of zero is a checkpoint that names no record, found diverged by the
+// operation this node's ledger says it applied there ([Runner.nameCheckpoint]).
 type divergedLog struct {
 	at             Position
 	consumed, held time.Time
@@ -201,16 +203,21 @@ func (d divergedLog) err(stream string) error {
 	// "AT", NEVER "PAST": another record reaching the checkpoint's own
 	// sequence is the whole finding, and a log written exactly that far —
 	// the other history's record landing AT it — holds nothing past it.
-	return fmt.Errorf("%w: this node's checkpoint on %s is at sequence %d, on the "+
-		"record the broker stored at %s, and the log's record at %d was stored at "+
-		"%s — the broker was restored from a copy older than these rows and "+
-		"another record has since been written at that sequence, so the log "+
-		"continues a history they are not; nothing past the checkpoint is "+
-		"applied, neither a read nor a write can be answered from these rows, "+
-		"and an operator re-anchors them with `crewlet retention reanchor "+
-		"-stream %s` (the restored case) or replaces them with a peer's",
-		ErrLogDiverged, stream, d.at.Seq, d.consumed.UTC().Format(time.RFC3339Nano),
-		d.at.Seq, d.held.UTC().Format(time.RFC3339Nano), stream)
+	consumed := fmt.Sprintf("on the record the broker stored at %s",
+		d.consumed.UTC().Format(time.RFC3339Nano))
+	if d.consumed.IsZero() {
+		consumed = "where its operation ledger says it applied another operation " +
+			"than the log's record there carries"
+	}
+	return fmt.Errorf("%w: this node's checkpoint on %s is at sequence %d, %s, and "+
+		"the log's record at %d was stored at %s — the broker was restored from a "+
+		"copy older than these rows and another record has since been written at "+
+		"that sequence, so the log continues a history they are not; nothing past "+
+		"the checkpoint is applied, neither a read nor a write can be answered from "+
+		"these rows, and an operator re-anchors them with `crewlet retention "+
+		"reanchor -stream %s` (the restored case) or replaces them with a peer's",
+		ErrLogDiverged, stream, d.at.Seq, consumed, d.at.Seq,
+		d.held.UTC().Format(time.RFC3339Nano), stream)
 }
 
 // ErrLogTruncated reports a log that has lost records a PEER's rows hold: a
