@@ -290,12 +290,95 @@ func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 // node still heartbeating it, or by a goroutine on this one — is left for the
 // next tick. The claim lapses [ClaimTTL] after its holder stops renewing, and
 // that is when a walk is abandoned rather than merely running.
+//
+// # A merge into an item in the trash WAITS, and is reported rather than run
+//
+// Its survivor takes no child and no duplicate until it is restored — the
+// rule [Writer.MergeDuplicates] refuses such a merge by before its mark — so
+// a survivor that went to the trash after the mark makes running the merge a
+// refusal on every tick. Worse, it was a refusal the job RETURNED ON: the
+// selection was one batch in id order and the loop stopped at its first
+// error, so one merge waiting on the trash held up every abandoned merge whose
+// id sorted after it, for as long as nobody restored an item they may never
+// have known about. So a waiting merge is recognised from its own rows before
+// any claim is taken, it uses up no place in the tick's budget, and every
+// tick names it — which is the "still reporting" half. A restore picks it up
+// on the next tick, and so does removing the duplicate's link to the
+// survivor, which leaves a marker with no target.
+//
+// AND ONE MERGE'S FAILURE IS NOT THE TICK'S, for [duty.repairOneSided]'s
+// reason: the rest are on other subjects. Each failure is logged, the loop
+// goes on, and the tick answers all of them together.
 func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error) {
-	var stuck []string
-	if err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	var (
+		finished  int64
+		attempted int
+		waiting   []string
+		failed    []error
+		after     string
+	)
+	fail := func(id string, err error) {
+		attempted++
+		d.deps.Logger.WarnContext(ctx, "tracker_merge_finish_failed",
+			"task", id, "error", err)
+		failed = append(failed, fmt.Errorf("tracker: finish the merge of %s: %w",
+			id, err))
+	}
+	// THE BUDGET IS [WalkBatch] MERGES ATTEMPTED, and the walk pages on
+	// until it is spent or the marked set is: a waiting merge costs one
+	// keyed read and no claim, so it never stands in for work.
+	for attempted < WalkBatch {
+		ids, err := d.markedAfter(ctx, after)
+		if err != nil {
+			return finished, errors.Join(append(failed, err)...)
+		}
+		if len(ids) == 0 {
+			break
+		}
+		for _, id := range ids {
+			if attempted == WalkBatch {
+				break
+			}
+			after = id
+			walk, err := d.abandonedMerge(ctx, id)
+			switch {
+			case err != nil:
+				fail(id, err)
+				continue
+			case walk.waiting:
+				waiting = append(waiting, id)
+				continue
+			}
+			done, err := d.finishMerge(ctx, id, now)
+			if err != nil {
+				fail(id, err)
+				continue
+			}
+			attempted++
+			if done {
+				finished++
+			}
+		}
+	}
+	if len(waiting) > 0 {
+		d.deps.Logger.WarnContext(ctx, "tracker_merges_waiting_on_the_trash",
+			"tasks", waiting, "detail", "each is marked mid-merge into an item "+
+				"that is now in the trash, which takes no subtask and no "+
+				"duplicate; restore that item and the next tick finishes the "+
+				"merge, or remove the duplicate's link to it and the next tick "+
+				"clears the mark")
+	}
+	return finished, errors.Join(failed...)
+}
+
+// markedAfter is one page of the tasks marked mid-merge, in id order, after a
+// cursor — the partial index's own order, so each page is a seek.
+func (d *duty) markedAfter(ctx context.Context, after string) ([]string, error) {
+	var ids []string
+	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
-			`SELECT id FROM tracker_tasks WHERE merging = 1 ORDER BY id LIMIT ?`,
-			WalkBatch)
+			`SELECT id FROM tracker_tasks WHERE merging = 1 AND id > ?
+			 ORDER BY id LIMIT ?`, after, WalkBatch)
 		if err != nil {
 			return fmt.Errorf("tracker: read the abandoned merges: %w", err)
 		}
@@ -305,28 +388,16 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 			if err := rows.Scan(&id); err != nil {
 				return err
 			}
-			stuck = append(stuck, id)
+			ids = append(ids, id)
 		}
 		return rows.Err()
-	}); err != nil {
-		return 0, err
-	}
-
-	var finished int64
-	for _, id := range stuck {
-		done, err := d.finishMerge(ctx, id, now)
-		if err != nil {
-			return finished, err
-		}
-		if done {
-			finished++
-		}
-	}
-	return finished, nil
+	})
+	return ids, err
 }
 
 // finishMerge completes one abandoned merge under its own claim, reporting
-// whether it did — false for a walk that is still running.
+// whether it did — false for a walk that is still running, or one that began
+// waiting on the trash between the selection and the claim.
 func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool, error) {
 	claim, err := d.deps.Writer.hold(ctx, mergeClaim(id))
 	switch {
@@ -342,22 +413,30 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 	}
 	defer claim.release(ctx)
 
+	// READ AGAIN UNDER THE CLAIM, because the selection's read was taken
+	// before it: the walk may have finished, or the survivor gone to the
+	// trash, in between.
 	walk, err := d.abandonedMerge(ctx, id)
-	if err != nil {
+	switch {
+	case err != nil:
 		return false, err
+	case walk.waiting:
+		return false, nil
 	}
 	opID := d.opID("merge", id, now)
 	done := false
 	if walk.into == "" {
 		// MID-MERGE WITH NO TARGET is a marker whose relation never
-		// landed. The honest repair is to clear the marker and
-		// NOTHING ELSE: the merge did not happen, so cancelling
-		// the task would close an item nobody merged — and leaving
-		// the flag set would make this tick run for ever against a
-		// task nothing is merging.
+		// landed, or whose survivor was PURGED since — and nothing can
+		// be moved onto, or merged into, a task a purge destroyed. The
+		// honest repair is to clear the marker and NOTHING ELSE: the
+		// merge did not happen, so cancelling the task would close an
+		// item nobody merged — and leaving the flag set would make this
+		// tick run for ever against a task nothing is merging.
 		d.deps.Logger.WarnContext(ctx, "tracker_merge_marker_without_target",
-			"task", id, "detail", "the marker is cleared and the task left "+
-				"open; the merge it names never linked anything")
+			"task", id, "purged_target", walk.purged, "detail", "the marker "+
+				"is cleared and the task left open; the merge it names links "+
+				"nothing that is still there")
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if _, err := d.deps.Writer.UpdateTask(ctx, opID, walk.task,
 			walk.project, NoIfMatch, TaskPatch{Merging: &done},
@@ -396,8 +475,17 @@ type abandonedMerge struct {
 	task, project string
 
 	// into is the canonical task, read off the `duplicates` relation the
-	// mark wrote — empty when the mark's relation never landed.
+	// mark wrote — empty when the mark's relation never landed, or when
+	// the task it names has since been purged.
 	into string
+
+	// purged is the survivor the mark named when a purge has since
+	// destroyed it, for the line that says why a marker was cleared.
+	purged string
+
+	// waiting says the survivor is in the trash, which takes nothing until
+	// it is restored — see [duty.finishMerges].
+	waiting bool
 
 	// reparent is the walk's own intent, carried on the task since the
 	// mark. FALSE for a marker written by a build that predates the
@@ -425,6 +513,29 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 				walk.into = relation.Other
 			}
 		}
+		if walk.into == "" {
+			return nil
+		}
+		// THE SURVIVOR'S OWN STATE, three-valued as [absentTask]'s: in
+		// the trash the merge waits, purged it has no target, and absent
+		// with no marker this node has not applied what named it.
+		canonical, held, err := readTask(ctx, tx, walk.into)
+		switch {
+		case err != nil:
+			return err
+		case held:
+			walk.waiting = canonical.Removed != nil
+			return nil
+		}
+		_, purged, err := purgedTask(ctx, tx, walk.into)
+		switch {
+		case err != nil:
+			return err
+		case !purged:
+			return fmt.Errorf("tracker: task %s is mid-merge into %s, which "+
+				"is not on this node: %w", id, walk.into, statelog.ErrUnavailable)
+		}
+		walk.purged, walk.into = walk.into, ""
 		return nil
 	})
 	return walk, err

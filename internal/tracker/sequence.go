@@ -418,14 +418,29 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 // publishes in depth order to avoid, and a restore brings back only what the
 // removal took — so a child filed under the removed parent in between would
 // stay a live row under a parent nobody can see.
+//
+// # Nor does a task's own subtree
+//
+// A task filed under itself, or under one of its own descendants, makes its
+// parent chain a CYCLE: the applier applies it — a committed record is never
+// refused there — and raises `cycle`, and the subtree drops off every board,
+// since a board draws roots and a cycle has none. The closure doc says two
+// concurrent re-parents on two subjects can form one no single write sees;
+// ONE write forming it is simply a write nobody refused, so it is refused
+// here, in the snapshot that also reads the parent.
+//
+// # An absent parent is one of two facts
+//
+// See [absentTask]: a PURGED parent is gone for good and is refused as such,
+// while one this node holds no row of at all may be a create it has not
+// applied yet, which is the only absence worth coming back for.
 func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) error {
 	parent, held, err := readTask(ctx, tx, parentID)
 	switch {
 	case err != nil:
 		return err
 	case !held:
-		return fmt.Errorf("tracker: parent task %s is not on this node: %w",
-			parentID, statelog.ErrUnavailable)
+		return absentTask(ctx, tx, parentID, "parent task")
 	case parent.Removed != nil:
 		return fmt.Errorf("tracker: parent task %s (%s) was removed by %s at "+
 			"%s; restore it before filing anything under it", parent.Key,
@@ -436,7 +451,78 @@ func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) e
 			"%s", task.ID, task.Project, parent.Key, parent.Project,
 			parent.Project)
 	}
+	under, err := inSubtree(ctx, tx, task.ID, parentID)
+	switch {
+	case err != nil:
+		return err
+	case under:
+		return fmt.Errorf("tracker: task %s cannot be filed under %s (%s), "+
+			"which is itself or one of its own subtasks — the parent chain "+
+			"would be a cycle with no root for a board to draw it from",
+			task.ID, parent.Key, parentID)
+	}
 	return nil
+}
+
+// inSubtree reports whether candidate is root itself or anywhere beneath it,
+// from the closure this snapshot holds — which carries every task at distance
+// zero from itself, so the one probe answers both.
+func inSubtree(ctx context.Context, tx *sql.Tx, root, candidate string) (bool, error) {
+	if root == "" || candidate == "" {
+		return false, nil
+	}
+	if root == candidate {
+		return true, nil
+	}
+	var found int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM tracker_task_closure
+		               WHERE ancestor_id = ? AND descendant_id = ?)`,
+		root, candidate).Scan(&found); err != nil {
+		return false, fmt.Errorf("tracker: read whether %s is under %s: %w",
+			candidate, root, err)
+	}
+	return found == 1, nil
+}
+
+// absentTask is the answer for a task a sequence names and this snapshot holds
+// no row of — THREE-VALUED, because the absence is two different facts and
+// the third value is the read failing.
+//
+// A PURGE LEAVES A MARKER that outlives the row (see [taskGuards]), so a task
+// carrying one is gone on every node and for good: that is a REFUSAL, and it
+// says so. Answered as [statelog.ErrUnavailable] — "not on this node" — it
+// told the caller to come back to a task that will never return, and a merge
+// walk or a duty retrying it did so on every tick for ever. Only a task with
+// no row AND no marker is one this node may simply not have applied yet,
+// which is the absence worth coming back for.
+func absentTask(ctx context.Context, tx *sql.Tx, id, role string) error {
+	key, purged, err := purgedTask(ctx, tx, id)
+	switch {
+	case err != nil:
+		return err
+	case !purged:
+		return fmt.Errorf("tracker: %s %s is not on this node: %w", role, id,
+			statelog.ErrUnavailable)
+	}
+	return fmt.Errorf("tracker: %s %s (%s) was purged, and a purge is "+
+		"permanent — name another task", role, key, id)
+}
+
+// purgedTask reads a task's deletion marker: the key it held, and whether a
+// purge destroyed it.
+func purgedTask(ctx context.Context, tx *sql.Tx, id string) (string, bool, error) {
+	var key string
+	err := tx.QueryRowContext(ctx,
+		`SELECT task_key FROM tracker_deletions WHERE task_id = ?`, id).Scan(&key)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("tracker: read whether task %s was "+
+			"purged: %w", id, err)
+	}
+	return key, true, nil
 }
 
 // declaredType refuses a task naming a type the company has not declared.
@@ -863,8 +949,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				duplicate, statelog.ErrUnavailable)
+			return absentTask(ctx, tx, duplicate, "task")
 		case current.Removed != nil:
 			return fmt.Errorf("tracker: task %s was removed by %s at %s; "+
 				"restore it before merging it", duplicate,
@@ -876,8 +961,20 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				into, statelog.ErrUnavailable)
+			return absentTask(ctx, tx, into, "task")
+		case canonical.Removed != nil:
+			// REFUSED BEFORE THE MARK, WHICHEVER WAY THE SUBTASKS GO.
+			// Moving them, every re-parent is refused on its own
+			// subject — a parent in the trash takes no new child — so
+			// the mark would be one nothing can finish, retried by the
+			// duty on every tick. Leaving them, the duplicate is
+			// cancelled INTO an item nobody can see, so the one live
+			// copy of the work is closed in favour of one in the trash.
+			// Either way the survivor has to be live first.
+			return fmt.Errorf("tracker: %s (%s) is in the trash — removed "+
+				"by %s at %s; restore it before merging anything into it",
+				canonical.Key, into, canonical.Removed.By,
+				canonical.Removed.At.Format(time.RFC3339))
 		case reparent && canonical.Project != current.Project:
 			// REFUSED BEFORE THE MARK, because every re-parent below
 			// would be refused on its own subject — a subtask lives in
@@ -888,6 +985,24 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 				"subtask lives in its parent's project. Merge without "+
 				"moving the subtasks to leave them where they are",
 				current.Key, current.Project, canonical.Key, canonical.Project)
+		}
+		if !reparent {
+			return nil
+		}
+		// AND NOT INTO ITS OWN SUBTREE when the subtasks move, for the
+		// same reason: the child the survivor sits under would be
+		// re-parented onto the survivor, which [refuseParent] refuses
+		// as a cycle — so the mark would stand with nothing to finish it.
+		under, err := inSubtree(ctx, tx, duplicate, into)
+		switch {
+		case err != nil:
+			return err
+		case under:
+			return fmt.Errorf("tracker: %s is one of %s's own subtasks, so "+
+				"the duplicate's subtasks cannot move onto it — one of them "+
+				"would end up under itself. Merge without moving the "+
+				"subtasks to leave them where they are",
+				canonical.Key, current.Key)
 		}
 		return nil
 	}); err != nil {
@@ -967,9 +1082,16 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 			if _, err := w.UpdateTask(ctx, stepID(opID, "c/"+child.ID),
 				child.ID, child.Project, NoIfMatch, TaskPatch{Parent: &into},
 				ChangeReparented, nil); err != nil {
+				// THE DUTY FINISHES IT ONCE THE MOVE CAN LAND, which is
+				// not the same promise as "the duty finishes it": a
+				// survivor that went to the trash after the pre-flight
+				// takes no child until it is restored, and the duty
+				// leaves such a merge waiting — reported, not retried
+				// — rather than failing on it every tick.
 				return moved, fmt.Errorf("tracker: %d subtask(s) re-parented "+
-					"onto %s and %s still has more; the tracker duty completes "+
-					"the rest idempotently: %w", moved, into, duplicate, err)
+					"onto %s and %s still has more, so it stays marked "+
+					"mid-merge; the tracker duty moves the rest once the "+
+					"move can land: %w", moved, into, duplicate, err)
 			}
 			moved++
 		}
