@@ -49,6 +49,14 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 		// sent beside any envelope at all.
 		{"get_work_item(body=true)", wholeBody(whole)},
 		{"get_work_catalogue", maximalCatalogue()},
+		// THE PROJECT LISTING AS A SEAT PAGES IT. Its own cap is the
+		// SCREEN's — two hundred rows, ≈ 93 KiB here, refused for weight
+		// — so the tool asks for [tracker.MaxProjectsPerToolAnswer] and
+		// says `total` beside `truncated`. Nothing measured this until
+		// the row grew a field, and what a cap that does not fit buys a
+		// model is not a large answer but advice to narrow and no
+		// projects at all.
+		{"list_projects", maximalProjects()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -185,6 +193,41 @@ func maximalDetail() tracker.TaskDetail {
 		})
 	}
 	return detail
+}
+
+// maximalProjects is a seat's page of projects, each row generous rather than
+// typical.
+//
+// NOTHING CAPS A PROJECT'S PROSE — its name, purpose and unit are the org
+// chart's own text — so "maximal" here is a measured row with room in it: a
+// purpose of a hundred and twenty characters is three times what a company
+// writes, and the whole point of the page size is that it holds even so.
+func maximalProjects() tracker.ProjectListing {
+	at := time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC)
+	out := tracker.ProjectListing{
+		Total: tracker.MaxProjectsPerAnswer, Truncated: true,
+	}
+	for i := range tracker.MaxProjectsPerToolAnswer {
+		out.Projects = append(out.Projects, tracker.ProjectRow{
+			Key: "PROJECT" + itoa(i), Name: strings.Repeat("n", 48),
+			Purpose: strings.Repeat("p", 120),
+			Unit: tracker.UnitRef{
+				Key: strings.Repeat("u", 32), Name: strings.Repeat("U", 32),
+				Resolved: true,
+			},
+			Lead: tracker.LeadRef{
+				Handle: strings.Repeat("l", 24), Kind: tracker.AuthorHuman,
+			},
+			DefaultAssignee: strings.Repeat("a", 24),
+			Counts:          tracker.TaskCounts{Open: 412, Done: 1204, Closed: 98},
+			LastChange: &tracker.LastChange{
+				At: at, Actor: strings.Repeat("l", 24),
+				ActorKind: tracker.AuthorOperator,
+			},
+			Version: 1099511628032,
+		})
+	}
+	return out
 }
 
 // maximalCatalogue is every field a document may declare, each with every

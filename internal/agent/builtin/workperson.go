@@ -30,6 +30,21 @@ import (
 // a LEAD for somebody in their line. What these tools add is the org lookup
 // the tracker deliberately does not do — this package has a chart and that one
 // does not.
+//
+// # WHOSE record, which is not who wrote it
+//
+// These tools ACT AS A PERSON, and the person is not the credential in their
+// hand. A write through the operator MCP is attributed to the TOKEN with
+// author kind `operator`, deliberately and permanently, because a tracker
+// whose author field is chosen by the writer is not an audit trail. The
+// SUBJECT of the record is the other question, and its answer is
+// [Actor.Record]: the seat the token is bound to, or the token itself where
+// nothing is bound.
+//
+// They passed `actor.Handle` for both. So a founder whose assistant marked
+// their inbox read wrote a second person record named after their credential,
+// and their own screen — which asks under their seat — showed an inbox where
+// nothing had ever been read.
 
 // PersonWriter is the tracker write side these tools need.
 type PersonWriter interface {
@@ -88,8 +103,13 @@ func (t *getPerson) Call(ctx context.Context, args map[string]any) (tools.Result
 	if handle == "" {
 		return failed("Name whose state to read with `handle`."), nil
 	}
+	// BOTH OF THAT PERSON'S NAMES, resolved from the chart — never the
+	// credential the caller is holding. An operator reading a report's own
+	// state is handed THAT person's alias, and the ordinary case, where
+	// they are reading their own, falls out of the same lookup rather than
+	// being a second rule. See [WorkDeps.Party].
 	state, err := t.deps.Reader.Person(ctx, tracker.PersonQuery{
-		Handle: handle, Level: seatReadLevel,
+		Who: t.deps.partyOf(handle), Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
 		return failed(readFailure(tracker.GetPersonTool, err)), nil
@@ -142,19 +162,28 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	handle := strings.TrimSpace(argString(args, "handle"))
-	if handle == "" {
-		handle = actor.Handle
+	if handle != "" {
+		// A HANDLE SOMEBODY TYPED IS RESOLVED AGAINST THE CHART, because
+		// a typo here writes a whole PERSON RECORD for somebody who does
+		// not exist — a queue nobody will ever read, and a wake routed to
+		// a handle Route drops in silence.
+		//
+		// ONLY a handle somebody typed. The caller's own identity is not
+		// a typo, and an unbound operator's is not in the chart at all —
+		// so resolving it refused their own list by name, telling a
+		// person holding the credential that there was nobody here called
+		// that. Their record is the one `get_person` and `work_inbox`
+		// already answer for them.
+		whose, unknown := t.deps.resolveHandle(tracker.SetPrioritiesTool,
+			"`handle`", handle)
+		if unknown != "" {
+			return failed(unknown), nil
+		}
+		handle = whose
+	} else {
+		// THE PERSON, NOT THE CREDENTIAL — see the file head.
+		handle = actor.Record()
 	}
-	// THE HANDLE IS RESOLVED AGAINST THE CHART, because a typo here writes
-	// a whole PERSON RECORD for somebody who does not exist — a queue
-	// nobody will ever read, and a wake routed to a handle Route drops in
-	// silence.
-	whose, unknown := t.deps.resolveHandle(tracker.SetPrioritiesTool,
-		"`handle`", handle)
-	if unknown != "" {
-		return failed(unknown), nil
-	}
-	handle = whose
 	authority := tracker.PersonAuthority{
 		// A HUMAN OR AN OPERATOR MAY WRITE ANYBODY'S, which is the
 		// design's own rule and the one the gate was missing. It matters
@@ -168,8 +197,13 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// AND THE LEAD RELATION IS RESOLVED HERE and passed as a value,
 	// because the tracker has no chart — see the file head. A surface that
 	// wired no lookup resolves false, which degrades to "your own only".
-	if t.leads != nil && handle != actor.Handle {
-		authority.Lead = t.leads(ctx, actor.Handle, handle)
+	//
+	// ASKED ABOUT [Actor.Record]: a lead relation is between two PEOPLE in
+	// the chart, and a credential is in no chart at all. A bound founder
+	// asked about under their token matched nobody and fell through to
+	// `Person` for an authority their seat actually holds.
+	if t.leads != nil && handle != actor.Record() {
+		authority.Lead = t.leads(ctx, actor.Record(), handle)
 	}
 	// EVERY ENTRY IS RESOLVED TO AN ID, because the list is stored as ids
 	// and read back by joining on them — and this tool's own description
@@ -251,8 +285,12 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if bad != "" {
 		return failed(bad), nil
 	}
+	// THE PERSON'S OWN RECORD, which is [Actor.Record] and not the author
+	// — see the file head. A pin is an arrangement somebody made, so it
+	// belongs to them and not to whichever credential they were holding.
+	whose := actor.Record()
 	result, err := writer.WritePins(ctx,
-		"pins-"+actor.Handle+"-"+callKey(turn), actor.Handle,
+		"pins-"+whose+"-"+callKey(turn), whose,
 		argStrings(args, "views"), favorites)
 	if err != nil {
 		return failed(writeFailure(tracker.SetPinsTool, err)), nil
@@ -359,8 +397,13 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		reasons = append(reasons, reason)
 	}
+	// THE PERSON'S OWN RECORD — see [setPins.CallForTurn] and the file
+	// head. An inbox is the one object in this tracker that must never be
+	// written on somebody else's behalf, and a founder's inbox is the
+	// founder's whichever credential their assistant holds.
+	whose := actor.Record()
 	result, err := writer.WriteInbox(ctx,
-		"inbox-"+actor.Handle+"-"+callKey(turn), actor.Handle,
+		"inbox-"+whose+"-"+callKey(turn), whose,
 		read, unread, snoozed, reasons, tracker.Position{
 			Stream: strings.TrimSpace(argString(args, "seen_through_stream")),
 			Seq:    uint64(argFloat(args, "seen_through")),
@@ -557,7 +600,12 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		return failed("Name whose inbox to read with `handle`."), nil
 	}
 	q := tracker.InboxQuery{
-		Handle:         handle,
+		// BOTH OF THAT PERSON'S NAMES — see [getPerson.Call]. The
+		// applier writes one notification row per RECIPIENT the record
+		// named, so a change that concerned a founder under the
+		// credential they filed something with is a row the seat alone
+		// never sees.
+		Who:            t.deps.partyOf(handle),
 		PrimaryOnly:    argBool(args, "primary_only"),
 		Unread:         argBool(args, "unread"),
 		IncludeSnoozed: argBool(args, "include_snoozed"),

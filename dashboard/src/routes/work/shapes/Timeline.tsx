@@ -24,7 +24,7 @@ import {
   type Timeline,
   type TimelineBar,
 } from "~/lib/timeline.ts";
-import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "./work.tsx";
+import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { EmptyState, Tag, cx } from "@crewlethq/ui";
 import { TimelineGlyph } from "@crewlethq/icons/glyphs";
 import { plural } from "~/lib/format.ts";
@@ -235,7 +235,11 @@ function Band({
                 <span className="work-key mono">{bar.row.key}</span>
                 <span className="truncate">{bar.row.title}</span>
                 <PriorityMark priority={bar.row.priority} />
-                <Assignee handle={bar.row.assignee} seatName={chrome.seatName} />
+                <Assignee
+                  handle={bar.row.assignee}
+                  seatName={chrome.seatName}
+                  seatKind={chrome.seatKind}
+                />
               </a>
             ))}
           </div>

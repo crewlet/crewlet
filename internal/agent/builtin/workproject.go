@@ -130,30 +130,10 @@ func (t *writeProject) Parameters() map[string]any {
 				"description": "REPLACES this project's own field " +
 					"declarations — send the whole set, read describe_project " +
 					"first. These sit beside the workspace's, they do not " +
-					"replace them. The project lead's.",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"id":                   map[string]any{"type": "string", "description": "Omit for a new field."},
-						"slug":                 map[string]any{"type": "string"},
-						"name":                 map[string]any{"type": "string"},
-						"type":                 map[string]any{"type": "string", "enum": toAny(fieldTypeNames())},
-						"required":             map[string]any{"type": "boolean"},
-						"required_in_subtasks": map[string]any{"type": "boolean"},
-						"archived": map[string]any{
-							"type":        "boolean",
-							"description": "One-way; values stay on their tasks.",
-						},
-						"pinned":           map[string]any{"type": "boolean"},
-						"hide_from_agents": map[string]any{"type": "boolean"},
-						"description":      map[string]any{"type": "string"},
-						"options": map[string]any{
-							"type":  "array",
-							"items": map[string]any{"type": "object"},
-						},
-					},
-					"required": []any{"slug", "name", "type"},
-				},
+					"replace them. Each declaration is whole too: a key left " +
+					"out is cleared, `config` and its options included. The " +
+					"project lead's.",
+				"items": fieldDeclarationSchema(),
 			},
 			"default_assignee": map[string]any{
 				"type": "string",
@@ -186,7 +166,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	key := strings.TrimSpace(argString(args, "project"))
 	if key == "" {
-		key = t.deps.defaultProject(actor.Handle)
+		key = t.deps.defaultProject(actor)
 	}
 	if key == "" {
 		return failed("Name the `project` to change — your seat's unit owns " +
@@ -225,10 +205,17 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// policy half on a different answer to the same question.
 	// EITHER AUTHORITY IS ENOUGH, and the operator half is why the lookup
 	// below is not the whole answer: it resolves the lead from the ORG
-	// CHART by handle, and an operator token carries its own name rather
-	// than a seat's — so for the founder's own surface it always answers
-	// false. See [tracker.ProjectAuthority].
-	lead := t.leads != nil && t.leads(ctx, actor.Handle, key)
+	// CHART by handle, and a token nobody bound is in no chart at all — so
+	// for an unbound operator it answers false whatever they lead. See
+	// [tracker.ProjectAuthority].
+	//
+	// ASKED ABOUT [Actor.Record], which is the person behind the
+	// credential: a bound founder's own seat leads their projects, and
+	// asked about the token's name instead the lookup matched nobody and
+	// fell through to `Operator` for an authority their seat actually
+	// holds — so a lead-only edit refused for a seat that leads the
+	// project read as a person's override in the history.
+	lead := t.leads != nil && t.leads(ctx, actor.Record(), key)
 	person := actor.Kind.Person()
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}

@@ -237,6 +237,159 @@ paragraph: every destination has a path of its own, no two share one, each
 resolves to the workspace it declares, no two workspaces own a first segment,
 and no reserved segment has the shape of a key the engine mints.
 
+### A filter is a chip; an arrangement is a menu
+
+The grammar above says where a control LIVES. This says what a control is, and
+it is the boundary the work screens lost first: a bar of eleven controls, five
+of which were pickers drawn whether or not they were set, so the two that were
+narrowing looked exactly like the nine that were not — and which of them
+appeared depended on the shape, so one switch sat at three different places on
+three tabs.
+
+Two kinds, and nothing is both:
+
+- A **filter** narrows the answer. It is added from one **Filter** menu, it is
+  drawn as a removable **chip** under the bar, and there is no chip for a
+  filter that is off — so an unfiltered list has no chip row at all. Taking a
+  chip off clears the one URL key it names.
+- An **arrangement** decides how the same answer is DRAWN — the shape, the
+  grouping, the order, the grid's columns. All of it lives in one **Display**
+  menu, whose button says what is on, so the arrangement is readable without
+  opening anything.
+
+  **A screen whose grid has an optional column has a menu to reach it.** The
+  columns half is one component, `ColumnChooser` in `DataGrid.tsx`, drawn by
+  the work list's Display menu and by the projects directory's own **Columns**
+  button beside its segment — because `optional` with no chooser is a column
+  that can be turned off in the source and never on by anybody, which is what
+  the directory's Unit column shipped as for one commit, taking `sort=unit`
+  with it. It is one implementation rather than two checkbox lists for the two
+  rules that are easy to get wrong separately: an empty `cols=` is the DEFAULT
+  set rather than an empty grid, and the value written back is in the columns'
+  DECLARATION order rather than the reader's click order, because `cols=`
+  carries an order as well as a selection. What each screen keeps is which
+  columns exist — per shape on the work list, per grid everywhere else — and
+  the choices are DERIVED from the columns the grid draws, so a column added
+  appears in its menu with no second edit.
+
+`URL_HOMES` in `lib/work.ts` is where that is declared per key rather than per
+paragraph: every URL key the work list carries names the control that owns it —
+chip, menu, or one of the three that are deliberately neither and carry their
+reason at the entry. `routes/work/toolbar/grammar.test.tsx` holds it against
+the SCREEN in both directions, reading the key set out of `ItemsView.tsx`
+rather than listing it: every key the list puts on the address has a home, and
+every home is a key the list actually writes. Both halves fail silently
+otherwise — a key with no home is a narrowing reachable only by editing the
+address, which `unit=` was for its chip's whole life while the Clear control
+walked past it, and a key with two is two controls for one fact that disagree
+the first time either writes.
+
+The one control outside both is the **scope** switch (open / closed /
+everything), which is always set to something: as a chip it would either be
+permanently present, which is not a chip, or absent on its default, which hides
+the one segment that decides whether finished work is on screen at all. Its
+third value has a NAME (`all`) rather than the empty string, because a key set
+to `""` is a key the router deletes — so the segment snapped back to its
+fallback on the next render, and the one segment whose whole job is to show
+finished work could not be selected.
+
+**A key that is there and empty is not a key that is missing.** The scope's
+third value has a NAME for one half of this; the column narrowing has the other
+half, and it cannot borrow the trick. Narrowing a board to one of its columns
+writes `group=<value>`, and the column holding the rows with no value on the
+axis — Unassigned, Untagged, No parent — has the empty string as its key, on
+every axis, which is what the engine reads with `Params.Has`. So no word could
+be spelled that some axis will not one day hold as a value, and the honest
+spelling is PRESENCE: the address carries `group=` with nothing after it,
+`URLSearchParams` round-trips it, and every reader asks whether the key is there
+rather than what it says. Written as a plain string it was unreachable end to
+end — the query builder dropped an empty value, `useParam` could not tell it
+from an absent key, and the address writer deleted it — so the Unassigned
+column's own "N more →" loaded the whole board.
+
+A **saved view** is neither: it is a query somebody arranged and put somewhere,
+so it is a tab in the strip. The five shapes are not tabs beside it — a shape
+is a way of drawing any query, and mixed into one strip the two read as the
+same kind of thing. That is also why `view=` and `shape=` are two keys:
+switching a saved board to a list must not throw the saved filters away.
+
+**And a narrowing the SCREEN is is not a filter either — it is LOCKED.** One
+list serves three screens, and two of them are that list narrowed to something
+the reader did not choose: `#/work/{KEY}` is the work in one project, `#/me`'s
+Assigned tab is the work on one person. A locked narrowing is held to four
+rules, and each one is a way the same defect appears if it is broken:
+
+- It is **applied under everything else**, after every key the reader set and
+  every default a saved view supplied, so nothing can widen the list past the
+  thing the screen is about.
+- It is **not offered** in the Filter menu. A row there is a second answer to a
+  question the screen has already answered, and choosing it writes a key the
+  lock overwrites — a control that does nothing.
+- It draws **no chip**, because a chip is removable and this is not. A chip
+  that will not come off is a control reporting a state the reader cannot
+  reach.
+- It is **not in the URL**. The screen's own key is what addresses it —
+  `#/me?handle=cto`, a project's path segment — so a second key naming the same
+  fact is a second place for the answer to be written, and the two can differ.
+
+It follows that a locked narrowing does not make a list "filtered": the empty
+state that blames a narrowing and offers to clear it is for a filter that is
+actually on, and over a locked one it would name a control the reader has no
+way to press. What a host screen says instead is its own sentence, about its
+own subject.
+
+### The sparse state
+
+Every screen above is drawn, argued about and reviewed on a company with work
+in it. A company's first week is the state every company passes through, and it
+is the one where each of these bands is conditional on data that does not exist
+yet — so the page a new operator meets is the one nobody designed. Five rules,
+each the answer to one thing that went missing at one item:
+
+- **The landing shape is the list.** A board's information is the comparison
+  ACROSS its lanes, which makes it the worst shape at low N and the best at
+  high N: four lanes holding one card between them say nothing one lane could
+  not, and that card is a 292 px object in a 1500 px field. A list degrades to
+  one full-width row and is still a list. So a container with no default view
+  opens as a list and the board is one press away in **Display** — and the
+  landing shape is never conditional on how much work exists, because a screen
+  that redraws itself as a company fills up is a screen nobody can learn.
+- **A closed-set axis draws every declared value; an open one draws what
+  exists.** The ENGINE decides which lanes there are — `work_items` carries
+  every column the query's own predicate admits, so a one-item company gets the
+  denominator a board's comparison needs and Open draws no dead Done lane. What
+  is the screen's is the DRAWING: an empty lane says "Nothing here" rather than
+  standing as a heading over nothing. The rule and the axes it covers are in
+  [the work tracker guide](../guides/work-tracker.md#views); a list, a table
+  and a timeline draw only the bands that hold rows, which is the bullet under
+  "A board draws every lane the scope admits" below.
+- **The view strip is always drawn.** Its first tab is the container's own
+  list — a real destination, and the only thing that names the page inside its
+  own content column — so gating the strip on somebody having saved a query
+  left the toolbar as the top edge of the screen. It ends in a link to the
+  inventory, because saved views are undiscoverable until somebody has used
+  one. The container tab carries no count: the engine's total is over the
+  FILTER and not over the container, and a number an answer does not give is
+  not drawn.
+- **An empty list is a function of what was ASKED.** One sentence answered
+  three questions that send a reader to three different places, and it blamed
+  filters on a screen with no chip row at all. So: a narrowing is on and
+  nothing matched → "Nothing matches", with the control that clears it rather
+  than a description of one; nothing is narrowing and this container has
+  nothing in this SCOPE → "Nothing open here", naming the switch, with a number
+  only where the container's own counts give one; nothing at all → how work
+  arrives. The last one is drawn by whoever holds the wider fact — the page for
+  a company with no projects, the project screen for an empty project — and the
+  list stays quiet rather than stacking a second panel under it.
+- **The end of a complete list is said.** A list that reached its end and one
+  that was cut off both ended in rows and then page ground: the count in the
+  bar is silent once everything matching is on screen, and a cursor is
+  invisible. A complete answer with rows on it closes with "That is all of it ·
+  N items". It never says how many a filter hides — `total_hint` counts what
+  MATCHED, over the same predicate as the rows, so the unfiltered total is not
+  in the answer at all and synthesising it would take a second query at a
+  second instant.
+
 **Reserved segments cannot collide with keys.** Project and container keys are
 uppercase (`ENG`), item keys are `KEY-n`, everything else the engine mints is a
 uuid — and every reserved segment is lowercase. That is what lets `#/work/views`
@@ -342,11 +495,13 @@ because every single-modifier combination worth having is already the browser's.
 | Route | Page | Tabs / views |
 |---|---|---|
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `state=unread\|all\|snoozed` · `reason=` · `row=` (which row the detail pane is on) |
-| `#/me` | **My work** — the seven claims, plus what reached you | `handle=` (an operator reading somebody else's day) |
-| `#/work` | **All work** | `view=list\|board\|calendar\|timeline\|table\|trash` + the filter grammar |
+| `#/me` | **My work** — the seven claims on one person's attention | `tab=assigned\|priorities\|asks\|unblocked\|collaborating\|watching\|checklist` · `handle=` (an operator reading somebody else's day) · on the Assigned tab, `shape=`, `cols.list=` / `cols.table=` and the filter grammar, with the assignee LOCKED and `view=` absent — the screen's own tabs are its strip |
+| `#/work` | **All work** | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` (the active shape's column set) + the filter grammar |
+| `#/work/projects` | **Projects** — the directory: every project, its lead, its three counts and how far along its work is. A row peeks; the peek's `Open ↗` is the way to the page. The segment and the sort are both the ENGINE's question: `shown=` becomes `archived=false\|only\|true` and `sort=` travels as it is written, because the answer stops at the engine's own 200 and anything applied after that orders — or narrows — a page rather than the company. **Unit is the one OPTIONAL column**: the engine mints a project the moment a unit declares its `project` key and names it after the unit, so on a chart-owned company Unit and Project are the same word on every row — two of nine columns spending their width on one fact. It is a column rather than a deletion because the two genuinely differ where a project is a root-level SEAT's, and `sort=unit` stays an ordering the engine takes whether or not the column is drawn — so the directory carries a **Columns** menu beside its segment, which is the same `ColumnChooser` the work list's Display menu draws over its own columns. Optional with no chooser is a column nobody can reach and an ordering no head on the screen offers, which is what this shipped as for one commit | `shown=active\|archived\|all` · `sort=key\|name\|unit\|open\|done\|closed\|last_change`, with a leading `-` for descending · `cols=` (the bare key: this is the screen's only grid), which carries the order as well as the selection, so it names the whole set |
+| `#/work/history` | **Every change** — the tracker's own log, on the log frame | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` · `project=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
-| `#/work/{KEY}` | **Project** | the same view strip, scoped to the project |
+| `#/work/{KEY}` | **Project** — the header says what the container is, its lede says what it is for, and **Items** carries the open count | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
 | `#/company` | **Company** — the charter, the chart, and editing them | `lens=chart\|charter\|builder` (builder is *(operator)*) · `unit=` · `seat=` |
 | `#/company/people` | **People** — the one directory, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
@@ -431,9 +586,42 @@ the retention screen's per-domain terms — a block that already titled itself,
 with no header row and nothing to sort, which is a table in the sense the
 element means rather than a list of objects.
 
+**Including the tracker's own list and table, which are one grid with two
+column sets.** They were two components over one answer, and the cost was
+exactly what two renderers of one row always costs: the list had none of the
+rules this section states — one track list for the whole grid, the cap on a
+shrink column, the card a row becomes below 860px, the cursor `j` and `k`
+walk — and the table had none of the list's, so it drew an EMPTY band per
+group the moment a second axis was asked for, because sub-groups replace a
+group's rows and it read only `rows`. The shape now picks a **column set** and
+nothing else: same fetch, same bands, same head, same phone layout. A set is a
+default (which columns are on with nothing chosen), an order, and how a value
+is drawn — the list's priority is the bare mark that opens its row and the
+table's is the word in a column you can sort.
+
+**`cols=` therefore selects WITHIN the active set, and is keyed per shape** —
+`cols.list=` and `cols.table=`. Not because a name might be one the other set
+lacks; a grid already drops a name its columns do not hold, and falls back to
+its default when nothing survives. It is because `cols=` carries an **order**
+as well as a selection, and the order is the set's own: one key read against
+both sets draws the list's columns in the table's arrangement, which is a row
+nobody asked for and which no validation catches, since every name in it is
+legal in both. Per shape, each arrangement survives the other, and an address
+says which set its columns belong to. The **sort** is deliberately not keyed
+that way: it is a fact about the QUESTION — the engine orders the whole set
+the same way whatever draws it — so both shapes share one `sort=`.
+
 **The sort is in the URL**, which is the rule the component exists for: a
 sorted ops table that cannot be sent to anybody, does not survive a reload and
 comes back unsorted from Back is sorted for one person for one minute.
+
+**A band may hold bands.** A second grouping is a heading under a heading,
+which is what a second axis means where every row is a line, and a band
+carries rows OR sub-bands rather than both — sub-groups replace a group's rows
+exactly as groups replace the ungrouped ones. A band counts what is under it,
+its sub-bands included, and a band whose page of rows is empty still draws its
+heading: "Ada Okonkwo · 0 of 3" is an answer, where the empty state drawn over
+it is a second and false one.
 
 **A screen's primary grid takes `sort=` and every other one takes
 `sort.<name>=`.** Several screens carry two or three — the spend by seat and
@@ -478,6 +666,23 @@ things follow from that, and each is a rule a new column has to keep:
   Without it the card gets a bare mark on a line of its own between two
   labelled ones, which reads as a rendering fault rather than as a value.
   `app/source.test.ts` is what stops one reaching a screen.
+- **A cell with nothing in it is not a line.** A column draws no value on a row
+  that has none — `PriorityMark` renders null for `normal`, which nearly every
+  task is, and every mark whose rule is "nothing is drawn for the default" does
+  the same. In the table that is an empty track under a head, which is correct
+  and is what keeps the row's columns lined up. Here the head is gone and the
+  label is the CELL's own, so the card opened with `PRIORITY` alone on a line
+  with nothing beside it, on every ordinary row — the labelled form of the
+  dashed placeholder the board card already stopped drawing. `.grid-cell:empty`
+  is what drops it, and it is `:empty` rather than a column predicate because
+  the constraint here is the opposite of the board card's: a container cannot
+  ask a child that drew nothing whether it did, and the element has to stay in
+  the DOM regardless, since the wide layout's tracks are positional and
+  dropping it would move every later value one column left. The browser has
+  already rendered it, so `:empty` is it answering — and generated content is
+  not a child node, so the label's own `::before` does not defeat it. A cell
+  drawing a marked absence has content and keeps its line, which is the
+  distinction `EmptyValue` exists to make.
 - **A value wraps rather than being cut.** `.truncate` is right for a cell that
   IS one line of a fixed column and wrong once the column is gone: at 390px it
   cut the one field the reader opened the list for and left the rest of the
@@ -529,6 +734,66 @@ own — so a guard on the breadcrumb inside it swaps a stray link for an empty
 band, which is the same gap with nothing in it. A test that counts the links
 cannot see that, so the element is asserted separately.
 
+**A person in a grid cell is a RESOLVED NAME.** A handle is the database's word
+for somebody — it is what a filter takes, what a payload carries and what a
+column stores — and it is not what anybody is called. Every cell that draws a
+person therefore resolves it through the org chart and prints the NAME, with
+four clauses that travel together because each one was got wrong separately:
+
+- **The handle is the fallback, never a blank.** A seat the chart no longer has
+  still names somebody, so an unresolved handle is drawn as the handle. A blank
+  there would read as "nobody", which the same column already has its own mark
+  for — and those are different facts: nobody holds this, versus somebody the
+  chart has lost.
+- **The hover title carries whichever one the cell does not print.** A cell
+  that prints the name titles the HANDLE, because that is what an operator
+  types into a filter and resolving the name must not destroy the identifier it
+  was resolved from; a cell that prints no word — the compact row's badge —
+  titles the NAME, because there the title is the only place the answer is.
+  Either way the cell says more than it draws, and neither spends the title on
+  what is already on screen.
+- **Where an avatar is drawn it is initials on a NEUTRAL disc**, built from the
+  resolved name rather than from the handle — initials off a handle make every
+  seat whose handle begins with the same letter the same mark. It takes no
+  colour, by [the one rule](#the-one-rule): a seat is identity, and identity is
+  carried by the name, the mark and the position. The only variant it has is
+  STRUCTURAL — the dashed ring a HUMAN seat wears, which says the engine does
+  not run it — and **every** cell that draws a person resolves the kind and
+  draws it. That is the same resolution as the name and it arrives with it:
+  `seatLookup` answers both, the row chrome carries both, and the two cells a
+  screen hands them to (`SeatCell`, `SeatChip`) take the same `kind` prop, so a
+  caller cannot thread the name and drop the kind. Half-threaded is what this
+  was: `SeatCell` took the kind and the compact `Assignee` had no way to be
+  handed one, so one human seat was a dashed disc in the table column set and a
+  solid one in the list — on the same grid, over the same row — while eighteen
+  of the nineteen seat chips passed nothing at all. A kind the chart does not
+  hold draws the NEUTRAL disc: a renamed or removed seat is a third answer, not
+  an agent. The two places that pass a literal `agent` are the ones where the
+  chart cannot be wrong — a turn's seat and a coding run's seat, which the
+  engine RUNS, and it never runs a human seat — and they say so at the call
+  rather than leaving a solid disc that reads as a kind nobody threaded. A
+  badge drawn BESIDE the printed name is decorative, or the row reads "Ada
+  Lovelace avatar, Ada Lovelace"; a badge drawn ALONE keeps its accessible
+  name, or the columns that draw no word announce the assignee as nothing at
+  all.
+- **The KIND is marked only where it is not the ordinary one.** Who wrote
+  something is a person and a kind — `agent`, `human`, `operator`, `system` —
+  and `agent` is what nearly every write in an agent company is. A mark on
+  every row separates nothing, which is the same reason `normal` priority draws
+  no mark: the tag exists so that the writes that were NOT an agent's stand
+  out. The word checked against is the engine's own, and each cell spelling it
+  separately is how one of them came to check for a kind the engine does not
+  mint and mark every row in its column.
+
+The cells this governs are the frame's `SeatCell`, the shared `SeatChip`, the
+tracker's compact `Assignee`, the Projects directory's Lead and Last change,
+the trash's `removed_by`, the log's actor, a schedule's scope and every fire it
+woke, a saved view's owner, a page's watchers and commenters and a delivery's
+recipient — and the rule is written here rather than at any one of them because
+the whole point is that the same person looks the same on every screen they
+appear on. `components/work.test.tsx` and `routes/work/shapes/Grid.test.tsx`
+hold the ring over the pieces and over the grid's two column sets.
+
 ### A dropdown's list sizes to its options
 
 The product has one dropdown, `@crewlethq/ui`'s `Select` in its listbox mode,
@@ -571,7 +836,7 @@ set a fact, which on a product whose objects are mostly written by agents is
 the thing a reader asks about most. "In progress" is a different fact from
 "moved to in progress by ada, eleven minutes ago, in turn ↗".
 
-**An absent value is a decision.** Three different facts share one empty cell
+**An absent value is a decision.** Four different facts share one empty cell
 and they are not interchangeable:
 
 - the row is **dropped** — this object has no such property at all (a task with
@@ -579,11 +844,54 @@ and they are not interchangeable:
 - the row is a **dash** — the property exists and holds nothing (a task with no
   due date has a due date, unset);
 - the row **says something** — the empty state means something a reader should
-  know ("none — reflection uses the default").
+  know ("none — reflection uses the default");
+- the whole **group says something**, in one line, because every property in it
+  is absent — `whenAllAbsent`. A section of nothing is not the same claim as a
+  row of nothing: a fresh task spent a heading, a hairline and four dashes
+  telling the reader that nothing about it is scheduled, which in a 420px peek
+  is most of the space between the header and the description. "Nothing
+  scheduled: no dates, no estimate, no size." states it once, the heading stays
+  — the group exists and is empty, which is not the claim the *dropped* case
+  makes — and the rows come back the moment any one of them is filled.
 
-The caller says which, and there is no path by which forgetting produces a
-plausible-looking wrong one. `0` and `false` are values a property can hold and
-are rendered, never folded into "nothing set".
+The caller says which, on all four, and there is no path by which forgetting
+produces a plausible-looking wrong one. The fourth is deliberately an opt-in
+rather than something the rail works out for itself: a rail of annotation rows
+would fold into one sentence the day somebody cleared them, with nobody having
+decided that. `0` and `false` are values a property can hold and are rendered,
+never folded into "nothing set".
+
+**One attribution per change, not per row.** A create sets six fields at once,
+so six consecutive rows carried six identical copies of "agent-ceo · 21h ago ·
+turn ↗" — one sentence written out six times, which turned three rows of a
+peek into six lines. A **run** of consecutive properties sharing one (actor,
+instant, turn) draws ONE line, naming what it covers, under the last of them:
+"Status, Priority and Type · set by agent-ceo · 21h ago · turn ↗". It is the
+rule [A row is not a row](#a-row-is-not-a-row) already states for a feed —
+rows under one heading do not each repeat the actor — and a row that draws no
+line ends the run rather than being reached over, because a line naming
+"Status and Type" with a Priority between them is a claim the reader has to
+check.
+
+**And never an attribution under an absence.** Provenance under a dash claims
+the engine recorded somebody setting nothing. The one exception is a change
+that EMPTIED the field, which the log did witness, and it reads "cleared by"
+rather than "set by" — they are different events about the same blank cell.
+The wording is one component shared with the header's fact line, because
+written twice it had already drifted: the line said "set by ada" and the rail
+said a bare "ada", which under a value reads as who wrote the row.
+
+**A header and a rail stacked in one column are one reading.** On an object's
+page the rail sits BESIDE the header, in a sticky side column, so the header's
+fact line and the rail's rows are read across a gap — the line to scan in a
+second, the rows to study. In a **peek** both are in one 420px column with the
+rail a hundred pixels under the header, and there the same facts in both is not
+a second reading: it is the same answer given twice before the description has
+been reached. So a peek whose body is a properties rail passes NO facts and the
+rail states every property once; a peek with no rail under it — a unit, a
+revision — keeps its fact line, because there it is the only place the object's
+own values are stated. The caller decides, since the rule is about the frame's
+BODY rather than its header.
 
 ### A log is an axis, then its rows
 
@@ -606,6 +914,40 @@ rounded up to the same visible sliver.
 **A bar is a control.** Clicking one narrows `window=` to the bucket it covers,
 which is the gesture every log tool has and the reason the axis is worth having:
 "what happened in that spike" is the question the spike creates.
+
+**And the axis is labelled, or it is a box of bars.** A seven-day window holding
+one busy day is a single column hard against the right edge of an empty plot,
+which reads as a chart that failed to load rather than as a company that was
+quiet until yesterday. So the first bucket, the last bucket and an even spread
+between them carry their own dates — five labels at most, which is what the
+narrowest layout holds at the axis's size — positioned over the bucket each one
+names rather than laid out in flow, since a label is wider than the bar it points
+at. A day bucket is a date with the year dropped in the reader's own year, the
+form every column of dates in this product takes; anything shorter is a wall
+clock in the reader's chosen zone, because five repetitions of today's date under
+a chart of minutes is the noise the compact form exists to remove. They are
+**ink**, tabular and at the caption size: the chart's one accent is spent on the
+bars.
+
+**What the bars are a count OF is a required prop, not a caption.** `over` is
+`window` where the engine counted them through the listing's own predicate and
+`loaded` where the browser bucketed the pages it is holding, and the noun is the
+caller's too — so the one sentence a screen reader hears says "9,412 events in
+this window" on the event log and "41 changes on the pages loaded" on the
+tracker's. Optional, it was wrong on the second caller the day that caller
+arrived: a tracker chart announced a page count as a window count, in a noun
+nothing on that screen is.
+
+**A log reaches its older rows by fetching them.** A page boundary is not a
+window: telling a reader to narrow the window to see what came before this page
+sends them toward fewer and newer rows. So a log that fills its page offers
+**Load older**, holds the pages it has, and discards all of them together when
+the window or a server-side facet changes — pages fetched under the previous
+question are rows the engine would never have answered for this one, and the
+cursor walks that question's history. While a reader is paging back the first
+page is held still: the cursor was minted from its last row, so re-reading it
+under a poll pushes that row out and the changes between two pages belong to
+neither, which is a silent hole in the middle of a log.
 
 **A date is a band, not a wider cell.** A row's time column is sized for a wall
 clock, which is right for every row in a log but the first of each day — and
@@ -661,7 +1003,7 @@ selected one reads zero and the rail is a dead end.
 | `view=` | section | a list container's view |
 | `lens=` | section | which whole reading of a screen is drawn — the Company screen's chart, charter and builder, the Configuration screen's active, history and diff |
 | `sort=` `cols=` | filter | the grid's order and its visible columns |
-| `sort.<name>=` `cols.<name>=` | filter | the same, for a second grid on the page |
+| `sort.<name>=` `cols.<name>=` | filter | the same, for a second grid on the page — and `cols.<shape>=` alone on the work screen, whose one grid has a column set per shape while both share its `sort=` |
 
 **`peek` is one key, one component, one rule.** A plain click peeks; ⌘-click,
 middle-click and the rail's `Open ↗` go to the page. Inside a peek `[` and `]`
@@ -686,6 +1028,14 @@ being handed the row that opened it: the row carries what its list needed, a
 peek answers "what is this thing", and the two differ on every kind. It is
 also what lets a pasted `peek=` open on arrival, where no row exists.
 
+**A peek is one column, so it says everything once.** Its header carries the
+object's identity and its state marks; where a properties rail follows below,
+that rail states every property and the header carries no fact line — see
+[An object's own facts](#an-objects-own-facts). A list inside a peek measures
+ITS OWN box too: `.work-rows` drops to four columns on a container query
+rather than a viewport one, or a 420px panel on a wide screen gets the full
+eight-track row and the title is starved to nothing.
+
 **`[` and `]` walk the list, so the list publishes its order** with
 `usePeekNeighbours`. Only the list knows what the reader is looking at —
 sorted, filtered and paged as they left it — and a rail that stepped through
@@ -706,7 +1056,7 @@ none of it:
 | `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
 | `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link. It SHRINKS rather than wraps — see [The page bar shrinks](#the-page-bar-shrinks-and-breaks-on-its-own-width) |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
-| `ObjectHeader` | an object's eyebrow, title, state marks and up to six facts, in the same order on the page and in the peek. A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
+| `ObjectHeader` | an object's eyebrow, title, state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `@crewlethq/ui`'s `Tabs`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
 | `DetailRail` | the peek's chrome — resizable, a drawer under 1200 px |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
@@ -720,6 +1070,17 @@ none of it:
 the route cannot supply (`usePageLabels`), the coverage of the answer it drew
 from (`usePageCoverage`), and its own controls. Twenty screens each drawing
 their own header is how five of them came to drop the coverage badge.
+
+**And only a SCREEN publishes — a body rendered inside one never does.** The
+frame holds one coverage slot with one setter, so a reusable body that published
+from inside another screen fought that screen's own answer: on
+`#/work/{KEY}?lens=history` the project's read and the log's read both wrote it,
+whichever polled last won, and switching lenses unmounted the log and cleared the
+slot to nothing over a page still showing the project it had read. A body states
+its own rows' coverage INLINE instead, beside the rows, which is what a peek rail
+and the Items lens already do. The two halves never both apply: a screen
+publishes and draws none, a body draws and publishes none, and the same component
+serving as both takes that as a prop rather than guessing.
 
 **Every object screen publishes the name it draws, and it is the same string.**
 A route addresses an object by its identifier — a turn or a trace or an event
@@ -1552,6 +1913,16 @@ What replaced it:
   on List to x≈1338 on Board and x≈1155 on Calendar, and the Overdue chip
   wrapped to a line of its own ~1,200px from the count. A wrap breaks between
   groups.
+- **A panel that rounds a run of rows clips; it does not hide.** The offset
+  above only means anything while the screen is the band's own scroller, and a
+  sticky box is held by the nearest one: a panel wrapped around the rows with
+  `overflow: hidden` becomes that scroller, and because such a panel grows to
+  its rows it can never scroll, so its own offset is permanently zero and the
+  band is pushed `--sticky-top` DOWN from the top of the panel instead. The
+  grouped work list did exactly that — every band left its slot blank and
+  painted over the first row of its own group, one task per group in the DOM,
+  drawn and covered. `overflow: clip` rounds the corners identically and makes
+  no scroller, which is the same decision the data grid's wrap records.
 
 Three rows of buttons, and a table, that behaved differently from a keyboard
 than they looked:
@@ -2310,59 +2681,173 @@ began as a flat filter row over a plain table beside a "board" that was three
 company does its work. What replaced it is a WORKSPACE, and every part of it
 is one of the rules on this page applied to a tracker.
 
-- **The project is the rail, not a dropdown.** A company's projects are the
-  first division of its work, so they are always on screen with their open
-  counts beside them, and choosing one is a SECTION change rather than a
-  filter. `All work` is a real destination above them, because "what is the
-  whole company doing" is a question somebody asks.
-- **Five SHAPES over one answer, and eight tabs.** List, Board, Calendar,
-  Timeline and Table differ in how rows are DRAWN and never in what was asked
-  for — the board's columns are the server's own grouping, the calendar buckets
-  rows the server already returned, the timeline lays out the `start`, `due`
-  and `waiting_on` those same rows carry, and the table puts one field per
-  column so a column can be compared down and sorted at its head. A shape that
-  fetched differently would be a second idea of what the filters mean. The
-  timeline's own window is derived from the rows on screen, which is why it
-  asks for a big unpaged page: a second page would redraw the first one's axis.
-  **Trash** is the other tab, and it is a saved QUERY rather than a shape —
-  which is the distinction the strip is built on. A
-  tab whose meaning is a parameter is a view; a tab whose meaning is a drawing
-  is a type. The trash is a Table carrying `removed=true`, so every view saved
-  with that parameter is read as one: the removal's actor and instant come from
-  `work_activity` rather than from the row, and PURGED work has no row at all —
-  its history entry is the only evidence it existed, so it gets a band of its
-  own saying it cannot be restored.
+- **A project is a LEAF of the workspace, not a shape of it.** The Work
+  sidebar is the company's own tree — every project with its lead and its
+  maintained open count, then the saved views — and a project is where that
+  tree stops. Its list, its board and its calendar are ways of drawing the
+  project you are already on, so a sidebar row for each would turn two levels
+  into three and make "Engineering ▸ Board" a destination competing with
+  Engineering. The counts are the engine's maintained columns rather than an
+  aggregate per poll, which is what lets the tree carry a number at all: see
+  [the rail](#the-rail) for what a workspace sidebar is.
+- **A SHAPE is a drawing, a VIEW is a query, and only the query was saved by
+  anybody.** [A filter is a chip](#a-filter-is-a-chip-an-arrangement-is-a-menu)
+  states the general rule; what is the tracker's own is where the line falls.
+  The engine ships SIX builtin views — one per shape, plus the trash — and
+  neither the strip nor the sidebar draws them, for two different reasons worth
+  keeping apart. The STRIP drops them because a way of drawing is not something
+  somebody saved: mixed in beside an arranged query, the two read as the same
+  kind of thing, which is why `view=` and `shape=` are two keys. The SIDEBAR
+  drops them because a builtin carries no id, so there is no row to address.
+  The five shapes live in **Display**; the strip is the container's own tab,
+  whatever was saved, and `All views →`. That it is drawn even when nothing was
+  saved is [the sparse state](#the-sparse-state)'s rule, not this one.
+- **The landing shape is the CLIENT's fallback, not a builtin the engine marks
+  `default`.** Why it is the list is under [the sparse state](#the-sparse-state);
+  why it lives here is that exactly one view row may carry `default` and the
+  applier settles that in the same transaction as the write. A builtin claiming
+  it would collide with whatever a company saved, so `LANDING_SHAPE` is what
+  holds when nothing claims it.
+- **The trash is `removed=true`, which is what the engine says it is.** Its own
+  `ViewKeyTrash` puts it plainly: a view carrying that parameter *is* a trash
+  listing and a client may treat it as one. So it is a filter in the Filter
+  menu rather than a tab, and the grid takes the removals rather than a flag
+  naming a tab — which is the property a magic view key would not have: a trash
+  of one project's bugs is expressible, and every view saved with the parameter
+  is read the same way. `show_closed` travels with it, because a removed task
+  is very often a finished one and the status predicate is ANDed otherwise: the
+  one listing whose whole job is "what did my assistant delete" would hide
+  every deletion of anything already done. Its three extra columns APPEND to
+  whichever set is active, so the trash is readable as a list too, and the
+  removal's actor and instant come from the activity feed rather than from the
+  row — the row carries no tombstone, and a row the loaded page of the feed
+  does not reach says which fact is missing rather than drawing a blank.
+  **Purged work has no row at all**, so its history entry is the only evidence
+  it existed and it gets a band of its own saying it cannot be restored.
+- **Where a WRITE is attributed, the kind of writer travels with the name.**
+  The trash's `removed_by`, the log's actor and the directory's Last change all
+  answer "who did this", and a person removing one task, an assistant removing
+  a subtree and the engine repairing one look identical without it. The name is
+  the grid's own rule — see **A person in a grid cell is a resolved name**
+  under [Every list is one grid](#every-list-is-one-grid) — and the kind is the
+  clause those three cells share, `agent` being the ordinary case and the one
+  left unmarked. Spelled per cell, one of them came to check against a word the
+  engine does not mint, so its tag was drawn on every row of the trash and
+  separated nothing.
+- **The list and the table are ONE grid with two column sets**, which is
+  [Every list is one grid](#every-list-is-one-grid) applied to the two shapes
+  that are rows in columns. What is the tracker's own is the KEYING: `cols.list=`
+  and `cols.table=`, because a column set carries an order as well as a
+  selection and one key read against both draws the list's columns in the
+  table's arrangement — a row nobody asked for that no validation catches,
+  since every name in it is legal in both. The `sort=` is deliberately shared,
+  because it is a fact about the QUESTION rather than about the drawing.
 - **The table sorts at the ENGINE.** A header writes the query's own `sort=`
   key, so the whole set is ordered rather than the hundred rows that happen to
   be loaded — and a column the grammar has no key for is therefore NOT
-  sortable, because `ParseQuery` refuses an unknown key rather than ignoring
-  it: one wrong header would take the board down with a refusal rather than
-  mis-ordering a column. `status` is the one a reader expects and cannot have;
-  `group_by=status` is what that question actually wants.
-- **A view SETS the scope segment.** Open / Closed / All is the single
-  authority on the status group a read asks for: the screen spreads a view's
-  saved parameters and then writes that one key from the segment. So a
-  segment defaulting to a constant made a view saved over closed work
-  unrunnable — it opened on `Open`, overwrote the view's own group, and named
-  a scope its rows did not match. The segment therefore takes its DEFAULT
-  from the chosen view, which is what makes the control and the query agree;
-  a scope somebody picks is in the URL and outlives a view switch, like every
-  other filter here. A saved group the three segments cannot name — `active`
-  alone — reads as `Open`, the wider set nearest what its author asked for, so
-  the segment and the read agree rather than the control claiming a narrowing
-  that is not applied. And a view that WIDENED — `show_closed` with no group at
-  all — opens on `All`, because seeding `Open` there writes the narrow group
-  back over exactly the half the view asked for: "and whatever finished this
-  week" answered as open work alone, and the Trash tab answered as the removed
-  tasks that were still open, hiding every removal of anything already done.
-- **A row is a table, and its columns belong to the LIST.** Every row was its
-  own grid container once, so `auto` tracks sized against that row's content
-  alone and a status badge landed at a different x on every line. The tracks
-  are declared on the list and each row takes them with `subgrid`, so a
-  column is as wide as the widest value in it. The row also keeps a CELL for
+  sortable, because the query grammar refuses an unknown key rather than
+  ignoring it: one wrong header would take the board down with a refusal rather
+  than mis-ordering a column. `status` is the one a reader expects and cannot
+  have; grouping by status is what that question actually wants.
+- **The four shapes ask four different questions of ONE grammar, and each
+  difference is its own axis.** A board is `group_by` and no cursor, because
+  across a set of columns there is no single order to be after. A list and a
+  table are one page with a sort — the same rows, the same grouping, the same
+  hundred — so a second arm for the table would be a second copy of one paging
+  rule. A calendar is a DATE RANGE and no grouping, because its axis IS the
+  grammar's one `due` key: the month on screen spends it, the Overdue chip is
+  not offered there, and the count says what it counted. A timeline is a big
+  unpaged page ordered by start, because its window is derived from the rows
+  present and a second page would redraw the first one's axis. What no shape
+  does is narrow differently — the FILTERS mean one thing on all four, and a
+  shape that reinterpreted them would be a second idea of what the reader asked.
+- **A view SETS the scope segment, and the segment is read once rather than
+  per reader.** Open / Closed / All is the single authority on the status group a
+  read asks for: the screen spreads a view's saved parameters and then writes
+  that one key from the segment. So a segment defaulting to a constant made a
+  view saved over closed work unrunnable — it opened on `Open`, overwrote the
+  view's own group, and named a scope its rows did not match. The segment
+  therefore takes its DEFAULT from the chosen view. Two absences land on `Open`
+  for different reasons: a view naming no group at all is not a view asking for
+  everything, and a view naming a group the three segments cannot express
+  (`active` alone) has no reading that answers it as saved — only a choice of
+  which wider set to show, and `Open` is the one nearer what its author asked
+  for. The exception is a view that WIDENED — `show_closed` with no group —
+  which opens on `All`, because seeding `Open` there writes the narrow group
+  back over exactly the half the view asked for. And a `scope=` off the address
+  that names none of the three reads as `All` in ONE place rather than per
+  reader: spelled separately, a hand-edited `?scope=opne` drew an unset switch
+  over a query showing every closed task, which is the one combination the
+  segment exists to make impossible.
+- **A row is a table, and its columns belong to the LIST.** This is the
+  EMBEDDED list — a seat's queue, a person's day, an item's subtasks, which
+  draw the same compact row inside somebody else's panel; the work screen's
+  own list is the grid above, which states the identical rule on its own
+  tracks. Every row was its own grid container once, so `auto` tracks sized
+  against that row's content alone and a status badge landed at a different x
+  on every line. The tracks are declared on the list and each row takes them
+  with `subgrid`, so a column is as wide as the widest value in it. The row
+  also keeps a CELL for
   a value it does not have: an undated, unassigned, unestimated task lines
   its status up with the task above it rather than pulling every later
-  column one place left.
+  column one place left. **And how wide the list is has never been a fact
+  about the window** — a subtask list is 420px in a peek on a 2000px screen —
+  so the narrow track set is a container query over the list's own box rather
+  than a viewport one, and the item page's rail-beside-body threshold is one
+  over the page column, which is the window less the rail, less the sidebar,
+  less an open peek. The narrow set is declared ONCE beside the wide one: a
+  track list is positional, so a second copy that missed a reordering hands
+  every cell the wrong column and says nothing about it.
+- **And a row's own inset comes out of the tracks at its ends.** A subgrid
+  item's padding is SUBTRACTED from the first and last track it spans, and the
+  row pads itself so a hover tints it edge to edge rather than as a box
+  floating inside the panel. A browser hands that back where the track is
+  sized from content and cannot where it is fixed — so a fixed opening track
+  the same width as the inset resolves to nothing at all. Both of the list's
+  track sets had one: the priority mark overflowed a zero-wide cell and came
+  to rest on the key, so `↑LEAD-3` read as one identifier with a stray
+  character on the front. An end track states the inset as well as the
+  column — in both sets, which is a second reason the narrow one is declared
+  once rather than twice.
+- **A card is not a row, so it holds nothing open.** The dashed "nobody"
+  square exists to keep a row's assignee COLUMN from collapsing; a card is
+  inline flow and has no column to keep. So a card draws its foot only when
+  something goes in it — blocked, a due date, a size, an assignee — and a task
+  nobody has touched is a key and a title. Drawn unconditionally, the foot of
+  such a card was that dashed square alone under the title, which reads as a
+  control somebody could press rather than as the absence of five facts. One
+  fact brings the foot back, and the square with it: "nobody holds this, and
+  it is due on Monday" is the pair a board column is scanned for. The
+  predicate that asks restates each mark's own emptiness rule, which is the
+  price of asking BEFORE rendering — a container cannot ask a child that drew
+  nothing whether it did — so a mark that gains a field is a mark that adds it
+  there.
+- **A board draws every lane the scope admits, and a list draws only the
+  bands that hold something.** The engine mints the lanes: on a closed axis
+  — status, status group, priority and the due bands — `work_items` carries
+  every column the query's own predicate could have put a row in, empty ones
+  at `count: 0`, so a young company's open work is three lanes with one card
+  rather than one lane in an empty page, and a Done lane appears only when
+  finished work was asked for. That is the histogram's rule (every bucket is drawn)
+  applied to a board, and the two shapes then differ only in the DRAWING,
+  as shapes must: a lane with room in it is what a board is, where a band
+  over nothing is a rule separating nothing from nothing. The admission is the
+  predicate's own, and the fourth axis is the one that is not a stored value at
+  all: the due bands are WHEN work is due, cut on the COMPANY's midnight rather
+  than the reader's, so the bands, the row's own overdue flag and every `due=`
+  filter cannot disagree about a task. An empty scope says which it is — nothing
+  open yet, nothing finished yet, nothing filed — and "Nothing matches" is
+  reserved for a filter that is actually on; the three sentences and which
+  screen owns each are in [the sparse state](#the-sparse-state).
+- **A board lane is a range, not a ceiling.** A lane stretches to whatever
+  height the tallest lane on the board sets, which answers a short column
+  beside a long one and nothing else: a board whose lanes are ALL short — one
+  status, one card — has no tall lane to take a height from, and the lane
+  closed directly under its single card at 138px, reading as a stray panel
+  somebody left on the screen rather than as a place work belongs. So the lane
+  carries a floor of two cards' worth of room as well as its scroll ceiling,
+  and the floor wins under a viewport short enough for the two to cross — a
+  lane that holds one card and scrolls beats a lane too short to hold one.
 - **Nothing is drawn for the default.** `normal` priority is what a task gets
   when nobody said, so it is most of a board — a mark on every card is a mark
   that says nothing, and it buries the four that ARE urgent. A due date drops
@@ -2370,25 +2855,130 @@ is one of the rules on this page applied to a tracker.
   down forty rows is how the one row due next year goes unnoticed.
 - **Reading an item does not lose the board.** A plain click opens a PEEK
   beside the rows; ⌘-click and middle-click follow the anchor to the item's
-  own page, because a card that cannot be opened in a tab is not a link.
-  Below about 1500px it becomes a DRAWER over the board rather than a third
-  column, and that threshold is measured rather than guessed: the sidebar,
-  the rail and the peek are three panes and the board is what is left, so at
-  1280 — an ordinary laptop — one board column was left beside a detail
-  panel, which is not a board.
+  own page, because a card that cannot be opened in a tab is not a link. The
+  peek is the FRAME's — mounted by the shell, addressed by `peek=`, and the
+  list only publishes the order `[` and `]` walk, because a list that published
+  nothing would otherwise get a rail stepping through somebody else's rows.
+  Below `--peek-drawer-max` — 1200px, measured, and its arithmetic is at the
+  definition in `frame.css` — it becomes a DRAWER over the content rather than
+  a column beside it. That threshold is the FRAME's and governs every screen's
+  peek, so the quantity it turns on is the one common to all of them: a LIST
+  too narrow to read, whose floor is 444px, plus the chrome in front of it at
+  the widest density. The board once had a number of its own — three panes are
+  the rail, the sidebar and the peek, a lane is 292px, and at 1280 exactly one
+  lane was left beside a detail panel, "which is not a board", so the peek
+  should overlay below about 1500. That measured a peek the tracker's own
+  screen owned as a column of its own body grid; the frame took the peek over,
+  the rules enforcing 1500 matched an attribute nothing ever set, and they are
+  gone. A board's answer to a narrow body is horizontal scroll — lanes keep
+  their width and the reader pushes them — which is why the list, not the
+  board, is what sets the number.
+- **The item's peek is the page's header with NO facts under it.** A header and
+  a properties rail stacked in one 420px column are one reading: the header's
+  line said Status, Type and Assignee and the rail said all three again a
+  hundred pixels below, so a third of the panel above the fold was the same
+  answer twice and the description started under it. The page keeps its fact
+  line because there the rail is in a column BESIDE the header rather than
+  under it. And the peek resolves its own people: the frame mounts it from a
+  `peek=` token knowing nothing about an org chart, so a peek taking the list's
+  chrome was handed `{}` and drew every person as a raw handle while the page
+  for the same task named them.
+- **A group of absences is ONE sentence, and the caller decides that.** A
+  heading, a hairline and four dashes cost a reader four lines to learn that
+  nothing about this task is scheduled, so the properties rail takes a
+  `whenAllAbsent` line per group and draws it in place of them. It is
+  deliberately not a rule the rail applies by itself: a rail of annotation rows
+  would collapse to one sentence the day somebody cleared them, with nobody
+  having decided that. The other three absences stay distinct — a row that is
+  DROPPED, a row that is a DASH, and a row that says something — which is
+  [Honest empty states](#honest-empty-states) inside one panel.
+- **Every project the company has is a page, and its segment is the ENGINE's
+  question.** `shown=active|archived|all` is a SCREEN segment and `archived=`
+  is the engine's three-mode enum; mapping between them is one object, where
+  collapsing them would either put `archived=only` in a route people share or
+  invent a second name for a mode the engine already has. The segment SELECTS a
+  set rather than narrowing a wider one — asked for both and filtered here, the
+  page past the engine's own 200 held no archived row at all, so Archived said
+  "No project is archived" about a company that had retired dozens. The sort
+  travels for the same reason: applied after a capped answer it orders the rows
+  that survived the key order, which reads exactly like the answer to the
+  question it is not. The corollary is that a column the engine cannot order by
+  is not sortable — Lead is resolved against the org chart at read time and the
+  tracker holds no chart, so there is no column behind it.
+- **A census on the segments is what stops the directory guessing.** Selecting
+  one set is what makes the listing honest and it is also what makes an empty
+  answer ambiguous — no projects, or every project archived — so the engine
+  sends BOTH counts under the same narrowing the rows were read under. Nothing
+  derives them from the rows: on Active the archived count has no row on screen
+  to be derived from, which is the whole point. With them, the empty state says
+  how many are archived and links to them, where it used to hedge by naming
+  both ways it happens and sending the reader to look; and a company with
+  nothing filed is sayable from whichever segment they landed on, which is
+  Active.
+- **The log pages BACKWARD, and says when it is holding still.** The history
+  screen is the event log's own frame — a window, an axis, then the rows, with
+  its three dimensions as facet rails: the KIND of change, who made it, and
+  which PROJECT it was in. That third one is the narrowing a project's own
+  History lens already is, reachable from the company-wide log rather than only
+  by starting from a project. Paging was the one part of the frame this screen
+  did not borrow: it asked for one page, printed that older changes existed,
+  and told the reader to narrow the window — which moves the window's NEWEST
+  edge and reaches fewer, newer rows, the opposite of what they were reaching
+  for. **Load older changes** fetches instead, and once a head is held the foot
+  says the pages are held still, because until then it is not true: the first
+  page is re-asked on every poll.
+- **The bars are ours and the rows are the engine's, and the screen says
+  which.** The event log asks the engine for its histogram; this question has
+  no such read, so the axis is bucketed from the pages the screen is holding —
+  and the caption says the bars cover the changes LOADED, the facets say the
+  same about their counts, and the histogram takes that scope as a REQUIRED
+  prop, so the sentence a screen reader hears cannot drift from the one on the
+  card. A client-side count dressed as the engine's is the one thing this
+  product never does.
+- **ONLY A SCREEN PUBLISHES TO THE FRAME.** The log is a screen at
+  `#/work/history` and a lens inside a project, and the frame holds one
+  coverage slot with one setter — so a body publishing from inside another
+  screen fought that screen's own answer: on a project's history lens both
+  wrote it, whichever polled last won, and switching back to Items cleared the
+  slot to nothing over a page still showing a project it had read. The lens
+  publishes nothing and states its own rows' coverage inline, which is what the
+  Items lens beside it already does. It is a COMPONENT rather than a bare call
+  because the rule is conditional and a hook may not be: called with nothing,
+  the publish writes null over whatever the enclosing screen published, which
+  is the same clobber under a quieter name.
+- **A lens keeps its filters.** The three lenses over a project — Items,
+  Overview, History — are three readings of ONE container, not three screens,
+  so switching keeps the narrowing AND the arrangement: `lens=` is written
+  through the frame's section move, which copies the whole current query and
+  sets one key. A lens that built a fresh query would make History a one-way
+  trip, with the way back being every chip re-added by hand — and it would fail
+  silently, because each lens renders perfectly on its own. Only Items carries
+  a count, from the project's own maintained census: Overview is a description
+  rather than a collection, and History is PAGED, so a count of the page it
+  loaded would read as a count of the lens.
 - **The charts answer the questions the numbers cannot.** A census bar says
-  the shape of a project where three counts say only their sizes; a load bar
+  how far along a project is where three counts say only their sizes; a load bar
   is drawn against the HEAVIEST QUEUE on screen rather than an absolute
   ceiling, because a queue of thirty is heavy in one company and a quiet week
   in another. All of them wear STATUS tones rather than the categorical hues,
   so one fact is never two colours on one screen.
+- **A progress meter is an AMOUNT, and its whole is stated.** The project
+  census fills with what is DONE against everything ever filed: closed work is
+  a muted segment beside the fill, because it left the question rather than
+  answering it, and open work is the untinted track. Drawn as a SHARE — each of
+  the three sized against their own sum — a project holding one open item drew
+  a full solid bar and read as finished, which is the state every project of a
+  young company is in. The legend names what FILLS the bar and nothing else: a
+  swatch for the remainder would be a colour that is not on it. The one meter is
+  drawn by `dashboard/src/routes/work/census.tsx`, in the project's header and
+  in the directory's Progress column, so the two cannot disagree about one row.
 
 ---
 
 ## Honest empty states
 
 A screen that renders a blank where data would go is a screen that cannot be
-trusted when it IS blank. Three distinctions the product makes everywhere:
+trusted when it IS blank. Four distinctions the product makes everywhere:
 
 - **Nothing happened** vs **nothing could be read.** "No events" on a fresh
   company and "no events" from a query the engine refused are the same empty
@@ -2418,6 +3008,54 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
   older rows the screen never saw, and a caption reading "some of this may be
   missing" is one nobody can act on where "Knowledge answered one page" says
   where to look.
+- **An empty CONTAINER** vs **a query that matched nothing.** A container says
+  its own emptiness, from what it already knows about itself, before the list
+  it holds has answered anything — and that state REPLACES the list rather than
+  sitting under it. A project page handed its whole body to the work list, so a
+  project nobody has ever filed anything in said "Nothing matches — no item
+  matches these filters. Widen them", with no filter set: a claim about a
+  narrowing that did not exist, on the day-one state of every project. It is
+  drawn from the project's own maintained counts now, names the project, and
+  says how work gets filed (a seat's `create_work_item`, an inbound webhook, a
+  schedule, or your own assistant at `/operator/mcp`). "Nothing matches" is
+  reserved for a query that genuinely narrowed. The same rule sorts the two
+  empty pages apart: the work list's empty state is about ITEMS and the
+  projects directory's is about PROJECTS, so a company with no projects is told
+  what a project is and that a unit's `project` key in the company
+  configuration is what mints one.
+- **An empty SEGMENT is not an empty company — so the answer carries the
+  census.** The projects directory's three segments each ask the engine for
+  their own set, which is what makes the listing honest and is also what makes
+  an empty answer ambiguous: an empty **Active** answer is either a company
+  with no projects or one that has archived every one of them, and a reader
+  acts on those oppositely. The screen cannot derive the difference, because on
+  the Active segment the archived projects have no row on screen to be derived
+  from. So `work_projects` answers with a `census` of BOTH sets under the same
+  narrowing, and the page never guesses: `active + archived === 0` is the
+  company having nothing and draws "No project has been created yet" on
+  **whichever segment the reader is on** — which matters, because they land on
+  Active; an empty Active answer with archived projects behind it says how many
+  and links to them; and Archived says nothing is archived. The counts also sit
+  on the segment control itself, so the switch says what is behind each option
+  before it is pressed. A screen that hedges — one sentence naming both ways a
+  state happens — is a screen missing a number, and the fix is to send the
+  number rather than to word around it.
+
+  **And the directory is not the only reader of it.** Every surface that draws
+  a conclusion from an empty project listing reads the same census, because
+  every one of them asks the ACTIVE set: the Work rail's Projects section, and
+  the `#/work` landing, which replaces the whole list with "No work has been
+  filed yet". Read from the ROWS, each concluded the first state — so a
+  company that had archived all four of its projects was told by the rail that
+  no project had been created and by the landing that nothing could be filed
+  until a unit declared a `project` key, both beside a directory saying all
+  four had been archived, and both false about a company holding every item it
+  ever filed. `active + archived === 0` is the only thing that draws the
+  first-run panel now; `active === 0 && archived > 0` keeps the ordinary list
+  and gives it an empty state naming the count with the way to
+  `#/work/projects?shown=archived` — the same sentence the directory's own
+  Active state writes, because it is the same fact. An answer carrying no
+  census concludes neither, on the rule its rows already followed.
 
 Every empty state names what would fill it.
 

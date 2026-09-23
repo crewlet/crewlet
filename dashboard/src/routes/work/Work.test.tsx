@@ -15,15 +15,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import {
-  ActivityFeed,
-  Board,
-  CalendarView,
-  ProjectHead,
-  Work,
-  WorkspaceHead,
-  patchedHref,
-} from "./Work.tsx";
+import { Work } from "./Work.tsx";
+import { patchedHref } from "./ItemsView.tsx";
+import { Board } from "./shapes/Board.tsx";
+import { CalendarView } from "./shapes/Calendar.tsx";
 import { BoardCard, WorkRow } from "~/components/work.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -103,9 +98,11 @@ test("an overdue due date is marked and an on-time one is not", () => {
 });
 
 // NOBODY IS A STATE, and the one worth seeing: an unassigned item routes to
-// the project's lead, and a project with no lead routes to nobody at all.
+// the project's lead, and a project with no lead routes to nobody at all. On a
+// card it is drawn wherever the foot is drawn — beside the facts it belongs
+// with, never alone, which is the case below.
 test("an unassigned card draws the empty seat rather than a blank", () => {
-  const { container } = card();
+  const { container } = card({ due: "2031-09-01T00:00:00Z" });
   expect(container.querySelector(".work-nobody")).toBeTruthy();
   expect(screen.getByText("Unassigned")).toBeTruthy();
   cleanup();
@@ -119,6 +116,32 @@ test("an unassigned card draws the empty seat rather than a blank", () => {
   );
   expect(held.container.querySelector(".work-nobody")).toBeNull();
   expect(held.container.querySelector(".crewlet-avatar")?.textContent).toBe("AL");
+});
+
+// THE GHOST HOLDS A TRACK OPEN, AND A CARD HAS NO TRACK. On `.work-row` the
+// dashed square is a grid cell, and a cell that vanished would take its column
+// with it and pull every later one a place left — which is the case further
+// down. A card is inline flow, so on a task nobody has touched the same square
+// came out alone under the title, floating in a foot with nothing else in it
+// and reading as a control somebody could press. The foot is its marks: with
+// none of them it is not drawn, and one fact brings it back.
+test("a card with nothing set draws no foot, while the same task as a row keeps its cell", () => {
+  const bare = card().container;
+  expect(bare.querySelector(".work-card-foot")).toBeNull();
+  expect(bare.querySelector(".work-nobody")).toBeNull();
+  cleanup();
+  const asRow = render(<WorkRow row={row("1")} href="#/work/ENG-1" now={NOW} chrome={{}} />);
+  expect(asRow.container.querySelector(".work-nobody")).toBeTruthy();
+  cleanup();
+  // ONE MARK IS ENOUGH, and the ghost comes back with it: "nobody holds this,
+  // and it is due on Monday" is the pair a board column is scanned for.
+  const dated = card({ due: "2031-09-01T00:00:00Z" }).container;
+  expect(dated.querySelector(".work-card-foot")).toBeTruthy();
+  expect(dated.querySelector(".work-nobody")).toBeTruthy();
+  cleanup();
+  // And a card whose only fact is that it is blocked still has a foot, which
+  // is what says the predicate reads every mark rather than the assignee.
+  expect(card({ blocked: true }).container.querySelector(".work-card-foot")).toBeTruthy();
 });
 
 // A CARD IS A REAL ANCHOR, so middle-click and ⌘-click open the item's own
@@ -210,11 +233,19 @@ test("a patched address keeps the path it is on and the filters it is under", ()
       new URLSearchParams("assignee=ada&scope=open"),
       filterPatchForGroup("status", "todo"),
     ),
-  ).toBe("#/work/ENG?assignee=ada&scope=open&view=list&group_by=status&group=todo");
-  // AN EMPTY VALUE IS THE KEY'S ABSENCE, matching `useParam`: a control that
-  // clears the grouping must drop the key rather than write `group_by=`.
-  expect(patchedHref(["work"], new URLSearchParams("group_by=status"), { group_by: "" })).toBe(
+  ).toBe("#/work/ENG?assignee=ada&scope=open&shape=list&group_by=status&group=todo");
+  // `null` IS THE KEY'S ABSENCE: a control that clears the grouping drops the
+  // key rather than writing `group_by=`.
+  expect(patchedHref(["work"], new URLSearchParams("group_by=status"), { group_by: null })).toBe(
     "#/work",
+  );
+  // AND `""` IS A VALUE, because one narrowing's value IS the empty string —
+  // the column holding the rows with no value on the axis. Written as a
+  // deletion, the "Unassigned" column's own overflow link loaded the whole
+  // board; the engine tells the two apart with `Params.Has`, and
+  // `URLSearchParams` round-trips `group=`.
+  expect(patchedHref(["work"], new URLSearchParams(), filterPatchForGroup("assignee", ""))).toBe(
+    "#/work?shape=list&group_by=assignee&group=",
   );
 });
 
@@ -237,7 +268,10 @@ test("an overflow link hands the axis and the column back to the screen", () => 
 });
 
 // AN EMPTY COLUMN IS STILL A COLUMN, and it says it is empty: a heading over
-// nothing at all reads as a column whose rows failed to arrive.
+// nothing at all reads as a column whose rows failed to arrive. This is the
+// engine's own shape now — a closed axis carries every lane the scope admits
+// at `count: 0` with no rows (`internal/tracker/grouping.go`), so a young
+// company's open work is three lanes with one card rather than one lane.
 test("a column with no rows says so rather than rendering nothing", () => {
   board([group("in_review", { count: 0, rows: [] })]);
   expect(screen.getByText("Nothing here")).toBeTruthy();
@@ -342,103 +376,6 @@ test("a crowded day folds the rest into a count", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The heads
-// ---------------------------------------------------------------------------
-
-const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
-  key: "ENG",
-  name: "Engineering",
-  unit: { key: "platform", name: "Platform", resolved: true },
-  lead: { handle: "ada", kind: "agent" },
-  task_counts: { open: 12, done: 40, closed: 3 },
-  version: 1,
-  statuses: [],
-  types: [],
-  fields: [],
-  policy_stamp: 1,
-  complete: true,
-  ...over,
-});
-
-// A PROJECT'S CENSUS IS A SHAPE AS WELL AS THREE NUMBERS, and the bar carries
-// its own legend: an unlabelled stack of three colours is three colours.
-test("the census bar is drawn with its legend, and only where there is work", () => {
-  // THE CENSUS IS DRAWN OUT OF THE DESIGN SYSTEM'S OWN PARTS NOW, so the two
-  // selectors are theirs: `.stackbar`/`.legend` were our recipes' classes and
-  // no longer exist. What is asserted is unchanged — a bar, and a key beside
-  // it — and the legend is a real `role="list"` over there, which is what the
-  // second selector could have been written against instead.
-  const { container } = render(<ProjectHead detail={project()} />);
-  expect(container.querySelector(".crewlet-stacked-bar")).toBeTruthy();
-  expect(container.querySelector(".crewlet-legend")).toBeTruthy();
-  cleanup();
-  const fresh = render(
-    <ProjectHead detail={project({ task_counts: { open: 0, done: 0, closed: 0 } })} />,
-  );
-  expect(fresh.container.querySelector(".crewlet-stacked-bar")).toBeNull();
-});
-
-// THE WORKSPACE RANKS ITS PROJECTS BY OPEN WORK, in ONE hue: a hue per project
-// would be identity colouring by row — rename the project and its colour
-// changes — and the label already says which project it is.
-test("the workspace chart ranks projects by open work in a single hue", () => {
-  const projects: WorkProjectRow[] = [
-    {
-      key: "OPS",
-      name: "Operations",
-      unit: { resolved: true },
-      lead: {},
-      task_counts: { open: 3, done: 1, closed: 0 },
-      version: 1,
-    },
-    {
-      key: "ENG",
-      name: "Engineering",
-      unit: { resolved: true },
-      lead: {},
-      task_counts: { open: 11, done: 4, closed: 2 },
-      version: 1,
-    },
-  ];
-  const { container } = render(<WorkspaceHead projects={projects} />);
-  const labels = [...container.querySelectorAll(".key-mark")].map((el) => el.textContent);
-  expect(labels).toEqual(["ENG", "OPS"]);
-  // ONE HUE STILL, read where their `BarList` puts it: the bar's colour is a
-  // custom property on the fill rather than a `background` on a child div, so
-  // the selector and the read both move to theirs. `.meter-track > div` was
-  // our own chart's markup and is gone with it.
-  const fills = [...container.querySelectorAll(".crewlet-bar-list__bar")].map((el) =>
-    (el as HTMLElement).style.getPropertyValue("--crewlet-bar-list-bar-color"),
-  );
-  expect(fills.length).toBe(2);
-  expect(new Set(fills).size).toBe(1);
-});
-
-// A ONE-BAR CHART IS A NUMBER, so a company with one project gets the facts
-// and no chart at all.
-test("a single project draws its facts and no comparison", () => {
-  const { container } = render(
-    <WorkspaceHead
-      projects={[
-        {
-          key: "ENG",
-          name: "Engineering",
-          unit: { resolved: true },
-          lead: {},
-          task_counts: { open: 2, done: 0, closed: 0 },
-          version: 1,
-        },
-      ]}
-    />,
-  );
-  // NO CHART AT ALL, asserted against their bar list rather than against our
-  // old track class — a company with one project gets the facts and nothing
-  // to compare them with.
-  expect(container.querySelector(".crewlet-bar-list")).toBeNull();
-  expect(screen.getByText("Projects")).toBeTruthy();
-});
-
-// ---------------------------------------------------------------------------
 // The row
 // ---------------------------------------------------------------------------
 
@@ -486,7 +423,10 @@ test("a row with nothing to say in a column still keeps the column", () => {
   const cells = (el: Element) =>
     [...el.querySelectorAll(".work-row > .work-cell")].map((c) => c.className);
   expect(cells(bare)).toEqual(cells(full));
-  expect(cells(bare)).toHaveLength(4);
+  // FIVE: the priority that opens the row, the status, and the three trailing
+  // facts — due, type and who holds it. The key and the title are the row's own
+  // elastic tracks rather than cells, because neither is ever absent.
+  expect(cells(bare)).toHaveLength(5);
 });
 
 // A DATE COLUMN DROPS THE YEAR IT SHARES WITH THE READER. Repeating "2031"
@@ -570,14 +510,135 @@ test("a refused project list is said to be a refusal, not an empty company", asy
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
 });
 
+// AND THE EMPTY STATE REPLACES THE LIST rather than following it: drawn under
+// it, a company with no projects read two sentences about one blank — the
+// list's "nothing matches" and this — and the first was wrong.
+test("a company with no projects gets one empty state, not two", async () => {
+  serving({
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: { projects: [], total: 0, census: { active: 0, archived: 0 }, complete: true },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+  expect(screen.queryByText(/Nothing is open/)).toBeNull();
+  expect(container.querySelector(".work-bar")).toBeNull();
+});
+
+// AN UNFILTERED EMPTY SCOPE SAYS WHAT WOULD FILL IT. "Nothing matches" is the
+// filter-miss sentence, and it was drawn over an unfiltered board — blaming a
+// narrowing that did not exist, with no chip on screen to take off.
+test("an empty scope says why, and only a filter says nothing matched", async () => {
+  const company = {
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: {
+      projects: [
+        {
+          key: "ENG",
+          name: "Engineering",
+          unit: { resolved: true },
+          lead: {},
+          task_counts: { open: 0, done: 0, closed: 0 },
+          version: 1,
+        },
+      ],
+      total: 1,
+      complete: true,
+    },
+  };
+  serving(company);
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Nothing is open")).toBeTruthy());
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+  cleanup();
+
+  location.hash = "#/work?scope=closed";
+  serving(company);
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Nothing has been finished yet")).toBeTruthy());
+  cleanup();
+
+  location.hash = "#/work?assignee=ada";
+  serving(company);
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Nothing matches")).toBeTruthy());
+});
+
 // AND A READ THAT ANSWERED IS ALLOWED TO CONCLUDE IT.
 test("a project list that answered with nothing says the company has filed nothing", async () => {
   serving({
     work_items: { items: [], groups: [], complete: true },
-    work_projects: { projects: [], total: 0, complete: true },
+    work_projects: { projects: [], total: 0, census: { active: 0, archived: 0 }, complete: true },
   });
   mountWork();
   await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+});
+
+// THE FIXTURE ABOVE IS NOT WHAT THE ENGINE SENDS, WHICH IS HOW THIS SCREEN
+// SHIPPED BROKEN.
+//
+// `readProjectRows` returned a nil slice for a company with no projects and
+// `ProjectListing.Projects` carries no `omitempty`, so the wire said
+// `"projects": null` — and `projects?.length === 0` is `undefined === 0`,
+// which is false. Every case above hands the screen `projects: []`, because a
+// fixture is written by somebody who already knows the answer, so the suite
+// was green through every photograph of the real product drawing the ordinary
+// list on a brand-new company.
+//
+// THIS ONE IS THE ENGINE'S OWN BYTES, copied from what
+// `TestAnEmptyProjectListingEncodesAnEmptyArray` encodes — census, coverage
+// and all — so the screen is exercised against the answer it actually gets.
+// The engine's half of the fix is what makes it pass; the case is here so
+// that a regression on either side of the wire goes red.
+test("the engine's own empty-company answer draws the no-work panel", async () => {
+  serving({
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: {
+      projects: [],
+      total: 0,
+      census: { active: 0, archived: 0 },
+      read_level: "stale",
+      log_seq: 0,
+      applied_through: 0,
+      log_lag: 0,
+      complete: true,
+    },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+});
+
+// AND AN ALL-ARCHIVED COMPANY IS NOT AN EMPTY ONE.
+//
+// This read is the ACTIVE set — the engine's own default — so an empty answer
+// is two states a reader acts on oppositely, and gated on the rows this screen
+// read both as the first: a company with four archived projects holding every
+// item it ever filed was told "nothing can be filed until a unit declares a
+// `project` key, and this company has none", which is false twice over and is
+// the opposite of what `#/work/projects` said beside it. The census is what
+// tells them apart, which is why the answer carries both counts whatever the
+// limit.
+test("a company whose every project is archived is not told it has none", async () => {
+  serving({
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: {
+      projects: [],
+      total: 0,
+      census: { active: 0, archived: 4 },
+      complete: true,
+    },
+  });
+  mountWork();
+  // THE LIST, not the first-run panel — the work is there, in projects the
+  // reader has retired.
+  await waitFor(() => expect(screen.getByText("Every project is archived")).toBeTruthy());
+  expect(screen.queryByText("No work has been filed yet")).toBeNull();
+  expect(screen.getByText(/All 4 of the company’s projects have been archived/)).toBeTruthy();
+  // AND IT GOES TO THEM. The reader's next move is the projects rather than
+  // the scope switch, so the sentence carries the way there.
+  const link = screen.getByRole("link", { name: /See them under Archived/ });
+  expect(link.getAttribute("href")).toBe("#/work/projects?shown=archived");
 });
 
 // THE LIST IS HEADED BY THE AXIS THE QUERY WAS SENT ON. A saved view may
@@ -623,9 +684,362 @@ test("a saved view's grouping heads the list's columns by name", async () => {
     },
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-group-head")).toBeTruthy());
-  expect(container.querySelector(".work-group-head")?.textContent).toContain("Ada Okonkwo");
-  expect(container.querySelector(".work-group-head")?.textContent).not.toContain("ada");
+  await waitFor(() => expect(container.querySelector(".grid-band-head")).toBeTruthy());
+  expect(container.querySelector(".grid-band-head")?.textContent).toContain("Ada Okonkwo");
+  expect(container.querySelector(".grid-band-head")?.textContent).not.toContain("ada");
+});
+
+/** A company with one project — the listing every list-screen case needs,
+ *  because a listing that answered with NONE replaces the list with the
+ *  "nothing filed" state. */
+const oneProject = {
+  projects: [
+    {
+      key: "ENG",
+      name: "Engineering",
+      unit: { resolved: true },
+      lead: {},
+      task_counts: { open: 1, done: 0, closed: 0 },
+      version: 1,
+    },
+  ],
+  total: 1,
+  complete: true,
+};
+
+/** A strip of one saved view carrying its own arrangement. */
+function savedWith(params: Record<string, string>) {
+  return {
+    views: [
+      {
+        id: "v-1",
+        key: "arranged",
+        name: "Arranged",
+        type: "list",
+        container: { kind: "workspace", id: "" },
+        builtin: false,
+        default: true,
+        params,
+      },
+    ],
+    complete: true,
+  };
+}
+
+/** The Display menu, opened. */
+async function openDisplay() {
+  const button = await screen.findByRole("button", {
+    name: /^(List|Board|Table|Calendar|Timeline)/,
+  });
+  fireEvent.click(button);
+  return button;
+}
+
+// THE PICKERS SHOW WHAT THE QUERY WAS SENT WITH, not what the address holds.
+// Built from the URL key alone they sat on "No grouping" over a list the
+// engine had grouped by assignee — and a reader looking for the control that
+// turned it off found one that already said it was off.
+test("a view's own arrangement is what the display controls show", async () => {
+  serving({
+    work_views: savedWith({ group_by: "assignee", group_by2: "priority", sort: "due" }),
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: oneProject,
+  });
+  mountWork();
+  // THE BUTTON SAYS IT FIRST, because the arrangement has to be readable
+  // without opening anything.
+  await waitFor(() => expect(screen.getByRole("button", { name: /List · Assignee/ })).toBeTruthy());
+  await openDisplay();
+  expect(screen.getByRole("combobox", { name: "Group by" }).textContent).toContain("Assignee");
+  expect(screen.getByRole("combobox", { name: "Then by" }).textContent).toContain("Priority");
+  expect(screen.getByRole("combobox", { name: "Order by" }).textContent).toContain("Due soonest");
+});
+
+// AND TURNING ONE OFF IS A VALUE ON THE ADDRESS. `group_by=` is DELETED by the
+// router, after which the view supplies the axis again — so the option did
+// nothing at all, twice over: the control snapped back and the rows never
+// changed.
+test("turning a view's grouping off says so on the address and on the wire", async () => {
+  const query = serving({
+    work_views: savedWith({ group_by: "assignee", sort: "due" }),
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: oneProject,
+  });
+  mountWork();
+  await waitFor(() => expect(asked(query).group_by).toBe("assignee"));
+  await openDisplay();
+  fireEvent.click(screen.getByRole("combobox", { name: "Group by" }));
+  fireEvent.mouseDown(await screen.findByRole("option", { name: "No grouping" }));
+  await waitFor(() => expect(location.hash).toContain("group_by=none"));
+  // AND `none` NEVER REACHES THE ENGINE: it is this dashboard's word for the
+  // absence of a key, not an axis the grammar has.
+  await waitFor(() => expect(asked(query).group_by).toBeUndefined());
+  expect(asked(query).sort).toBe("due");
+});
+
+// AN ORDINARY UNGROUPED LIST WRITES NOTHING, because there is nothing to
+// override: `group_by=none` on the address of a list no view arranged is a key
+// that says what the absence of it already said.
+test("turning off an arrangement nobody set leaves the address clean", async () => {
+  serving({
+    work_views: savedWith({}),
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: oneProject,
+  });
+  mountWork();
+  await openDisplay();
+  fireEvent.click(screen.getByRole("combobox", { name: "Order by" }));
+  fireEvent.mouseDown(await screen.findByRole("option", { name: "Default order" }));
+  await waitFor(() => expect(screen.queryByRole("option", { name: "Default order" })).toBeNull());
+  expect(location.hash).not.toContain("sort=");
+});
+
+// A COLUMN NARROWING IS NAMED BY THE AXIS IT WAS CUT ON, and that axis can be
+// the view's: labelled from the URL key alone the chip read "Column is ada"
+// over a board whose own heading said "Assignee · Ada Okonkwo".
+test("a column chip takes its name from the effective axis", async () => {
+  location.hash = "#/work?group=ada";
+  serving({
+    work_views: savedWith({ group_by: "assignee" }),
+    work_items: { items: [], groups: [], complete: true },
+    work_projects: oneProject,
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-chips")).toBeTruthy());
+  const chips = container.querySelector(".work-chips")?.textContent ?? "";
+  expect(chips).toContain("Assignee");
+  expect(chips).toContain("Ada Okonkwo");
+  expect(chips).not.toContain("Column");
+});
+
+// ---------------------------------------------------------------------------
+// The grid: one renderer, two column sets
+// ---------------------------------------------------------------------------
+
+/**
+ * The head row as it is drawn, in order — a glyph head reading "".
+ *
+ * BY TEXT AND IN ORDER, because a set is not a set of names: `cols=` carries
+ * the order as well as the selection, which is the whole reason the key is per
+ * shape. A comparison that sorted these would pass on a table drawing the
+ * list's arrangement.
+ */
+const heads = (container: HTMLElement) =>
+  [...container.querySelectorAll(".grid-th")].map((el) => (el.textContent ?? "").trim());
+
+/** What the list draws with nothing chosen: the compact row, as columns. */
+const LIST_SET = ["", "Key", "Status", "Title", "Due", "", "", "Updated"];
+
+/** And the table's: one field per column, the identity first. */
+const TABLE_SET = [
+  "Key",
+  "",
+  "Title",
+  "Status",
+  "Priority",
+  "Assignee",
+  "Project",
+  "Due",
+  "Updated",
+];
+
+// TWO DEFAULT SETS, ONE RENDERER. The list and the table were two components
+// over one answer, so every rule the grid had — one track list, a capped shrink
+// column, the card a row becomes on a phone, the cursor `j` and `k` walk — the
+// list simply did not have. What is left of the difference is which columns are
+// on and in what order.
+test("the list and the table are the same grid drawn in two column sets", async () => {
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const asList = mountWork();
+  await waitFor(() => expect(asList.container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(heads(asList.container)).toEqual(LIST_SET);
+  cleanup();
+
+  location.hash = "#/work?shape=table";
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const asTable = mountWork();
+  await waitFor(() => expect(asTable.container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(heads(asTable.container)).toEqual(TABLE_SET);
+  // ONE GRID, both times: the list is not a hand-rolled panel any more, so it
+  // has a head row at all and every column of it is sized by the same tracks.
+  expect(asTable.container.querySelectorAll(".grid-wrap").length).toBe(1);
+});
+
+// `cols=` SELECTS WITHIN THE ACTIVE SET, and a name that set does not hold is
+// ignored rather than drawn or refused. `restore` is a real column — the trash
+// listing's — so this is the shape a stale link actually takes rather than a
+// nonsense word.
+test("cols narrows within the active set and ignores what the set does not hold", async () => {
+  location.hash = "#/work?cols.list=key,title,restore";
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(heads(container)).toEqual(["Key", "Title"]);
+});
+
+// AND A `cols=` NAMING NOTHING THE SET HOLDS LEAVES THE DEFAULT STANDING,
+// rather than a grid with no columns at all.
+test("a cols naming nothing this set draws falls back to the default set", async () => {
+  location.hash = "#/work?cols.list=restore,removed_by";
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(heads(container)).toEqual(LIST_SET);
+});
+
+// THE KEY IS PER SHAPE, which is what stops one arrangement destroying the
+// other. `cols=` carries an ORDER and that order is the SET's, so a value
+// written against the table and read against the list draws the list's columns
+// in the table's arrangement — a row nobody asked for, and one no validation
+// can catch, because every name in it is legal in both sets.
+test("each shape keeps its own column arrangement", async () => {
+  location.hash = "#/work?shape=table&cols.list=key,title";
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  // The list's narrowing is on the address and the table pays no attention.
+  expect(heads(container)).toEqual(TABLE_SET);
+  cleanup();
+
+  location.hash = "#/work?shape=table&cols.table=key,title";
+  serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
+  const own = mountWork();
+  await waitFor(() => expect(own.container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(heads(own.container)).toEqual(["Key", "Title"]);
+});
+
+// AND THE DISPLAY MENU OFFERS COLUMNS ON BOTH GRID SHAPES. It offered them on
+// the table alone, under a rule that read "the column set belongs to the table,
+// which is the one shape with columns" — which described the implementation
+// rather than the product: the only thing making it true was that the list was
+// a different component with no columns to give.
+test("the Display menu offers the active set's columns on the list too", async () => {
+  serving({
+    work_views: savedWith({}),
+    work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true },
+    work_projects: oneProject,
+  });
+  mountWork();
+  await openDisplay();
+  await waitFor(() => expect(screen.getByText("Columns")).toBeTruthy());
+  // THROUGH THE DOCUMENT, not the mount's own container: the menu is a
+  // `Popover`, so its panel is portalled out of the tree the screen rendered.
+  const boxes = [...document.querySelectorAll(".grid-cols-choice")].map(
+    (el) => el.textContent ?? "",
+  );
+  // THE WHOLE VOCABULARY, not only what is drawn: the four the compact set
+  // leaves off are choices here rather than columns a reader has to switch
+  // shape to reach.
+  expect(boxes).toEqual([
+    "Priority",
+    "Key",
+    "Status",
+    "Title",
+    "Project",
+    "Due",
+    "Start",
+    "Points",
+    "Estimate",
+    "Type",
+    "Assignee",
+    "Updated",
+  ]);
+  const ticked = [...document.querySelectorAll<HTMLInputElement>(".grid-cols-choice input")]
+    .map((box, at) => (box.checked ? boxes[at] : null))
+    .filter(Boolean);
+  // AND THE TICKS ARE THE DEFAULT SET until somebody moves one.
+  expect(ticked).toEqual([
+    "Priority",
+    "Key",
+    "Status",
+    "Title",
+    "Due",
+    "Type",
+    "Assignee",
+    "Updated",
+  ]);
+});
+
+// A BAND SAYS BOTH NUMBERS, on either shape. The engine's count is over the
+// whole group and the rows under it are a page, so a heading reading `3` over
+// two visible rows is the number a person plans against — the rule the grid's
+// own bands already kept and the hand-rolled list restated.
+test("a grouped answer draws bands with the engine's count on both shapes", async () => {
+  const grouped = {
+    work_items: {
+      items: [],
+      groups: [{ key: "todo", count: 3, rows: [row("1"), row("2")] }],
+      total_hint: 3,
+      complete: true,
+    },
+  };
+  for (const shape of ["list", "table"]) {
+    location.hash = `#/work?shape=${shape}&group_by=status`;
+    serving(grouped);
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelector(".grid-band-head")).toBeTruthy());
+    const band = container.querySelector(".grid-band-head")!;
+    expect(band.textContent, shape).toContain("To do");
+    expect(band.textContent, shape).toContain("2 of 3");
+    expect(container.querySelectorAll(".grid-row").length, shape).toBe(2);
+    cleanup();
+  }
+});
+
+// A SECOND AXIS IS A BAND INSIDE A BAND, on either shape — and the table drew
+// NEITHER. `buildItemsParams` sends `group_by2` for both, the answer comes back
+// with the rows under `subgroups` rather than under `groups[].rows`, and a grid
+// that read only `rows` drew one empty heading per group with every row of the
+// answer nowhere on the screen.
+test("a twice-grouped answer nests its bands and keeps its rows", async () => {
+  const nested = {
+    work_items: {
+      items: [],
+      groups: [
+        {
+          key: "todo",
+          count: 2,
+          rows: [],
+          subgroups: [{ key: "ada", count: 2, rows: [row("1", { assignee: "ada" }), row("2")] }],
+        },
+      ],
+      total_hint: 2,
+      complete: true,
+    },
+  };
+  for (const shape of ["list", "table"]) {
+    location.hash = `#/work?shape=${shape}&group_by=status&group_by2=assignee`;
+    serving(nested);
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelectorAll(".grid-row").length).toBe(2));
+    const bands = [...container.querySelectorAll(".grid-band-head")].map((el) => el.textContent);
+    expect(bands.length, shape).toBe(2);
+    expect(bands[0], shape).toContain("To do");
+    expect(bands[1], shape).toContain("Ada Okonkwo");
+    // THE OUTER BAND COUNTS WHAT IS UNDER IT, sub-bands included — read off
+    // its own `rows` it reported every twice-grouped group as holding nothing.
+    expect(bands[0], shape).toContain("2");
+    cleanup();
+  }
+});
+
+// THE END OF A COMPLETE ANSWER IS SAID ON BOTH SHAPES. The list closed with it
+// and the table closed with "N loaded" — a count the toolbar three lines above
+// already carries — so the one shape a reader picks to compare a field was the
+// one that could not tell them whether they were looking at all of it.
+test("the foot says the end of it on both shapes", async () => {
+  for (const shape of ["list", "table"]) {
+    location.hash = `#/work?shape=${shape}`;
+    serving({
+      work_items: { items: [row("1"), row("2")], groups: [], total_hint: 2, complete: true },
+    });
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelector(".grid-foot")).toBeTruthy());
+    expect(container.querySelector(".grid-foot")?.textContent, shape).toBe(
+      "That is all of it · 2 items",
+    );
+    cleanup();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -728,7 +1142,12 @@ test("a removed row names who removed it, from the feed rather than the row", as
           effective_at: "2031-04-15T00:00:00Z",
           kind: "removed",
           actor: "ada",
-          actor_kind: "seat",
+          // THE ENGINE'S OWN VOCABULARY. `tracker.AuthorKind` mints `agent`,
+          // `human`, `operator` and `system` and nothing else — this fixture
+          // said `seat`, which is what the cell it exercises used to compare
+          // against, so the two agreed with each other and neither agreed with
+          // the wire.
+          actor_kind: "agent",
           subject_kind: "task",
           subject_id: "t-1",
           subject_key: "ENG-9",
@@ -834,44 +1253,6 @@ test("a purged task appears in its own band, marked irreversible", async () => {
   expect(screen.queryByText("Nothing matches")).toBeNull();
 });
 
-// MARKDOWN IS THE CONTRACT, so an excerpt is a markdown fragment. The feed cell
-// is ONE LINE — `.truncate` is `white-space: nowrap` — so the row drew "##
-// Understanding the work This task is to interview…" with the hashes in it,
-// which reads as a bug in the engine rather than as a heading.
-test("the activity feed draws a markdown excerpt as prose, not as its source", () => {
-  const { container } = render(
-    <ActivityFeed
-      records={[
-        {
-          id: "h-9",
-          log_seq: 12,
-          log_stream: "CREWLET_WORK_LOG",
-          log_generation: 1,
-          at: "2031-04-15T00:00:00Z",
-          effective_at: "2031-04-15T00:00:00Z",
-          kind: "created",
-          subject_kind: "task",
-          subject_id: "t-9",
-          subject_key: "ENG-12",
-          excerpt:
-            "## Understanding the work\n\nInterview three desks about **settlement**, then read [the guide](https://docs.crewlet.ai/x).",
-          notified: true,
-        },
-      ]}
-      now={NOW}
-    />,
-  );
-  const cell = container.querySelector(".work-feed-what") as HTMLElement;
-  // BOTH HALVES. The negative alone passes on a cell that renders nothing at
-  // all, which is the shape of an assertion that cannot fail.
-  expect(cell.textContent).toBe(
-    "Understanding the work Interview three desks about settlement, then read the guide.",
-  );
-  expect(cell.textContent).not.toContain("#");
-  expect(cell.textContent).not.toContain("**");
-  expect(cell.textContent).not.toContain("https://");
-});
-
 // ---------------------------------------------------------------------------
 // The filter bar
 // ---------------------------------------------------------------------------
@@ -879,40 +1260,383 @@ test("the activity feed draws a markdown excerpt as prose, not as its source", (
 // THE BAR IS A TOOLBAR, and `toolbar` is not a synonym for "the row of
 // controls at the top": `.screen:has(.toolbar)` is what publishes
 // `--sticky-top`, which is the offset every other sticky band in the same
-// scroller starts at — the grid's column heads among them. Hand-rolled here,
-// `.work-filters` restated every one of `.toolbar`'s declarations and omitted
-// the class, so the property stayed at its 0px default and the table's own
-// header parked underneath an opaque band. See styles/sticky.test.ts for the
-// other half of this; a class name is the only part of it the DOM can see.
-test("the filter bar declares itself the screen's toolbar", async () => {
+// scroller starts at — the grid's column heads and a list's group bands among
+// them. Hand-rolled, this bar restated every one of `.toolbar`'s declarations
+// and omitted the class, so the property stayed at its 0px default and the
+// table's own header parked underneath an opaque band. See
+// styles/sticky.test.ts for the other half of this; a class name is the only
+// part of it the DOM can see.
+test("the bar declares itself the screen's toolbar", async () => {
   serving({ work_items: { items: [], groups: [], complete: true } });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-filters")).toBeTruthy());
-  expect(container.querySelector(".work-filters")?.classList.contains("toolbar")).toBe(true);
+  await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
+  expect(container.querySelector(".work-bar")?.classList.contains("toolbar")).toBe(true);
 });
 
-// AND ITS CONTROLS TRAVEL IN GROUPS. What the bar draws varies by shape — the
-// type, group-by and sort pickers each appear on some tabs and not
-// others — and as one flat wrapping row that put the scope control at x≈345 on
-// List, x≈1338 on Board and x≈1155 on Calendar, with the Overdue chip wrapping
-// to a line of its own ~1,200px from the count. A group is the wrap unit, so a
-// break falls between the question and the switches and never inside either.
-test("the scope control and the chips are one group, not loose children of the bar", async () => {
+// THREE CONTROLS, NOT ELEVEN. The bar carried a search box, five selects, a
+// three-way switch, two chips, a Clear button and the count — and which of
+// them appeared depended on the shape, so the scope switch sat at x≈345 on
+// List, x≈1338 on Board and x≈1155 on Calendar. What is left is the Filter
+// menu, the substring mark, the scope switch and the Display menu, so there is
+// no arrangement left for a wrap to disturb.
+test("the bar is two menus, a switch and a mark", async () => {
   serving({ work_items: { items: [], groups: [], complete: true } });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-filters-switches")).toBeTruthy());
-  const switches = container.querySelector(".work-filters-switches") as HTMLElement;
-  // The scope segments and both chips, in one box.
-  for (const label of ["Open", "Closed", "All", "Blocked", "Overdue"]) {
-    expect(within(switches).getByText(label), `${label} is not in the switch group`).toBeTruthy();
+  await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
+  const bar = container.querySelector(".work-bar") as HTMLElement;
+  expect(within(bar).getByText("Filter")).toBeTruthy();
+  // The Display button SAYS WHAT IS ON, so the arrangement is readable without
+  // opening anything — which is what the strip of shape tabs used to do.
+  expect(within(bar).getByText("List")).toBeTruthy();
+  for (const label of ["Open", "Closed", "All"]) {
+    expect(within(bar).getByText(label), `${label} is not in the bar`).toBeTruthy();
   }
-  // And the search field is NOT — it belongs to the question, which is the
-  // group that takes the bar's slack.
-  const ask = container.querySelector(".work-filters-ask") as HTMLElement;
-  expect(ask.querySelector(".work-filters-search")).toBeTruthy();
-  expect(switches.querySelector(".work-filters-search")).toBeNull();
-  // Both groups are children of the bar itself, which is what makes them the
-  // wrap unit — nested one inside the other they would wrap as one.
-  expect(ask.parentElement).toBe(container.querySelector(".work-filters"));
-  expect(switches.parentElement).toBe(container.querySelector(".work-filters"));
+  // AND THE PICKERS ARE GONE FROM IT. A control per field is what a menu
+  // replaces, and one left behind would be a second way to set the same key.
+  expect(within(bar).queryByLabelText("Status")).toBeNull();
+  expect(within(bar).queryByLabelText("Priority")).toBeNull();
+  expect(within(bar).queryByLabelText("Assignee")).toBeNull();
+});
+
+// A CHIP IS DRAWN ONLY WHERE A FILTER IS APPLIED, so an unfiltered list has no
+// chip row at all — which is the whole difference from a bar of controls that
+// were all drawn whether or not they were set.
+test("an unfiltered list draws no chips, and a filtered one says the whole narrowing", async () => {
+  serving({ work_items: { items: [], groups: [], complete: true } });
+  const bare = mountWork();
+  await waitFor(() => expect(bare.container.querySelector(".work-bar")).toBeTruthy());
+  expect(bare.container.querySelector(".work-chips")).toBeNull();
+  cleanup();
+
+  location.hash = "#/work?assignee=ada&blocked=true";
+  serving({ work_items: { items: [], groups: [], complete: true } });
+  const filtered = mountWork();
+  await waitFor(() => expect(filtered.container.querySelector(".work-chips")).toBeTruthy());
+  const chips = filtered.container.querySelector(".work-chips") as HTMLElement;
+  // The company's own word for the person, not the handle the URL carries.
+  expect(within(chips).getByText("Ada Okonkwo")).toBeTruthy();
+  expect(within(chips).getByText("Blocked")).toBeTruthy();
+  // And one control that takes them all off.
+  expect(within(chips).getByText("Clear")).toBeTruthy();
+});
+
+// TAKING A CHIP OFF CLEARS THE ONE KEY IT NAMES and nothing else, which is
+// what makes a chip removable without a table of removers beside the table of
+// chips.
+test("removing a chip clears its own key and leaves the rest", async () => {
+  location.hash = "#/work?assignee=ada&priority=high";
+  serving({ work_items: { items: [], groups: [], complete: true } });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-chips")).toBeTruthy());
+  const chips = container.querySelector(".work-chips") as HTMLElement;
+  fireEvent.click(within(chips).getByLabelText("Remove the Assignee is Ada Okonkwo filter"));
+  await waitFor(() => expect(location.hash).not.toContain("assignee=ada"));
+  expect(location.hash).toContain("priority=high");
+});
+
+// THE SAVED VIEWS ARE THE STRIP AND THE SHAPES ARE NOT. A saved view is a
+// QUERY somebody arranged; a shape is how any query is drawn. Mixed into one
+// strip they read as the same kind of thing, and a company with four saved
+// views had a strip of nine.
+test("the strip holds what somebody saved, never the five shapes", async () => {
+  serving({
+    work_views: {
+      views: [
+        ...["list", "board", "table"].map((key) => ({
+          id: "",
+          key,
+          name: key[0]!.toUpperCase() + key.slice(1),
+          type: key,
+          container: { kind: "workspace", id: "" },
+          builtin: true,
+          default: key === "board",
+          params: {},
+        })),
+        {
+          id: "v-1",
+          key: "overdue-by-owner",
+          name: "Overdue, by owner",
+          type: "list",
+          container: { kind: "workspace", id: "" },
+          builtin: false,
+          params: { group_by: "assignee" },
+        },
+      ],
+      complete: true,
+    },
+    work_items: { items: [], groups: [], complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Overdue, by owner")).toBeTruthy());
+  const tabs = screen.getAllByRole("tab").map((el) => el.textContent);
+  expect(tabs).toEqual(["All work", "Overdue, by owner"]);
+});
+
+// AND THE SHAPE IS ITS OWN KEY, so switching a saved view to another drawing
+// keeps the view. They were one key, so a reader who wanted their saved board
+// as a list lost the filters that made it theirs.
+test("the shape is a key beside the view rather than the same one", async () => {
+  location.hash = "#/work?view=overdue-by-owner&shape=list";
+  const query = serving({
+    work_views: {
+      views: [
+        {
+          id: "v-1",
+          key: "overdue-by-owner",
+          name: "Overdue, by owner",
+          type: "board",
+          container: { kind: "workspace", id: "" },
+          builtin: false,
+          params: { assignee: "ada" },
+        },
+      ],
+      complete: true,
+    },
+    work_items: { items: [], groups: [], complete: true },
+  });
+  mountWork();
+  // THE VIEW'S OWN FILTER SURVIVED the shape override, which is the whole
+  // point of the two keys.
+  await waitFor(() => expect(asked(query).assignee).toBe("ada"));
+  // And a list is a paged question rather than a set of columns.
+  expect(asked(query).limit).toBe(100);
+  expect(asked(query).group_by).toBeUndefined();
+});
+
+// ---------------------------------------------------------------------------
+// The sparse state
+// ---------------------------------------------------------------------------
+
+/** A project row, for the one fact these cases need from the directory. */
+const listedProject = (counts = { open: 0, done: 0, closed: 0 }): WorkProjectRow => ({
+  key: "ENG",
+  name: "Engineering",
+  unit: { resolved: true },
+  lead: {},
+  task_counts: counts,
+  version: 1,
+});
+
+// THE LANDING SHAPE IS THE LIST, and nothing in the engine decides it: no
+// builtin view is marked `default`, so this fallback is what every company that
+// has saved nothing lands on. A board's information is the comparison ACROSS
+// its lanes, so at one item it is one 292px card in a 1500px field — where a
+// list degrades to one full-width row and is still a list.
+test("a container with no default view opens on the list", async () => {
+  const query = serving({
+    work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  // A LIST IS A PAGED QUESTION rather than a set of columns, which is the half
+  // of this that reaches the engine.
+  expect(asked(query).limit).toBe(100);
+  expect(asked(query).group_by).toBeUndefined();
+  expect(asked(query).group_limit).toBeUndefined();
+  // And the Display button says which shape is on without anything opening.
+  expect(screen.getByText("List")).toBeTruthy();
+  expect(container.querySelector(".work-board")).toBeNull();
+});
+
+// A BOARD IS THE WORKFLOW, NOT THE OCCUPIED PART OF IT — and the ENGINE says
+// so: `work_items` carries every column the query's own predicate admits, the
+// empty ones at `count: 0` with an empty row list, so the one-item company
+// gets the denominator the comparison a board exists for needs. What is left
+// here is the DRAWING: a zero lane is a head with its count and a body saying
+// it is empty, rather than a heading over nothing.
+test("a board draws every declared lane the scope admits, and says which are empty", async () => {
+  location.hash = "#/work?shape=board";
+  serving({
+    work_items: {
+      items: [],
+      // AS THE ENGINE SENDS IT on the Open segment: the three open statuses,
+      // and no Done lane, because the query excluded finished work.
+      groups: [
+        { key: "todo", count: 1, rows: [row("1")] },
+        { key: "in_progress", count: 0, rows: [] },
+        { key: "in_review", count: 0, rows: [] },
+      ],
+      total_hint: 1,
+      complete: true,
+    },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-board")).toBeTruthy());
+  const heads = [...container.querySelectorAll(".work-col-head")].map((el) => el.textContent ?? "");
+  expect(heads.length).toBe(3);
+  expect(heads[0]).toContain("To do");
+  expect(heads[1]).toContain("In progress");
+  expect(heads[2]).toContain("In review");
+  // A ZERO LANE CARRIES ITS OWN COUNT and says it is empty, rather than being a
+  // heading over nothing.
+  expect(heads[1]).toContain("0");
+  expect(container.querySelectorAll(".work-col-empty").length).toBe(2);
+  // AND NO DEAD DONE LANE: the Open segment's query cannot return one, so
+  // drawing it would be a column the reader can never fill from here.
+  expect(heads.some((head) => head.includes("Done"))).toBe(false);
+});
+
+// AN OPEN SET IS NOT A BOARD. A lane per possible assignee is every handle the
+// company could ever hold, so an assignee board is still the answer's own.
+test("an assignee board draws only the columns the answer carried", async () => {
+  location.hash = "#/work?shape=board&group_by=assignee";
+  serving({
+    work_items: {
+      items: [],
+      groups: [{ key: "ada", count: 1, rows: [row("1", { assignee: "ada" })] }],
+      total_hint: 1,
+      complete: true,
+    },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-board")).toBeTruthy());
+  expect(container.querySelectorAll(".work-col-head").length).toBe(1);
+});
+
+// THE STRIP IS DRAWN WHETHER OR NOT ANYBODY HAS SAVED ANYTHING. Its first tab
+// is the container's own list — a real destination, and the one thing that
+// names this page inside its own content column — so gating the whole strip on
+// somebody else's saved query left the toolbar as the top edge of the screen.
+test("the strip and its way into the inventory survive a company that saved nothing", async () => {
+  serving({ work_items: { items: [], groups: [], complete: true } });
+  mountWork();
+  await waitFor(() => expect(screen.getByRole("tab", { name: "All work" })).toBeTruthy());
+  // A REAL ANCHOR, middle-clickable like every other way out of a screen.
+  const more = screen.getByText("All views →");
+  expect(more.tagName).toBe("A");
+  expect(more.getAttribute("href")).toBe("#/work/views");
+  // AND NO COUNT ON THE CONTAINER TAB. The engine's total is over the FILTER
+  // rather than over the container, so a number here would read as the
+  // container's size and be the size of whatever is narrowed.
+  expect(screen.getByRole("tab", { name: "All work" }).textContent).toBe("All work");
+});
+
+// (a) A NARROWING THAT MATCHED NOTHING CARRIES THE CONTROL THAT REMOVES IT,
+// rather than a sentence describing one.
+test("a filtered list that matched nothing offers to clear the filters", async () => {
+  location.hash = "#/work?assignee=ada";
+  serving({
+    work_items: { items: [], groups: [], total_hint: 0, complete: true },
+    work_projects: { projects: [listedProject()], total: 1, complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Nothing matches")).toBeTruthy());
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  await waitFor(() => expect(location.hash).not.toContain("assignee=ada"));
+});
+
+// (b) NOTHING IN THIS SCOPE IS NOT A FILTER THAT MATCHED NOTHING. "Widen them"
+// named a control that is not on the screen: a chip row exists only when a
+// filter does, so an unfiltered list had nothing to widen and nothing to clear.
+test("an unfiltered list with nothing open names the scope switch, not the filters", async () => {
+  serving({
+    work_items: { items: [], groups: [], total_hint: 0, complete: true },
+    work_projects: { projects: [listedProject()], total: 1, complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("Nothing is open")).toBeTruthy());
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+  // AND IT CLAIMS NO NUMBER AT WORKSPACE SCOPE: `work_items` counts what
+  // MATCHED, so how much finished work sits behind the other segment is not in
+  // this answer at all. It names the switch and says nothing about what is
+  // behind it, where a project's own counted sentence can say exactly.
+  expect(screen.queryByText(/\d+ items? under Closed/)).toBeNull();
+  expect(screen.getByText(/Finished work is under Closed/)).toBeTruthy();
+});
+
+// (c) AND A COMPANY THAT HAS FILED NOTHING GETS ONE PANEL, not two stacked.
+// The page holds the wider fact — the project list — and the list holds the
+// rows, so neither can gate the other's sentence without being told.
+test("a first-run company gets the page's own panel and no second one from the list", async () => {
+  serving({
+    work_items: { items: [], groups: [], total_hint: 0, complete: true },
+    work_projects: { projects: [], total: 0, census: { active: 0, archived: 0 }, complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(screen.getByText("No work has been filed yet")).toBeTruthy());
+  expect(screen.queryByText("Nothing is open")).toBeNull();
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+});
+
+// A LIST THAT REACHED ITS END AND ONE THAT WAS CUT OFF ended the same way:
+// rows, then page ground. The count in the bar is silent once everything
+// matching is on screen (`totalHint`) and a cursor is invisible, so the reader
+// of a page could not tell whether there was another one.
+test("a complete list closes with the end of it and an incomplete one does not", async () => {
+  serving({
+    work_items: { items: [row("1"), row("2")], groups: [], total_hint: 2, complete: true },
+  });
+  const whole = mountWork();
+  await waitFor(() => expect(whole.container.querySelector(".grid-foot")).toBeTruthy());
+  expect(whole.container.querySelector(".grid-foot")?.textContent).toBe(
+    "That is all of it · 2 items",
+  );
+  cleanup();
+
+  serving({
+    work_items: {
+      items: [row("1"), row("2")],
+      groups: [],
+      total_hint: 240,
+      next_cursor: "c1",
+      complete: true,
+    },
+  });
+  const paged = mountWork();
+  await waitFor(() => expect(paged.container.querySelector(".grid-wrap")).toBeTruthy());
+  expect(paged.container.querySelector(".grid-foot")).toBeNull();
+});
+
+// AND A NARROWING CHANGES THE NOUN AND NOTHING ELSE. It never says how many the
+// filter hides: the engine's `total_hint` is counted over the same predicate as
+// the rows, so the unfiltered total is not in this answer and synthesising it
+// would take a second query at a second instant.
+test("a narrowed list says its rows are the ones that match, and counts nothing else", async () => {
+  location.hash = "#/work?assignee=ada";
+  serving({
+    work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".grid-foot")).toBeTruthy());
+  expect(container.querySelector(".grid-foot")?.textContent).toBe(
+    "That is all of it · 1 item matches",
+  );
+});
+
+// THE UNSET COLUMN IS A COLUMN, and its overflow has to reach it. `group=` with
+// nothing after it is the engine's own key for the rows with no value on the
+// axis (`Params.Has` is what tells it from an absent key) — and every writer on
+// this screen read an empty value as "no key": the query builder dropped it,
+// `useParam` could not say it, and the address writer deleted it. So following
+// "2 more →" out of Unassigned loaded the whole board, which is the one column
+// overflow a lead actually follows.
+test("the unset column's overflow narrows to that column rather than the whole board", async () => {
+  location.hash = "#/work?shape=board&group_by=assignee";
+  const query = serving({
+    work_items: {
+      items: [],
+      groups: [{ key: "", count: 3, rows: [row("1")] }],
+      total_hint: 3,
+      complete: true,
+    },
+  });
+  const { container } = mountWork();
+  await waitFor(() => expect(container.querySelector(".work-col-foot a")).toBeTruthy());
+  const more = container.querySelector(".work-col-foot a") as HTMLAnchorElement;
+  // THE LINK CARRIES THE KEY WITH NOTHING AFTER IT, which is what a middle
+  // click follows.
+  expect(more.getAttribute("href")).toContain("group_by=assignee");
+  expect(more.getAttribute("href")).toMatch(/[?&]group=(&|$)/);
+  // AND THE CLICK NAMES THE SAME PLACE, down to the key being present.
+  fireEvent.click(more);
+  await waitFor(() => expect(location.hash).toContain("shape=list"));
+  expect(new URLSearchParams(location.hash.split("?")[1]).has("group")).toBe(true);
+  // Which reaches the wire as a narrowing rather than as nothing.
+  await waitFor(() => expect(asked(query).group).toBe(""));
+  expect(asked(query).group_by).toBe("assignee");
+  // And the chip says which column it is, in the axis's own word — the same
+  // resolver the column head it came from uses, so the two cannot disagree.
+  const chips = container.querySelector(".work-chips") as HTMLElement;
+  expect(within(chips).getByText("Unassigned")).toBeTruthy();
+  expect(within(chips).getByText("Assignee")).toBeTruthy();
 });

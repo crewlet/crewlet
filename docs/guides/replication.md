@@ -147,6 +147,13 @@ Folding them into one would make a node that is applying nothing while its
 position advances look identical to one that is fully caught up. `crewlet
 retention status` prints both, per node and per domain.
 
+**Lag does not move a node's seats, at any size.** A node that is behind keeps
+every seat it holds and claims no new ones until it is level — see [a copy
+that is behind, and a copy that is wrong](../concepts/seat-ownership.md#a-copy-that-is-behind-and-a-copy-that-is-wrong)
+for the six states that do move work, none of which is a distance. What lag
+does bound is how fresh an answer a read can ask for
+([Read Consistency](consistency.md)).
+
 ### The bulk-apply degradation, priced
 
 One applier per domain, one goroutine, one totally ordered log. The measured

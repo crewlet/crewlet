@@ -42,6 +42,17 @@ const ROWS: Row[] = [
   { id: "two", who: "cto" },
 ];
 
+/**
+ * A mark that draws nothing for the ordinary case, in the shape every one of
+ * them takes: a COMPONENT that returns null, so the grid holds an element and
+ * the DOM holds no child. `PriorityMark` is the real one — see
+ * `components/work.tsx` — and this stands in for it so the case says what it
+ * is about rather than importing a tracker into the frame's own suite.
+ */
+function Nothing() {
+  return null;
+}
+
 // THE ROUTER IS REAL, not a stub: `DataGrid` reads `sort=` and `cols=` off
 // the URL through `useParam`, and a grid without one throws before it renders
 // a row.
@@ -228,6 +239,60 @@ test("a cell carries its column's name, and only when that name is a word", () =
   expect(heads.map((h) => h.textContent)).toEqual(["Id", "·", "", ""]);
 });
 
+// A CELL WITH NO VALUE HAS NO CHILD NODES, WHICH IS WHAT THE CARD DROPS IT ON.
+//
+// A column draws no value on a row that has none — `PriorityMark` renders null
+// for `normal`, which nearly every task is, and every mark whose rule is
+// "nothing is drawn for the default" does the same. In the table that is an
+// empty track under a head, which is correct and is what keeps the row's
+// columns lined up. Below 860px the head is gone and the label is the CELL's
+// own, so the card opened with `PRIORITY` on a line by itself, on every
+// ordinary row.
+//
+// `.grid-cell:empty { display: none }` in frame.css is the fix, because a
+// container cannot ask a child that drew nothing whether it did and the
+// element has to stay in the DOM regardless — the wide layout's tracks are
+// positional, so dropping it would move every later value one column left.
+// What THIS file owes that rule is its precondition: an empty cell really is
+// childless, which a mark wrapped in an always-rendered span would defeat
+// silently. The rule that reads it is asserted in styles/frame.test.ts, since
+// jsdom applies no media query and computes no layout.
+test("a cell with no value is childless, and keeps its column's name", () => {
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "id", header: "Id", cell: (r) => r.id },
+          // THE MARK THAT DRAWS NOTHING FOR THE DEFAULT, in the shape every
+          // one of them takes: a component that returns null.
+          { key: "prio", header: "", label: "Priority", cell: () => <Nothing /> },
+          // AND A MARKED ABSENCE IS CONTENT. An em dash is a value somebody
+          // reads — "nobody holds this" — so its line stays.
+          { key: "who", header: "Who", cell: () => <span>—</span> },
+        ]}
+      />
+    </Router>,
+  );
+  const cells = [...container.querySelectorAll<HTMLElement>(".grid-row > .grid-cell")];
+  const prio = cells.filter((_, at) => at % 3 === 1);
+  const who = cells.filter((_, at) => at % 3 === 2);
+  expect(prio).toHaveLength(ROWS.length);
+  for (const cell of prio) {
+    expect(cell.childNodes).toHaveLength(0);
+    expect(cell.matches(":empty")).toBe(true);
+  }
+  for (const cell of who) expect(cell.matches(":empty")).toBe(false);
+
+  // AND THE COLUMN STILL SAYS ITS NAME, because the table layout is untouched:
+  // the head keeps its column and the cell keeps the word the card would draw
+  // on a row that HAS a priority.
+  expect(prio.map((c) => c.getAttribute("data-label"))).toEqual(ROWS.map(() => "Priority"));
+  const heads = [...container.querySelectorAll<HTMLElement>(".grid-head > *")];
+  expect(heads.map((h) => h.textContent)).toEqual(["Id", "", "Who"]);
+});
+
 // A SHRINK COLUMN CANNOT STARVE THE ONES THE LIST IS FOR.
 //
 // `max-content` is not "shrink to content" — it is GROW to content, with no
@@ -339,4 +404,112 @@ test("only a sortable column head is a button, and every button is named", () =>
   for (const button of buttons) {
     expect((button.getAttribute("aria-label") ?? button.textContent ?? "").trim()).not.toBe("");
   }
+});
+
+// AND A SORTABLE HEAD WHOSE HEAD IS NOT A WORD IS STILL NAMED.
+//
+// The rule above takes the unsortable glyph heads out of the button role. What
+// it cannot do is stop a SORTABLE column being declared with a glyph or an
+// empty head — an ordinary thing to want, since such a column already carries
+// its word in `label` for the card layout — and that renders a control whose
+// entire accessible name is the sort arrow.
+test("a sortable glyph head takes its name from the column's label", () => {
+  render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "mark", header: "", label: "Priority", sortValue: (r) => r.id, cell: () => "·" },
+        ]}
+      />
+    </Router>,
+  );
+  expect(screen.getByRole("button", { name: "Priority" })).toBeTruthy();
+});
+
+// A BAND INSIDE A BAND, because a second grouping is a heading under a
+// heading. A grid that knew only `rows` drew one EMPTY band per group over a
+// twice-grouped answer, with every row of it nowhere on the screen — which is
+// what the work table did for as long as its Display menu offered a second
+// axis.
+test("a band's own bands are drawn, and it counts what is under them", () => {
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        bands={[
+          {
+            key: "todo",
+            label: "To do",
+            total: 5,
+            rows: [],
+            bands: [{ key: "ada", label: "Ada", total: 2, rows: ROWS }],
+          },
+        ]}
+        rowKey={(r) => r.id}
+        columns={[{ key: "id", header: "Id", cell: (r) => r.id }]}
+      />
+    </Router>,
+  );
+  const heads = [...container.querySelectorAll(".grid-band-head")].map((el) => el.textContent);
+  expect(heads).toEqual(["To do2 of 5", "Ada2"]);
+  // THE ROWS ARE UNDER THE SUB-BAND, and they are the grid's rows: a cursor
+  // that could not reach them would step over half a screen.
+  expect(container.querySelectorAll(".grid-row").length).toBe(2);
+  expect(
+    [...container.querySelectorAll(".grid-row")].map((el) => el.getAttribute("data-row-index")),
+  ).toEqual(["0", "1"]);
+});
+
+// AND A GROUPED ANSWER WITH NO ROWS ON THIS PAGE IS NOT AN EMPTY ANSWER. A
+// band carries the engine's count over its whole group and a bounded slice of
+// rows, so "Nothing matches" drawn over a band that says three exist is a
+// second and false answer on the same screen.
+test("a band with no rows on this page still draws its heading", () => {
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        bands={[{ key: "ada", label: "Ada", total: 3, rows: [] }]}
+        rowKey={(r) => r.id}
+        columns={[{ key: "id", header: "Id", cell: (r) => r.id }]}
+        empty={{ title: "Nothing matches" }}
+      />
+    </Router>,
+  );
+  expect(container.querySelector(".grid-band-head")?.textContent).toBe("Ada0 of 3");
+  expect(screen.queryByText("Nothing matches")).toBeNull();
+});
+
+// THE SORT KEY AND THE COLUMN KEY ARE TWO QUESTIONS.
+//
+// `sort=` is a fact about the QUESTION — on a server-sorted list the key goes
+// to the engine, which orders the whole set the same way whatever draws it —
+// and `cols=` is a fact about the DRAWING. The work screen is where they come
+// apart: its list and its table are one grid with two column sets, so the
+// order is shared between them and the column arrangement is not. `name` alone
+// could not say that, because it keys both.
+test("colsName keys the columns without moving the sort key", () => {
+  location.hash = "#/x?cols.list=who";
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        rows={ROWS}
+        colsName="list"
+        rowKey={(r) => r.id}
+        columns={[
+          { key: "id", header: "Id", sortValue: (r) => r.id, cell: (r) => r.id },
+          { key: "who", header: "Who", sortValue: (r) => r.who, cell: (r) => r.who },
+        ]}
+      />
+    </Router>,
+  );
+  // THE COLUMN NARROWING CAME OFF `cols.list=`, which a bare `cols=` would not
+  // have answered.
+  expect([...container.querySelectorAll(".grid-th")].map((el) => el.textContent)).toEqual(["Who"]);
+  // AND THE SORT IS STILL THE BARE KEY, which is the half `name` would have
+  // moved with it.
+  fireEvent.click(screen.getByRole("button", { name: "Who" }));
+  expect(location.hash).toContain("sort=who");
+  expect(location.hash).not.toContain("sort.list=");
+  location.hash = "#/";
 });

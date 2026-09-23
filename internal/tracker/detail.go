@@ -78,6 +78,18 @@ type DetailWants struct {
 	// CommentCursor pages the thread. Empty starts at the newest.
 	CommentCursor string
 
+	// Units resolves the task's two unit references against the chart —
+	// see [Units] and [TaskDetail.Units]. Nil renders both raw and
+	// unresolved, which is honest for a surface holding no chart and a
+	// WIRING MISTAKE on one that has one: `resolved: false` is the
+	// finding "this names a team the chart no longer has", so a surface
+	// that could have resolved and did not reports every task as orphaned.
+	//
+	// It is not one of the wants above: resolving costs no query, and a
+	// flag would be one more thing a surface can forget while rendering
+	// an id where a person expects their team's name.
+	Units Units
+
 	// Comment names ONE comment to read WHOLE, and REPLACES the page.
 	//
 	// The thread page carries EXCERPTS — see [CommentBodyShown] — so this
@@ -107,6 +119,28 @@ type TaskDetail struct {
 	Comments []Comment      `json:"comments,omitempty"`
 	History  []HistoryEntry `json:"history,omitempty"`
 
+	// Keys names the tasks this answer's HISTORY points at, id to item key
+	// — the same map [ActivityAnswer.Keys] carries, asked of one task's own
+	// rows, and resolved by the same walk so the two reads cannot name one
+	// delta differently.
+	//
+	// It is here for exactly the reason it is there: a delta names the
+	// other end of a relation by its ID, because a key is a fact about
+	// ANOTHER task's row and `tracker_history` is inside this domain's
+	// identity claim, written once and repaired by nothing — so a node
+	// that had not applied that task would store a different string there
+	// for ever. Neither side could fix "Parent: 1d573f85… → 50a01576…"
+	// alone: the engine may not put a key on the record, and a surface
+	// holds no map to resolve one with. Without it the company-wide log
+	// resolved a re-parent to two keys while the item's own History tab —
+	// the screen a reader opens to see what happened to THIS task —
+	// printed two uuids for the same commit.
+	//
+	// ONLY WITH [DetailWants.History], since the history rows are what it
+	// labels, and AN ID THIS NODE HOLDS NO ROW FOR IS SIMPLY ABSENT: a
+	// renderer falls back to the id, which is the honest degradation.
+	Keys map[string]string `json:"keys,omitempty"`
+
 	// CommentsCursor pages the thread, and is empty when this page is the
 	// whole of it.
 	//
@@ -121,6 +155,22 @@ type TaskDetail struct {
 	// exactly that. The raw map stays on [TaskDetail.Task] — it is the
 	// record — and this is the reader's view of it.
 	Fields []FieldValue `json:"fields,omitempty"`
+
+	// Units is the task's two unit references RESOLVED against the chart,
+	// on exactly the terms [TaskDetail.Fields] is the custom-field map's
+	// reader view: the strings stay on [TaskDetail.Task] because they are
+	// the record, and this is what a person reads.
+	//
+	// It exists because what those strings hold is the unit's KEY — an id
+	// on any company that gave its units one, which is a word chosen to
+	// survive a rename precisely because nobody reads it. A screen
+	// rendering the document raw showed `eng` where the same company's
+	// board column said `Engineering`.
+	//
+	// A POINTER, because a task filed into no unit has nothing to resolve
+	// and the honest report of that is an ABSENCE — the same rule
+	// [LastChange] follows for a project nobody has filed work into.
+	Units *TaskUnits `json:"units,omitempty"`
 
 	// Links are BOTH DIRECTIONS, so a reader sees "blocks" and "blocked
 	// by" without a second query and without knowing which end authored
@@ -144,6 +194,18 @@ type TaskDetail struct {
 	AppliedThrough uint64             `json:"applied_through"`
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
+}
+
+// TaskUnits is a task's two unit references as a reader renders them.
+//
+// BOTH HALVES, ALWAYS, because they answer different questions and a screen
+// draws them side by side: Filed is the team the work belongs to and never
+// moves, Routing is whose lead hears about it now. Each carries what the ROW
+// holds beside what the chart calls it today — see [UnitRef], and [Units] for
+// what an unresolved one means.
+type TaskUnits struct {
+	Filed   UnitRef `json:"filed"`
+	Routing UnitRef `json:"routing"`
 }
 
 // DetailLink is one relation as a reader sees it.
@@ -268,6 +330,15 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			if out.History, err = readHistory(ctx, tx, id, limit); err != nil {
 				return err
 			}
+			// IN THE SAME TRANSACTION as the rows it labels, for
+			// the reason the feed's own read gives: a map read
+			// separately could name a key from a later instant
+			// than the history it is about.
+			if out.Keys, err = counterpartyKeys(ctx, tx,
+				historyDeltaSides(out.History),
+				r.db.Caps().MaxVariables); err != nil {
+				return err
+			}
 		}
 		if want.Links {
 			if out.Links, err = readLinks(ctx, tx, id); err != nil {
@@ -324,6 +395,13 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	if err != nil {
 		return TaskDetail{}, err
 	}
+	// THE UNITS ARE RESOLVED OUTSIDE THE TRANSACTION, because the seam is
+	// the CALLER's code — a chart walk today, whatever a future surface
+	// hands over tomorrow — and holding a read transaction open across it
+	// would make one caller's resolver a lock on this node's estate. It
+	// reads no row, so there is nothing to keep consistent with the ones
+	// above.
+	out.Units = taskUnits(want.Units, out.Task)
 	// THE LEVEL SERVED, never the level asked for. Assigning the argument
 	// here — which is the only thing this function used to do with it —
 	// is what made the level a label: a read that refused and one that
@@ -573,7 +651,15 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 		return nil, fmt.Errorf("tracker: read the history of %s: %w", taskID, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []HistoryEntry
+	// SIZED TO THE PAGE, which is what [readActivity] does over the same
+	// table for the same reason: `limit` is known before the first scan,
+	// and growing from nil reallocates six times on the way to a default
+	// page of [DetailHistoryDefault]. It also holds the rule
+	// [readProjectRows] states at length — an answer's list is `[]` and
+	// never nil — although a task's history has no reachable empty case to
+	// exercise it: a create writes a row, so every task this reader can
+	// find has at least one.
+	out := make([]HistoryEntry, 0, limit)
 	for rows.Next() {
 		var e HistoryEntry
 		var actorKind, fields string
@@ -615,7 +701,8 @@ func readLinks(ctx context.Context, tx *sql.Tx, taskID string) ([]DetailLink, er
 		LEFT JOIN tracker_tasks t ON t.id = %s
 		WHERE %s = ?
 		ORDER BY r.kind, %s`
-	var out []DetailLink
+	// NEVER NIL — see [readHistory] and [readProjectRows].
+	out := []DetailLink{}
 	for _, q := range []struct {
 		statement string
 		derived   bool

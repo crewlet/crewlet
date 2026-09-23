@@ -192,6 +192,22 @@ type Runner struct {
 	fault      error
 	faultSince time.Time
 
+	// drained records that this loop has reached the end of its log at
+	// least once since it started, which is what [Health.Drained] carries.
+	//
+	// THE LOOP IS THE ONLY HONEST WITNESS. Whether a node is behind right
+	// now is a subtraction anybody can do against the stream's last
+	// sequence; whether its rows have ever been the WHOLE state is a fact
+	// about a series, and a reader sampling the lag on a timer can miss
+	// every instant a busy log is empty. This loop cannot: a fetch the
+	// broker answers with nothing, while it holds nothing itself, is that
+	// instant.
+	//
+	// RESET WHEN THE LOOP RESTARTS, beside `stopped` and `fault`, because
+	// an adoption installs a peer's rows under a new history — what this
+	// node drained before says nothing about the one it now applies.
+	drained bool
+
 	// drain is this loop's measured records per second, smoothed.
 	//
 	// # Why it is measured rather than a constant
@@ -325,6 +341,28 @@ func (r *Runner) Fault(now time.Time) (string, bool) {
 		r.faultSince.UTC().Format(time.RFC3339)), true
 }
 
+// Drained reports whether this loop has reached the end of its log at least
+// once since it started — the fact [Health.Drained] carries, and the one
+// question about this applier that no single reading of the lag can answer.
+//
+// IT NEVER GOES BACK TO FALSE while the loop runs. A node that drained and is
+// now a thousand records behind has still held the whole state once, which is
+// what a snapshot gate is asking about; what makes such a node a bad donor is
+// the DISTANCE, and that is [Health.Lag]'s question, measured separately.
+func (r *Runner) Drained() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.drained
+}
+
+// markDrained records that the broker answered this loop's fetch with nothing
+// while it held nothing itself, which is this node being level with the log.
+func (r *Runner) markDrained() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.drained = true
+}
+
 // Deferred is the earliest record this node holds and cannot decode, and false
 // when it holds none.
 func (r *Runner) Deferred() (Deferral, bool) {
@@ -450,6 +488,10 @@ func (r *Runner) Op(ctx context.Context, opID string) (Position, bool, error) {
 func (r *Runner) Run(ctx context.Context) error {
 	r.mu.Lock()
 	r.stopped, r.fault, r.faultSince = nil, nil, time.Time{}
+	// AND THE DRAIN LATCH, for the reason its own field states: a restart
+	// here is an adoption or a re-anchor, and a drain of the history this
+	// loop used to apply is not a claim about the one it is about to.
+	r.drained = false
 	r.mu.Unlock()
 
 	var w *store.Writer
@@ -520,7 +562,11 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		if len(run) == 0 {
 			// THE BROKER ANSWERED, with nothing: whatever was wrong
-			// is not wrong now.
+			// is not wrong now. It is also the one moment this node
+			// can prove its rows are the WHOLE state rather than a
+			// prefix of it — nothing is pending and nothing is in
+			// hand — so it is where the drain latch is set.
+			r.markDrained()
 			r.recovered(ctx)
 			pause = 0
 			continue

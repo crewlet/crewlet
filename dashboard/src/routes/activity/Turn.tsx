@@ -608,7 +608,17 @@ export function turnFacts(view: TurnView): Fact[] {
       label: "Seat",
       // The chip is its own link, so the fact carries no `path`: an anchor
       // inside the fact's own anchor is markup no browser agrees about.
-      value: view.role ? <SeatChip name={view.role} handle={view.role} /> : "the engine",
+      //
+      // `agent` WITHOUT ASKING THE CHART, and it is a fact rather than a
+      // default: a turn is what the engine RUNS, and it never runs a human
+      // seat — so the seat on a turn is an agent seat by construction.
+      // Stated so the solid disc reads as the answer rather than as a kind
+      // nobody threaded.
+      value: view.role ? (
+        <SeatChip name={view.role} handle={view.role} kind="agent" />
+      ) : (
+        "the engine"
+      ),
     },
     {
       // A RUNNING TURN HAS NO OUTCOME, and `outcomeOf` says so with an empty

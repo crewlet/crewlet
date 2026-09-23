@@ -287,6 +287,13 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
             bars={bars}
             bucket={bucket}
             total={rows.length}
+            noun="turn"
+            // THE PAGE'S OWN COUNT, which is what the caption above already
+            // says: these bars are folded from the turns this screen is
+            // holding rather than counted by the engine over the window.
+            over="loaded"
+            axis
+            now={now}
             onPick={range.set}
             label="Turns over the window"
           />

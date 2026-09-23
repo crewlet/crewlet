@@ -82,7 +82,22 @@
      427–443px: below the floor this number exists to hold, at twenty widths
      of window, with nothing to report it. The floor is what was measured; the
      threshold is arithmetic over it, the chrome AND the density, and it has
-     to be redone whenever any of the three moves. */
+     to be redone whenever any of the three moves.
+
+     AND THE BOARD'S OWN 1500 DOES NOT GOVERN IT. A second threshold was
+     measured once, from the tracker's board: three panes are the rail, the
+     sidebar and the peek, what is left is the board, a lane is 292 and at
+     1280 exactly one lane was left — "which is not a board" — so the peek
+     should overlay below about 1500. That measurement was about a peek this
+     SCREEN owned, as a column of its own body grid, and the rules enforcing
+     it matched an attribute nothing ever set; they have been deleted from
+     screens.css. The peek is the frame's now, one threshold for every screen,
+     so the quantity it turns on has to be the one common to all of them — a
+     LIST too narrow to read, which nothing can rescue. A board has its own
+     answer to a narrow body and it is horizontal scroll: lanes keep their
+     width and the reader pushes them, which is what `.work-board` does. A
+     list cannot scroll sideways without becoming unreadable, so the list is
+     what sets this number. */
   --peek-drawer-max: 1200px;
 }
 
@@ -1354,6 +1369,32 @@
   z-index: 1;
 }
 
+/* A SECOND AXIS IS A BAND INSIDE A BAND, and the indent is what says which is
+   which: a sub-band at the same inset as its parent reads as a sibling, so an
+   answer cut two ways would look like one cut once with twice as many
+   headings. It drops the raised ground as well as the inset — two stacked
+   heads in one fill are one block with a line through it — and gives up the
+   uppercase register, because the deeper heading is the more specific one and
+   a shout at both levels ranks neither. */
+.grid-band .grid-band > .grid-band-head {
+  padding-left: calc(var(--space-3) + var(--space-4));
+  background: var(--surface-panel);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: var(--fw-medium);
+  /* `--text-muted` IS THE READABLE RUNG — this sheet's aliases are one step
+     off the package's, so it resolves to `--color-text-tertiary` at 6.63:1.
+     See the note at `.props-empty`; there is no `--text-tertiary` here. */
+  color: var(--text-muted);
+}
+
+/* AND A SUB-BAND DRAWS NO RULE ABOVE ITSELF. `.grid-band + .grid-band` is the
+   line between two groups; inside one group it would cut the group in half at
+   every sub-heading, which is the boundary the indent already draws. */
+.grid-band .grid-band + .grid-band {
+  border-top: none;
+}
+
 .grid-band-count {
   margin-left: auto;
   color: var(--text-muted);
@@ -1366,6 +1407,17 @@
   font-size: var(--fs-3xs);
   color: var(--text-muted);
   background: var(--surface-raised);
+}
+
+/* THE WAY INTO WHAT A BAND DID NOT FIT. A band carries a page of a count the
+   engine made over the whole group, so the foot is where the rest of it is
+   reachable from — and the link is a standalone call to action on its own
+   line, drawn by its container exactly as the board's column foot is. */
+.grid-band-foot a {
+  color: var(--accent-ink);
+}
+.grid-band-foot a:hover {
+  color: var(--text);
 }
 
 .grid-foot {
@@ -1390,6 +1442,41 @@
   color: var(--accent-ink);
   cursor: pointer;
   text-align: left;
+}
+
+/* ---- The column chooser --------------------------------------------------
+   `ColumnChooser`'s, and it lives here rather than in screens.css because the
+   control does: the work list's Display menu drew it first, and the projects
+   directory draws the SAME component over its own columns — a grid with an
+   optional column and no chooser is a column nobody can reach, which is what
+   `#/work/projects` shipped as when Unit became optional. Two checkbox lists
+   over one rule is how the two would start disagreeing about what an empty
+   `cols=` means. */
+.grid-cols-label {
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+/* TWO COLUMNS, because a chooser is a list of short words and a single file of
+   them makes a menu as tall as the grid has columns — twelve on the work
+   table. */
+.grid-cols-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1) var(--space-3);
+}
+.grid-cols-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* THE POINTER TARGET IS THE ROW, not the box: a 13px checkbox is under the
+     minimum on a phone, and the label is what a reader aims at. */
+  min-height: var(--size-target-min);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
 }
 
 /* ---- Cells -------------------------------------------------------------- */
@@ -1693,6 +1780,30 @@
   border-top: none;
 }
 
+/* A GROUP NOBODY HAS FILLED IN ANYWHERE, said once across both columns. Its
+   heading stays above it — the group exists and is empty, which is not the
+   same claim as an object that has no such group — and this is the sentence
+   the CALLER wrote for it. See PropertiesRail's own doc for why the rail does
+   not decide this for itself.
+
+   `--text-muted` IS THE READABLE RUNG HERE, and the name is the trap. This
+   sheet's aliases are one step off the token package's: `uilet.css` maps
+   `--text-muted` to `--color-text-tertiary` (6.63:1 light, 7.01:1 dark) and
+   `--text-faint` to `--color-text-muted` (~3:1, the non-text floor). So the
+   palette doc's rule — words a reader has to read take
+   `--color-text-tertiary`, never `--color-text-muted` — is kept by the line
+   BELOW and broken by `--text-faint`, which is what `styles/rungs.test.ts`
+   fails on in both directions. There is no `--text-tertiary` in this tree:
+   reaching for that spelling names a property nothing declares, which
+   `styles/tokens.test.ts` fails on and which the browser drops whole, taking
+   the colour with it rather than falling back. This is a sentence, so it sits
+   at the same rung as every other empty state in the product. */
+.props-empty {
+  grid-column: 1 / -1;
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
 /* WHO SET IT, under the value rather than beside it: the value is what the
    reader came for and the provenance is why they stayed. A line of its own so
    a long actor name cannot push the value out of the column. */
@@ -1701,6 +1812,27 @@
   margin-top: 2px;
   font-size: var(--fs-3xs);
   color: var(--text-muted);
+}
+
+/* THE `turn ↗` LINK IS ONE TOKEN, in the fact line and in the rail alike —
+   both render [SetByLine], so this is one rule rather than two that drift.
+
+   THE ARROW WAS ON A LINE OF ITS OWN, at every width, and no `white-space`
+   could have stopped it: `.t-link` already carries `nowrap`, and what breaks
+   here is not a wrap. `base.css` gives every `svg` `display: block` — right,
+   because the product's glyphs are overwhelmingly flex items and that is what
+   removes the inline baseline gap — and a BLOCK box inside an inline box
+   splits the inline box around it (CSS 2.1 § 9.2.1.1), so the anchor was cut
+   in two and the glyph took the second half. An inline-flex anchor has a
+   formatting context of its own, so the word and the arrow are one atomic
+   box that cannot be split or wrapped between. `align-items: center` is the
+   product's own convention for a glyph beside a word (`.work-type`,
+   `.work-prio`, uilet's own buttons), and the gap is in `em` so it tracks the
+   line's type step rather than the spacing scale, which is about layout. */
+.setby-turn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
 }
 
 /* ---- The log's time axis --------------------------------------------------
@@ -1752,6 +1884,48 @@ button.histogram-bar[data-empty]:hover {
 .histogram-bar:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
+}
+
+/* THE DATES UNDER THE BARS, which is the half that makes the plot an axis. A
+   seven-day window holding one busy day drew a single bar hard against the
+   right edge of an empty box with nothing beneath it — which reads as a chart
+   that failed to load rather than as a company that was quiet until yesterday.
+
+   THE BORDER ABOVE IS THE AXIS LINE. `.histogram`'s own `border-bottom` already
+   rules it, so the ticks hang under that rule rather than drawing a second one.
+
+   ABSOLUTE, so a tick sits over the bucket it names. The labels are wider than
+   the bars they point at — five dates over ninety columns — so laid out in flow
+   they would push each other along the row and every one but the first would
+   name a bucket it is nowhere near. `ui/Histogram.tsx` computes each one's
+   percentage from its own bar index and pins the two ends to the edges, which
+   is the one place a centred label would hang off the card.
+
+   NO COLOUR OF ITS OWN: an axis label is ink, and the chart's one accent is
+   spent on the bars. */
+.histogram-figure {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.histogram-axis {
+  position: relative;
+  /* THE ROW IS AS TALL AS ONE LABEL, stated rather than left to the absolutely
+     positioned children — which contribute no height at all, so without this
+     the chart and whatever follows it would overlap. */
+  height: calc(var(--fs-3xs) * var(--lh-normal));
+  margin-top: 2px;
+}
+
+.histogram-tick {
+  position: absolute;
+  top: 0;
+  font-size: var(--fs-3xs);
+  color: var(--text-muted);
+  /* A COLUMN OF TIMES LINES UP or it reads as a jitter in the axis itself. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* ---- Facets --------------------------------------------------------------
@@ -2055,6 +2229,30 @@ button.histogram-bar[data-empty]:hover {
      the longest single word the product declares today, CONVERSATION, is
      93.09px and never breaks. `anywhere` puts the min-content size at one
      character, so the basis is what the box IS, whatever a head says. */
+  /* AND A CELL WITH NOTHING IN IT IS NOT A LINE.
+     A column draws no value on a row that has none — `PriorityMark` returns
+     null for `normal`, which is what nearly every task is, and the same is
+     true of any mark whose whole rule is "nothing is drawn for the default".
+     In a table that cell is an empty track under a head, which is correct and
+     is what keeps the row's columns lined up. Here the head is gone and the
+     label is the cell's own, so the card opened with `PRIORITY` on a line by
+     itself with nothing beside it, on every ordinary row — the labelled form
+     of the dashed placeholder the board card already stopped drawing.
+
+     `:empty` IS THE ONLY THING THAT KNOWS. A container cannot ask a child that
+     drew nothing whether it did, which is why the board card asks a predicate
+     BEFORE rendering and pays for it by restating each mark's emptiness rule —
+     a price worth paying there, because the foot is a box that must not exist.
+     Here the cell exists either way (the wide layout's tracks are positional,
+     so dropping the element would move every later value one column left), and
+     the browser has already rendered it: `:empty` is it answering. Generated
+     content is not a child node, so the `::before` below does not defeat this
+     — and a cell that draws an em dash or any other marked absence HAS content
+     and stays, which is the distinction `EmptyValue` exists to make. */
+  .grid-cell:empty {
+    display: none;
+  }
+
   .grid-cell[data-label]::before {
     content: attr(data-label);
     flex: 0 0 7rem;

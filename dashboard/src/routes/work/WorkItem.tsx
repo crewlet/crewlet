@@ -38,7 +38,16 @@ import {
   TypeIcon,
   type RowChrome,
 } from "~/components/work.tsx";
-import { Callout, Card, EmptyState, InlineCode, Skeleton, Tabs, Tag } from "@crewlethq/ui";
+import {
+  Callout,
+  Card,
+  EmptyState,
+  EmptyValue,
+  InlineCode,
+  Skeleton,
+  Tabs,
+  Tag,
+} from "@crewlethq/ui";
 import {
   DeleteGlyph,
   ArrowForwardGlyph,
@@ -57,7 +66,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { Mark } from "~/ui/glyph.tsx";
 import { plainText } from "~/lib/markdown.ts";
 import { fmtDate, fmtDateTime, fmtCount, fmtDuration, relTime } from "~/lib/format.ts";
@@ -69,6 +78,7 @@ import {
   fieldValueState,
   fieldValueText,
   fmtMinutes,
+  type LabelContext,
   typeIcon,
   typeName,
 } from "~/lib/work.ts";
@@ -92,6 +102,7 @@ import type {
   WorkRoutingAnswer,
   WorkSummary,
   WorkTombstone,
+  WorkUnitRef,
 } from "~/protocol/index.ts";
 
 /**
@@ -187,17 +198,26 @@ export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number })
 }
 
 /**
- * The six facts a task is read by, in one order, on its page and in the rail.
+ * The five facts a task's PAGE is read by, in the rail's own order.
  *
- * ONE FUNCTION rather than two lists that happen to agree today. The page and
- * the peek are one definition of what a task shows — see this file's own doc —
- * and a header written twice is two orders as soon as somebody adds a seventh
- * fact, with the drift landing on the page nobody reads forty times a day.
+ * THE PAGE'S, AND NOT THE PEEK'S, and that is the whole of the difference
+ * between the two frames now. On the page `.work-item` puts the properties
+ * rail in a sticky side column BESIDE the body, so the header's line and the
+ * rail's rows are read across a gap — two readings of one object, the line to
+ * scan and the rows to study, which is what the fact line is for. In the peek
+ * there is one 420px column and the rail is a hundred pixels UNDER the header,
+ * so the same facts in both put Status, Type and Assignee on the screen twice
+ * within a screenful, before the description has been reached at all. A
+ * stacked header and rail are one reading. See [ObjectHeader]'s own doc, and
+ * [ItemPeek], which passes no facts.
+ *
+ * ONE FUNCTION rather than two lists that happen to agree today: what the page
+ * heads with and what the rail leads with are one order, so a sixth fact
+ * cannot land in one and not the other.
  *
  * THEY ARE THE PROPERTIES RAIL'S OWN LEADING ROWS, in the rail's own order:
  * status, priority and type out of State, the assignee out of People, the due
- * date out of Plan. A reader who scans the header and then the rail below it
- * is reading one object rather than re-learning it.
+ * date out of Plan.
  *
  * NO `setBy` HERE, deliberately, although a [Fact] carries one: who last moved
  * a field is what the rail answers row by row, and the same attribution drawn
@@ -206,7 +226,11 @@ export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number })
  *
  * AN ABSENT PRIORITY, TYPE OR DUE DATE IS DROPPED rather than dashed — a
  * [FactLine] renders no line for an undefined value — because a fresh task has
- * none of the three and a header of em dashes says less than a shorter one.
+ * none of the three and a header of en dashes says less than a shorter one.
+ * `none` is DROPPED here too, under the product's "nothing is drawn for the
+ * default" rule, where the rail's row states it as a word: a line that is
+ * scanned and a row that answers "what is this set to" are different
+ * questions, and the same value belongs in only one of the answers.
  * The assignee is the exception and is always drawn: nobody holding a task is
  * an answer a reader comes to this line for, stated in the rail's own words.
  */
@@ -221,14 +245,20 @@ function itemFacts({
 }): Fact[] {
   const item = detail.task;
   const seatName = chrome.seatName ?? ((handle: string) => handle);
+  // AND THE KIND BESIDE IT, because a chip draws the dashed ring off it. An
+  // absent resolver answers `undefined`, which is the neutral disc — the same
+  // fallback an unresolved handle takes.
+  const seatKind = chrome.seatKind ?? (() => undefined);
   return [
     { label: "Status", value: <StatusBadge status={item.status} defs={chrome.statuses} /> },
     {
       label: "Priority",
-      // THE RAIL'S OWN CONDITION. `none` is the absence of a priority and
-      // `normal` is a priority somebody chose, which is why the word is asked
-      // for: a properties line answering "what is this set to" reads "normal"
-      // where a board card draws nothing at all.
+      // NOTHING IS DRAWN FOR THE DEFAULT, which is what a header line is for:
+      // `none` and `normal` are both what a task gets when nobody has decided,
+      // and a fact line carrying them on every task buries the one that is
+      // urgent. The rail's row is the other question — what is this set to —
+      // and answers `none` with the word. `word` is still asked for here
+      // because `normal` IS a choice somebody made when it is drawn at all.
       value:
         item.priority && item.priority !== "none" ? (
           <PriorityMark priority={item.priority} word />
@@ -238,7 +268,7 @@ function itemFacts({
       label: "Type",
       value: item.type ? (
         <span className="row gap-1">
-          <TypeIcon type={item.type} types={chrome.types} />
+          <TypeIcon type={item.type} types={chrome.types} decorative />
           {typeName(item.type, chrome.types)}
         </span>
       ) : undefined,
@@ -249,7 +279,11 @@ function itemFacts({
       // one way a person appears in a list, avatar and link together, and
       // wrapping it in a second anchor would nest one link inside another.
       value: item.assignee ? (
-        <SeatChip name={seatName(item.assignee)} handle={item.assignee} />
+        <SeatChip
+          name={seatName(item.assignee)}
+          handle={item.assignee}
+          kind={seatKind(item.assignee)}
+        />
       ) : (
         <span className="muted">Unassigned</span>
       ),
@@ -291,7 +325,7 @@ export function WorkItem({ id }: { id: string }) {
   });
 
   const chrome: RowChrome = {
-    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    ...seatResolvers(index),
     types: project.data?.types,
     statuses: project.data?.statuses,
   };
@@ -397,9 +431,17 @@ export function WorkItem({ id }: { id: string }) {
  * a second copy of them here is how the tracker's peek came to be the only
  * peek in the product.
  *
- * AND THE HEADER IS THE PAGE'S, one size down — the same [ObjectHeader] over
- * the same [itemFacts], so the two frames of one task cannot come to name the
- * same six things in two orders.
+ * AND THE HEADER IS THE PAGE'S, one size down — the same [ObjectHeader],
+ * carrying the same identity and the same state marks, so the two frames of
+ * one task cannot come to head it two ways.
+ *
+ * WITH NO FACTS, WHICH IS THE ONE THING IT DOES NOT SHARE. A header and a
+ * properties rail stacked in ONE 420px column are one reading: the header's
+ * line said Status, Type and Assignee and the rail said all three again about
+ * a hundred pixels below it, so a third of the panel above the fold was the
+ * same answer twice and the description started under it. The page keeps its
+ * fact line because there the rail is in a column beside the header rather
+ * than under it. See [itemFacts].
  *
  * IT RESOLVES ITS OWN PEOPLE, like every other peek in the product. It used
  * to take a [RowChrome] instead, and the frame is what mounts it — from a
@@ -425,7 +467,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
   // THE PAGE'S OWN CHROME, built from the same two reads: the chart for the
   // names and the project for its vocabulary.
   const inner: RowChrome = {
-    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    ...seatResolvers(index),
     types: project.data?.types,
     statuses: project.data?.statuses,
   };
@@ -442,8 +484,11 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
               {/* THE PAGE'S OWN HEADER, one size down. It used to be a type
                   glyph, a mono key, a title line and a row of badges written
                   out here — four pieces of the page, re-drawn, which is how
-                  the two frames of one task came to say the same facts in two
-                  orders. */}
+                  the two frames of one task came to head it two ways.
+
+                  IDENTITY AND STATE MARKS ONLY: no `facts`, because the rail
+                  below is in the SAME column and states every one of them
+                  once. See this component's own doc. */}
               <ObjectHeader
                 size="peek"
                 kind="Item"
@@ -451,7 +496,6 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 identifier={item.key}
                 title={item.title}
                 status={itemFlags(state.data)}
-                facts={itemFacts({ detail: state.data, chrome: inner, now })}
               />
               <div className="col gap-3">
                 {item.removed && <RemovedNote tomb={item.removed} now={now} />}
@@ -534,7 +578,16 @@ export function Subtasks({
   }
   if (rows.length === 0) return null;
   return (
-    <Card padding="none">
+    // THE LIST MEASURES ITS OWN BOX, NOT THE WINDOW. `.work-rows` declares
+    // eight tracks and drops to four inside a VIEWPORT query, so a subtask
+    // list in a 420px peek on a 1848px screen gets all eight: 90px of fixed
+    // tracks, seven gaps and four content-sized cells resolve before the
+    // title's `minmax(0, 1fr)`, and the title — the only thing on the row that
+    // says what the subtask IS — is starved to almost nothing. A row's columns
+    // belong to the list, and how wide the list is has never been a fact about
+    // the window. `.work-subtasks` is the size container the rule keys on, so
+    // one declaration serves the peek, the page and a phone.
+    <Card padding="none" className="work-subtasks">
       <Card.Header count={rows.length}>
         <Card.Title>Subtasks</Card.Title>
       </Card.Header>
@@ -635,6 +688,29 @@ export function ItemBody({
   const comments = detail.comments ?? [];
   const history = detail.history ?? [];
 
+  // WHAT A RELATION'S OTHER END IS CALLED, on the chrome the two history
+  // surfaces hand `describeHistory`.
+  //
+  // A re-parent, a cascade removal and every relation delta name the other
+  // task by its ID — a key belongs to that task's own row, and a history row
+  // is written once by every node and repaired by nothing — so the answer
+  // resolves what this node holds and the sentence reads it from here. Without
+  // it these two tabs printed `Parent: 1d573f85-… → 50a01576-…` while
+  // `#/work/history`, which builds the same context from `work_activity`'s own
+  // map, printed `Parent: — → ENG-1` for the same commit.
+  //
+  // BUILT ONCE, HERE, because both tabs ask the same question of the same
+  // answer: built per tab they are two places for one resolver to be dropped,
+  // and each renders perfectly on its own while disagreeing with the other.
+  //
+  // AN UNRESOLVED ID FALLS THROUGH TO ITSELF — `deltaValue` reads
+  // `taskKey(id) || id` — which is the honest degradation for an id past the
+  // answer's cap or on a task this node has not applied.
+  const labels: RowChrome & LabelContext = {
+    ...chrome,
+    taskKey: (id) => detail.keys?.[id] ?? "",
+  };
+
   return (
     <>
       <BodySection title="Description" flush={flush}>
@@ -675,7 +751,13 @@ export function ItemBody({
                 </a>
               )}
               <span className="spacer" />
-              {entry.assignee && <Assignee handle={entry.assignee} seatName={chrome.seatName} />}
+              {entry.assignee && (
+                <Assignee
+                  handle={entry.assignee}
+                  seatName={chrome.seatName}
+                  seatKind={chrome.seatKind}
+                />
+              )}
             </div>
           ))}
         </Card>
@@ -719,9 +801,9 @@ export function ItemBody({
         {tab === "comments" ? (
           <Thread comments={comments} chrome={chrome} now={now} more={detail.comments_cursor} />
         ) : tab === "woke" ? (
-          <Woke history={history} chrome={chrome} now={now} record={record} onPick={setRecord} />
+          <Woke history={history} chrome={labels} now={now} record={record} onPick={setRecord} />
         ) : (
-          <History detail={detail} chrome={chrome} now={now} />
+          <History detail={detail} chrome={labels} now={now} />
         )}
       </Card>
       {/* THE READ-ONLY PRODUCT'S ANSWER TO AN EDIT BUTTON. Closed by default:
@@ -766,6 +848,7 @@ function Thread({
             <SeatChip
               name={chrome.seatName?.(comment.author) ?? comment.author}
               handle={comment.author}
+              kind={chrome.seatKind?.(comment.author)}
             />
             <span className="muted" title={fmtDateTime(comment.created_at)}>
               {relTime(comment.created_at, now)}
@@ -806,7 +889,8 @@ function History({
   now,
 }: {
   detail: WorkItemDetail;
-  chrome: RowChrome;
+  /** The chart's resolvers AND the answer's own key map — see [ItemBody]. */
+  chrome: RowChrome & LabelContext;
   now: number;
 }) {
   const history = detail.history ?? [];
@@ -889,7 +973,8 @@ function Woke({
   onPick,
 }: {
   history: WorkChange[];
-  chrome: RowChrome;
+  /** The chart's resolvers AND the answer's own key map — see [ItemBody]. */
+  chrome: RowChrome & LabelContext;
   now: number;
   record: string;
   onPick: (id: string) => void;
@@ -984,7 +1069,11 @@ export function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome:
         {answer.recipients.map((r) => (
           <div key={r.handle} className="thread-entry">
             <div className="row gap-1">
-              <SeatChip name={chrome.seatName?.(r.handle) ?? r.handle} handle={r.handle} />
+              <SeatChip
+                name={chrome.seatName?.(r.handle) ?? r.handle}
+                handle={r.handle}
+                kind={chrome.seatKind?.(r.handle)}
+              />
               <span className="spacer" />
               {/* WHETHER IT ASKED IS ITS OWN MARK, never a tint on the reason.
                   Folded into the reason chip's colour it made the chip say two
@@ -1090,6 +1179,7 @@ export function ItemProps({
     return map;
   }, [project]);
   const seatName = chrome.seatName ?? ((h: string) => h);
+  const seatKind = chrome.seatKind ?? (() => undefined);
   const spend = item.spend;
 
   // WHO SET EACH OF THESE, from the change log the page already holds. See
@@ -1098,9 +1188,16 @@ export function ItemProps({
   // than borrowing the oldest one still visible.
   const now = useNow();
   const setBy = useMemo(() => attribution(detail.history), [detail.history]);
+  // NAMED THE WAY THE ROWS BESIDE IT NAME PEOPLE. The change log carries a
+  // handle, and the line rendered it raw — `agent-ceo · 21h ago` under a
+  // value whose Reporter row said "Agent CEO" — while the History tab one
+  // card down resolved the same actor through the chart. One person, two
+  // names, on one screen.
   const by = (field: ChangeField): SetBy | undefined => {
     const who = setBy.get(field);
-    return who ? { ...who, ago: who.at ? relTime(who.at, now) : undefined } : undefined;
+    return who
+      ? { ...who, actor: seatName(who.actor), ago: who.at ? relTime(who.at, now) : undefined }
+      : undefined;
   };
 
   // EVERY ROW SAYS WHICH KIND OF ABSENCE IT HAS. A property left out of the
@@ -1108,6 +1205,37 @@ export function ItemProps({
   // nothing, and renders the dash; one whose empty state means something says
   // that instead. See [PropertiesRail].
   const groups: PropertyGroup[] = [
+    {
+      // NO HEADING, AND FIRST. The project is the task's ADDRESS rather than
+      // its state, its people or its plan — which company workspace this piece
+      // of work lives in — so it heads the rail the way a page's container
+      // does, above the groups that describe the task itself.
+      //
+      // THE PEEK IS WHY IT HAD TO BE A ROW. The page reaches the project from
+      // the page bar's "Open on the board →"; the peek renders no page bar, so
+      // the only trace of the project in the panel was the `LEAD` prefix
+      // inside the key, which a reader who does not already know the key
+      // grammar cannot read and cannot follow.
+      properties: [
+        {
+          label: "Project",
+          // THE NAME WITH THE KEY BESIDE IT: the name is what a person calls
+          // it and the key is what every item, board and link is addressed by,
+          // and a row carrying only one of the two makes the reader translate.
+          // The project read is the same one that supplies this rail's
+          // vocabulary, so a panel that is still loading shows the key alone
+          // rather than waiting.
+          value: (
+            <span className="row gap-2">
+              {project?.name || item.project}
+              {project?.name && <span className="mono">{item.project}</span>}
+            </span>
+          ),
+          path: ["work", item.project],
+          setBy: by("project"),
+        },
+      ],
+    },
     {
       name: "State",
       properties: [
@@ -1118,17 +1246,34 @@ export function ItemProps({
         },
         {
           label: "Priority",
-          value:
-            item.priority && item.priority !== "none" ? (
-              <PriorityMark priority={item.priority} word />
-            ) : undefined,
+          // `none` IS A VALUE THE ENGINE MINTS, not an absence: a create
+          // defaults the field to it and the applier records the delta, so the
+          // change log carries "somebody set this" about a row that used to
+          // render as a dash — a blank with an attribution under it, which is
+          // the engine and the dashboard disagreeing on one screen.
+          // `internal/tracker/policy.go` states it: "PriorityNone is the
+          // default and is a real value rather than an absent one: 'nobody has
+          // said' and 'explicitly not urgent' are the same fact here." A rail
+          // answers what the field is SET TO, so it answers with the word —
+          // the same reasoning this rail already applied to `normal`. An
+          // absent priority is a different case and still dashes: no value
+          // reached this build at all.
+          value: !item.priority ? undefined : item.priority === "none" ? (
+            // NOT A [PriorityMark]: the mark is the four-step SCALE, drawn as
+            // a shape so it reads without its colour, and `none` is not a step
+            // on it. A glyph here would put an elevation beside a task that
+            // has none.
+            <span>none</span>
+          ) : (
+            <PriorityMark priority={item.priority} word />
+          ),
           setBy: by("priority"),
         },
         {
           label: "Type",
           value: item.type ? (
             <span className="row gap-1">
-              <TypeIcon type={item.type} types={chrome.types} />
+              <TypeIcon type={item.type} types={chrome.types} decorative />
               {typeName(item.type, chrome.types)}
             </span>
           ) : undefined,
@@ -1142,7 +1287,11 @@ export function ItemProps({
         {
           label: "Assignee",
           value: item.assignee ? (
-            <SeatChip name={seatName(item.assignee)} handle={item.assignee} />
+            <SeatChip
+              name={seatName(item.assignee)}
+              handle={item.assignee}
+              kind={seatKind(item.assignee)}
+            />
           ) : (
             <span className="muted">Unassigned</span>
           ),
@@ -1151,8 +1300,13 @@ export function ItemProps({
         {
           label: "Reporter",
           value: item.reporter ? (
-            <SeatChip name={seatName(item.reporter)} handle={item.reporter} />
+            <SeatChip
+              name={seatName(item.reporter)}
+              handle={item.reporter}
+              kind={seatKind(item.reporter)}
+            />
           ) : undefined,
+          setBy: by("reporter"),
         },
         // DROPPED rather than dashed: a task nobody is collaborating on has
         // no collaborators, which is not the same as an empty set of them.
@@ -1163,10 +1317,20 @@ export function ItemProps({
                 value: (
                   <span className="row wrap gap-1">
                     {(item.collaborators ?? []).map((handle) => (
-                      <SeatChip key={handle} name={seatName(handle)} handle={handle} />
+                      <SeatChip
+                        key={handle}
+                        name={seatName(handle)}
+                        handle={handle}
+                        kind={seatKind(handle)}
+                      />
                     ))}
                   </span>
                 ),
+                // WHO LAST CHANGED THE SET, which is the honest claim a set
+                // can carry: the log records the whole membership on each
+                // side, so the line names the person who moved it and never
+                // which member they added.
+                setBy: by("collaborators"),
               },
             ]
           : []),
@@ -1178,7 +1342,7 @@ export function ItemProps({
                   <span className="row wrap gap-1">
                     {(item.watchers ?? []).map((handle) => (
                       <span key={handle} className="row gap-1">
-                        <SeatChip name={seatName(handle)} handle={handle} />
+                        <SeatChip name={seatName(handle)} handle={handle} kind={seatKind(handle)} />
                         {/* MUTED IS NOT THE SAME AS NOT WATCHING, and both
                             travel: a set that carried only the difference
                             would silently re-add everybody on the next
@@ -1190,6 +1354,10 @@ export function ItemProps({
                     ))}
                   </span>
                 ),
+                // `watchers` AND NOT `muted`, although the row draws both: a
+                // property carries one line, and who last changed who is
+                // WATCHING is the one a reader of this row is asking for.
+                setBy: by("watchers"),
               },
             ]
           : []),
@@ -1197,6 +1365,14 @@ export function ItemProps({
     },
     {
       name: "Plan",
+      // NOTHING SCHEDULED IS ONE FACT, NOT FOUR. Every row here is a DASH when
+      // unset rather than dropped — a task has a due date, unset, which is not
+      // the same as a task that cannot have one — and on a fresh task that is
+      // a heading, a hairline and four dashes saying one thing four times,
+      // most of the vertical space between the header and the description in
+      // a peek. The group says it once and the reader still learns it. The
+      // rows come back the moment any one of them is filled.
+      whenAllAbsent: "Nothing scheduled: no dates, no estimate, no size.",
       properties: [
         {
           label: "Start",
@@ -1245,11 +1421,20 @@ export function ItemProps({
       name: "Fields",
       properties: (detail.fields ?? []).map((field) => {
         const state = fieldValueState(field);
+        // AN UNSET FIELD TAKES THE RAIL'S OWN ABSENCE, not the dash a list
+        // cell draws. `fieldValueText` answers `EMPTY_VALUE` for a value that
+        // is not there, which is right in a grid column and wrong here: the
+        // rail's mark carries "Not set" with it, and a bare en dash in a cell
+        // says nothing at all to a reader who cannot hover it. The row cannot
+        // simply be given no `value`, because the state word — undeclared,
+        // archived, from another tracker — is a fact about the DECLARATION
+        // and stays true of a field nobody has filled in.
+        const unset = field.value === null || field.value === undefined || field.value === "";
         return {
           label: field.name || field.slug || field.id,
           value: (
             <>
-              {fieldValueText(field, defs, seatName)}
+              {unset ? <EmptyValue label="Not set" /> : fieldValueText(field, defs, seatName)}
               {state && <span className="work-field-state">{state}</span>}
             </>
           ),
@@ -1294,7 +1479,7 @@ export function ItemProps({
           {
             label: "Filed into",
             value: item.filed_unit ? (
-              <span className="truncate">{item.filed_unit}</span>
+              <UnitValue unit={detail.units?.filed} stored={item.filed_unit} />
             ) : (
               <span className="muted">no unit</span>
             ),
@@ -1303,7 +1488,13 @@ export function ItemProps({
           // and it is shown only where it has MOVED, because the pair being
           // equal is the ordinary case and repeating it is noise.
           ...(item.routing_unit && item.routing_unit !== item.filed_unit
-            ? [{ label: "Routes to", value: item.routing_unit }]
+            ? [
+                {
+                  label: "Routes to",
+                  value: <UnitValue unit={detail.units?.routing} stored={item.routing_unit} />,
+                  setBy: by("routing_unit"),
+                },
+              ]
             : []),
           ...((item.former_keys ?? []).length > 0
             ? [
@@ -1319,6 +1510,40 @@ export function ItemProps({
   }
 
   return <PropertiesRail groups={groups} />;
+}
+
+/**
+ * A team this item names, as a person reads it and as a link to its work.
+ *
+ * THE NAME IS WHAT IS DRAWN AND THE KEY IS WHAT IS FOLLOWED. What the row
+ * holds is the unit's KEY — its `id` on a company that gave its units one,
+ * a word chosen so that a rename moves nothing and therefore a word nobody
+ * reads — so the panel said `eng` while the same company's board column, which
+ * resolves its heading through the chart, said Engineering. The answer carries
+ * the chart's reading beside the record (`WorkItemDetail.units`) and this
+ * draws that; the address keeps the stored key, which the engine matches
+ * against the whole SET of that team's spellings, so one link reaches the
+ * team's work however each item was filed.
+ *
+ * A REFERENCE THE CHART NO LONGER HAS IS A FINDING, drawn the way the project
+ * directory draws the same one: the stored key in a warning tag, unlinked,
+ * because a team that has left the chart is something to correct rather than
+ * somewhere to go.
+ */
+function UnitValue({ unit, stored }: { unit?: WorkUnitRef; stored: string }) {
+  if (unit && unit.resolved === false) {
+    return (
+      <Tag variant="warning" appearance="outline" title="The current org chart has no such unit">
+        {unit.key || stored}
+      </Tag>
+    );
+  }
+  const key = unit?.key || stored;
+  return (
+    <a className="t-link truncate" href={href(["work"], { unit: key })}>
+      {unit?.name || key}
+    </a>
+  );
 }
 
 /**

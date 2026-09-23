@@ -5,12 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"os"
 	"strings"
 
 	"github.com/google/uuid"
-
-	"github.com/crewlet/crewlet/internal/envref"
 )
 
 // Organization is the whole company: a flexible hierarchy of units, the
@@ -102,9 +99,77 @@ func (o *Organization) Role(name string) *Role {
 }
 
 // Unit returns the unit with this name from anywhere in the tree, or nil.
+//
+// THE DOCUMENT'S OWN RESOLVER, and the exact string is the point: a `lead:`,
+// a `manages:` entry and a root seat's `unit:` are references written inside
+// one document and admitted under [Organization.ValidateAdmission], which
+// refuses a second unit answering to the same folded key — so a reference
+// here either names one unit as written or names nothing, and
+// [Organization.DanglingRefs] reports the second case at the field that
+// carries it.
+//
+// It is NOT the resolver for a reference read back out of a row, a record or
+// a query parameter: that reference was written at some earlier epoch, may
+// carry either spelling of a unit's identity, and is resolved by
+// [Organization.UnitByRef].
 func (o *Organization) Unit(name string) *Unit {
 	for u := range o.AllUnits() {
 		if u.Name == name {
+			return u
+		}
+	}
+	return nil
+}
+
+// UnitByRef resolves a DURABLE unit reference — a value read back out of a
+// row, carried on a record, or typed into a filter — to the unit it names,
+// matching a unit's [Unit.Key] or its [Unit.Name].
+//
+// THE ONE RESOLVER EVERY DURABLE REFERENCE GOES THROUGH, and the two
+// spellings are why it has to exist. What is stored is a unit's key: its id
+// where it has one and its name where it does not. The two are the same
+// string until a founder adds an id, so a row written before that names the
+// unit by name and a row written after it names the same unit by id — and a
+// resolver that matched one spelling would lose every row written under the
+// other, which is the opposite of what an id is for. This is [Unit.ID]'s own
+// promise that "a filter on a unit matches the SET of its id and its name",
+// in the one place that can keep it.
+//
+// CASE-INSENSITIVE, under [foldUnitKey] — the same fold the admission rule
+// claims a key under, never [strings.EqualFold], which is a different fold
+// over real characters in a team name. A unit reference arrives from places
+// nobody spells carefully: a model typing `unit: engineering`, a query string
+// a person wrote, a URL somebody pasted.
+//
+// AN ID WINS AN AMBIGUITY. A reference that is one unit's id and another
+// unit's name resolves to the unit whose ID it is, because an id is chosen
+// once to be the durable handle and a name is prose somebody renames — so the
+// id is the spelling that cannot move, and the unit answering by name is the
+// one that can. The pair is refused as a duplicate key on any document
+// submitted since that rule existed (see [Organization.ValidateAdmission]);
+// this settles what a STORED revision carrying one resolves to, rather than
+// leaving it to walk order.
+//
+// A REFERENCE NAMING NOTHING IS nil, never an error and never a guess. A
+// stored unit may legitimately name a team the chart no longer has, so what
+// that means belongs to the caller: a write refuses it by name, and a read
+// matches the literal rather than widening to everything.
+func (o *Organization) UnitByRef(ref string) *Unit {
+	folded := foldUnitKey(ref)
+	if folded == "" {
+		return nil
+	}
+	// TWO PASSES, and the order is the ambiguity rule. One pass over
+	// [Unit.Key] could not express it: Key falls back to the name, so a
+	// unit named "platform" and a unit with `id: platform` both answer in
+	// the first pass and whichever the walk reached first would win.
+	for u := range o.AllUnits() {
+		if foldUnitKey(u.ID) == folded {
+			return u
+		}
+	}
+	for u := range o.AllUnits() {
+		if foldUnitKey(u.Name) == folded {
 			return u
 		}
 	}
@@ -220,31 +285,19 @@ func (o *Organization) SeatByOperatorID(operatorID string, lookup EnvLookup) *Ro
 	if want == "" {
 		return nil
 	}
-	if lookup == nil {
-		lookup = os.LookupEnv
-	}
+	// THE NIL LOOKUP IS PASSED THROUGH rather than defaulted here:
+	// [HumanContact.ResolvedIdentities] is the one place that decides what
+	// an absent lookup reads, and a second default beside it is a second
+	// thing to keep in step.
 	for r := range o.AllRoles() {
-		// Contact is a POINTER and most seats have none: an agent seat
-		// has no external identities at all, and a human seat that
-		// declares only availability has none either.
-		if r == nil || r.Contact == nil {
-			continue
-		}
-		declared := strings.TrimSpace(r.Contact.CrewletOperatorID)
-		if declared == "" {
-			continue
-		}
-		if name, isRef := envref.Whole(declared); isRef {
-			v, ok := lookup(name)
-			if !ok {
-				continue
-			}
-			declared = strings.TrimSpace(v)
-			if declared == "" {
-				continue
-			}
-		}
-		if strings.ToLower(declared) == want {
+		// THROUGH [Role.ResolvedOperatorID], which is the same walk the
+		// OTHER direction takes. Written out here as well, the two
+		// copies of the `${VAR}` handling were two chances for "whose
+		// seat is this credential" and "which credential is this seat's"
+		// to disagree — and a person whose two answers disagree is bound
+		// for writes and unbound for reads, which is a dashboard that
+		// knows who they are and shows them nothing.
+		if r.ResolvedOperatorID(lookup) == want {
 			return r
 		}
 	}

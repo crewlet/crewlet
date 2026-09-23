@@ -2455,10 +2455,47 @@ func nativePages(e *engine.Engine) queries.PageReader {
 // when it names none, because a seat HAS a unit; an operator does not, so the
 // argument is required and the tool refuses naming it rather than guessing a
 // project on a person's behalf.
+//
+// Which UNIT the work is filed into is not a default of this surface and no
+// longer needs one: the tracker reads it off the project's own row at the
+// write, so an operator's item belongs to the team that owns the project it
+// named. It used to be stamped from the caller's own team, which an operator
+// has not got — so every item filed here read "Filed into: no unit" beside a
+// project page naming its unit.
+// operatorWriter is the node's tracker writer acting as one operator.
+//
+// ONE HELPER FOR THE EIGHT SEAMS BELOW, because turning a tool-layer actor
+// into a writer is a single rule and eight hand-copied spellings of it are
+// eight chances for one seam to carry an identity the other seven do not —
+// which is exactly what happened to [tracker.Provenance.Seat], the field that
+// decides whose person record a write lands on.
+func operatorWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Writer {
+	return w.As(actor.Handle, actor.Kind, tracker.Provenance{
+		// THE CREDENTIAL AND THE PERSON IT NAMES, which are two
+		// different facts: the author stays the token, and the seat is
+		// only ever the subject of that person's own state.
+		OperatorID: actor.OperatorID, Seat: actor.Seat,
+	})
+}
+
 func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	var opts opsmcp.Options
 	if c := e.Company(); c != nil && c.Config != nil {
 		opts.Company = c.Config.Name
+	}
+	// THE CHART, resolved per call because a config apply replaces it —
+	// and wired UNCONDITIONALLY, which it was not. It used to be set only
+	// where the company had a knowledge backend, because `search_knowledge`
+	// was the only tool that read it. WHO THE CALLER IS reads it on every
+	// call now: the same chart says which seat a token is bound to, and
+	// without it a bound founder's own marks, pins and queue were written
+	// under their credential's name instead of theirs.
+	opts.Org = func() *org.Organization {
+		c := e.Company()
+		if c == nil {
+			return nil
+		}
+		return c.Org
 	}
 	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
 		opts.Work = builtin.WorkDeps{
@@ -2469,8 +2506,7 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			// an audit trail, and there is deliberately no way to name a
 			// seat to act as.
 			Writer: func(actor builtin.Actor) builtin.WorkWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return operatorWriter(writer, actor)
 			},
 			// AND THE TWO SEQUENCES, which this surface went
 			// without — so an operator's assistant was refused
@@ -2480,12 +2516,10 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			// estate, which this writer has; nothing else about
 			// them differs from a seat's.
 			Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return operatorWriter(writer, actor)
 			},
 			Merges: func(actor builtin.Actor) builtin.WorkMerger {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return operatorWriter(writer, actor)
 			},
 			// AND THE RANKED SEARCH. It reads, so it takes no actor —
 			// the corpus is the same for everybody and there is nothing
@@ -2496,22 +2530,19 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			// view is furniture a person arranges, and no seat is
 			// given the tools that reach it.
 			ViewWriter: func(actor builtin.Actor) builtin.ViewWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return operatorWriter(writer, actor)
 			},
 			// AND THE CATALOGUE WRITER: the company's own vocabulary is
 			// a person's to set, never a seat's to widen so its own
 			// create succeeds.
 			CatalogueWriter: func(actor builtin.Actor) builtin.CatalogueWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return operatorWriter(writer, actor)
 			},
 			// AND THE PERSON WRITER. Who may write what is the
 			// tracker's own rule; what this surface supplies is the
 			// identity it is judged against.
 			PersonWriter: func(actor builtin.Actor) builtin.PersonWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return operatorWriter(writer, actor)
 			},
 			// AND THE INBOX READ. It takes no actor for the reason
 			// Search takes none — it reads, and whose inbox is an
@@ -2525,16 +2556,14 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			// purge the CLI guards with a typed confirmation. No seat
 			// holds either — see internal/agent/builtin/worktrash.go.
 			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return operatorWriter(writer, actor)
 			},
 			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
 			// this one is on every surface — declaring a tag is open
 			// to every seat — and what an operator adds here is the
 			// credential the archive facet asks for.
 			ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return operatorWriter(writer, actor)
 			},
 			// THE ROSTER, so an operator's assistant is refused a
 			// handle nobody has rather than silently filing work for
@@ -2546,6 +2575,13 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 				}
 				return builtin.Corpus(c.Org)
 			},
+			// AND THE PARTY BEHIND A HANDLE, which the roster above
+			// deliberately does not carry: an operator reading a
+			// person's inbox or their own state is answered about
+			// BOTH the names that person's rows may be filed under,
+			// and the credential is an attribution key rather than
+			// somewhere an agent could mention them.
+			Party: builtin.Parties(opts.Org),
 			// AND THE THREE CHART SEAMS THE SEAT SURFACE HAS AND THIS
 			// ONE WENT WITHOUT. Their absence was invisible and not
 			// harmless: with no Leads, an operator filing an unassigned
@@ -2555,7 +2591,10 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			Leads:          engine.LiveLeads(e),
 			Units:          engine.LiveUnits(e),
 			DefaultProject: func(string) string { return "" },
-			Actor:          opsmcp.WorkActor,
+			// THE SAME CHART DECIDES WHO IS WRITING: a token bound to
+			// a human seat writes that PERSON's own state, while the
+			// author on the record stays the token.
+			Actor: opsmcp.WorkActor(opts.Org),
 			// THE MENTION RESOLVER, which this surface went without: a
 			// comment's @-mention is turned into a wake by the tracker's
 			// recipients only when the writer resolved it, so an
@@ -2579,17 +2618,9 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	// unlike the ten write tools, ranked search over the company's own
 	// wiki is exactly as useful to an operator's assistant on Confluence.
 	if e.Knowledge() != nil {
+		// THE CHART THE SEARCH IS SCOPED AGAINST is already wired
+		// above, for every company rather than only this one.
 		opts.Knowledge = operatorKnowledge{engine: e}
-		// AND THE CHART BESIDE IT. An operator has no turn, so the org
-		// the search is scoped against comes from here; resolved per
-		// call, because a config apply replaces it.
-		opts.Org = func() *org.Organization {
-			c := e.Company()
-			if c == nil {
-				return nil
-			}
-			return c.Org
-		}
 	}
 	// THE LEAD RELATION, which the tracker deliberately does not derive:
 	// it holds no org chart, and one it derived would be a second opinion

@@ -62,14 +62,149 @@ export interface GridColumn<T> {
   optional?: boolean;
 }
 
+/** One column a reader may turn on or off, as a chooser offers it. */
+export interface ColumnChoice {
+  key: string;
+  label: string;
+  /** Off until `cols=` names it. */
+  optional?: boolean;
+}
+
+/**
+ * The choices a chooser offers, DERIVED from the columns a grid draws.
+ *
+ * A chooser holding its own list of names would be a second declaration of the
+ * grid's columns — wrong the first time one is added, and indistinguishable
+ * from a correct one. This takes the three facts a chooser needs off the
+ * columns themselves, so a column added to a grid appears in its menu with no
+ * second edit.
+ *
+ * THE CELL RENDERERS ARE NEVER CALLED. A name and a flag are properties of the
+ * COLUMN, so nothing here touches a row — which is what lets a caller derive
+ * the choices from a column list built over a stub context.
+ */
+export function columnChoicesOf<T>(columns: GridColumn<T>[]): ColumnChoice[] {
+  return columns.map((column) => ({
+    key: column.key,
+    // THE HEAD, OR THE NAME THE COLUMN CARRIES WHERE THE HEAD IS A GLYPH —
+    // which is exactly what [GridColumn.label] is for on the card layout a
+    // narrow grid takes.
+    label:
+      typeof column.header === "string" && column.header
+        ? column.header
+        : (column.label ?? column.key),
+    optional: column.optional,
+  }));
+}
+
+/**
+ * The checkbox list a reader chooses columns with, wherever it is drawn.
+ *
+ * ONE IMPLEMENTATION, because the two rules below are not obvious and a second
+ * copy would have to re-derive both. It was the work list's Display menu
+ * alone; the projects directory now draws the same control beside its segment,
+ * and a screen whose grid has an optional column and no chooser is a column
+ * nobody can reach — which is what `#/work/projects` shipped as when Unit
+ * became optional.
+ *
+ * AN EMPTY `cols=` IS THE DEFAULT SET, NOT AN EMPTY GRID. [DataGrid] reads it
+ * that way, so the boxes have to show the default until somebody moves one —
+ * a chooser that drew an empty value as "nothing ticked" would say the grid is
+ * blank while it is drawing every ordinary column.
+ *
+ * IT WRITES THE DECLARATION ORDER, NEVER THE CLICK ORDER. `cols=` carries an
+ * ORDER as well as a selection, so a value built from a Set's insertion order
+ * would rearrange the grid every time somebody ticked a box.
+ *
+ * The caller owns the KEY: the work list's is per shape (`cols.list=` /
+ * `cols.table=`, since its two column sets declare two orders) and a screen
+ * with one grid takes the bare `cols=` — see [DataGrid]'s own `name` and
+ * `colsName`.
+ */
+export function ColumnChooser({
+  choices,
+  value,
+  onChange,
+  label = "Columns",
+}: {
+  choices: ColumnChoice[];
+  /** `cols=` as it stands, empty for the default set. */
+  value: string;
+  onChange: (cols: string) => void;
+  /** The heading above the boxes, where a menu wants another word. */
+  label?: string;
+}) {
+  if (choices.length === 0) return null;
+  const chosen = new Set(value ? value.split(",").filter(Boolean) : []);
+  return (
+    <>
+      <div className="grid-cols-label">{label}</div>
+      <div className="grid-cols-choices">
+        {choices.map((choice) => {
+          const on = chosen.size === 0 ? !choice.optional : chosen.has(choice.key);
+          return (
+            <label key={choice.key} className="grid-cols-choice">
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={() => {
+                  const next = new Set(
+                    chosen.size === 0
+                      ? choices.filter((c) => !c.optional).map((c) => c.key)
+                      : chosen,
+                  );
+                  if (on) next.delete(choice.key);
+                  else next.add(choice.key);
+                  onChange(
+                    choices
+                      .filter((c) => next.has(c.key))
+                      .map((c) => c.key)
+                      .join(","),
+                  );
+                }}
+              />
+              <span>{choice.label}</span>
+            </label>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
 export interface GridBand<T> {
   key: string;
   label: ReactNode;
+  /**
+   * The axis value's own mark, drawn before the label.
+   *
+   * A SIBLING OF THE LABEL RATHER THAN PART OF IT, because the head is a flex
+   * row with a gap: folded into `label` the mark sits inside the truncating
+   * span, where the gap never reaches it and an ellipsis eventually eats it.
+   * An axis with no mark passes nothing rather than a placeholder.
+   */
+  mark?: ReactNode;
   /** The engine's count over the whole group, where it gave one. */
   total?: number;
   rows: T[];
+  /**
+   * The bands INSIDE this one, where the answer was grouped twice.
+   *
+   * ONE LEVEL, and a band carries rows OR sub-bands, never both — which is the
+   * shape the answer arrives in: sub-groups REPLACE a group's rows exactly as
+   * groups replace the ungrouped ones, because an answer carrying both would be
+   * the same rows twice. A grid that knew only `rows` drew a run of EMPTY bands
+   * over a twice-grouped answer with the rows nowhere at all, which is what the
+   * work table did for as long as its Display menu offered a second axis.
+   */
+  bands?: GridBand<T>[];
   /** A per-band aggregate line. */
   footer?: ReactNode;
+}
+
+/** Every row a band holds, its sub-bands' included, in the order they draw. */
+function bandRows<T>(band: GridBand<T>): T[] {
+  return band.bands ? band.bands.flatMap(bandRows) : band.rows;
 }
 
 /**
@@ -186,6 +321,7 @@ export function DataGrid<T>({
   onLoadMore,
   loadedNote,
   name,
+  colsName,
 }: {
   rows?: T[];
   bands?: GridBand<T>[];
@@ -217,9 +353,26 @@ export function DataGrid<T>({
    * order: inserting a grid above would move every link's meaning by one.
    */
   name?: string;
+  /**
+   * WHICH COLUMN SET this grid's `cols=` names, where that is not `name`.
+   *
+   * The two keys answer two different questions and only usually have one
+   * answer. `sort=` is a fact about the QUESTION — on a server-sorted list the
+   * key goes to the engine, which orders the whole set the same way whatever
+   * draws it — and `cols=` is a fact about the DRAWING. The work screen is
+   * where they come apart: its list and its table are one grid with two column
+   * sets, so the order is shared between them and the column arrangement is
+   * not. A `cols=` carries an ORDER as well as a selection and that order is
+   * the set's own declaration order, so one key read against both sets draws
+   * the list's columns in the table's order — a row nobody arranged.
+   *
+   * Defaults to `name`, which is what every grid with one column set wants.
+   */
+  colsName?: string;
 }) {
   const [sortRaw, setSort] = useParam(name ? `sort.${name}` : "sort", defaultSort);
-  const [colsRaw, setCols] = useParam(name ? `cols.${name}` : "cols", "");
+  const columnSet = colsName ?? name;
+  const [colsRaw, setCols] = useParam(columnSet ? `cols.${columnSet}` : "cols", "");
   const sort = parseSort(sortRaw);
   const body = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(-1);
@@ -267,7 +420,13 @@ export function DataGrid<T>({
   );
 
   const flat = useMemo(() => {
-    if (bands) return bands.flatMap((b) => sortRows(b.rows));
+    // THROUGH THE SUB-BANDS TOO, and in the order they draw: this is the list
+    // `j`, `k` and `enter` walk, so a row the grid renders and this misses is a
+    // row the cursor steps over — and a row counted here that is not rendered
+    // puts every later `data-row-index` one place out.
+    const walk = (band: GridBand<T>): T[] =>
+      band.bands ? band.bands.flatMap(walk) : sortRows(band.rows);
+    if (bands) return bands.flatMap(walk);
     return sortRows(rows ?? []);
   }, [bands, rows, sortRows]);
 
@@ -368,7 +527,14 @@ export function DataGrid<T>({
     .map((c) => c.width ?? (c.shrink ? `fit-content(${SHRINK_CAP})` : "minmax(0, 1fr)"))
     .join(" ");
 
-  if (flat.length === 0 && empty) {
+  // A GROUPED ANSWER WITH NO ROWS ON THIS PAGE IS NOT AN EMPTY ANSWER.
+  //
+  // A band carries the engine's count over its WHOLE group and a bounded slice
+  // of rows, so a band whose slice is empty still says how many are in it —
+  // "Ada Okonkwo · 0 of 3" is an answer, and "Nothing matches" drawn over it is
+  // a different and false one. The empty state is for a grid with nothing to
+  // draw at all, which with bands means no band either.
+  if (flat.length === 0 && !bands?.length && empty) {
     return (
       <div className="grid-wrap">
         {/* `compact` IS OUR `inline`: an empty state inside a panel rather
@@ -407,6 +573,18 @@ export function DataGrid<T>({
     // a rendering fault rather than as a value. The head cannot carry the word
     // — that is what made it a glyph — so the column says it separately, and
     // the card is the only layout that spends it.
+    //
+    // THE LABEL IS SET UNCONDITIONALLY AND THE SHEET DROPS THE LINE. A column
+    // draws no value on a row that has none — `PriorityMark` renders null for
+    // `normal`, which nearly every task is — and in the card that left the
+    // label alone on a line: `PRIORITY` with nothing beside it. Nothing here
+    // can see that, because a component that renders null is an element like
+    // any other until the browser draws it; `.grid-cell:empty` in `frame.css`
+    // is the browser answering, and the element has to stay in the DOM anyway
+    // or the wide layout's positional tracks move. What this file owes that
+    // rule is that a cell with no value has no child nodes — which is what
+    // `DataGrid.test.tsx` holds, since a mark wrapped in an always-rendered
+    // span would defeat it silently.
     const inner = shownColumns.map((column) => (
       <span
         key={column.key}
@@ -467,6 +645,42 @@ export function DataGrid<T>({
     );
   }
 
+  /**
+   * One band, and the bands inside it.
+   *
+   * RECURSIVE BECAUSE THE ANSWER IS. A second axis comes back as sub-groups
+   * under each group, and nesting a heading under a heading is what a second
+   * axis MEANS where every row is a line — the alternative, one flat band per
+   * pair, throws away which of the two axes a heading belongs to.
+   *
+   * NO `depth` CLASS: a sub-band's head is inset and quieter so that a band at
+   * its parent's inset does not read as its sibling, and the sheet says that
+   * with `.grid-band .grid-band > .grid-band-head` — the nesting IS the fact,
+   * and a class spelling it out is a second copy of what the DOM already says.
+   */
+  function renderBand(band: GridBand<T>): ReactNode {
+    // THE LOADED COUNT IS THIS BAND'S OWN ROWS, its sub-bands' included — a
+    // band that carries sub-bands carries no rows of its own, so counting
+    // `rows` alone reported every twice-grouped band as holding nothing.
+    const loaded = bandRows(band).length;
+    return (
+      <div key={band.key} className="grid-band">
+        <div className="grid-band-head">
+          {band.mark}
+          <span className="truncate">{band.label}</span>
+          {/* THE ENGINE'S COUNT AND THE LOADED COUNT, apart. A band head
+              reading 12 over 12 of 300 rows is the number a person plans
+              against. */}
+          <span className="grid-band-count t-num">
+            {band.total != null && band.total !== loaded ? `${loaded} of ${band.total}` : loaded}
+          </span>
+        </div>
+        {band.bands ? band.bands.map((sub) => renderBand(sub)) : sortRows(band.rows).map(renderRow)}
+        {band.footer && <div className="grid-band-foot">{band.footer}</div>}
+      </div>
+    );
+  }
+
   return (
     // THE POINTER IS WHAT SAYS WHICH GRID THE READER IS IN — see the registry
     // above. `pointerdown` rather than `click`, so a drag on a header or a
@@ -521,6 +735,17 @@ export function DataGrid<T>({
               className={className}
               onClick={() => headerClick(column)}
               aria-sort={sorted ? (sort?.desc ? "descending" : "ascending") : undefined}
+              // AND A SORTABLE HEAD IS NAMED EVEN WHERE ITS HEAD IS NOT A WORD.
+              // The rule above takes the unsortable glyph heads out of the
+              // button role; what it cannot do is stop a SORTABLE column being
+              // declared with a glyph or an empty head, which renders a
+              // control whose whole accessible name is the sort arrow. Such a
+              // column already carries the word separately for the phone's
+              // card layout (`label`, held by `app/source.test.ts`), so the
+              // name is there to be spent.
+              aria-label={
+                typeof column.header === "string" && column.header ? undefined : column.label
+              }
             >
               {body}
             </button>
@@ -529,25 +754,7 @@ export function DataGrid<T>({
       </div>
 
       <div className="grid-body" ref={body}>
-        {bands
-          ? bands.map((band) => (
-              <div key={band.key} className="grid-band">
-                <div className="grid-band-head">
-                  <span className="truncate">{band.label}</span>
-                  {/* THE ENGINE'S COUNT AND THE LOADED COUNT, apart. A band
-                      head reading 12 over 12 of 300 rows is the number a
-                      person plans against. */}
-                  <span className="grid-band-count t-num">
-                    {band.total != null && band.total !== band.rows.length
-                      ? `${band.rows.length} of ${band.total}`
-                      : band.rows.length}
-                  </span>
-                </div>
-                {sortRows(band.rows).map(renderRow)}
-                {band.footer && <div className="grid-band-foot">{band.footer}</div>}
-              </div>
-            ))
-          : sortRows(rows ?? []).map(renderRow)}
+        {bands ? bands.map((band) => renderBand(band)) : sortRows(rows ?? []).map(renderRow)}
       </div>
 
       {(footer || onLoadMore || loadedNote) && (

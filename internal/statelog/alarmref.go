@@ -33,16 +33,16 @@ func AlarmReference() string {
 // this is prose: "apply.lag.seconds > StallGrace" is precise and says nothing
 // to somebody who has just been paged.
 var alarmMeaning = map[Kind]string{
-	KindApplyLag: "This node is more than a minute behind the log. Its seats " +
-		"move if it stays behind for thirty.",
+	KindApplyLag: "This node is more than a minute behind the log. Being " +
+		"behind does not move its seats; a position that stops moving does.",
 	KindReadRefusals: "Reads are being refused for something other than " +
 		"ordinary lag, and have been for longer than a heartbeat.",
 	KindBarrierSlow: "The read barrier — the append every linearizable read " +
 		"waits on — is spending a quarter of the whole read budget.",
 	KindLogHeadroom: "The log is within a tenth of its byte ceiling. A full " +
 		"log refuses writes rather than dropping records.",
-	KindBackupAge: "The newest verified backup is older than the policy asks " +
-		"for. The trim will not advance past it.",
+	KindBackupAge: "No verified backup has been recorded, or the newest is " +
+		"older than the policy asks for. The trim does not advance either way.",
 	KindTrimBlocked: "The trim has a term it cannot satisfy, so the log is " +
 		"growing toward its ceiling.",
 	KindDeferredOld: "This node has been holding records it cannot apply for " +

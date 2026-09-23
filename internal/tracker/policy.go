@@ -86,6 +86,33 @@ func (g StatusGroup) Finished() bool {
 	return g == GroupDone || g == GroupClosed
 }
 
+// openGroupsSQL is [StatusGroup.Open] as the `IN (…)` list an SQL predicate
+// takes, RENDERED FROM the closed set rather than typed again.
+//
+// The same sentence is asked in SQL five times — the open condition the
+// `due=overdue` alias carries, the two arms `show_closed` resolves to, the
+// workload's overdue count, and the first arm of the `due:bucket` grouping —
+// and once in Go, where [TaskRow.Overdue] is derived. Written out beside each
+// one, that is six copies of a predicate which has to mean exactly one thing:
+// a fifth status group added to [StatusGroups] would reach the Go copy and
+// none of the others, and every SQL one would then answer the old question
+// without saying so.
+//
+// It composes this package's own constants and nothing a caller typed, so it
+// is a literal by the time it reaches a statement.
+var openGroupsSQL = openGroupList()
+
+// openGroupList renders the open half of [StatusGroups] as quoted values.
+func openGroupList() string {
+	out := make([]string, 0, len(StatusGroups))
+	for _, group := range StatusGroups {
+		if group.Open() {
+			out = append(out, "'"+string(group)+"'")
+		}
+	}
+	return strings.Join(out, ",")
+}
+
 // statusRow is one status's fixed properties.
 type statusRow struct {
 	label       string

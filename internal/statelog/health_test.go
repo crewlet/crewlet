@@ -63,12 +63,12 @@ func TestADeferralShedsSeatsOnlyPastTheGrace(t *testing.T) {
 	now := time.Now()
 	base := statelog.Health{
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 10},
-		CaughtUp: true,
+		Drained:  true,
 		Floor:    statelog.Floor{State: statelog.FloorOK, ReadAt: now},
 	}
 
 	if !base.Healthy(now, statelog.DeferredSince{}) {
-		t.Fatal("a caught-up node with nothing deferred is not healthy")
+		t.Fatal("a drained node with nothing deferred is not healthy")
 	}
 
 	held := base
@@ -111,7 +111,7 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 		"at the floor and caught up": {
 			health: statelog.Health{
 				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50),
-				Lag: ptr(0), LastSeq: ptr(100), CaughtUp: true,
+				Lag: ptr(0), LastSeq: ptr(100), Drained: true,
 			},
 			strict: true, ok: true,
 		},
@@ -123,12 +123,12 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 			want: statelog.RefuseBelowFloor,
 		},
 		"a floor nobody could read": {
-			health: statelog.Health{Position: at(100), Lag: ptr(0), LastSeq: ptr(100), CaughtUp: true},
+			health: statelog.Health{Position: at(100), Lag: ptr(0), LastSeq: ptr(100), Drained: true},
 			want:   statelog.RefuseFloorUnknown,
 		},
 		"a stream whose end could not be read": {
 			health: statelog.Health{
-				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50), CaughtUp: true,
+				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50), Drained: true,
 			},
 			want: statelog.RefuseBrokerUnreachable,
 		},
@@ -137,7 +137,7 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 		"a lag reported with no end behind it": {
 			health: statelog.Health{
 				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(0),
-				CaughtUp: true,
+				Drained: true,
 			},
 			want: statelog.RefuseBrokerUnreachable,
 		},
@@ -146,11 +146,11 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 		"a checkpoint past the log's end": {
 			health: statelog.Health{
 				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(0),
-				LastSeq: ptr(60), CaughtUp: true,
+				LastSeq: ptr(60), Drained: true,
 			},
 			strict: true, want: statelog.RefuseWrongStream,
 		},
-		"a strict domain that has never drained": {
+		"a strict domain that is behind right now": {
 			health: statelog.Health{
 				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(3),
 				LastSeq: ptr(103),
@@ -164,14 +164,14 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 		"a stale first sequence cannot lower the published floor": {
 			health: statelog.Health{
 				Position: at(10), TrimFloor: ptr(500), FirstSeq: ptr(1), Lag: ptr(0),
-				LastSeq: ptr(900), CaughtUp: true,
+				LastSeq: ptr(900), Drained: true,
 			},
 			strict: true, want: statelog.RefuseBelowFloor,
 		},
 		"and a first sequence above it does raise it": {
 			health: statelog.Health{
 				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(900), Lag: ptr(0),
-				LastSeq: ptr(900), CaughtUp: true,
+				LastSeq: ptr(900), Drained: true,
 			},
 			strict: true, want: statelog.RefuseBelowFloor,
 		},
@@ -240,8 +240,7 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	serving := func() statelog.Health {
 		return statelog.Health{
-			CaughtUp: true,
-			Floor:    statelog.Floor{State: statelog.FloorOK, ReadAt: now},
+			Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: now},
 		}
 	}
 
@@ -301,5 +300,95 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 		Since: now.Add(-statelog.DeferralGrace - time.Second), Held: true}) {
 		t.Error("a deferral past the grace kept the seats, which is what the " +
 			"deferred_old alarm already tells an operator has stopped")
+	}
+}
+
+// BEING BEHIND DOES NOT SHED SEATS; HAVING STOPPED DOES.
+//
+// The two facts were one bool, and it was assigned `lag == 0` on every
+// heartbeat — so a node holding a record it had not applied YET read as a node
+// whose copy was WRONG. The measured cost was a single node releasing all
+// seven of its seats on each burst of tracker writes and reclaiming them about
+// five seconds later, six times in eight minutes. The distinction this pins is
+// the one [statelog.Health.Healthy]'s whole contract rests on: a copy that is
+// behind catches up, and a copy that has stopped moving does not.
+func TestALaggingNodeKeepsItsSeatsAndAStalledOneDoesNot(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	ptr := func(v uint64) *uint64 { return &v }
+	behind := func() statelog.Health {
+		return statelog.Health{
+			Position:  statelog.Position{Stream: "S", Generation: 1, Seq: 100},
+			Drained:   true,
+			Floor:     statelog.Floor{State: statelog.FloorOK, ReadAt: now},
+			Lag:       ptr(7),
+			LastSeq:   ptr(107),
+			FirstSeq:  ptr(1),
+			TrimFloor: ptr(1),
+		}
+	}
+
+	if !behind().Healthy(now, statelog.DeferredSince{}) {
+		t.Fatal("a node seven records behind gave up its seats — with a real " +
+			"model that is every turn on the node interrupted by somebody " +
+			"filing a work item, and the records catch up on their own")
+	}
+	if code := behind().Refusal(now); code != "" {
+		t.Errorf("a node seven records behind refuses reads with %q; ordinary "+
+			"lag is answered by the caller's own staleness bound, not by a "+
+			"refusal", code)
+	}
+
+	// A HUGE LAG IS STILL A LAG. Nothing here is a threshold on the
+	// distance: a node that is applying is a node that is catching up,
+	// however far it has to come.
+	far := behind()
+	far.Lag, far.LastSeq = ptr(1_000_000), ptr(1_000_100)
+	if !far.Healthy(now, statelog.DeferredSince{}) {
+		t.Error("a node a million records behind gave up its seats, so a fleet " +
+			"whose peer published a backlog moves the company's work rather " +
+			"than waiting out the replay")
+	}
+
+	// AND A NODE THAT HAS NEVER DRAINED IS THE SAME KIND OF BEHIND. It is
+	// what a node looks like between its boot and its first catch-up, and
+	// the remedy is the admission gate below, never a shed.
+	fresh := behind()
+	fresh.Drained = false
+	if !fresh.Healthy(now, statelog.DeferredSince{}) {
+		t.Error("a node that has not finished hydrating reports its copy WRONG, " +
+			"so the sweep logs `seats_shed_unserviceable` at WARN every pass " +
+			"for a node whose only fault is that it is still catching up")
+	}
+
+	// THE STALL IS THE ONE THAT DOES SHED: this node owes progress and has
+	// made none for the grace, so its rows are frozen rather than moving.
+	stalled := behind()
+	stalled.Stalled = true
+	if stalled.Healthy(now, statelog.DeferredSince{}) {
+		t.Errorf("a node frozen for %s kept its seats — every expectation it "+
+			"forms is stale and every write burns its round budget on a "+
+			"conflict", statelog.StallGrace)
+	}
+	if code := stalled.Refusal(now); code != statelog.RefuseStalled {
+		t.Errorf("a stalled node refuses with %q, want %q", code, statelog.RefuseStalled)
+	}
+
+	// ADMISSION IS THE OTHER GATE AND IT READS THE INSTANT. A seat about to
+	// attach would act on rows that are behind, so `strict` refuses on the
+	// LAG whatever the drain latch says.
+	if ok, code := behind().Established(true); ok || code != statelog.RefuseBehind {
+		t.Errorf("Established(strict) = (%v, %q) for a drained node seven "+
+			"records behind, want a %q refusal — a seat attaching here "+
+			"answers \"there is no such item\" about work it was just handed",
+			ok, code, statelog.RefuseBehind)
+	}
+	// And a node that is level is admitted, drain latch or not: being level
+	// IS having drained, this instant.
+	level := behind()
+	level.Lag, level.LastSeq, level.Drained = ptr(0), ptr(100), false
+	if ok, code := level.Established(true); !ok {
+		t.Errorf("Established(strict) = (%v, %q) for a node level with the log, "+
+			"want it admitted", ok, code)
 	}
 }

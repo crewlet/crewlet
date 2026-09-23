@@ -367,22 +367,45 @@ beside it. `g` then a letter jumps between them.
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Activity** shows it: *Live now* has the seat working, and **Turns**
-shows the turn as it runs — Plan, then Execute, then Review, each phase listing
-the rounds it took, the tools each round called, and the prompts the model
-actually saw. A phase that finishes updates in place rather than moving, so you
-can read one while the next is running.
+shows the turn as it runs — Execute, then Review, each phase listing the rounds
+it took, the tools each round called, and the prompts the model actually saw.
+A turn has those two phases: Execute both decides and acts, because the frame
+that works out what to do is the frame that does it, and Review then judges
+what the round actually landed. On a seat's very first turn one more runs
+before them — Onboarding, where the agent reads its own team's pages once. A
+phase that finishes updates in place rather than moving, so you can read one
+while the next is running. [Turn Engine](../concepts/turn-engine.md) is what
+each one does.
 
 Follow the turn to **Work** and **Knowledge**. Both are the engine's own —
 `tracker.backend` and `knowledge.backend` default to `native`, so your company
 has a tracker and a wiki from its first minute with nothing to set up. A seat
-files with `create_work_item` and writes with `write_page`; a board row opens
-the item beside the board, and ⌘-click opens its page.
+files with `create_work_item` and writes with `write_page`; a row opens the
+item beside the list, and ⌘-click opens its page. Work opens as a **list** —
+one line per item, which reads the same on your first task as on your five
+hundredth — and **Filter** and **Display** in the bar decide what is on it and
+how it is drawn: a board, a table, a calendar or a timeline over the same rows.
+**Projects** beside it is the directory of what your units have declared.
 
 **Bind your token to your seat** and the personal screens become yours: give a
 human seat `contact.crewlet_operator_id` matching one of your
 `api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
-person. Until then the dashboard says so rather than guessing — an unbound
-token is an ordinary state, not a fault.
+person. My work is one tab per claim on somebody's attention — what they hold,
+the order somebody put it in, the questions waiting on them — with every count
+on the strip, and a band above it naming whose day is on screen. **Assigned**
+is the work list narrowed to that person: the same Filter, Display and scope
+controls, opening grouped by when each task is due. Until then the dashboard
+says so rather than guessing: an unbound token is an ordinary state, not a
+fault.
+
+Once bound, **what you file through your own assistant counts as yours** on
+both screens. The record still names the token — a write through
+`/operator/mcp` is attributed to the credential, with author kind `operator`,
+because a tracker whose author field is chosen by the writer is not an audit
+trail — and the personal reads match your seat handle *or* that token id, so
+the item you reported and the one a colleague assigned you land on the same
+day. An operator reading somebody else's screen gets *their* two names from
+the chart, never the token in your hand.
 
 Your own AI assistant can read and write the same records over MCP. Point any
 client at `/operator/mcp` with your API token:

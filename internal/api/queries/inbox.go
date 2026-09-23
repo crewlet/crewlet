@@ -20,18 +20,21 @@ import (
 // better was found, and the person's own read and snooze marks. No commercial
 // tracker records why a notification reached you; this one always has.
 //
-// SCOPED, NOT OPERATOR-GATED. See [Sources.viewerHandle]: a caller reads the
+// SCOPED, NOT OPERATOR-GATED. See [Sources.viewerParty]: a caller reads the
 // seat their own token is bound to, and naming anybody else's needs an
 // operator credential. Registering it operator-only would make the landing
 // screen the most-gated screen in the product, and the human teammate — one of
 // the two readers this dashboard is for — fictional.
 func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
-	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
 	q := tracker.InboxQuery{
-		Handle: handle,
+		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty]. The
+		// notices a founder's own assistant produced name the token,
+		// and an inbox asked about the seat alone showed none of them.
+		Who: who,
 		// A SNOOZE MEANS "NOT NOW", so the default hides them and the
 		// reader asks for them explicitly — the reader returns one whose
 		// time has come either way.

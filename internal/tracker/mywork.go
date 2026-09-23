@@ -116,10 +116,17 @@ type MyWork struct {
 
 // MyWorkQuery asks for one person's own day.
 type MyWorkQuery struct {
-	// Handle is whose. Required — "mine" is resolved by the surface from
-	// its own credential, never by this reader, because a reader that
-	// defaulted it would answer about whoever it happened to pick.
-	Handle string
+	// Who this day belongs to. Required — "mine" is resolved by the
+	// surface from its own credential, never by this reader, because a
+	// reader that defaulted it would answer about whoever it happened to
+	// pick.
+	//
+	// A [Party] RATHER THAN A HANDLE, because a person's rows carry every
+	// identity they write under: the same founder is `jane-founder` on the
+	// seat their colleagues assign to and `founder` on everything their
+	// own assistant filed. Every block below matches ANY of them, and the
+	// answer reports the seat. See [Party].
+	Who Party
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -142,13 +149,13 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time) (
 			"level — a surface resolves an absent read_level to its own " +
 			"default before it reads")
 	}
-	if q.Handle == "" {
+	if !q.Who.Named() {
 		return MyWork{}, fmt.Errorf("tracker: my_work names nobody — a " +
 			"surface resolves the viewer from its own credential before it " +
 			"reads, because a day with nobody's name on it is everybody's")
 	}
 
-	out := MyWork{Handle: q.Handle}
+	out := MyWork{Handle: q.Who.Handle}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
 		// THE DOMAIN, honestly: this person's work is in every container
@@ -162,7 +169,7 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time) (
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		return readMyWork(ctx, tx, q.Handle, now, &out)
+		return readMyWork(ctx, tx, q.Who, now, &out)
 	})
 	if err != nil {
 		return MyWork{}, err
@@ -176,7 +183,7 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time) (
 	return out, nil
 }
 
-func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
+func readMyWork(ctx context.Context, tx *sql.Tx, who Party, now time.Time,
 	out *MyWork) error {
 
 	// THE DAY BOUNDARY the `overdue` column on every row is computed
@@ -190,7 +197,13 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	dayStart := anchor.At
 	open := openGroups()
 
-	priorities, err := readPriorityRows(ctx, tx, handle, dayStart)
+	// EVERY IDENTITY THIS PERSON'S ROWS MAY CARRY, bound once and reused
+	// by all seven blocks — so no block can be fixed while another keeps
+	// asking about one name. See [Party].
+	mine := who.args()
+	me := placeholders(len(mine))
+
+	priorities, err := readPriorityRows(ctx, tx, who, dayStart)
 	if err != nil {
 		return err
 	}
@@ -198,11 +211,12 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 
 	// ASSIGNED, in the queue's own order — priority then due, which is
 	// exactly what `tracker_tasks_queue_idx` is built in, so the block a
-	// turn opens on is the query the index is named for.
+	// turn opens on is the query the index is named for. An `IN` over two
+	// identities is two seeks of that same index rather than a scan.
 	assigned, _, err := readTasks(ctx, tx,
-		"t.removed_at IS NULL AND t.assignee = ? AND t.status_group IN ("+
+		"t.removed_at IS NULL AND t.assignee IN ("+me+") AND t.status_group IN ("+
 			placeholders(len(open))+")",
-		append([]any{handle}, open...),
+		append(append([]any{}, mine...), open...),
 		[]sortTerm{
 			{Column: "t.prio_rank", Descending: true},
 			{Column: "t.due_at"}, {Column: "t.id"},
@@ -212,27 +226,29 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	}
 	out.Assigned = assigned
 
-	asks, err := readAsks(ctx, tx, handle, dayStart)
+	asks, err := readAsks(ctx, tx, who, dayStart)
 	if err != nil {
 		return err
 	}
 	out.AskedOfMe = asks
 
-	items, err := readChecklistClaims(ctx, tx, handle)
+	items, err := readChecklistClaims(ctx, tx, who)
 	if err != nil {
 		return err
 	}
 	out.ChecklistItems = items
 
-	// COLLABORATING EXCLUDES WHAT THIS SEAT OWNS, because a task already
+	// COLLABORATING EXCLUDES WHAT THIS PERSON OWNS, because a task already
 	// in `assigned` listed again here is one row spending two of the seven
 	// blocks — and the distinction the block exists for is precisely
-	// "brought on without owning".
+	// "brought on without owning". The exclusion covers EVERY identity for
+	// the same reason the inclusion does: a task assigned to the seat and
+	// collaborated on under the token is one task this person owns.
 	collaborating, _, err := readTasks(ctx, tx,
-		"t.removed_at IS NULL AND t.assignee <> ? AND t.status_group IN ("+
+		"t.removed_at IS NULL AND t.assignee NOT IN ("+me+") AND t.status_group IN ("+
 			placeholders(len(open))+") AND EXISTS (SELECT 1 FROM "+
-			"tracker_collaborators c WHERE c.task_id = t.id AND c.handle = ?)",
-		append(append([]any{handle}, open...), handle),
+			"tracker_collaborators c WHERE c.task_id = t.id AND c.handle IN ("+me+"))",
+		append(append(append([]any{}, mine...), open...), mine...),
 		[]sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
 		MyWorkRows, dayStart)
 	if err != nil {
@@ -243,11 +259,15 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	// WATCHING, MINUS THE MUTED. A mute is how somebody says "keep me on
 	// this but stop telling me", and a block that ignored it would put
 	// every muted task back in front of them once a turn.
+	//
+	// EXISTS RATHER THAN A JOIN, which is also what keeps the identity set
+	// from multiplying rows: a person watching one task under both names
+	// is still one row here.
 	watching, _, err := readTasks(ctx, tx,
-		"t.removed_at IS NULL AND t.assignee <> ? AND EXISTS (SELECT 1 FROM "+
-			"tracker_watchers w WHERE w.task_id = t.id AND w.handle = ? "+
+		"t.removed_at IS NULL AND t.assignee NOT IN ("+me+") AND EXISTS (SELECT 1 FROM "+
+			"tracker_watchers w WHERE w.task_id = t.id AND w.handle IN ("+me+") "+
 			"AND w.muted = 0)",
-		[]any{handle, handle},
+		append(append([]any{}, mine...), mine...),
 		[]sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
 		MyWorkRows, dayStart)
 	if err != nil {
@@ -255,7 +275,7 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	}
 	out.WatchingRecent = watching
 
-	// UNBLOCKED: this seat's open work that HAD a blocker and no longer
+	// UNBLOCKED: this person's open work that HAD a blocker and no longer
 	// has an open one. The only block about a CHANGE rather than a state,
 	// and the reason it is here at all — a task that became workable while
 	// nobody was looking has nothing else to announce it at turn start.
@@ -265,12 +285,12 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	// of the board; without the second, a task with one blocker cleared
 	// and another still open reads as workable and is not.
 	unblocked, _, err := readTasks(ctx, tx,
-		"t.removed_at IS NULL AND t.assignee = ? AND t.status_group IN ("+
+		"t.removed_at IS NULL AND t.assignee IN ("+me+") AND t.status_group IN ("+
 			placeholders(len(open))+") AND EXISTS (SELECT 1 FROM "+
 			"tracker_task_deps d WHERE d.task_id = t.id "+
 			"AND d.cleared_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM "+
 			"tracker_task_deps d WHERE d.task_id = t.id AND d.blocker_open = 1)",
-		append([]any{handle}, open...),
+		append(append([]any{}, mine...), open...),
 		[]sortTerm{{Column: "t.updated_at", Descending: true}, {Column: "t.id"}},
 		MyWorkRows, dayStart)
 	if err != nil {
@@ -302,10 +322,10 @@ func openGroups() []any {
 // is filtered out HERE rather than rewritten out of the list, because the list
 // is a person's own object and a read must not write to it: the next write to
 // the list drops it for good.
-func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
+func readPriorityRows(ctx context.Context, tx *sql.Tx, who Party,
 	dayStart time.Time) ([]TaskRow, error) {
 
-	person, held, err := readPerson(ctx, tx, handle)
+	person, held, err := readPartyRecord(ctx, tx, who)
 	if err != nil {
 		return nil, err
 	}
@@ -350,20 +370,23 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 // THE OPEN ONES ONLY, which is the shipped partial index's own predicate: an
 // ask is open until somebody answers it or resolves it, and a removed comment
 // is not an ask at all.
-func readAsks(ctx context.Context, tx *sql.Tx, handle string,
+func readAsks(ctx context.Context, tx *sql.Tx, who Party,
 	dayStart time.Time) ([]AskRow, error) {
 
+	args := who.args()
+	args = append(args, MyWorkRows)
 	rows, err := tx.QueryContext(ctx, `
 		SELECT c.id, c.task_id, c.author, c.body, c.created_at
 		FROM tracker_comments c
 		JOIN tracker_tasks t ON t.id = c.task_id
-		WHERE c.ask = ? AND c.resolved = 0 AND c.answered_by IS NULL
+		WHERE c.ask IN (`+placeholders(len(who.Handles()))+`)
+		  AND c.resolved = 0 AND c.answered_by IS NULL
 		  AND c.removed = 0 AND t.removed_at IS NULL
 		ORDER BY c.created_at DESC
-		LIMIT ?`, handle, MyWorkRows)
+		LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read the asks waiting on %s: %w",
-			handle, err)
+			who, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -383,7 +406,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("tracker: read the asks waiting on %s: %w",
-			handle, err)
+			who, err)
 	}
 	if len(pending) == 0 {
 		return []AskRow{}, nil
@@ -425,9 +448,11 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 }
 
 // readChecklistClaims reads the sub-items this person owns.
-func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
+func readChecklistClaims(ctx context.Context, tx *sql.Tx, who Party) (
 	[]ChecklistRow, error) {
 
+	args := who.args()
+	args = append(args, MyWorkRows)
 	// THE OPEN ONES, on live tasks. A done item is not a claim, and an
 	// item on a removed task is an item nobody can act on.
 	rows, err := tx.QueryContext(ctx, `
@@ -435,12 +460,13 @@ func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 		       i.done
 		FROM tracker_checklist_items i
 		JOIN tracker_tasks t ON t.id = i.task_id
-		WHERE i.assignee = ? AND i.done = 0 AND t.removed_at IS NULL
+		WHERE i.assignee IN (`+placeholders(len(who.Handles()))+`)
+		  AND i.done = 0 AND t.removed_at IS NULL
 		ORDER BY t.key, i.ord
-		LIMIT ?`, handle, MyWorkRows)
+		LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read the checklist items of %s: %w",
-			handle, err)
+			who, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -457,7 +483,7 @@ func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("tracker: read the checklist items of %s: %w",
-			handle, err)
+			who, err)
 	}
 	return out, nil
 }

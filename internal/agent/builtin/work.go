@@ -202,15 +202,24 @@ type WorkDeps struct {
 	// colleague who joined this morning and admitting one who left.
 	Seats func() []colleague.Seat
 
-	// UnitOfSeat is the team a seat belongs to, read PER CALL against the
-	// epoch current when the tool runs — for the reason the default
-	// project is: a seat's tools are cloned into its lease, an apply does
-	// not rebuild the clone, and a captured unit would file today's work
-	// under the team somebody left last week.
+	// Party resolves a handle to the two identities that person's own
+	// records may be filed under — their seat, and the `api.auth` token
+	// bound to it with `contact.crewlet_operator_id`.
 	//
-	// Nil stamps no unit, which is what a build with no chart has: the
-	// task is filed unrouted and its project lead is the only fallback.
-	UnitOfSeat func(handle string) string
+	// A SEAM RATHER THAN A FIELD ON THE ROSTER, because [Corpus]
+	// deliberately leaves an operator id out: that map is both the
+	// exact-id index and what `lookup_colleague` renders, and a credential
+	// listed beside somebody's Slack id reads as somewhere an agent could
+	// mention them. This is the attribution key, asked for by name.
+	//
+	// A FUNCTION OF THE HANDLE rather than of the caller, because the
+	// party belongs to the person ASKED ABOUT: an operator reading a
+	// report's inbox is handed THAT person's two names from the chart,
+	// never the credential in their own hand.
+	//
+	// Nil answers the handle alone, which is the honest state for a
+	// surface with no chart loaded and the whole truth for every seat.
+	Party func(handle string) tracker.Party
 
 	// Units resolves a project's chart-owned unit at READ time — the
 	// tracker holds no org, because the applier may not read one. Nil
@@ -303,6 +312,21 @@ type Actor struct {
 	// answers "what did this credential do".
 	OperatorID string
 
+	// Seat is the chart seat that credential is BOUND to with
+	// `contact.crewlet_operator_id` — empty for an actor that already IS
+	// a seat, and for a token nobody bound.
+	//
+	// IT CHANGES NO ATTRIBUTION. [Actor.Handle] stays the author and
+	// [Actor.Kind] stays `operator`, because a tracker whose author field
+	// is chosen by the writer is not an audit trail. What it answers is
+	// the OTHER question a person surface asks — whose inbox, whose pins,
+	// whose queue, whose day — and that is the person rather than the
+	// credential in their hand. See [Actor.Record] and [Actor.Party].
+	//
+	// Resolved by the surface, because this package holds no chart: the
+	// operator MCP walks it with `org.Organization.SeatByOperatorID`.
+	Seat string
+
 	// TurnID is the RUN that produced this write — provenance, so an
 	// audit can walk from an item back to the execution that wrote it.
 	TurnID string
@@ -338,6 +362,30 @@ func (a Actor) OperationSeed() string {
 		return a.WorkKey
 	}
 	return a.TurnID
+}
+
+// Record is WHOSE OWN STATE this actor writes and reads: the seat the
+// credential is bound to, or the actor itself where nothing is bound.
+//
+// A seat answers its own handle, which is every in-engine caller. A bound
+// operator answers the person they are, so their assistant's marks and pins
+// land on that person's record rather than on a second one named after a
+// credential. An unbound token answers itself, which is an ordinary state —
+// an operator outside the org chart — and not an error.
+func (a Actor) Record() string {
+	if seat := strings.TrimSpace(a.Seat); seat != "" {
+		return seat
+	}
+	return a.Handle
+}
+
+// Party is who a personal READ is about: [Actor.Record] and, behind it, the
+// credential their older rows may be filed under.
+//
+// The alias is matched against and never rendered — see [tracker.Party] — so
+// a screen is never handed a token where a colleague's handle goes.
+func (a Actor) Party() tracker.Party {
+	return tracker.Party{Handle: a.Record(), OperatorID: a.OperatorID}
 }
 
 // settle waits for a write to reach this node's projection.
@@ -395,6 +443,18 @@ func (d WorkDeps) actor(ctx context.Context, turn *turnctx.Turn) (Actor, error) 
 		return d.Actor(ctx, turn)
 	}
 	return actorFor(turn)
+}
+
+// partyOf is who a personal read about `handle` is about — see
+// [WorkDeps.Party].
+//
+// NO SEAM RESOLVES TO THE HANDLE ALONE, which is exactly what this read did
+// before the seam existed and is still the whole truth for a seat.
+func (d WorkDeps) partyOf(handle string) tracker.Party {
+	if d.Party == nil {
+		return tracker.PartyOf(handle)
+	}
+	return d.Party(handle)
 }
 
 // turnKey is the idempotency key a comment carries, or "" outside a turn.
@@ -588,8 +648,9 @@ func (t *listWorkItems) Parameters() map[string]any {
 			},
 			"unit": map[string]any{
 				"type": "string",
-				"description": "A team's key: the work routed to that team, " +
-					"whoever holds it.",
+				"description": "A team, by its id or its name: the work FILED " +
+					"into that team, whoever holds it. Where it routes NOW is " +
+					"`routing_unit`, which a re-route moves and this does not.",
 			},
 			"field_filters": map[string]any{
 				"type": "object",
@@ -736,7 +797,18 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// asks two things about the reader: what they hold, and what is
 	// unclaimed in THEIR container.
 	q, err := t.deps.Reader.ExpandedQuery(ctx, params, tracker.Viewer{
-		Handle: actor.Handle, Project: t.deps.defaultProject(actor.Handle),
+		// AND IT IS THE ACTOR'S OWN PARTY, exactly as `my_work` asks:
+		// for a seat its one handle, and for a bound operator the person
+		// their credential names plus the credential itself. Asked about
+		// the bare author, `preset=my_queue` answered a founder's
+		// assistant about the TOKEN — a party no colleague has ever
+		// assigned anything to — and `preset=priorities` about a queue
+		// nobody wrote. The two fields rather than [Actor.Party],
+		// because a viewer is a party plus a container and the grammar
+		// derives the party from them ([tracker.Viewer.Party]).
+		Handle:     actor.Record(),
+		OperatorID: actor.OperatorID,
+		Project:    t.deps.defaultProject(actor),
 	},
 		t.deps.now(), t.deps.zone())
 	if err != nil {
@@ -749,6 +821,11 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// A guard that only filled an empty field would enforce nothing the
 	// day something populated it; see [statelog.LevelFor].
 	q.Level = statelog.LevelFor(statelog.SurfaceSeat, q.Level)
+	// AND THE CHART THE UNIT FILTERS RESOLVE THROUGH, set here for the
+	// reason the level is: it belongs to this surface rather than to the
+	// grammar. A model types the team name it remembers, and the rows hold
+	// the key the chart chose — see [tracker.Units].
+	q.Units = t.deps.Units
 	// AND THE ROWS ARE THE ROWS THAT MATCH, which is the one promise this
 	// tool makes and the default took away.
 	//
@@ -782,8 +859,11 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// A GROUPED ANSWER HAS NO FLAT ROWS BY CONSTRUCTION, so the empty
 	// message has to ask about the groups too — a board with five columns
 	// reported as "no work items match" is a seat about to file the
-	// duplicate.
-	if len(answer.Rows) == 0 && len(answer.Groups) == 0 && answer.Complete {
+	// duplicate. AND HAVING COLUMNS IS NOT HAVING WORK: a closed axis
+	// carries every column the query admits whether or not anything is in
+	// it (see internal/tracker's grouping doc), so the question is whether
+	// any column COUNTS anything.
+	if len(answer.Rows) == 0 && boardEmpty(answer.Groups) && answer.Complete {
 		return tools.Result{Output: "No work items match that filter."}, nil
 	}
 	result := map[string]any{"count": len(answer.Rows), "items": answer.Rows}
@@ -987,6 +1067,19 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	if refusal != "" {
 		return failed(refusal), nil
 	}
+	// THE CHART, so the answer carries the team's NAME beside the key the
+	// row holds. A model acts on the key — it is what a `unit=` filter
+	// takes, and that filter takes the name too — but a model also writes
+	// PROSE about the item it just read, into a comment, a chat message
+	// or a hand-off, and "filed into eng" is a sentence about a slug
+	// nobody outside the config file has seen. It is also the only way
+	// this surface can say a team has left the chart, which is the
+	// difference between a stale unit and a typo.
+	//
+	// It is passed WHEREVER A CHART IS HELD rather than gated on a caller
+	// asking, because an unresolved reference is a FINDING: a surface
+	// that could resolve and did not would report every task as orphaned.
+	want.Units = t.deps.Units
 	detail, err := t.deps.Reader.Task(ctx, id, want, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
@@ -1110,9 +1203,11 @@ func (t *createWorkItem) Parameters() map[string]any {
 			},
 			"unit": map[string]any{
 				"type": "string",
-				"description": "The team this work belongs to. Defaults to " +
-					"YOUR team, which is almost always right — name another " +
-					"only when you are filing on their behalf.",
+				"description": "The team this work belongs to, by its id or " +
+					"its name. Defaults to the team that owns `project`, " +
+					"which is almost always right — name another only when " +
+					"the work belongs to a different team than the project " +
+					"it sits in.",
 			},
 			"waiting_on": map[string]any{
 				"type": "array",
@@ -1225,31 +1320,43 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		task.Parent = &parent
 	}
 	if task.Project == "" {
-		if t.deps.DefaultProject != nil {
-			task.Project = t.deps.DefaultProject(actor.Handle)
-		}
+		task.Project = t.deps.defaultProject(actor)
 		if task.Project == "" {
 			return failed("create_work_item needs a `project`: your team owns " +
 				"none, so there is no default. Ask which project this belongs " +
 				"in rather than guessing."), nil
 		}
 	}
-	// THE FILING SEAT'S OWN TEAM, on both unit fields, and open to every
+	// A UNIT THE CALLER NAMED, checked against the chart and open to every
 	// seat — deliberately unlike the re-route above. `FiledUnit` is the
-	// immutable record of where this came from; `RoutingUnit` is the
-	// mutable half, and a create that stamped neither left a task whose
-	// unit lead could never be a fallback for it.
+	// immutable record of which team the work belongs to; `RoutingUnit`
+	// is the mutable half, whose lead hears about it now.
+	//
+	// NAMING NONE IS THE ORDINARY CASE, and the tracker fills both from
+	// the project's own chart-owned unit at the write — one derivation,
+	// inside the create's own snapshot, so every writer gets the same
+	// answer. This stamped the FILING SEAT'S team instead,
+	// which was right only for a seat filing into its own team's project:
+	// an operator holds no seat and a root-level seat holds no unit, so
+	// both filed work into no unit at all, whatever the project said the
+	// work belonged to.
+	//
+	// WHAT IS STORED IS THE CHART'S OWN KEY, not the string the model
+	// typed: a unit is named by its id or by its name, in whatever case
+	// the model remembered, and `filed_unit` is written once and never
+	// rewritten — so storing the argument verbatim would leave one team's
+	// work under as many spellings as its colleagues have ways of writing
+	// it, each of them a filter the others miss.
 	if unit := strings.TrimSpace(argString(args, "unit")); unit != "" {
 		if t.deps.Units != nil {
-			if _, _, found := t.deps.Units.ResolveUnit(unit); !found {
+			resolved, found := t.deps.Units.ResolveUnit(unit)
+			if !found {
 				return failed(fmt.Sprintf("This company has no team %q.",
 					clip(unit))), nil
 			}
+			unit = resolved.Key
 		}
 		task.FiledUnit, task.RoutingUnit = unit, unit
-	} else if t.deps.UnitOfSeat != nil {
-		task.FiledUnit = t.deps.UnitOfSeat(actor.Handle)
-		task.RoutingUnit = task.FiledUnit
 	}
 
 	// THE ASSIGNEE IS RESOLVED BEFORE THE WATCHERS, so the canonical
@@ -1264,7 +1371,14 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// THE REPORTER WATCHES WHAT THEY FILED, and so does the assignee. Set
 	// at the write rather than derived at the wake: a watcher list built
 	// later would be built from a row that has moved on.
-	task.Watchers = handles(actor.Handle, task.Assignee)
+	//
+	// AND THE WATCH IS THE PERSON'S, which is [Actor.Record] and not the
+	// author beside it: `reporter` is attribution and stays the token,
+	// but a watcher is an ADDRESS — the party registry resolves SEATS, so
+	// a token id in the set is dropped at every later wake and renders as
+	// a colleague on the item. A founder whose assistant filed the work
+	// heard nothing about it again.
+	task.Watchers = handles(actor.Record(), task.Assignee)
 
 	// THE LABELS BEFORE THE TASK, because the create refuses one the
 	// project has not declared and the declare is a separate record on a
@@ -1475,6 +1589,12 @@ type updateWorkItem struct {
 	// own work into your own team is what every seat does, and pointing
 	// somebody ELSE's work at a different team is a decision about who
 	// owns it.
+	//
+	// OR A PERSON'S OWN, which is the second arm at the gate itself and
+	// not a fact about this seam: a lead relation is between two people in
+	// the chart, and an operator's credential is in no chart — so this
+	// lookup alone would have locked the company's own token out of the
+	// verb entirely.
 	leads LeadsProject
 }
 
@@ -1537,10 +1657,11 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			},
 			"routing_unit": map[string]any{
 				"type": "string",
-				"description": "Point this item at a different team: its " +
-					"lead hears that work routes to them now. The project " +
-					"lead's to set — filing your own work into your own team " +
-					"is what `unit` on create_work_item does.",
+				"description": "Point this item at a different team, by its " +
+					"id or its name: that team's lead hears that work routes " +
+					"to them now. The project lead's to set, or a person's " +
+					"own — filing your own work into your own team is what " +
+					"`unit` on create_work_item does.",
 			},
 			"waiting_on":   setArgSchema("The items this one is blocked BY. Each is a key or an id."),
 			"blocking":     setArgSchema("The items blocked BY this one. Each is a key or an id."),
@@ -1655,18 +1776,35 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// task that still has an assignee.
 	if raw, held := args["routing_unit"]; held {
 		unit := strings.TrimSpace(argString(map[string]any{"v": raw}, "v"))
-		if t.leads == nil || !t.leads(ctx, actor.Handle, before.Task.Project) {
+		// EITHER AUTHORITY IS ENOUGH, and the operator half is why the
+		// lookup is not the whole answer: it resolves a lead from the ORG
+		// CHART by handle, and an operator's actor carries the TOKEN's own
+		// name. Asked about [Actor.Handle] it therefore answered false for
+		// every operator, a bound founder included, and the one surface a
+		// person re-routes from could not use the verb at all. Asked about
+		// [Actor.Record] it is the person behind the credential, and
+		// [tracker.AuthorKind.Person] is the arm for a human at the
+		// dashboard and for the token nobody bound — the same pair
+		// `write_project` resolves, for the same reason.
+		lead := t.leads != nil && t.leads(ctx, actor.Record(), before.Task.Project)
+		if !lead && !actor.Kind.Person() {
 			return failed(fmt.Sprintf("Pointing %s at a different team is the "+
 				"lead of %s's decision, not yours. Ask them, or say in a "+
 				"comment why it belongs elsewhere.",
 				before.Task.Key, before.Task.Project)), nil
 		}
+		// AND THE CHART'S OWN KEY IS WHAT LANDS, for the reason the
+		// filed unit above takes it: the wake resolves the stored value
+		// back to a lead, and a spelling the chart did not choose is one
+		// a rename walks away from.
 		if unit != "" && t.deps.Units != nil {
-			if _, _, found := t.deps.Units.ResolveUnit(unit); !found {
+			resolved, found := t.deps.Units.ResolveUnit(unit)
+			if !found {
 				return failed(fmt.Sprintf("This company has no team %q. A task "+
 					"routed at a team nobody has reaches nobody at all.",
 					clip(unit))), nil
 			}
+			unit = resolved.Key
 		}
 		patch.RoutingUnit = &unit
 		if kind == tracker.ChangeFields {
@@ -1874,7 +2012,15 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 		// announced their removal in the wake. The writer resolves it
 		// against the task's current sets inside its own snapshot, which
 		// is the only place a single consistent read of them exists.
-		patch.Watch = &tracker.WatchIntent{Handle: actor.Handle, Watch: watch}
+		//
+		// AND IT IS THE PERSON'S OWN WATCH — [Actor.Record], not the
+		// author. A bound operator's `watch: true` wrote the TOKEN's name
+		// into the watcher set, where the `watchers` history delta
+		// rendered it as a colleague, the person's own seat was not
+		// following the item, and every later wake dropped it against the
+		// roster. Attribution is the other question and is unchanged: the
+		// commit still names the credential.
+		patch.Watch = &tracker.WatchIntent{Handle: actor.Record(), Watch: watch}
 		if kind == tracker.ChangeFields {
 			kind = tracker.ChangeWatchers
 		}
@@ -2066,7 +2212,12 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
 		Ask:     ask,
 		Answers: strings.TrimSpace(argString(args, "answers")),
-		Author:  actor.Handle,
+		// THE PERSON, because this is what the inference is asked about:
+		// an ask is answered by the one it was ADDRESSED to, and an ask
+		// names a seat. Under the token's own name a bound operator
+		// answering the question put to their seat stamped nothing, and
+		// the ask stayed open on the board.
+		Author: actor.Record(),
 	})
 	if refusal != "" {
 		return failed(refusal), nil
@@ -2094,7 +2245,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	patch := tracker.TaskPatch{
 		Comment: comment,
 		Watch: &tracker.WatchIntent{
-			Handle: actor.Handle, Watch: true, Auto: true,
+			// THE PERSON'S, NOT THE CREDENTIAL'S — the same
+			// [Actor.Record] the explicit gesture takes.
+			Handle: actor.Record(), Watch: true, Auto: true,
 		},
 	}
 	got, err := writer.UpdateTask(ctx,
@@ -2147,7 +2300,10 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // asked anything.
 func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment) string {
 	switch {
-	case task.Assignee == "" || task.Assignee == actor.Handle:
+	// AGAINST THE PERSON RATHER THAN THE AUTHOR: an assignee is a seat,
+	// and a bound operator commenting on their own task matched nothing —
+	// so the warning told them they were waking themselves.
+	case task.Assignee == "" || task.Assignee == actor.Record():
 		return ""
 	case comment.Ask != "" || len(comment.Mentions) > 0:
 		return ""
@@ -2244,17 +2400,23 @@ func (d WorkDeps) now() time.Time {
 	return d.Now()
 }
 
-// defaultProject is the seat's own, or empty where its unit owns none.
+// defaultProject is the caller's own, or empty where their unit owns none.
 //
-// ONE SPELLING, because three tools fall back to it and a second copy would
+// ONE SPELLING, because five tools fall back to it and a second copy would
 // be the one that stopped matching — a create filing into the seat's project
 // while a describe answered about another is the shape that teaches a model
 // the wrong vocabulary for the container it is writing to.
-func (d WorkDeps) defaultProject(handle string) string {
+//
+// IT TAKES THE ACTOR RATHER THAN A HANDLE, so that WHICH of an actor's names
+// the chart is asked about is decided once here rather than at each call. It
+// is [Actor.Record]: a home project is a fact about the PERSON, and a token
+// is in no chart at all — so a bound founder's assistant was refused its own
+// team's project by five tools that each spelled the identity separately.
+func (d WorkDeps) defaultProject(a Actor) string {
 	if d.DefaultProject == nil {
 		return ""
 	}
-	return d.DefaultProject(handle)
+	return d.DefaultProject(a.Record())
 }
 
 func (d WorkDeps) zone() *time.Location {
@@ -2349,3 +2511,15 @@ var seatReadLevel = statelog.DefaultReadLevel(statelog.SurfaceSeat)
 // a wake carried was waited for before the turn opened (read-your-trigger),
 // so there is nothing left for a tool call to name.
 var seatRead = statelog.Freshness{Level: seatReadLevel}
+
+// boardEmpty reports whether a grouped answer holds no task at all — which,
+// on a closed axis, is a board of columns every one of which counts zero, and
+// on a flat answer is no groups at all.
+func boardEmpty(groups []tracker.Group) bool {
+	for _, group := range groups {
+		if group.Count > 0 {
+			return false
+		}
+	}
+	return true
+}

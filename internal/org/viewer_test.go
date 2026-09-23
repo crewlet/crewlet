@@ -46,6 +46,77 @@ func TestASeatIsFoundByTheTokenBoundToIt(t *testing.T) {
 	}
 }
 
+// THE OTHER DIRECTION, and it has to agree with the one above.
+//
+// Reading somebody's own work needs the alias as well as the seat: a write
+// made through a person's credential is attributed to the TOKEN, so their rows
+// carry both names and a read asked about one of them answers nothing (see
+// [tracker.Party]). The two lookups used to be two copies of the same `${VAR}`
+// handling, and a company whose two answers disagree is bound for writes and
+// unbound for reads — a dashboard that knows who you are and shows you an
+// empty day.
+func TestASeatNamesTheTokenBoundToIt(t *testing.T) {
+	o := &org.Organization{
+		Name: "Nimbus",
+		Roles: []*org.Role{
+			{Name: "Ada Okonkwo", Kind: org.KindHuman,
+				Contact: &org.HumanContact{CrewletOperatorID: "${FOUNDER_ID}"}},
+			{Name: "Rui Santos", Kind: org.KindHuman,
+				Contact: &org.HumanContact{CrewletOperatorID: "OPS"}},
+			// A SEAT WITH CONTACTS BUT NO BINDING, and a seat with no
+			// contact block at all: both are the ordinary state, and
+			// both must answer "" rather than something a predicate
+			// would match.
+			{Name: "Bo Lang", Kind: org.KindHuman,
+				Contact: &org.HumanContact{SlackUserID: "U0COLLEAGUE"}},
+			{Name: "CTO"},
+		},
+	}
+	o.Normalize()
+	env := func(name string) (string, bool) {
+		if name == "FOUNDER_ID" {
+			return " Founder ", true
+		}
+		return "", false
+	}
+
+	// A REFERENCE RESOLVES, trimmed and case-folded exactly as the inverse
+	// lookup folds what a token presents — which is what makes the two
+	// agree on a value neither of them was written with.
+	want := []string{"founder", "ops", "", ""}
+	for i, seat := range o.Roles {
+		if got := seat.ResolvedOperatorID(env); got != want[i] {
+			t.Errorf("%s names operator %q, want %q", seat.Name, got, want[i])
+		}
+	}
+
+	// AND THE TWO DIRECTIONS CLOSE THE LOOP: whatever a seat names is what
+	// finds that seat again.
+	for _, seat := range o.Roles {
+		id := seat.ResolvedOperatorID(env)
+		if id == "" {
+			continue
+		}
+		if back := o.SeatByOperatorID(id, env); back == nil || back.Name != seat.Name {
+			t.Errorf("%s names %q and that id resolves to %v", seat.Name, id, back)
+		}
+	}
+
+	// AN UNRESOLVABLE REFERENCE NAMES NOBODY rather than the raw text: a
+	// predicate matching `${FOUNDER_ID}` would union in every row somebody
+	// wrote with that literal as a handle.
+	unset := func(string) (string, bool) { return "", false }
+	if got := o.Roles[0].ResolvedOperatorID(unset); got != "" {
+		t.Errorf("an unset reference named %q", got)
+	}
+	// AND A NIL SEAT IS NOT A PANIC: the API asks this of whatever
+	// SeatByHandle answered, and a handle nobody holds answers nil.
+	var absent *org.Role
+	if got := absent.ResolvedOperatorID(nil); got != "" {
+		t.Errorf("a seat nobody holds named %q", got)
+	}
+}
+
 // A `${VAR}` IS A POINTER, AND THE LOOKUP IS WHAT MAKES IT AN ANSWER.
 //
 // Tier B stores the reference verbatim — that is what a pointer IS — so this

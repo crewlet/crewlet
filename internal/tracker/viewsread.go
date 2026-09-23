@@ -66,9 +66,22 @@ type ViewRow struct {
 type ViewQuery struct {
 	Container Container
 
-	// Viewer is whose pins order the saved half. Empty asks for the
-	// shared strip: no pins, and no personal views but the shared ones.
-	Viewer string
+	// Viewer is whose pins order the saved half, and whose personal views
+	// join it. An UNNAMED party asks for the shared strip: no pins, and no
+	// personal views but the shared ones.
+	//
+	// A [Party] RATHER THAN A HANDLE for the reason [MyWorkQuery.Who] is
+	// one — a saved view and a pin are both written by the person's own
+	// credential through the operator tool server, so they are OWNED by
+	// the token's name while the strip is asked for under the seat's.
+	Viewer Party
+
+	// Units resolves a UNIT container's two spellings, so a strip asked
+	// for by a team's id carries the views saved against its name and the
+	// other way round — see [Units] and [CanonicalContainer]. Nil matches
+	// the container as asked, which is the honest answer for a surface
+	// holding no chart.
+	Units Units
 
 	Level statelog.ReadLevel
 
@@ -156,7 +169,7 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 			return err
 		}
 		implicit := implicitViews(q.Container)
-		saved, err := savedViews(ctx, tx, q.Container, q.Viewer, pinned)
+		saved, err := savedViews(ctx, tx, q.Container, q.Units, q.Viewer, pinned)
 		if err != nil {
 			return err
 		}
@@ -249,16 +262,38 @@ func implicitViews(container Container) []ViewRow {
 // answer at all. Filtering in SQL rather than after the fact is what stops a
 // personal view riding a page boundary into somebody else's strip.
 func savedViews(ctx context.Context, tx *sql.Tx, container Container,
-	viewer string, pinned map[string]bool) ([]ViewRow, error) {
+	units Units, viewer Party, pinned map[string]bool) ([]ViewRow, error) {
 
+	// A UNIT CONTAINER MATCHES BOTH OF ITS TEAM'S SPELLINGS, which is the
+	// same rule a `unit=` filter follows and for the same reason: a strip
+	// saved before the team had an id is addressed by its name, and one
+	// saved after it by the id. Every other kind addresses itself one way
+	// and [unitSpellings] hands that one back.
+	ids := []string{container.ID}
+	if container.Kind == ContainerUnit {
+		if spellings := unitSpellings(units, ids); len(spellings) > 0 {
+			ids = spellings
+		}
+	}
+	// THE SHARED HALF IS `owner = ''`, and it answers for a party that
+	// names nobody — which is what an anonymous strip is. The personal
+	// half matches EVERY name this person saves under, because a view
+	// saved through their own credential is owned by the token's id while
+	// the strip is asked for under their seat's.
+	own := ""
+	args := []any{container.Kind}
+	args = append(args, anyOf(ids)...)
+	if owners := viewer.args(); len(owners) > 0 {
+		own = " OR owner IN (" + placeholders(len(owners)) + ")"
+		args = append(args, owners...)
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, name, type, owner, protected, is_default, rank, icon,
 		       params_json
 		FROM tracker_views
-		WHERE container_kind = ? AND container_id = ?
-		  AND (owner = '' OR owner = ?)
-		ORDER BY rank, name`,
-		container.Kind, container.ID, viewer)
+		WHERE container_kind = ? AND container_id IN (`+placeholders(len(ids))+`)
+		  AND (owner = ''`+own+`)
+		ORDER BY rank, name`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read %s %s's views: %w",
 			container.Kind, container.ID, err)
@@ -302,11 +337,15 @@ func savedViews(ctx context.Context, tx *sql.Tx, container Container,
 }
 
 // pinnedViews is the viewer's own pins, and empty for an anonymous read.
-func pinnedViews(ctx context.Context, tx *sql.Tx, viewer string) (map[string]bool, error) {
-	if viewer == "" {
+//
+// GATED ON THE IDENTITY LIST, which is what [savedViews] matches on: the two
+// halves of one strip must agree about whether there is a viewer at all, or a
+// party naming only a credential would have its views and not its pins.
+func pinnedViews(ctx context.Context, tx *sql.Tx, viewer Party) (map[string]bool, error) {
+	if len(viewer.Handles()) == 0 {
 		return nil, nil
 	}
-	person, held, err := readPerson(ctx, tx, viewer)
+	person, held, err := readPartyRecord(ctx, tx, viewer)
 	if err != nil || !held {
 		return nil, err
 	}

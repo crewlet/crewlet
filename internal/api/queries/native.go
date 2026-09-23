@@ -157,9 +157,17 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	values := p.Values()
 	viewer := strings.TrimSpace(p.String("viewer"))
 	delete(values, "viewer")
+	// AND BOTH OF THE VIEWER'S NAMES, for the one key in this grammar
+	// that names a PERSON rather than filtering rows: `priorities=` reads
+	// somebody's own record, and a record written before their credential
+	// was keyed on their seat is filed under the credential. Without the
+	// alias, `preset=priorities` was the one tab of My work's seven that
+	// stayed empty for exactly the person the preset is for.
+	party := s.partyOf(viewer)
 	q, err := s.Work.ExpandedQuery(ctx, values, tracker.Viewer{
-		Handle:  viewer,
-		Project: s.projectOf(viewer),
+		Handle:     party.Handle,
+		OperatorID: party.OperatorID,
+		Project:    s.projectOf(viewer),
 	}, now, time.UTC)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
@@ -175,6 +183,11 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	// surface: a screen renders the level and the lag beside the rows, so
 	// a person who asked for a stronger answer is shown the one they got.
 	q.Level = statelog.LevelFor(statelog.SurfaceDashboard, q.Level)
+	// AND THE CHART THE UNIT FILTERS RESOLVE THROUGH, set here for the
+	// reason the level is: it is a property of this SURFACE rather than of
+	// the grammar, so `unit=` takes a team's id or its name and finds the
+	// work filed under either — see [tracker.Units].
+	q.Units = s.chartUnits()
 	answer, err := s.Work.Tasks(ctx, q, now)
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):
@@ -263,8 +276,14 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// that explain it — and a detail that left them out rendered a task
 	// filed with a severity as one that carried none, beside a board that
 	// had just filtered on that very field.
+	//
+	// AND THE CHART, so the properties panel reads "Engineering" where the
+	// row holds `eng` — the same seam the board column and the project
+	// directory resolve through, so one screen cannot call a team two
+	// things. See [tracker.TaskDetail.Units].
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
+		Units: s.chartUnits(),
 	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
@@ -299,7 +318,7 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 // Absent is still the SHARED strip: no pins and no personal views but the
 // shared ones, which is what a screen draws before it knows who is looking,
 // and what the sidebar and the board ask for on every poll. That is why the
-// rule is [Sources.viewerPins] rather than [Sources.viewerHandle] — the
+// rule is [Sources.viewerPins] rather than [Sources.viewerParty] — the
 // refusal an absent handle earns on a question ABOUT somebody would refuse a
 // strip that has a perfectly good answer.
 func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
@@ -318,6 +337,11 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    viewer,
+		// THE CHART, so `container=unit:engineering` and
+		// `container=unit:eng` reach one strip — the same rule that
+		// upper-cases a project key, for the container kind that has
+		// two spellings. See [tracker.Units].
+		Units: s.chartUnits(),
 		// THE CALLER'S OWN, resolved to this surface's default when they
 		// said nothing — which is `stale`, like every other dashboard
 		// poll. See [freshness] and [Sources.workItems].
@@ -397,7 +421,7 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // workPerson answers one human's own state — their inbox, their queue and
 // their pins.
 //
-// SCOPED BY [Sources.viewerHandle], the same rule `work_my_work` and
+// SCOPED BY [Sources.viewerParty], the same rule `work_my_work` and
 // `work_inbox` take: an absent handle is the caller's own seat, and naming
 // anybody else's needs an operator credential.
 //
@@ -409,7 +433,7 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // to work on next, and who set that order. The parameter selected whose. A
 // scope rule two of the three personal questions follow is not a rule.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
-	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
@@ -418,7 +442,11 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	state, err := s.Work.Person(ctx, tracker.PersonQuery{
-		Handle:      handle,
+		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty]. The
+		// record a person's own assistant has been writing is filed
+		// under the credential it wrote with, so a read of the seat
+		// alone reports an inbox nothing has ever been read in.
+		Who:         who,
 		Level:       fresh.Level,
 		MaxLag:      fresh.MaxLag,
 		MaxLagSeq:   fresh.MaxLagSeq,
@@ -580,16 +608,20 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	listing, err := s.Work.Projects(ctx, tracker.ProjectQuery{
-		Q:        strings.TrimSpace(p.String("q")),
-		Unit:     strings.TrimSpace(p.String("unit")),
-		Archived: p.Bool("archived", false),
-		Limit:    p.Int("limit", 0),
-		Units:    s.chartUnits(),
-		// THE CALLER'S OWN — see [freshness].
-		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
-	})
+	// THE TRACKER'S OWN GRAMMAR, parsed by the tracker. `archived=` and
+	// `sort=` are closed sets it owns, and a copy of either here is a
+	// second answer to a question the engine already has one of.
+	q, err := tracker.ParseProjectQuery(p)
+	if err != nil {
+		// A REFUSAL ABOUT THE REQUEST — the value names itself and the
+		// accepted ones, so a 400 tells the caller what to send instead.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	}
+	q.Units = s.chartUnits()
+	// THE CALLER'S OWN — see [freshness].
+	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
+	q.MinPosition = fresh.MinPosition
+	listing, err := s.Work.Projects(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -643,7 +675,12 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out, err := s.Work.Workload(ctx, tracker.WorkloadQuery{
-		Unit:  strings.TrimSpace(p.String("unit")),
+		Unit: strings.TrimSpace(p.String("unit")),
+		// THROUGH THE CHART, so `?unit=` takes the unit's id or its
+		// name — see [tracker.Units]. A screen sends whichever of the
+		// two it was handed, and the rows hold whichever was current
+		// when each was written.
+		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
@@ -775,11 +812,11 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 
 // workMyWork answers everything one person is expected to look at.
 func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
-	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerHandle]. This
+	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerParty]. This
 	// was registered operator-only and demanded a handle, which is why
 	// routes/MyWork.tsx picked the alphabetically first seat: there was no
 	// way for the screen to know whose day it was drawing.
-	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
@@ -788,7 +825,12 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out, err := s.Work.MyWork(ctx, tracker.MyWorkQuery{
-		Handle: handle,
+		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty].
+		// Every block here matches rows by handle, and the rows a
+		// person's own credential wrote carry the TOKEN's name: the
+		// seven tabs a founder opened on their own day were empty
+		// while they were reporter and watcher on eleven items.
+		Who: who,
 		// THE CALLER'S OWN, defaulting to `stale`: this is a POLL of
 		// somebody's day, not a read-back of a write they just made —
 		// see [freshness] and [Sources.workItems].

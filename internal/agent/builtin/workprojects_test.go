@@ -82,11 +82,45 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
 	callWork(t, reg, tracker.ListProjectsTool, map[string]any{
-		"q": "platform", "unit": "Engineering", "archived": true, "limit": 12,
+		"q": "platform", "unit": "Engineering", "archived": "only",
+		"sort": "-open", "limit": 12,
 	})
 	q := trk.projectQuery
-	if q.Q != "platform" || q.Unit != "Engineering" || !q.Archived || q.Limit != 12 {
+	if q.Q != "platform" || q.Unit != "Engineering" || q.Limit != 12 {
 		t.Errorf("list_projects built %+v, want every argument carried", q)
+	}
+	// THE SAME GRAMMAR THE SCREEN'S IS. `archived=only` SELECTS the
+	// retired ones, and a tool that read it as the two-valued flag it
+	// replaced would answer a model about both sets while the model's own
+	// question was about one.
+	if q.Archived != tracker.ArchivedOnly {
+		t.Errorf("archived=only reached the query as %q, want %q",
+			q.Archived, tracker.ArchivedOnly)
+	}
+	if q.Sort != tracker.ProjectSortOpen || !q.Descending {
+		t.Errorf("sort=-open reached the query as %q/%v, want open descending "+
+			"— a seat's page is fifty of the company's projects, so which "+
+			"fifty is what the ordering decides", q.Sort, q.Descending)
+	}
+
+	// AN ABSENT `archived` IS THE LIVE SET, resolved at the parse so the
+	// read never sees a query that named no set at all.
+	trk.projectQuery = tracker.ProjectQuery{}
+	callWork(t, reg, tracker.ListProjectsTool, map[string]any{})
+	if trk.projectQuery.Archived != tracker.ArchivedExclude {
+		t.Errorf("an absent archived reached the query as %q, want %q",
+			trk.projectQuery.Archived, tracker.ArchivedExclude)
+	}
+
+	// AND A VALUE THAT IS NOT ONE IS A TOOL FAILURE NAMING IT, never a
+	// silent fall back to the default: a model told nothing learns nothing
+	// and asks the same wrong question again.
+	res := callWork(t, reg, tracker.ListProjectsTool, map[string]any{
+		"archived": "yes",
+	})
+	if !res.Failed || !strings.Contains(res.Output, "yes") {
+		t.Errorf("archived=yes answered %+v, want a failure quoting the value",
+			res)
 	}
 
 	callWork(t, reg, tracker.DescribeProjectTool, map[string]any{
@@ -141,10 +175,25 @@ func TestAProjectReadFailureIsReported(t *testing.T) {
 	}
 }
 
+// stubUnits is a test chart holding ONE unit, which answers to its id or its
+// name in any case — the contract [tracker.Units] states and the engine's own
+// resolver keeps.
 type stubUnits struct{}
 
-func (stubUnits) ResolveUnit(string) (string, tracker.LeadRef, bool) {
-	return "Platform", tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent}, true
+func (stubUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
+	ref = strings.TrimSpace(ref)
+	if !strings.EqualFold(ref, "plat") && !strings.EqualFold(ref, "Platform") {
+		return tracker.ChartUnit{}, false
+	}
+	return tracker.ChartUnit{
+		Key: "plat", Name: "Platform",
+		Lead: tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent},
+	}, true
+}
+
+func (s stubUnits) AllUnits() []tracker.ChartUnit {
+	unit, _ := s.ResolveUnit("plat")
+	return []tracker.ChartUnit{unit}
 }
 
 // MY_WORK TAKES NO HANDLE, ever.
@@ -159,10 +208,10 @@ func TestMyWorkIsAlwaysTheTurnsOwnSeat(t *testing.T) {
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
 	callWork(t, reg, tracker.MyWorkTool, map[string]any{"handle": "somebody-else"})
-	if trk.myWorkQuery.Handle != "eng" {
+	if trk.myWorkQuery.Who.Handle != "eng" {
 		t.Errorf("my_work read %q's day, want the turn's own seat — a tool "+
 			"that took a handle would hand one agent a colleague's queue",
-			trk.myWorkQuery.Handle)
+			trk.myWorkQuery.Who.Handle)
 	}
 	entry, ok := reg.Lookup(tracker.MyWorkTool)
 	if !ok {

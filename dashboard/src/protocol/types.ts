@@ -1975,6 +1975,17 @@ export interface WorkUnitRef {
   resolved: boolean;
 }
 
+/** A task's two unit references as a reader renders them — see
+ *  [WorkItemDetail.units].
+ *
+ *  BOTH HALVES, ALWAYS, because they answer different questions and a screen
+ *  draws them side by side: `filed` is the team the work belongs to and never
+ *  moves, `routing` is whose lead hears about it now. */
+export interface WorkItemUnits {
+  filed: WorkUnitRef;
+  routing: WorkUnitRef;
+}
+
 export interface WorkLeadRef {
   handle?: string;
   kind?: "agent" | "human" | "operator" | "system";
@@ -1992,6 +2003,24 @@ export interface WorkTaskCounts {
   closed: number;
 }
 
+/** When a project's work last changed, and who changed it.
+ *
+ *  MAINTAINED beside the counts, by the apply that writes the project's own
+ *  history row — so this is the head of that project's activity feed and never
+ *  disagrees with it. A turn's spend, a board re-order and an edit to the
+ *  project's own settings do not move it: none of them is the work changing.
+ *
+ *  `actor_kind` is which of the four kinds the handle belongs to, because
+ *  `ana` the person and `ana` the seat are different answers; an `operator` is
+ *  a token acting for the company and belongs to no seat. Either field may be
+ *  empty — a commit can name nobody — and the instant is what says the answer
+ *  exists at all. */
+export interface WorkLastChange {
+  at: string;
+  actor?: string;
+  actor_kind?: "agent" | "human" | "operator" | "system";
+}
+
 export interface WorkProjectRow {
   key: string;
   name: string;
@@ -2000,14 +2029,36 @@ export interface WorkProjectRow {
   lead: WorkLeadRef;
   default_assignee?: string;
   task_counts: WorkTaskCounts;
+  /** ABSENT for a project no work has ever been filed into, which is a
+   *  different fact from a project whose work is old — see
+   *  {@link WorkLastChange}. */
+  last_change?: WorkLastChange;
   archived?: boolean;
   version: number;
 }
 
+/**
+ * How many projects each archival set holds, under the listing's own `q` and
+ * `unit` and nothing else.
+ *
+ * `archived=` SELECTS one set, which is what makes the listing honest and also
+ * what leaves an empty answer ambiguous: a screen asking for the live projects
+ * and getting none cannot tell a company with no projects from one that has
+ * archived every one of them, and a reader acts on those two oppositely. The
+ * census is the same question minus the archival term, so the screen never
+ * guesses and never asks twice.
+ */
+export interface WorkProjectCensus {
+  active: number;
+  archived: number;
+}
+
 export interface WorkProjectsAnswer {
   projects: WorkProjectRow[];
+  /** The count of the set that was ASKED for — `census` of that mode. */
   total: number;
   truncated?: boolean;
+  census: WorkProjectCensus;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -2378,10 +2429,40 @@ export interface WorkItemDetail {
   task: WorkItem;
   comments?: WorkComment[];
   history?: WorkChange[];
+  /** What the tasks this answer's `history` POINTS AT are called, id to item
+   *  key — the same map `WorkActivityAnswer.keys` carries, asked of one task's
+   *  own rows.
+   *
+   *  A relation, parent or cascade delta names the other end by its ID,
+   *  because a key belongs to that task's own row and a history row is written
+   *  once by every node and repaired by nothing. Neither side can fix
+   *  "Parent: — → 1d573f85-…" alone: the engine may not put a key on the
+   *  record, and this build holds no map to resolve one with. It is what
+   *  `LabelContext.taskKey` is threaded from.
+   *
+   *  PRESENT ONLY WHERE THE HISTORY IS, since those are the rows it labels,
+   *  and an id the answering node holds no row for is simply ABSENT — a
+   *  renderer falls back to the id, which is a value somebody set. */
+  keys?: Record<string, string>;
   links?: WorkLink[];
   /** The task's custom-field values, ANNOTATED — see [WorkFieldValue]. The
    *  raw map stays on the task; this is the reader's view of it. */
   fields?: WorkFieldValue[];
+  /** The task's two unit references RESOLVED against the org chart, on exactly
+   *  the terms `fields` is the custom-field map's reader view: the strings
+   *  stay on the task because they are the record, and this is what a person
+   *  reads.
+   *
+   *  It exists because what those strings hold is the unit's KEY — its `id` on
+   *  a company that gave its units one, which is a word chosen so that a
+   *  rename moves nothing and therefore a word nobody reads. `key` repeats
+   *  exactly what the row holds, so a filter built from it reaches the same
+   *  rows, and `resolved: false` is the finding "this names a team the chart
+   *  no longer has".
+   *
+   *  ABSENT for a task filed into no team at all, because that is what its two
+   *  empty strings already say. */
+  units?: WorkItemUnits;
   /** Pages the thread backwards, and is empty when this page is all of it. */
   comments_cursor?: string;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
@@ -3055,6 +3136,19 @@ export interface WorkActivityRecord {
 
 export interface WorkActivityAnswer {
   records: WorkActivityRecord[];
+  /** The key of every task id these records NAME, resolved on the answering
+   *  node — a relation delta carries the other task's id, because a key belongs
+   *  to that task's own row and a history row is written once by N nodes and
+   *  repaired by nothing. So the id is what the record claims and the key is
+   *  what this answer resolves, which is the same split `subject_key` already
+   *  takes.
+   *
+   *  ABSENT IS NOT EMPTY, in both directions. An id the answering node holds no
+   *  row for is left OUT rather than mapped to "" — a deferred record names a
+   *  task this node has not applied, and a blank key renders as a task with no
+   *  name — and a page whose deltas name nothing resolvable carries no map at
+   *  all, so a reader guards for undefined rather than for `{}`. */
+  keys?: Record<string, string>;
   /** Resumes exactly after the last row, as a log POSITION — a bare sequence
    *  names no stream and no generation, so a cursor built from one cannot
    *  survive a reanchor. */

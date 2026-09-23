@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -572,4 +573,52 @@ func firedKind(alarms []statelog.Alarm, want statelog.Kind) bool {
 		}
 	}
 	return false
+}
+
+// A COMPANY WITH NO BACKUP HANDS IN AN ABSENCE, NOT A FABRICATED AGE.
+//
+// The alarm has to fire — `backup_floor` refuses until a backup exists, so a
+// company that never takes one never trims — and the form this replaces bought
+// that firing by filling the reading with `backup_max_age + 1h`. The threshold
+// was then reached by a number nobody measured, and the alarm told a company
+// four seconds old that its newest verified backup was twenty-five hours old,
+// one line above the trim term reporting that no backup had been recorded at
+// all: one state, described two ways, and the louder of them invented a
+// backup.
+func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
+	t.Parallel()
+	r := &retention{state: &stateLog{}, fleet: coordmem.NewFleet(), nodeID: "node-a"}
+	now := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
+
+	none := r.reading(t.Context(), now, coord.BackupPoint{}, false)
+	if none.BackupAge != nil {
+		t.Errorf("a fleet with no backup reported an age of %v", *none.BackupAge)
+	}
+	if none.BackupMaxAge != config.DefaultBackupMaxAge {
+		t.Fatalf("BackupMaxAge = %v, want the default %v — with no policy the "+
+			"alarm is silent and this case proves nothing",
+			none.BackupMaxAge, config.DefaultBackupMaxAge)
+	}
+	raised := statelog.Evaluate(none)
+	if !firedKind(raised, statelog.KindBackupAge) {
+		t.Fatalf("a fleet with no backup raised %v — the trim will not advance "+
+			"until one exists", raised)
+	}
+	for _, a := range raised {
+		if a.Kind == statelog.KindBackupAge && strings.Contains(a.Detail, " old") {
+			t.Errorf("detail = %q: it names an age for a backup that does not "+
+				"exist", a.Detail)
+		}
+	}
+
+	// AND A REAL BACKUP IS STILL MEASURED against the same clock, so the
+	// nil above is the absence rather than a field nothing fills.
+	taken := r.reading(t.Context(), now,
+		coord.BackupPoint{At: now.Add(-2 * time.Hour)}, true)
+	if taken.BackupAge == nil || *taken.BackupAge != 2*time.Hour {
+		t.Fatalf("a two-hour-old backup reported %v", taken.BackupAge)
+	}
+	if got := statelog.Evaluate(taken); len(got) != 0 {
+		t.Errorf("a node inside its backup policy raised %v", got)
+	}
 }

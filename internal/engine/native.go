@@ -447,10 +447,18 @@ func (e *Engine) NativeHydrated() bool {
 // catches up, so withholding claims is the whole remedy and dropping work in
 // hand would be pure loss. This is about a copy that is WRONG — an applier
 // halted at a record it cannot decode, an eviction whose peers are dropping
-// everything this node writes, rows below a trim floor with a hole nothing
-// will fill, or a record held past [statelog.DeferralGrace]. A seat left
-// running on any of those answers its own tools out of a copy the fleet has
-// already abandoned, and D122 is the rule that says it must not.
+// everything this node writes, rows below a trim floor (or a floor nobody
+// could read) with a hole nothing will fill, a checkpoint naming a stream
+// that is not this one, an applied prefix frozen past [statelog.StallGrace],
+// or a record held past [statelog.DeferralGrace]. A seat left running on any
+// of those answers its own tools out of a copy the fleet has already
+// abandoned, and D122 is the rule that says it must not.
+//
+// A LAG IS NEVER ONE OF THEM, which is what the log line below means by
+// "wrong rather than behind" — and for as long as the health underneath
+// derived "has this node's copy ever been whole" from "is it level this
+// instant", that line was false on every firing: one unapplied tracker record
+// made a solo node unfit for a heartbeat and moved all seven of its seats.
 //
 // A node with no native backend is trivially serviceable, which is what a
 // company on Jira and Confluence has.
@@ -953,8 +961,15 @@ func chartProjects(o *org.Organization) []tracker.ChartProject {
 			Key: key, Name: name, Purpose: purpose, Unit: unit,
 		})
 	}
+	// THE UNIT COLUMN IS THE UNIT'S KEY, never its name. The project's
+	// unit is what a task filed into it is filed under, and a task's filed
+	// unit is never rewritten — so writing the NAME here filed every item
+	// in the company under a spelling that moves the day somebody renames
+	// the team, which is exactly what `id:` exists to prevent. The name is
+	// the project's own display name beside it, and a reader resolves the
+	// key back to the team's current name through the chart.
 	for unit := range o.AllUnits() {
-		add(unit.Project, unit.Name, unit.Purpose, unit.Name)
+		add(unit.Project, unit.Name, unit.Purpose, unit.Key())
 	}
 	for role := range o.AllRoles() {
 		// EVERY seat, not just the root-level ones: `Organization.Roles`
@@ -968,7 +983,7 @@ func chartProjects(o *org.Organization) []tracker.ChartProject {
 		// so the project still says where in the company it sits.
 		var home string
 		if unit := o.UnitFor(role); unit != nil {
-			home = unit.Name
+			home = unit.Key()
 		}
 		add(role.Project, role.Name, "", home)
 	}
@@ -1034,31 +1049,6 @@ func ProjectOfSeat(o *org.Organization, handle string) string {
 	return scopeOfSeat(o, handle,
 		func(u *org.Unit) string { return u.Project },
 		func(r *org.Role) string { return r.Project })
-}
-
-// UnitOfSeat is the team a seat belongs to, as a task's unit fields hold it.
-//
-// THE UNIT'S KEY rather than its name, because a unit is renamed for the
-// reasons prose is renamed and every task filed under it would otherwise stop
-// resolving — [org.Unit.Key] is the stable identity, falling back to the name
-// for a unit that has not been given one.
-//
-// THE SAME UPWARD WALK as the project, so a seat in a team nested under a
-// department is filed under its OWN team rather than the department's: the
-// first unit that holds the role is the answer, which is what a person means
-// by "my team".
-func UnitOfSeat(o *org.Organization, handle string) string {
-	if o == nil || handle == "" {
-		return ""
-	}
-	for unit := range o.AllUnits() {
-		for _, role := range unit.Roles {
-			if role.Handle() == handle {
-				return unit.Key()
-			}
-		}
-	}
-	return ""
 }
 
 // scopeOfSeat is the project or container a seat files into: its own, else
@@ -1206,11 +1196,6 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		DefaultProject: func(handle string) string {
 			return ProjectOfSeat(e.Company().Org, handle)
 		},
-		// AND THE SEAT'S OWN TEAM, which a create stamps on both unit
-		// fields. Per call for the reason the default project is.
-		UnitOfSeat: func(handle string) string {
-			return UnitOfSeat(e.Company().Org, handle)
-		},
 		// THE LEAD MAP IS READ PER CALL against the epoch current when the
 		// tool runs, for the reason the default project is: a seat's
 		// tools are cloned into its lease, an apply does not rebuild the
@@ -1228,19 +1213,27 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 // THE ONE IMPLEMENTATION, here because this package is where a concrete thing
 // is matched to a seam: the tracker holds no org — the applier may not read
 // one, since two nodes briefly on different epochs would write different rows
-// — so a project's chart-owned unit is resolved at READ time, and every
-// surface that renders one has to reach the same answer.
+// — so a stored unit is resolved at READ time, and every surface that renders,
+// filters or writes one has to reach the same answer.
+//
+// THROUGH [org.Organization.UnitByRef], which is that answer: a stored unit
+// carries either spelling of a unit's identity — its id where the chart gave
+// it one, its name where it did not, and whichever was current when the row
+// was written. Resolving through [org.Organization.Unit] instead matched the
+// name EXACTLY, so `unit: engineering` on a company with a unit named
+// "Engineering" was refused with "This company has no team", and a company
+// that gave its units ids could not resolve one at all.
 func ChartUnits(o *org.Organization) tracker.Units { return chartUnits{org: o} }
 
 type chartUnits struct{ org *org.Organization }
 
-func (c chartUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
+func (c chartUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
 	if c.org == nil {
-		return "", tracker.LeadRef{}, false
+		return tracker.ChartUnit{}, false
 	}
-	unit := c.org.Unit(name)
+	unit := c.org.UnitByRef(ref)
 	if unit == nil {
-		return "", tracker.LeadRef{}, false
+		return tracker.ChartUnit{}, false
 	}
 	lead := tracker.LeadRef{}
 	// THE EFFECTIVE LEAD, which is the one inherited from an ancestor
@@ -1261,14 +1254,43 @@ func (c chartUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
 			lead.Kind = tracker.AuthorHuman
 		}
 	}
-	return unit.Name, lead, true
+	// THE KEY AND THE NAME, because the callers ask in both directions:
+	// what a write stores is the key ([org.Unit.Key]), so that a rename
+	// does not move the work, and what a screen reads is the name.
+	return tracker.ChartUnit{Key: unit.Key(), Name: unit.Name, Lead: lead}, true
+}
+
+// AllUnits is the whole chart, for the board — see [tracker.Units].
+//
+// EVERY UNIT, in the org's own walk order, each with the lead its rows would
+// route to: this is the same answer [chartUnits.ResolveUnit] gives one
+// reference at a time, and two derivations of one unit's identity is how the
+// board and the filter come to disagree about which team a row belongs to.
+func (c chartUnits) AllUnits() []tracker.ChartUnit {
+	if c.org == nil {
+		return nil
+	}
+	var out []tracker.ChartUnit
+	for unit := range c.org.AllUnits() {
+		// THROUGH THE RESOLVER, by the unit's own key, so the pair
+		// cannot drift: whatever ResolveUnit says a unit's key, name and
+		// lead are is what the enumeration says too.
+		if resolved, found := c.ResolveUnit(unit.Key()); found {
+			out = append(out, resolved)
+		}
+	}
+	return out
 }
 
 // liveUnits resolves against the epoch current when the tool RUNS.
 type liveUnits struct{ engine *Engine }
 
-func (l liveUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
-	return ChartUnits(l.engine.Company().Org).ResolveUnit(name)
+func (l liveUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
+	return ChartUnits(l.engine.Company().Org).ResolveUnit(ref)
+}
+
+func (l liveUnits) AllUnits() []tracker.ChartUnit {
+	return ChartUnits(l.engine.Company().Org).AllUnits()
 }
 
 // liveSeats resolves a people field's value to exactly one handle, against the
@@ -1304,21 +1326,43 @@ func (l liveLeads) ProjectLead(project string) string {
 
 // UnitLead is who hears about work routed to a unit.
 func (l liveLeads) UnitLead(unit string) string {
-	if unit == "" {
+	return UnitLeadOf(l.engine.Company().Org, unit)
+}
+
+// UnitLeadOf is who hears about work routed to a unit, named by the unit's ID
+// or by its NAME.
+//
+// BOTH SPELLINGS, which is the set [org.Unit.ID]'s own doc promises a unit is
+// matched by. Matching the id ALONE — which this did — resolved a lead on no
+// company that had not given its units ids: `id` is optional, the shipped
+// example sets none, and `u.ID` is then the empty string, which equals no
+// routing unit any writer has ever stored. So the fallback that reaches a
+// unit's lead when a change named nobody else reached nobody, on every
+// default company, and looked exactly like a unit whose lead is unset.
+//
+// The name is what a row holds today and the id is what it holds the moment a
+// founder adds one; a task filed before that keeps the name, which is what
+// [tracker.Task.FiledUnit] being a record of what was true means.
+//
+// THROUGH [org.Organization.UnitByRef] rather than a walk of its own, which is
+// what makes "both spellings" one rule rather than a claim each reader
+// repeats. The private loop this had folded with [strings.EqualFold] while the
+// chart claims a unit key under a different fold, so the two disagreed over
+// characters that are real in a team name.
+//
+// A UNIT THAT EXISTS AND LEADS NOBODY answers empty, which is not the same as
+// a unit nothing names — and the resolver draws that line once, for every
+// caller.
+func UnitLeadOf(o *org.Organization, unit string) string {
+	if o == nil {
 		return ""
 	}
-	chart := l.engine.Company().Org
-	if chart == nil {
+	found := o.UnitByRef(unit)
+	if found == nil {
 		return ""
 	}
-	for u := range chart.AllUnits() {
-		if !strings.EqualFold(u.ID, unit) {
-			continue
-		}
-		if lead := chart.EffectiveLead(u); lead != nil {
-			return lead.Handle()
-		}
-		return ""
+	if lead := o.EffectiveLead(found); lead != nil {
+		return lead.Handle()
 	}
 	return ""
 }

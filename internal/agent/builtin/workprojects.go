@@ -61,17 +61,37 @@ func (t *listProjects) Parameters() map[string]any {
 					"purpose. Omit for every project.",
 			},
 			"unit": map[string]any{
-				"type":        "string",
-				"description": "Narrows to the projects one unit of the org chart owns.",
+				"type": "string",
+				"description": "Narrows to the projects one unit of the org " +
+					"chart owns, by that unit's id or its name.",
 			},
 			"archived": map[string]any{
-				"type": "boolean",
-				"description": "True also lists retired projects. Default " +
-					"false — no new work is filed into one.",
+				"type": "string",
+				"enum": tracker.ArchivedModeNames(),
+				"description": "Which set: `false` for the live projects, " +
+					"`only` for the retired ones alone, `true` for both. " +
+					"Default `false` — no new work is filed into a retired " +
+					"project.",
+			},
+			"sort": map[string]any{
+				"type": "string",
+				// THE ENGINE'S OWN LIST, rendered rather than retyped:
+				// a description naming a key the parse refuses is a
+				// refusal a model cannot act on. No `enum`, because the
+				// leading `-` doubles the set and a fourteen-entry
+				// enumeration teaches a model less than the sentence.
+				"description": "Orders the whole company's projects before " +
+					"the page is taken, so `-open` is the most open work " +
+					"anywhere rather than the most open of one page. One of " +
+					strings.Join(tracker.ProjectSortNames(), ", ") +
+					", each optionally with a leading `-` for descending. " +
+					"Default " + string(tracker.ProjectSortKey) + ".",
 			},
 			"limit": map[string]any{
-				"type":        "integer",
-				"description": "At most 200, which is also the default.",
+				"type": "integer",
+				"description": "At most 50, which is also the default. A " +
+					"company with more projects than that answers with " +
+					"`total` beside `truncated`: narrow with q or unit.",
 			},
 		},
 	}
@@ -95,16 +115,32 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !ok || t.deps.Reader == nil {
 		return unconfigured(tracker.ListProjectsTool), nil
 	}
-	listing, err := reader.Projects(ctx, tracker.ProjectQuery{
-		Q:        strings.TrimSpace(argString(args, "q")),
-		Unit:     strings.TrimSpace(argString(args, "unit")),
-		Archived: argBool(args, "archived"),
-		Limit:    argInt(args, "limit", 0),
-		Units:    t.deps.Units,
-		// THE SEAT'S OWN LEVEL, like every other read here — see
-		// [seatReadLevel] for why it is a name and not a literal.
-		Level: seatReadLevel,
-	})
+	// THE SAME GRAMMAR THE SCREEN'S `archived=` AND `sort=` ARE, parsed by
+	// the one function that owns them — see [tracker.ParseProjectQuery]. A
+	// model that spelled one wrong is told what is accepted rather than
+	// quietly answered about a different set.
+	q, err := tracker.ParseProjectQuery(tracker.MapParams(args))
+	if err != nil {
+		// CLIPPED, because the refusal quotes the model's OWN argument
+		// back at it and a smuggled newline breaks the render — see
+		// [clip], which is also why it is not shortened.
+		//nolint:nilerr // A tool failure is a RESULT the caller reads.
+		return failed(clip(err.Error())), nil
+	}
+	// THE SEAT'S OWN PAGE, which is smaller than the listing's own cap and
+	// has to be: two hundred rows encode at ≈ 93 KiB and [jsonAnswer]
+	// REFUSES a tool answer past [ToolAnswerBytes] rather than cutting it,
+	// so the tracker's screen-sized cap reached a model as advice to narrow
+	// and no projects at all. A page with `total` beside it is the honest
+	// answer — see [tracker.MaxProjectsPerToolAnswer].
+	if q.Limit <= 0 || q.Limit > tracker.MaxProjectsPerToolAnswer {
+		q.Limit = tracker.MaxProjectsPerToolAnswer
+	}
+	q.Units = t.deps.Units
+	// THE SEAT'S OWN LEVEL, like every other read here — see
+	// [seatReadLevel] for why it is a name and not a literal.
+	q.Level = seatReadLevel
+	listing, err := reader.Projects(ctx, q)
 	if err != nil {
 		return failed(readFailure(tracker.ListProjectsTool, err)), nil
 	}
@@ -164,9 +200,9 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	project := strings.TrimSpace(argString(args, "project"))
 	if project == "" {
-		// THE SEAT'S OWN, which is what a model omitting the argument
+		// THE CALLER'S OWN, which is what a model omitting the argument
 		// meant — and the one project it is certain to be asking about.
-		project = t.deps.defaultProject(actor.Handle)
+		project = t.deps.defaultProject(actor)
 	}
 	if project == "" {
 		return failed("Name a project — this seat's unit owns none, so there " +

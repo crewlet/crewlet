@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -109,6 +110,32 @@ type ActivityAnswer struct {
 	// NextCursor resumes exactly after the last row, as a log position.
 	NextCursor string `json:"next_cursor,omitempty"`
 
+	// Keys names the tasks this page's DELTAS point at, id to item key.
+	//
+	// ON THE ANSWER AND NEVER ON THE RECORD, which is the whole of the
+	// decision. A delta names the other end of a relation by its ID
+	// because a key is a fact about ANOTHER task's row, and
+	// `tracker_history` is inside this domain's identity claim and is
+	// written once and repaired by nothing — so a node that had not
+	// applied that task would store a different string there for ever.
+	// See `deltas.go`. Resolved HERE the answer is a rendering aid the
+	// read states once, from the rows this node holds at the instant it
+	// answers, and it binds nothing: two nodes may legitimately answer
+	// with different maps, exactly as they may answer with different
+	// coverage.
+	//
+	// It is the same join [readActivity] already makes for
+	// [ActivityRecord.SubjectKey], asked of the ids a row POINTS AT
+	// rather than of the row's own subject — and it exists because
+	// neither side could fix "Waiting on: — → 0f3c…" alone: the engine
+	// may not put a key on the record, and a surface holds no map to
+	// resolve one with.
+	//
+	// AN ID THIS NODE HOLDS NO ROW FOR IS SIMPLY ABSENT, never an empty
+	// string: a renderer falls back to the id, which is the honest
+	// degradation and the same one it takes past [MaxActivityKeys].
+	Keys map[string]string `json:"keys,omitempty"`
+
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
 	AppliedThrough uint64             `json:"applied_through"`
@@ -119,6 +146,24 @@ type ActivityAnswer struct {
 
 // MaxActivityRows is how many commits one page carries.
 const MaxActivityRows = 200
+
+// MaxActivityKeys bounds the key map one answer carries.
+//
+// FIVE PER ROW ON A FULL PAGE, which is more counterparties than a row can
+// legibly show: every delta side is cut at [MaxDeltaValue] and ends in its own
+// dropped count, so a row naming more than a handful is already telling the
+// reader it has more. The cap is what stops a page of dependency commits
+// turning a label into the most expensive part of the read — and past it the
+// remaining ids render as ids, which is the same degradation as an id this
+// node holds no row for and therefore needs no second shape.
+//
+// A TASK DETAIL'S OWN HISTORY SHARES IT and is nowhere near: that read is
+// capped at [DetailHistoryDefault] rows, so its walk cannot reach a fifth of
+// this even if every row moved every counterparty field. It is one number
+// because it bounds one walk — a second constant would be a second opinion
+// about what a rendering aid is allowed to cost, free to drift from this one
+// and with no reading of its own to justify it.
+const MaxActivityKeys = MaxActivityRows * 5
 
 // ActivityQuery asks for a slice of the feed.
 type ActivityQuery struct {
@@ -217,6 +262,16 @@ func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
 			return err
 		}
 		answer.Records, answer.NextCursor = records, next
+		// IN THE SAME TRANSACTION as the rows it labels, so the map
+		// cannot name a key from a later instant than the page it is
+		// about — the same reason the count and the coverage probe
+		// share this read.
+		keys, err := counterpartyKeys(ctx, tx, activityDeltaSides(records),
+			r.db.Caps().MaxVariables)
+		if err != nil {
+			return err
+		}
+		answer.Keys = keys
 		position, applied, err := readCheckpoint(ctx, tx)
 		if err != nil {
 			return err
@@ -404,6 +459,219 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		}.String()
 	}
 	return out, next, nil
+}
+
+// counterpartyKeys resolves the task ids a page of deltas points at.
+//
+// See [ActivityAnswer.Keys] for why the map is on the answer and not on the
+// record. What this function is, mechanically, is one indexed lookup per
+// chunk of ids over `tracker_tasks` — the same join [readActivity] makes for
+// each row's own subject, asked of the ids the rows POINT AT.
+//
+// IT TAKES THE DELTA SIDES rather than the rows, because TWO reads ask it and
+// they hold their deltas in two shapes: the feed decodes `fields_json` into
+// [Delta] pairs, and a task detail's history keeps the raw snapshot, which the
+// applier writes as a from/to pair where it could compare two documents and as
+// the notification's own value where it could not. Collecting the sides is
+// therefore per shape ([activityDeltaSides], [historyDeltaSides]) and
+// everything that can drift — which fields name a task, what counts as a
+// member, the cap, the dedupe and the lookup — is here, once. Written twice,
+// the item's own History tab rendered a re-parent as two uuids while the
+// company-wide log resolved the same delta to two keys.
+//
+// It resolves nothing and fails nothing when there is nothing to resolve,
+// which is the overwhelming majority of pages: a feed of status changes and
+// comments names no counterparty at all, and the walk below then issues no
+// statement.
+func counterpartyKeys(ctx context.Context, tx *sql.Tx, sides []string,
+	maxVariables int) (map[string]string, error) {
+
+	wanted := make([]string, 0, len(sides))
+	seen := make(map[string]bool, len(sides))
+	for _, side := range sides {
+		for _, member := range strings.Split(side, ", ") {
+			switch {
+			case member == "" || seen[member]:
+				continue
+			case strings.HasPrefix(member, "+"):
+				// THE DROPPED COUNT, not a member. A bounded
+				// list ends in `+12 more`, and no id this
+				// package mints begins with a plus.
+				continue
+			case len(wanted) >= MaxActivityKeys:
+				// PAST THE CAP THE REST RENDER AS IDS, which is
+				// what an unresolved id already does — so the
+				// walk stops rather than growing a map the page
+				// cannot use.
+				return resolveTaskKeys(ctx, tx, wanted, maxVariables)
+			}
+			seen[member] = true
+			wanted = append(wanted, member)
+		}
+	}
+	return resolveTaskKeys(ctx, tx, wanted, maxVariables)
+}
+
+// activityDeltaSides is every counterparty side a feed page carries.
+//
+// The feed's own shape: `fields_json` decoded into [Delta] pairs, so each
+// field contributes exactly two sides.
+func activityDeltaSides(records []ActivityRecord) []string {
+	out := make([]string, 0, len(records)*2)
+	for _, record := range records {
+		for _, field := range counterpartyDeltaFields {
+			delta, carried := record.Fields[field]
+			if !carried {
+				continue
+			}
+			out = append(out, delta.From, delta.To)
+		}
+	}
+	return out
+}
+
+// historyDeltaSides is the same over a task's own history rows.
+//
+// THE RAW SNAPSHOT, which is the other shape the same column takes: the
+// applier writes a from/to pair where it could compare two documents and the
+// notification's own value where it could not (a comment, a mention, an ask).
+// A collector that assumed the pair would resolve nothing on the second, and a
+// renderer reading both — which is what the dashboard does — would then print
+// an id under one heading and a key under the next.
+func historyDeltaSides(entries []HistoryEntry) []string {
+	out := make([]string, 0, len(entries)*2)
+	for _, entry := range entries {
+		for _, field := range counterpartyDeltaFields {
+			raw, carried := entry.Fields[field]
+			if !carried {
+				continue
+			}
+			out = appendDeltaSides(out, raw)
+		}
+	}
+	return out
+}
+
+// appendDeltaSides flattens one raw snapshot value into the strings that may
+// hold ids.
+//
+// RECURSIVE OVER THE THREE SHAPES `encoding/json` decodes a snapshot into, and
+// silent on every other: a number, a bool or a nested object in this position
+// is not an id, and the lookup that follows would spend a parameter on it.
+func appendDeltaSides(out []string, raw any) []string {
+	switch v := raw.(type) {
+	case string:
+		return append(out, v)
+	case []any:
+		for _, item := range v {
+			out = appendDeltaSides(out, item)
+		}
+		return out
+	case map[string]any:
+		// A FROM/TO PAIR AND NOTHING ELSE. Any other object here is a
+		// shape this field does not take, and walking its values would
+		// be guessing at which of them names a task.
+		for _, side := range [...]string{"from", "to"} {
+			if member, carried := v[side]; carried {
+				out = appendDeltaSides(out, member)
+			}
+		}
+		return out
+	}
+	return out
+}
+
+// counterpartyDeltaFields are the delta fields whose members are TASK IDS.
+//
+// DERIVED FROM [RelationKinds] rather than listed beside it, for the reason
+// that slice exists: a fifth kind of edge is resolved with no second edit.
+// [RelationPage] is the one exclusion and it is a fact about the type — a
+// `page` edge names a knowledge-base page, and a map that answered for one
+// would be claiming a page is a task.
+//
+// FOUR ARE BEYOND THE EDGES, and each one names a task for its own reason:
+// `blocking` is the mirror a blocker carries, `priorities` is a person's own
+// queue — an ordered list of task ids that renders on the same page —
+// `parent` is the task this one hangs under, and `removed_with` is the root a
+// cascade took it with. The last two are scalars rather than lists and are
+// resolved here all the same: [TaskDeltas] records both by ID for the reason
+// it records every relation by one — a key is a fact about another task's row
+// and a history row is repaired by nothing — so without them a reparent and a
+// cascade removal are the two rows on an item's own History tab that still
+// render a uuid.
+var counterpartyDeltaFields = func() []string {
+	out := make([]string, 0, len(RelationKinds)+4)
+	for _, kind := range RelationKinds {
+		if kind == RelationPage {
+			continue
+		}
+		out = append(out, string(kind))
+	}
+	return append(out, "blocking", "priorities", "parent", "removed_with")
+}()
+
+// resolveTaskKeys reads the item keys of ids this node holds a row for.
+//
+// CHUNKED ON THE ESTATE'S OWN PARAMETER LIMIT, which is the shape the applier
+// takes for the same reason — a statement with more bound parameters than the
+// engine accepts fails outright rather than answering less. A limit the store
+// could not probe degrades to one id per statement: slow, never wrong.
+func resolveTaskKeys(ctx context.Context, tx *sql.Tx, ids []string,
+	maxVariables int) (map[string]string, error) {
+
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if maxVariables < 1 {
+		maxVariables = 1
+	}
+	out := make(map[string]string, len(ids))
+	for chunk := range slices.Chunk(ids, maxVariables) {
+		args := make([]any, 0, len(chunk))
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		rows, err := tx.QueryContext(ctx,
+			`SELECT id, key FROM tracker_tasks WHERE id IN (`+
+				placeholders(len(chunk))+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("tracker: resolve the item keys this "+
+				"activity page points at: %w", err)
+		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := scanTaskKeys(rows, out); err != nil {
+			return nil, err
+		}
+	}
+	if len(out) == 0 {
+		// NIL RATHER THAN AN EMPTY MAP, so the field is omitted: a page
+		// that named nothing resolvable and a page that named nothing
+		// at all are one fact to a reader, and two spellings of it in
+		// one field is what `deltas.go` refuses on the write side.
+		return nil, nil
+	}
+	return out, nil
+}
+
+// scanTaskKeys drains one chunk into the map.
+func scanTaskKeys(rows *sql.Rows, into map[string]string) error {
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, key string
+		if err := rows.Scan(&id, &key); err != nil {
+			return fmt.Errorf("tracker: scan an item key: %w", err)
+		}
+		if key == "" {
+			// A ROW WITH NO KEY YET IS AN ABSENT ANSWER, not an
+			// empty one — see [ActivityAnswer.Keys].
+			continue
+		}
+		into[id] = key
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("tracker: read the item keys: %w", err)
+	}
+	return nil
 }
 
 // compileActivity turns the query into a predicate.

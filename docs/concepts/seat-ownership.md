@@ -96,6 +96,54 @@ What *is* provable is that a successful renew at time *t* bought exclusivity thr
 
 That also gives the right answer during a database blip. The lease row is untouched by an unreachable store, so the seat is **kept** — shedding on a two-second outage would tear a healthy company down — but new turns stop at the first failed renew. The consumer is quiesced, and un-quiesced when a renew succeeds again. Both edges matter: without the second one the node comes back healthy, still owning the seat, still attached to it, and never reads from it again.
 
+## A copy that is behind, and a copy that is wrong
+
+A node runs its seats out of its own copy of the company's records — the
+tracker and the knowledge base, applied from the shared log into this node's
+database (see [Replication](../guides/replication.md)). That copy can be in
+two quite different bad states, and the engine treats them as opposites.
+
+| | What it means | What the node does |
+|---|---|---|
+| **Behind** | Records are on the log that this node has not applied yet. It is catching up, and it will. | **Keeps every seat it holds**, and claims no new ones until it is level. The sweep logs `seat_claims_withheld` at debug, and the fleet view counts how many of this node's replication loops are current |
+| **Wrong** | The copy cannot become current by applying more records | **Gives back every seat**, so a peer that can serve them takes over (`seats_shed_unserviceable`). It takes them back on the first sweep after the state clears |
+
+Six states are *wrong*, and each is a fact about the rows rather than about how
+far along they are:
+
+- the applier has **stopped** at a record it cannot apply;
+- the node has been **evicted** from the fleet, so its peers drop everything it
+  writes;
+- its rows are **below the trim floor** — records it never applied have been
+  deleted, and the hole will never fill. A floor that has been *unreadable* for
+  four heartbeats counts here too: an unread floor is not a floor that is
+  satisfied;
+- its checkpoint names **a stream that is not this one**, which is a log
+  deleted and rebuilt underneath it (`crewlet retention reanchor` is the
+  repair);
+- its applied position has **stopped moving** for a minute while records wait —
+  a stall, which is the one of these that looks like lag and is not: the node
+  owes progress and is not making it;
+- it has held a record it **cannot decode** for longer than the deferral grace,
+  which means it is running a build that cannot read what its peers write.
+
+**Lag is never one of them, at any size.** A node a million records behind
+keeps its seats and works through the backlog; a node one record behind — which
+is every node for the moment between a write landing on the log and its own
+applier reaching it — is not in a different state from one that is level. The
+distinction is what the `apply_lag` [alarm](../reference/alarms.md) says: being
+behind is worth looking at, and it is not what moves work.
+
+The release is voluntary, like a rebalance: the in-flight turn finishes, and
+the seat leaves when it goes idle. The lease was never lost — only the rows
+are wrong — so abandoning a turn mid-flight would cost more than the stale
+answer it is racing.
+
+On a single node there is nowhere for the seats to go, so the shed is simply a
+company that stops working until the state clears. That is the right trade for
+rows that are wrong — the alternative is agents acting on them — and it is the
+reason lag must never reach this gate.
+
 ## Fencing: what it protects, and what it cannot
 
 The epoch is threaded into the **sandbox run state**: every mutation on a live run record is refused when the record's `owner_epoch` outranks the writer's. Beside it, the **seat fence** (`seat.Host.Fence`) is checked in the turn loop at the top of every round and again before each of that round's tool calls. A zombie's late write to a run it no longer owns bounces; a zombie's turn stops before its next tool call.

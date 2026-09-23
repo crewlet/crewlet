@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -217,7 +218,7 @@ func (s *stubPages) Revision(_ context.Context, pageID string, version int,
 }
 
 // personalQuestions are the four scoped by the caller's own seat — see
-// Sources.viewerHandle. They refuse an anonymous caller who names somebody
+// Sources.viewerParty. They refuse an anonymous caller who names somebody
 // else, so a sweep that walks every native question has to present a
 // credential for these four. Named once rather than per sweep: the set grew
 // from one to four, and each sweep that spelled it as `== "work_my_work"`
@@ -314,6 +315,30 @@ func TestTheItemQueryAsksForEveryPart(t *testing.T) {
 	want := tracker.DetailWants{Comments: true, History: true, Links: true, Fields: true}
 	if w.taskWants != want {
 		t.Errorf("work_item asked the reader for %+v, want %+v", w.taskWants, want)
+	}
+}
+
+// AND IT ASKS WITH THE CHART, so the properties panel reads a team's NAME
+// where the row holds its key.
+//
+// What a task's unit fields hold is [org.Unit.Key] — an id on any company
+// that gave its units one, which is a word chosen so that a rename moves
+// nothing and therefore a word nobody reads. Without the chart this answer
+// carried the id alone, and an item page said `eng` beside a board column
+// that said Engineering. An unresolved reference is also a FINDING — the team
+// has left the chart — so a surface that holds a chart and does not pass it
+// reports every task as orphaned.
+func TestTheItemQueryAsksWithTheChart(t *testing.T) {
+	w := &stubWork{}
+	cfg := company(t)
+	if _, err := askNative(t, queries.Sources{
+		Work: w, Company: func() *config.Company { return cfg },
+	}, "work_item", map[string]any{"id": "ENG-1"}); err != nil {
+		t.Fatalf("work_item: %v", err)
+	}
+	if w.taskWants.Units == nil {
+		t.Error("work_item read the item with no chart, so its unit fields " +
+			"render as a key nobody reads and as a team the chart has lost")
 	}
 }
 
@@ -545,8 +570,8 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 				t.Fatalf("%q reached the reader as %s %q, want %s %q", tc.raw,
 					w.views.Container.Kind, w.views.Container.ID, tc.kind, tc.id)
 			}
-			if w.views.Viewer != "ana" {
-				t.Fatalf("the viewer reached the reader as %q", w.views.Viewer)
+			if w.views.Viewer.Handle != "ana" {
+				t.Fatalf("the viewer reached the reader as %+v", w.views.Viewer)
 			}
 		})
 	}
@@ -560,6 +585,88 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 			map[string]any{"container": raw})
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("container=%q answered %v, want a bad-parameter refusal", raw, err)
+		}
+	}
+}
+
+// THE PROJECTS LISTING'S TWO CLOSED SETS REACH THE READER AS THEMSELVES.
+//
+// `archived=` SELECTS a set and `sort=` orders the WHOLE of it before the
+// engine's own cap takes a page. Both were the screen's own work once — the
+// route sent a widening boolean and the directory narrowed and re-sorted what
+// came back — so past the cap the Archived segment reported a company with
+// dozens of retired projects as having none, and `sort=-open` ranked the most
+// open work among the projects whose keys sort first.
+func TestTheProjectsListingCarriesItsArchivalSetAndOrdering(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		archived   string
+		sort       string
+		wantSet    tracker.ArchivedMode
+		wantSort   tracker.ProjectSort
+		descending bool
+	}{
+		{"", "", tracker.ArchivedExclude, "", false},
+		{"false", "key", tracker.ArchivedExclude, tracker.ProjectSortKey, false},
+		{"only", "-open", tracker.ArchivedOnly, tracker.ProjectSortOpen, true},
+		{"true", "last_change", tracker.ArchivedInclude, tracker.ProjectSortLastChange, false},
+	} {
+		w := &stubWork{}
+		args := map[string]any{}
+		if tc.archived != "" {
+			args["archived"] = tc.archived
+		}
+		if tc.sort != "" {
+			args["sort"] = tc.sort
+		}
+		if _, err := askNative(t, queries.Sources{Work: w}, "work_projects",
+			args); err != nil {
+			t.Fatalf("work_projects%+v: %v", args, err)
+		}
+		if w.projectQuery.Archived != tc.wantSet {
+			t.Errorf("archived=%q reached the reader as %q, want %q",
+				tc.archived, w.projectQuery.Archived, tc.wantSet)
+		}
+		if w.projectQuery.Sort != tc.wantSort ||
+			w.projectQuery.Descending != tc.descending {
+			t.Errorf("sort=%q reached the reader as %q/%v, want %q/%v",
+				tc.sort, w.projectQuery.Sort, w.projectQuery.Descending,
+				tc.wantSort, tc.descending)
+		}
+	}
+
+	// AND A VALUE THAT IS NEITHER SET'S IS A 400 NAMING THE PARAMETER, not
+	// a silent fall back: a screen handed the default for a filter it
+	// asked for draws a set nobody chose, and the reader has no way to
+	// tell. `bad_params` is also the one code the dashboard renders as the
+	// SCREEN's fault, so retrying is not offered.
+	for _, tc := range []struct{ key, value, want string }{
+		{"archived", "yes", "archived"},
+		// `active` READS LIKE A VALUE and is not one — the live set is
+		// `false`. Accepting it as the default would be exactly the
+		// silent narrowing this refusal exists to stop.
+		{"archived", "active", "archived"},
+		{"sort", "lead", "sort"},
+		{"sort", "-progress", "sort"},
+	} {
+		w := &stubWork{}
+		_, err := askNative(t, queries.Sources{Work: w}, "work_projects",
+			map[string]any{tc.key: tc.value})
+		if !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("%s=%s answered %v, want a bad-parameter refusal",
+				tc.key, tc.value, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.want) ||
+			!strings.Contains(err.Error(), tc.value) {
+			t.Errorf("%s=%s is refused with %q, want the parameter and the "+
+				"value named", tc.key, tc.value, err)
+		}
+		// AND THE READ IS NEVER MADE. A refusal that had already asked
+		// the store would be a 400 over an answer somebody paid for.
+		if w.projectQuery.Level != "" {
+			t.Errorf("%s=%s reached the reader as %+v, want no read at all",
+				tc.key, tc.value, w.projectQuery)
 		}
 	}
 }
@@ -593,8 +700,8 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 	}
 	// AND THE READER WAS NEVER ASKED, which is the half a refusal
 	// returned after the read would not have bought.
-	if w.views.Viewer != "" {
-		t.Errorf("the refused handle reached the reader as %q", w.views.Viewer)
+	if w.views.Viewer.Named() {
+		t.Errorf("the refused handle reached the reader as %+v", w.views.Viewer)
 	}
 
 	// AN OPERATOR NAMES ANYBODY'S: they hold the credential that writes
@@ -604,9 +711,9 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 		map[string]any{"container": "workspace", "viewer": "ada-okonkwo"}); err != nil {
 		t.Fatalf("an operator naming a seat's handle: %v", err)
 	}
-	if w.views.Viewer != "ada-okonkwo" {
+	if w.views.Viewer.Handle != "ada-okonkwo" {
 		t.Errorf("an operator's viewer reached the reader as %q, want ada-okonkwo",
-			w.views.Viewer)
+			w.views.Viewer.Handle)
 	}
 
 	// AND NAMING NOBODY IS STILL THE SHARED STRIP, anonymously: a real
@@ -616,8 +723,8 @@ func TestAStripIsOnlyPersonalisedByAViewerTheCallerMayName(t *testing.T) {
 		map[string]any{"container": "workspace"}); err != nil {
 		t.Fatalf("the shared strip, asked anonymously: %v", err)
 	}
-	if w.views.Viewer != "" {
-		t.Errorf("an unnamed viewer reached the reader as %q, want empty", w.views.Viewer)
+	if w.views.Viewer.Named() {
+		t.Errorf("an unnamed viewer reached the reader as %+v, want empty", w.views.Viewer)
 	}
 }
 

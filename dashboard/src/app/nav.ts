@@ -179,6 +179,8 @@ export function railRow(key: Workspace | ""): RailRow | undefined {
 export const RESERVED_SEGMENTS: string[] = [
   "views",
   "search",
+  "projects",
+  "history",
   "people",
   "units",
   "turns",
@@ -247,12 +249,30 @@ export const DESTINATIONS: Destination[] = [
     hint: "Every item in the company, in one list",
   },
   {
-    key: "work-search",
+    // THE CONTAINERS, AS A PLACE OF THEIR OWN. The company's four numbers and
+    // the ranked bar chart used to sit above every board and every list on
+    // `#/work`, so the work itself started below the fold on any company with
+    // more than three projects — and a reader who came to look at a list read
+    // an overview first, every time. An overview is a different question from
+    // "what is there", and a different question is a different page.
+    key: "work-projects",
     workspace: "work",
-    label: "Search",
-    icon: "search",
-    path: ["work", "search"],
-    hint: "Rank the company's work against a phrase, the way an agent does",
+    label: "Projects",
+    icon: "view_column",
+    path: ["work", "projects"],
+    hint: "Every project, who leads it, and how far along it is",
+  },
+  {
+    // THE LOG, FOR THE REASON THE OVERVIEW GOT A PAGE. The tracker's change
+    // feed has a time axis, facets and a pace of its own, and it was drawn as
+    // twenty rows under a board — where it could be neither filtered nor
+    // ranged, and answered "what changed" with whatever the last page held.
+    key: "work-history",
+    workspace: "work",
+    label: "History",
+    icon: "timeline",
+    path: ["work", "history"],
+    hint: "Every change to the company's work, over a window you choose",
   },
   {
     key: "work-views",
@@ -261,6 +281,14 @@ export const DESTINATIONS: Destination[] = [
     icon: "dashboard",
     path: ["work", "views"],
     hint: "Every saved view, who owns it and which are pinned",
+  },
+  {
+    key: "work-search",
+    workspace: "work",
+    label: "Search",
+    icon: "search",
+    path: ["work", "search"],
+    hint: "Rank the company's work against a phrase, the way an agent does",
   },
   {
     key: "company",

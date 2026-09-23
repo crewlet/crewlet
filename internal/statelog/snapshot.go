@@ -81,8 +81,11 @@ const (
 	// save a joiner the replay it would cost to transfer.
 	SkipLagging SkipReason = "lagging"
 
-	// SkipUnhydrated — this node has not drained the log even once, so
-	// what it holds is a prefix rather than a state.
+	// SkipUnhydrated — this node cannot vouch for a whole copy: it has
+	// not drained the log since its applier started, or its rows have
+	// stopped moving since it did. Either way what it holds is a prefix
+	// rather than a state. It is [Health.Drained], and the DISTANCE a
+	// drained node has since fallen behind is `lagging` instead.
 	SkipUnhydrated SkipReason = "unhydrated"
 
 	// SkipSoleNode — there is nobody to donate to. The recovery artefact
@@ -574,10 +577,17 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 					"longer has — a copy would name a position no recipient "+
 					"could replay from", name, h.Position.Seq, *h.LastSeq)}
 		}
-		if !h.CaughtUp {
+		// THE HISTORY, and the term below is the DISTANCE. They were one
+		// bool once — assigned from the instantaneous lag — and this arm
+		// then fired at a lag of one, which made the slack below
+		// unreachable: no node ever skipped for `lagging`, because a node
+		// a hundred records behind was already reported as one that had
+		// never drained at all.
+		if !h.Drained {
 			return &ErrSkipped{Reason: SkipUnhydrated, Detail: fmt.Sprintf(
-				"this node has never drained %s, so what it holds is a prefix "+
-					"rather than a state", name)}
+				"this node has not drained %s since its applier started, or has "+
+					"stalled since it did, so what it holds is a prefix rather "+
+					"than a state", name)}
 		}
 		if h.Lag != nil && *h.Lag > SnapshotLagSlack {
 			return &ErrSkipped{Reason: SkipLagging, Detail: fmt.Sprintf(

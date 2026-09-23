@@ -14,6 +14,22 @@ declare module "*.md?raw" {
 }
 
 /**
+ * A screen's own source, for a gate whose subject IS the source.
+ *
+ * `routes/work/toolbar/grammar.test.tsx` reads every URL key `ItemsView`
+ * writes out of the component itself, the way `internal/clientsource` reads a
+ * declaration out of this tree for the engine's own gates — because a list of
+ * twenty strings copied into a test is a list that goes stale silently. A
+ * `?raw` import rather than `readFileSync`: it resolves through Vite, so it
+ * works in the jsdom environment a rendering suite needs, where
+ * `import.meta.url` is not a file URL at all.
+ */
+declare module "*.tsx?raw" {
+  const content: string;
+  export default content;
+}
+
+/**
  * The vendored drawings' checksum file, likewise as its own bytes.
  *
  * It carries no extension because `shasum -a 256 -c SHA256SUMS` is how the file

@@ -93,6 +93,55 @@ Read and snooze marks are the assistant's to write, not the screen's: the
 dashboard is read-only, and every write in this engine is attributed to
 somebody. What it shows is what the engine recorded.
 
+**Your own writes count as yours — and the record still names the token.**
+A work item you file through your assistant is attributed to the **credential**
+you filed it with, with author kind `operator`, never to your seat handle.
+That is deliberate and it stays: a tracker whose author field is chosen by the
+writer is not an audit trail, and there is no way to ask the operator tool
+server to act as a seat. So the item records `sarah` as its reporter, while her
+colleagues assign work to `sarah-chen`.
+
+Both of those are **her**. Every question that answers "mine" — My work's
+seven tabs, the inbox, her own record — matches the seat handle *or* the
+operator id bound to it, and reports the answer under the seat.
+
+Everything that asks who the caller *is* rather than who wrote it resolves to
+the **seat** for the same reason: the watch her create leaves on the item, the
+project it is filed into when she names none, and the lead relation that
+decides which work she may point at another team. An address is not an
+attribution — nothing routes to a credential, so a token left in a watcher set
+is a colleague nobody can reach. It is also how the wake for a change knows not
+to come back to her: the record carries her seat beside the token that authored
+it, so work she files through her assistant wakes her colleagues and not
+her.
+
+Bind the token and your own work is on your own screen; leave it unbound and
+you are an operator outside the chart, acting as `operator:<id>`, which is an
+ordinary state and not an error.
+
+**Your own marks and pins are the person's, and the record still names the
+token.** *Whose* state a document holds and *who wrote it* are two different
+questions with two different answers, and the person tools answer both. When
+Sarah's assistant marks her inbox read, pins a view or re-orders her queue, the
+record it writes is **`sarah-chen`'s** — the seat her token is bound to — while
+the history row it leaves names **`sarah`** with author kind `operator`. The
+attribution rule above is untouched: it answers *who did this*, and it stays
+the credential. The subject answers *whose inbox is this*, and that is the
+person.
+
+Keyed on the credential, as it was, a bound founder accumulated a second record
+called `founder`: everything their assistant marked was invisible on `#/inbox`,
+which asks under the seat, and `#/me`'s queue tab came back empty. An **unbound
+token is unchanged** — it writes its own record under its own id, which is the
+ordinary state of an operator outside the chart — and records written before a
+company bound its token are still read, the seat's being preferred and the
+credential's the fallback.
+
+One change that concerned you under both names is **one** notice, under the
+stronger of the two reasons — the same rule that already gives one handle one
+reason. And an operator reading somebody else's day is handed *that* person's
+two names from the chart, never the credential in their own hand.
+
 **The binding is written on the seat, not on the token.** Tier A is the root of
 trust and may never read Tier B — it holds the keys to the secret store — so a
 `seat:` field on an `api.auth.tokens[]` entry would have the trusted tier

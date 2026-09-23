@@ -339,7 +339,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		// it would be a parser that could fail on a store — and a list
 		// read outside this snapshot could name a task the rows below
 		// were never filtered against.
-		if q.PriorityListOf != "" {
+		if q.PriorityListOf.Named() {
 			q.PriorityList, err = readPriorityList(ctx, tx, q.PriorityListOf)
 			if err != nil {
 				return err
@@ -514,7 +514,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	if len(q.Keys) > 0 {
 		add("t.key IN ("+placeholders(len(q.Keys))+")", anyOf(q.Keys)...)
 	}
-	if q.PriorityListOf != "" {
+	if q.PriorityListOf.Named() {
 		if len(q.PriorityList) == 0 {
 			// AN EMPTY LIST IS AN EMPTY ANSWER, stated rather than
 			// omitted: dropping the clause would answer every task in
@@ -543,12 +543,19 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	if len(q.Types) > 0 {
 		add("t.type IN ("+placeholders(len(q.Types))+")", anyOf(q.Types)...)
 	}
-	if len(q.Unit) > 0 {
-		add("t.filed_unit IN ("+placeholders(len(q.Unit))+")", anyOf(q.Unit)...)
+	// BOTH UNIT FILTERS MATCH EVERY SPELLING THEIR UNIT ANSWERS TO — see
+	// [unitSpellings]. `filed_unit` is a record of what was true and is
+	// never rewritten, so a company that gives a unit an id holds both
+	// spellings across its own history for ever: the filter resolves
+	// through the chart and matches the set rather than the one string
+	// somebody typed.
+	if spellings := unitSpellings(q.Units, q.Unit); len(spellings) > 0 {
+		add("t.filed_unit IN ("+placeholders(len(spellings))+")",
+			anyOf(spellings)...)
 	}
-	if len(q.RoutingUnit) > 0 {
-		add("t.routing_unit IN ("+placeholders(len(q.RoutingUnit))+")",
-			anyOf(q.RoutingUnit)...)
+	if spellings := unitSpellings(q.Units, q.RoutingUnit); len(spellings) > 0 {
+		add("t.routing_unit IN ("+placeholders(len(spellings))+")",
+			anyOf(spellings)...)
 	}
 	if handles := q.Assignee; len(handles) > 0 {
 		// `none` is a VALUE rather than a missing filter: "unassigned"
@@ -710,7 +717,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			// THE ALIAS CARRIES ITS OPEN CONDITION, which is what makes
 			// it the same predicate as the preset that means the same
 			// thing rather than a second one that drifts.
-			add("t.status_group IN ('not_started','active')")
+			add("t.status_group IN (" + openGroupsSQL + ")")
 		}
 	}
 	for column, filter := range map[string]*NumFilter{
@@ -770,11 +777,11 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		// cancelled inside it is in the answer exactly as one done
 		// inside it is — which is what the finish stamp being by GROUP
 		// buys, and why the board's Cancelled column is not empty.
-		add("(t.status_group IN ('not_started','active') OR "+
+		add("(t.status_group IN ("+openGroupsSQL+") OR "+
 			"(t.finished_at IS NOT NULL AND t.finished_at >= ?))",
 			store.EncodeTime(now.Add(-q.ShowClosed.Recent)))
 	default:
-		add("t.status_group IN ('not_started','active')")
+		add("t.status_group IN (" + openGroupsSQL + ")")
 	}
 
 	if len(q.Any) > 0 {
@@ -874,17 +881,17 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		where = append(where, rooted)
 	}
 
-	if q.Group != "" && !branch {
+	if q.Group != nil && !branch {
 		// A COLUMN FILTER IS A PREDICATE OF THE WHOLE QUERY, in its
 		// JOIN-FREE form: the count hint and the totals share this
 		// predicate and carry no join, so an axis expressed only as one
 		// would leave a header adding up the whole board while the rows
 		// showed a single column of it.
-		axis, err := compileGroup(q.GroupBy, fields)
+		axis, err := compileGroup(q.GroupBy, fields, q.dayWindow(), q.Units)
 		if err != nil {
 			return "", nil, err
 		}
-		clause, values := axis.filter(q.Group)
+		clause, values := axis.filter(*q.Group)
 		add(clause, values...)
 	}
 
@@ -1845,8 +1852,14 @@ func joinAnd(clauses []string) string {
 // row, so "no row" is the ordinary state of every human on their first day and
 // every seat for ever — and refusing would make a turn-start read fail on a
 // seat that had simply never been given a priority.
-func readPriorityList(ctx context.Context, tx *sql.Tx, handle string) ([]string, error) {
-	person, held, err := readPerson(ctx, tx, handle)
+//
+// THROUGH [readPartyRecord] LIKE EVERY OTHER PERSONAL READ. It read the handle
+// alone, so `preset=priorities` and `my_work` answered from DIFFERENT records
+// for the one person who can have two — a founder whose list was written
+// before their token was keyed on their seat saw it on My work's own block and
+// an empty board on the tab beside it.
+func readPriorityList(ctx context.Context, tx *sql.Tx, who Party) ([]string, error) {
+	person, held, err := readPartyRecord(ctx, tx, who)
 	if err != nil {
 		return nil, err
 	}
@@ -1868,7 +1881,7 @@ func readPriorityList(ctx context.Context, tx *sql.Tx, handle string) ([]string,
 // A ROW THE LIST DOES NOT NAME KEEPS ITS PLACE at the end, because a caller
 // that combined `priorities=` with another filter still asked for those rows.
 func orderByList(rows []TaskRow, q Query) []TaskRow {
-	if q.PriorityListOf == "" || len(q.PriorityList) == 0 || len(rows) == 0 {
+	if !q.PriorityListOf.Named() || len(q.PriorityList) == 0 || len(rows) == 0 {
 		return rows
 	}
 	at := make(map[string]int, len(q.PriorityList))

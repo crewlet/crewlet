@@ -182,6 +182,29 @@ const (
 	ArchivedOnly    ArchivedMode = "only"
 )
 
+// ArchivedModes is every mode, in the order a refusal names them.
+var ArchivedModes = []ArchivedMode{ArchivedExclude, ArchivedInclude, ArchivedOnly}
+
+// ArchivedModeNames is the same list as wire strings, for the surfaces that
+// have to quote it back at a caller who spelled one wrong.
+func ArchivedModeNames() []string {
+	out := make([]string, len(ArchivedModes))
+	for i, m := range ArchivedModes {
+		out[i] = string(m)
+	}
+	return out
+}
+
+// Valid reports whether this is one of the three modes.
+//
+// THE ZERO VALUE IS NOT ONE OF THEM, deliberately. "" is what a caller who has
+// not answered the question carries, and the question has three answers rather
+// than two — so every surface that takes one either resolves the absence to
+// its own default before reading ([Query.parseArchived], over the default
+// [Parse] already set) or refuses it by name ([Reader.Projects], which builds
+// its query from a struct literal and so has no constructor to carry one).
+func (m ArchivedMode) Valid() bool { return slices.Contains(ArchivedModes, m) }
+
 // Sort is one ordering term.
 type Sort struct {
 	Key        string
@@ -215,6 +238,18 @@ type Query struct {
 	Unit        []string
 	RoutingUnit []string
 
+	// Units is the chart the two keys above are resolved through, so a
+	// filter naming a unit's id finds the work filed under its name and
+	// the other way round — see [Units] and [unitSpellings]. Nil matches
+	// what the caller typed, literally, which is the honest answer for a
+	// surface holding no chart.
+	//
+	// NOT PART OF THE GRAMMAR: it is the SURFACE's own chart rather than
+	// something a caller can write, so [ParseQuery] neither reads nor
+	// refuses a key for it, and a surface sets it beside the read level it
+	// resolves.
+	Units Units
+
 	Tags TagFilter
 
 	Types      []string
@@ -226,7 +261,14 @@ type Query struct {
 	// `Person.Priorities` and `update_priorities` are what a person calls
 	// their list, and renaming it here would leave one word meaning two
 	// things across the API.
-	PriorityListOf string
+	//
+	// A [Party] RATHER THAN A HANDLE, for the reason [MyWorkQuery.Who] is
+	// one: this names a PERSON, and the one person who can have two names
+	// is the one whose list is most likely to have been written through
+	// their own credential. [ParseQuery] fills the handle from the
+	// parameter and only a surface with the chart can add the alias, which
+	// is what [Reader.ExpandedQuery] does from its viewer.
+	PriorityListOf Party
 
 	// PriorityList is that list, RESOLVED — filled inside the read's own
 	// transaction, because it lives on another object and a parser that
@@ -290,8 +332,23 @@ type Query struct {
 	GroupBy    string
 	GroupBy2   string
 	GroupLimit int
-	Group      string
-	Subgroup   string
+
+	// Group narrows a board to ONE column and Subgroup to one lane of it,
+	// which is how a board loads a column further — a grouped answer mints
+	// no cursor, so there is nothing else to page with.
+	//
+	// POINTERS, because the empty string is a VALUE on every axis in this
+	// grammar: the absent-value column is a column a board DRAWS — "nobody
+	// is assigned", "untagged", "no due date" — and `group=` is the
+	// spelling that loads it. Held as plain strings, the one column a
+	// board could not page was the one holding everything nobody had
+	// filled in, and the request that asked for it answered the WHOLE
+	// board instead, which is the widest possible reading of a narrowing
+	// somebody asked for. [Params.Has] tells "named and empty" from
+	// "absent", which is the same rule `blocked=` is read by and the one
+	// its own doc states.
+	Group    *string
+	Subgroup *string
 
 	Sort []Sort
 
@@ -306,6 +363,23 @@ type Query struct {
 	// the reader's own `time.Now()` made the row and the filter two
 	// different questions on two different clocks.
 	DayStart time.Time
+
+	// DayEnd and WeekEnd are the other two boundaries of that same
+	// calendar — the instant today ends, and the instant the
+	// Monday-anchored week it sits in does. They are what the
+	// `due:bucket` grouping cuts Today from This week from Later on.
+	//
+	// RESOLVED HERE, beside DayStart, rather than derived from it in SQL.
+	// A day is not always 24 hours and a week is not always 168: a
+	// daylight-saving transition makes one of each an hour shorter or
+	// longer, so `DayStart + 86 400 s` is a different instant from
+	// tomorrow's midnight twice a year in the company's own zone — and a
+	// band cut there would disagree with the `due=range:today..tomorrow`
+	// filter that means the same thing, which is the whole defect this
+	// axis exists to remove. [ResolveDate] owns that calendar, and these
+	// are its `tomorrow` and its `eow`.
+	DayEnd  time.Time
+	WeekEnd time.Time
 
 	Level statelog.ReadLevel
 
@@ -453,15 +527,25 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 	if err != nil {
 		return Query{}, err
 	}
+	// AND THE TWO BOUNDARIES THAT DAY AND ITS WEEK END ON, from the same
+	// calendar in the same call — see [Query.DayEnd].
+	dayEnd, err := ResolveDate("tomorrow", now, loc)
+	if err != nil {
+		return Query{}, err
+	}
+	weekEnd, err := ResolveDate("eow", now, loc)
+	if err != nil {
+		return Query{}, err
+	}
 	q := Query{
 		Subtasks:   SubtasksCollapsed,
 		Archived:   ArchivedExclude,
 		DayStart:   dayStart.At,
+		DayEnd:     dayEnd.At,
+		WeekEnd:    weekEnd.At,
 		Dates:      map[string]DateFilter{},
 		View:       p.String("view"),
 		Preset:     p.String("preset"),
-		Group:      p.String("group"),
-		Subgroup:   p.String("subgroup"),
 		Cursor:     p.String("cursor"),
 		LinkedPage: p.String("linked_page"),
 		// UPPERCASED FOR THE SAME REASON `key` IS, and it is the same
@@ -474,8 +558,10 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		References: ProjectKey(p.String("references")),
 		Batch:      p.String("batch"),
 		AskedOf:    p.String("asked_of"),
-		// THE LIST, not the enum. See [Query.PriorityListOf].
-		PriorityListOf: strings.TrimSpace(p.String("priorities")),
+		// THE LIST, not the enum — and the SEAT alone, because a parser
+		// has no chart to resolve a second identity from. See
+		// [Query.PriorityListOf].
+		PriorityListOf: PartyOf(strings.TrimSpace(p.String("priorities"))),
 		AskedBy:        p.String("asked_by"),
 		Parent:         p.String("parent"),
 		Root:           p.String("root"),
@@ -870,14 +956,16 @@ func (q *Query) parseShowClosed(p Params) error {
 }
 
 func (q *Query) parseArchived(p Params) error {
-	switch value := ArchivedMode(p.String("archived")); value {
-	case "":
-	case ArchivedExclude, ArchivedInclude, ArchivedOnly:
-		q.Archived = value
-	default:
-		return fmt.Errorf("tracker: archived is false, true or only, and %q is "+
-			"none of them", value)
+	value := ArchivedMode(p.String("archived"))
+	// ABSENT IS NOT A FOURTH STATE: it leaves the default [Parse] set.
+	if value == "" {
+		return nil
 	}
+	if !value.Valid() {
+		return fmt.Errorf("tracker: archived is %s, and %q is none of them",
+			strings.Join(ArchivedModeNames(), ", "), value)
+	}
+	q.Archived = value
 	return nil
 }
 
@@ -885,11 +973,29 @@ func (q *Query) parseArchived(p Params) error {
 var groupKeys = []string{
 	"status", "status_group", "assignee", "priority", "tag", "type",
 	"project", "unit", "routing_unit", "parent",
-	"due:day", "due:week", "start:week",
+	"due:day", "due:week", groupByDueBucket, "start:week",
 }
+
+// GroupKeys is every grouping the grammar takes, for the one caller that
+// carries its own copy of the list — the dashboard's Display menu — to be held
+// against; see client_gate_test.go.
+func GroupKeys() []string { return slices.Clone(groupKeys) }
 
 func (q *Query) parseGrouping(p Params) error {
 	q.GroupLimit = p.Int("group_limit", 0)
+	// NAMED, NOT NON-EMPTY — see [Query.Group]. `group=` is a request for
+	// the column holding the rows with no value, and it is the only way to
+	// ask for one.
+	for key, target := range map[string]**string{
+		"group":    &q.Group,
+		"subgroup": &q.Subgroup,
+	} {
+		if !p.Has(key) {
+			continue
+		}
+		value := strings.TrimSpace(p.String(key))
+		*target = &value
+	}
 	for key, target := range map[string]*string{
 		"group_by":  &q.GroupBy,
 		"group_by2": &q.GroupBy2,
@@ -921,14 +1027,14 @@ func (q *Query) parseGrouping(p Params) error {
 	// "one column of a board grouped by status" and means nothing without
 	// the board — ignoring it would answer the WHOLE set, which is the
 	// widest possible reading of a narrowing the caller asked for.
-	if q.Group != "" && q.GroupBy == "" {
+	if q.Group != nil && q.GroupBy == "" {
 		return fmt.Errorf("tracker: group=%s was passed without group_by — a "+
 			"column with no axis is a narrowing that would silently answer "+
-			"everything", q.Group)
+			"everything", *q.Group)
 	}
-	if q.Subgroup != "" && q.GroupBy2 == "" {
+	if q.Subgroup != nil && q.GroupBy2 == "" {
 		return fmt.Errorf("tracker: subgroup=%s was passed without group_by2, "+
-			"so there is no second axis for it to name", q.Subgroup)
+			"so there is no second axis for it to name", *q.Subgroup)
 	}
 	if q.GroupLimit != 0 && q.GroupBy == "" {
 		return fmt.Errorf("tracker: group_limit bounds the rows one COLUMN " +
@@ -1223,8 +1329,13 @@ func (m MapParams) Bool(key string, def bool) bool {
 // Has reports whether a key was NAMED, however it was spelled.
 //
 // Separate from [MapParams.String] because "set to empty" and "not set" are
-// different requests: `assignee=` asks for the unassigned work and an absent
-// `assignee` asks for all of it.
+// different requests: `group=` asks for the column holding the rows with no
+// value, and an absent `group` asks for the whole board.
+//
+// It is not every key's rule, which is exactly why the two are told apart
+// HERE rather than by whether a value came back empty: an empty `assignee`
+// narrows nothing, because that key is a comma-separated list and the
+// unassigned work is spelled `assignee=none`.
 func (m MapParams) Has(key string) bool {
 	_, held := m[key]
 	return held

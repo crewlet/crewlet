@@ -212,27 +212,26 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	}
 	task.Tags = tags
 
-	// THE COERCED VALUES COME BACK OUT OF THE SNAPSHOT, and the LAST run
-	// of the closure is the one whose mint was accepted — so both are
-	// assigned rather than appended to, exactly as the update path does
-	// with its own warnings.
-	var (
-		coerced  map[string]json.RawMessage
-		warnings []string
-	)
+	// WHAT THE SNAPSHOT SETTLED COMES BACK OUT OF IT, and the LAST run of
+	// the closure is the one whose mint was accepted — so every field of
+	// it is assigned rather than appended to, exactly as the update path
+	// does with its own warnings.
+	var settled settledCreate
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), task.Project, 1,
 		func(tx *sql.Tx) error {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			var err error
-			coerced, warnings, err = w.refuseCreate(ctx, tx, task)
+			settled, err = w.refuseCreate(ctx, tx, task)
 			return err
 		})
 	if err != nil {
 		return WriteResult{Result: minted}, err
 	}
-	if coerced != nil {
-		task.Fields = coerced
+	if settled.fields != nil {
+		task.Fields = settled.fields
 	}
+	task.FiledUnit, task.RoutingUnit = filedUnit(
+		task.FiledUnit, task.RoutingUnit, settled.unit)
 	rank, err := IntegerAt(n)
 	if err != nil {
 		return WriteResult{}, fmt.Errorf("tracker: derive %s-%d's rank from the "+
@@ -252,8 +251,51 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 
 	result, err := w.writeTask(ctx, stepID(opID, "task"), task, notify, at)
 	result.Key, result.Rank = task.Key, task.Rank
-	result.Warnings = append(result.Warnings, warnings...)
+	result.Warnings = append(result.Warnings, settled.warnings...)
 	return result, err
+}
+
+// filedUnit is which team a new task belongs to, and which team's lead hears
+// about it.
+//
+// THE PROJECT'S OWN UNIT WHEN THE WRITER NAMED NONE, because that is what the
+// field means: `filed_unit` is the unit the work belongs to — it is what
+// `unit=` filters on, what a board's `unit` axis groups by, and what the
+// dashboard labels "Filed into" — and a task's project already has an owning
+// unit, written by the chart apply and carried on the project's own row.
+//
+// Deriving it here rather than at a caller is what makes the answer the same
+// whoever files the work. It was a caller's job once and only one caller did
+// it, stamping the FILING SEAT'S own team: every write from any other surface
+// landed with no unit at all. An item an operator filed into ENG through
+// `/operator/mcp` — an operator holds no seat and therefore no team — read
+// "Filed into: no unit" on a page whose project said it belonged to Core, and
+// so did every item filed by a root-level seat, which belongs to no unit
+// either. Nothing derived it from the project, although the project knew.
+//
+// THE ROW RATHER THAN A SEAM, unlike the people fields [FieldWorld] resolves:
+// a project's unit is a row this package reads inside the decide's own
+// transaction, so it needs no caller to supply it — the same distinction
+// [FieldWorld]'s doc draws for a relationship's task. It is also the value
+// every node already holds, so a writer cannot file against a chart its peers
+// have not applied.
+//
+// AN EXPLICIT UNIT IS LEFT ALONE, because it is the one thing the project
+// cannot say: work that belongs to another team than the one that owns the
+// project it sits in is exactly what `create_work_item`'s `unit` argument is
+// for. And the routing half follows whatever the filed half settles on
+// whenever the writer named no routing unit of its own, so the unit the work
+// belongs to is the unit whose lead hears about it — while a create that
+// deliberately routed somewhere else keeps that.
+func filedUnit(stated, routed, project string) (filed, routing string) {
+	filed, routing = stated, routed
+	if filed == "" {
+		filed = project
+	}
+	if routing == "" {
+		routing = filed
+	}
+	return filed, routing
 }
 
 // writeTask is sequence 1's second append and 1a's second, shared because they
@@ -371,6 +413,29 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 	return base, result, nil
 }
 
+// settledCreate is what a create's own snapshot decided: the values that could
+// only be settled against rows, carried back out to the record the sequence's
+// second append publishes.
+//
+// A STRUCT RATHER THAN THREE RETURNS, because every one of them is the same
+// kind of thing — read inside the mint's transaction, assigned rather than
+// accumulated across the closure's runs — and a fourth loose value is where a
+// caller starts pairing one run's answer with another's.
+type settledCreate struct {
+	// fields are the task's custom-field values in their canonical form,
+	// nil when nothing needed settling.
+	fields map[string]json.RawMessage
+
+	// warnings are what the writer is told and was not refused for.
+	warnings []string
+
+	// unit is the project's own chart-owned unit, which a task that names
+	// none is filed into. Empty for a project the chart gave no unit —
+	// which is honest rather than a default, and is what a company with a
+	// root-level project has.
+	unit string
+}
+
 // refuseCreate is what sequence 1 reads the project and its catalogues for.
 // It also COERCES the task's custom-field values, which is why it answers with
 // them rather than only with an error: a value is normalised against the
@@ -378,30 +443,39 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 // timestamp on a date-only field to its date — and the record has to carry
 // that canonical form, so every node writes identical rows without re-deciding
 // anything.
+//
+// The project's own UNIT rides back out for the same reason and on the same
+// row it already reads: see [filedUnit] for why the derivation belongs at the
+// write rather than at whichever caller happened to know its filer's team.
 func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
-	map[string]json.RawMessage, []string, error) {
+	settledCreate, error) {
 
 	project, held, err := readProject(ctx, tx, task.Project)
 	switch {
 	case err != nil:
-		return nil, nil, err
+		return settledCreate{}, err
 	case !held:
-		return nil, nil, fmt.Errorf("tracker: project %s is not on this node: %w",
-			task.Project, statelog.ErrUnavailable)
+		return settledCreate{}, fmt.Errorf("tracker: project %s is not on this "+
+			"node: %w", task.Project, statelog.ErrUnavailable)
 	case project.Archived:
-		return nil, nil, fmt.Errorf("tracker: project %s is archived, so it "+
-			"takes no new work; unarchive it first", task.Project)
+		return settledCreate{}, fmt.Errorf("tracker: project %s is archived, so "+
+			"it takes no new work; unarchive it first", task.Project)
 	}
-	if err := declaredType(ctx, tx, task); err != nil {
-		return nil, nil, err
+	if err = declaredType(ctx, tx, task); err != nil {
+		return settledCreate{}, err
 	}
-	if err := declaredTags(ctx, tx, task.Project, task.Tags); err != nil {
-		return nil, nil, err
+	if err = declaredTags(ctx, tx, task.Project, task.Tags); err != nil {
+		return settledCreate{}, err
 	}
-	if err := requiredFields(ctx, tx, project, task); err != nil {
-		return nil, nil, err
+	if err = requiredFields(ctx, tx, project, task); err != nil {
+		return settledCreate{}, err
 	}
-	return settleFields(ctx, tx, task.Project, task.Type, task.Fields, w.World)
+	fields, warnings, err := settleFields(ctx, tx, task.Project, task.Type,
+		task.Fields, w.World)
+	if err != nil {
+		return settledCreate{}, err
+	}
+	return settledCreate{fields: fields, warnings: warnings, unit: project.Unit}, nil
 }
 
 // declaredType refuses a task naming a type the company has not declared.
@@ -553,7 +627,10 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		subtask.Type = DefaultTaskType
 	}
 
-	var parent Task
+	var (
+		parent  Task
+		settled settledCreate
+	)
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), subtask.Project, 1,
 		func(tx *sql.Tx) error {
 			current, held, err := readTask(ctx, tx, parentID)
@@ -577,8 +654,11 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 			// A PROMOTION'S SUBTASK CARRIES NO CUSTOM FIELDS — it is
 			// built from a checklist item, which has none — so the
 			// coerced map it answers with is empty and is dropped
-			// deliberately rather than threaded through.
-			_, _, err = w.refuseCreate(ctx, tx, subtask)
+			// deliberately. Its PROJECT'S UNIT is not: a promoted
+			// subtask is work in a project like any other, and one
+			// filed into no unit is one that unit's lead is no
+			// fallback for.
+			settled, err = w.refuseCreate(ctx, tx, subtask)
 			return err
 		})
 	if err != nil {
@@ -593,6 +673,8 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	subtask.Key = fmt.Sprintf("%s-%d", subtask.Project, n)
 	subtask.Rank = rank
 	subtask.Parent = &parentID
+	subtask.FiledUnit, subtask.RoutingUnit = filedUnit(
+		subtask.FiledUnit, subtask.RoutingUnit, settled.unit)
 	subtask.CreatedAt, subtask.UpdatedAt = at, at
 	if subtask.Status == "" {
 		subtask.Status = StatusTodo

@@ -425,7 +425,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_activity", s.workActivity)
 		// AND ONE PERSON'S DAY, plus the notices that reached them.
 		//
-		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.viewerHandle].
+		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.viewerParty].
 		// A caller reads the seat their own token is bound to, and
 		// naming anybody else's needs an operator credential, which is
 		// the same authority the tools that WRITE these records
@@ -487,7 +487,7 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Conversations != nil {
 		// SCOPED, like every other per-seat question — see
-		// [Sources.viewerHandle].
+		// [Sources.viewerParty].
 		r.Register("conversations", s.conversations)
 	}
 	if s.Config != nil {

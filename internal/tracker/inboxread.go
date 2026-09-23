@@ -177,10 +177,20 @@ var DefaultPrimaryReasons = []Reason{
 
 // InboxQuery asks for a page of somebody's inbox.
 type InboxQuery struct {
-	// Handle is whose inbox this is. Required: an inbox with no person is
-	// not a company-wide feed, it is a mistake — [Reader.Activity] is the
+	// Who this inbox belongs to. Required: an inbox with no person is not
+	// a company-wide feed, it is a mistake — [Reader.Activity] is the
 	// company-wide feed.
-	Handle string
+	//
+	// A [Party] RATHER THAN A HANDLE, because `tracker_notifications` is
+	// keyed on the recipient the RECORD named, and a person's records name
+	// every identity they write under. A founder is `reporter` on their own
+	// item under the token their assistant used and `assignee` on the next
+	// one under their seat: one person, two recipients, and an inbox asked
+	// about one of them is missing half of what the company told them. The
+	// page is one keyset over both, and a change that named two of this
+	// person's identities is collapsed to one notice — see
+	// [collapseNotices].
+	Who Party
 
 	// Since is a lower bound as a log position, which is what a caller
 	// resumes from after marking a page read.
@@ -223,9 +233,12 @@ type InboxQuery struct {
 func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 	InboxAnswer, error) {
 
-	handle := strings.TrimSpace(q.Handle)
+	who := Party{
+		Handle:     strings.TrimSpace(q.Who.Handle),
+		OperatorID: strings.TrimSpace(q.Who.OperatorID),
+	}
 	switch {
-	case handle == "":
+	case !who.Named():
 		return InboxAnswer{}, fmt.Errorf("tracker: an inbox read names nobody " +
 			"— pass the handle whose inbox this is; the company-wide feed is " +
 			"`work_activity`")
@@ -245,7 +258,7 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 		limit = MaxInboxRows
 	}
 
-	answer := InboxAnswer{Handle: handle}
+	answer := InboxAnswer{Handle: who.Handle}
 	var marks person
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
@@ -260,7 +273,7 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		person, _, err := readPerson(ctx, tx, handle)
+		person, _, err := readPartyRecord(ctx, tx, who)
 		if err != nil {
 			return err
 		}
@@ -268,7 +281,7 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 		answer.PrimaryReasons = effectivePrimary(person.PrimaryReasons)
 		marks = person.marks(answer.PrimaryReasons)
 
-		notices, next, err := readInbox(ctx, tx, handle, q, limit)
+		notices, next, err := readInbox(ctx, tx, who, q, limit)
 		if err != nil {
 			return err
 		}
@@ -320,11 +333,12 @@ func inboxScope() statelog.ScopeSet {
 // notification rows are swept on the inbox retention horizon and the history
 // rows are never swept, but a reanchor rebuilds the history from the log and a
 // notice can outlive the row it names. What was said outlives who said it.
-func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
+func readInbox(ctx context.Context, tx *sql.Tx, who Party, q InboxQuery,
 	limit int) ([]InboxNotice, string, error) {
 
-	where := []string{"n.recipient = ?"}
-	args := []any{handle}
+	ids := who.Handles()
+	where := []string{"n.recipient IN (" + placeholders(len(ids)) + ")"}
+	args := who.args()
 
 	// THE KEYSET IS THE COMPOSED POSITION, for the reason the activity
 	// feed gives: `log_seq` already carries `(generation << 40) | seq`, so
@@ -352,7 +366,19 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		}
 		where = append(where, "n.reason IN ("+strings.Join(holes, ",")+")")
 	}
-	args = append(args, limit+1)
+	// ONE EXTRA ROW PER IDENTITY, because the page is counted in CHANGES
+	// and the table is keyed in (change, recipient) pairs.
+	//
+	// `tracker_notifications` has (record_id, recipient) as its primary
+	// key, so one change leaves at most one row per identity and a party
+	// of two can hold two rows for one change. Reading `limit+1` rows
+	// would then return as few as half a page. Reading `limit*n+1`
+	// guarantees at least `limit+1` distinct changes came back whenever
+	// the table holds them, so the page is full and `more` is honest —
+	// and with a single identity it is exactly the `limit+1` this read
+	// has always taken.
+	over := limit*len(ids) + 1
+	args = append(args, over)
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation,
@@ -365,20 +391,12 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		 ORDER BY n.log_seq DESC
 		 LIMIT ?`, args...)
 	if err != nil {
-		return nil, "", fmt.Errorf("tracker: read %s's inbox: %w", handle, err)
+		return nil, "", fmt.Errorf("tracker: read %s's inbox: %w", who, err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := make([]InboxNotice, 0, limit)
-	more := false
+	read := make([]InboxNotice, 0, over)
 	for rows.Next() {
-		if len(out) == limit {
-			// THE EXTRA ROW IS THE CURSOR'S EVIDENCE and never an
-			// answer, which is the activity feed's own rule: a page
-			// that returned it would overrun the caller's limit.
-			more = true
-			break
-		}
 		var notice InboxNotice
 		var packed int64
 		var at int64
@@ -389,7 +407,7 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 			&kind, &notice.SubjectID, &notice.SubjectKey, &notice.Excerpt,
 			&notice.Actor, &actorKind); err != nil {
 
-			return nil, "", fmt.Errorf("tracker: scan %s's inbox: %w", handle, err)
+			return nil, "", fmt.Errorf("tracker: scan %s's inbox: %w", who, err)
 		}
 		notice.LogSeq = uint64(packed) % statelog.GenerationStride
 		notice.At = store.DecodeTime(at)
@@ -398,10 +416,23 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		notice.ActorKind = AuthorKind(actorKind)
 		notice.Addressed = addressed != 0
 		notice.Fallback = fallback != 0
-		out = append(out, notice)
+		read = append(read, notice)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("tracker: read %s's inbox: %w", handle, err)
+		return nil, "", fmt.Errorf("tracker: read %s's inbox: %w", who, err)
+	}
+
+	out := collapseNotices(read)
+	more := false
+	if len(out) > limit {
+		// THE EXTRA CHANGE IS THE CURSOR'S EVIDENCE and never an
+		// answer, which is the activity feed's own rule: a page that
+		// returned it would overrun the caller's limit. Cutting at a
+		// CHANGE boundary is exact because every row of one change
+		// carries that change's own `log_seq`, and the cursor below is
+		// strictly-before — so the next page resumes at the change
+		// after the last one returned, with no row of it left behind.
+		out, more = out[:limit], true
 	}
 
 	var next string
@@ -413,6 +444,58 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		}.String()
 	}
 	return out, next, nil
+}
+
+// collapseNotices reduces a change that named two of one person's identities
+// to the one notice they hear under.
+//
+// # It is the one-reason-per-handle rule, extended to the party
+//
+// [Candidates] already gives each HANDLE exactly one reason, the first in
+// [Reasons] that names them — "a person who is mentioned AND watching is told
+// they were mentioned, which is the stronger fact and the one they will act
+// on". A person with two identities gets one row per identity, so the same
+// change can arrive twice: `reporter` under the credential they filed it with
+// and `assignee` under the seat a colleague handed it to. Two cards for one
+// change is the exact noise that rule exists to prevent, and neither card is
+// wrong on its own, so the answer is the stronger reason — the same tie-break,
+// one level up.
+//
+// The rows arrive newest-first and every row of one change carries that
+// change's own `log_seq`, so collapsing preserves the order: the survivor sits
+// where the change's first row was.
+func collapseNotices(read []InboxNotice) []InboxNotice {
+	out := make([]InboxNotice, 0, len(read))
+	at := make(map[string]int, len(read))
+	for _, notice := range read {
+		i, seen := at[notice.RecordID]
+		if !seen {
+			at[notice.RecordID] = len(out)
+			out = append(out, notice)
+			continue
+		}
+		if reasonRank(notice.Reason) < reasonRank(out[i].Reason) {
+			// THE WHOLE ROW, not just its reason: `addressed` and
+			// `fallback_only` are properties of the (change,
+			// recipient) pair the reason came from, and keeping one
+			// row's reason beside another's flags would report a
+			// wake that asks nothing as one that does.
+			out[i] = notice
+		}
+	}
+	return out
+}
+
+// reasonRank is a reason's place in [Reasons], which IS the precedence.
+//
+// A reason this build does not know ranks LAST rather than first: an older
+// node's row is a fact about a company running two builds, and a value nothing
+// can order must not be allowed to outrank one that can be.
+func reasonRank(reason Reason) int {
+	if i := slices.Index(Reasons, reason); i >= 0 {
+		return i
+	}
+	return len(Reasons)
 }
 
 // person is the marks half, so [markInbox] takes one argument rather than

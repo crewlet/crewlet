@@ -38,7 +38,41 @@ describe("the latest change to each property", () => {
       actorKind: "agent",
       turnId: "t-9",
       at: "2026-03-01T12:00:00Z",
+      // A CHANGE THAT FILLED THE FIELD, which is what the rail needs to know
+      // before it draws a by-line under a blank one — see below.
+      cleared: false,
     });
+  });
+
+  test("says whether the change emptied the field", () => {
+    // THE ONE THING THAT LICENSES PROVENANCE UNDER A BLANK. A rail draws no
+    // "set by" under a value that is not there — it would claim a record of
+    // somebody setting nothing — and a change that took the value AWAY is a
+    // record the log genuinely holds, which reads "cleared by" instead.
+    // `tracker.Delta` carries `From` and `To` with no `omitempty`, so an
+    // emptied field is `to: ""` rather than an absent key.
+    const who = attribution([
+      change({
+        actor: "ada",
+        fields: {
+          due: { from: "2026-03-09T00:00:00Z", to: "" },
+          status: { from: "todo", to: "in_progress" },
+        },
+      }),
+    ]);
+    expect(who.get("due")?.cleared).toBe(true);
+    expect(who.get("status")?.cleared).toBe(false);
+  });
+
+  test("a delta this build cannot read claims no clearing either way", () => {
+    // The defensive arm: a payload whose shape is unreadable says nothing
+    // about whether a value was emptied, and `false` is the honest answer —
+    // it suppresses the by-line under an absent value rather than inventing
+    // a clearing nobody recorded.
+    const who = attribution([
+      change({ actor: "ada", fields: { status: "in_progress" as unknown as object } }),
+    ]);
+    expect(who.get("status")?.cleared).toBe(false);
   });
 
   test("the newest change wins, and the input order is what decides", () => {
@@ -98,13 +132,17 @@ describe("when there is no honest answer", () => {
 
 test("every field name is one the engine writes, spelled its way", () => {
   // The rail labels it "Estimate" and the task row calls the number
-  // `estimate_minutes`; the history bag calls it `estimate`. Held against
+  // `estimate_minutes`; the history bag calls it `estimate`. "Watching" is
+  // `watchers` and "Routes to" is `routing_unit`. Held against
   // `tracker.TaskDeltas` by `internal/tracker/attribution_test.go` — this half
   // only pins the shape so a rename here is visible in the diff.
   expect([...CHANGE_FIELDS]).toEqual([
     "title",
     "status",
     "assignee",
+    "reporter",
+    "collaborators",
+    "watchers",
     "priority",
     "project",
     "type",
@@ -113,5 +151,42 @@ test("every field name is one the engine writes, spelled its way", () => {
     "start",
     "estimate",
     "points",
+    "routing_unit",
   ]);
+});
+
+test("the people and routing rows can be attributed", () => {
+  // THE ROWS THE RAIL DRAWS WITHOUT A LINE ARE THE POINT. Reporter,
+  // Collaborators, Watching and "Routes to" rendered no provenance at all
+  // until `tracker.TaskDeltas` started comparing those fields — a watcher
+  // arrived and the rail could not say who added them, which is the one thing
+  // this product can answer that a tracker cannot.
+  const who = attribution([
+    change({
+      actor: "ada",
+      actor_kind: "human",
+      kind: "watchers",
+      fields: {
+        reporter: { from: "", to: "bo" },
+        collaborators: { from: "bo", to: "bo, cy" },
+        watchers: { from: "bo", to: "bo, ada" },
+        routing_unit: { from: "Engineering", to: "Platform" },
+      },
+    }),
+  ]);
+  for (const field of ["reporter", "collaborators", "watchers", "routing_unit"] as const) {
+    // DECLARED AND RESOLVED, both halves: `by()` on the rail takes a
+    // [ChangeField], so a name missing from the list is a row that cannot ask
+    // the question — and one in the list that the log never keys is a row that
+    // asks and is answered with nothing.
+    expect([...CHANGE_FIELDS]).toContain(field);
+    expect(who.get(field)?.actor).toBe("ada");
+    expect(who.get(field)?.cleared).toBe(false);
+  }
+  // AND A SET EMPTIED IS A CLEARING like any other value: the last watcher
+  // leaving is a record the log holds, and the row reads "cleared by".
+  const emptied = attribution([
+    change({ actor: "ada", fields: { watchers: { from: "bo", to: "" } } }),
+  ]);
+  expect(emptied.get("watchers")?.cleared).toBe(true);
 });

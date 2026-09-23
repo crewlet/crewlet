@@ -136,10 +136,17 @@ export function typeName(slug: string | undefined, types?: WorkTypeDef[]): strin
  * This is that column, in the only form a dense one-line row has room for.
  *
  * AND A PHRASE, because `kind.replaceAll("_", " ")` after an actor's name reads
- * "ada watchers". Only the kinds an apply can compare two documents for produce
- * deltas — `tracker.TaskDeltas` covers eleven task fields and nothing else — so
- * `watchers`, `relations`, `checklist`, `archived`, `reparented` and the whole
- * comment family reach the reader through this column alone.
+ * "ada watchers". A kind carries deltas exactly when an APPLY CAN COMPARE TWO
+ * DOCUMENTS for it, and `tracker.TaskDeltas` now compares every field a patch
+ * can move — so `watchers`, `checklist`, `archived` and `reparented` say what
+ * moved and this phrase says what happened. What still reaches the reader
+ * through this column ALONE is what no comparison can produce: the comment
+ * family, which is a thread rather than a field of the task; `purged`, whose
+ * subject no longer exists to compare; and a plain `removed` or `restored`,
+ * where the only delta a tombstone holds is `removed_with` and a task removed
+ * on its own went with nothing. The count is deliberately not stated — the
+ * rule is, because a field added to the comparison tomorrow would falsify a
+ * number nothing here gates.
  *
  * ONE DECLARATION, held against `tracker.ChangeKinds` by
  * `internal/tracker/client_gate_test.go`: this is a closed set the engine owns
@@ -221,6 +228,42 @@ export interface LabelContext {
   types?: WorkTypeDef[];
   tags?: WorkProjectTag[];
   seatName?: (handle: string) => string;
+  /** The company's own fields, so a chip over one can say what it is called. */
+  fields?: WorkFieldDef[];
+  /**
+   * What a UNIT key is called, where the caller can say.
+   *
+   * The one axis a client cannot name for itself: a row holds the unit's KEY,
+   * which is its `id` on a company that set one, and the anonymous org
+   * projection carries no ids — so the engine's own column `label` is the only
+   * name for it, and a caller holding the answer passes it down here. Absent,
+   * the key stands, which is what the address holds and what a filter takes.
+   */
+  unitName?: (key: string) => string;
+  /**
+   * WHO IS READING, as the seat handle a wake would have been delivered to.
+   *
+   * A change record is written ONCE and read by everybody, so a sentence the
+   * engine addressed to the seat it woke — "…of your priorities" — is second
+   * person to whoever happens to open the log. Only a surface knows who that
+   * is, which is the same division `deltaValue` states for the reader's zone:
+   * the state log's N nodes write one identical row, and anything that depends
+   * on who is looking at it belongs here. Empty is the honest default and means
+   * "nobody in particular", which renders the owner's name rather than "you".
+   */
+  viewer?: string;
+  /**
+   * What a task id is CALLED, for the fields whose value is another task.
+   *
+   * A relation delta carries the other task's id rather than its key, and for
+   * the same reason `deltaValue` renders an instant rather than a day: the
+   * record is the state log's, written identically by N nodes, and a key
+   * belongs to the other task's own row — so a node that had not applied that
+   * task would store a different string, for ever, in a table nothing repairs.
+   * The answer resolves what it can (`WorkActivityAnswer.keys`) and this is how
+   * it reaches the sentence.
+   */
+  taskKey?: (id: string) => string;
 }
 
 /**
@@ -233,8 +276,22 @@ export interface LabelContext {
  * either as a blank heading leaves a column of work nobody can name.
  */
 export function groupLabel(axis: string, group: WorkGroup, ctx: LabelContext = {}): string {
-  const key = group.key;
+  // THE SERVER'S OWN WORD WINS, where it gave one — it is the only party that
+  // can label a key this build has never heard of.
   if (group.label) return group.label;
+  return axisLabel(axis, group.key, ctx);
+}
+
+/**
+ * ONE VALUE OF ONE AXIS, in the company's own words.
+ *
+ * Split out of [groupLabel] because two surfaces now ask it and only one of
+ * them holds a `WorkGroup`: a column head has the group the answer returned,
+ * and a filter chip has nothing but the key out of the URL. Spelled a second
+ * time for the chip, a board narrowed to one column would have been headed
+ * "Ada Okonkwo" and chipped `ada-okonkwo` on the same screen.
+ */
+export function axisLabel(axis: string, key: string, ctx: LabelContext = {}): string {
   switch (axis) {
     case "status":
       return key ? statusLabel(key, ctx.statuses) : "No status";
@@ -250,20 +307,155 @@ export function groupLabel(axis: string, group: WorkGroup, ctx: LabelContext = {
       return key ? (ctx.tags?.find((t) => t.slug === key)?.label ?? key) : "Untagged";
     case "parent":
       return key || "No parent";
+    case "project":
+      return key || "No project";
+    case "unit":
+    case "routing_unit":
+      // THE NAME WHERE THE CALLER HAS ONE, and the key where it does not.
+      //
+      // A unit key is its `id` on a company that set one — a word chosen so
+      // that a rename moves nothing, and therefore a word nobody reads. Only
+      // the ENGINE can turn one into a team's name: a unit's `id:` is guarded,
+      // so the anonymous org projection this client reads carries names alone
+      // and a key out of a URL resolves against nothing here. What the engine
+      // does give is a column's own `label`, which [groupLabel] takes before
+      // this is reached and which a caller holding the answer can pass down —
+      // so a chip and the heading it was cut from say one word.
+      return key ? ctx.unitName?.(key) || key : "No unit";
+    case "due:bucket":
+      // THE ENGINE NAMES THESE and a column head takes that name — the answer
+      // carries a `label` per band, so [groupLabel] returns before it reaches
+      // here. What reaches here is a CHIP, which holds the key out of the URL
+      // and no answer, and the words are the engine's own list: copied here
+      // they would be a second declaration nothing holds against `dueBands`,
+      // which is the drift `clientsource` exists to catch. Humanised, the key
+      // IS the word — `this_week` reads "This week" — so the chip and the
+      // heading it came from say the same thing without a second table.
+      return key ? humanize(key) : "No due date";
     default:
       return key || EMPTY_VALUE;
   }
 }
 
-/** The axes a board may be cut on, with what each is called in the picker. */
-export const GROUP_AXES: { value: string; label: string }[] = [
+/**
+ * The groups a LIST draws: only the bands that hold something.
+ *
+ * A BOARD DRAWS EVERY LANE the scope admits — the engine mints the empty ones
+ * on a closed axis, so a board is the shape of the process rather than of this
+ * week's rows — and a list does not: a band is a heading between runs of
+ * rows, and a heading over nothing is a rule across the page separating
+ * nothing from nothing. Two drawings of one answer, which is what a shape is;
+ * the fetch is the same, as the rule that a shape never fetches differently
+ * requires.
+ */
+export function bandsOf(groups: WorkGroup[]): WorkGroup[] {
+  return groups.filter((group) => group.count > 0 || (group.subgroups?.length ?? 0) > 0);
+}
+
+/**
+ * What an ARRANGEMENT control writes when the reader chooses none of it.
+ *
+ * THE EMPTY STRING MEANS "INHERIT", not "off", and the two are different
+ * answers wherever a saved view supplies a default. `buildItemsParams` resolves
+ * an arrangement as "the reader's, or the view's" — so a control writing `""`
+ * dropped the key and handed the question straight back to the view: a view
+ * grouping by assignee could not be ungrouped at all, because every attempt
+ * cleared the override and re-applied the view's own. The scope segment's
+ * third value has a name for exactly this reason; so does this.
+ *
+ * It never reaches the wire. `none` is not an axis or a sort key the engine
+ * has, and [buildItemsParams] resolves it to the absence of the key rather
+ * than sending it.
+ */
+export const EXPLICIT_NONE = "none";
+
+/**
+ * What an arrangement is actually set to: the reader's choice, the view's, or
+ * nothing.
+ *
+ * ONE RESOLVER for the grouping, the second grouping and the order, because
+ * all three are the same three-way question and a spelling per key is how one
+ * of them came to answer it differently. The PICKERS read this too, so the
+ * control shows what the query was sent with rather than what the URL happens
+ * to hold — which is the other half of the same defect: a saved view's
+ * grouping was in force while its picker sat on "No grouping".
+ */
+export function effectiveArrangement(asked: string, inherited: unknown): string {
+  if (asked === EXPLICIT_NONE) return "";
+  if (asked) return asked;
+  return typeof inherited === "string" ? inherited : "";
+}
+
+/**
+ * The axes a board may be cut on, with what each is called in the picker.
+ *
+ * A COPY OF THE ENGINE'S `groupKeys`, held against it by
+ * `internal/tracker/client_gate_test.go` in both directions: a value here the
+ * grammar refuses takes the whole board down with a refusal, and a key the
+ * engine takes that this list never names is an arrangement only a hand-edited
+ * URL can reach — which is what `project` was until the gate named it. The
+ * keys the menu deliberately leaves out are listed THERE, each with its
+ * reason, so a grouping added to the grammar lands here or in that list.
+ *
+ * `workspace` marks an axis the engine takes only at workspace scope: inside a
+ * project every row is in one project, and the grammar refuses the question.
+ */
+export const GROUP_AXES: { value: string; label: string; workspace?: boolean }[] = [
   { value: "status", label: "Status" },
   { value: "status_group", label: "Status group" },
   { value: "assignee", label: "Assignee" },
   { value: "priority", label: "Priority" },
   { value: "type", label: "Type" },
   { value: "tag", label: "Tag" },
+  { value: "project", label: "Project", workspace: true },
+  { value: "unit", label: "Unit" },
+  // WHEN THE WORK IS DUE, which is the one axis that is not a stored value:
+  // the engine cuts it against the COMPANY's day rather than the reader's, so
+  // the bands, a row's overdue flag and every `due=` filter agree about a
+  // task. Offered on every shape — "what is late, what is today" is a
+  // question somebody asks of a list as readily as of a board.
+  { value: "due:bucket", label: "Due" },
 ];
+
+/**
+ * The axes the Display menu's Group by offers, for one shape at one scope.
+ *
+ * A BOARD IS ALWAYS GROUPED — it is what a board is — and its default axis is
+ * status, so on a board there is no "No grouping" row and "Status" is the
+ * axis's own entry. The menu used to list both: a `""` row LABELLED "Status"
+ * ahead of the `status` axis, two rows reading the same word with different
+ * URL effects, one of which marked the control active and one of which did
+ * not. Every other shape can be ungrouped, so it leads with that.
+ */
+export function groupAxisOptions(
+  shape: Shape,
+  workspace: boolean,
+): { value: string; label: string }[] {
+  const axes = GROUP_AXES.filter((a) => !a.workspace || workspace).map(({ value, label }) => ({
+    value,
+    label,
+  }));
+  return shape === "board" ? axes : [{ value: "", label: "No grouping" }, ...axes];
+}
+
+/**
+ * The second axis's options: never the first, which the engine refuses because
+ * every row would be alone in its own band.
+ */
+export function secondAxisOptions(
+  first: string,
+  workspace: boolean,
+): { value: string; label: string }[] {
+  return [
+    { value: "", label: "No second grouping" },
+    ...groupAxisOptions("board", workspace).filter((a) => a.value !== first),
+  ];
+}
+
+/** What an axis is CALLED, or "" for one this build does not offer. */
+export function axisName(axis: string): string {
+  return GROUP_AXES.find((a) => a.value === axis)?.label ?? "";
+}
 
 /** The orderings a list may ask for. */
 export const SORTS: { value: string; label: string }[] = [
@@ -289,16 +481,57 @@ export const SORTS: { value: string; label: string }[] = [
  * like a rendering bug.
  */
 export function describeChange(record: WorkActivityRecord, ctx: LabelContext): string {
-  const moved = Object.entries(record.fields ?? {});
-  if (moved.length > 0) {
-    return moved.map(([field, d]) => deltaClause(field, d.from, d.to, ctx)).join(", ");
-  }
+  const moved = deltaSentence(record.fields, ctx);
+  if (moved) return moved;
   // THE PROSE THE BODY RENDERS TO, not its source. The excerpt is a cut of a
-  // comment or a description, both markdown by contract, and this string is
-  // drawn in a one-line cell — so an unflattened one printed `## Understanding
-  // the work` with the hashes in it.
-  if (record.excerpt) return plainText(record.excerpt);
+  // comment or a description, both markdown by contract, so an unflattened one
+  // printed `## Understanding the work` with the hashes in it.
+  //
+  // RE-ADDRESSED, because a cross-item log is read by everybody and an excerpt
+  // was written for one recipient. See [readdress].
+  if (record.excerpt) return readdress(plainText(record.excerpt), record, ctx);
   return record.kind.replaceAll("_", " ");
+}
+
+/**
+ * A sentence the engine addressed to ONE seat, re-addressed to whoever is
+ * reading it.
+ *
+ * `tracker.Writer.prioritisedWake` writes "<actor> put ENG-1 at position 1 of
+ * your priorities" — a notification CARD's text, correct for the seat the wake
+ * was delivered to and second person to everybody else. The company-wide log
+ * draws the same record for a founder, a lead and every other agent, so there
+ * it says "your" to a reader whose queue it is not.
+ *
+ * ONLY A SURFACE CAN FIX THIS, which is the division `deltaValue` states for
+ * the reader's zone one function below: the record is the state log's, written
+ * identically by N nodes, so it cannot carry a rendering that depends on who
+ * opens it. What the record DOES carry is whose record it is — a person
+ * subject's id is the handle itself (`tracker.PersonSubject`) — so the owner is
+ * always nameable, and second person survives exactly when the reader is that
+ * owner.
+ *
+ * SCOPED TO A PERSON SUBJECT, because that is the only kind whose records are
+ * addressed to somebody: a task's excerpt is a comment body or a description
+ * and its "you" belongs to whoever wrote it.
+ */
+function readdress(text: string, record: WorkActivityRecord, ctx: LabelContext): string {
+  if (record.subject_kind !== "person" || !text) return text;
+  const owner = record.subject_id;
+  // THE HANDLE IS THE ONLY IDENTITY THAT CAN MATCH HERE, and the other one is
+  // named rather than compared. A viewer has two — `/viewer` returns the
+  // operator id a token maps to AND the seat handle bound to it
+  // (`lib/viewer.ts`) — but a person subject's id is the SEAT HANDLE
+  // (`tracker.PersonSubject`), so a comparison against the operator id could
+  // never be true and would be a branch with no reachable case. An operator
+  // with no seat bound to them owns no queue for this to be about.
+  if (!owner || owner === ctx.viewer) return text;
+  const name = ctx.seatName?.(owner) ?? owner;
+  // THE POSSESSIVE FIRST, so "your priorities" does not become "<name> s
+  // priorities" by way of the bare pronoun. Case-insensitive because the
+  // engine's sentences are prose and a rule that only matched one casing would
+  // be one that silently stopped matching.
+  return text.replace(/\byour\b/gi, `${name}'s`).replace(/\byou\b/gi, name);
 }
 
 /**
@@ -335,9 +568,51 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
  * glance rather than only on a careful read.
  */
 export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
-  const moved = Object.entries(entry.fields ?? {});
+  return deltaSentence(entry.fields, ctx) || changePhrase(entry.kind);
+}
+
+/**
+ * EVERY FIELD A RECORD SAYS IT MOVED, as one sentence — and "" where it moved
+ * none.
+ *
+ * ONE FUNCTION FOR BOTH SURFACES, because the feed and an item's own history
+ * are the same claim about the same column: a delta worded two ways on two
+ * screens is the drift this module exists to end, and it had already started —
+ * the feed read `fields` as a from/to map and the history read it as either
+ * shape, so the two disagreed about what a comment's `mentions` said. They
+ * differ on ONE rung and only one, the excerpt, which each states for itself.
+ *
+ * GENERIC OVER THE KIND, deliberately, and there is no per-kind sentence
+ * anywhere below. `fields_json` is written by two producers — the applier's own
+ * document comparison, and the notification's fields where no comparison was
+ * possible — and neither tags its entries with what they are about, so a
+ * renderer that switched on the kind would be guessing at the shape rather than
+ * reading it. Which kinds carry fields at all is the ENGINE's answer and it
+ * grows: a `relations`, `project_updated`, `view_saved` or `person_updated`
+ * record that starts carrying deltas is rendered by this function on the day it
+ * does, with nothing here to change.
+ *
+ * ONE SHAPE ARRIVES, AND THE SECOND ARM IS DEFENSIVE — which is the opposite
+ * of what this comment used to claim, and the claim cost somebody a bug report.
+ * It said the engine writes "the notification's own fields where it cannot
+ * compare two documents (a comment, a mention, an ask)", and therefore that a
+ * reader decoding only from/to pairs would silently drop those records.
+ * `internal/tracker/apply_history.go` refutes it in its own words — a comment's
+ * wake builds its deltas with `TaskDeltas` like every other, so the fallback
+ * branch there "can carry no key the one above could not" — and both of that
+ * column's producers are `map[string]Delta`, so every value on the wire is a
+ * pair and a comment stores `{}`. Measured over a company exercising comments
+ * with mentions and asks, status moves, re-parents and project writes: seven
+ * history rows, none of them anything but pairs.
+ *
+ * The `else` is kept anyway, because it costs one branch and it is the
+ * difference between a value nobody planned for rendering as itself and
+ * rendering as `[object Object]`. What it is NOT is a second shape the engine
+ * produces, and nothing should be built on the belief that it is.
+ */
+function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelContext): string {
   const said: string[] = [];
-  for (const [field, raw] of moved) {
+  for (const [field, raw] of Object.entries(fields ?? {})) {
     const delta = raw as { from?: unknown; to?: unknown } | null;
     if (delta && typeof delta === "object" && ("from" in delta || "to" in delta)) {
       said.push(deltaClause(field, scalar(delta.from), scalar(delta.to), ctx));
@@ -346,8 +621,7 @@ export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
     const value = deltaValue(field, scalar(raw), ctx);
     said.push(value ? `${humanize(field)}: ${value}` : humanize(field));
   }
-  if (said.length > 0) return said.join(", ");
-  return changePhrase(entry.kind);
+  return said.join(", ");
 }
 
 /**
@@ -385,7 +659,17 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
       return statusLabel(value, ctx.statuses);
     case "type":
       return typeName(value, ctx.types);
+    // A FIELD WHOSE VALUE IS PEOPLE, which travels as HANDLES: the one a task
+    // is assigned to, the one who reported it, and the three sets
+    // `tracker.TaskDeltas` sorts before it stores them — the watchers, the
+    // handles that muted the task, and its collaborators. A handle nobody can
+    // resolve renders as the handle, which is what `seatName` already does:
+    // a seat the chart no longer holds still moved this field.
     case "assignee":
+    case "reporter":
+    case "watchers":
+    case "muted":
+    case "collaborators":
       return people(value);
     case "tags":
       return value
@@ -402,6 +686,31 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     // this build does not recognise passes through rather than being guessed at.
     case "estimate":
       return /^\d+m$/.test(value) ? fmtMinutes(Number(value.slice(0, -1))) : value;
+    // A FIELD WHOSE VALUE IS OTHER TASKS, which travels as their IDS: three of
+    // `tracker.RelationKinds`, the `blocking` mirror, the ordered queue a
+    // person record carries, the parent a re-parent moves a task between, and
+    // the root a cascade removed it with. The last two are SCALARS rather than
+    // lists and take the same arm, because one id splits into one member. NOT
+    // `page`, which is the fourth relation kind and names a wiki page —
+    // resolving it here would be claiming a page is a task, and the answer
+    // deliberately leaves those ids out of its map.
+    //
+    // AN ID THE ANSWER DID NOT RESOLVE RENDERS AS THE ID. The map omits what
+    // the answering node holds no row for — a record naming a counterparty it
+    // has not applied, or anything past the answer's own cap — and a value
+    // nobody can explain is still a value somebody set, where a blank reads as
+    // a task with no name.
+    case "waiting_on":
+    case "linked":
+    case "duplicates":
+    case "blocking":
+    case "priorities":
+    case "parent":
+    case "removed_with":
+      return value
+        .split(", ")
+        .map((id) => ctx.taskKey?.(id) || id)
+        .join(", ");
     default:
       return value;
   }
@@ -514,14 +823,36 @@ export function fieldValueState(field: WorkFieldValue): string {
  */
 export type Shape = WorkViewShape;
 
+/**
+ * WHAT A CONTAINER OPENS ON when nothing else decides it.
+ *
+ * THE LIST, BECAUSE A BOARD'S INFORMATION IS THE COMPARISON ACROSS ITS LANES.
+ * That makes it the worst shape at low N and the best at high N: four lanes
+ * holding one card between them say nothing a lane could not say alone, and
+ * the one card is a 292px object in a 1500px field. A list degrades to one
+ * full-width row, which is still a list — the same drawing at one item and at
+ * four hundred. So the landing shape is the one that never stops working, and
+ * the board is one press away in the Display menu, named by what it is for.
+ *
+ * NOT CONDITIONAL ON HOW MUCH WORK EXISTS. A landing screen whose shape
+ * changes as a company fills up is a screen nobody can learn, and the first
+ * item somebody files would silently redraw the page.
+ *
+ * AND IT IS THE CLIENT'S FALLBACK, not a builtin marked `default` in the
+ * engine: one view row may carry `default` and the applier settles that in the
+ * same transaction as the write, so a builtin claiming it would collide with
+ * whatever a company saved. This is what holds when nothing claims it.
+ */
+export const LANDING_SHAPE: Shape = "list";
+
 /** The shape a view is drawn in. */
 export function shapeOf(viewKey: string, views: WorkView[]): Shape {
   const view = views.find((v) => v.key === viewKey);
   if (view) return view.type;
-  // A KEY NOTHING RESOLVES DRAWS THE BOARD rather than nothing: a strip that
-  // has not arrived yet is the ordinary state of the first paint, and a body
-  // that waited for it would flash empty on every navigation.
-  return "board";
+  // A KEY NOTHING RESOLVES DRAWS [LANDING_SHAPE] rather than nothing: a strip
+  // that has not arrived yet is the ordinary state of the first paint, and a
+  // body that waited for it would flash empty on every navigation.
+  return LANDING_SHAPE;
 }
 
 /**
@@ -529,11 +860,11 @@ export function shapeOf(viewKey: string, views: WorkView[]): Shape {
  *
  * ONE ROW MAY CARRY `default` and the applier settles that in the same
  * transaction as the write, so there is never a second claim to fall back
- * from. Absent, the board: it is the shape that answers "what is moving",
- * which is the question somebody opening a tracker has.
+ * from. Absent, the key of the shape every container has without anybody
+ * saving one — see [LANDING_SHAPE] for why that is the list.
  */
 export function defaultView(views: WorkView[]): string {
-  return views.find((v) => v.default)?.key ?? "board";
+  return views.find((v) => v.default)?.key ?? LANDING_SHAPE;
 }
 
 /** A view's saved query, or an empty set of defaults. */
@@ -551,13 +882,88 @@ export interface TrackerFilters {
   type: string;
   priority: string;
   assignee: string;
-  /** `open` (the default), `closed`, or empty for everything. */
+  /** One of the PROJECT's own labels — the set is a project's, never the
+   *  company's, so this narrows only where that set is known. */
+  tag: string;
+  /**
+   * The TEAM the work is filed into, by the unit's id or by its name.
+   *
+   * URL-ONLY, and deliberately: it arrives from an item's own "Filed into"
+   * line rather than from a control, because naming a team from a picker
+   * would need a list of unit KEYS, and the anonymous org projection this
+   * client reads carries names alone (a unit's `id:` is guarded). It still
+   * carries a chip, which is how a reader sees it and takes it off.
+   *
+   * The engine matches the SET of the unit's spellings, so the one key an
+   * item holds reaches every task of that team however it was filed — which
+   * a `group=` narrowing on the unit axis cannot do, since a column IS one
+   * stored spelling.
+   */
+  unit: string;
+  /** One of [SCOPES]: `open` (the default), `closed` or `all`. */
   scope: string;
   groupBy: string;
-  group: string;
+  /** The SECOND axis, drawn as bands inside the first — see [buildItemsParams]. */
+  groupBy2: string;
+  /**
+   * WHICH COLUMN THE WHOLE QUERY IS NARROWED TO, and it is THREE-VALUED.
+   *
+   * `undefined` is the whole board. `""` is the column holding the rows with
+   * NO value on this axis — "Unassigned", "Untagged", "No parent" — and
+   * anything else is that value. The engine reads the key's PRESENCE
+   * (`Params.Has`) for exactly this reason: ITS key for the unset column IS
+   * the empty string, on every axis, so "" cannot also mean "no narrowing".
+   *
+   * This is the same defect `EXPLICIT_NONE` records one field above, with the
+   * opposite resolution. An ARRANGEMENT needed a NAME for "off", because its
+   * empty string already meant "inherit the view's" and a word is the only way
+   * to tell a choice from an absence. A column narrowing needs PRESENCE,
+   * because its empty string already means a real column and no word could be
+   * spelled that some axis will not one day hold as a value. So the URL carries
+   * `group=` with nothing after it, which `URLSearchParams` round-trips, and
+   * every reader asks whether the key is there rather than what it says.
+   *
+   * Spelled as a plain string it was unreachable end to end: the query builder
+   * dropped an empty one on the way to the wire, the address writer deleted the
+   * key, and the unset column's own "N more →" link loaded the whole board.
+   */
+  group: string | undefined;
   sort: string;
   blocked: boolean;
-  overdue: boolean;
+  /**
+   * WHEN it is due, as the grammar's one `due` key.
+   *
+   * ONE KEY, NOT TWO. The bar carried an Overdue switch writing `overdue=true`
+   * while the grammar has a single `due` parameter that the calendar's own
+   * window also spends — so a screen offering both a switch and a date filter
+   * would have had two URL keys competing for one wire parameter and a
+   * precedence rule between them that nothing could state on screen. Overdue
+   * is now what it is on the wire: one value of this filter
+   * (`internal/tracker/dates.go` resolves it, carrying the open-status
+   * condition with it), beside the engine's own aliases.
+   */
+  due: string;
+  /**
+   * The trash, AS A FILTER, because that is what the engine says it is.
+   *
+   * `internal/tracker/viewsread.go`: "what makes it the trash is `removed=true`
+   * … any view carrying that parameter is a trash listing and a client may
+   * treat it as one". It was a TAB in the view strip beside five shapes — so a
+   * reader could reach removed work only by leaving whatever arrangement they
+   * were in, and a trash of one project's bugs was not expressible at all.
+   */
+  removed: boolean;
+  /**
+   * The company's OWN fields, by `f.<slug>`, exactly as the grammar spells
+   * them.
+   *
+   * A MAP RATHER THAN A KEY EACH, because the set is the company's: a build
+   * that named them would offer the fields it shipped knowing about, which is
+   * none of them. The screen collects every `f.` key off the address and hands
+   * them through — so a saved view's custom-field narrowing, a pasted URL and
+   * the Filter menu are one path rather than three.
+   */
+  fields: Record<string, string>;
 }
 
 export const NO_FILTERS: TrackerFilters = {
@@ -566,15 +972,31 @@ export const NO_FILTERS: TrackerFilters = {
   type: "",
   priority: "",
   assignee: "",
+  tag: "",
+  unit: "",
   scope: "open",
   groupBy: "",
-  group: "",
+  groupBy2: "",
+  // ABSENT, which is the whole board — see [TrackerFilters.group] for why the
+  // empty string is a column rather than the lack of one.
+  group: undefined,
   sort: "",
   blocked: false,
-  overdue: false,
+  due: "",
+  removed: false,
+  fields: {},
 };
 
-/** Whether anything is narrowing the rows, so a Clear control can appear. */
+/**
+ * Whether anything is narrowing the rows, so a Clear control can appear.
+ *
+ * THE ARRANGEMENT IS NOT A NARROWING. `groupBy`, `groupBy2` and `sort` decide
+ * how the same answer is DRAWN — they are the Display menu's, not the filter
+ * chips' — and counting them here made Clear appear over a board nobody had
+ * filtered and then, pressed, flatten the arrangement the reader had chosen
+ * while removing nothing. `group` stays, because narrowing a board to one
+ * column narrows the whole query, totals included.
+ */
 export function anyFilter(f: TrackerFilters): boolean {
   return Boolean(
     f.q ||
@@ -582,14 +1004,101 @@ export function anyFilter(f: TrackerFilters): boolean {
     f.type ||
     f.priority ||
     f.assignee ||
-    f.groupBy ||
-    f.group ||
-    f.sort ||
+    f.tag ||
+    f.unit ||
+    // PRESENCE, NEVER TRUTH: `group=` with nothing after it is the unset
+    // column, which narrows the query exactly as a named one does.
+    f.group !== undefined ||
     f.blocked ||
-    f.overdue ||
+    f.due ||
+    f.removed ||
+    Object.keys(f.fields).length > 0 ||
     f.scope !== "open",
   );
 }
+
+/**
+ * WHICH CONTROL OWNS A KEY. A filter is a chip; an arrangement is a menu.
+ *
+ * The rule is the design's, stated once in
+ * `docs/reference/dashboard-design.md`, and it is the boundary these screens
+ * lost first: a bar of eleven controls, five of them pickers drawn whether or
+ * not they were set, so the two that were narrowing looked exactly like the
+ * nine that were not. What a key IS decides where it is set and where it is
+ * taken off — a narrowing is added from the **Filter** menu and removed from
+ * its own chip, and a drawing is chosen in the **Display** menu, whose button
+ * says what is on.
+ *
+ * A key that is BOTH is two controls for one fact, and they disagree the
+ * first time either writes; a key that is NEITHER is a state a reader can
+ * reach only by editing the address, with nothing on screen to say it is on.
+ * Three keys are deliberately neither, and each carries the reason below.
+ */
+export type ControlHome = "chip" | "menu" | "bar" | "strip" | "shape";
+
+/**
+ * Every key the work list carries on the address, and what draws it.
+ *
+ * KEYED BY THE URL SPELLING rather than by the [TrackerFilters] field that
+ * holds it, because the address is what this states: `groupBy` is `group_by`
+ * there, and a custom field is not one key at all. The two FAMILIES end in a
+ * dot and stand for every key beneath them — the company's own fields, whose
+ * set is the company's, and the per-shape column arrangements, whose set is
+ * the grid shapes'.
+ *
+ * `routes/work/toolbar/grammar.test.tsx` READS THIS and holds it in both
+ * directions: every key the screen puts on the address has a home here, and
+ * every home here is a key the screen actually writes — so a key added later
+ * with nowhere to live fails rather than shipping invisible.
+ */
+export const URL_HOMES: Record<string, ControlHome> = {
+  // THE NARROWINGS. Each is a chip under the bar, and taking the chip off
+  // clears exactly this key. Most are offered by the Filter menu; `q` is the
+  // substring mark beside it and `unit` arrives from an item's own "Filed
+  // into" line, which changes where a filter is SET and not what it is.
+  q: "chip",
+  status: "chip",
+  type: "chip",
+  priority: "chip",
+  assignee: "chip",
+  tag: "chip",
+  unit: "chip",
+  due: "chip",
+  blocked: "chip",
+  removed: "chip",
+  // NARROWING A BOARD TO ONE COLUMN NARROWS THE WHOLE QUERY, totals included
+  // — see [TrackerFilters.group], which is also why its chip is drawn on the
+  // key's PRESENCE rather than on its value.
+  group: "chip",
+  /** The company's own fields: one key per declared field, `f.<slug>`. */
+  "f.": "chip",
+
+  // THE ARRANGEMENT. None of these narrows anything, which is exactly why
+  // they are one menu rather than chips: they decide how the same answer is
+  // DRAWN.
+  shape: "menu",
+  group_by: "menu",
+  group_by2: "menu",
+  sort: "menu",
+  /** The chosen columns, per grid shape: `cols.<shape>` — see `shapes/Grid.tsx`. */
+  "cols.": "menu",
+
+  // AND THE THREE THAT ARE NEITHER, each for a reason the design states.
+  //
+  // THE SCOPE is always set to something: as a chip it would either be
+  // permanently present, which is not a chip, or absent on its default, which
+  // hides the one segment deciding whether finished work is on screen at all.
+  // So it stays in the bar as a switch.
+  scope: "bar",
+  // A SAVED VIEW is a query somebody arranged and put somewhere, so it is a
+  // tab in the strip — and a key of its own beside `shape=` precisely so that
+  // redrawing a saved board does not throw the saved filters away.
+  view: "strip",
+  // AND THE CALENDAR'S WINDOW is that shape's own axis, stepped in its own
+  // header: a month is not a narrowing somebody added and not another drawing
+  // of one answer, it is WHICH answer that shape asks for.
+  month: "shape",
+};
 
 /**
  * The `work_items` parameters one screen state asks for.
@@ -618,18 +1127,74 @@ export function buildItemsParams(args: {
   filters: TrackerFilters;
   /** The calendar's own bounds, as `YYYY-MM-DD` — see [gridRange]. */
   range?: { from: string; to: string };
+  /**
+   * THE HOST SCREEN'S OWN NARROWING, and it is the last word on the key it
+   * names.
+   *
+   * `#/me`'s Assigned tab IS one person's work, so the assignee is not a
+   * filter the reader set and can take off — it is what the screen is. Applied
+   * after everything else and on every branch, so no saved default, no `f.`
+   * key and no hand-edited address can widen the list past the person it is
+   * about. It is deliberately NOT routed through [TrackerFilters]: counted
+   * there it would make [anyFilter] true on an unfiltered day, and the empty
+   * panel would blame a narrowing with no chip to take off.
+   */
+  lock?: { assignee?: string };
+}): Record<string, unknown> {
+  const params = itemsParams(args);
+  // LAST, ON EVERY BRANCH. Three of them return early — the calendar, the
+  // timeline and the grid pair — so a lock written inside would have to be
+  // written three times, and the one that was forgotten is the one nobody
+  // would see: a list drawing somebody else's work under this person's name.
+  if (args.lock?.assignee) params.assignee = args.lock.assignee;
+  return params;
+}
+
+/** [buildItemsParams] before its lock, which is every other rule it has. */
+function itemsParams(args: {
+  container: string;
+  shape: Shape;
+  view: Record<string, string>;
+  filters: TrackerFilters;
+  range?: { from: string; to: string };
 }): Record<string, unknown> {
   const { container, shape, view, filters, range } = args;
+  // A VIEW'S PARAMS GO STRAIGHT ONTO THE WIRE, and they can only ever be
+  // QUERY keys. `cols`, `cols.list` and `cols.table` are DISPLAY keys this
+  // screen keeps in the address, and the engine would refuse a read carrying
+  // one — but no view can carry one to begin with, so there is nothing to
+  // strip here: `internal/tracker/views.go:274` runs every saved view's params
+  // through `ParseQuery` at the SAVE, whose `checkKeys`
+  // (`internal/tracker/query.go:449`) refuses any key outside `QueryKeys`
+  // (`query.go:429`) that is not an `f.<ref>` custom field, and `cols` is in
+  // neither. `WriteView` (`views.go:66`) is the only write path and
+  // `save_work_view` reaches it (`internal/agent/builtin/workviews.go:216`).
+  // The builtin views are this package's own two params, held parseable by
+  // `TestEveryImplicitViewsQueryParses`, and both spellings of the display key
+  // are held refused by `TestAViewThatCouldNotBeRunIsRefusedAtTheSave`. A
+  // client-side filter here would be a second, weaker copy of that refusal —
+  // and the weaker one, since it would run after the engine had already
+  // decided.
   const params: Record<string, unknown> = { ...view, container };
 
   const set = (key: string, value: string) => {
     if (value) params[key] = value;
+  };
+  // THE COLUMN NARROWING IS SENT ON ITS PRESENCE, never on its truth: `""` is
+  // the unset column and the engine reads the key with `Params.Has`, so an
+  // empty value has to reach the wire as `group: ""` rather than be dropped by
+  // the writer above. Absent, the key is left exactly as it was — which is how
+  // a saved view's own `group` keeps supplying the default nobody overrode.
+  const setGroup = () => {
+    if (filters.group !== undefined) params.group = filters.group;
   };
   set("q", filters.q);
   set("status", filters.status);
   set("type", filters.type);
   set("priority", filters.priority);
   set("assignee", filters.assignee);
+  set("tag", filters.tag);
+  set("unit", filters.unit);
 
   // OPEN AND CLOSED ARE STATUS GROUPS, not a boolean: the four groups are
   // what every rule in the tracker is written at, and `done` and `closed` are
@@ -658,9 +1223,9 @@ export function buildItemsParams(args: {
   // that switch either adds nothing or adds a predicate the group already
   // implies. Measured, all three answer identically.
   if (filters.scope === "open") {
-    params.status_group = "not_started,active";
+    params.status_group = SCOPE_GROUPS.open;
   } else if (filters.scope === "closed") {
-    params.status_group = "done,closed";
+    params.status_group = SCOPE_GROUPS.closed;
     if (!params.show_closed) params.show_closed = "true";
   } else {
     delete params.status_group;
@@ -668,9 +1233,51 @@ export function buildItemsParams(args: {
   }
 
   if (filters.blocked) params.blocked = true;
-  if (filters.overdue) params.due = "overdue";
+  // THE GRAMMAR HAS ONE `due`, and the calendar branch below spends it on its
+  // own window — which is why that branch deletes this rather than relying on
+  // assignment order, and why the Filter menu does not offer a due filter on
+  // that shape at all.
+  if (filters.due) params.due = filters.due;
 
-  const axis = filters.groupBy || (typeof view.group_by === "string" ? view.group_by : "");
+  // A REMOVED TASK IS VERY OFTEN A FINISHED ONE, so this carries `show_closed`
+  // exactly as the builtin trash view does — the group predicate is ANDed
+  // unconditionally otherwise (`internal/tracker/read.go`), which is what hid
+  // every removal of anything already done. As a FLOOR rather than an
+  // override, for the reason the scope segment gives above: a view that
+  // narrowed the window it widened to keeps its own value.
+  if (filters.removed) {
+    params.removed = "true";
+    if (!params.show_closed) params.show_closed = "true";
+  }
+
+  // THE COMPANY'S OWN FIELDS, PASSED THROUGH VERBATIM. The grammar for a
+  // custom field is the engine's (`f.<slug>=<op>:<value>`, with the field's own
+  // natural comparison for a bare value), and a client that parsed it here
+  // would be a second copy of a table the engine refuses against — where a
+  // wrong operator is not an error but a clause that matches nothing, which
+  // reads as a board with no work on it.
+  for (const [key, value] of Object.entries(filters.fields)) {
+    if (value) params[key] = value;
+    else delete params[key];
+  }
+
+  const axis = effectiveArrangement(filters.groupBy, view.group_by);
+  // THE SECOND AXIS IS SENT ONLY BESIDE A FIRST, which is the engine's own
+  // refusal (`group_by2 was passed without group_by`) rather than a rule of
+  // ours — and it is dropped where it EQUALS the first, which the engine also
+  // refuses, because every row would then be alone in its own band. The
+  // control cannot offer the first axis as the second, so this covers a
+  // hand-edited URL rather than a reachable state.
+  const axis2 = effectiveArrangement(filters.groupBy2, view.group_by2);
+  // AND THE ORDER IS THE SAME THREE-WAY QUESTION. A view's own `sort` is
+  // spread into `params` above, so the reader's choice has to overwrite it and
+  // their explicit "default order" has to DELETE it — where an empty string
+  // deleted the override instead and handed the view's sort back.
+  const order = effectiveArrangement(filters.sort, view.sort);
+  const setSubAxis = () => {
+    if (axis && axis2 && axis2 !== axis) params.group_by2 = axis2;
+    else delete params.group_by2;
+  };
 
   if (shape === "board") {
     params.group_by = axis || "status";
@@ -678,18 +1285,26 @@ export function buildItemsParams(args: {
     delete params.limit;
     delete params.cursor;
     delete params.group;
+    // NO SECOND AXIS ON A BOARD. A board's second axis is a swimlane GRID —
+    // cells, a cap that is the product of the two axes, and an overflow link
+    // per cell — which is a different drawing rather than a deeper band, and
+    // the Display menu does not offer it here. Sent anyway, by a view or by a
+    // hand-edited URL, it would come back as `subgroups` this shape draws
+    // nothing for: the rows would simply vanish from their columns.
+    delete params.group_by2;
   } else if (shape === "calendar") {
     // THE CALENDAR HAS ITS OWN AXIS, so a grouping brought in by a view is
     // dropped rather than sent: a grouped answer replaces the rows with
     // columns, and a month drawn from columns has nothing in its cells.
     delete params.group_by;
+    delete params.group_by2;
     delete params.group;
     delete params.group_limit;
     // AND ITS AXIS IS THE `due` KEY ITSELF, which the grammar has exactly one of
-    // — so the grid's window and the Overdue chip cannot both be asked for. The
-    // window wins, and the chip is therefore not offered on this shape at all
-    // (see `Work.tsx`): a pressed control whose narrowing is overwritten on the
-    // way to the wire is how a reader concludes their filter matched everything.
+    // — so the grid's window and a due filter cannot both be asked for. The
+    // window wins, and the filter is therefore not offered on this shape at all
+    // (see `FilterMenu`): a chip whose narrowing is overwritten on the way to
+    // the wire is how a reader concludes their filter matched everything.
     // Overdue work inside the window is already tinted in place.
     //
     // WRITTEN AS A DROP RATHER THAN LEFT TO THE OVERWRITE two branches above.
@@ -714,11 +1329,15 @@ export function buildItemsParams(args: {
     if (axis) {
       params.group_by = axis;
       params.group_limit = 100;
-      set("group", filters.group);
+      setGroup();
     } else {
       delete params.group_by;
       delete params.group;
     }
+    // A BAND OF BANDS IS NOT A TIMELINE. Its own axis is the date, and a
+    // second grouping would nest one band inside another down a shared axis —
+    // which is a Gantt swimlane and not what this component draws.
+    delete params.group_by2;
     // MORE ROWS THAN A LIST, because a bar is one line where a list row is
     // three or four and the window is derived from the rows present: a
     // timeline paged at a hundred would draw a different axis on every page.
@@ -726,8 +1345,9 @@ export function buildItemsParams(args: {
     // AND IT ARRIVES IN THE AXIS'S OWN ORDER unless the reader asked
     // otherwise, so the bars descend rather than zig-zag. The builtin view
     // carries the same value; this is what holds when a saved view or a
-    // filter change drops it.
-    params.sort = filters.sort || "start";
+    // filter change drops it — and what an explicit "default order" resolves
+    // to here, because a timeline's default IS its date axis.
+    params.sort = order || "start";
     return params;
   } else {
     // THE LIST AND THE TABLE ASK THE SAME QUESTION. They are two arrangements
@@ -737,25 +1357,211 @@ export function buildItemsParams(args: {
     if (axis) {
       params.group_by = axis;
       params.group_limit = 100;
-      set("group", filters.group);
+      setGroup();
     } else {
       delete params.group_by;
       delete params.group;
     }
+    // THE ONE SHAPE PAIR A SECOND AXIS IS DRAWN IN: a band inside a band, down
+    // one column, which is what nesting means where every row is a line.
+    setSubAxis();
     params.limit = 100;
   }
 
   // THE SORT IS OMITTED where nobody asked for one, so the engine's own
   // default applies — the manual order inside a project and the most recently
   // touched across the company, which are two different right answers and
-  // neither is something a client should hard-code.
-  if (filters.sort) params.sort = filters.sort;
+  // neither is something a client should hard-code. A reader who chose that
+  // default over a view's own sort deletes the key the view spread in, which
+  // is what [EXPLICIT_NONE] is for.
+  if (order) params.sort = order;
+  else delete params.sort;
   return params;
 }
 
-/** Where a board column's overflow lands: the same rows as a list. */
+/**
+ * Where a board column's overflow lands: the same rows as a list.
+ *
+ * `shape`, NEVER `view`. The two are different keys now — a view is the saved
+ * QUERY and the shape is how it is drawn — and writing `view=list` here threw
+ * away whichever saved view the reader was on, so following "52 more" out of a
+ * saved board landed them on the container's default filters with the column
+ * narrowing applied to the wrong set.
+ */
 export function filterPatchForGroup(axis: string, key: string): Record<string, string> {
-  return { view: "list", group_by: axis, group: key };
+  // AND THE UNSET COLUMN'S KEY IS `""`, which the patch carries as a value
+  // rather than as a deletion — see [TrackerFilters.group]. `patchedHref`
+  // deletes on `null` for exactly this: written as "clears the key", the
+  // "Unassigned" column's own overflow link loaded the whole board.
+  return { shape: "list", group_by: axis, group: key };
+}
+
+// ---------------------------------------------------------------------------
+// The filter chips
+// ---------------------------------------------------------------------------
+
+/**
+ * One narrowing the reader applied, as the chip that says so and takes it off.
+ *
+ * WHY CHIPS AT ALL. The bar carried a control per field — a search box and five
+ * selects, each drawn whether or not it was set — so eleven controls stood
+ * between the reader and the rows, the two that were ON looked exactly like the
+ * nine that were not, and a shape that hid a picker (the calendar has no
+ * Group by) moved every control beside it. A chip is drawn only where a filter
+ * is applied, so the bar is empty on an unfiltered board and says the whole
+ * narrowing in one line on a filtered one.
+ *
+ * `param` IS THE URL KEY, which is what makes a chip removable without a table
+ * of removers beside this one: the screen clears the key the chip names.
+ */
+export interface FilterChipSpec {
+  /** The URL key this chip stands for, and what taking it off clears. */
+  param: string;
+  /** The field's own name — the whole chip on a switch, which has no value. */
+  label: string;
+  /** The relation, where there is one to state. */
+  verb?: string;
+  /** What it was set to, in the company's own words. */
+  value?: string;
+}
+
+/**
+ * Every applied filter, in one order, as the chips a screen draws.
+ *
+ * PURE, over values, for the reason this file's own preamble gives: a rule that
+ * can only be exercised by rendering a screen is a rule nobody re-measures, and
+ * every judgement here has a wrong form that reads as a different fact — a chip
+ * saying `ada-okonkwo` where the company says Ada Okonkwo, or `in_progress`
+ * where the team says Doing.
+ *
+ * THE SCOPE IS NOT A CHIP. Open / Closed / All is a three-valued switch that is
+ * always set to something, drawn in the bar beside these: as a chip it would
+ * either be permanently present (a chip that cannot be removed is not a chip)
+ * or absent on its default, which hides the one segment that decides whether
+ * finished work is on screen at all.
+ */
+export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterChipSpec[] {
+  const out: FilterChipSpec[] = [];
+  if (f.q) out.push({ param: "q", label: "Text", verb: "contains", value: f.q });
+  if (f.status) {
+    out.push({
+      param: "status",
+      label: "Status",
+      verb: "is",
+      value: statusLabel(f.status, ctx.statuses),
+    });
+  }
+  if (f.type)
+    out.push({ param: "type", label: "Type", verb: "is", value: typeName(f.type, ctx.types) });
+  if (f.priority) {
+    out.push({ param: "priority", label: "Priority", verb: "is", value: humanize(f.priority) });
+  }
+  if (f.assignee) {
+    out.push({
+      param: "assignee",
+      label: "Assignee",
+      verb: "is",
+      // UNASSIGNED IS A VALUE the grammar spells `none`, and it is the one a
+      // lead opens a board to ask for — printed raw it reads as a filter that
+      // failed to resolve somebody's name.
+      value: f.assignee === "none" ? "Unassigned" : (ctx.seatName?.(f.assignee) ?? f.assignee),
+    });
+  }
+  if (f.tag) {
+    out.push({
+      param: "tag",
+      label: "Tag",
+      verb: "is",
+      value: ctx.tags?.find((t) => t.slug === f.tag)?.label ?? f.tag,
+    });
+  }
+  if (f.unit) {
+    out.push({
+      param: "unit",
+      label: "Unit",
+      verb: "is",
+      // WHATEVER THE ADDRESS HOLDS, which on a company that gave its units
+      // ids is a key rather than a word — see [axisLabel]'s unit arm for why
+      // this client cannot turn one into a name on its own, and why the chip
+      // says the key rather than inventing one.
+      value: axisLabel("unit", f.unit, ctx),
+    });
+  }
+  if (f.due) out.push({ param: "due", label: "Due", verb: "is", value: dueFilterLabel(f.due) });
+  if (f.group !== undefined) {
+    // THE COLUMN A BOARD WAS NARROWED TO, named by its own axis — the same
+    // resolver the column head uses, so the chip and the heading it came from
+    // say the same word. Including the UNSET one: `axisLabel` names an empty
+    // key per axis ("Unassigned", "Untagged"), which is the whole reason it
+    // takes the key rather than the group.
+    out.push({
+      param: "group",
+      label: axisName(f.groupBy) || "Column",
+      verb: "is",
+      value: axisLabel(f.groupBy, f.group, ctx),
+    });
+  }
+  // THE SWITCHES LAST, because they have no value to read: a chip that is only
+  // a field name is a different shape from one that is a sentence, and mixing
+  // the two through the row makes the row look ragged rather than ordered.
+  if (f.blocked) out.push({ param: "blocked", label: "Blocked" });
+  if (f.removed) out.push({ param: "removed", label: "Removed items" });
+  // THE COMPANY'S OWN FIELDS, LAST AND IN THE ADDRESS'S OWN ORDER. Named from
+  // the catalogue where it has arrived and from the SLUG where it has not —
+  // which is a value a reader can still act on, rather than a chip that says
+  // nothing while a second read is in flight.
+  for (const [param, value] of Object.entries(f.fields)) {
+    const slug = param.slice("f.".length);
+    const def = ctx.fields?.find((d) => d.slug === slug || d.id === slug);
+    out.push({ param, label: def?.name || slug, verb: "is", value: fieldFilterValue(value) });
+  }
+  return out;
+}
+
+/**
+ * The due filters a person is offered, which are the ENGINE'S OWN ALIASES.
+ *
+ * Every value here is one `internal/tracker/dates.go` expands itself
+ * (`DateAlias`, plus `overdue`, which carries an open-status condition with
+ * it), so the control cannot compose a window the engine resolves differently
+ * from the word on the chip. A comparison this list does not offer —
+ * `gte:2026-01-01`, `range:sow..eom` — is still legal on the address and in a
+ * saved view, and the chip prints it back verbatim rather than re-wording it.
+ *
+ * THERE IS NO "no due date". The grammar has no `due=null`: `due` compiles to
+ * a comparison against a column, and `due_at IS NULL` is not one. Offering it
+ * would mean offering a filter that is refused.
+ */
+export const DUE_FILTERS: { value: string; label: string }[] = [
+  { value: "overdue", label: "Overdue" },
+  { value: "earlier", label: "Before today" },
+  { value: "thisweek", label: "This week" },
+  { value: "next7", label: "Next 7 days" },
+  { value: "thismonth", label: "This month" },
+  { value: "last7", label: "Last 7 days" },
+  { value: "lastmonth", label: "Last month" },
+];
+
+/** What a due filter reads as, or the value itself for one written by hand. */
+export function dueFilterLabel(value: string): string {
+  return DUE_FILTERS.find((d) => d.value === value)?.label ?? value;
+}
+
+/**
+ * What a custom-field filter reads as, WITHOUT parsing the grammar.
+ *
+ * The engine's spelling is `<op>:<value>` with the field's own natural
+ * comparison for a bare value, and the two forms a chip has to separate are
+ * `null` / `not_null` — which are questions about the ROW rather than about a
+ * value, and read as "nothing" and "anything" printed raw. Everything else is
+ * shown as the reader wrote it: a chip that re-worded `range:3..8` would be a
+ * second copy of a table the engine refuses against, and one wrong word there
+ * is a filter that matches nothing while the chip claims otherwise.
+ */
+function fieldFilterValue(value: string): string {
+  if (value === "null") return "not set";
+  if (value === "not_null") return "set";
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -852,6 +1658,57 @@ export function countedLabel(shown: number, params: Record<string, unknown>): st
 }
 
 /**
+ * THE END OF A LIST, SAID — and "" where it would be a reassurance.
+ *
+ * # What it separates
+ *
+ * A list that has reached its end and a list that was cut off end the same
+ * way: rows, then page ground. [totalHint] is deliberately silent once
+ * everything matching is on screen, and a page's own cursor is invisible — so
+ * the reader of a hundred rows cannot tell whether the hundred-and-first
+ * exists. This is the sentence that says it does not.
+ *
+ * # Why it is not the reassurance [pageNote] refuses
+ *
+ * `pageNote`'s rule — "a note that always drew would put 'and that is all of
+ * them' under every healthy card in the product" — is about a CARD in a
+ * column of cards, where the note is one of twenty and nobody reads the
+ * twentieth. This is the foot of the page's own subject, drawn once, where the
+ * question "is that everything?" is the reason somebody scrolled. It is silent
+ * on an empty list (the empty state is the answer there) and on an incomplete
+ * one (the count in the bar already says there is more).
+ *
+ * # It never says what a filter hides
+ *
+ * The design's own sentence was "Two items match. Widen the filters, or clear
+ * them, to see the other six" — and "the other six" is a count over the
+ * UNFILTERED set, which no answer carries: `total_hint` is `countHint` over
+ * the SAME predicate as the rows (`internal/tracker/read.go`), so it counts
+ * what matched and never what was excluded. Stating it would mean a second
+ * query at a second instant, printing a difference nobody wrote. So the
+ * narrowed form says only that these are the ones that match.
+ */
+export function endNote(args: {
+  shown: number;
+  /** The answer's `total_hint`. */
+  hint: number;
+  /** The answer's `total_capped` — a count that stopped rather than finished. */
+  capped?: boolean;
+  /** The answer's `next_cursor`: a page with one is not the end of anything. */
+  cursor?: string;
+  /** Whether a narrowing is on, which is the only thing that changes the noun. */
+  narrowed: boolean;
+}): string {
+  if (args.shown <= 0 || args.cursor || args.capped || args.hint > args.shown) return "";
+  const count = plural(args.shown, "item");
+  // "1 item matches" / "2 items match": the verb agrees with the count, which
+  // a single spelling gets wrong at exactly the number a sparse company has.
+  return args.narrowed
+    ? `That is all of it · ${count} match${args.shown === 1 ? "es" : ""}`
+    : `That is all of it · ${count}`;
+}
+
+/**
  * The month the calendar draws, and a fallback for anything that is not one.
  *
  * `month=` is a URL parameter, so it is whatever the address bar holds — and
@@ -903,11 +1760,64 @@ export function pageNote(shown: number, more: boolean, one: string, many?: strin
   return more ? `The newest ${plural(shown, one, many)}; there are more.` : "";
 }
 
+/**
+ * The three segments, and NONE OF THEM IS THE EMPTY STRING.
+ *
+ * "Everything" used to be spelled `""`, and a scope is a URL key: the router's
+ * own writer deletes a key set to the empty string (`Navigator.filter`), so
+ * choosing All wrote nothing, the parameter read back as its fallback — the
+ * view's own seeded scope, `open` on almost every container — and the segment
+ * snapped back to Open on the next render. The one segment whose whole job is
+ * to show finished work could not be selected at all. A zero value has to be
+ * meaningful or the type must refuse it; here it could not be meaningful, so
+ * the value has a name.
+ */
+export const SCOPES = ["open", "closed", "all"] as const;
+export type Scope = (typeof SCOPES)[number];
+
+/**
+ * WHICH STATUS GROUPS EACH SEGMENT ADMITS, as the wire spells it.
+ *
+ * ONE SPELLING FOR BOTH READERS OF IT. [buildItemsParams] writes this key and
+ * [scopeOf] reads it back off a saved view — two places that must agree about
+ * exactly the same fact, and they already held two copies of the two strings.
+ * A mismatch is silent: a segment that writes a group nothing reads back snaps
+ * the control to the wrong value over a query that is narrowing correctly.
+ *
+ * The lanes a board draws were a third reader until the ENGINE started padding
+ * a closed axis to what its own predicate admits — the same narrowing, derived
+ * from the predicate itself rather than from a copy of it.
+ *
+ * `all` IS THE EMPTY STRING here and only here: it is the absence of the key
+ * rather than a fourth value, which is what [buildItemsParams] deletes and what
+ * makes every group admitted.
+ */
+export const SCOPE_GROUPS: Record<Scope, string> = {
+  open: "not_started,active",
+  closed: "done,closed",
+  all: "",
+};
+
+/**
+ * WHICH SEGMENT A `scope=` OFF THE ADDRESS ACTUALLY IS.
+ *
+ * A URL key is whatever the address bar holds, and [buildItemsParams] already
+ * reads anything the three do not name as `all` — it is the else-branch of one
+ * switch. Every other reader of the segment needs the same answer: the control
+ * that draws it, the padding that narrows a board's lanes with it, and the
+ * empty state that names it. Spelled per reader, a hand-edited `?scope=opne`
+ * drew an unset switch over a query showing every closed task, which is the one
+ * combination this segment exists to make impossible.
+ */
+export function asScope(value: string): Scope {
+  return SCOPES.includes(value as Scope) ? (value as Scope) : "all";
+}
+
 /** A view's `status_group` mapped back onto the three segments. */
-export function scopeOf(group: string | undefined): string {
-  if (group === "not_started,active") return "open";
-  if (group === "done,closed") return "closed";
-  return "";
+export function scopeOf(group: string | undefined): Scope {
+  if (group === SCOPE_GROUPS.open) return "open";
+  if (group === SCOPE_GROUPS.closed) return "closed";
+  return "all";
 }
 
 /**
@@ -947,12 +1857,12 @@ export function scopeOf(group: string | undefined): string {
  * round trip no test could reach: deleting it left every suite green while the
  * tracker opened on every closed task the company has.
  */
-export function seededScope(view: Record<string, string> | undefined): string {
+export function seededScope(view: Record<string, string> | undefined): Scope {
   const group = view?.status_group;
   const scope = scopeOf(group);
-  if (scope) return scope;
+  if (scope !== "all") return scope;
   const widened = (view?.show_closed ?? "").trim();
-  if (!group && widened && widened !== "false") return "";
+  if (!group && widened && widened !== "false") return "all";
   return "open";
 }
 

@@ -1894,3 +1894,88 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 		t.Errorf("the applier reports itself stopped after recovering: %v", err)
 	}
 }
+
+// THE DRAIN IS THE APPLIER'S OWN OBSERVATION, AND IT IS A HISTORY.
+//
+// [statelog.Health.Drained] answers "have this node's rows ever been the whole
+// state", which no single reading of the lag can: the two were one bool,
+// derived per heartbeat from `lag == 0`, and every reader that wanted the
+// history got the instant instead — a solo node released all seven of its
+// seats on each burst of tracker writes, because the record it had not applied
+// yet made that bool false for one beat. The loop is the only witness that
+// cannot miss a drain: the fetch the broker answers with nothing, while the
+// loop holds nothing itself, IS one.
+func TestTheDrainLatchIsTheApplierSOwnObservation(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	if h.runner.Drained() {
+		t.Fatal("a loop that has never run reports its rows a whole state, so a " +
+			"node vouches for a copy it has not read a record of")
+	}
+	for seq := uint64(1); seq <= 2; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", string(rune('a'+seq-1)),
+			fmt.Sprintf("op-%d", seq), 1))
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	waitForDrain(t, h, true, "the loop to reach the end of its log")
+
+	// AND IT MEANS LEVEL, not merely "the loop ran": the records are
+	// applied and committed before the fetch that finds nothing behind
+	// them.
+	if got := h.runner.Committed().Seq; got != 2 {
+		cancel()
+		<-errs
+		t.Fatalf("the loop reported itself drained at checkpoint %d, want 2 — it "+
+			"is vouching for rows it has not written", got)
+	}
+	cancel()
+	<-errs
+	if !h.runner.Drained() {
+		t.Error("a stopped loop forgot that it had drained; the answer a reader " +
+			"gets after a shutdown is the last honest one, not a fresh doubt")
+	}
+
+	// A RESTART CLEARS IT. Re-entering Run is what an adoption does — a
+	// peer's rows installed under a history this loop has never applied —
+	// so what it drained before is not a claim about what it holds now.
+	// The broker refuses the first few fetches, which is the state in
+	// which the answer must stay false: a loop that cannot reach the log
+	// has not reached the end of it.
+	h.fetch.mu.Lock()
+	h.fetch.failures = 4
+	h.fetch.mu.Unlock()
+	before := h.fetch.fetchCount()
+	ctx, cancel = context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	go func() { errs <- h.runner.Run(ctx) }()
+	waitForDrain(t, h, false, "the restarted loop to drop its drain latch")
+
+	// AND IT COMES BACK ONLY WHEN THE BROKER ANSWERS ONE. Counted from the
+	// restart, because the fetches of the first run say nothing about this
+	// one: fewer than five would mean the latch was set while every fetch
+	// this loop made was still failing.
+	waitForDrain(t, h, true, "the loop to drain once the broker answers again")
+	if got := h.fetch.fetchCount() - before; got <= 4 {
+		t.Errorf("the restarted loop latched after %d fetch(es), and the first "+
+			"4 were refused — the latch is being set by something other than "+
+			"an answer from the broker", got)
+	}
+	cancel()
+	<-errs
+}
+
+// waitForDrain blocks until the runner's drain latch reads want, or fails.
+func waitForDrain(t *testing.T, h *applyHarness, want bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.runner.Drained() == want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("waited 15s for %s: Drained() = %v", what, h.runner.Drained())
+}

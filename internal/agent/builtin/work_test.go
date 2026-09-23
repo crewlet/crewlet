@@ -76,14 +76,23 @@ type fakeTracker struct {
 
 	projectEdits     []tracker.ProjectEdit
 	projectAuthority []tracker.ProjectAuthority
-	tagEdits         []tracker.TagEdit
-	tagAuthority     []tracker.TagAuthority
-	tagWarnings      []string
-	ensured          [][]string
-	ensuredIn        []string
+
+	// declaredTypes and declaredFields are the catalogue as the WRITE
+	// tools composed it, which is the half of those verbs that lives in
+	// this package: the tracker's own suite certifies what it does with a
+	// declaration, and nothing else can say what a model's arguments
+	// BECAME.
+	declaredTypes  [][]tracker.TaskType
+	declaredFields [][]tracker.FieldDef
+	tagEdits       []tracker.TagEdit
+	tagAuthority   []tracker.TagAuthority
+	tagWarnings    []string
+	ensured        [][]string
+	ensuredIn      []string
 
 	projectQuery tracker.ProjectQuery
 	projects     tracker.ProjectListing
+	viewQuery    tracker.ViewQuery
 	detailQuery  tracker.ProjectDetailQuery
 	project      tracker.ProjectDetail
 
@@ -91,6 +100,19 @@ type fakeTracker struct {
 	activity      tracker.ActivityAnswer
 	myWorkQuery   tracker.MyWorkQuery
 	myWork        tracker.MyWork
+
+	// viewer is who the last list was expanded FOR, which is the half of a
+	// personal filter — `preset=my_queue`, `assignee=me` — that decides
+	// whether a founder's assistant is answered about them or about the
+	// credential in their hand.
+	viewer tracker.Viewer
+
+	// personQuery and inboxQuery are the last personal reads this fake was
+	// asked, so a case can assert WHO a tool resolved the question to —
+	// which is the half of these two verbs that decides whether a founder
+	// is shown their own day or a credential's.
+	personQuery tracker.PersonQuery
+	inboxQuery  tracker.InboxQuery
 
 	readErr  error
 	writeErr error
@@ -157,12 +179,15 @@ func (f *fakeTracker) Task(_ context.Context, idOrKey string, want tracker.Detai
 	return tracker.TaskDetail{}, fmt.Errorf("%w: %s", tracker.ErrNoTask, idOrKey)
 }
 
-func (f *fakeTracker) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
+func (f *fakeTracker) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
+	f.viewQuery = q
 	return tracker.ViewListing{}, nil
 }
 
 func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
-	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+
+	f.viewer = viewer
 
 	// THE KEYS THE TOOL COMPOSED, kept as strings: what a case here is
 	// about is the TRANSLATION from a model's arguments to the grammar's
@@ -179,8 +204,11 @@ func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracke
 	return tracker.CatalogueAnswer{}, nil
 }
 
-func (f *fakeTracker) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
-	return tracker.PersonState{}, nil
+func (f *fakeTracker) Person(_ context.Context, q tracker.PersonQuery,
+	_ time.Time) (tracker.PersonState, error) {
+
+	f.personQuery = q
+	return tracker.PersonState{Handle: q.Who.Handle}, nil
 }
 
 // Thread answers what the fake was TOLD to answer, and records the query.
@@ -372,6 +400,38 @@ func (f *fakeTracker) WriteTags(_ context.Context, opID, project string,
 		Outcome: statelog.OutcomeApplied, Version: 4,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 14},
 		Warnings: f.tagWarnings,
+	}, nil
+}
+
+// The CATALOGUE write side, which is the OPERATOR's alone. The declaration a
+// tool composed is what a case here asserts; whether the tracker accepts it is
+// the tracker's own suite (internal/tracker/config_test.go), and a second copy
+// of that gate in this fake would certify nothing but itself.
+func (f *fakeTracker) WriteTypes(_ context.Context, opID string,
+	types []tracker.TaskType) (tracker.WriteResult, error) {
+
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	f.declaredTypes = append(f.declaredTypes, types)
+	f.opIDs = append(f.opIDs, opID)
+	return tracker.WriteResult{
+		Outcome: statelog.OutcomeApplied, Version: 5,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 15},
+	}, nil
+}
+
+func (f *fakeTracker) WriteFields(_ context.Context, opID string,
+	fields []tracker.FieldDef) (tracker.WriteResult, error) {
+
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	f.declaredFields = append(f.declaredFields, fields)
+	f.opIDs = append(f.opIDs, opID)
+	return tracker.WriteResult{
+		Outcome: statelog.OutcomeApplied, Version: 6,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 16},
 	}, nil
 }
 
@@ -1008,6 +1068,33 @@ func TestAGroupedAnswerIsNotReportedAsEmpty(t *testing.T) {
 	}
 }
 
+// AND A BOARD OF EMPTY COLUMNS IS EMPTY.
+//
+// A closed axis carries every column the query admits whether or not anything
+// is in it, so "the answer has groups" stopped meaning "the answer has work":
+// a seat handed three columns at zero and told nothing would read them as a
+// board and go looking for the rows.
+func TestABoardWhoseEveryColumnIsEmptyIsReportedEmpty(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.answer = &tracker.Answer{
+		Groups: []tracker.Group{
+			{Key: "todo", Rows: []tracker.TaskRow{}},
+			{Key: "in_progress", Rows: []tracker.TaskRow{}},
+			{Key: "in_review", Rows: []tracker.TaskRow{}},
+		},
+		Complete: true,
+	}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{
+		"project": "eng",
+	})
+	if !strings.Contains(got.Output, "No work items match") {
+		t.Fatalf("three columns at zero were reported as a board: %s", got.Output)
+	}
+}
+
 // EVERY OPERATOR TOOL ANSWERS WITHOUT A TURN.
 //
 // The operator surface calls through Callable.Call, which passes a nil turn,
@@ -1063,8 +1150,9 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 	_ time.Time) (tracker.InboxAnswer, error) {
 
+	f.inboxQuery = q
 	return tracker.InboxAnswer{
-		Handle:         q.Handle,
+		Handle:         q.Who.Handle,
 		PrimaryReasons: tracker.DefaultPrimaryReasons,
 		Notices: []tracker.InboxNotice{{
 			RecordID: "rec-1", SubjectID: "i1", SubjectKey: "ENG-1",

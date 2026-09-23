@@ -137,35 +137,48 @@ func operatorRegistry(t *testing.T, trk *fakeTracker, person builtin.PersonWrite
 }
 
 type personSpy struct {
+	// handle is WHOSE record the last write named, and opID the operation
+	// it wrote under. Both on every verb, because the subject of a person
+	// write is the whole of what this file is about: a mark written under
+	// the wrong name is a mark nobody ever sees.
 	handle     string
+	opID       string
 	priorities []string
 	authority  tracker.PersonAuthority
 	reasons    []tracker.Reason
+
+	// actor is who the surface resolved the writer FOR, which is the other
+	// half: the record's subject is the person and its author is still
+	// the credential, and a case asserting one without the other would
+	// pass on a fix that let a caller write as anybody.
+	actor builtin.Actor
 }
 
-func (p *personSpy) WritePriorities(_ context.Context, _, handle string,
+func (p *personSpy) WritePriorities(_ context.Context, opID, handle string,
 	priorities []string, authority tracker.PersonAuthority) (
 	tracker.WriteResult, error) {
 
-	p.handle, p.priorities, p.authority = handle, priorities, authority
+	p.handle, p.opID = handle, opID
+	p.priorities, p.authority = priorities, authority
 	return tracker.WriteResult{
 		Outcome:  statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 20},
 	}, nil
 }
 
-func (p *personSpy) WritePins(_ context.Context, _, _ string, _ []string,
+func (p *personSpy) WritePins(_ context.Context, opID, handle string, _ []string,
 	_ []tracker.Favorite) (
 	tracker.WriteResult, error) {
 
+	p.handle, p.opID = handle, opID
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
-func (p *personSpy) WriteInbox(_ context.Context, _, _ string,
+func (p *personSpy) WriteInbox(_ context.Context, opID, handle string,
 	_, _, _ []tracker.InboxEntry, reasons []tracker.Reason,
 	_ tracker.Position) (tracker.WriteResult, error) {
 
-	p.reasons = reasons
+	p.handle, p.opID, p.reasons = handle, opID, reasons
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
@@ -257,21 +270,43 @@ func callPlain(t *testing.T, reg *tools.Registry, name string,
 	return got
 }
 
-// personRegistry is the operator surface with the person seams wired.
+// personRegistry is the operator surface with the person seams wired, acting
+// as the human seat `alice` and with no chart behind it.
 func personRegistry(t *testing.T, person *personSpy) *tools.Registry {
+	t.Helper()
+	return personSurface(t, newFakeTracker(), person, func(
+		context.Context, *turnctx.Turn) (builtin.Actor, error) {
+
+		return builtin.Actor{Handle: "alice", Kind: tracker.AuthorHuman}, nil
+	}, nil)
+}
+
+// personSurface is that surface over one fake tracker, one actor and one party
+// lookup — so a case can vary the CALLER, which is the only thing the subject
+// of these writes depends on.
+func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
+	actor func(context.Context, *turnctx.Turn) (builtin.Actor, error),
+	party func(string) tracker.Party) *tools.Registry {
+
 	t.Helper()
 	reg := tools.NewRegistry()
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
-			Reader:       newFakeTracker(),
-			Writer:       newFakeTracker().as,
-			Inbox:        newFakeTracker(),
-			PersonWriter: func(builtin.Actor) builtin.PersonWriter { return person },
-			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{
-					Handle: "alice", Kind: tracker.AuthorHuman,
-				}, nil
+			Reader: trk,
+			Writer: trk.as,
+			Inbox:  trk,
+			Party:  party,
+			PersonWriter: func(a builtin.Actor) builtin.PersonWriter {
+				// THE ACTOR THE WRITER WAS RESOLVED FOR, which is
+				// what carries the attribution: the record's
+				// subject is the person and its author is still
+				// the credential, and a case that asserted only
+				// the first would pass on a fix that let a caller
+				// write as anybody.
+				person.actor = a
+				return person
 			},
+			Actor: actor,
 		},
 	}) {
 		// WITH THE HINTS, which is what the operator surface itself
@@ -284,6 +319,241 @@ func personRegistry(t *testing.T, person *personSpy) *tools.Registry {
 		}
 	}
 	return reg
+}
+
+// boundOperator is what `opsmcp.WorkActor` builds for a token a company bound
+// to a human seat with `contact.crewlet_operator_id`: the credential in the
+// author field, the kind saying it is not a seat, and the PERSON it names in
+// [builtin.Actor.Seat].
+func boundOperator(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+	return builtin.Actor{
+		Handle: "founder", Kind: tracker.AuthorOperator,
+		OperatorID: "founder", Seat: "jane-founder",
+	}, nil
+}
+
+// unboundOperator is a token nobody is bound to — a pipeline, an operator
+// outside the org chart. An ordinary state, and not an error.
+func unboundOperator(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+	return builtin.Actor{
+		Handle: "ci", Kind: tracker.AuthorOperator, OperatorID: "ci",
+	}, nil
+}
+
+// boundParties is the chart lookup the operator surface wires: this company
+// bound `founder` to `jane-founder` and nobody else.
+func boundParties(handle string) tracker.Party {
+	if handle == "jane-founder" {
+		return tracker.Party{Handle: handle, OperatorID: "founder"}
+	}
+	return tracker.PartyOf(handle)
+}
+
+// A BOUND OPERATOR'S OWN MARKS AND PINS ARE THE PERSON'S, AND THE RECORD
+// STILL NAMES THE TOKEN.
+//
+// These two verbs passed `actor.Handle` as the record's SUBJECT, and through
+// `/operator/mcp` that is the TOKEN's id. So a founder whose assistant marked
+// their inbox read wrote a whole second person record called `founder`, while
+// their own screen — which asks under the seat their colleagues assign to —
+// showed an inbox where nothing had ever been read, a strip with none of their
+// pins, and a queue nobody had ever ordered.
+//
+// It is not attribution: the author field is a separate, correct concern, and
+// a tracker whose author is chosen by the writer is not an audit trail. It is
+// WHOSE STATE the document holds, and that is the person.
+//
+// BOTH VERBS IN ONE CASE, because they are the two that carry a subject with
+// no handle argument to correct it — one of them fixed and the other left
+// would look exactly like this from the screen that is still half empty.
+func TestABoundOperatorsOwnStateIsWrittenUnderTheirSeat(t *testing.T) {
+	t.Parallel()
+	for name, call := range map[string]struct {
+		tool string
+		args map[string]any
+		want string
+	}{
+		"pins":  {tracker.SetPinsTool, map[string]any{"views": []any{"v-1"}}, "pins-jane-founder-"},
+		"inbox": {tracker.MarkInboxTool, map[string]any{"seen_through": float64(4)}, "inbox-jane-founder-"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			person := &personSpy{}
+			reg := personSurface(t, newFakeTracker(), person,
+				boundOperator, boundParties)
+
+			if got := callNoTurn(t, reg, call.tool, call.args); got.Failed {
+				t.Fatalf("%s failed: %q", call.tool, got.Output)
+			}
+			if person.handle != "jane-founder" {
+				t.Errorf("%s wrote %q's record, want the person the token is "+
+					"bound to — written under the credential it is a second "+
+					"record nothing this person opens will ever read",
+					call.tool, person.handle)
+			}
+			// AND THE OPERATION ID FOLLOWS THE SUBJECT, because it is
+			// what the ledger collapses a redelivery against: keyed on
+			// one name while the record is keyed on another, two people's
+			// writes share a scope.
+			if !strings.HasPrefix(person.opID, call.want) {
+				t.Errorf("%s wrote under operation %q, want one scoped to %q",
+					call.tool, person.opID, call.want)
+			}
+			// AND THE AUDIT TRAIL IS UNTOUCHED.
+			if person.actor.Handle != "founder" ||
+				person.actor.Kind != tracker.AuthorOperator ||
+				person.actor.OperatorID != "founder" {
+
+				t.Errorf("%s is authored by %+v — the author is the credential "+
+					"and the kind says it is not a seat", call.tool, person.actor)
+			}
+		})
+	}
+}
+
+// AND AN UNBOUND TOKEN WRITES UNDER ITS OWN ID, EXACTLY AS BEFORE.
+//
+// Leaving a token unbound is ordinary — an operator outside the org chart, a
+// pipeline — and it acts as itself rather than being refused. This is the half
+// a careless fix breaks: a lookup that answered the first seat, or refused,
+// would take a working surface away from every company that never wrote the
+// binding.
+func TestAnUnboundOperatorStillWritesItsOwnRecord(t *testing.T) {
+	t.Parallel()
+	person := &personSpy{}
+	reg := personSurface(t, newFakeTracker(), person, unboundOperator, boundParties)
+
+	if got := callNoTurn(t, reg, tracker.SetPinsTool, map[string]any{
+		"views": []any{"v-1"},
+	}); got.Failed {
+		t.Fatalf("set_pins failed: %q", got.Output)
+	}
+	if person.handle != "ci" {
+		t.Errorf("an unbound token wrote %q's record, want its own", person.handle)
+	}
+	// AND SO DOES ITS PRIORITY LIST, which is the verb that resolves an
+	// omitted handle: the caller's own identity is not a typo, and running
+	// it through the roster refused an operator their own list by name.
+	if got := callNoTurn(t, reg, tracker.SetPrioritiesTool, map[string]any{
+		"items": []any{"ENG-1"},
+	}); got.Failed {
+		t.Fatalf("set_priorities for an unbound token failed: %q", got.Output)
+	}
+	if person.handle != "ci" {
+		t.Errorf("set_priorities wrote %q's list, want the caller's own",
+			person.handle)
+	}
+}
+
+// A BOUND OPERATOR OMITTING THE HANDLE ORDERS THE PERSON'S QUEUE.
+//
+// `set_priorities` defaulted to `actor.Handle` too, so a founder saying "these
+// three first" put them on a list belonging to their credential — invisible in
+// `my_work`, invisible under `preset=priorities`, and with the `prioritised`
+// wake routed to a handle nobody holds.
+func TestABoundOperatorsOwnQueueIsTheirSeats(t *testing.T) {
+	t.Parallel()
+	person := &personSpy{}
+	trk := newFakeTracker()
+	reg := personSurface(t, trk, person, boundOperator, boundParties)
+
+	if got := callNoTurn(t, reg, tracker.SetPrioritiesTool, map[string]any{
+		"items": []any{"ENG-1"},
+	}); got.Failed {
+		t.Fatalf("set_priorities failed: %q", got.Output)
+	}
+	if person.handle != "jane-founder" {
+		t.Errorf("the list was written for %q, want the person the token names",
+			person.handle)
+	}
+}
+
+// AND MY WORK ANSWERS FOR BOTH OF THAT PERSON'S NAMES.
+//
+// The read side is the mirror of the same defect: asked about the bare handle,
+// a founder's assistant got the TOKEN's day — seven blocks over rows their
+// colleagues had filed against the seat, and not one of them matched. The
+// alias behind it is what still reaches the rows their own earlier writes left
+// under the credential.
+func TestMyWorkThroughAnOperatorAnswersForTheirSeat(t *testing.T) {
+	t.Parallel()
+	person := &personSpy{}
+	trk := newFakeTracker()
+	reg := personSurface(t, trk, person, boundOperator, boundParties)
+
+	if got := callNoTurn(t, reg, tracker.MyWorkTool, nil); got.Failed {
+		t.Fatalf("my_work failed: %q", got.Output)
+	}
+	if got := trk.myWorkQuery.Who.Handles(); !slices.Equal(got,
+		[]string{"jane-founder", "founder"}) {
+
+		t.Errorf("my_work asked about %v, want the seat first and the "+
+			"credential behind it", got)
+	}
+	// AND A SEAT IS STILL A PARTY OF ONE, which is every in-engine caller.
+	seat := newFakeTracker()
+	own := personSurface(t, seat, &personSpy{}, func(
+		context.Context, *turnctx.Turn) (builtin.Actor, error) {
+
+		return builtin.Actor{Handle: "ana", Kind: tracker.AuthorAgent}, nil
+	}, boundParties)
+	if got := callNoTurn(t, own, tracker.MyWorkTool, nil); got.Failed {
+		t.Fatalf("my_work for a seat failed: %q", got.Output)
+	}
+	if got := seat.myWorkQuery.Who.Handles(); !slices.Equal(got, []string{"ana"}) {
+		t.Errorf("a seat's my_work asked about %v, want its one handle", got)
+	}
+}
+
+// AND A PERSONAL READ ABOUT SOMEBODY ELSE CARRIES *THEIR* TWO NAMES.
+//
+// Whose two names these are is a fact about the SEAT, resolved from the chart,
+// never the credential in the caller's own hand: an operator reading a
+// report's inbox is answered about that report. Both verbs take the handle as
+// an argument, so neither could get it from the actor.
+func TestTheHandleArgumentIsResolvedToThatPersonsParty(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := personSurface(t, trk, &personSpy{}, unboundOperator, boundParties)
+
+	if got := callPlain(t, reg, tracker.GetPersonTool, map[string]any{
+		"handle": "jane-founder",
+	}); got.Failed {
+		t.Fatalf("get_person failed: %q", got.Output)
+	}
+	if got := trk.personQuery.Who.Handles(); !slices.Equal(got,
+		[]string{"jane-founder", "founder"}) {
+
+		t.Errorf("get_person asked about %v, want the seat and the credential "+
+			"bound to it — the record may be filed under either", got)
+	}
+	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+		"handle": "jane-founder",
+	}); got.Failed {
+		t.Fatalf("work_inbox failed: %q", got.Output)
+	}
+	if got := trk.inboxQuery.Who.Handles(); !slices.Equal(got,
+		[]string{"jane-founder", "founder"}) {
+
+		t.Errorf("work_inbox asked about %v — the applier writes one row per "+
+			"recipient the record named, so a change that reached this person "+
+			"under their credential is a row the seat alone never sees", got)
+	}
+	// AND A SURFACE WITH NO CHART ANSWERS THE HANDLE ALONE, which is the
+	// honest state for a build that has not loaded one and the whole truth
+	// for every agent seat.
+	bare := newFakeTracker()
+	none := personSurface(t, bare, &personSpy{}, unboundOperator, nil)
+	if got := callPlain(t, none, tracker.GetPersonTool, map[string]any{
+		"handle": "jane-founder",
+	}); got.Failed {
+		t.Fatalf("get_person with no chart failed: %q", got.Output)
+	}
+	if got := bare.personQuery.Who.Handles(); !slices.Equal(got,
+		[]string{"jane-founder"}) {
+
+		t.Errorf("with no chart get_person asked about %v", got)
+	}
 }
 
 // TestEveryOperatorToolIsAnnotatedDeliberately closes the hole that classified

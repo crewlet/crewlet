@@ -624,12 +624,22 @@ func ptr[T any](v T) *T { return &v }
 // spellings of one fact in one column are indistinguishable until the first
 // query compares them, and then they disagree silently.
 //
-// A PRIORITIES WRITE IS THE CASE TO ASSERT ON, and the choice is load-bearing:
-// it is a DOCUMENT apply, so it passes no deltas at all, and its notification
-// is built unconditionally once the top task is on this node. A purge looks
-// like the obvious case and is not — `Gates.purgeNotify` returns nil unless
-// the project has a lead, so on a harness without one the row takes neither
-// branch and the assertion passes for the wrong reason.
+// A LEAD RE-STATING A PRIORITY LIST IS THE CASE TO ASSERT ON, and the choice
+// is load-bearing twice over. It is loud — a lead writing somebody else's
+// queue is the one person write that announces itself, so the row reaches the
+// notification branch at all — and the SECOND statement of one list moves
+// nothing, because `personDeltas` deliberately records who re-ordered a queue
+// and not when (`priorities_set_at` moves on every write and would make every
+// re-statement look like a change).
+//
+// It used to be the FIRST such write, on the argument that a document apply
+// "passes no deltas at all". That is no longer true and was the bug
+// `deltas.go` exists to fix: every document apply now compares the stored
+// object with the record's, so a first priorities write moves `priorities` and
+// `priorities_set_by` and has a real delta to store. A purge looks like the
+// obvious alternative and is not — `Gates.purgeNotify` returns nil unless the
+// project has a lead, so on a harness without one the row takes neither branch
+// and the assertion passes for the wrong reason.
 func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -642,14 +652,26 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 	// so a self-write leaves `notified = 0` and never reaches the branch
 	// this case is about.
 	lead := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
-	if _, err := lead.WritePriorities(t.Context(), "op-prio", "ana",
-		[]string{"t-1"}, tracker.PersonAuthority{Lead: true}); err != nil {
-		t.Fatalf("WritePriorities: %v", err)
+	for i, op := range []string{"op-prio", "op-prio-again"} {
+		// THE CLOCK MOVES BETWEEN THEM, which is what makes the second
+		// write a real test of the one field `personDeltas` leaves out:
+		// `priorities_set_at` is re-stamped on every lead write, so on a
+		// frozen clock this case would pass whether or not it were
+		// recorded.
+		r.at = wednesday.Add(time.Duration(i) * time.Hour)
+		if _, err := lead.WritePriorities(t.Context(), op, "ana",
+			[]string{"t-1"}, tracker.PersonAuthority{Lead: true}); err != nil {
+			t.Fatalf("WritePriorities %s: %v", op, err)
+		}
+		r.drain()
 	}
-	r.drain()
 
+	// THE NEWEST ROW, which is the re-statement. The first write is the
+	// one that moved the list onto an empty record and has a delta of its
+	// own — see TestEveryDocumentApplyRecordsWhatMoved.
 	got := r.strings(`SELECT fields_json FROM tracker_history
-		WHERE subject_kind = ? AND kind = ?`,
+		WHERE subject_kind = ? AND kind = ?
+		ORDER BY log_seq DESC LIMIT 1`,
 		string(tracker.KindPerson), string(tracker.ChangePrioritised))
 	if len(got) == 0 {
 		t.Fatal("the priorities write left no history row, so this case " +
@@ -660,7 +682,8 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 	// than an answer. This is the assertion the first draft of this case
 	// was missing, and it passed either way without it.
 	if notified := r.strings(`SELECT notified FROM tracker_history
-		WHERE subject_kind = ? AND kind = ?`,
+		WHERE subject_kind = ? AND kind = ?
+		ORDER BY log_seq DESC LIMIT 1`,
 		string(tracker.KindPerson), string(tracker.ChangePrioritised)); len(notified) == 0 ||
 		notified[0] != "1" {
 

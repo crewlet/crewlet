@@ -485,7 +485,12 @@ function ToolBody({ name }: { name: string }) {
             <>
               <div className="row gap-2 wrap">
                 {holders.seats.map((seat) => (
-                  <SeatChip key={seat.handle} name={seat.name} handle={seat.handle} />
+                  <SeatChip
+                    key={seat.handle}
+                    name={seat.name}
+                    handle={seat.handle}
+                    kind={seat.kind}
+                  />
                 ))}
               </div>
               <p className="t-caption">{holders.why}</p>

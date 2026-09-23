@@ -28,7 +28,7 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	r.at = wednesday
 	routeTo(t, r, "t-2", "ENG-2", "bob")
 
-	before := r.inbox(tracker.InboxQuery{Handle: "bob"})
+	before := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
 	if len(before.Notices) != 2 {
 		t.Fatalf("bob's inbox holds %d notices, want 2", len(before.Notices))
 	}
@@ -64,7 +64,7 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 			swept)
 	}
 
-	after := r.inbox(tracker.InboxQuery{Handle: "bob"})
+	after := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
 	if len(after.Notices) != 1 {
 		t.Fatalf("bob's inbox holds %d notices after the sweep, want 1",
 			len(after.Notices))

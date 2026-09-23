@@ -13,7 +13,7 @@ import (
 func (r *roundTrip) person(handle string) tracker.PersonState {
 	r.t.Helper()
 	state, err := r.reader.Person(r.t.Context(), tracker.PersonQuery{
-		Handle: handle, Level: statelog.ReadStale,
+		Who: tracker.PartyOf(handle), Level: statelog.ReadStale,
 	}, wednesday)
 	if err != nil {
 		r.t.Fatalf("Person(%q): %v", handle, err)
@@ -211,7 +211,7 @@ func TestADueSnoozeIsReportedRatherThanPromoted(t *testing.T) {
 	// THE READ'S OWN CLOCK DECIDES, so the same rows answer differently as
 	// the hour passes — which is the whole point of a snooze.
 	state, err := r.reader.Person(t.Context(), tracker.PersonQuery{
-		Handle: "ana", Level: statelog.ReadStale,
+		Who: tracker.PartyOf("ana"), Level: statelog.ReadStale,
 	}, wednesday.Add(2*time.Hour))
 	if err != nil {
 		t.Fatalf("Person: %v", err)
@@ -254,7 +254,7 @@ func TestAPersonNobodyHasWrittenReadsEmpty(t *testing.T) {
 		t.Fatal("a person read naming nobody was answered")
 	}
 	if _, err := r.reader.Person(t.Context(), tracker.PersonQuery{
-		Handle: "ana",
+		Who: tracker.PartyOf("ana"),
 	}, wednesday); err == nil {
 		t.Fatal("a person read with no read level was answered")
 	}
