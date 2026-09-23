@@ -53,13 +53,13 @@ one JSON object, and it always has the same three parts in the same places:
   more to say says it in the detail rather than rewording the sentence.
   Never match on it: the wording is copy and can be improved at any time. A few
   refusals still build their body themselves and answer with the code alone —
-  several under `/config` and `/setup` — so a client renders `message` where it
-  is present and its own line for the code where it is not.
+  several under `/config` and `/secrets` — so a client renders `message` where
+  it is present and its own line for the code where it is not.
 - **Everything else is the detail** — the machine-readable facts about *this*
   refusal, as typed JSON beside the two reserved keys rather than nested under
   one: `config_path` and `hint` above, `fields` on an integration that is
-  missing values, `current_revision_id` on a lost update, `problems` and
-  `problems` on a refused configuration document. Values keep their own types,
+  missing values, `current_revision_id` on a lost update, `problems` on a
+  refused configuration document. Values keep their own types,
   so a count is a number and a list of located problems is a list.
 
 `error` and `message` are RESERVED: a route's own detail can never displace
