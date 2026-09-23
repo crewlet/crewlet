@@ -21,20 +21,16 @@ type fakeBindings struct {
 	indexErr error
 }
 
-func (f fakeBindings) PersonByLogin(_ context.Context, login string) (
-	iamdomain.Sighting, error) {
+func (f fakeBindings) PersonByLoginVouched(_ context.Context, login string) (
+	iamdomain.Sighting, iamdomain.Vouch, error) {
 
-	if f.err != nil {
-		return iamdomain.Sighting{}, f.err
+	switch {
+	case f.err != nil:
+		return iamdomain.Sighting{}, iamdomain.Vouch{}, f.err
+	case f.indexErr != nil:
+		return iamdomain.Sighting{}, iamdomain.Vouch{}, f.indexErr
 	}
-	return f.rows[login], nil
-}
-
-func (f fakeBindings) Staleness(context.Context, string) (time.Duration, bool, error) {
-	if f.indexErr != nil {
-		return 0, false, f.indexErr
-	}
-	return f.lag, f.deferred, nil
+	return f.rows[login], iamdomain.Vouch{Lag: f.lag, Deferred: f.deferred}, nil
 }
 
 // boundMachine is an active machine under a Tier A token's login, bound to a

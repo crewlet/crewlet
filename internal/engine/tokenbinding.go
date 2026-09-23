@@ -110,9 +110,8 @@ func (e *Engine) BoundSeat(ctx context.Context, login string) (session.PersonRow
 // DECLARED HERE, by its one caller, so the rule above is exercised against a
 // fake rather than only through a running domain.
 type bindingDirectory interface {
-	PersonByLogin(ctx context.Context, login string) (iamdomain.Sighting, error)
-	Staleness(ctx context.Context, person string) (lag time.Duration, deferred bool,
-		err error)
+	PersonByLoginVouched(ctx context.Context, login string) (iamdomain.Sighting,
+		iamdomain.Vouch, error)
 }
 
 // boundRowOf is [Engine.BoundSeat] over its seam.
@@ -122,27 +121,26 @@ func boundRowOf(ctx context.Context, dir bindingDirectory, login string) (
 	if login == "" {
 		return session.PersonRow{}, nil
 	}
-	seen, err := dir.PersonByLogin(ctx, login)
+	// THE ROW AND HOW FAR THIS NODE CAN VOUCH FOR IT, in one snapshot: read
+	// apart, a record reprocessed between the two paired a binding from
+	// before it with "nothing deferred".
+	seen, vouch, err := dir.PersonByLoginVouched(ctx, login)
 	if err != nil {
 		return session.PersonRow{}, fmt.Errorf("engine: read the directory's "+
-			"row for %s: %w", login, err)
+			"row for %s, and whether this node holds a record about it that it "+
+			"has not applied: %w", login, err)
 	}
 	if seen.ID == "" || seen.Kind != iam.KindMachine || !seen.Stage.MayAct() ||
 		seen.Seat == "" {
 		return session.PersonRow{}, nil
 	}
-	lag, deferred, err := dir.Staleness(ctx, seen.ID)
 	switch {
-	case err != nil:
-		return session.PersonRow{}, fmt.Errorf("engine: %s is bound to %s on "+
-			"this node, which could not say whether it holds a record about "+
-			"that machine it has not applied: %w", login, seen.Seat, err)
-	case lag > statelog.StallGrace:
+	case vouch.Lag > statelog.StallGrace:
 		return session.PersonRow{}, fmt.Errorf("engine: %s is bound to %s on "+
 			"this node, and its identity applier is %s behind — past the %s "+
 			"stall grace, so it cannot say the binding still stands", login,
-			seen.Seat, lag, statelog.StallGrace)
-	case deferred:
+			seen.Seat, vouch.Lag, statelog.StallGrace)
+	case vouch.Deferred:
 		return session.PersonRow{}, fmt.Errorf("engine: %s is bound to %s on "+
 			"this node, which holds a record it cannot decode about that "+
 			"machine's bucket, so it cannot say the binding still stands",

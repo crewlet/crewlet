@@ -160,33 +160,61 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 	return out, nil
 }
 
-// Staleness is how far this node can vouch for one person's rows: how far its
-// applier is behind the log, and whether it holds a record it could not decode
-// whose scope covers that person's bucket.
+// Vouch is how far this node can vouch for the rows one read answered: how far
+// its applier is behind the log, and whether it holds a record it could not
+// decode whose scope covers the person those rows are about.
 //
 // FACTS AND NOT A VERDICT. What a lag or a deferral MEANS is the caller's
 // table — internal/iam/session's for a session, the engine's for a Tier A
-// token's binding — and a threshold chosen here would be a second opinion
-// about the one event [statelog.StallGrace] already names. It is one method
-// rather than two so that a caller cannot ask about the lag and forget the
-// deferral, which reads as a caught-up node while it holds a newer peer's
-// record about exactly this person. THREE-VALUED on the deferral: the index
-// is a read, and one that failed says nothing either way.
-//
-// An EMPTY person is covered by every deferral, because nothing can say which
-// bucket a record it could not decode is about.
-func (r *Reader) Staleness(ctx context.Context, person string) (
-	lag time.Duration, deferred bool, err error) {
+// token's binding and a login's record — and a threshold chosen here would be
+// a second opinion about the one event [statelog.StallGrace] already names.
+// One value rather than two answers so that a caller cannot ask about the lag
+// and forget the deferral, which reads as a caught-up node while it holds a
+// newer peer's record about exactly this person.
+type Vouch struct {
+	Lag      time.Duration
+	Deferred bool
+}
 
-	err = r.withTx(ctx, func(tx *sql.Tx) error {
+// PersonByLoginVouched is [Reader.PersonByLogin] and how far this node can
+// vouch for its answer, the row and the deferral read in ONE snapshot.
+//
+// For the callers that decide on a DIRECTORY ROW rather than on a credential:
+// a Tier A token's seat binding and the record a login keeps its holder's work
+// under. They read the row and then asked [Reader] separately whether a
+// record this node retained covered its person — two snapshots, so a record
+// reprocessed between them paired rows from before it with "nothing
+// deferred", a verdict that held at no instant. [Reader.MachineToken] and
+// [Reader.Resolve] read the two together for the same reason.
+//
+// An ABSENT row is vouched for over the ROOT — every deferral covers it —
+// because nothing can say which bucket a record this node could not decode is
+// about, and it may be the enrolment that claims this login. A reservation is
+// vouched for over its person's bucket, which its row names. THREE-VALUED on
+// the deferral: the index is a read, and one that failed says nothing either
+// way.
+func (r *Reader) PersonByLoginVouched(ctx context.Context, login string) (
+	Sighting, Vouch, error) {
+
+	var (
+		out   Sighting
+		vouch Vouch
+	)
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		if login != "" {
+			if err := sightingIn(ctx, tx, "login", login, &out); err != nil {
+				return err
+			}
+		}
 		var err error
-		deferred, err = deferredFor(ctx, tx, person)
+		vouch.Deferred, err = deferredFor(ctx, tx, out.ID)
 		return err
 	})
 	if err != nil {
-		return 0, false, err
+		return Sighting{}, Vouch{}, err
 	}
-	return r.lag(), deferred, nil
+	vouch.Lag = r.lag()
+	return out, vouch, nil
 }
 
 // deferredFor reports, inside the caller's snapshot, whether this node holds a

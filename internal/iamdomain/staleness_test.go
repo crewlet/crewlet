@@ -10,24 +10,26 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 )
 
-// STALENESS STATES BOTH FACTS, and Resolve reads the same two.
+// A VOUCH STATES BOTH FACTS, and Resolve reads the same two.
 //
-// A Tier A token's seat binding is a directory row read on every request, and
-// the engine refuses to honour one a node cannot vouch for: past the stall
-// grace, or holding a newer peer's record about that person's bucket. Asked
-// about the lag alone, a caught-up node holding exactly that record reads as
-// current; asked about any deferral at all, one record about somebody else
-// would refuse every bound credential on the node for the length of a rolling
-// upgrade.
+// A Tier A token's seat binding and the record a login keeps its holder's work
+// under are directory rows read on every request, and the engine refuses to
+// honour one a node cannot vouch for: past the stall grace, or holding a newer
+// peer's record about that person's bucket. Asked about the lag alone, a
+// caught-up node holding exactly that record reads as current; asked about any
+// deferral at all, one record about somebody else would refuse every bound
+// credential on the node for the length of a rolling upgrade.
 //
 // This case holds the LAG half and the control of the deferral half — a node
-// that retained nothing covers nobody, the empty person included. The deferral
-// half itself needs a record the node really retained, which only a real
-// applier produces: internal/engine's
+// that retained nothing covers nobody, a login nobody holds included. The
+// deferral half itself needs a record the node really retained, which only a
+// real applier produces: internal/engine's
 // TestARetainedRecordCoversExactlyItsPersonsBucket boots one and retains two.
-func TestStalenessIsTheLagAndNoDeferralWhereNothingIsRetained(t *testing.T) {
+func TestAVouchIsTheLagAndNoDeferralWhereNothingIsRetained(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
+	someone := uuid.New().String()
+	enrolSarah(t, rig, someone)
 	log, err := statelogtest.LocalReaderOver(
 		iamdomain.Domain{}, rig.db.Replicated(), rig.waiter)
 	if err != nil {
@@ -40,18 +42,22 @@ func TestStalenessIsTheLagAndNoDeferralWhereNothingIsRetained(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}
-	someone := uuid.New().String()
-	for _, person := range []string{someone, ""} {
-		lag, deferred, err := reader.Staleness(t.Context(), person)
+	for _, tc := range []struct{ login, holder string }{
+		{"sarah.chen", someone},
+		{"nobody.at.all", ""},
+	} {
+		seen, vouch, err := reader.PersonByLoginVouched(t.Context(), tc.login)
 		if err != nil {
-			t.Fatalf("Staleness(%q): %v", person, err)
+			t.Fatalf("PersonByLoginVouched(%s): %v", tc.login, err)
 		}
-		if lag != 90*time.Second {
-			t.Errorf("Staleness(%q): lag %s, want the applier's 90s", person, lag)
+		if seen.ID != tc.holder {
+			t.Errorf("%s resolved to %q, want %q", tc.login, seen.ID, tc.holder)
 		}
-		if deferred {
-			t.Errorf("Staleness(%q) reports a deferral on a node that retained "+
-				"nothing", person)
+		if vouch.Lag != 90*time.Second {
+			t.Errorf("%s: lag %s, want the applier's 90s", tc.login, vouch.Lag)
+		}
+		if vouch.Deferred {
+			t.Errorf("%s: a deferral on a node that retained nothing", tc.login)
 		}
 	}
 	// AND THE SESSION TABLE READS THE SAME TWO FACTS, so a token and a

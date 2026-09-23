@@ -43,46 +43,76 @@ func sessionRecord(lineage, person string) iamdomain.MutationRecord {
 	}
 }
 
+// enrolMachine enrols one active service account through the node's own
+// writer, so a row under its login exists for a retained record to cover.
+func enrolMachine(t *testing.T, e *Engine, id, login string) {
+	t.Helper()
+	if _, err := e.native.iamWriter.Enrol(t.Context(), iamdomain.Enrolment{
+		PersonID: id, Kind: iam.KindMachine, Stage: iam.StageActive,
+		Login: login, OpID: "enrol-" + login, Reason: "a pipeline",
+	}); err != nil {
+		t.Fatalf("enrol %s: %v", login, err)
+	}
+}
+
 // A RETAINED RECORD COVERS EXACTLY ITS PERSON'S BUCKET — EVERY RETAINED RECORD.
 //
-// The session table and a Tier A token's binding refuse to vouch for somebody
-// while this node holds a record about them it could not apply: a 401 there
-// would sign a person out of a session that record opened, on a node that
-// simply has not applied it. The answer was the runner's EARLIEST deferral,
-// which the runner read without its scope — so no retained record was ever
-// about anybody, and that refusal never fired. And even with its scope, the
-// earliest record is about one bucket: a later record about somebody else was
-// invisible to it.
+// A Tier A token's binding, the record a login keeps its holder's work under
+// and the session table each refuse to vouch for somebody while this node
+// holds a record about them it could not apply: a 401 there would sign a
+// person out of a session that record opened, on a node that simply has not
+// applied it. The answer was the runner's EARLIEST deferral, which the runner
+// read without its scope — so no retained record was ever about anybody, and
+// that refusal never fired. And even with its scope, the earliest record is
+// about one bucket: a later record about somebody else was invisible to it.
 //
-// Here the node retains a record about A and then one about C. A and C are
-// covered, the later C included; B, in a bucket neither touches, is not; and
-// nobody-in-particular is covered by any record there is.
+// Here three principals in three buckets are enrolled, and the node retains a
+// record about A and then one about C. A and C are covered, the later C
+// included; B, in a bucket neither touches, is not; and a login nobody holds
+// is covered by any record there is, since nothing can say whose enrolment a
+// record this node could not decode is. The CONTROL is the same four reads
+// before anything was retained.
 func TestARetainedRecordCoversExactlyItsPersonsBucket(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	e, b := retentionNode(t)
 	people := peopleInBuckets(3)
-	a, bystander, c := people[0], people[1], people[2]
-	retain(t, e, b, retainedFromNewerBuild, claimRecord(t, a, "anna.first"))
-	retain(t, e, b, retainedUnderUnknownKey, claimRecord(t, c, "cora.later"))
+	logins := []string{"ci:anna", "ci:bystander", "ci:cora"}
+	for i, id := range people {
+		enrolMachine(t, e, id, logins[i])
+	}
+	a, c := people[0], people[2]
 
 	reader := e.native.iamReader
-	for _, tc := range []struct {
-		name   string
-		person string
-		want   bool
+	cases := []struct {
+		name  string
+		login string
+		want  bool
 	}{
-		{"the person the earliest retained record is about", a, true},
-		{"the person a LATER retained record is about", c, true},
-		{"a person in a bucket no retained record touches", bystander, false},
-		{"nobody in particular", "", true},
-	} {
-		_, deferred, err := reader.Staleness(ctx, tc.person)
+		{"the person the earliest retained record is about", "ci:anna", true},
+		{"the person a LATER retained record is about", "ci:cora", true},
+		{"a person in a bucket no retained record touches", "ci:bystander", false},
+		{"a login nobody holds", "ci:nobody", true},
+	}
+	vouched := func(login string) iamdomain.Vouch {
+		t.Helper()
+		_, vouch, err := reader.PersonByLoginVouched(ctx, login)
 		if err != nil {
-			t.Fatalf("%s: Staleness: %v", tc.name, err)
+			t.Fatalf("PersonByLoginVouched(%s): %v", login, err)
 		}
-		if deferred != tc.want {
-			t.Errorf("%s: deferred %v, want %v", tc.name, deferred, tc.want)
+		return vouch
+	}
+	for _, tc := range cases {
+		if vouched(tc.login).Deferred {
+			t.Fatalf("%s: deferred on a node that retained nothing", tc.name)
+		}
+	}
+
+	retain(t, e, b, retainedFromNewerBuild, claimRecord(t, a, "anna.first"))
+	retain(t, e, b, retainedUnderUnknownKey, claimRecord(t, c, "cora.later"))
+	for _, tc := range cases {
+		if got := vouched(tc.login).Deferred; got != tc.want {
+			t.Errorf("%s: deferred %v, want %v", tc.name, got, tc.want)
 		}
 	}
 	// AND THE SESSION TABLE READS THE SAME FACT, in the rows' own snapshot:
@@ -184,12 +214,7 @@ func TestAMachineTokenIsVouchedForOnlyWhereNothingRetainedCoversItsOwner(t *test
 	tokens := make([]string, len(machines))
 	for i, id := range machines {
 		login := fmt.Sprintf("ci:bucket-%d", i)
-		if _, err := e.native.iamWriter.Enrol(ctx, iamdomain.Enrolment{
-			PersonID: id, Kind: iam.KindMachine, Stage: iam.StageActive,
-			Login: login, OpID: "enrol-" + login, Reason: "a pipeline",
-		}); err != nil {
-			t.Fatalf("enrol %s: %v", login, err)
-		}
+		enrolMachine(t, e, id, login)
 		secret, err := credential.NewTokenSecret()
 		if err != nil {
 			t.Fatal(err)

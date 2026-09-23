@@ -68,30 +68,26 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 		}
 		return recordThrough(ctx, chart, login, row)
 	}
-	seen, err := dir.PersonByLogin(ctx, login)
+	seen, vouch, err := dir.PersonByLoginVouched(ctx, login)
 	if err != nil {
-		return "", fmt.Errorf("engine: read the directory's row for %s: %w",
-			login, err)
+		return "", fmt.Errorf("engine: read the directory's row for %s, and "+
+			"whether this node holds a record about it that it has not "+
+			"applied: %w", login, err)
 	}
 	// A ROW THIS NODE CANNOT VOUCH FOR IS UNKNOWN IN BOTH DIRECTIONS — the
 	// opposite of a token's binding, where only the widening one is. A
 	// stale binding names a seat the person may since have left and a
 	// stale absence one they may since have joined, and either wrong
 	// answer writes a record under a name nothing of theirs reads. An
-	// absent row is asked about the EMPTY person, which every deferral
-	// covers: nothing can say which bucket a record this node could not
-	// decode is about, and it may be the enrolment that claimed this login.
-	lag, deferred, err := dir.Staleness(ctx, seen.ID)
+	// absent row is vouched for over the ROOT, which every deferral covers:
+	// nothing can say which bucket a record this node could not decode is
+	// about, and it may be the enrolment that claimed this login.
 	switch {
-	case err != nil:
-		return "", fmt.Errorf("engine: this node could not say whether it "+
-			"holds an identity record about %s it has not applied, so it "+
-			"cannot say whose record that is: %w", login, err)
-	case lag > statelog.StallGrace:
+	case vouch.Lag > statelog.StallGrace:
 		return "", fmt.Errorf("engine: this node's identity applier is %s "+
 			"behind — past the %s stall grace — so it cannot say whose record "+
-			"%s is", lag, statelog.StallGrace, login)
-	case deferred:
+			"%s is", vouch.Lag, statelog.StallGrace, login)
+	case vouch.Deferred:
 		return "", fmt.Errorf("engine: this node holds an identity record it "+
 			"cannot decode that may be about %s, so it cannot say whose "+
 			"record that is", login)
