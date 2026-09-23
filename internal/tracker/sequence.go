@@ -145,6 +145,20 @@ func stepID(opID, step string) string { return statelog.StepOpID(opID, step) }
 // answers for itself — see each sequence's "Re-running it".
 var ErrStepUnresolved = errors.New("tracker: a step's outcome is unresolved")
 
+// ErrStepUnvouched reports a walking sequence that stopped at a step whose
+// outcome is unknown BECAUSE THIS NODE'S OPERATION LEDGER CANNOT VOUCH FOR IT
+// ([statelog.Result.Unvouched]): the step's operation was minted before the
+// instant the ledger may have lost rows from, and it holds no row for it.
+//
+// IT IS AN [ErrStepUnresolved] — errors.Is answers true for both — and the one
+// kind of it the same operation id retried HERE never finishes: the row the
+// step needs is the one the loss took, so every re-run on this node stops at
+// the same step. What can finish it is another node, or one whose ledger lost
+// nothing that far back. A caller told "call again" about it goes round a loop
+// the answer already knew the end of.
+var ErrStepUnvouched = fmt.Errorf("tracker: this node's operation ledger "+
+	"cannot vouch for a step: %w", ErrStepUnresolved)
+
 // resolved reads one step of a walking sequence the way the walk must: a step
 // that failed stops it, and so does one whose outcome is UNKNOWN.
 //
@@ -156,10 +170,21 @@ var ErrStepUnresolved = errors.New("tracker: a step's outcome is unresolved")
 // with a subtask still under it, and a caller told the whole gesture
 // succeeded. Stopping leaves the walk's own mark up, which is what hands the
 // remainder to the re-run or the duty rather than to nobody.
+//
+// AN UNKNOWN THIS NODE'S LEDGER CANNOT VOUCH FOR IS SAID SO ([ErrStepUnvouched]),
+// because the re-run the ordinary unknown asks for is exactly what never
+// finishes it here.
 func resolved(step string, result WriteResult, err error) error {
 	switch {
 	case err != nil:
 		return err
+	case result.Outcome == statelog.OutcomeUnknown && result.Unvouched:
+		return fmt.Errorf("tracker: whether %s landed cannot be told on this "+
+			"node (operation %s): its operation ledger may have lost the record "+
+			"of it, so the walk stopped there and a re-run here stops at the same "+
+			"step; another node, or one whose ledger lost nothing that far back, "+
+			"can finish it under the same operation id: %w",
+			step, result.OpID, ErrStepUnvouched)
 	case result.Outcome == statelog.OutcomeUnknown:
 		return fmt.Errorf("tracker: whether %s landed is unknown (operation "+
 			"%s), so the walk stopped there; re-run it under the same "+
@@ -284,10 +309,55 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	switch {
 	case errors.Is(err, errMintLanded):
 		return w.resumeCreate(ctx, opID, task, notify)
+	case minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched:
+		return w.unvouchedCreate(ctx, opID, task, minted)
 	case err != nil:
 		return WriteResult{Result: minted}, err
 	}
 	return w.fileTask(ctx, opID, task, n, settled, notify)
+}
+
+// unvouchedCreate answers a create whose counter step this node's operation
+// ledger cannot vouch for ([statelog.Result.Unvouched]).
+//
+// # Why it is not "not made"
+//
+// The operation was minted before the ledger may have lost rows — a seat
+// re-running a turn whose trigger was queued before its node adopted a
+// snapshot, a caller finishing a month-old `unknown` — so its first run may
+// well have filed the task, on this node or another. An unknown counter was
+// turned into ErrUnavailable, which every caller read as "the change was NOT
+// made": the seat then rephrased and filed a duplicate under a new operation,
+// or gave up on work that already existed.
+//
+// THE TASK'S OWN ROW CAN SAY, because its id is a function of the operation
+// ([Task.ID] is derived from the op id): a row under it is this operation's
+// task, filed by an earlier run, and is answered with its key exactly as a
+// resumed create would. No row is not proof of absence — the first run may
+// have filed it on a node this one has not caught up with — so it is answered
+// `unknown`, still unvouched, with no error: neither made nor not made.
+func (w *Writer) unvouchedCreate(ctx context.Context, opID string, task Task,
+	minted statelog.Result) (WriteResult, error) {
+
+	if w.db == nil {
+		return WriteResult{Result: minted}, nil
+	}
+	var held bool
+	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		_, held, err = readTask(ctx, tx, task.ID)
+		return err
+	}); err != nil {
+		return WriteResult{Result: minted}, fmt.Errorf("tracker: the create of %s "+
+			"cannot be vouched for here; read whether its task landed: %w",
+			task.ID, err)
+	}
+	if !held {
+		return WriteResult{Result: minted}, nil
+	}
+	return w.landedTask(ctx, statelog.Result{
+		Outcome: statelog.OutcomeApplied, OpID: stepID(opID, "task"), Collapsed: true,
+	}, task.ID)
 }
 
 // settleCreate is the read a create's mint runs inside its own snapshot: the
@@ -920,6 +990,11 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	switch {
 	case errors.Is(err, errMintLanded):
 		created, err = w.resumeCreate(ctx, opID, subtask, notify)
+	case minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched:
+		// THE SUBTASK'S OWN ROW SAYS WHETHER AN EARLIER RUN FILED IT, as
+		// it does for a create ([Writer.unvouchedCreate]); where it cannot,
+		// the walk stops below as unvouched rather than as "not made".
+		created, err = w.unvouchedCreate(ctx, opID, subtask, minted)
 	case err != nil:
 		return WriteResult{Result: minted}, err
 	default:
@@ -1325,7 +1400,16 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return aliased, err
 	}
 
-	base, _, err := w.mintKey(ctx, stepID(opID, "counter"), target, 1+len(subtree), nil)
+	base, minted, err := w.mintKey(ctx, stepID(opID, "counter"), target, 1+len(subtree), nil)
+	if minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched {
+		// NOT "NOT MOVED": the operation predates this node's ledger loss,
+		// so an earlier run may have moved the root on a node this one has
+		// not caught up with. The walk stops as one this node cannot vouch
+		// for, which is what the caller has to be told.
+		return WriteResult{Result: minted}, resolved(fmt.Sprintf(
+			"the key range for task %s's move into %s", taskID, target),
+			WriteResult{Result: minted}, nil)
+	}
 	if errors.Is(err, errMintLanded) {
 		// THE COUNTER STEP LANDED UNDER AN EARLIER COPY and the root has
 		// not moved — this node read it in its old project — so the range

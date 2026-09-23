@@ -1482,6 +1482,13 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if err != nil {
 		return failed(writeFailure(CreateWorkItemTool, err)), nil
 	}
+	if got.Outcome == statelog.OutcomeUnknown {
+		// AN ITEM NOBODY CAN SAY WAS FILED IS NOT ONE TO REPORT. The key
+		// below would be one this attempt minted for a task that may never
+		// have landed — or, where this node's ledger cannot vouch for the
+		// operation, no key at all beside an "outcome" a model reads past.
+		return failed(createUnknown(actor, opID, got)), nil
+	}
 	t.deps.settle(ctx, got.Position)
 	answer := map[string]any{
 		"key": got.Key, "id": task.ID, "status": task.Status,
@@ -1512,6 +1519,70 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 	}
 	return jsonResult(answer)
+}
+
+// createUnknown explains a create whose outcome is unknown: the item may have
+// been filed and it may not, so it is reported as neither.
+//
+// # Why it is a failed result and not an answer carrying `outcome: unknown`
+//
+// Because the rest of that answer is a receipt. A key beside the word
+// "unknown" is read as the item's key, and the seat reports the work filed —
+// under a number that is a gap if the task step never landed. And where this
+// node's operation ledger cannot vouch for the operation (a seat re-running a
+// turn queued before its node adopted a snapshot), the create used to be
+// refused outright, which the default failure text renders as "the change was
+// NOT made": the seat then reworded the call and filed a duplicate of the item
+// its first run had filed.
+//
+// # What it tells the caller to do depends on whether a repeat is the same operation
+//
+// A seat's operation id is derived from its turn and the call's own arguments
+// ([opIDFor]), so the same call again, before any different call to this tool,
+// is the same operation: it answers with the item if it landed and files it
+// once if it did not. Worded differently it is a new item. An unvouched one
+// publishes nothing whatever it is asked, so a repeat is safe and answers the
+// same way until this node holds the item — the list is what can say sooner. A
+// caller with no turn to derive from mints a fresh operation per call, so a
+// repeat is a second item if the first one landed.
+func createUnknown(actor Actor, opID string, got tracker.WriteResult) string {
+	why := "the write's acknowledgement was lost"
+	if got.Unvouched {
+		why = "this node's operation ledger may have lost the record of this " +
+			"operation, so this node cannot tell"
+	}
+	filed := ""
+	if got.Key != "" {
+		filed = fmt.Sprintf(" If this attempt filed it, it is %s.", got.Key)
+	}
+	seat := actor.OperationSeed() != ""
+	var next string
+	switch {
+	case got.Unvouched && seat:
+		next = "Look for it with list_work_items before doing anything else " +
+			"about it. Calling create_work_item again with exactly the same " +
+			"arguments is safe — it files nothing this node cannot vouch for — " +
+			"but answers the same way until the item reaches this node. Never " +
+			"file it again under different wording: if the first run filed it, " +
+			"that is a second item."
+	case got.Unvouched:
+		next = "Look for it with list_work_items before filing it again: if " +
+			"the first attempt filed it, a second call files a second item."
+	case seat:
+		next = "Call create_work_item again with exactly the same arguments, " +
+			"before calling it with any other: the retry is the same " +
+			"operation, answers with the item if it was filed, and files it " +
+			"once if it was not. Do not reword it — a call with different " +
+			"arguments is a new item."
+	default:
+		next = "Look for it with list_work_items before filing it again: a " +
+			"second call is a new operation, and files a second item if the " +
+			"first one landed."
+	}
+	return fmt.Sprintf("%s: whether the work item was filed is unknown (%s; "+
+		"operation %s). It may exist and it may not — do not report it as "+
+		"filed, and do not report it as failed.%s %s",
+		CreateWorkItemTool, why, opID, filed, next)
 }
 
 // resolveRef turns what a model typed — a key like ENG-7, or an id — into the
@@ -2536,6 +2607,19 @@ func writeFailure(name string, err error) string {
 		return fmt.Sprintf("%s was refused: %v. Nothing is wrong with your "+
 			"edit — somebody changed the item after you read it. Call "+
 			"get_work_item again and decide from what it says now.", name, err)
+	case errors.Is(err, tracker.ErrStepUnvouched):
+		// NEITHER DONE NOR NOT MADE, AND NOT FINISHED BY ASKING AGAIN
+		// HERE. It is an ErrStepUnresolved, so this arm goes first: the
+		// retry that one asks for stops at the same step on this node
+		// every time, because the ledger row that step needs is the one
+		// the loss took — and a model told "call again" goes round that
+		// loop until its rounds run out.
+		return fmt.Sprintf("%s stopped part of the way through: %v. Some of "+
+			"it may already have landed, and this node cannot tell which — "+
+			"calling %s again here stops at the same step. Do not report it as "+
+			"done or as failed, and do not redo it by other means: read the "+
+			"items it touches with get_work_item, and say which part is "+
+			"unconfirmed.", name, err, name)
 	case errors.Is(err, tracker.ErrStepUnresolved):
 		// NEITHER DONE NOR NOT MADE. A gesture that walks — a move, a
 		// merge, a promotion, a dependency — stopped at a step whose

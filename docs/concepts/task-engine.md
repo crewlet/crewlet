@@ -111,7 +111,12 @@ a cache cannot:
   outcome is `unknown` rather than carrying on over it: nothing after that
   step is written, a mid-move or mid-merge mark stays up, and the caller is
   told the gesture stopped and under which operation id. Running it again
-  under that id answers the steps that landed and finishes the rest.
+  under that id answers the steps that landed and finishes the rest — except
+  where the step it stopped at is one this node's ledger cannot vouch for, and
+  the answer then says so, because running it again here stops at the same
+  step. A create in that position answers from its own item's row instead: the
+  item, where this node holds it, and `unknown` with no key minted where it
+  does not.
 - **A write can wait for itself.** A turn that files a task and then lists the
   project sees what it just filed, because the tool waits for this node to
   apply its own position before it reads. A gesture that writes one item

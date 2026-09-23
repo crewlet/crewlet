@@ -47,6 +47,11 @@ func TestARetryOfAMoveTheLedgerLostIsUnknownRatherThanRefused(t *testing.T) {
 		t.Errorf("the retry answered %q under %q, want unknown under the root "+
 			"step's id", retry.Outcome, retry.OpID)
 	}
+	// AND IT SAYS THIS NODE CANNOT VOUCH, because the re-run an ordinary
+	// unknown asks for stops at the same step here every time.
+	if !errors.Is(err, tracker.ErrStepUnvouched) {
+		t.Errorf("the retry's error does not wrap ErrStepUnvouched: %v", err)
+	}
 	if got := r.logEnd(t); got != end {
 		t.Fatalf("the retry put %d record(s) on the log", got-end)
 	}
@@ -95,6 +100,71 @@ func TestARetriedCreateTheLedgerCannotVouchForFilesNothing(t *testing.T) {
 		t.Fatalf("the retry put %d record(s) on the log — a number minted for "+
 			"a create this node cannot decide", got-end)
 	}
+}
+
+// A CREATE THIS NODE'S LEDGER CANNOT VOUCH FOR IS ANSWERED FROM ITS OWN TASK
+// ROW, AND NEVER AS "NOT MADE".
+//
+// A seat re-running a turn whose trigger was queued before its node adopted a
+// snapshot carries an operation minted before the ledger's loss. Its counter
+// step was answered unknown, which the create turned into ErrUnavailable and
+// the tool into "The change was NOT made" — about a task its first run filed.
+// The seat then rephrased (a new operation) and filed a duplicate. The task's
+// id is a function of the operation, so its row says whether this operation
+// filed it.
+func TestACreateTheLedgerCannotVouchForIsAnsweredFromItsTaskRow(t *testing.T) {
+	t.Parallel()
+
+	t.Run("filed by an earlier run", func(t *testing.T) {
+		t.Parallel()
+		r := newRoundTrip(t)
+		r.applyWhileWriting()
+		minted := time.Now().Add(-time.Hour)
+		op := statelog.NewOpID(minted, "create")
+		first, err := r.writer.CreateTask(t.Context(), op, newTask("t-once"), nil)
+		if err != nil || first.Key == "" {
+			t.Fatalf("the first run = (%+v, %v)", first, err)
+		}
+		r.drain()
+		r.sweepLedger(minted.Add(time.Minute))
+		end := r.logEnd(t)
+
+		retry, err := r.writer.CreateTask(t.Context(), op, newTask("t-once"), nil)
+		if err != nil {
+			t.Fatalf("the retry: %v — an operation this node cannot vouch for is "+
+				"not a failure, and its task is right here", err)
+		}
+		if retry.Outcome != statelog.OutcomeApplied || retry.Key != first.Key {
+			t.Fatalf("the retry answered %q with key %q, want applied with the "+
+				"first run's %q", retry.Outcome, retry.Key, first.Key)
+		}
+		if got := r.logEnd(t); got != end {
+			t.Fatalf("the retry put %d record(s) on the log", got-end)
+		}
+	})
+
+	t.Run("filed nowhere this node can see", func(t *testing.T) {
+		t.Parallel()
+		r := newRoundTrip(t)
+		r.applyWhileWriting()
+		minted := time.Now().Add(-time.Hour)
+		r.sweepLedger(minted.Add(time.Minute))
+		end := r.logEnd(t)
+
+		got, err := r.writer.CreateTask(t.Context(), statelog.NewOpID(minted, "create"),
+			newTask("t-maybe"), nil)
+		if err != nil {
+			t.Fatalf("the create = %v, want no error — neither made nor not made "+
+				"is not a failure to report as one", err)
+		}
+		if got.Outcome != statelog.OutcomeUnknown || !got.Unvouched || got.Key != "" {
+			t.Fatalf("the create answered %+v, want an unvouched unknown with no key",
+				got.Result)
+		}
+		if n := r.logEnd(t); n != end {
+			t.Fatalf("the create put %d record(s) on the log", n-end)
+		}
+	})
 }
 
 // sweepLedger is what the operation ledger's retention sweep does to this

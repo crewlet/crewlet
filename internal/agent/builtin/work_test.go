@@ -47,6 +47,11 @@ type fakeTracker struct {
 	created []tracker.Task
 	merged  []mergeCall
 
+	// createAnswer overrides what CreateTask answers, for the cases about
+	// what the TOOL makes of an outcome rather than about the task it
+	// composed.
+	createAnswer *tracker.WriteResult
+
 	// searched is every text the ranked search was asked for, and ranked
 	// what it answers with.
 	searched  []string
@@ -341,6 +346,9 @@ func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Ta
 	f.created = append(f.created, task)
 	f.notified = append(f.notified, notify)
 	f.opIDs = append(f.opIDs, opID)
+	if f.createAnswer != nil {
+		return *f.createAnswer, nil
+	}
 	return tracker.WriteResult{
 		Key: "ENG-9", Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 11},
@@ -756,6 +764,113 @@ func TestAFailedWriteSaysSo(t *testing.T) {
 	if !got.Failed || strings.Contains(got.Output, "NOT made") ||
 		!strings.Contains(got.Output, "exactly the same arguments") {
 		t.Errorf("a walk that stopped at an unresolved step gave %q", got.Output)
+	}
+}
+
+// A CREATE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS FILED, NOR AS NOT
+// MADE, and what it tells the caller to do is what a repeat would actually be.
+//
+// The answer used to be the create's receipt with `outcome: unknown` in it: a
+// key the seat read as its item's — a gap in the numbering if the task step
+// never landed — or, where the ledger could not vouch for the operation, the
+// default failure's "The change was NOT made" about an item the first run
+// filed, after which the seat reworded the call and filed a duplicate.
+func TestACreateWhoseOutcomeIsUnknownIsNeverReportedAsFiled(t *testing.T) {
+	t.Parallel()
+	lostAck := tracker.WriteResult{
+		Key:    "ENG-9",
+		Result: statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op.task"},
+	}
+	unvouched := tracker.WriteResult{Result: statelog.Result{
+		Outcome: statelog.OutcomeUnknown, OpID: "op.counter", Unvouched: true,
+	}}
+	cases := []struct {
+		name     string
+		operator bool
+		answer   tracker.WriteResult
+		want     []string
+		refuse   []string
+	}{
+		{
+			name: "a seat under a lost acknowledgement repeats the same call", answer: lostAck,
+			want: []string{"exactly the same arguments", "Do not reword it",
+				"If this attempt filed it, it is ENG-9"},
+			refuse: []string{"cannot tell", "list_work_items"},
+		},
+		{
+			name: "a seat the ledger cannot vouch for looks before it refiles", answer: unvouched,
+			want: []string{"this node cannot tell", "list_work_items",
+				"Never file it again under different wording"},
+			refuse: []string{"If this attempt filed it", "acknowledgement was lost"},
+		},
+		{
+			name: "an operator's repeat is a new operation", operator: true, answer: lostAck,
+			want:   []string{"list_work_items", "files a second item"},
+			refuse: []string{"exactly the same arguments", "cannot tell"},
+		},
+		{
+			name: "an operator the ledger cannot vouch for looks first", operator: true,
+			answer: unvouched,
+			want:   []string{"this node cannot tell", "list_work_items"},
+			refuse: []string{"exactly the same arguments"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			trk.createAnswer = &tc.answer
+			deps := builtin.WorkDeps{Reader: trk, Writer: trk.as}
+			call := callWork
+			if tc.operator {
+				deps.Actor, call = operatorActor, callNoTurn
+			}
+			got := call(t, workRegistry(t, deps), builtin.CreateWorkItemTool,
+				map[string]any{"title": "the follow-up", "project": "ENG"})
+			if !got.Failed {
+				t.Fatalf("an unknown create answered as a receipt: %s", got.Output)
+			}
+			for _, bad := range []string{"NOT made", `"key"`} {
+				if strings.Contains(got.Output, bad) {
+					t.Errorf("the answer carries %q, which is a claim about an "+
+						"item nobody can say was filed: %s", bad, got.Output)
+				}
+			}
+			if !strings.Contains(got.Output, trk.opIDs[0]) {
+				t.Errorf("the answer does not name operation %s: %s",
+					trk.opIDs[0], got.Output)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got.Output, want) {
+					t.Errorf("the answer lacks %q: %s", want, got.Output)
+				}
+			}
+			for _, bad := range tc.refuse {
+				if strings.Contains(got.Output, bad) {
+					t.Errorf("the answer says %q, which is not what a repeat "+
+						"here would be: %s", bad, got.Output)
+				}
+			}
+		})
+	}
+}
+
+// A WALK THIS NODE CANNOT VOUCH FOR IS NOT ANSWERED "CALL AGAIN". The same
+// call re-runs under the same operation, and the step it stopped at needs the
+// ledger row the loss took — so on this node it stops there every time, and a
+// model told to repeat it loops until its rounds run out.
+func TestAWalkThisNodeCannotVouchForIsNotAnsweredWithARetry(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	trk.writeErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnvouched)
+	got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "status": "done",
+	})
+	if !got.Failed || strings.Contains(got.Output, "NOT made") ||
+		strings.Contains(got.Output, "exactly the same arguments") ||
+		!strings.Contains(got.Output, "stops at the same step") {
+		t.Errorf("a walk this node cannot vouch for gave %q", got.Output)
 	}
 }
 

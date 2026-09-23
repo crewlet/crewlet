@@ -125,7 +125,16 @@ re-run refuse (a move finds its task already in the target project, a create
 finds its object already there), so on such an operation "no" would be the
 ledger's silence read as an answer. Only a refusal about the node itself — it
 holds a record it cannot read, or the object is deleted for good — stands
-either way. The thirty days are sized for the slowest real retrier, a seat
+either way. A **create** can say more than `unknown`, because its item's id is
+derived from the operation: one the ledger cannot vouch for is answered from
+that item's own row — the item the first copy filed, under the key it took,
+where this node holds it, and `unknown` with no number minted where it does
+not, since the first copy may be on the log beyond what this node has applied.
+A gesture that writes several records in order and meets such a step stops
+there and says so: re-running it under the same id **on this node** stops at
+the same step every time, because the row that step needs is the one the loss
+took, and it is a node whose ledger lost nothing that far back that can finish
+it. The thirty days are sized for the slowest real retrier, a seat
 that only runs on a schedule carrying an operation id across a long weekend; a
 write that is retried later than that is told `unknown`, and the operation's
 own record, if it landed, is on the log. The watermark travels with the ledger,
