@@ -352,13 +352,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		if n.pages, err = pages.NewStore(pages.Options{
 			Publisher: running.publisher, DB: e.backends.Store,
 			// LIVE off the epoch for the reason the searcher below is:
-			// `knowledge.skills_container` is Tier B, and this store is
-			// built once per node while an apply can move the key
-			// underneath it.
-			Reserved: func() []string {
+			// `knowledge.skills_container` and `knowledge.root_space`
+			// are Tier B, and this store is built once per node while an
+			// apply can move either key underneath it.
+			Reserved: func() pages.Reserved {
 				c := e.Company()
 				if c == nil {
-					return nil
+					return pages.Reserved{}
 				}
 				return reservedContainers(c.Config)
 			},
@@ -1642,18 +1642,16 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 	}
 }
 
-// reservedContainers are the containers a seat's own writes may not target.
-func reservedContainers(cfg *config.Company) []string {
+// reservedContainers are the containers a seat's own writes are held back
+// from, each under its own rule — see [pages.Reserved].
+func reservedContainers(cfg *config.Company) pages.Reserved {
 	if cfg == nil {
-		return nil
+		return pages.Reserved{}
 	}
-	var out []string
-	for _, key := range []string{cfg.SkillsContainerKey(), cfg.RootSpaceKey()} {
-		if key = strings.TrimSpace(key); key != "" {
-			out = append(out, key)
-		}
+	return pages.Reserved{
+		Skills: strings.TrimSpace(cfg.SkillsContainerKey()),
+		Root:   strings.TrimSpace(cfg.RootSpaceKey()),
 	}
-	return out
 }
 
 // seatMentions resolves the handles a body names to the seats that exist.

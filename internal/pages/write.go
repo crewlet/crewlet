@@ -83,7 +83,7 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 	if container == "" {
 		return Written{}, invalid("container", "a page needs a container to live in")
 	}
-	if err := s.refuseReserved(actor, container); err != nil {
+	if err := s.refuseReserved(actor, container, true); err != nil {
 		return Written{}, err
 	}
 	if err := s.checkTitle(in.Title); err != nil {
@@ -256,7 +256,7 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 			// INSIDE THE DECIDE, because a save names only a page id
 			// and which container it is in comes out of the row. See
 			// [Options.Reserved].
-			if err := s.refuseReserved(actor, head.Container); err != nil {
+			if err := s.refuseReserved(actor, head.Container, false); err != nil {
 				return statelog.Decision{}, err
 			}
 			if head.Version != save.BaseVersion {
@@ -334,7 +334,7 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	if err != nil {
 		return Written{}, err
 	}
-	if err := s.refuseReserved(actor, head.Container); err != nil {
+	if err := s.refuseReserved(actor, head.Container, false); err != nil {
 		return Written{}, err
 	}
 	if NormalizeTitle(head.Title) == NormalizeTitle(title) {

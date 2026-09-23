@@ -38,13 +38,17 @@
 //
 // # The reserved containers
 //
-// Two, and both are excluded from search and from routing. The SKILLS
-// container holds tool-skill pages: machinery, and a seat told to read one
-// would follow an instruction written for a different phase of a different
-// turn. The ROOT container holds the organisation's own pages, starting with
-// the Onboarding page every seat reads first. Both are refused as a unit's
-// own space by the config loader, and both are named there rather than here
-// so an operator can move either.
+// Two, and they are reserved for different reasons. The SKILLS container
+// holds tool-skill pages: machinery, excluded from search and from routing,
+// and a seat told to read one would follow an instruction written for a
+// different phase of a different turn — so an AGENT writes nothing there. The
+// ROOT container holds the organisation's own pages, starting with the
+// Onboarding page every seat reads first; it is searched and routed like any
+// other, and what an agent may not do there is ADD a page, because a new page
+// at the top of the company is a person's decision. [Reserved] states both,
+// and the store enforces them on every write path. Both are refused as a
+// unit's own space by the config loader, and both are named there rather than
+// here so an operator can move either.
 //
 // # The two-key sequences this no longer has
 //

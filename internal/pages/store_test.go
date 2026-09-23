@@ -869,7 +869,7 @@ func TestAHeadReadReportsTheRevisionItWasReadAt(t *testing.T) {
 	}
 }
 
-// THE RESERVED RULE FIRES ON EVERY WRITE PATH, not only on a create.
+// THE SKILLS CONTAINER REFUSES AN AGENT EVERY WRITE, not only a create.
 //
 // It used to be one check inside `write_page`, so a seat that could not create
 // a page in the tool-skills container could still SAVE over one, RENAME one
@@ -878,11 +878,11 @@ func TestAHeadReadReportsTheRevisionItWasReadAt(t *testing.T) {
 // the one place every write goes through, which is why it is here and why
 // [pages.ErrReserved] finally has a producer.
 //
-// A PERSON IS NOT REFUSED. The rule is not about capability — internal/authz
-// decides that — it is that a page in a reserved container is excluded from
-// knowledge search and from routing, so an AGENT writing there produces
-// something silently unreadable, while a person publishing the skills is the
-// intended use of the container.
+// A PERSON IS NOT REFUSED here. Whether a person may write a tool skill is a
+// capability, and internal/authz decides it; what the store holds is that a
+// page in the skills container is machinery injected into every seat's turn
+// and excluded from search and routing, which an AGENT cannot tell from
+// anything it holds.
 func TestTheReservedRuleFiresOnSaveRenameAndComment(t *testing.T) {
 	r := newRoundTrip(t)
 
@@ -891,6 +891,12 @@ func TestTheReservedRuleFiresOnSaveRenameAndComment(t *testing.T) {
 	page := r.write(author("ana"), pages.NewPage{
 		Container: "TS", Title: "Chat conventions", Body: "thread your reply",
 	}).Page
+	remark, _, err := r.store.Comment(t.Context(), author("ana"), page.ID,
+		pages.NewComment{Body: "see also the handbook"})
+	if err != nil {
+		t.Fatalf("a person could not comment on a skill page: %v", err)
+	}
+	r.drain()
 
 	for name, write := range map[string]func(pages.Actor) error{
 		"create": func(a pages.Actor) error {
@@ -914,15 +920,26 @@ func TestTheReservedRuleFiresOnSaveRenameAndComment(t *testing.T) {
 				pages.NewComment{Body: "why?"})
 			return err
 		},
+		"comment edit": func(a pages.Actor) error {
+			_, _, err := r.store.EditComment(t.Context(), a, page.ID,
+				remark.ID, "rewritten")
+			return err
+		},
+		"comment removal": func(a pages.Actor) error {
+			_, err := r.store.RemoveComment(t.Context(), a, page.ID,
+				remark.ID, pages.CommentAuthority{Moderate: true})
+			return err
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := write(agent("pm"))
 			if !errors.Is(err, pages.ErrReserved) {
-				t.Fatalf("an agent's %s into a reserved container gave %v, "+
+				t.Fatalf("an agent's %s into the skills container gave %v, "+
 					"want ErrReserved", name, err)
 			}
-			if !strings.Contains(err.Error(), "TS") {
-				t.Errorf("the refusal does not name the container: %v", err)
+			if !strings.Contains(err.Error(), "TS") ||
+				!strings.Contains(err.Error(), "tool skills") {
+				t.Errorf("the refusal does not name the container and why: %v", err)
 			}
 		})
 	}
@@ -933,6 +950,80 @@ func TestTheReservedRuleFiresOnSaveRenameAndComment(t *testing.T) {
 		Container: "ENG", Title: "Deploy notes", Body: "x",
 	}); err != nil {
 		t.Fatalf("an agent could not write an ordinary container: %v", err)
+	}
+}
+
+// THE ORG ROOT REFUSES AN AGENT A NEW PAGE, AND NOTHING ELSE.
+//
+// The root holds what is true of the whole company, starting with the
+// Onboarding page every seat reads first, and a new page at the top of the
+// company is a person's decision — which is all `write_page` ever refused
+// there. When the rule moved into the store it was folded into the skills
+// container's, so an agent could no longer keep a root page current, rename
+// it or remark on it, and the refusal told it the page was "excluded from
+// knowledge search and from routing" — true of the skills container and false
+// of this one, which is searched and routed like any other.
+//
+// Both halves, and the message: a create is refused naming the root's own
+// reason, and every gesture on a page already there lands.
+func TestTheOrgRootRefusesAnAgentOnlyANewPage(t *testing.T) {
+	r := newRoundTrip(t)
+
+	// THE ONBOARDING PAGE IS A PERSON'S, as the convention has it.
+	page := r.write(author("ana"), pages.NewPage{
+		Container: "HOME", Title: "Onboarding", Body: "who is here",
+	}).Page
+
+	_, err := r.store.Create(t.Context(), agent("pm"), pages.NewPage{
+		Container: "home", Title: "Team rituals", Body: "x",
+	})
+	if !errors.Is(err, pages.ErrReserved) {
+		t.Fatalf("an agent's new page in the org root gave %v, want ErrReserved", err)
+	}
+	if !strings.Contains(err.Error(), "HOME") ||
+		!strings.Contains(err.Error(), "organisation's own container") {
+		t.Errorf("the refusal does not name the root and why: %v", err)
+	}
+	if strings.Contains(err.Error(), "excluded from") {
+		t.Errorf("the refusal says the root is excluded from search or routing, "+
+			"which is the skills container's reason and false of this one: %v", err)
+	}
+
+	saved, err := r.store.SavePage(t.Context(), agent("pm"), page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("who is here, and who joined")})
+	if err != nil {
+		t.Fatalf("an agent could not keep a root page current: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.Rename(t.Context(), agent("pm"), page.ID,
+		"Onboarding for everyone", false); err != nil {
+		t.Fatalf("an agent could not rename a root page: %v", err)
+	}
+	r.drain()
+	remark, _, err := r.store.Comment(t.Context(), agent("pm"), page.ID,
+		pages.NewComment{Body: "the second section is stale"})
+	if err != nil {
+		t.Fatalf("an agent could not remark on a root page: %v", err)
+	}
+	r.drain()
+	if _, _, err := r.store.EditComment(t.Context(), agent("pm"), page.ID,
+		remark.ID, "the third section is stale"); err != nil {
+		t.Fatalf("an agent could not correct its own remark on a root page: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.RemoveComment(t.Context(), agent("pm"), page.ID,
+		remark.ID, pages.CommentAuthority{}); err != nil {
+		t.Fatalf("an agent could not take down its own remark on a root page: %v", err)
+	}
+	if saved.Page.Version != 2 {
+		t.Errorf("the save landed at version %d, want 2", saved.Page.Version)
+	}
+
+	// AND A PERSON ADDS A PAGE THERE, which is what the container is for.
+	if _, err := r.store.Create(t.Context(), author("ana"), pages.NewPage{
+		Container: "HOME", Title: "Company values", Body: "x",
+	}); err != nil {
+		t.Fatalf("a person could not publish into the org root: %v", err)
 	}
 }
 

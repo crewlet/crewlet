@@ -63,9 +63,9 @@ type Store struct {
 	// read here is paired with an expectation.
 	db *store.DB
 
-	// reserved names the containers a SEAT may not write to. See
-	// [Options.Reserved].
-	reserved func() []string
+	// reserved names the containers a SEAT may not write to, or not add a
+	// page to. See [Options.Reserved].
+	reserved func() Reserved
 
 	now      func() time.Time
 	newID    func() string
@@ -85,10 +85,9 @@ type Options struct {
 	// applier is forbidden.
 	Now func() time.Time
 
-	// Reserved names the containers this company holds for itself — the
-	// tool-skills container, whose pages are machinery, and the org root,
-	// which holds the onboarding tree. An AGENT's write to one is refused
-	// with [ErrReserved].
+	// Reserved names the containers this company holds back from an
+	// AGENT's writes — see [Reserved] for the two and what each refuses.
+	// A refused write answers [ErrReserved].
 	//
 	// # Why it is here and not at a tool
 	//
@@ -101,17 +100,44 @@ type Options struct {
 	// # Why the ACTOR and not the authority table
 	//
 	// Because this is not a question about capability. internal/authz
-	// decides who may write a page at all; what is left is that pages in
-	// a reserved container are excluded from knowledge search and from
-	// routing, so a SEAT writing there produces something silently
-	// unreadable — and an agent cannot know that from anything it holds.
-	// A person doing it on purpose, through the CLI that publishes the
-	// skills or through the dashboard, is the intended use of those
-	// containers rather than a mistake.
+	// decides who may write a page at all, and — for a person — who may
+	// write a tool skill; what is left here is a rule about what an AGENT
+	// cannot see from anything it holds: that a page in the skills
+	// container is machinery rather than knowledge, and that the org root
+	// is the company's own canon rather than a team's notebook. A person
+	// publishing into either on purpose is what those containers are for.
 	//
 	// A FUNCTION because the keys are Tier B: `knowledge.skills_container`
-	// moves on an apply, and this store is built once per node.
-	Reserved func() []string
+	// and `knowledge.root_space` move on an apply, and this store is built
+	// once per node.
+	Reserved func() Reserved
+}
+
+// Reserved is what a company holds back from an AGENT's writes.
+//
+// TWO CONTAINERS, AND THEY ARE NOT RESERVED FOR THE SAME REASON, so they do not
+// refuse the same gestures. Folding them into one list is what made every
+// write into the org root a refusal whose sentence was false: the root is
+// searched and routed like any other container, and only the skills container
+// is not.
+type Reserved struct {
+	// Skills is the tool-skills container, and EVERY write an agent makes
+	// there is refused — a create, a save, a rename and every comment
+	// gesture. Its pages are machinery the engine injects into a phase of
+	// every seat's turn as an instruction, and it is excluded from
+	// knowledge search and from routing: a page a seat writes there is
+	// either never read or read by every seat as an order, and a remark on
+	// one reaches nobody. Empty is a company with tool skills turned off.
+	Skills string
+
+	// Root is the organisation's own container — what is true of the
+	// whole company, starting with the Onboarding page every seat reads
+	// first — and an agent may not ADD a page there. A new page at the top
+	// of the company is a person's decision; a seat publishes into its own
+	// team's space. The pages already there are ordinary pages, searched
+	// and routed like any other, so a seat keeping one current, renaming
+	// it or remarking on it is ordinary upkeep and is not refused.
+	Root string
 }
 
 // NewStore builds the knowledge base over its own log.
@@ -345,13 +371,17 @@ func (a Actor) Name() string {
 	return "operator:anonymous"
 }
 
-// refuseReserved refuses an AGENT's write to a container the engine holds for
-// itself.
+// refuseReserved refuses an AGENT's write to a container the company holds
+// back from it — see [Reserved] for which gesture each one refuses.
+//
+// creating is whether the write ADDS a page, which is the one gesture the org
+// root refuses; every write path passes it, so the difference between the two
+// reservations is stated here once rather than at each caller.
 //
 // THE CONTAINER KEY IS CANONICALISED on both sides, because an operator types
 // `eng` in one file and `ENG` in another and a comparison that read them as
 // two containers would let a seat write to the one it was refused.
-func (s *Store) refuseReserved(actor Actor, container string) error {
+func (s *Store) refuseReserved(actor Actor, container string, creating bool) error {
 	if s.reserved == nil || actor.IsHuman() {
 		return nil
 	}
@@ -359,15 +389,24 @@ func (s *Store) refuseReserved(actor Actor, container string) error {
 	if key == "" {
 		return nil
 	}
-	for _, held := range s.reserved() {
-		if ContainerKey(held) != key {
-			continue
-		}
-		return fmt.Errorf("%w: %s holds this company's own pages — they are "+
-			"excluded from knowledge search and from routing, so what you "+
-			"write there is silently unreadable. Write it somewhere a reader "+
-			"will find it, or ask a person to publish it here",
-			ErrReserved, key)
+	held := s.reserved()
+	// THE SKILLS CONTAINER FIRST, because its rule is the stronger: a
+	// company that named one key for both is refused every write there.
+	if skills := ContainerKey(held.Skills); skills != "" && skills == key {
+		return fmt.Errorf("%w: %s holds this company's tool skills — pages the "+
+			"engine injects into seats' turns as instructions, excluded from "+
+			"knowledge search and from routing — so a page a seat writes "+
+			"there is either never read or read by every seat as an order. "+
+			"Write it somewhere a reader will find it, or ask a person to "+
+			"publish or change the skill", ErrReserved, key)
+	}
+	if root := ContainerKey(held.Root); creating && root != "" && root == key {
+		return fmt.Errorf("%w: %s is the organisation's own container — what "+
+			"is true of the whole company, starting with the Onboarding page "+
+			"every seat reads first — and a new page there is a person's "+
+			"decision. Write this in your team's space, or ask a person to "+
+			"publish it at the top of the company; the pages already there "+
+			"can be edited and commented on as usual", ErrReserved, key)
 	}
 	return nil
 }

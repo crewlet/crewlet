@@ -102,11 +102,13 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	kb, err := pages.NewStore(pages.Options{
 		Publisher: publisher, DB: db,
 		Now: func() time.Time { return wednesday },
-		// EVERY HARNESS RESERVES TS, so the rule is in force on every
-		// case rather than only on the one that is about it — a rule
-		// installed by its own test alone is one the rest of the suite
-		// proves nothing about.
-		Reserved: func() []string { return []string{"TS"} },
+		// EVERY HARNESS RESERVES TS AND HOME, so both rules are in force
+		// on every case rather than only on the one that is about them —
+		// a rule installed by its own test alone is one the rest of the
+		// suite proves nothing about.
+		Reserved: func() pages.Reserved {
+			return pages.Reserved{Skills: "TS", Root: "HOME"}
+		},
 	})
 	if err != nil {
 		t.Fatalf("build the store: %v", err)

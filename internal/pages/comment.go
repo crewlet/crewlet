@@ -90,7 +90,7 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			if err := s.refuseReserved(actor, head.Container); err != nil {
+			if err := s.refuseReserved(actor, head.Container, false); err != nil {
 				return statelog.Decision{}, err
 			}
 			patch := PagePatch{V: DocumentVersion, Comment: &CommentPatch{
@@ -158,7 +158,7 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			if err := s.refuseReserved(actor, head.Container); err != nil {
+			if err := s.refuseReserved(actor, head.Container, false); err != nil {
 				return statelog.Decision{}, err
 			}
 			read = revision
@@ -251,7 +251,7 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			if err := s.refuseReserved(actor, head.Container); err != nil {
+			if err := s.refuseReserved(actor, head.Container, false); err != nil {
 				return statelog.Decision{}, err
 			}
 			// THE AUTHOR IS READ IN THE DECIDE'S OWN SNAPSHOT, which
