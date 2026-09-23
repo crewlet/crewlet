@@ -268,9 +268,11 @@ type Runner struct {
 	// checkpoint on the log may be another history — and cleared by a
 	// verification that settles it ([Runner.verifyBeforeApplying]).
 	verify bool
-	// void is the generations the reanchor that placed the checkpoint
-	// ABANDONED, read with it by [Runner.loadCursor]: a record written in
-	// one is consumed and applied into no row — see [ReanchorPlan.From].
+	// void is what the reanchor that placed the checkpoint made void, read
+	// with it by [Runner.loadCursor]: a record written in a generation it
+	// ABANDONED, and one a restored reanchor OVERTOOK, is consumed and
+	// applied into no row — see [ReanchorPlan.From] and
+	// [ReanchorPlan.StaleAfter].
 	void      voidRange
 	deferred  Deferral
 	hasDefer  bool
@@ -2452,12 +2454,17 @@ func (r *Runner) Commits() float64 {
 func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (int, bool, error) {
 	started := r.now()
 	opts.StoredAt = rec.StoredAt
-	// THE FRAMEWORK'S OWN GATE FIRST: a record written in a generation the
-	// reanchor that placed this checkpoint abandoned. It is the framework's
-	// because the range is the checkpoint's, and it is asked of the record's
-	// OWN generation — the writer's stamp — never of the position the loop
-	// composed, which is this checkpoint's generation for every record.
-	reason, gated := ReasonAbandoned, r.void.holds(rec.Gen)
+	// THE FRAMEWORK'S OWN GATES FIRST: a record written in a generation the
+	// reanchor that placed this checkpoint abandoned, and one a restored
+	// reanchor overtook — after its generation record, in a generation
+	// below the one it opened. They are the framework's because both rules
+	// are the checkpoint's, and each is asked of the record's OWN generation
+	// — the writer's stamp — never of the position the loop composed, which
+	// is this checkpoint's generation for every record.
+	reason, gated := ReasonAbandoned, r.void.abandons(rec.Gen)
+	if !gated && r.void.overtakes(rec.Position.Seq, rec.Gen) {
+		reason, gated = ReasonOvertaken, true
+	}
 	if !gated {
 		var err error
 		reason, gated, err = r.applier.Gated(ctx, tx, rec)

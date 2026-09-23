@@ -880,6 +880,16 @@ open — re-run it with `-discard` to finish, or keep the record by replacing th
 node's rows with a peer's and evicting this node, which abandons the generation
 it opened.
 
+**What the rest of the fleet writes after the reanchor is not applied here.**
+The other nodes learn of a restored reanchor when their appliers reach its
+generation record or their heartbeat reads the fleet's new generation, and a
+node whose rows were the copy's age can write once more in the old generation
+before either happens. Such a record is decided from the rows the reanchor did
+not keep, so wherever the re-anchored checkpoint is followed from — this node,
+and every peer that adopts its snapshot — a record positioned after the
+reanchor's own record and written in a lower generation is void: consumed and
+applied on no node, logged `statelog_record_gated` naming `overtaken`.
+
 **A reanchor that stops part-way is re-run.** Once its generation record is on
 the log, the verb rebuilds this node's consumer and commits the checkpoint on
 the node's own time rather than the caller's, and the CLI waits up to six

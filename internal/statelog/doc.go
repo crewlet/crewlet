@@ -338,7 +338,11 @@
 // from rolling back to the copy. Following it from there applies nothing below
 // the end, so a restored log holding a record that writes rows these do not —
 // written after the restore — is re-anchored only on the operator's word, the
-// newest such record named ([UnheldTail], [ReanchorGuard.Discard]).
+// newest such record named ([UnheldTail], [ReanchorGuard.Discard]). And what the
+// fleet's other nodes write in the old generation AFTER the reanchor's own
+// record, before they learn of it, is decided from the rows it did not keep:
+// the checkpoint says where that record is, and such records are void wherever
+// the checkpoint is followed from ([ReanchorPlan.StaleAfter]).
 //
 // And a reanchor breaks the premise for every OTHER node of a domain that claims
 // identity: it opens its generation from one node's rows, so the rest hold a

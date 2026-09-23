@@ -167,6 +167,13 @@ const (
 	// followed from — see [ReanchorPlan.From].
 	ReasonAbandoned Reason = "abandoned"
 
+	// ReasonOvertaken — the record was written after a RESTORED reanchor's
+	// generation record, in a generation below the one that reanchor opened:
+	// by a node the move had overtaken before it learned of it, from the rows
+	// the reanchor did not keep — the copy's age. It produces rows nowhere the
+	// reanchor's checkpoint is followed from — see [ReanchorPlan.StaleAfter].
+	ReasonOvertaken Reason = "overtaken"
+
 	// ReasonLogFull — the log is at its byte ceiling and refuses
 	// appends rather than dropping records. An operator raises the
 	// ceiling or unblocks the trim. On a log that keeps a gate reserve

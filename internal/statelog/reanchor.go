@@ -351,6 +351,19 @@ type ReanchorPlan struct {
 	// applied on no node from here — and nil when the transition discards
 	// nothing.
 	Discarded *TailRecord
+
+	// StaleAfter is, for the RESTORED case, the sequence of the generation
+	// record the transition appended, and zero otherwise. Every record
+	// positioned after it that was written in a generation below Generation
+	// is void wherever this checkpoint is followed from: consumed, its anchor
+	// advanced, applied into no row ([ReasonOvertaken]). The fleet's other
+	// nodes learn of the move only when their appliers reach the record or
+	// their heartbeat reads the fleet's generation, and a node whose rows
+	// were the copy's age writes in the old generation until then — decided
+	// from the rows the reanchor did not keep. An abandoned reanchor keeps
+	// such records, because there the other nodes' rows are the history
+	// these continue; a restored one cannot.
+	StaleAfter uint64
 }
 
 // Case is which case these facts describe and where the new checkpoint goes,
@@ -886,7 +899,7 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 	// landed in between are ones the first walk never saw
 	// ([ReanchorInputs.Unheld]).
 	if keeps && plan.Case == ReanchorRestored {
-		plan.Cursor = opened - 1
+		plan.Cursor, plan.StaleAfter = opened-1, opened
 		at.Seq = plan.Cursor
 		if in.ClaimsIdentity {
 			unheld, walkErr := UnheldTail(post, d.Domain, d.DB, d.Stream, in.Generation,
@@ -943,7 +956,8 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 
 	// 6. THE ONE CHECKPOINT, alone in its transaction.
 	if err := d.DB.Tx(post, func(tx *sql.Tx) error {
-		return t.reanchorCursor(post, tx, at, in.StreamCreatedAt, names, plan.From, d.Now())
+		return t.reanchorCursor(post, tx, at, in.StreamCreatedAt, names, plan.From,
+			plan.StaleAfter, d.Now())
 	}); err != nil {
 		return ReanchorPlan{}, fmt.Errorf("statelog: move %s's checkpoint into "+
 			"generation %d: %w", d.Domain.Name(), gen, err)

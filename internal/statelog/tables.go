@@ -128,23 +128,37 @@ func decodeInstant(micros int64) time.Time {
 	return store.DecodeTime(micros)
 }
 
-// voidRange is the generations strictly between after and before: the ones a
-// reanchor ABANDONED, whose records are void wherever its checkpoint is
-// followed from. Zero and zero, the empty range, on every checkpoint no such
-// reanchor placed.
-type voidRange struct{ after, before uint32 }
+// voidRange is what the reanchor that placed a checkpoint made VOID wherever
+// that checkpoint is followed from, in two rules: the generations strictly
+// between after and before, the ones it ABANDONED ([ReanchorPlan.From]); and,
+// for a RESTORED reanchor, every record positioned after staleAfter — the
+// generation record it appended — whose generation is below before, the one it
+// opened ([ReanchorPlan.StaleAfter]). Zero, zero and zero on every checkpoint
+// no such reanchor placed.
+type voidRange struct {
+	after, before uint32
+	staleAfter    uint64
+}
 
-// holds reports whether generation gen is one of them.
-func (v voidRange) holds(gen uint32) bool { return gen > v.after && gen < v.before }
+// abandons reports whether generation gen is one a reanchor abandoned.
+func (v voidRange) abandons(gen uint32) bool { return gen > v.after && gen < v.before }
+
+// overtakes reports whether a record at seq written in generation gen is one a
+// restored reanchor overtook: after its generation record, in a generation
+// below the one it opened.
+func (v voidRange) overtakes(seq uint64, gen uint32) bool {
+	return v.staleAfter > 0 && seq > v.staleAfter && gen < v.before
+}
 
 // readCursor reads this domain's checkpoint, reporting false when the applier
 // has never committed on this stream.
 func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, error) {
-	var gen, seq, created, storedAt, voidAfter, voidBefore int64
+	var gen, seq, created, storedAt, voidAfter, voidBefore, staleAfter int64
 	err := tx.QueryRowContext(ctx, `
-		SELECT generation, seq, stream_created_at, stored_at, void_after, void_before
+		SELECT generation, seq, stream_created_at, stored_at, void_after, void_before,
+			stale_after
 		FROM statelog_cursor WHERE stream = ?`,
-		t.stream).Scan(&gen, &seq, &created, &storedAt, &voidAfter, &voidBefore)
+		t.stream).Scan(&gen, &seq, &created, &storedAt, &voidAfter, &voidBefore, &staleAfter)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return cursorRow{at: Position{Stream: t.stream}}, false, nil
@@ -155,7 +169,8 @@ func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, er
 		at:       Position{Stream: t.stream, Generation: uint32(gen), Seq: uint64(seq)},
 		created:  store.DecodeTime(created),
 		storedAt: decodeInstant(storedAt),
-		void:     voidRange{after: uint32(voidAfter), before: uint32(voidBefore)},
+		void: voidRange{after: uint32(voidAfter), before: uint32(voidBefore),
+			staleAfter: uint64(staleAfter)},
 	}, true, nil
 }
 
@@ -196,8 +211,10 @@ func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, 
 
 // reanchorCursor writes the checkpoint a reanchor places — at p, keyed to
 // created, naming the log's record at p by storedAt (zero where the log holds
-// none there) — together with the generations it abandoned: every one strictly
-// between from and p's own ([ReanchorPlan.From]).
+// none there) — together with what it made void: every generation strictly
+// between from and p's own ([ReanchorPlan.From]), and, for a restored reanchor,
+// every lower-generation record after staleAfter, the generation record it
+// appended ([ReanchorPlan.StaleAfter]), zero when there is no such rule.
 //
 // ITS OWN STATEMENT rather than a flag on setCursor, because the two write
 // different things for a reason: the applier's checkpoint moves every batch
@@ -206,13 +223,13 @@ func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, 
 // reanchor must REPLACE it, since the range an earlier reanchor abandoned says
 // nothing about the log this one follows.
 func (t tables) reanchorCursor(ctx context.Context, tx *sql.Tx, p Position,
-	created, storedAt time.Time, from uint32, now time.Time) error {
+	created, storedAt time.Time, from uint32, staleAfter uint64, now time.Time) error {
 
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO statelog_cursor
 			(stream, generation, seq, stream_created_at, stored_at, updated_at,
-			 void_after, void_before)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 void_after, void_before, stale_after)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (stream) DO UPDATE SET
 			generation        = excluded.generation,
 			seq               = excluded.seq,
@@ -220,10 +237,11 @@ func (t tables) reanchorCursor(ctx context.Context, tx *sql.Tx, p Position,
 			stored_at         = excluded.stored_at,
 			updated_at        = excluded.updated_at,
 			void_after        = excluded.void_after,
-			void_before       = excluded.void_before`,
+			void_before       = excluded.void_before,
+			stale_after       = excluded.stale_after`,
 		t.stream, int64(p.Generation), int64(p.Seq),
 		store.EncodeTime(created), encodeInstant(storedAt), store.EncodeTime(now),
-		int64(from), int64(p.Generation))
+		int64(from), int64(p.Generation), int64(staleAfter))
 	if err != nil {
 		return fmt.Errorf("statelog: write the reanchored cursor at %s: %w", p, err)
 	}

@@ -2306,3 +2306,123 @@ func TestAReanchorFinishesAfterItsCallerHasGone(t *testing.T) {
 		t.Fatalf("the checkpoint is at %s, want generation %d committed", at, plan.Generation)
 	}
 }
+
+// A RESTORED REANCHOR'S LOWER GENERATIONS AFTER ITS RECORD ARE VOID — AND THE
+// RULE TRAVELS WITH THE CHECKPOINT.
+//
+// The fleet's other nodes learn of a restored reanchor only when their
+// appliers reach its generation record or their heartbeat reads the fleet's
+// generation, and until then a node whose rows were the copy's age goes on
+// writing in the generation it was in — after the generation record, decided
+// from the rows the reanchor did not keep. The applier stopped only on a HIGHER
+// generation, and the abandoned range excludes the one the rows stood at, so
+// those records were applied on top of the kept rows. The transition now says
+// on the checkpoint where its record is, and every lower-generation record
+// after it is void: consumed and applied into no row. Records of the new
+// generation apply, and so does the generation record itself. And the rule is
+// on the checkpoint row, so a peer adopting the re-anchoring node's snapshot
+// before it got past them voids them too.
+func TestARestoredReanchorsLowerGenerationsAfterItsRecordAreVoid(t *testing.T) {
+	t.Parallel()
+
+	// THE TRANSITION WRITES THE RULE: the restored case, its record at 7001.
+	f := newReanchorFixture(t)
+	seedCursor(t, f.db, probeStream,
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, reanchorCreated)
+	in := reanchorInputs()
+	in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
+	in.FirstSeq, in.LastSeq = 1, 7_000
+	f.log.seq = 6_999
+	f.log.put("probe.object.last", "op-last", probeBody(t, 7_000, "op-last"))
+	holdRecord(t, f.db, 7_000, "op-last")
+	plan, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), in, confirmed())
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	if plan.StaleAfter != 7_001 {
+		t.Fatalf("the plan voids old-generation records after %d, want 7001 — its generation record", plan.StaleAfter)
+	}
+	var staleAfter int64
+	if err := f.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT stale_after FROM statelog_cursor WHERE stream = ?`, probeStream).
+			Scan(&staleAfter)
+	}); err != nil {
+		t.Fatalf("read the checkpoint: %v", err)
+	}
+	if staleAfter != 7_001 {
+		t.Fatalf("the checkpoint voids old-generation records after %d, want 7001", staleAfter)
+	}
+
+	// THE APPLIER VOIDS THEM, over a checkpoint carrying the rule.
+	h := newApplyHarness(t, probeDomain{})
+	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO statelog_cursor
+				(stream, generation, seq, stream_created_at, updated_at,
+				 void_after, void_before, stale_after)
+			VALUES (?, 2, 10, ?, ?, 1, 2, 11)`,
+			probeStream, store.EncodeTime(reanchorCreated), store.EncodeTime(reanchorCreated))
+		return err
+	}); err != nil {
+		t.Fatalf("seed the checkpoint: %v", err)
+	}
+	stamped := func(seq uint64, id string, gen uint32) statelog.Envelope {
+		e := env(seq, "edit", id, "op-"+id, 1)
+		e.Gen = gen
+		return e
+	}
+	h.fetch.offer(11, stamped(11, "generation", 2))
+	h.fetch.offer(12, stamped(12, "copy-age", 1))
+	h.fetch.offer(13, stamped(13, "current", 2))
+	if err := h.run(13); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	h.applier.mu.Lock()
+	applied := slices.Clone(h.applier.applied)
+	h.applier.mu.Unlock()
+	want := []statelog.Position{
+		{Stream: probeStream, Generation: 2, Seq: 11},
+		{Stream: probeStream, Generation: 2, Seq: 13},
+	}
+	if !slices.Equal(applied, want) {
+		t.Fatalf("applied %v, want %v — a record a copy-age node wrote in the old "+
+			"generation after the reanchor's record was applied on top of the "+
+			"rows it kept, or a record of the new generation was not", applied, want)
+	}
+}
+
+// A RESTORED CHECKPOINT'S RULE TRAVELS IN A SNAPSHOT.
+//
+// A peer that adopts the re-anchoring node's snapshot before either got past the
+// records a copy-age node wrote in the old generation follows the log from the
+// same checkpoint, and must void them too — so the rule is on the checkpoint
+// row, which every artefact carries whole.
+func TestARestoredCheckpointsRuleTravelsInASnapshot(t *testing.T) {
+	t.Parallel()
+	h := newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}, seed: func(t *testing.T, db *store.DB) {
+		t.Helper()
+		if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), `
+				UPDATE statelog_cursor SET void_after = 0, void_before = 1,
+					stale_after = 4201 WHERE stream = ?`, probeStream)
+			return err
+		}); err != nil {
+			t.Fatalf("seed the donor's rule: %v", err)
+		}
+	}})
+	if _, err := h.adopter(t).Join(t.Context()); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	var staleAfter int64
+	if err := h.joiner.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT stale_after FROM statelog_cursor WHERE stream = ?`, probeStream).
+			Scan(&staleAfter)
+	}); err != nil {
+		t.Fatalf("read the adopted checkpoint: %v", err)
+	}
+	if staleAfter != 4_201 {
+		t.Fatalf("the adopted checkpoint voids old-generation records after %d, want the donor's 4201", staleAfter)
+	}
+}
