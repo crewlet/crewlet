@@ -144,6 +144,9 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 			// stop notifications — so this is what catches what slips
 			// through, in the inbox and in the completion ledger.
 			WakeID: changefeed.WakeID(record.OpID, c.Handle),
+			// AND STAMPED WITH THE RECORD'S OWN INSTANT, which every copy
+			// of this wake carries — see [notify.Routed.WakeAt].
+			WakeAt: record.CreatedAt,
 		})
 	}
 	return out, nil

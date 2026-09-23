@@ -672,6 +672,11 @@ reproduces exactly; that instant is what lets a node whose operation ledger may
 have lost the first run's row since answer a re-run `unknown` rather than apply
 it twice (see
 [Replication](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
+A wake the engine's own tracker or knowledge base produces is stamped with the
+instant of the change it announces rather than the moment it was delivered, so
+every copy of it — a change-feed redelivery, a delivery retried after a failed
+publish — carries the same instant as well as the same id, and a re-run woken
+by a later copy derives the first run's ids.
 
 **A re-run is recognised call for call, and only when its calls are the same.**
 Everything a derived id is made of — the work, the verb, the item, the

@@ -228,3 +228,43 @@ func (r *roundTrip) routeVia(payload []byte, leads pages.Leads,
 	}
 	return routed
 }
+
+// EVERY WAKE CARRIES ITS RECORD'S OWN INSTANT, a watcher's and the lead's
+// fallback alike — see notify.Routed.WakeAt for what the delivery's own clock
+// cost a re-run turn.
+func TestAPageWakeIsStampedWithItsRecordsInstant(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	watched := r.write(author("jane"), pages.NewPage{
+		Title: "Runbook", Body: "prose", Watchers: []string{"carla"},
+	})
+	if _, err := r.store.SavePage(t.Context(), author("jane"), watched.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("the deploy steps changed")}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	directed := r.lastRecord()
+	r.write(author("jane"), pages.NewPage{Container: "ENG", Title: "Nobody watches this"})
+	fallback := r.lastRecord()
+
+	for name, payload := range map[string][]byte{
+		"a watcher's wake": directed, "the lead's fallback": fallback,
+	} {
+		record, err := pages.Decode(payload)
+		if err != nil {
+			t.Fatalf("decode %s's record: %v", name, err)
+		}
+		if record.CreatedAt.IsZero() {
+			t.Fatalf("the premise: %s's record carries no instant", name)
+		}
+		routed := r.route(payload, pages.Leads{"ENG": "lead"})
+		if len(routed) == 0 {
+			t.Fatalf("%s reached nobody", name)
+		}
+		for _, got := range routed {
+			if !got.WakeAt.Equal(record.CreatedAt) {
+				t.Errorf("%s to %s is stamped %s, want the record's %s", name,
+					got.To.Handle, got.WakeAt, record.CreatedAt)
+			}
+		}
+	}
+}

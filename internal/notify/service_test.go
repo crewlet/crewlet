@@ -122,6 +122,24 @@ func (h *harness) settled(t *testing.T, topic string) []*events.Event {
 	}
 }
 
+// settledN waits for n events on a topic, then returns what landed.
+func (h *harness) settledN(t *testing.T, topic string, n int) []*events.Event {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		h.mu.Lock()
+		got := append([]*events.Event(nil), h.seen[topic]...)
+		h.mu.Unlock()
+		if len(got) >= n {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d event(s) on %s, want %d", len(got), topic, n)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func (h *harness) inbox(t *testing.T, handle string) []*events.Event {
 	t.Helper()
 	return h.settled(t, topics.AgentInbox(handle))
@@ -807,6 +825,39 @@ func TestADerivedWakeIDReachesTheEvent(t *testing.T) {
 		t.Errorf("the wake carries id %s, not the producer's derived %s — so a "+
 			"redelivery of the same change would look like a second one",
 			woken[0].ID, derived)
+	}
+}
+
+// A DERIVED WAKE CARRIES ITS RECORD'S INSTANT, on every copy.
+//
+// A wake's timestamp is half of the identity a turn derives from it: the unit
+// of work began at the earliest timestamp among its triggers, and every
+// operation id the turn derives carries that instant. A derived wake was
+// stamped with the delivery's own clock, so each producer retry — a feed
+// redelivery, this very Handle NAK'd and run again — minted the same id with a
+// FRESH instant, and a turn re-run from a later copy derived different
+// operation ids from the first run's: its writes were not collapsed onto them.
+func TestADerivedWakeCarriesItsRecordsInstant(t *testing.T) {
+	h := newService(t, nil)
+	derived := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	written := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+	routed := to(notify.Recipient{Handle: "engineering-lead"}, "please look")
+	routed.WakeID, routed.WakeAt = derived, written
+	h.parser.out = []notify.Routed{routed}
+
+	for range 2 {
+		if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+			t.Fatalf("Handle = %+v, want an ack", got)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	woken := h.settledN(t, topics.AgentInbox("engineering-lead"), 2)
+	for i, ev := range woken {
+		if !ev.Timestamp.Equal(written) {
+			t.Errorf("copy %d of one wake is stamped %s, want the record's %s — a "+
+				"turn re-run from it derives different operation ids",
+				i, ev.Timestamp, written)
+		}
 	}
 }
 
