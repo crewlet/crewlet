@@ -45,6 +45,13 @@ func (a *recordingAudit) EmitOnce(ctx context.Context, _ authevents.OnceClass, _
 	return true
 }
 
+// Claim takes every key: nothing here is about the coalescing either.
+func (a *recordingAudit) Claim(context.Context, authevents.OnceClass, string,
+	time.Duration) (func(), bool) {
+
+	return func() {}, true
+}
+
 func (a *recordingAudit) Failed(_ context.Context, f authevents.Failure) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

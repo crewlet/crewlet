@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -344,6 +345,75 @@ func TestAForgedCookieIsCountedAndADeadlineEndIsSaidOnce(t *testing.T) {
 	row, _ := events.DataAs[*types.IAMSessionEnded](ended[0])
 	if row.Reason != types.EndAbsolute || row.Person != sessionPerson || row.Lineage == "" {
 		t.Errorf("ended row = %+v, want the absolute deadline naming the person and session", row)
+	}
+}
+
+// AN ENDING IS ANNOUNCED ONCE, FROM THE FACT THAT ENDED IT.
+//
+// The deadlines are decided before any row is read, so a session a RECORD
+// ended is refused on its deadline too once its cookie outlives it: an
+// administrator revokes somebody, and their other browser presents the cookie
+// the next day. The record already announced that ending; a second row naming
+// `absolute` would name the wrong cause for a session over a day earlier.
+//
+// Mutation: announce the deadline without asking the rows and every record
+// case below publishes one; announce it when the rows cannot say and the
+// stalled case does.
+func TestADeadlineEndsOnlyASessionNoRecordEnded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		shape func(*session.Identity)
+	}{
+		{"the row says it ended", func(id *session.Identity) { id.Session.Ended = true }},
+		{"the person's epoch moved", func(id *session.Identity) { id.Person.Epoch = 4 }},
+		{"the company's generation moved", func(id *session.Identity) { id.Generation = 2 }},
+		{"the person was suspended", func(id *session.Identity) { id.Person.Stage = iam.StageSuspended }},
+		{"the sweep collected the row", func(id *session.Identity) { id.Session = session.SessionRow{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSignedIn(t)
+			tc.shape(&rig.dir.identity)
+			rig.at = rig.at.Add(9 * time.Hour)
+			rig.signerAt(rig.at)
+			tr := newAuditTrail(t)
+			g := rig.withAudit(tr)
+			for range 2 {
+				if got := rig.call(g, http.MethodGet, "/agents", rig.withCookie); got.status != http.StatusUnauthorized {
+					t.Fatalf("an expired cookie answered %d", got.status)
+				}
+			}
+			if ended := tr.published("iam_session_ended"); len(ended) != 0 {
+				row, _ := events.DataAs[*types.IAMSessionEnded](ended[0])
+				t.Errorf("a session a record had already ended was announced "+
+					"again as %q", row.Reason)
+			}
+		})
+	}
+
+	// A NODE THAT CANNOT SAY ANNOUNCES NOTHING, and asks again next time.
+	rig := newSignedIn(t)
+	rig.at = rig.at.Add(9 * time.Hour)
+	rig.signerAt(rig.at)
+	tr := newAuditTrail(t)
+	g := rig.withAudit(tr)
+	rig.dir.err = errors.New("the replicated estate is not open")
+	rig.call(g, http.MethodGet, "/agents", rig.withCookie)
+	if got := len(tr.published("iam_session_ended")); got != 0 {
+		t.Fatalf("a node that could not read the rows announced %d endings", got)
+	}
+	rig.dir.err = nil
+	rig.call(g, http.MethodGet, "/agents", rig.withCookie)
+	rig.call(g, http.MethodGet, "/agents", rig.withCookie)
+	ended := tr.published("iam_session_ended")
+	if len(ended) != 1 {
+		t.Fatalf("%d endings once the rows could be read, want the one the "+
+			"stalled read handed back", len(ended))
+	}
+	row, _ := events.DataAs[*types.IAMSessionEnded](ended[0])
+	if row.Reason != types.EndAbsolute {
+		t.Errorf("reason %q, want absolute", row.Reason)
 	}
 }
 

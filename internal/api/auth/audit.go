@@ -54,14 +54,18 @@ import (
 
 // Audit is where the guard's authentication facts go.
 //
-// CONSUMER-DEFINED and three methods wide, which is all of the trail the guard
+// CONSUMER-DEFINED and four methods wide, which is all of the trail the guard
 // uses. internal/iam/authevents' Trail is what a running node hands in, and
 // the once-per-window classes are its own: each keeps a bounded set of its
-// own, so no class can evict another's keys.
+// own, so no class can evict another's keys. Claim is EmitOnce's decision
+// without the row, for the deadline arm, which has to read the estate before
+// it knows whether there is anything to say.
 type Audit interface {
 	Emit(ctx context.Context, payload events.Payload)
 	EmitOnce(ctx context.Context, class authevents.OnceClass, key string,
 		window time.Duration, payload events.Payload) bool
+	Claim(ctx context.Context, class authevents.OnceClass, key string,
+		window time.Duration) (release func(), claimed bool)
 	Failed(ctx context.Context, f authevents.Failure)
 }
 

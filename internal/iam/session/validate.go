@@ -397,6 +397,59 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 	// AND ONLY THEN THE ROWS. Nothing above this line reads anything, so
 	// an unauthenticated caller cannot price a request by sending rubbish.
 	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
+	v := standing(b, identity, err)
+	if v.Row == RowValid || v.Row == RowBehind {
+		// THROUGH served, BOTH OF THEM. Both serve reads on the bearer's
+		// own proof, so both must move the idle deadline: an arm that
+		// served without re-issuing would let a session in continuous
+		// use on a lagging node expire on the deadline it was minted
+		// with.
+		return s.served(v.Row, b, identity, rotation, now, v.Detail)
+	}
+	return v
+}
+
+// Standing is the row a bearer's ROWS put it on, with its own deadlines and
+// its rotation set aside: what this node's copy of the estate says about the
+// session, and nothing the bearer says about itself.
+//
+// # It exists for one question, and answers it three ways
+//
+// [Signer.Validate] decides the deadlines FIRST and reads nothing to do it, so
+// a session refused on a deadline has not been looked up at all — and a
+// deadline is the one ending no record states, so whoever notices it is the
+// only one who can say it happened. But a session a RECORD ended — revoked,
+// signed out everywhere, its person removed or suspended, the company's
+// generation bumped — is refused on its deadline too when its cookie is
+// presented after it, and whoever wrote that record already said how it
+// ended. So before a deadline ending is announced, this asks what the rows
+// say:
+//
+//   - [RowValid]: the session was live until its own deadline, which is the
+//     whole of what ended it.
+//   - [RowEnded] or [RowGone]: a record ended it, or the sweep has already
+//     collected it; either way the ending was not the deadline's to announce.
+//   - [RowBehind] or [RowStalled]: this node cannot say, and a fact nobody
+//     could confirm is not one to announce.
+//
+// NO RE-ISSUE AND NO ROTATION VERDICT: the answer is about the rows alone, and
+// a bearer past its deadline is never served.
+func Standing(ctx context.Context, directory Directory, b Bearer) Validation {
+	identity, err := directory.Resolve(ctx, b.Lineage.String(), b.Person)
+	v := standing(b, identity, err)
+	if v.Row == RowValid || v.Row == RowBehind {
+		v.Person, v.Session = identity.Person, identity.Session
+	}
+	return v
+}
+
+// standing is the row one read of the estate puts a bearer on — the half of
+// the table that is about the ROWS, shared by [Signer.Validate] and
+// [Standing] so the two can never disagree about what a row means.
+//
+// A SERVING ROW comes back bare, for its caller to finish: Validate re-issues
+// through [Signer.served] and Standing only reports it.
+func standing(b Bearer, identity Identity, err error) Validation {
 	if err != nil {
 		return Validation{Row: RowStalled, Bearer: b, Err: err,
 			Detail: "this node could not read the identity estate"}
@@ -427,13 +480,8 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 			return Validation{Row: RowGone, Bearer: b,
 				Detail: "this node has no row for the person the bearer names"}
 		}
-		// THROUGH served, LIKE THE OTHER BEHIND ARM. Both serve reads
-		// on the bearer's own proof, so both must move the idle
-		// deadline: an arm that served without re-issuing would let a
-		// session in continuous use on a lagging node expire on the
-		// deadline it was minted with.
-		return s.served(RowBehind, b, identity, rotation, now,
-			"this node has not applied the person's row yet")
+		return Validation{Row: RowBehind, Bearer: b,
+			Detail: "this node has not applied the person's row yet"}
 	}
 	if identity.Person.Epoch > b.Epoch {
 		return Validation{Row: RowEnded, Bearer: b, Person: identity.Person,
@@ -462,10 +510,10 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 		return Validation{Row: RowGone, Bearer: b, Person: identity.Person,
 			Detail: "this node covers the session's start and has no row for it"}
 	case !identity.Session.Found:
-		return s.served(RowBehind, b, identity, rotation, now,
-			"this node has not applied the session's start record yet")
+		return Validation{Row: RowBehind, Bearer: b,
+			Detail: "this node has not applied the session's start record yet"}
 	}
-	return s.served(RowValid, b, identity, rotation, now, "")
+	return Validation{Row: RowValid, Bearer: b}
 }
 
 // served finishes a row that is allowed to serve, re-issuing the cookie when

@@ -214,6 +214,10 @@ func (silentAudit) EmitOnce(context.Context, authevents.OnceClass, string, time.
 	events.Payload) bool {
 	return true
 }
+func (silentAudit) Claim(context.Context, authevents.OnceClass, string,
+	time.Duration) (func(), bool) {
+	return func() {}, true
+}
 func (silentAudit) Failed(context.Context, authevents.Failure) {}
 
 // EVERY DEPENDENCY THE ENGINE SUPPLIES IS REQUIRED, and a missing one is

@@ -340,8 +340,8 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	if cookie == "" {
 		return sessionAnswer{how: iam.Anonymous}
 	}
-	v := s.signer.Validate(r.Context(),
-		tierASubjects{directory: s.directory, tokens: tokens}, cookie)
+	subjects := tierASubjects{directory: s.directory, tokens: tokens}
+	v := s.signer.Validate(r.Context(), subjects, cookie)
 	if v.Reuse {
 		s.reuse(r, v, client(r))
 	}
@@ -360,7 +360,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// existed tells an attacker holding it the same.
 		log.InfoContext(r.Context(), "api_session_refused",
 			"row", string(v.Row), "detail", v.Detail)
-		s.ended(r, v)
+		s.ended(r, v, subjects)
 		for _, clear := range session.Clears(s.external) {
 			http.SetCookie(w, clear)
 		}
@@ -630,25 +630,70 @@ func (s *Sessions) reuse(r *http.Request, v session.Validation, remote string) {
 //
 // A DEADLINE is the one way a session ends that no record states — the idle
 // deadline lives in the bearer and nowhere else — so this is the only frame
-// that can ever say a session ended that way, and it says so ONCE PER LINEAGE
-// PER NODE: the cookie is cleared by this very answer, and a script that goes
-// on replaying it is not a second ending. Every OTHER ended row — the row
-// says so, the epoch or the generation moved, the person was suspended — was
-// ended by a record, and whoever wrote the record already said so; a second
-// announcement from every node a stale cookie reaches would name the wrong
-// cause.
-func (s *Sessions) ended(r *http.Request, v session.Validation) {
-	switch {
-	case v.Row == session.RowEnded && v.Deadline != "":
+// that can ever say a session ended that way; see [Sessions.deadline]. Every
+// OTHER ended row — the row says so, the epoch or the generation moved, the
+// person was suspended — was ended by a record, and whoever wrote the record
+// already said so.
+func (s *Sessions) ended(r *http.Request, v session.Validation,
+	directory session.Directory) {
+
+	if v.Row == session.RowEnded && v.Deadline != "" {
+		s.deadline(r, v, directory)
+	}
+}
+
+// deadline announces a session its own deadline ended — ONCE, and only when a
+// deadline is what ended it.
+//
+// # Once per lineage per node
+//
+// The cookie is cleared by the refusal this rides on, and a script that goes
+// on replaying it is not a second ending, so the lineage is CLAIMED before
+// anything is read: a replay costs a map lookup and never a read of the
+// estate.
+//
+// # And only when no record got there first
+//
+// The deadlines are decided before any row is read, so a session a RECORD
+// ended — revoked, signed out everywhere, its person removed or suspended, the
+// company's generation bumped — is refused on its deadline too once its cookie
+// outlives it: a person revoked on Monday whose other browser presents the
+// cookie on Tuesday. Whoever wrote that record already announced the ending,
+// and a second row naming `idle` or `absolute` would name the wrong cause for
+// a session that was over a day earlier. So the rows are asked
+// ([session.Standing]) — the same directory validation read through, a token's
+// exchanged session included — and the ending is announced only when they
+// say the session was live. A node that cannot say HANDS THE CLAIM BACK and
+// announces nothing: a fact nobody could confirm is not one to announce, and
+// the next presentation asks again.
+func (s *Sessions) deadline(r *http.Request, v session.Validation,
+	directory session.Directory) {
+
+	ctx := r.Context()
+	lineage := v.Bearer.Lineage.String()
+	release, claimed := s.audit.Claim(ctx, authevents.OnceSessionEnded, lineage, 0)
+	if !claimed {
+		return
+	}
+	standing := session.Standing(ctx, directory, v.Bearer)
+	switch standing.Row {
+	case session.RowValid:
 		reason := types.EndIdle
 		if v.Deadline == session.DeadlineAbsolute {
 			reason = types.EndAbsolute
 		}
-		lineage := v.Bearer.Lineage.String()
-		s.audit.EmitOnce(r.Context(), authevents.OnceSessionEnded, lineage, 0,
-			types.IAMSessionEnded{
-				Person: v.Bearer.Person, Lineage: lineage, Reason: reason,
-			})
+		s.audit.Emit(ctx, types.IAMSessionEnded{
+			Person: v.Bearer.Person, Lineage: lineage, Reason: reason,
+		})
+	case session.RowBehind, session.RowStalled:
+		log.DebugContext(ctx, "iam_session_deadline_unconfirmed",
+			"lineage", lineage, "row", string(standing.Row),
+			"detail", standing.Detail, "error", errText(standing.Err))
+		release()
+	default:
+		// ENDED BY A RECORD, or collected by the sweep — said already, by
+		// whatever did it. The claim stays: nothing a later presentation
+		// could read would make this ending the deadline's.
 	}
 }
 
