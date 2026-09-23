@@ -202,8 +202,15 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 		WHERE node_id = 'node-z'`); n != 1 {
 		t.Fatalf("the peer's record on the new generation applied %d time(s), want once", n)
 	}
-	if _, adopted, err := statelog.AdoptedAt(t.Context(), back.Store); err != nil || !adopted {
-		t.Fatalf("the adoption row says (%v, %v), want a completed adoption", adopted, err)
+	// THE NODE ESTATE'S OWN RECORD, which is where an adoption is written:
+	// the replicated file is the thing the adoption replaced.
+	var completed int
+	if err := back.Store.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM statelog_adoption
+			WHERE completed_at IS NOT NULL`).Scan(&completed)
+	}); err != nil || completed == 0 {
+		t.Fatalf("the adoption rows say %d completed adoption(s) (%v), want one",
+			completed, err)
 	}
 	if got := running.runner.StreamCreatedAt(); statelog.IdentityOf(live, got, true) != statelog.StreamSame {
 		t.Fatalf("the runner is keyed to %s, want the rebuilt stream's %s", got, live)

@@ -92,8 +92,9 @@ type Turn struct {
 	// It travels with the key because it is half of the same identity. An
 	// idempotent write derived from the key carries this instant as its
 	// mint time, and the state log answers `unknown` rather than deciding
-	// again an operation minted before its node's operation ledger lost
-	// rows — to an adopted snapshot or to the ledger's own sweep — so a
+	// again an operation minted before its node's operation ledger may
+	// have lost rows — to the ledger's own sweep, or to a snapshot adopted
+	// from a donor that scrubbed it — so a
 	// re-run must reproduce the instant exactly, as it reproduces
 	// the key, and neither may move with the run. It is derived from the
 	// SAME events the key is, for that reason (inbox.WorkSinceFor).

@@ -229,20 +229,6 @@ type Gates interface {
 	// resolves as "applied nowhere" and its caller is told the
 	// destruction it asked for did not happen, when it did.
 	GatedAt(ctx context.Context, subj Subject, writer, opID string, p Position) (Reason, bool, error)
-
-	// AdoptedAt is the instant before which this node's ops table cannot
-	// vouch for an operation — when its latest adoption of a donated
-	// snapshot completed, or began, once the fleet's offers were in, where
-	// one did not complete — reporting false when it never recorded one: a
-	// join that fails before its first record installed nothing. See
-	// [AdoptedAt] for the rule.
-	//
-	// The ops table is this node's own and is scrubbed from every
-	// donated snapshot, so an op id minted before this instant cannot be
-	// answered for here at all — and reading its absence as "somebody
-	// else won" would re-decide against a row that moved because of this
-	// very write.
-	AdoptedAt(ctx context.Context) (time.Time, bool, error)
 }
 
 // Request is one caller-visible write.
@@ -590,9 +576,9 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 				"domain", p.domain.Name(), "subject", req.Subject.String(),
 				"op_id", req.OpID, "minted_at", mintedAt(req.OpID),
 				"detail", "this operation was minted before this node's "+
-					"operation ledger lost rows — to an adopted snapshot, "+
-					"which arrives without the donor's ledger, or to the "+
-					"ledger's retention sweep — and it holds no row saying "+
+					"operation ledger may have lost rows — to the ledger's "+
+					"retention sweep, or to a snapshot adopted from a donor "+
+					"that scrubbed its ledger — and it holds no row saying "+
 					"whether the operation already applied, so it is "+
 					"answered unknown rather than decided a second time; "+
 					"a node whose ledger lost nothing that far back can "+
@@ -1165,8 +1151,9 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 
 	// THE LEDGER'S SILENCE MEANS SOMETHING ONLY WHERE IT CAN VOUCH, and
 	// that is asked before either reading of it below — the mine arm's
-	// included, because an adoption during this very write is exactly
-	// what scrubs the row of a record this node was acknowledged for.
+	// included, because a sweep, or an adoption from a donor that
+	// scrubbed its ledger, is exactly what loses the row of a record this
+	// node was acknowledged for.
 	vouched, err := p.vouches(ctx, req)
 	if err != nil {
 		return Result{}, err
@@ -1174,12 +1161,11 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 
 	if mine {
 		if !vouched {
-			// THE ACKNOWLEDGEMENT IS THE PROOF, and the adoption is why
-			// the row is missing. The broker named this operation's own
-			// record at `at`, this node's rows are past it and no gate
-			// dropped it — so it applied, in the donated snapshot this
-			// node installed rather than under its own applier, which is
-			// the one applier that writes a ledger row here.
+			// THE ACKNOWLEDGEMENT IS THE PROOF, and the ledger's loss
+			// is why the row is missing. The broker named this
+			// operation's own record at `at`, this node's rows are past
+			// it and no gate dropped it — so it applied, and its row
+			// went with the rows the watermark says this ledger lost.
 			return Result{
 				Outcome:  OutcomeApplied,
 				Position: at,
@@ -1200,11 +1186,10 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 	}
 
 	if !vouched {
-		// THE LEDGER CANNOT ANSWER FOR THIS OPERATION ON THIS NODE. It
-		// is scrubbed from every donated snapshot, so a node that
-		// adopted one arrives with an empty table — and reading that
-		// absence as "somebody else won" would re-decide against a row
-		// that moved because of this very write.
+		// THE LEDGER CANNOT ANSWER FOR THIS OPERATION ON THIS NODE: it
+		// may have lost the row, and reading that absence as "somebody
+		// else won" would re-decide against a row that moved because of
+		// this very write.
 		//
 		// NO POSITION, which is the whole content of unknown (see
 		// [Result.Position]): the record at `at` is merely the newest on
@@ -1222,25 +1207,33 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 //
 // # Why the ledger can lose a row, and what that costs a retry
 //
-// TWO WAYS, and the bound is the later of them.
+// ONE WATERMARK SAYS HOW FAR BACK IT MAY HAVE ([Rows.LostBefore]), and it
+// travels in the same file as the ledger. Two things move it, each in the
+// transaction or the file that loses the rows, and only ever forward.
 //
-// The ledger is this node's own and is SCRUBBED out of every donated
-// snapshot, so a node that adopted one holds no row for any operation the
-// donor applied — [AdoptedAt] is the instant before which that loss reaches.
-// An operation minted at or after it was published after every artefact the
-// adoption could have installed, so its every copy is one this node's own
-// applier applies and writes a row for: absence is conclusive. An operation
-// minted before it may have landed inside the artefact with its row scrubbed,
-// and absence says nothing.
+// The SWEEP deletes every row applied more than [OpsRetention] ago, and
+// records its cutoff with the delete. Every copy of an operation is applied at
+// or after the instant it was minted, so one minted at or after that cutoff
+// cannot have lost its row; one minted before it may have, and absence says
+// nothing. Without this, a retry a month on — an operator repeating an
+// `unknown`, a seat carrying an operation id across a long pause — was decided
+// again and published a second copy.
 //
-// And the ledger is SWEPT: a row applied more than [OpsRetention] ago is
-// deleted by this node's own retention job, which records the cutoff of every
-// sweep that deleted anything ([Rows.LostBefore]). Every copy of an operation is
-// applied at or after the instant it was minted, so one minted at or after
-// that cutoff cannot have lost its row to the sweep; one minted before it may
-// have, and absence again says nothing. Without this half, a retry a month on
-// — an operator repeating an `unknown`, a seat carrying an operation id across
-// a long pause — was decided again and published a second copy.
+// An ADOPTION FROM A DONOR THAT SCRUBBED ITS LEDGER — a build from before the
+// ledger travelled — installs a file whose ledger holds none of the donor's
+// rows, so the adopter writes the join's own start into that file before it
+// installs it (see [Adopter.Join]): an operation minted after the start was
+// published after every artefact the join could install, and its every copy
+// is one this node's own applier writes a row for.
+//
+// AN ADOPTION FROM ANY OTHER DONOR LOSES NOTHING. Its ledger travels with its
+// rows ([Domain.OpsTable]), so the adopter holds a row for every operation the
+// donor applied and inherits the donor's own watermark besides — and a turn
+// woken by a trigger from before the join, which derives its operation ids
+// from that trigger's instant, has its FIRST attempts decided and published
+// like anyone's. With the ledger scrubbed, those first attempts were answered
+// `unknown` and never published: the recovering node refusing its own
+// backlog.
 //
 // That is why this runs BEFORE A DECISION IS PUBLISHED and not only in the
 // resolution of an ambiguous one. A retry — a turn re-run after a crash, a
@@ -1255,62 +1248,35 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 //
 // Read off the id with [OpMintedAt], never off a field the caller fills, for
 // the reason [Request.OpID] gives. An id that carries none is read as minted
-// at the zero instant, so a node that has adopted vouches for it only by
-// holding its row — see opid.go.
+// at the zero instant, so a ledger that has lost anything vouches for it only
+// by holding its row — see opid.go.
 //
 // # Where it is cheap
 //
-// The adoption record is one aggregate over a table with a row per join this
-// node ever made, the sweep's is one row by key, and the ledger row is read
-// only for an operation minted before the bound — which on a node that never
-// adopted and whose sweep never deleted anything is no operation at all. A
-// domain with no ledger has nothing to vouch with and nothing that reads it,
-// so it is answered without any read.
+// The watermark is one row by key, and the ledger row is read only for an
+// operation minted before it — which on a ledger that has lost nothing is no
+// operation at all. A domain with no ledger has nothing to vouch with and
+// nothing that reads it, so it is answered without any read.
 func (p *Publisher) vouches(ctx context.Context, req Request) (bool, error) {
 	if p.domain.OpsTable() == "" {
 		return true, nil
 	}
-	bound, lost, err := p.ledgerLoss(ctx)
+	bound, lost, err := p.rows.LostBefore(ctx)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("statelog: read how far back the operation "+
+			"ledger may have lost rows: %w", err)
 	}
 	if !lost || !mintedAt(req.OpID).Before(bound) {
 		return true, nil
 	}
 	// MINTED BEFORE THE BOUND, so only the row itself can speak — and it
-	// is read AFTER the bound, so an adoption or a sweep landing between
+	// is read AFTER the bound, so a sweep or an install landing between
 	// the two reads is one whose effect on the table this read sees.
 	_, held, err := p.rows.Op(ctx, req.OpID)
 	if err != nil {
 		return false, fmt.Errorf("statelog: read the operation ledger: %w", err)
 	}
 	return held, nil
-}
-
-// ledgerLoss is the instant before which this node's operation ledger may
-// have lost rows — the later of its latest adoption and its sweep's latest
-// cutoff — reporting false when it has lost none. See [Publisher.vouches].
-func (p *Publisher) ledgerLoss(ctx context.Context) (time.Time, bool, error) {
-	adopted, everAdopted, err := p.gates.AdoptedAt(ctx)
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("statelog: read the adoption record: %w", err)
-	}
-	swept, everSwept, err := p.rows.LostBefore(ctx)
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("statelog: read the ledger's sweep record: %w", err)
-	}
-	switch {
-	case everAdopted && everSwept:
-		if swept.After(adopted) {
-			return swept, true, nil
-		}
-		return adopted, true, nil
-	case everAdopted:
-		return adopted, true, nil
-	case everSwept:
-		return swept, true, nil
-	}
-	return time.Time{}, false, nil
 }
 
 // fence0 is every refusal this node can make from what it already knows,

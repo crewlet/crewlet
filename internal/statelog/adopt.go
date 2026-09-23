@@ -72,13 +72,15 @@ type AdoptDeps struct {
 	Reopen func(ctx context.Context) error
 
 	// Record writes this node's own adoption row at each phase, and the
-	// join fails if it cannot: the row is what bounds which operations
-	// this node's ledger can answer for — see [AdoptedAt].
+	// join fails if it cannot: the row is this node's history of what it
+	// installed, and a crash mid-adoption must read as one — see
+	// [RecordAdoption].
 	//
 	// began is the adoption's start, the same at every phase of one join,
-	// and the ADOPTER stamps it rather than the caller: what makes it a
-	// bound is that it follows every offer the join collected, and only
-	// [Adopter.Join] knows when the last one was in.
+	// and the ADOPTER stamps it rather than the caller: it is also the
+	// watermark a donor that scrubbed its ledger leaves the artefact
+	// with, and what makes it a bound is that it follows every offer the
+	// join collected — only [Adopter.Join] knows when the last one was in.
 	Record func(ctx context.Context, began time.Time, donor string, m Manifest,
 		phase AdoptionPhase) error
 
@@ -93,12 +95,11 @@ type AdoptDeps struct {
 // THE ROW DOES NOT KEEP IT. [RecordAdoption] writes the same columns at every
 // phase and stamps completed_at only at [AdoptionComplete], so what survives a
 // crash is when the adoption began and whether it finished — not which side
-// of the install it stopped on. That is why [AdoptedAt] reads an incomplete
-// row at its start, which is a bound on either side: a node that crashed
-// between the rename and the complete looks, from its checkpoint alone,
-// exactly like a node that is caught up, and the ledger it holds may be the
-// donor's scrubbed one. Nothing refuses to serve on an incomplete row; the
-// phase names the step in the error a failed Record returns.
+// of the install it stopped on. Nothing on the write path needs to know: the
+// ledger's watermark is inside the file, so whichever side of the rename a
+// join stopped on, the live file says how far back its own ledger may have
+// lost rows. Nothing refuses to serve on an incomplete row; the phase names
+// the step in the error a failed Record returns.
 type AdoptionPhase string
 
 const (
@@ -201,7 +202,10 @@ var ErrEstateNotRestored = errors.New("statelog: the live replicated database " 
 //     the checkpoint commits with the rows and a metadata claim the file does
 //     not keep is a corrupt snapshot.
 //  6. VERIFY THE SCRUB against the manifest's own list, on the still-temporary
-//     file. A claim nobody checks is a claim.
+//     file. A claim nobody checks is a claim. And where the donor scrubbed a
+//     domain's operation ledger — a build from before the ledger travelled —
+//     WRITE THE LOSS INTO THE ARTEFACT, so the file that lost the rows and the
+//     watermark that says so are installed by one rename.
 //  7. RE-CHECK that every adopted position is still above the floor. The hold
 //     makes this a belt; a fleet that trimmed anyway is one this node must not
 //     follow into a hole.
@@ -219,9 +223,9 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 		return Manifest{}, err
 	}
 	// THE ADOPTION BEGINS HERE, once every offer is in, and this is the
-	// instant its row keeps — the bound [AdoptedAt] reads for a join that
-	// stops before it completes. It is one instant for every offer this
-	// join tries, so one join writes one row.
+	// instant its row keeps — and the watermark an artefact whose donor
+	// scrubbed its ledger is installed with. It is one instant for every
+	// offer this join tries, so one join writes one row.
 	//
 	// IT FOLLOWS EVERY DONOR'S ANSWER, and that is the whole of why it is a
 	// bound. A donor offers the artefact it holds WHEN IT ANSWERS, so every
@@ -230,7 +234,7 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	// precede the ask itself: a donor's snapshotter can finish an artefact
 	// between the ask and its answer, and an operation this node published
 	// in between would then sit inside that artefact with its ledger row
-	// scrubbed, minted after the bound.
+	// scrubbed by a donor that scrubs, minted after the bound.
 	began := a.now().UTC()
 
 	var refusals []error
@@ -368,6 +372,9 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 			"is that everything still in it is fleet-visible",
 			offer.Manifest.Scrubbed, empty)
 	}
+	if err := a.recordScrubbedLedgers(ctx, part, offer.Manifest, began); err != nil {
+		return Manifest{}, err
+	}
 	if err := a.deps.Record(ctx, began, offer.Manifest.NodeID, offer.Manifest, AdoptionScrubbed); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: record the adoption: %w", err)
 	}
@@ -404,8 +411,8 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 		// the estate next — a running node's restore, or the next start
 		// of one being stopped — opens the artefact. The row stays as
 		// [AdoptionScrubbed] left it, incomplete, which is what happened,
-		// and its start is as much a bound on this side of the install as
-		// on the other — see [AdoptedAt]. But the estate is not open, and
+		// and the file carries its own ledger's watermark whichever side
+		// of the install it stopped on. But the estate is not open, and
 		// that is what the caller has to be told.
 		return Manifest{}, fmt.Errorf("%w: the artefact is installed and "+
 			"opening it failed: %w", ErrEstateNotRestored, err)
@@ -428,6 +435,52 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 		"sha256", offer.Manifest.SHA256, "taken_at", offer.Manifest.TakenAt,
 		"bytes", offer.Manifest.Bytes, "domains", len(offer.Manifest.Domains))
 	return offer.Manifest, nil
+}
+
+// recordScrubbedLedgers writes, into the artefact at part, that every domain
+// ledger its donor scrubbed may have lost every row applied before began.
+//
+// ONLY WHERE THE MANIFEST SAYS SO. A donor of this build or later scrubs no
+// ledger — it travels, with the donor's own watermark beside it — and the
+// artefact is installed exactly as it arrived. A donor from before scrubbed
+// every ledger, and the manifest's list is its own account of which: the
+// adopter holds that list checked against the file already (step 6), so a
+// ledger it names is empty and one it does not name is the donor's.
+//
+// INTO THE ARTEFACT, BEFORE IT IS INSTALLED, never into the live estate after:
+// a live estate reopens into service with a publisher already able to read
+// it, and a write that landed a moment later would leave a window in which
+// the scrubbed ledger's silence reads as conclusive. The artefact is migrated
+// by the open here — it may come from a build whose schema predates the
+// watermark's table — which is the same migration the reopen would have run.
+func (a *Adopter) recordScrubbedLedgers(ctx context.Context, part string, m Manifest,
+	began time.Time) error {
+
+	var lost []Domain
+	for _, reg := range a.deps.Domains {
+		if ops := reg.Domain.OpsTable(); ops != "" && slices.Contains(m.Scrubbed, ops) {
+			lost = append(lost, reg.Domain)
+		}
+	}
+	if len(lost) == 0 {
+		return nil
+	}
+	db, err := store.OpenEstate(ctx, store.EstateReplicated, part, store.Options{})
+	if err != nil {
+		return fmt.Errorf("statelog: open the artefact to record the ledger its "+
+			"donor scrubbed: %w", err)
+	}
+	for _, d := range lost {
+		if err := RecordLedgerLoss(ctx, db, d, began); err != nil {
+			_ = db.Close()
+			return err
+		}
+	}
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("statelog: close the artefact after recording the "+
+			"ledger its donor scrubbed: %w", err)
+	}
+	return nil
 }
 
 // rollback undoes an install that stopped before its rename: the live file is

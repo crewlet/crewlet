@@ -18,20 +18,20 @@ import (
 // The publisher asks when an operation was minted, in two places — before it
 // publishes a decision, and when it resolves an append whose answer was lost —
 // and both times the question is the same: can this node's operation ledger
-// vouch for it? It cannot for an operation minted before this node's latest
-// adoption of a donated snapshot, because the ledger is scrubbed out of every
-// one ([AdoptedAt]), nor for one minted before its retention sweep's latest
-// cutoff, because every row applied before that is gone ([Rows.LostBefore]) — see
-// [Publisher.vouches]. An operation id is minted ONCE and
+// vouch for it? It cannot for an operation minted before the ledger's own
+// watermark — the instant before which it may have lost rows, to its
+// retention sweep or to a snapshot adopted from a donor that scrubbed its
+// ledger ([Rows.LostBefore]) — see [Publisher.vouches]. An operation id is
+// minted ONCE and
 // reused by every retry of the operation, including retries in another call,
 // another run of the same turn and another process on another node. So "when
 // was this minted" is a property of the ID, and anything that states it
 // separately states something the retry cannot reproduce.
 //
 // It was stated separately: a request carried a MintedAt beside its op id, and
-// every writer filled it with its own clock at the call. A turn re-run after an
-// adoption then carried an op id minted before the adoption with a MintedAt
-// after it, the pre-adoption arm could not fire, and the writer re-decided
+// every writer filled it with its own clock at the call. A turn re-run after
+// the ledger lost rows then carried an op id minted before the loss with a
+// MintedAt after it, the check could not fire, and the writer re-decided
 // against a ledger that no longer held the first application — publishing the
 // operation a second time. (Nor was the arm consulted before a decision at
 // all, only in the resolution of a lost acknowledgement — which a re-run whose
@@ -67,11 +67,9 @@ import (
 //
 // An id the engine did not mint — a caller's own string, a test's literal —
 // has no instant to recover, and it is read as minted at the zero instant:
-// before every adoption and every sweep this node has recorded. The ledger
-// vouches for it only on a node that has never adopted a snapshot and whose
-// sweep has never deleted a row, which is the one ledger that has lost
-// nothing; anywhere else an absent row answers `unknown` rather than
-// "somebody else won". That is the only reading under which an id of unknown
+// before every loss the ledger has recorded. The ledger vouches for it only
+// where it has never lost a row; anywhere else an absent row answers
+// `unknown` rather than "somebody else won". That is the only reading under which an id of unknown
 // age can never be re-decided across a loss, and the price — a caller's own
 // id cannot be retried to a conclusion on a node whose ledger has lost rows —
 // falls on the caller that invented it, never on a colleague's write.
@@ -79,15 +77,17 @@ import (
 // # Whose clock
 //
 // The instant is read off the clock of whichever node minted the id, and the
-// adoption bound off this node's, so a retry that crosses nodes compares two
-// clocks. The comparison errs safely in one direction only. A minting clock
-// BEHIND this node's makes an operation look older, and answers `unknown`
-// where the ledger could have vouched. A minting clock AHEAD of it by δ can
-// make an operation whose first copy landed up to δ before a donor finished
-// the artefact this node adopted look minted after the adoption, and that one
-// is re-decided. So the fleet's wall clocks are assumed to agree to within the
-// time between a donor finishing the artefact it offers and this node
-// stamping its adoption of it — which the offer window makes seconds in the
+// watermark off the clock of whichever node lost the rows — the sweeping node
+// for the sweep, the joining one for an adoption from a donor that scrubbed —
+// so a retry that crosses nodes compares two clocks. The comparison errs
+// safely in one direction only. A minting clock BEHIND the other makes an
+// operation look older, and answers `unknown` where the ledger could have
+// vouched. A minting clock AHEAD of it by δ can make an operation whose row
+// was lost up to δ before the watermark look minted after it, and that one is
+// re-decided. So the fleet's wall clocks are assumed to agree to within the
+// margin each loss leaves: the sweep's is its whole thirty days, and an
+// adoption's is the time between a donor finishing the artefact it offers and
+// the join stamping its start — which the offer window makes seconds in the
 // ordinary case and which nothing enforces. It is the same kind of assumption
 // the trim's age term already rests on (see the package doc), and it is
 // stated here because this is where it is spent.
@@ -103,8 +103,8 @@ const opStepSeparator = "."
 //
 // The instant is an ARGUMENT rather than a read of the wall clock, so the one
 // reading of the clock is the caller's and a test can pin it. It must be the
-// wall clock of the node minting the id: it is compared with this node's
-// adoption record, which is read off the wall. The name may be empty, and
+// wall clock of the node minting the id: it is compared with the ledger's
+// watermark, which is read off the wall. The name may be empty, and
 // says what the operation is for whoever reads the ledger; see the grammar.
 func NewOpID(at time.Time, name string) string {
 	var tail [10]byte

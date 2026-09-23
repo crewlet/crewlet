@@ -93,8 +93,8 @@ type turnTelemetry struct {
 // TIME-ORDERED, and the instant it carries is read: a write a run with no unit
 // of work makes is seeded from the RUN, and the operation id derived from it
 // carries the run's start as its mint instant — which is what the state log
-// compares with this node's latest adoption before it will decide an operation
-// again (builtin.Actor.OperationSince). A resumed run keeps its id, so the
+// compares with its operation ledger's watermark before it will decide an
+// operation again (builtin.Actor.OperationSince). A resumed run keeps its id, so the
 // instant rides the pending row with no field of its own. Minted by the state
 // log's own grammar ([statelog.NewOpID]) so the one reader of that instant
 // needs no second parser; its random tail keeps two runs from colliding

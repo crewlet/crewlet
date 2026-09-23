@@ -200,7 +200,7 @@ func (controlBase) InstallsGate(statelog.Envelope) bool { return false }
 func (controlBase) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
 		"control_widgets":        statelog.Replicated,
-		"control_ops":            statelog.Local,
+		"control_ops":            statelog.Divergent,
 		"control_log_deferred":   statelog.Local,
 		"control_deferred_scope": statelog.Local,
 	}
@@ -372,6 +372,9 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		"an identity claim over no replicated table": {
 			domain: nothingReplicated{controlDomain{}}, names: "empty set",
 		},
+		"an operation ledger scrubbed out of every snapshot": {
+			domain: scrubbedLedger{controlDomain{}}, names: "must be divergent",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -530,6 +533,17 @@ func (b brokenStream) Stream() statelog.StreamSpec {
 type ledgerless struct{ controlDomain }
 
 func (ledgerless) OpsTable() string { return "" }
+
+// scrubbedLedger classes its operation ledger as this node's own, which is
+// what every domain here did until an adopter's first attempts started coming
+// back `unknown`.
+type scrubbedLedger struct{ controlDomain }
+
+func (scrubbedLedger) Tables() map[string]statelog.TableClass {
+	tables := controlDomain{}.Tables()
+	tables["control_ops"] = statelog.Local
+	return tables
+}
 
 type nothingReplicated struct{ controlDomain }
 

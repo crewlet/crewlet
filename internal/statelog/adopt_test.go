@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -85,6 +86,30 @@ type joinHarness struct {
 
 func newJoinHarness(t *testing.T) *joinHarness {
 	t.Helper()
+	return newJoinHarnessFrom(t, joinDonor{domain: probeDomain{}})
+}
+
+// joinDonor is how the harness's donor is built: the domain it declares — the
+// probe as this build declares it, or as a build from before the ledger
+// travelled did — and anything written into its estate before the snapshot.
+type joinDonor struct {
+	domain statelog.Domain
+	seed   func(t *testing.T, db *store.DB)
+}
+
+// scrubbingProbe is the probe domain as a build from before the ledger
+// travelled declared it: its operation ledger classed as this node's own, and
+// so scrubbed out of every snapshot it takes.
+type scrubbingProbe struct{ probeDomain }
+
+func (scrubbingProbe) Tables() map[string]statelog.TableClass {
+	tables := probeDomain{}.Tables()
+	tables["probe_ops"] = statelog.Local
+	return tables
+}
+
+func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
+	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
@@ -123,13 +148,16 @@ func newJoinHarness(t *testing.T) *joinHarness {
 	}); err != nil {
 		t.Fatalf("seed the donor: %v", err)
 	}
+	if from.seed != nil {
+		from.seed(t, donorDB)
+	}
 
 	h := &joinHarness{t: t, nc: q.Conn(), broker: q}
 	snapDir := filepath.Join(donorDir, "snapshots")
 	lag := uint64(0)
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains: []statelog.Registered{{
-			Domain: probeDomain{},
+			Domain: from.domain,
 			Health: func() statelog.Health {
 				return statelog.Health{
 					Position: statelog.Position{Stream: probeStream, Generation: 1, Seq: 4_200},
@@ -331,17 +359,20 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 			rows, seq)
 	}
 
-	// THE DONOR'S OWN TABLES DID NOT COME WITH IT.
-	var ops int64
-	if err := h.joiner.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_ops`).Scan(&ops)
-	}); err != nil {
-		t.Fatalf("read the operation ledger: %v", err)
+	// THE DONOR'S OPERATION LEDGER CAME WITH IT, and lost nothing on the
+	// way: its rows are what this node's own applier would have written
+	// from the same records, so a retry of anything the donor applied is
+	// answered from them here — and an operation neither ledger holds is
+	// one that never applied, which this node may decide like any other.
+	if ops := h.joinerOps(t); ops != 1 {
+		t.Fatalf("the adopted ledger holds %d row(s), want the donor's one — "+
+			"without it this node cannot tell a first attempt from a retry of "+
+			"anything the donor applied, and must answer both `unknown`", ops)
 	}
-	if ops != 0 {
-		t.Fatalf("the adopted estate holds %d row(s) of the DONOR's operation "+
-			"ledger — a writer here would resolve its own ambiguous publish "+
-			"against a peer's history", ops)
+	if before, lost := h.joinerLostBefore(t); lost {
+		t.Fatalf("the adopted ledger may have lost rows before %s — a donor that "+
+			"scrubs nothing loses nothing, and a watermark here refuses every "+
+			"first attempt minted before it", before)
 	}
 
 	// THE HOLD WAS TAKEN BEFORE THE FETCH AND RELEASED AFTER.
@@ -636,64 +667,144 @@ func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
 	}
 }
 
-// A JOIN THAT STOPPED AFTER ITS INSTALL STILL BOUNDS THE LEDGER, FROM A START
-// THAT FOLLOWS ITS DONOR'S ANSWER.
+// A DONOR THAT SCRUBBED ITS LEDGER LEAVES THE ARTEFACT WITH A WATERMARK, WRITTEN
+// BEFORE THE INSTALL, AT A START THAT FOLLOWS ITS ANSWER.
 //
-// An artefact installed and then not opened leaves its adoption row
-// incomplete, and whatever opens the estate next — a running node's restore,
-// or the next start — finds the donor's file current and carries on over it.
-// Nothing completes the row, because the adoption did not complete; its START
-// is what [statelog.AdoptedAt] then answers, and that start is a bound only if
-// it follows the moment the donor answered. The donor offers what it holds
-// when it answers, so it may have finished that artefact an instant before —
-// and an operation this node published earlier than THAT can be inside the
-// file it now runs on, with its ledger row scrubbed. A start stamped when the
-// join began precedes the ask, and leaves exactly those operations to be
-// re-decided.
-//
-// The case runs the real record and the real reader over the node's own
-// store, and opens that store again after the join as the next start would.
-func TestAJoinThatStoppedAfterItsInstallStillBoundsTheLedger(t *testing.T) {
+// A build from before the ledger travelled scrubs it out of every snapshot,
+// and a rolling upgrade puts such a donor in front of this build's joiner. Its
+// artefact holds none of the ledger's rows, so the adopter has to say how far
+// back that ledger may have lost them — and say it IN THE FILE, before the
+// rename: written into the live estate after the reopen, it would leave a
+// window in which a publisher reads the empty ledger's silence as conclusive,
+// and a join that installed and then failed to reopen would leave the file
+// with no watermark at all. The start is the bound because it follows the
+// moment the donor answered: the donor offers what it holds when it answers,
+// so it may have finished the artefact an instant before, and an operation
+// this node published earlier than THAT can be inside it with its row
+// scrubbed.
+func TestADonorThatScrubbedItsLedgerLeavesTheArtefactAWatermark(t *testing.T) {
 	t.Parallel()
-	h := newJoinHarness(t)
-	h.reopenErr = errors.New("the artefact did not open")
-	h.record = func(ctx context.Context, began time.Time, donor string,
-		m statelog.Manifest, phase statelog.AdoptionPhase) error {
 
-		return statelog.RecordAdoption(ctx, h.joiner, began, donor, m, phase)
+	t.Run("an adoption that completes", func(t *testing.T) {
+		t.Parallel()
+		h := newJoinHarnessFrom(t, joinDonor{domain: scrubbingProbe{}})
+		if !slices.Contains(h.manifest.Scrubbed, "probe_ops") {
+			t.Fatalf("the scrubbing donor's manifest lists %v scrubbed, without "+
+				"its ledger — the case is not staging a donor that scrubs",
+				h.manifest.Scrubbed)
+		}
+		if _, err := h.adopter(t).Join(t.Context()); err != nil {
+			t.Fatalf("Join: %v", err)
+		}
+		if ops := h.joinerOps(t); ops != 0 {
+			t.Fatalf("the adopted ledger holds %d row(s) from a donor that "+
+				"scrubbed it", ops)
+		}
+		before, lost := h.joinerLostBefore(t)
+		if !lost || !before.Equal(h.began[0].Truncate(time.Microsecond)) {
+			t.Fatalf("the adopted ledger's watermark = (%s, %v), want the join's "+
+				"own start %s — without it the empty ledger's silence reads as "+
+				"conclusive, and every retry of an operation the donor applied is "+
+				"decided a second time", before, lost, h.began[0])
+		}
+		if asked := h.answeredAt(t); before.Before(asked) {
+			t.Fatalf("the watermark is %s, before the donor answered at %s — an "+
+				"operation minted between the two can be inside the artefact with "+
+				"its row scrubbed, and is re-decided", before, asked)
+		}
+	})
+
+	// AND ONE THAT STOPPED AFTER ITS INSTALL: whatever opens the estate next
+	// finds the donor's file current, with the watermark already in it,
+	// because it was written before the rename rather than after the reopen
+	// that never happened.
+	t.Run("an adoption that stopped after its install", func(t *testing.T) {
+		t.Parallel()
+		h := newJoinHarnessFrom(t, joinDonor{domain: scrubbingProbe{}})
+		h.reopenErr = errors.New("the artefact did not open")
+		if _, err := h.adopter(t).Join(t.Context()); !errors.Is(err, statelog.ErrEstateNotRestored) {
+			t.Fatalf("Join = %v, want the installed artefact not opening", err)
+		}
+		later, err := store.Open(t.Context(), filepath.Join(filepath.Dir(h.joinPath), "node.db"),
+			store.Options{})
+		if err != nil {
+			t.Fatalf("open the node's store again: %v", err)
+		}
+		t.Cleanup(func() { _ = later.Close() })
+		h.joiner = later
+		at, _, _, err := statelog.CursorFor(t.Context(), later.Replicated(), probeStream)
+		if err != nil {
+			t.Fatalf("read the reopened estate's checkpoint: %v", err)
+		}
+		if at.Seq != 4_200 {
+			t.Fatalf("the reopened estate is at %d, want the artefact's 4200 — the "+
+				"case did not reach an installed artefact", at.Seq)
+		}
+		before, lost := h.joinerLostBefore(t)
+		if !lost {
+			t.Fatal("the installed artefact carries no watermark — its ledger is " +
+				"the donor's scrubbed one, and every operation minted before the " +
+				"join would be decided again")
+		}
+		if asked := h.answeredAt(t); before.Before(asked) {
+			t.Fatalf("the watermark is %s, before the donor answered at %s", before, asked)
+		}
+	})
+}
+
+// A DONOR'S OWN WATERMARK TRAVELS WITH ITS LEDGER.
+//
+// The donor's sweep deleted every row it applied more than the ledger's
+// retention ago, and recorded how far back. Those rows are missing from the
+// artefact too, so an adopter that took the ledger without the watermark
+// would read their absence as conclusive and decide a retry of any of them
+// again.
+func TestADonorsWatermarkTravelsWithItsLedger(t *testing.T) {
+	t.Parallel()
+	swept := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	h := newJoinHarnessFrom(t, joinDonor{
+		domain: probeDomain{},
+		seed: func(t *testing.T, db *store.DB) {
+			if err := statelog.RecordLedgerLoss(t.Context(), db.Replicated(),
+				probeDomain{}, swept); err != nil {
+				t.Fatalf("record the donor's sweep: %v", err)
+			}
+		},
+	})
+	if _, err := h.adopter(t).Join(t.Context()); err != nil {
+		t.Fatalf("Join: %v", err)
 	}
-
-	if _, err := h.adopter(t).Join(t.Context()); !errors.Is(err, statelog.ErrEstateNotRestored) {
-		t.Fatalf("Join = %v, want the installed artefact not opening", err)
+	if before, lost := h.joinerLostBefore(t); !lost || !before.Equal(swept) {
+		t.Fatalf("the adopted ledger's watermark = (%s, %v), want the donor's %s",
+			before, lost, swept)
 	}
+}
 
-	// WHAT THE NEXT OPEN FINDS: the donor's file, at the position its
-	// manifest names.
-	later, err := store.Open(t.Context(), filepath.Join(filepath.Dir(h.joinPath), "node.db"),
-		store.Options{})
+// joinerOps is how many rows the joiner's operation ledger holds.
+func (h *joinHarness) joinerOps(t *testing.T) int64 {
+	t.Helper()
+	var ops int64
+	if err := h.joiner.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_ops`).Scan(&ops)
+	}); err != nil {
+		t.Fatalf("read the operation ledger: %v", err)
+	}
+	return ops
+}
+
+// joinerLostBefore is the joiner's ledger watermark, through the read seam the
+// publisher asks it through.
+func (h *joinHarness) joinerLostBefore(t *testing.T) (time.Time, bool) {
+	t.Helper()
+	rows, err := statelog.NewRows(h.joiner, probeDomain{}, nil)
 	if err != nil {
-		t.Fatalf("open the node's store again: %v", err)
+		t.Fatalf("build the read seam: %v", err)
 	}
-	t.Cleanup(func() { _ = later.Close() })
-	at, _, _, err := statelog.CursorFor(t.Context(), later.Replicated(), probeStream)
+	before, lost, err := rows.LostBefore(t.Context())
 	if err != nil {
-		t.Fatalf("read the reopened estate's checkpoint: %v", err)
+		t.Fatalf("read the ledger's watermark: %v", err)
 	}
-	if at.Seq != 4_200 {
-		t.Fatalf("the reopened estate is at %d, want the artefact's 4200 — the "+
-			"case did not reach an installed artefact", at.Seq)
-	}
-
-	bound, ever, err := statelog.AdoptedAt(t.Context(), later)
-	if err != nil || !ever {
-		t.Fatalf("AdoptedAt = (%s, %v, %v), want the incomplete join's bound — "+
-			"the ledger this node now runs on is the donor's scrubbed one", bound, ever, err)
-	}
-	if asked := h.answeredAt(t); bound.Before(asked) {
-		t.Fatalf("the ledger is bounded at %s, before the donor answered at %s — "+
-			"an operation minted between the two can be inside the installed "+
-			"artefact with its ledger row scrubbed, and is re-decided", bound, asked)
-	}
+	return before, lost
 }
 
 // addDonor stands up another donor on the harness's broker, offering the same

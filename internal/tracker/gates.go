@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -260,27 +259,6 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 		return "", false, err
 	}
 	return reason, gated, nil
-}
-
-// AdoptedAt is the instant before which this node's operation ledger cannot
-// vouch for an operation: when its latest adoption of a donated snapshot
-// completed, or began where one did not complete — see [statelog.AdoptedAt].
-//
-// The operation ledger is this node's own and is SCRUBBED from every donated
-// snapshot, so an op id minted before this instant cannot be answered for here
-// at all — and reading its absence as "somebody else won" would re-decide
-// against a row that moved because of this very write.
-func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
-	// THE FRAMEWORK'S OWN READER, not a second query against its table.
-	// This one had drifted into looking for a row keyed `id = 'current'`
-	// on a table keyed on `started_at` — which fails on every call with a
-	// missing column rather than reporting no adoption, and the caller
-	// then treats a working node as one that cannot answer for anything.
-	//
-	// It is still THE NODE'S OWN ESTATE that is read: an adoption record
-	// is a fact about this machine's history, and a donated snapshot must
-	// not carry the recipient's own.
-	return statelog.AdoptedAt(ctx, g.db)
 }
 
 // GateRecordVersion is the version every gate-installing record carries, FOR

@@ -127,7 +127,8 @@ func mergeClaim(task string) string  { return classMerge.Resource(task) }
 // gesture's mint instant: the ledger's vouching reads it off the step's id,
 // and a step spelled here in a shape that grammar did not recognise would be
 // read as minted at the zero instant — answered `unknown` on any node whose
-// ledger ever lost a row, to an adopted snapshot or to its sweep.
+// ledger ever lost a row, to its sweep or to a snapshot from a donor that
+// scrubbed it.
 func stepID(opID, step string) string { return statelog.StepOpID(opID, step) }
 
 // WriteResult is what a tracker write returns.

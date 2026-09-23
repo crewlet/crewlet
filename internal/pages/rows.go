@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"time"
-
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -285,19 +283,4 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 		return "", false, err
 	}
 	return reason, gated, nil
-}
-
-// AdoptedAt is the instant before which this node's operation ledger cannot
-// vouch for an operation: when its latest adoption of a donated snapshot
-// completed, or began where one did not complete — see [statelog.AdoptedAt].
-//
-// It qualifies a read of the OPERATION LEDGER, which travels SCRUBBED inside a
-// snapshot: an op id minted before this instant cannot be answered for here at
-// all, and reading its absence as "somebody else won" would re-decide against a
-// row that moved because of this very write.
-func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
-	if g == nil || g.db == nil {
-		return time.Time{}, false, nil
-	}
-	return statelog.AdoptedAt(ctx, g.db)
 }

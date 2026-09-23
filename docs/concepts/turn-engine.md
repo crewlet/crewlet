@@ -651,8 +651,8 @@ makes the same call writes once, while two different calls in one turn — an
 item moved to `in_progress` and later to `done`, two comments on one item —
 are two writes. Each id also carries **when the unit of work began** (the
 earliest trigger it was derived from), which a re-run reproduces exactly; that
-instant is what lets a node that adopted a peer's snapshot since answer a
-re-run `unknown` rather than apply it twice (see
+instant is what lets a node whose operation ledger may have lost the first
+run's row since answer a re-run `unknown` rather than apply it twice (see
 [Replication](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
 
 A **resumed** turn is not a re-run. A detached coding job re-enters the run

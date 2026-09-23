@@ -45,17 +45,18 @@ type NewComment struct {
 	// IT DERIVES THE OPERATION ID rather than only the comment's own, so a
 	// re-run is the SAME operation: inside the log's duplicate window the
 	// broker collapses its append, past it the comment's own id makes the
-	// apply an upsert of the row the first run wrote, and after this node
-	// adopts a donated snapshot the state log answers it `unknown` rather
-	// than deciding it again — which is what TurnSince is for.
+	// apply an upsert of the row the first run wrote, and once this node's
+	// ledger has lost the first run's row the state log answers it
+	// `unknown` rather than deciding it again — which is what TurnSince is
+	// for.
 	TurnKey string
 
 	// TurnSince is when the unit of work TurnKey names began, and it is the
 	// instant the derived operation id carries (see statelog.DeriveOpID).
 	// It must be the key's own — reproduced by every re-run — and never the
 	// instant of this call: the state log refuses to decide again an
-	// operation minted before its node's latest adoption, and a call's own
-	// clock is always after it.
+	// operation minted before its ledger's watermark whose row it no longer
+	// holds, and a call's own clock is always after it.
 	TurnSince time.Time
 
 	Quiet bool

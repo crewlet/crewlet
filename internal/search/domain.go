@@ -256,16 +256,3 @@ func NewGates() Gates { return Gates{} }
 func (Gates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
 	return "", false, nil
 }
-
-// AdoptedAt implements [statelog.Gates], and is UNREACHABLE on this domain.
-//
-// It exists to qualify a read of the OPERATION LEDGER — an op id minted before
-// this node adopted a donated snapshot cannot be answered for, because the
-// ledger travels scrubbed. This domain keeps no ledger, so the publisher's
-// resolution never reaches the arm that asks. Answering "never adopted" is
-// therefore not a claim about the node; it is the value of a question nobody
-// asks, and a domain that reached for the framework's adoption row here would
-// be reading a table to feed a branch that cannot run.
-func (Gates) AdoptedAt(context.Context) (time.Time, bool, error) {
-	return time.Time{}, false, nil
-}

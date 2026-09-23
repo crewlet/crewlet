@@ -14,11 +14,13 @@ import (
 // MINT INSTANT — the instant the work BEGAN, never the instant of the run.
 //
 // The state log refuses to decide again an operation its node's ledger cannot
-// vouch for, which is one minted before the node's latest adoption of a
-// donated snapshot. A re-run comes after the adoption it is judged against by
-// construction, so an id carrying the RUN's clock is one a re-run after an
-// adoption publishes a second time — which is exactly how the operation ledger
-// was defeated while every writer stamped its own clock beside the id.
+// vouch for, which is one minted before the ledger's watermark — the point
+// before which it may have lost rows, to its sweep or to a snapshot adopted
+// from a donor that scrubbed it — whose row it does not hold. A re-run comes
+// after the loss it is judged against by construction, so an id carrying the
+// RUN's clock is one a re-run after a loss publishes a second time — which is
+// exactly how the operation ledger was defeated while every writer stamped its
+// own clock beside the id.
 func TestARerunReusesTheOperationIDAndItsMintInstant(t *testing.T) {
 	t.Parallel()
 	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)

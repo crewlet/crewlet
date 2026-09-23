@@ -200,23 +200,29 @@ func TestASnapshotNamesEveryDomainAndItsManifestIsTheClaim(t *testing.T) {
 	}
 }
 
-// THE DONOR SCRUBS, ON A LIST DERIVED FROM THE DOMAIN'S DECLARATION.
+// THE DONOR SCRUBS, ON A LIST DERIVED FROM THE DOMAIN'S DECLARATION — AND ITS
+// OPERATION LEDGER IS NOT ON IT.
 //
 // An offered artefact carries no authority a peer does not already hold only
 // once every table still in it is fleet-visible — so a table this node owns
 // must be empty before the artefact exists, not after it arrives. And the list
 // comes from what the domain says about its own tables: a hardcoded one would
 // silently omit whatever a deployment actually has.
+//
+// The ledger is fleet-visible in exactly that sense: its rows are what every
+// node's applier writes from the same records. Scrubbed, it left the adopter
+// unable to tell a first attempt from a retry of anything the donor applied.
 func TestADonorScrubsItsOwnTablesBeforeItOffersAnything(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)
-	// A row in the replicated table that travels, and rows in the two the
-	// domain classes Local.
+	// A row in the replicated table, a row in the ledger, both of which
+	// travel, and one in a table the domain classes Local.
 	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO probe_rows (position, kind, stored_at) VALUES (1, 'edit', 0);
 			INSERT INTO probe_ops (op_id, subject, position, applied_at)
-				VALUES ('op-1', 's', 1, 0);`)
+				VALUES ('op-1', 's', 1, 0);
+			INSERT INTO probe_deferred_scope (position, path) VALUES (1, 'object.a');`)
 		return err
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -229,10 +235,15 @@ func TestADonorScrubsItsOwnTablesBeforeItOffersAnything(t *testing.T) {
 	if len(m.Scrubbed) == 0 {
 		t.Fatal("the manifest claims nothing was scrubbed")
 	}
-	for _, want := range []string{"probe_ops"} {
+	for _, want := range []string{"probe_log_deferred", "probe_deferred_scope"} {
 		if !slicesContains(m.Scrubbed, want) {
 			t.Errorf("the manifest does not list %s as scrubbed: %v", want, m.Scrubbed)
 		}
+	}
+	if slicesContains(m.Scrubbed, "probe_ops") {
+		t.Errorf("the manifest lists the operation ledger as scrubbed: %v — an "+
+			"adopter answers every operation minted before the join `unknown`",
+			m.Scrubbed)
 	}
 	// THE CLAIM IS TRUE, checked the way a recipient checks it.
 	copyPath := filepath.Join(h.dir, m.Artifact)
@@ -244,14 +255,15 @@ func TestADonorScrubsItsOwnTablesBeforeItOffersAnything(t *testing.T) {
 		t.Fatalf("the artefact claims %v scrubbed and %v are actually empty — a "+
 			"claim nobody checks is a claim", m.Scrubbed, empty)
 	}
-	// AND WHAT TRAVELS IS STILL THERE.
-	remaining, err := store.EmptyTables(t.Context(), copyPath, []string{"probe_rows"})
+	// AND WHAT TRAVELS IS STILL THERE — the ledger with the rows.
+	remaining, err := store.EmptyTables(t.Context(), copyPath, []string{"probe_rows", "probe_ops"})
 	if err != nil {
-		t.Fatalf("check the replicated table: %v", err)
+		t.Fatalf("check the tables that travel: %v", err)
 	}
 	if len(remaining) != 0 {
-		t.Fatal("the replicated table was scrubbed too — the artefact would " +
-			"carry a checkpoint and none of the rows it covers")
+		t.Fatalf("%v arrived empty — the artefact would carry a checkpoint and "+
+			"none of the rows it covers, or a ledger that answers for nothing",
+			remaining)
 	}
 }
 

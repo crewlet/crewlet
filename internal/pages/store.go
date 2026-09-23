@@ -111,12 +111,12 @@ func NewStore(opts Options) (*Store, error) {
 // instant is what the state log reads to decide whether its ledger can vouch
 // for a retry of this operation — and the fallback this had, a v4 when a v7
 // could not be minted, is an id carrying no instant at all, which a node whose
-// ledger ever lost a row — to an adopted snapshot or to its sweep — answers
-// `unknown` for ever.
+// ledger ever lost a row — to its sweep, or to a snapshot from a donor that
+// scrubbed it — answers `unknown` for ever.
 //
 // THE WALL CLOCK and not the store's own [Store.now], which is the clock the
 // AUTHORED instants are stamped from and which a test pins: the mint instant
-// is compared with this node's adoption and sweep records, which are read off
+// is compared with the ledger's watermark, which a sweep and a join set off
 // the wall.
 func newTimeOrderedID() string { return statelog.NewOpID(time.Now(), "") }
 

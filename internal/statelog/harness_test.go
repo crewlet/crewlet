@@ -63,8 +63,10 @@ func (probeDomain) InstallsGate(statelog.Envelope) bool { return false }
 
 func (probeDomain) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
-		"probe_objects": statelog.Replicated,
-		"probe_ops":     statelog.Local,
+		"probe_objects":        statelog.Replicated,
+		"probe_ops":            statelog.Divergent,
+		"probe_log_deferred":   statelog.Local,
+		"probe_deferred_scope": statelog.Local,
 	}
 }
 
@@ -85,6 +87,13 @@ type applier struct {
 	// lost is the instant the ledger last lost rows before — zero while it
 	// never has. See [harness.sweep].
 	lost time.Time
+
+	// lostReads counts LostBefore calls, and lostFrom, when non-zero, is
+	// the read from which the loss is REPORTED — which is how a case lands
+	// a loss in the middle of one write, between the check its decision
+	// passed and the resolution of its append.
+	lostReads int
+	lostFrom  int
 
 	// auto makes this node apply its own record the instant it is
 	// acknowledged, which is the ordinary branch. Off, the node is
@@ -203,10 +212,15 @@ func (a *applier) Op(_ context.Context, opID string) (statelog.Position, bool, e
 	return at, ok, nil
 }
 
-// LostBefore answers the cutoff [harness.sweep] last forgot rows before.
+// LostBefore answers the instant [harness.sweep] or
+// [harness.adoptFromAScrubbingDonor] last lost rows before.
 func (a *applier) LostBefore(context.Context) (time.Time, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.lostReads++
+	if a.lostFrom > 0 && a.lostReads < a.lostFrom {
+		return time.Time{}, false, nil
+	}
 	return a.lost, !a.lost.IsZero(), nil
 }
 
@@ -395,20 +409,13 @@ func (f *fakeFence) asked() []statelog.Position {
 	return append([]statelog.Position(nil), f.cursors...)
 }
 
-// fakeGates answers the two questions that make an absent operation mean
-// something other than "somebody else won".
+// fakeGates answers whether a record is gated, which is one of the two
+// questions that make an absent operation mean something other than "somebody
+// else won" — the other is the ledger's own watermark ([applier.LostBefore]).
 type fakeGates struct {
-	mu      sync.Mutex
-	reason  statelog.Reason
-	gated   bool
-	adopted time.Time
-
-	// adoptedReads counts AdoptedAt calls, and adoptFrom, when non-zero,
-	// is the read from which the adoption is REPORTED — which is how a
-	// case lands an adoption in the middle of one write, between the
-	// check its decision passed and the resolution of its append.
-	adoptedReads int
-	adoptFrom    int
+	mu     sync.Mutex
+	reason statelog.Reason
+	gated  bool
 }
 
 func (g *fakeGates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
@@ -417,35 +424,29 @@ func (g *fakeGates) GatedAt(context.Context, statelog.Subject, string, string, s
 	return g.reason, g.gated, nil
 }
 
-func (g *fakeGates) AdoptedAt(context.Context) (time.Time, bool, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.adoptedReads++
-	if g.adoptFrom > 0 && g.adoptedReads < g.adoptFrom {
-		return time.Time{}, false, nil
-	}
-	return g.adopted, !g.adopted.IsZero(), nil
-}
-
-// adopt is what installing a donated snapshot does to this node's ledger: the
-// artefact arrives with the ledger SCRUBBED, so every row this node's applier
-// had written is gone, and the adoption is recorded at `at`.
 // sweep is this node's retention sweep deleting every ledger row, as a sweep
 // whose cutoff is after all of them does, and recording that cutoff.
-func (h *harness) sweep(cutoff time.Time) {
+func (h *harness) sweep(cutoff time.Time) { h.lose(cutoff) }
+
+// adoptFromAScrubbingDonor is what installing a snapshot from a donor that
+// scrubbed its ledger — a build from before the ledger travelled — does to
+// this node's: the artefact arrives with none of the ledger's rows, and the
+// join writes its own start `at` into it as the watermark.
+//
+// AN ADOPTION FROM ANY OTHER DONOR HAS NO HELPER HERE, because it changes
+// nothing this harness models: the ledger and its watermark travel with the
+// rows, so the adopter answers exactly as its donor would have. The real
+// transfer is exercised end to end in adopt_test.go.
+func (h *harness) adoptFromAScrubbingDonor(at time.Time) { h.lose(at) }
+
+// lose empties the ledger and moves its watermark to at, never backwards.
+func (h *harness) lose(at time.Time) {
 	h.applier.mu.Lock()
 	defer h.applier.mu.Unlock()
 	h.applier.ops = map[string]statelog.Position{}
-	h.applier.lost = cutoff
-}
-
-func (h *harness) adopt(at time.Time) {
-	h.applier.mu.Lock()
-	h.applier.ops = map[string]statelog.Position{}
-	h.applier.mu.Unlock()
-	h.gates.mu.Lock()
-	h.gates.adopted = at
-	h.gates.mu.Unlock()
+	if at.After(h.applier.lost) {
+		h.applier.lost = at
+	}
 }
 
 // countingAppender wraps the real broker so a test can assert that a fenced

@@ -648,9 +648,10 @@ operation id it prints goes back in `-op-id` so the retry cannot append a
 second record. A retry whose first purge did land answers `applied`, at the
 position that purge landed at, rather than finding the task already gone. Pass
 the id exactly as printed: it carries the instant it was minted, and a node
-that has adopted a peer's snapshot since judges the retry by it — answering
-`unknown` again rather than purging twice. An id the engine did not print is
-refused.
+whose operation ledger may have lost the first purge's row since — to the
+ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older
+build — judges the retry by it, answering `unknown` again rather than purging
+twice. An id the engine did not print is refused.
 
 What it does **not** reach: a node that is offline or evicted keeps its copy
 until it replays, adopts a snapshot, is replaced or is destroyed. There is no

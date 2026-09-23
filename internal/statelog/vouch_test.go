@@ -10,19 +10,19 @@ import (
 // AN OPERATION THIS NODE'S LEDGER CANNOT VOUCH FOR IS NEVER DECIDED A SECOND
 // TIME.
 //
-// An adoption installs a donated snapshot whose operation ledger was scrubbed,
-// so a retry of an operation minted before it — a turn re-run, a caller
-// repeating an `unknown` under the same id — finds no row, takes a snapshot
-// whose rows already hold the first application, and decides again on top of
-// it. The broker has no reason to refuse that: the expectation is current, and
+// A ledger that LOST ROWS — to its retention sweep, or to a snapshot adopted
+// from a donor that scrubbed its ledger — holds none for an operation minted
+// before the loss, so a retry of one — a turn re-run, a caller repeating an
+// `unknown` under the same id — finds no row, takes a snapshot whose rows
+// already hold the first application, and decides again on top of it. The broker has no reason to refuse that: the expectation is current, and
 // the duplicate window is two minutes wide. So the refusal has to come from
 // here, before the append, and it has to read the instant the operation was
 // MINTED — which is the id's own, because every retry reuses the id and a
-// retry's own clock is always after the adoption.
+// retry's own clock is always after the loss.
 func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 	t.Parallel()
 
-	t.Run("minted before an adoption and retried after it, it answers unknown and publishes nothing", func(t *testing.T) {
+	t.Run("minted before an adoption from a scrubbing donor and retried after it, it answers unknown and publishes nothing", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		minted := time.Now().Add(-time.Hour)
@@ -31,9 +31,10 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		if err != nil || first.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the first application = (%+v, %v), want applied", first, err)
 		}
-		// THE ADOPTION, after the mint and before the retry: the
-		// ledger arrives scrubbed.
-		h.adopt(minted.Add(time.Minute))
+		// THE ADOPTION, after the mint and before the retry, from a
+		// donor that scrubbed its ledger: it arrives empty, with the
+		// join's start as its watermark.
+		h.adoptFromAScrubbingDonor(minted.Add(time.Minute))
 		appended := h.appends.appends.Load()
 
 		res, err := h.write(probeSubject("a"), op, "one")
@@ -43,7 +44,7 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		if res.Outcome != statelog.OutcomeUnknown {
 			t.Fatalf("outcome = %q, want unknown — the ledger that would say "+
 				"whether the first application landed was scrubbed by the "+
-				"adoption, and deciding again on rows that already hold it "+
+				"donor, and deciding again on rows that already hold it "+
 				"applies the operation twice", res.Outcome)
 		}
 		if got := h.appends.appends.Load() - appended; got != 0 {
@@ -59,7 +60,7 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		adopted := time.Now().Add(-time.Hour)
-		h.adopt(adopted)
+		h.adoptFromAScrubbingDonor(adopted)
 		res, err := h.write(probeSubject("a"), statelog.NewOpID(adopted.Add(time.Second), "write-a"), "one")
 		if err != nil || res.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("a first write minted after the adoption = (%+v, %v), want "+
@@ -78,14 +79,14 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		if err != nil || first.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the first application = (%+v, %v), want applied", first, err)
 		}
-		// An adoption the operation predates, whose artefact did NOT
-		// cover the first copy: the copy landed above it, so this node's
-		// own applier applied it and its row is here. The row speaks
-		// for itself, and refusing it would strand a retry that this
-		// node can answer.
-		h.gates.mu.Lock()
-		h.gates.adopted = minted.Add(time.Minute)
-		h.gates.mu.Unlock()
+		// A loss the operation predates, which did NOT take the first
+		// copy's row: the copy landed above it, so this node's own
+		// applier applied it and its row is here. The row speaks for
+		// itself, and refusing it would strand a retry that this node
+		// can answer.
+		h.applier.mu.Lock()
+		h.applier.lost = minted.Add(time.Minute)
+		h.applier.mu.Unlock()
 
 		res, err := h.write(probeSubject("a"), op, "one")
 		if err != nil {
@@ -114,7 +115,7 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		if err != nil || first.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the first application = (%+v, %v), want applied", first, err)
 		}
-		h.adopt(minted.Add(time.Minute))
+		h.adoptFromAScrubbingDonor(minted.Add(time.Minute))
 		time.Sleep(2 * shortWindow)
 
 		res, err := h.write(probeSubject("a"), op, "one")
@@ -188,8 +189,10 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		}
 
 		for name, lose := range map[string]func(*harness){
-			"adopted": func(h *harness) { h.adopt(time.Now()) },
-			"swept":   func(h *harness) { h.sweep(time.Now()) },
+			"adopted from a scrubbing donor": func(h *harness) {
+				h.adoptFromAScrubbingDonor(time.Now())
+			},
+			"swept": func(h *harness) { h.sweep(time.Now()) },
 		} {
 			h := newHarness(t)
 			lose(h)

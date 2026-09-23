@@ -101,9 +101,10 @@ a cache cannot:
   and the reply carries the operation id to retry it with, which collapses a
   duplicate rather than filing one. The id carries the instant it was minted,
   so a retry — a turn re-run included — is judged by when the operation began
-  rather than when it was retried: on a node that has adopted a peer's snapshot
-  since, where the record of what already landed was not carried over, it
-  answers `unknown` rather than applying it twice (see
+  rather than when it was retried: on a node whose record of what already
+  landed may have lost that operation's row since — to its thirty-day sweep,
+  or to a snapshot adopted from a peer on an older build — it answers
+  `unknown` rather than applying it twice (see
   [Replication](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
 - **A write can wait for itself.** A turn that files a task and then lists the
   project sees what it just filed, because the tool waits for this node to

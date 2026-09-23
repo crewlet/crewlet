@@ -61,21 +61,19 @@ type Rows interface {
 	// Op answers where an operation was applied on this node.
 	//
 	// CONCLUSIVE ONLY at or below this node's applied position and only
-	// above its own adoption instant: the ops table is this node's
-	// applier's own record, so "absent" below the checkpoint means "not
-	// applied here YET" and "absent" below an adoption means "scrubbed
-	// out of the snapshot I arrived with". Either read as "somebody else
+	// for an operation minted at or after [Rows.LostBefore]: "absent"
+	// below the checkpoint means "not applied here YET", and "absent"
+	// before the watermark may mean "lost". Either read as "somebody else
 	// won" republishes a write that already landed.
 	Op(ctx context.Context, opID string) (Position, bool, error)
 
 	// LostBefore answers the instant before which the domain's ops table
 	// may have lost rows, reporting false when it has lost none: every row
 	// it no longer holds was applied before it, so "absent" is conclusive
-	// only for an operation minted at or after it. The retention sweep is
-	// what loses them here, and records the cutoff of every pass that
-	// deleted anything, in the same transaction as the delete — the
-	// sweep's half of what [Gates.AdoptedAt] is for an adoption. See
-	// [Publisher.vouches].
+	// only for an operation minted at or after it. It travels with the
+	// ledger inside a snapshot; the sweep, an adoption from a donor that
+	// scrubbed its ledger and the boot's fold of such an adoption are what
+	// move it — see ledgerloss.go and [Publisher.vouches].
 	LostBefore(ctx context.Context) (time.Time, bool, error)
 }
 

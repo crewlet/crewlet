@@ -127,6 +127,9 @@ func (Domain) Tables() map[string]statelog.TableClass {
 	for _, table := range MachineryTables {
 		out[table] = statelog.Local
 	}
+	// THE LEDGER TRAVELS — see [statelog.Domain.OpsTable] and
+	// [MachineryTables].
+	out[Domain{}.OpsTable()] = statelog.Divergent
 	return out
 }
 

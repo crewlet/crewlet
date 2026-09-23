@@ -383,14 +383,16 @@ func (a Actor) OperationSeed() string {
 // time-ordered for exactly this reader.
 //
 // NEVER THE INSTANT OF THE CALL. The ledger that collapses a retry cannot
-// vouch for an operation minted before this node's latest adoption of a
-// donated snapshot, and a re-run's call is always after the adoption it has
-// to be judged against — so an id stamped with its call's clock is one a
-// re-run after an adoption decides a second time. See [statelog.OpMintedAt].
+// vouch for an operation minted before its watermark — the point before which
+// it may have lost rows — whose row it no longer holds, and a re-run's call is
+// always after the loss it has to be judged against — so an id stamped with
+// its call's clock is one a re-run after a loss decides a second time. See
+// [statelog.OpMintedAt].
 //
 // The zero instant where neither is known — a run parked by a build whose run
-// ids carried none — which reads as older than every adoption: a node that
-// adopted answers such a write `unknown` rather than risking it twice.
+// ids carried none — which reads as older than every loss: a node whose ledger
+// ever lost a row answers such a write `unknown`, unless it holds its row,
+// rather than risking it twice.
 func (a Actor) OperationSince() time.Time {
 	if a.WorkKey != "" {
 		return a.WorkSince

@@ -421,7 +421,7 @@ func evictionOnly(ctx context.Context, g statelog.Gates, subj statelog.Subject,
 	return g.GatedAt(ctx, statelog.Subject{Kind: ungatedKind, ID: subj.ID}, writer, opID, p)
 }
 
-// liar is a reader whose GatedAt is replaced and whose AdoptedAt is honest.
+// liar is a reader whose GatedAt is replaced.
 type liar struct {
 	statelog.Gates
 	gatedAt func(ctx context.Context, subj statelog.Subject, writer, opID string,

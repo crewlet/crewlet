@@ -323,10 +323,11 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 //
 // AN ID THE ENGINE DID NOT MINT IS REFUSED rather than passed on, and false is
 // returned with the 400 already written. It carries no instant, so the state
-// log reads it as older than every loss its ledger has had — an adopted
-// snapshot, or a retention sweep that deleted anything, which every deployment
-// older than the ledger's retention has had — and answers such a write
-// `unknown` without publishing it, on the first attempt as on every retry.
+// log reads it as older than every loss its ledger has had — a retention sweep
+// that deleted anything, which every deployment older than the ledger's
+// retention has had, or a snapshot adopted from a donor that scrubbed its
+// ledger — and answers such a write `unknown` without publishing it, on the
+// first attempt as on every retry.
 // Passed on, it would be a gesture that can never run and never says why.
 func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
 	opID := strings.TrimSpace(r.URL.Query().Get("op_id"))

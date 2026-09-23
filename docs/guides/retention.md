@@ -342,15 +342,17 @@ below the published floor whose missing records the log still holds reports
    the artefact's position. `crewlet retention verify --restore` is what tells
    you in advance that it does.
 
-**After an adoption, retries of older work answer `unknown` on that node.** A
-donor's snapshot arrives without its operation ledger — the table that says
-which operations this node has already applied — so for any operation minted
-before the adoption, the node cannot tell a first attempt from a retry of one
-that already landed. Rather than risk applying it twice it answers the write
-`unknown` (and logs `statelog_write_unvouched`): a turn re-run whose work began
-before the join, or an operator repeating an older `-op-id`, gets that answer
-here until the operation is retried on a node that did not adopt since. New
-work is unaffected. See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
+**An adoption carries the operation ledger with it.** The ledger — the table
+that says which operations have already been applied — travels inside the
+snapshot, so the adopted node answers a retry of anything its donor applied
+from it, and files work that was queued before the join like any other. The one
+exception is a donor on an **older build**, which scrubbed its ledger out of the
+snapshot: the joining node records the join as the point before which its
+ledger may have lost rows, so a retry of older work there — a turn re-run
+whose work began before the join, an operator repeating an older `-op-id` —
+answers `unknown` (and logs `statelog_write_unvouched`) rather than risk
+applying it twice, until it is retried on a node that did not adopt from the
+older peer. Upgrading the fleet ends it. See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted).
 
 ### A node a peer re-anchored past
 
@@ -819,10 +821,12 @@ in `-op-id` so the retry cannot append a second purge of a task the first one
 may already have destroyed — and when it did, the retry answers `applied`, at
 the first purge's position, rather than finding the task gone and refusing.
 Pass it back exactly as printed: the id carries the
-instant it was minted, which is what a node that has since adopted a snapshot
-judges the retry by — there it answers `unknown` again rather than purging
-twice. An id of your own making is refused (`op_id_invalid`): it carries no
-instant, so no node could tell whether it already ran.
+instant it was minted, which is what a node judges the retry by once its
+operation ledger may have lost the first purge's row — to the ledger's
+thirty-day sweep, or to a snapshot adopted from a peer on an older build —
+and there it answers `unknown` again rather than purging twice. An id of your
+own making is refused (`op_id_invalid`): it carries no instant, so no node
+could tell whether it already ran.
 
 A purge names **one** task, so its **children are moved, not destroyed** —
 each direct child re-parents onto the purged task's own parent, or becomes a

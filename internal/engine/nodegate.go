@@ -207,8 +207,9 @@ func livePresences(ctx context.Context, leases liveLeases) ([]statelog.Presence,
 // THE STATE LOG'S OWN GRAMMAR ([statelog.StepOpID]), so each log's id carries
 // the gesture's mint instant: the ledger's vouching reads it off the id, and
 // one spelled here in a shape that grammar did not recognise would be read as
-// minted at the zero instant — answered `unknown` on any node that ever
-// adopted a snapshot.
+// minted at the zero instant — answered `unknown` on any node whose ledger
+// ever lost a row, to its sweep or to a snapshot from a donor that scrubbed
+// it.
 func domainOpID(gesture string, readmit bool, domain string) string {
 	verb := "evict"
 	if readmit {

@@ -407,6 +407,16 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		return nil, err
 	}
 
+	// AN ADOPTION A BUILD FROM BEFORE THE LEDGER TRAVELLED RECORDED is one
+	// whose ledger was scrubbed, on a file whose watermark does not say so
+	// — carried into that watermark here, once, before the join below can
+	// replace the file and before anything publishes. See
+	// [statelog.FoldLegacyAdoptions].
+	if err := statelog.FoldLegacyAdoptions(ctx, e.backends.Store, registeredDomains()); err != nil {
+		s.Stop()
+		return nil, err
+	}
+
 	// ADOPT BEFORE ANY APPLIER RUNS, because a join REPLACES the
 	// replicated database file — and it can only do that while nothing
 	// holds a transaction open on it. An applier started first would be
@@ -1826,10 +1836,10 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 // because the heartbeat that finds the node caught up requests none.
 //
 // THE ADOPTION ROW IS LEFT AS THE FAILED JOIN LEFT IT: incomplete, because the
-// adoption did not complete, and that row's start bounds this node's ledger
-// correctly whichever file the reopen finds — see [statelog.AdoptedAt]. So a
-// restore that finds the donor's file current is a recovery, not an adoption
-// to finish.
+// adoption did not complete. Nothing on the write path reads it: whichever
+// file the reopen finds carries its own ledger and that ledger's watermark
+// (see [statelog.RecordLedgerLoss]). So a restore that finds the donor's file
+// current is a recovery, not an adoption to finish.
 //
 // A failed reopen is [statelog.ErrEstateNotRestored], so every outcome that
 // leaves this node with no replicated database reads the same.

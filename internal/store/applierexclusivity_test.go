@@ -339,7 +339,11 @@ var allowedReplicatedWriter = []allowance{
 	{
 		Prefix: "internal/statelog/", Kind: mechanism,
 		Why: "THE FRAMEWORK: the apply transaction itself, the snapshot " +
-			"install and the reanchor. A write here is the mechanism.",
+			"install and the reanchor. A write here is the mechanism — " +
+			"including the operation ledger's per-node sweep and the " +
+			"watermark it moves, because the ledger is statelog.Divergent " +
+			"(it travels, and its applied_at is each node's own clock), so " +
+			"two nodes legitimately hold different rows of it.",
 	},
 	{
 		Prefix: "internal/store/", Kind: mechanism,

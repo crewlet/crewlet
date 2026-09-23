@@ -109,9 +109,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 		return running.runner.Committed().Seq == last
 	})
 	// THE ADOPTION IS RECORDED AS COMPLETE, in this node's own estate and
-	// naming this donor's artefact. Read off the row itself: [statelog.AdoptedAt]
-	// answers a bound for an incomplete row too, so "an adoption is on record"
-	// cannot tell a join that finished from one that stopped partway.
+	// naming this donor's artefact.
 	var recorded string
 	var startedAt int64
 	var completedAt sql.NullInt64
@@ -132,11 +130,11 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 			recorded, manifest.SHA256)
 	}
 	// AND ITS START FOLLOWS THE DONOR'S ANSWER, which is what makes it the
-	// bound a join that stops before completing is read at: the artefact
-	// may have been finished an instant before the donor answered, and an
-	// operation this node published before THAT can sit inside it with its
-	// ledger row scrubbed. A start stamped when the join began precedes the
-	// ask itself.
+	// watermark an artefact from a donor that scrubbed its ledger is
+	// installed with: the artefact may have been finished an instant before
+	// the donor answered, and an operation this node published before THAT
+	// can sit inside it with its ledger row scrubbed. A start stamped when
+	// the join began precedes the ask itself.
 	if began, asked := store.DecodeTime(startedAt),
 		time.Unix(0, answered.Load()).UTC().Truncate(time.Microsecond); began.Before(asked) {
 		t.Fatalf("the adoption row starts at %s, before the donor answered at %s — "+
@@ -144,10 +142,18 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 			"its ledger row scrubbed, and an adoption that stopped before "+
 			"completing would let it be re-decided", began, asked)
 	}
-	if _, bounded, err := statelog.AdoptedAt(t.Context(), back.Store); err != nil || !bounded {
-		t.Fatalf("the ledger reads no adoption bound (%v, %v) — every operation "+
-			"minted before the adoption would be re-decided against a scrubbed "+
-			"ledger", bounded, err)
+	// AND THE LEDGER LOST NOTHING: a donor of this build scrubs none, so the
+	// adopter holds its donor's rows and inherits its donor's watermark —
+	// which says nothing lost, on a donor that never swept. An adopter that
+	// recorded a loss here would answer its own backlog `unknown`.
+	rows, err := tracker.NewRows(back.Store)
+	if err != nil {
+		t.Fatalf("build the tracker's read seam: %v", err)
+	}
+	if before, lost, err := rows.LostBefore(t.Context()); err != nil || lost {
+		t.Fatalf("the adopted ledger may have lost rows before %s (%v, %v) — a "+
+			"ledger that travelled lost nothing, and every first attempt minted "+
+			"before the join would be refused", before, lost, err)
 	}
 	waitUntil(t, 30*time.Second, "the node to admit seats again", e.NativeHydrated)
 	if ok, domain := e.SeatsServiceable(); !ok {

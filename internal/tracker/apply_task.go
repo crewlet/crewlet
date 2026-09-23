@@ -326,8 +326,9 @@ func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 		// it, so a second one on the same subject loses there. What
 		// reaches here is a REDELIVERY at a position the checkpoint has
 		// already passed — collapsed by the operation ledger on the
-		// ordinary path and, when that ledger has been scrubbed by an
-		// adoption, by this branch. Applying the payload is correct
+		// ordinary path and, when that ledger has lost the row (to its
+		// sweep, or to a snapshot adopted from a donor that scrubbed
+		// it), by this branch. Applying the payload is correct
 		// because a create carries the COMPLETE state, so the row ends
 		// where the record says either way.
 		created.ID = c.subject().ID

@@ -184,16 +184,12 @@ type openFence struct{}
 func (openFence) Evicted(context.Context) (bool, error)                 { return false, nil }
 func (openFence) ClearForZero(context.Context, statelog.Position) error { return nil }
 
-// openGates reports no gate and no adoption.
+// openGates reports no gate.
 type openGates struct{}
 
 func (openGates) GatedAt(context.Context, statelog.Subject, string, string,
 	statelog.Position) (statelog.Reason, bool, error) {
 	return "", false, nil
-}
-
-func (openGates) AdoptedAt(context.Context) (time.Time, bool, error) {
-	return time.Time{}, false, nil
 }
 
 // errNoApplier is what the suite's waiter answers when asked to wait for an

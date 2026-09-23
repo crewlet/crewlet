@@ -531,7 +531,7 @@ What each of the four holds, in full:
 | **`conversation_sessions`** | What this seat already said in that thread |
 | `company_config` · `scheduled_runs` · `secret_values` | Revisions, cron bookkeeping, and the secret store's bootstrap half |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
-| `statelog_adoption` | This node's own record of any peer snapshot it has adopted, which is what tells an operation minted before an adoption began — once the fleet's offers were in — from one this node's ledger can answer for, whether or not that adoption completed |
+| `statelog_adoption` | This node's own history of the peer snapshots it has adopted — which donor's artefact, when the join began and whether it completed. Nothing on the write path reads it: the operation ledger travels inside the snapshot with its own watermark, and the rows an older build wrote, whose adoptions scrubbed the ledger, are carried into that watermark once at boot |
 | `chat_thread_follows` | EMPTY, and kept for one reason: rows written before the follows moved to coordination are carried onto the fleet at the next start, and a migration cannot do that — a `.sql` file has no KV client, and it runs before any Go code on every boot. Nothing reads or writes it at runtime. See node migration 0028 |
 | `stream_identity` | What this node last saw of each stream's identity, which is how it notices one that was recreated underneath it. A per-node **observation** rather than shared state: two nodes can legitimately have seen different generations, so one agreed value would destroy the comparison it exists to make |
 
@@ -557,7 +557,7 @@ to the adopted log.
 | **`tracker_tasks`** · `tracker_comments` · `tracker_history` · … | The company's work — the tracker's whole state, derived from `CREWLET_TRACKER_LOG` |
 | **`pages_heads`** · `pages_revisions` · `pages_titles` · … | The company's knowledge base, derived from `CREWLET_PAGES_LOG`: a page's current body, the immutable revisions behind it, and the title claim that is what makes a name an address |
 | **`kb_vectors`** · `kb_vectors_bin` | Page and task embeddings and their 1-bit codes, derived from `CREWLET_TRACKER_VECTORS`. The fleet pays the provider bill **once** and every node holds the answer, which is precisely why these are not in the node's own file |
-| `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` | Where this node is on each log, which operations it has already applied — and how far back its sweep has deleted that record, so a retry older than it is answered `unknown` rather than applied twice — and any record a newer build wrote that this one cannot decode |
+| `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` | Where this node is on each log, which operations have already been applied — a record that travels inside a snapshot — and how far back that record may have lost rows, to the sweep or to a snapshot from an older build that scrubbed it, so a retry older than that is answered `unknown` rather than applied twice; and any record a newer build wrote that this one cannot decode |
 
 **The whole company — coordination KV.**
 

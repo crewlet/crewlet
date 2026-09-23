@@ -29,6 +29,7 @@ import (
 // and a real store on both ends.
 type roundTrip struct {
 	t        *testing.T
+	broker   *js.Queue
 	db       *store.DB
 	log      *js.DomainLog
 	writer   *tracker.Writer
@@ -103,16 +104,26 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 			t.Errorf("close the store: %v", err)
 		}
 	})
+	return newRoundTripOn(t, q, log, db, "node-a")
+}
 
+// newRoundTripOn is the harness's node over a broker, a log and a store it is
+// handed: the one [newRoundTripWithoutProject] opens, or a second node's
+// joining the same log — a node that adopted a snapshot, say — under its own
+// id.
+func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
+	nodeID string) *roundTrip {
+
+	t.Helper()
 	rows, err := tracker.NewRows(db)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
 	// THE HARNESS EXISTS BEFORE THE WRITER, because the writer's authored
 	// clock reads a field on it that a case may move.
-	r := &roundTrip{t: t, db: db, log: log, at: wednesday}
+	r := &roundTrip{t: t, broker: q, db: db, log: log, at: wednesday}
 
-	fence := tracker.NewFence(db, "node-a")
+	fence := tracker.NewFence(db, nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an empty subject. The log's own
@@ -139,7 +150,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	r.metrics = recorder
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Log: log, Rows: rows, Fence: fence,
-		Gates: tracker.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: "node-a",
+		Gates: tracker.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
 		Metrics:       recorder,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
@@ -148,7 +159,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 		t.Fatalf("build the publisher: %v", err)
 	}
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: publisher, DB: db, NodeID: "node-a",
+		Publisher: publisher, DB: db, NodeID: nodeID,
 		// A REAL CLAIM BACKEND, because the WALKING sequences refuse
 		// without one and a harness that could not run them left the
 		// cross-project move — and everything it reads, including the
@@ -175,7 +186,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
-	r.writer, r.applier = writer, tracker.NewApplier("node-a")
+	r.writer, r.applier = writer, tracker.NewApplier(nodeID)
 	r.reader, r.waiter = reader, waiter
 	return r
 }
