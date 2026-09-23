@@ -415,11 +415,39 @@ What that means in practice:
   them — but a bind landing on the other log at the same instant passes its own
   decide too. Both can land.
 
-The residue is a person bound to a seat that is not in the chart. That is a
-**named legal state** a duty reports, not corruption, and it is the honest
-price of two domains: arbitration across them would need one log, and one log
-for the chart and the directory would serialise every hire against every
-sign-in.
+The residue is a person bound to a seat the chart does not hold as a human
+seat, and it comes in two forms:
+
+- **Settled** — the seat was removed or tombstoned, or turned into an agent
+  seat, and this node's chart has applied everything the bind saw. Nothing
+  clears it but a record: `crewlet iam unbind`, or `crewlet iam bind` to
+  another seat.
+- **Not yet** — the seat is absent from a node whose chart applier has not
+  reached the position the bind was decided at. It clears when that applier
+  catches up.
+
+Both are **named legal states**, not corruption, and they are the honest price
+of two domains: arbitration across them would need one log, and one log for
+the chart and the directory would serialise every hire against every sign-in.
+
+What decides a binding is dangling is the [seat table the request path
+uses](#validation-is-three-valued-twice) — a binding dangles
+exactly when that table would refuse its person or hold them off for want of
+the seat — and one evaluation feeds every surface that reports it:
+
+- `crewlet iam check` and the Access screen list each one as
+  `binding_dangling`, with the seat and which form it is in. A binding this
+  node's chart **cannot judge** — its applier past the 60-second stall grace —
+  is counted as `bindings_unchecked` rather than reported either way, so a
+  report printed during a chart stall never reads as a clean directory.
+- The **`iam_binding_dangling`** alarm fires once a residue has persisted past
+  the same 60 seconds every other alarm uses. The age is how long this node's
+  own evaluations — on the retention tick, every node, every quarter of an hour
+  and once at boot — have kept finding it, from the first that did to the
+  latest: nothing records when a binding began to dangle, so the alarm never
+  claims a persistence nobody saw. A bind racing a removal, or a hire a node
+  applies a few seconds late, clears before it can fire. See
+  [Alarms](../reference/alarms.md).
 
 **A node that cannot read the directory refuses the removal rather than
 allowing it.** A node running no identity domain holds an empty copy of those

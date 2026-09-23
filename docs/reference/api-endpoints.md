@@ -645,6 +645,40 @@ deployment's keyring cannot open renders as `sealed`. They are different
 states with different remedies — one is finished, the other is a keyring
 somebody still has — and neither is an outage.
 
+#### `GET /iam/check` walks the whole directory
+
+```json
+{
+  "findings": [
+    {"kind": "binding_dangling", "person": "018f3a9c-…", "login": "jane.doe",
+     "seat": "platform-lead",
+     "detail": "seat \"platform-lead\" is tombstoned; unbind them, or bind them to another seat"}
+  ],
+  "position": "CREWLET_IAM_LOG@0:1840",
+  "people_with_people_manage": 2,
+  "bindings_unchecked": 0
+}
+```
+
+`kind` is one of `no_people_manage_holder` (listed first: nobody left who can
+administer the company except through a Tier A token),
+`person_without_credential`, `binding_dangling`, `identity_shredded` and
+`grant_clamped_by_ceiling`.
+
+`binding_dangling` is decided by the **request path's own seat table**, so it
+names exactly the people a request would refuse or hold off for want of their
+seat: a seat removed, tombstoned or turned into an agent seat, or — on a node
+whose chart applier is behind — a hire this node has not applied yet, which
+clears by itself. The `detail` says which. The same evaluation raises the
+`iam_binding_dangling` [alarm](alarms.md) once a residue has persisted past the
+60-second stall grace.
+
+`bindings_unchecked` counts the bound people whose seat this node's chart
+**could not judge** — its applier past the stall grace, or a view it could not
+read. They are neither reported as dangling nor left out silently, so a report
+answered during a chart stall does not read as a clean directory; ask a node
+whose chart is current.
+
 #### `GET /iam/audit` pages by position, never by time
 
 Two nodes' clocks are compared nowhere in this engine, so `since` and `before`

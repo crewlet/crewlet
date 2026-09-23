@@ -1,6 +1,7 @@
 package iamapi
 
 import (
+	"context"
 	"net/http"
 	"slices"
 
@@ -28,9 +29,14 @@ const (
 	KindNoCredential FindingKind = "person_without_credential"
 
 	// KindDanglingBinding is a person bound to a seat this node's chart
-	// no longer holds. A LEGAL RESIDUE rather than corruption — two logs,
-	// two appliers, two anchors, so a bind and a seat removal can both
-	// win — and the repair is an unbind or a rebind, which is one record.
+	// does not hold as a human seat: removed, tombstoned, turned into an
+	// agent seat, or — on a node whose chart applier is behind — a hire
+	// this node has not applied yet. A LEGAL RESIDUE rather than
+	// corruption — two logs, two appliers, two anchors, so a bind and a
+	// seat removal can both win — and the repair is an unbind or a
+	// rebind, which is one record. The same evaluation raises the
+	// `iam_binding_dangling` alarm once one has persisted past the stall
+	// grace.
 	KindDanglingBinding FindingKind = "binding_dangling"
 
 	// KindShredded is a row whose key a removal destroyed. Reported as
@@ -62,14 +68,27 @@ type Finding struct {
 	Detail string      `json:"detail"`
 }
 
-// Seats is what the report asks the org chart about one seat.
+// Bindings is what the report asks about one person's seat binding: whether it
+// dangles, and if so the sentence that says which seat, why and what to do.
 //
-// NIL-ABLE, AND THE ABSENCE IS THE THIRD VALUE — the same shape
+// ASKED, NEVER RESTATED. The rule is the request path's own seat table — a
+// binding dangles exactly when that table would refuse the person or hold them
+// off for want of the seat — and the engine applies it once, for this report
+// and for the `iam_binding_dangling` alarm alike. The predicate it replaced
+// asked only whether the chart held a row by that handle, so a person bound to
+// an AGENT seat, refused on every request they made, was one this report said
+// nothing about.
+//
+// THREE-VALUED: an error is a node that cannot tell — a chart applier past the
+// stall grace, an unreadable view — and the report counts it as unchecked
+// rather than reporting a dangling binding it could not establish, which
+// would send an administrator to unbind somebody whose seat is there.
+//
+// NIL-ABLE, AND THE ABSENCE IS THE THIRD VALUE too — the same shape
 // internal/api/chartapi's `Held` takes, one estate the other way round. A node
-// running no chart domain has a legitimately empty copy of it, so asking would
-// report EVERY bound person as dangling; a report that cannot ask skips the
-// arm rather than guessing.
-type Seats func(handle string) bool
+// that cannot ask skips the arm rather than guessing.
+type Bindings func(ctx context.Context, row iamdomain.PersonRow) (
+	dangling bool, detail string, err error)
 
 // GetCheck is `GET /iam/check`.
 //
@@ -82,6 +101,7 @@ type Seats func(handle string) bool
 func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 	var findings []Finding
 	manage := 0
+	unchecked := 0
 	position := ""
 	after := ""
 	for {
@@ -94,7 +114,11 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		}
 		position = page.At.String()
 		for _, row := range page.People {
-			findings = append(findings, s.findingsFor(r, row)...)
+			found, checked := s.findingsFor(r, row)
+			findings = append(findings, found...)
+			if !checked {
+				unchecked++
+			}
 			if row.Stage == iam.StageActive &&
 				slices.Contains(row.Grants, iam.GrantPeopleManage) &&
 				s.hasCredential(r, row) {
@@ -121,19 +145,27 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		"findings":                  findings,
 		"position":                  position,
 		"people_with_people_manage": manage,
+		// SAID RATHER THAN SILENT: "no dangling binding" and "this
+		// node's chart could not say" are different answers, and a
+		// report that folded the second into the first would print
+		// "nothing to report" during exactly the chart stall that
+		// hides a residue.
+		"bindings_unchecked": unchecked,
 	})
 }
 
-// findingsFor is everything the report can say about one row.
-func (s *Service) findingsFor(r *http.Request, row iamdomain.PersonRow) []Finding {
-	var out []Finding
+// findingsFor is everything the report can say about one row, and whether its
+// seat binding could be checked at all.
+func (s *Service) findingsFor(r *http.Request, row iamdomain.PersonRow) (
+	out []Finding, bindingChecked bool) {
+
 	if row.Shredded {
 		out = append(out, Finding{
 			Kind: KindShredded, Person: row.ID, Login: row.Login,
 			Detail: "this person was removed and their key destroyed, so " +
 				"their name and address are unrecoverable everywhere",
 		})
-		return out
+		return out, true
 	}
 	if row.Stage == iam.StageActive && !s.hasCredential(r, row) {
 		out = append(out, Finding{
@@ -143,13 +175,20 @@ func (s *Service) findingsFor(r *http.Request, row iamdomain.PersonRow) []Findin
 				"an enrolment nobody completed",
 		})
 	}
-	if row.Seat != "" && s.seats != nil && !s.seats(row.Seat) {
-		out = append(out, Finding{
-			Kind: KindDanglingBinding, Person: row.ID, Login: row.Login,
-			Seat: row.Seat,
-			Detail: "this person is bound to a seat this node's org chart no " +
-				"longer holds; unbind them, or bind them to another",
-		})
+	bindingChecked = true
+	if row.Seat != "" && s.bindings != nil {
+		dangling, detail, err := s.bindings(r.Context(), row)
+		switch {
+		case err != nil:
+			bindingChecked = false
+			log.DebugContext(r.Context(), "api_iam_check_binding_unknown",
+				"person", row.ID, "error", err)
+		case dangling:
+			out = append(out, Finding{
+				Kind: KindDanglingBinding, Person: row.ID, Login: row.Login,
+				Seat: row.Seat, Detail: detail,
+			})
+		}
 	}
 	for _, g := range row.Grants {
 		if !slices.Contains(s.ceiling, g) {
@@ -162,7 +201,7 @@ func (s *Service) findingsFor(r *http.Request, row iamdomain.PersonRow) []Findin
 			})
 		}
 	}
-	return out
+	return out, bindingChecked
 }
 
 // hasCredential reports whether somebody can prove themselves at all.

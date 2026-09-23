@@ -77,6 +77,10 @@ var alarmMeaning = map[Kind]string{
 		"its byte ceiling holds less than the `min_age` window the trim " +
 		"keeps, so it will fill and refuse writes with every trim term " +
 		"satisfied.",
+	KindBindingDangling: "A person has been bound for longer than a minute " +
+		"to a seat this node's org chart does not hold as a human seat — " +
+		"removed, turned into an agent seat, or not applied here yet — so " +
+		"every request they make is refused or held off.",
 }
 
 const alarmHeader = `# Alarms

@@ -167,14 +167,13 @@ type Options struct {
 	// down for a setting that affects a single gesture.
 	ExternalBase string
 
-	// Seats reports whether a seat is one this node's org chart holds,
-	// for the dangling-binding arm of the report.
+	// Bindings classifies one person's seat binding for the
+	// dangling-binding arm of the report. See [Bindings].
 	//
 	// NIL-ABLE, AND THE ABSENCE IS THE THIRD VALUE — the same shape
 	// internal/api/chartapi's `Held` takes, one estate the other way
-	// round: a node running no chart domain has a legitimately empty copy
-	// of it, so asking would report EVERY bound person as dangling.
-	Seats Seats
+	// round: a node that cannot ask skips the arm rather than guessing.
+	Bindings Bindings
 
 	// Ceiling is this node's own `api.auth.max_grants`, which the report
 	// compares a person's declared grants against. Empty means this node
@@ -199,7 +198,7 @@ type Service struct {
 	opener    Opener
 	bootstrap Bootstrap
 	external  string
-	seats     Seats
+	bindings  Bindings
 	ceiling   []iam.Grant
 	audit     Audit
 	now       func() time.Time
@@ -224,7 +223,7 @@ func New(opts Options) (*Service, error) {
 	s := &Service{
 		directory: opts.Directory, authority: opts.Authority,
 		opener: opts.Opener, bootstrap: opts.Bootstrap,
-		external: opts.ExternalBase, seats: opts.Seats,
+		external: opts.ExternalBase, bindings: opts.Bindings,
 		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit, now: opts.Now,
 	}
 	if s.now == nil {

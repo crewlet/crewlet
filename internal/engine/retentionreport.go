@@ -294,6 +294,10 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		}
 	}
 	out.SemanticCoverage = r.semanticCoverage()
+	// THE TICK'S WALK, read back rather than taken, for the same reason as
+	// the rates — and because a binding's age is an interval between walks,
+	// which a walk per poll would make whatever the poll rate is.
+	r.bindings.fill(&out)
 	r.space(&out)
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)

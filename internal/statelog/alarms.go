@@ -159,6 +159,7 @@ const (
 	KindWALLarge         Kind = "wal_large"
 	KindPoolStarved      Kind = "pool_starved"
 	KindCensusDrift      Kind = "census_drift"
+	KindBindingDangling  Kind = "iam_binding_dangling"
 	KindLogCeilingShort  Kind = "log_ceiling_short"
 )
 
@@ -249,6 +250,29 @@ type Reading struct {
 	// LinearizableReads and LinearizableReadsExpected are the observed and
 	// designed-for daily read rates.
 	LinearizableReads, LinearizableReadsExpected int
+
+	// DanglingBindings is how many people this node's directory holds bound
+	// to a seat its org chart does not hold as a human one, and
+	// DanglingBindingFor how long the OLDEST of them has persisted, with
+	// DanglingBindingSeat the seat it names — the half of the detail an
+	// operator acts on.
+	//
+	// A DURATION THIS NODE OBSERVED, NOT ONE A ROW STATES. Nothing records
+	// when a binding began to dangle: the residue is the product of two
+	// logs, and the moment it arose is the moment THIS node applied the
+	// later of a bind and a seat's removal, which no record carries. So
+	// the age is how long this node's own evaluations have kept finding
+	// the residue, from the first that found it to the latest — never a
+	// persistence nobody saw.
+	//
+	// It is what the stall grace is compared against, and that is the
+	// point of carrying a duration rather than a count: a bind and a
+	// removal racing, or a hire this node's chart applier has not reached
+	// yet, is a residue for seconds, and alarming on its first sighting
+	// would page somebody for a state that was already clearing.
+	DanglingBindings    int
+	DanglingBindingFor  time.Duration
+	DanglingBindingSeat string
 
 	// LogBytesPerDay is what one log took in over the trailing day,
 	// LogMaxBytes the ceiling its broker enforces and ReplayWindow the
@@ -585,6 +609,34 @@ var table = []rule{
 		remedy: "Re-derive the log's ceiling and the trim's cadence from the real " +
 			"rate. See `stream.tracker_retention` in " +
 			"docs/getting-started/configuration.md.",
+	},
+	{
+		// A LEGAL RESIDUE, NAMED. The binding lives on the identity log
+		// and the seat on the chart's, and nothing orders the two: a
+		// bind and a seat's removal each pass their own decide and both
+		// land, and a node can apply a bind before the hire it names.
+		// Neither is corruption, and each is repaired by one record —
+		// but a person in either state is refused or held off on every
+		// request, so it is worth a page once it has outlived the
+		// race that makes it.
+		//
+		// AT THE STALL GRACE (ADR-0015), because that is the number that
+		// already separates a node catching up from one that has
+		// stopped: a residue that has persisted past it is not a hire
+		// in flight.
+		kind: KindBindingDangling,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d person(s) are bound to a seat this node's "+
+					"org chart does not hold as a human seat; the oldest, on "+
+					"%q, has been for %s", r.DanglingBindings,
+					r.DanglingBindingSeat, round(r.DanglingBindingFor)),
+				r.DanglingBindings > 0 && r.DanglingBindingFor > StallGrace
+		},
+		remedy: "Run `crewlet iam check`, which names who and why. A seat that " +
+			"was removed or is not a human seat needs its person unbound " +
+			"(`crewlet iam unbind`) or bound to another (`crewlet iam bind`) — " +
+			"one record either way. A seat this node's chart has not reached " +
+			"yet is its chart applier: read `apply_lag` first.",
 	},
 }
 

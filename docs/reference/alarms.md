@@ -36,6 +36,7 @@ below.
 | `wal_large` | The write-ahead log has grown past a gibibyte, which means a checkpoint is not happening. | A checkpoint is not happening, which usually means a reader is holding a snapshot open. It has no other symptom until the volume fills. |
 | `pool_starved` | Callers are queuing for a database connection before their query starts. | Raise `store.max_open_conns`, or find the caller holding one. Every read on this node is queuing before it starts. |
 | `census_drift` | This company is doing more than twice the reads its log was sized for, so every sizing decision under it is stale. | Re-derive the log's ceiling and the trim's cadence from the real rate. See `stream.tracker_retention` in docs/getting-started/configuration.md. |
+| `iam_binding_dangling` | A person has been bound for longer than a minute to a seat this node's org chart does not hold as a human seat — removed, turned into an agent seat, or not applied here yet — so every request they make is refused or held off. | Run `crewlet iam check`, which names who and why. A seat that was removed or is not a human seat needs its person unbound (`crewlet iam unbind`) or bound to another (`crewlet iam bind`) — one record either way. A seat this node's chart has not reached yet is its chart applier: read `apply_lag` first. |
 
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already

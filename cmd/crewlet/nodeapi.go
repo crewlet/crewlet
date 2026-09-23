@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -17,16 +16,15 @@ import (
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/iamapi"
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Finding the running node, and authenticating to it.
@@ -354,8 +352,8 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 		// declared grants against: it is applied at decision time and
 		// never written, so a fleet mid-rollout legally disagrees and
 		// nothing else would say so.
-		Ceiling: boot.API.Auth.MaxGrants,
-		Seats:   seatExists(e),
+		Ceiling:  boot.API.Auth.MaxGrants,
+		Bindings: danglingBindings(e),
 		// What an administrator did — a token minted or revoked, a
 		// session ended, a person removed — on the node's audit feed.
 		Audit: e.AuthEvents(),
@@ -389,38 +387,29 @@ func (b bootstrapMinter) MintCode(ctx context.Context) (string, error) {
 	return b.auth.ReissueBootstrapCode(ctx, b.node)
 }
 
-// seatExists reports whether a seat is one this node's org chart holds, or
-// nil on a node that cannot tell.
+// danglingBindings is the dangling-binding arm of the directory report, or nil
+// where this node cannot run it.
 //
-// THE MIRROR OF [seatHeld], one estate the other way round, and the nil is
-// the same third value: a node running no chart domain has an empty copy of
-// it, so asking would report EVERY bound person as dangling.
-func seatExists(e *engine.Engine) iamapi.Seats {
-	reader := e.Chart()
-	if reader == nil {
+// THE ENGINE'S RULE, not one written here: [engine.Engine.DanglingBinding] is
+// the request path's own seat table applied to a person's row, and the
+// `iam_binding_dangling` alarm asks the same function — so the report and the
+// alarm cannot disagree about which binding dangles. The seam it replaced
+// asked only whether the chart held a row by that handle, which is how a
+// person bound to an AGENT seat went unreported while every request they made
+// was refused.
+//
+// NIL ON A NODE RUNNING NO CHART DOMAIN, which is the same third value
+// [seatHeld] answers with: its copy of the chart is legitimately empty, so the
+// arm is skipped rather than asked.
+func danglingBindings(e *engine.Engine) iamapi.Bindings {
+	if e.Chart() == nil {
 		return nil
 	}
-	return func(handle string) bool {
-		ctx, cancel := context.WithTimeout(context.Background(), seatProbeBudget)
-		defer cancel()
-		_, err := reader.Seat(ctx, handle,
-			statelog.Freshness{Level: statelog.ReadStale})
-		// AN UNREADABLE CHART READS AS PRESENT, which is the direction
-		// that does not raise a false alarm: reporting somebody's
-		// binding as dangling because a read failed would send an
-		// administrator to unbind a person whose seat is perfectly
-		// there.
-		return err == nil || !errors.Is(err, chart.ErrNotFound)
+	return func(ctx context.Context, row iamdomain.PersonRow) (bool, string, error) {
+		residue, dangling, err := e.DanglingBinding(ctx, row)
+		return dangling, residue.Detail, err
 	}
 }
-
-// seatProbeBudget bounds one seat lookup inside the report.
-//
-// TWO SECONDS, and it is a per-ROW budget on a walk that may cover the whole
-// directory — so the number is what one local SQL read on a busy node costs
-// at its worst rather than what a network call would. A probe that cannot
-// answer inside it reads as present, which is the arm above.
-const seatProbeBudget = 2 * time.Second
 
 // openBootstrap writes this node's one-time founder code when the company has
 // nobody in it.

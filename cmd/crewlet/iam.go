@@ -609,6 +609,15 @@ func (p *iamPrinter) check(answer map[string]any, err error) error {
 		return p.dump(answer)
 	}
 	rows, _ := answer["findings"].([]any)
+	// A BINDING THE NODE COULD NOT JUDGE IS SAID FIRST, because it
+	// qualifies everything below it: "nothing to report" from a node whose
+	// chart applier has stalled is not a directory with no dangling
+	// binding, it is one nobody could check.
+	if unchecked, _ := answer["bindings_unchecked"].(float64); unchecked > 0 {
+		fmt.Fprintf(p.w, "%d seat binding(s) could not be checked: this "+
+			"node's org chart could not say whether their seats exist — ask "+
+			"a node whose chart applier is current\n", int(unchecked))
+	}
 	if len(rows) == 0 {
 		fmt.Fprintf(p.w, "nothing to report, as of %s\n",
 			str(answer["position"]))

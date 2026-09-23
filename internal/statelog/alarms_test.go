@@ -138,6 +138,14 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			},
 			"holds 81h55m",
 		},
+		"a binding that has dangled past the stall grace": {
+			statelog.KindBindingDangling,
+			statelog.Reading{
+				DanglingBindings: 2, DanglingBindingFor: 5 * time.Minute,
+				DanglingBindingSeat: "platform-lead",
+			},
+			`"platform-lead"`,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := statelog.Evaluate(tc.reading)
@@ -256,6 +264,44 @@ func TestANodeThatHasNeverMeasuredItsRateDoesNotAlarm(t *testing.T) {
 	}
 	if got := statelog.Evaluate(unread); len(got) != 0 {
 		t.Errorf("a measured rate against an unread ceiling raised %v", kindsOf(got))
+	}
+}
+
+// A DANGLING BINDING YOUNGER THAN THE STALL GRACE DOES NOT FIRE.
+//
+// The residue is legal and it is usually brief: a bind and a seat's removal
+// racing on two logs, or a hire this node's chart applier has not reached
+// yet, is a dangling binding for seconds and then is not. Alarming on its
+// first sighting would page somebody for a state that was already clearing —
+// so the rule fires at the grace that already separates a node catching up
+// from one that has stopped (ADR-0015), and not a second before.
+func TestADanglingBindingYoungerThanTheGraceDoesNotFire(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		reading statelog.Reading
+		want    bool
+	}{
+		"just seen": {statelog.Reading{
+			DanglingBindings: 1, DanglingBindingSeat: "ops-lead"}, false},
+		"half the grace": {statelog.Reading{DanglingBindings: 1,
+			DanglingBindingFor: statelog.StallGrace / 2, DanglingBindingSeat: "ops-lead"}, false},
+		"exactly the grace": {statelog.Reading{DanglingBindings: 1,
+			DanglingBindingFor: statelog.StallGrace, DanglingBindingSeat: "ops-lead"}, false},
+		"a second past it": {statelog.Reading{DanglingBindings: 1,
+			DanglingBindingFor:  statelog.StallGrace + time.Second,
+			DanglingBindingSeat: "ops-lead"}, true},
+		// A DURATION WITH NOBODY BEHIND IT IS NOT A RESIDUE: the count
+		// is what says one exists, so an age left over from a residue
+		// that cleared cannot fire on its own.
+		"an age with nobody dangling": {statelog.Reading{
+			DanglingBindingFor: time.Hour}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, fired := find(statelog.Evaluate(tc.reading), statelog.KindBindingDangling)
+			if fired != tc.want {
+				t.Errorf("fired = %v, want %v", fired, tc.want)
+			}
+		})
 	}
 }
 

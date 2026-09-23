@@ -141,6 +141,11 @@ type retention struct {
 	// Guarded by mu, for the coverage cache's reason. See lograte.go.
 	rates map[string]*uint64
 
+	// bindings follows the seat bindings this node's chart does not hold,
+	// for `iam_binding_dangling`. Nil on a node that runs no identity
+	// domain. See bindings.go.
+	bindings *bindingWatch
+
 	stop context.CancelFunc
 	done chan struct{}
 }
@@ -174,6 +179,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		alarms:      statelog.NewTracker(e.metrics, nil),
 		coverage:    e.vectorCoverage,
 		pooled:      map[string]poolCounters{},
+		bindings:    newBindingWatch(e),
 		done:        make(chan struct{}),
 	}
 	// DETACHED from the caller's context, for the reason every other
@@ -277,17 +283,21 @@ func (r *retention) tick(ctx context.Context) {
 }
 
 // evaluate observes this node's alarms and records what one tick can measure
-// about its own hardware, its vector coverage and its logs.
+// about its own hardware, its vector coverage, its logs and its directory.
 //
 // THE MEASUREMENT COMES FIRST, because the reading the table is evaluated
 // against reads these back: a tick that observed before it measured would
 // evaluate the previous tick's disk against this tick's log. The vector
-// coverage and the logs' intake are measured HERE and nowhere else — each is
-// a scan a report assembled per dashboard poll must not repeat.
+// coverage, the logs' intake and the directory's dangling bindings are
+// measured HERE and nowhere else — each is a scan a report assembled per
+// dashboard poll must not repeat, and the binding clock's whole meaning is an
+// age between walks at a regular cadence rather than one a poll decides.
 func (r *retention) evaluate(ctx context.Context) {
 	r.capacity(ctx)
 	r.measureCoverage(ctx)
-	r.measureRates(ctx, time.Now().UTC())
+	now := time.Now().UTC()
+	r.measureRates(ctx, now)
+	r.bindings.observe(ctx, now)
 	if r.alarms == nil {
 		return
 	}

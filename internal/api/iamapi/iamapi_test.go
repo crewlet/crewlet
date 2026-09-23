@@ -69,8 +69,13 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 		Opener:       fakeOpener{},
 		ExternalBase: "https://crewlet.example.com",
 		Ceiling:      iam.AllGrants,
-		Seats:        func(handle string) bool { return handle == "founder" },
-		Now:          func() time.Time { return at },
+		// EVERY BINDING HOLDS unless a case says otherwise: the rig's
+		// administrator is bound to "founder", and a report that found
+		// her dangling would be a finding no case asked for.
+		Bindings: func(context.Context, iamdomain.PersonRow) (bool, string, error) {
+			return false, "", nil
+		},
+		Now: func() time.Time { return at },
 	}
 	for _, apply := range options {
 		apply(&opts)
@@ -691,27 +696,78 @@ func TestTheReportNamesACompanyWithNoAdministrator(t *testing.T) {
 	}
 }
 
-// AND A NODE WITH NO CHART SKIPS THE DANGLING ARM rather than reporting every
-// bound person.
-func TestANodeWithNoChartReportsNoDanglingBinding(t *testing.T) {
+// THE DANGLING ARM ASKS THE RULE AND REPORTS ITS SENTENCE, and a node that
+// cannot ask skips the arm rather than reporting every bound person.
+//
+// The rule is the engine's — the request path's own seat table — so what this
+// asserts is the surface's half: only a BOUND person is asked about, a
+// dangling answer becomes a finding carrying the rule's own detail rather than
+// a sentence written here, and a node with no seam reports nothing.
+func TestTheDanglingArmReportsWhatTheRuleSays(t *testing.T) {
 	t.Parallel()
-	r := newRig(t, func(o *iamapi.Options) { o.Seats = nil })
+	r := newRig(t, func(o *iamapi.Options) { o.Bindings = nil })
 	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
 	if got.status != http.StatusOK {
 		t.Fatalf("status %d (body %v)", got.status, got.body)
 	}
 	if hasFinding(got.body, string(iamapi.KindDanglingBinding)) {
-		t.Errorf("a node that cannot read the chart reported a dangling "+
-			"binding: %v", got.body)
+		t.Errorf("a node that cannot ask reported a dangling binding: %v", got.body)
 	}
-	// AND THE CONTROL: a node that CAN read it reports the one that is
-	// genuinely dangling.
+
+	// AND THE CONTROL: a node that CAN ask reports the one the rule
+	// calls dangling, in the rule's own words, and asks about nobody the
+	// directory does not bind.
+	var asked []string
+	const why = `seat "founder" is a "agent" seat; unbind them, or bind them to another seat`
 	with := newRig(t, func(o *iamapi.Options) {
-		o.Seats = func(string) bool { return false }
+		o.Bindings = func(_ context.Context, row iamdomain.PersonRow) (bool, string, error) {
+			asked = append(asked, row.ID)
+			return true, why, nil
+		}
 	})
 	got = with.as(administrator(), http.MethodGet, "/iam/check", nil)
-	if !hasFinding(got.body, string(iamapi.KindDanglingBinding)) {
-		t.Errorf("a node that can read the chart reported nothing: %v", got.body)
+	finding := findingOf(got.body, string(iamapi.KindDanglingBinding))
+	if finding == nil {
+		t.Fatalf("a node that can read the chart reported nothing: %v", got.body)
+	}
+	if finding["detail"] != why || finding["seat"] != "founder" {
+		t.Errorf("the finding reads %v, want the rule's own sentence about "+
+			"\"founder\"", finding)
+	}
+	if !slices.Equal(asked, []string{alice.String()}) {
+		t.Errorf("the rule was asked about %v, want only the one bound person", asked)
+	}
+}
+
+// A BINDING THE CHART CANNOT JUDGE IS COUNTED, NEVER REPORTED AND NEVER HIDDEN.
+//
+// A node whose chart applier is past the stall grace cannot say whether a seat
+// exists. Reporting the binding as dangling would send an administrator to
+// unbind somebody whose seat is there; saying nothing at all would print
+// "nothing to report" during exactly the stall that hides a real residue. So
+// the answer carries how many it could not check.
+func TestABindingTheChartCannotJudgeIsCountedAsUnchecked(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *iamapi.Options) {
+		o.Bindings = func(context.Context, iamdomain.PersonRow) (bool, string, error) {
+			return false, "", errors.New("the chart applier is 4m0s behind")
+		}
+	})
+	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if hasFinding(got.body, string(iamapi.KindDanglingBinding)) {
+		t.Errorf("a binding nobody could judge was reported dangling: %v", got.body)
+	}
+	if n, _ := got.body["bindings_unchecked"].(float64); n != 1 {
+		t.Errorf("bindings_unchecked = %v, want 1 — the one bound person whose "+
+			"seat the chart could not answer for", got.body["bindings_unchecked"])
+	}
+
+	// AND THE CONTROL: a chart that answers leaves nothing unchecked.
+	fine := newRig(t)
+	got = fine.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if n, present := got.body["bindings_unchecked"].(float64); !present || n != 0 {
+		t.Errorf("bindings_unchecked = %v on a node that checked everything",
+			got.body["bindings_unchecked"])
 	}
 }
 
@@ -730,14 +786,19 @@ func TestTheReportNamesAGrantTheCeilingClamps(t *testing.T) {
 }
 
 func hasFinding(body map[string]any, kind string) bool {
+	return findingOf(body, kind) != nil
+}
+
+// findingOf is the first finding of a kind, or nil.
+func findingOf(body map[string]any, kind string) map[string]any {
 	rows, _ := body["findings"].([]any)
 	for _, raw := range rows {
 		row, _ := raw.(map[string]any)
 		if held, _ := row["kind"].(string); held == kind {
-			return true
+			return row
 		}
 	}
-	return false
+	return nil
 }
 
 // --- the table ----------------------------------------------------------- //

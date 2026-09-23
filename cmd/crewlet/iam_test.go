@@ -118,3 +118,34 @@ func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
 		t.Error("`boss` was accepted as a colleague level")
 	}
 }
+
+// A DIRECTORY NOBODY COULD CHECK IS NOT A CLEAN ONE.
+//
+// A node whose chart applier has stalled cannot say whether a bound person's
+// seat exists, and the report counts those rather than guessing. Printing
+// "nothing to report" over that count would tell an operator the directory is
+// clean during exactly the stall that hides a dangling binding.
+func TestAnUncheckedBindingIsSaidBeforeNothingToReport(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	p := &iamPrinter{w: &out}
+	if err := p.check(map[string]any{
+		"findings": []any{}, "position": "1:40", "bindings_unchecked": float64(2),
+	}, nil); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !strings.Contains(out.String(), "2 seat binding(s) could not be checked") {
+		t.Errorf("the unchecked bindings went unsaid:\n%s", out.String())
+	}
+
+	// AND THE CONTROL: a node that checked everything prints no caveat.
+	out.Reset()
+	if err := p.check(map[string]any{
+		"findings": []any{}, "position": "1:40", "bindings_unchecked": float64(0),
+	}, nil); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if strings.Contains(out.String(), "could not be checked") {
+		t.Errorf("a fully checked directory carried the caveat:\n%s", out.String())
+	}
+}

@@ -516,7 +516,7 @@ machine token with `crewlet iam token`.
 | `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live |
 | `invalidate-all` | Invalidate every session in the company. The restore runbook's last step |
 | `bootstrap-code` | Re-issue the one-time founder code. Withdraws every outstanding one first, so exactly one is live |
-| `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings, grants this node's ceiling clamps |
+| `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat removed, tombstoned, turned into an agent seat, or not yet applied on this node), grants this node's ceiling clamps. A binding this node's chart cannot judge — its applier past the 60-second stall grace — is counted and said first rather than reported either way |
 | `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-limit` |
 
 ### Flags
