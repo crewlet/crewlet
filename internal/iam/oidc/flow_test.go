@@ -274,6 +274,46 @@ func TestTheAuthorizationRequestUsesS256AndNeverPlain(t *testing.T) {
 	}
 }
 
+// THE AUTHORIZATION REQUEST ASKS FOR THE CONFIGURED SCOPES, and for the
+// engine's own set when none are configured.
+//
+// It used to send the package default whatever `api.auth.oidc.scopes` said,
+// so a deployment that narrowed the list asked for what it had removed. The
+// unset case is the one the deactivation probe rests on — it must carry
+// `offline_access`, or no session ever has a refresh token to ask with — and
+// `openid` is added to a list that forgot it rather than sent without it.
+func TestTheAuthorizationRequestAsksForTheConfiguredScopes(t *testing.T) {
+	t.Parallel()
+	idp := newIssuer(t)
+	for _, tc := range []struct {
+		name       string
+		configured []string
+		want       string
+	}{
+		{"unset takes the engine's set", nil, "openid profile email offline_access"},
+		{"a list replaces it", []string{"openid", "email"}, "openid email"},
+		{"openid is added", []string{"email", "offline_access"},
+			"openid email offline_access"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := idp.config()
+			config.Scopes = tc.configured
+			redirect, _, err := config.Start(testCipher(t),
+				idp.Server.URL+"/authorize", "", at)
+			if err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			parsed, err := url.Parse(redirect)
+			if err != nil {
+				t.Fatalf("redirect: %v", err)
+			}
+			if got := parsed.Query().Get("scope"); got != tc.want {
+				t.Errorf("the request asked for %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // A CODE REDEEMED WITHOUT THE VERIFIER IS REFUSED BY THE PROVIDER.
 //
 // PKCE, end to end: the provider hashed the challenge at the authorization

@@ -105,7 +105,7 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint, returnTo str
 		"response_type": "code",
 		"client_id":     c.ClientID,
 		"redirect_uri":  c.RedirectURI,
-		"scope":         strings.Join(Scopes, " "),
+		"scope":         strings.Join(c.requested(), " "),
 		"state":         flight.State,
 		"nonce":         flight.Nonce,
 		// S256 AND NEVER `plain`. RFC 7636 permits sending the verifier

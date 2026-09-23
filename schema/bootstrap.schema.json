@@ -162,7 +162,7 @@
           "type": "string"
         },
         "scopes": {
-          "description": "Requested scopes. openid is always included.",
+          "description": "Requested scopes. Unset asks for openid, profile, email and offline_access; a list replaces that set, and openid is always included.",
           "items": {
             "type": "string"
           },

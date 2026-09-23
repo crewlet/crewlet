@@ -50,6 +50,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -162,6 +163,27 @@ type Config struct {
 	// DeactivationProbe is how often a live session is checked against
 	// the provider. Zero takes [DefaultDeactivationProbe].
 	DeactivationProbe time.Duration
+
+	// Scopes is what the authorization request asks for. Empty takes
+	// [Scopes], the engine's own set; `openid` is added when a list omits
+	// it, because a request without it is not an OpenID Connect request.
+	//
+	// IT USED TO BE IGNORED: the request always sent [Scopes] whatever
+	// `api.auth.oidc.scopes` said, so a deployment that narrowed the list
+	// asked for what it had removed, and validation warned about a missing
+	// `offline_access` the request was in fact sending.
+	Scopes []string
+}
+
+// requested is the scope list one authorization request carries.
+func (c Config) requested() []string {
+	if len(c.Scopes) == 0 {
+		return Scopes
+	}
+	if slices.Contains(c.Scopes, "openid") {
+		return c.Scopes
+	}
+	return append([]string{"openid"}, c.Scopes...)
 }
 
 // Validate reports what is wrong with a provider configuration, naming the

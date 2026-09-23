@@ -649,7 +649,9 @@ service had an outage.
 
 Without `offline_access` there is no refresh token and therefore no probe, and
 validation says so rather than leaving you believing an off-boarding is felt
-sooner than it is.
+sooner than it is. An unset `api.auth.oidc.scopes` asks for `openid`,
+`profile`, `email` and `offline_access`; a list you write replaces that set
+whole, so a list without `offline_access` is the one that warns.
 
 ---
 

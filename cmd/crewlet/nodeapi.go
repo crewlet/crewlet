@@ -287,6 +287,11 @@ func signInProvider(boot *config.Bootstrap) *oidc.Provider {
 		ClientSecret: block.ClientSecret,
 		RedirectURI:  boot.API.ExternalBase() + auth.PathAuthOIDCCallback,
 		RequireACR:   block.RequireACR,
+		// BOTH WERE DROPPED HERE, so the request sent the package's
+		// scopes whatever the file said and the probe ran at the
+		// package's hour whatever `deactivation_probe` said.
+		Scopes:            block.RequestedScopes(),
+		DeactivationProbe: block.DeactivationProbe(),
 	}, nil, nil)
 }
 

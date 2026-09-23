@@ -779,7 +779,9 @@ api:
     #   client_id: "0oa1b2c3d4"
     #   client_secret: "${CREWLET_OIDC_CLIENT_SECRET}"    # an env var, never
     #                                                     #   a store secret
-    #   scopes: [openid, email, profile, groups, offline_access]
+    #   scopes: [openid, email, profile, groups, offline_access]  # unset asks
+    #                             #   for openid, profile, email and offline_access;
+    #                             #   a list REPLACES that set, openid always added
     #   groups_claim: groups
     #   deactivation_probe: 1h    # 5m..24h — the only thing that notices a
     #                             #   person disabled at the provider

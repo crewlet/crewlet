@@ -806,7 +806,11 @@ type APIOIDC struct {
 	// Scopes are what the authorization request asks for. `openid` is
 	// mandatory and is added if it is missing rather than refused, because
 	// a list that forgets it is a list nobody meant to break.
-	Scopes []string `yaml:"scopes,omitempty" json:"scopes,omitempty" desc:"Requested scopes. openid is always included."`
+	//
+	// UNSET TAKES THE ENGINE'S OWN SET — openid, profile, email and
+	// offline_access — which is the one that keeps a refresh token for the
+	// deactivation probe. A list written here REPLACES it, whole.
+	Scopes []string `yaml:"scopes,omitempty" json:"scopes,omitempty" desc:"Requested scopes. Unset asks for openid, profile, email and offline_access; a list replaces that set, and openid is always included."`
 
 	// GroupsClaim is the id-token claim carrying the caller's groups.
 	// Empty means this deployment maps no groups, which is a real posture:
@@ -878,9 +882,12 @@ const ScopeOpenID = "openid"
 // what the deactivation probe needs to exist at all.
 const ScopeOfflineAccess = "offline_access"
 
-// RequestedScopes are the scopes with `openid` guaranteed present.
+// RequestedScopes are the scopes with `openid` guaranteed present, or nil when
+// the list is unset — which asks for the engine's own set rather than for
+// `openid` alone, and is why nil and an empty answer are not the same thing
+// here.
 func (o *APIOIDC) RequestedScopes() []string {
-	if o == nil {
+	if o == nil || len(o.Scopes) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(o.Scopes)+1)
@@ -1367,7 +1374,11 @@ func (a API) warnings() []Warning {
 		// the probe is a refresh-token exchange — so a scopes list
 		// without `offline_access` silently has no offboarding horizon
 		// at all.
-		if !slices.Contains(oidc.Scopes, ScopeOfflineAccess) {
+		//
+		// ONLY A LIST SOMEBODY WROTE: an unset list asks for the engine's
+		// own set, which carries `offline_access`, and warning about it
+		// told every default deployment that it had no probe.
+		if len(oidc.Scopes) > 0 && !slices.Contains(oidc.Scopes, ScopeOfflineAccess) {
 			out = append(out, advisory(field("api.auth.oidc.scopes"),
 				"`"+ScopeOfflineAccess+"` is not requested, so this deployment "+
 					"holds no refresh token and the deactivation probe has "+

@@ -533,6 +533,32 @@ func TestTheOpenIDScopeIsAlwaysRequested(t *testing.T) {
 	if got := o.RequestedScopes(); len(got) != 2 {
 		t.Errorf("scopes = %v: openid was added to a list that already had it", got)
 	}
+	// UNSET IS NOT `openid` ALONE: it asks for the engine's own set, which
+	// is the one carrying offline_access — so it must reach the flow as
+	// nothing rather than as a one-element list that drops the refresh
+	// token the deactivation probe asks with.
+	if got := (&APIOIDC{}).RequestedScopes(); got != nil {
+		t.Errorf("an unset list requests %v, want nil so the engine's own "+
+			"set applies", got)
+	}
+}
+
+// AN UNSET SCOPE LIST WARNS ABOUT NOTHING, because it asks for the engine's own
+// set and that set carries offline_access. The warning is for a list somebody
+// WROTE without it; firing on the default told every deployment that its
+// deactivation probe had nothing to exchange when it had.
+func TestAnUnsetScopeListIsNotWarnedAboutAsMissingARefreshToken(t *testing.T) {
+	t.Parallel()
+	b := serving()
+	b.API.Auth.Backend = AuthBackendOIDC
+	b.API.Auth.OIDC = &APIOIDC{
+		Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
+	}
+	for _, w := range b.Warnings() {
+		if strings.Contains(w.Path, "oidc.scopes") {
+			t.Errorf("an unset scope list warned: %s", w.Message)
+		}
+	}
 }
 
 // --- the horizons -------------------------------------------------------- //
