@@ -39,6 +39,11 @@ type roundTrip struct {
 	metrics  *metrics.Recorder
 	consumed uint64
 
+	// claims is the coordination the writer takes a walking sequence's
+	// claim from, so a case can hold one as ANOTHER node — a walk that is
+	// running somewhere else — and see what the duty makes of it.
+	claims *memory.Backend
+
 	// at is the writer's AUTHORED clock, which a case moves when it is
 	// about the order of instants somebody typed. It defaults to
 	// `wednesday` so every case that is not about time sees one instant.
@@ -121,7 +126,8 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 	}
 	// THE HARNESS EXISTS BEFORE THE WRITER, because the writer's authored
 	// clock reads a field on it that a case may move.
-	r := &roundTrip{t: t, broker: q, db: db, log: log, at: wednesday}
+	r := &roundTrip{t: t, broker: q, db: db, log: log, at: wednesday,
+		claims: memory.New()}
 
 	fence := tracker.NewFence(db, nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
@@ -166,7 +172,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 		// subtree walk the trash shares — with no test at all. In-memory
 		// is the whole of what a single-node harness needs: the claim is
 		// there to exclude a SECOND node.
-		Claims: memory.New(),
+		Claims: r.claims,
 		Actor:  "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})

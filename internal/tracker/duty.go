@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -258,11 +259,18 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 }
 
 // pendingMerges reads whether any task is mid-merge.
+//
+// A REMOVED ONE IS NOT PENDING. A tombstoned task is frozen — its close is
+// refused like every other write to it — so nothing can finish its merge
+// until somebody restores it, and a gate that counted it would run this job
+// against a task it cannot touch on every tick until then. The restore brings
+// it back into the selection, and the merge is finished then.
 func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 	var found int
 	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM tracker_tasks WHERE merging = 1)`).
+		return tx.QueryRowContext(ctx, `
+			SELECT EXISTS (SELECT 1 FROM tracker_tasks
+			               WHERE merging = 1 AND removed_at IS NULL)`).
 			Scan(&found)
 	})
 	if err != nil {
@@ -291,11 +299,37 @@ func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 // tell that from a walk that died before its first child — which is why the
 // mark carries the intent (see [Task.MergeReparent]) rather than the duty
 // guessing at it.
+//
+// # Only a walk nobody holds
+//
+// A task carries the marker for the whole of a LIVE merge too, from its first
+// append to its last, so the marker alone says a walk is unfinished and never
+// that it was abandoned. What says that is the walk's own claim: its holder
+// takes merge/<task> before the mark and heartbeats it until the close, so a
+// claim this duty can take is one whose holder released it or stopped
+// renewing it for a whole [ClaimTTL]. The duty therefore finishes a merge
+// only UNDER that claim, and a claim somebody holds — or one whose state
+// coordination cannot say — is a walk left alone this tick. Selecting on the
+// marker alone ran the rest of every merge that happened to be mid-walk when a
+// tick fired, beside its live holder: every child it reached re-parented a
+// second time under the duty's operation and the duplicate closed twice — a
+// history row for each that describes nothing, attributed to a repair of a
+// walk that was never abandoned.
+//
+// Under the claim it reads the task AGAIN, since the holder may have finished
+// between the selection and the claim, and a merge whose marker is down is
+// done.
+//
+// ONE MERGE'S FAILURE IS NOT THE TICK'S, for the reason [duty.repairOneSided]
+// gives about its edges: the merges are independent, and stopping at the
+// first that failed left every merge after it in id order unfinished for as
+// long as that one kept failing.
 func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error) {
 	var stuck []string
 	if err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT id FROM tracker_tasks WHERE merging = 1 ORDER BY id LIMIT ?`,
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id FROM tracker_tasks
+			WHERE merging = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
 			WalkBatch)
 		if err != nil {
 			return fmt.Errorf("tracker: read the abandoned merges: %w", err)
@@ -315,55 +349,93 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 
 	var finished int64
 	for _, id := range stuck {
-		walk, err := d.abandonedMerge(ctx, id)
+		claim, err := d.deps.Writer.hold(ctx, mergeClaim(id))
 		if err != nil {
-			return finished, err
-		}
-		opID := d.opID("merge", id, now)
-		done := false
-		if walk.into == "" {
-			// MID-MERGE WITH NO TARGET is a marker whose relation never
-			// landed. The honest repair is to clear the marker and
-			// NOTHING ELSE: the merge did not happen, so cancelling
-			// the task would close an item nobody merged — and leaving
-			// the flag set would make this tick run for ever against a
-			// task nothing is merging.
-			d.deps.Logger.WarnContext(ctx, "tracker_merge_marker_without_target",
-				"task", id, "detail", "the marker is cleared and the task left "+
-					"open; the merge it names never linked anything")
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if _, err := d.deps.Writer.UpdateTask(ctx, opID, walk.task,
-				walk.project, NoIfMatch, TaskPatch{Merging: &done},
-				ChangeFields, nil); err != nil {
-				return finished, err
-			}
-			finished++
+			d.walkHeld(ctx, "tracker_merge_walk_held", id, err)
 			continue
 		}
-		var moved int
-		if walk.reparent {
-			if moved, err = d.deps.Writer.reparentOnto(ctx, opID,
-				walk.task, walk.into); err != nil {
-				return finished, err
-			}
+		completed, err := d.finishMerge(ctx, id, now)
+		claim.release(ctx)
+		if err != nil {
+			d.deps.Logger.WarnContext(ctx, "tracker_merge_completion_failed",
+				"task", id, "error", err)
+			continue
 		}
-		// THE CLOSE IS THE SAME APPEND THE SEQUENCE WOULD HAVE MADE —
-		// the cancelled status and the marker together, on the
-		// duplicate's own subject. Split in two it would leave a
-		// cancelled task still marked mid-merge, which this job would
-		// then pick up again on every tick for ever.
-		cancelled := StatusCancelled
-		if _, err := d.deps.Writer.UpdateTask(ctx, stepID(opID, "close"),
-			walk.task, walk.project, NoIfMatch,
-			TaskPatch{Status: &cancelled, Merging: &done},
-			ChangeStatus, nil); err != nil {
-			return finished, err
+		if completed {
+			finished++
 		}
-		finished++
-		d.deps.Logger.InfoContext(ctx, "tracker_merge_completed",
-			"task", id, "into", walk.into, "subtasks_moved", moved)
 	}
 	return finished, nil
+}
+
+// walkHeld reports a walk the duty left alone because it could not take the
+// walk's claim.
+//
+// TWO LEVELS FOR TWO FACTS. A claim a peer holds is a walk that is running,
+// which is the ordinary case and says nothing is wrong; a claim coordination
+// could not answer for is a walk this duty cannot even see, which is worth
+// somebody's attention if it repeats.
+func (d *duty) walkHeld(ctx context.Context, event, task string, err error) {
+	if errors.Is(err, statelog.ErrUnavailable) {
+		d.deps.Logger.DebugContext(ctx, event, "task", task, "detail",
+			"its claim is held, so the walk is running")
+		return
+	}
+	d.deps.Logger.WarnContext(ctx, event, "task", task, "error", err)
+}
+
+// finishMerge completes one abandoned merge, under its claim, and reports
+// whether there was anything left to complete.
+func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool, error) {
+	walk, err := d.abandonedMerge(ctx, id)
+	switch {
+	case err != nil:
+		return false, err
+	case !walk.merging:
+		// FINISHED BETWEEN THE SELECTION AND THE CLAIM, by the holder
+		// that released it.
+		return false, nil
+	}
+	opID := d.opID("merge", id, now)
+	done := false
+	if walk.into == "" {
+		// MID-MERGE WITH NO TARGET is a marker whose relation never
+		// landed. The honest repair is to clear the marker and NOTHING
+		// ELSE: the merge did not happen, so cancelling the task would
+		// close an item nobody merged — and leaving the flag set would
+		// make this tick run for ever against a task nothing is merging.
+		d.deps.Logger.WarnContext(ctx, "tracker_merge_marker_without_target",
+			"task", id, "detail", "the marker is cleared and the task left "+
+				"open; the merge it names never linked anything")
+		if _, err = d.deps.Writer.UpdateTask(ctx, opID, walk.task,
+			walk.project, NoIfMatch, TaskPatch{Merging: &done},
+			ChangeFields, nil); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	var moved int
+	if walk.reparent {
+		if moved, err = d.deps.Writer.reparentOnto(ctx, opID,
+			walk.task, walk.into); err != nil {
+			return false, err
+		}
+	}
+	// THE CLOSE IS THE SAME APPEND THE SEQUENCE WOULD HAVE MADE — the
+	// cancelled status and the marker together, on the duplicate's own
+	// subject. Split in two it would leave a cancelled task still marked
+	// mid-merge, which this job would then pick up again on every tick for
+	// ever.
+	cancelled := StatusCancelled
+	if _, err = d.deps.Writer.UpdateTask(ctx, stepID(opID, "close"),
+		walk.task, walk.project, NoIfMatch,
+		TaskPatch{Status: &cancelled, Merging: &done},
+		ChangeStatus, nil); err != nil {
+		return false, err
+	}
+	d.deps.Logger.InfoContext(ctx, "tracker_merge_completed",
+		"task", id, "into", walk.into, "subtasks_moved", moved)
+	return true, nil
 }
 
 // abandonedMerge is a mid-merge task's own account of the walk that stopped:
@@ -381,6 +453,10 @@ type abandonedMerge struct {
 	// is can be moved afterwards, and one moved against an explicit
 	// `move_subtasks: false` has to be put back by hand.
 	reparent bool
+
+	// merging is whether the task still carries the marker as this read
+	// found it.
+	merging bool
 }
 
 func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, error) {
@@ -396,6 +472,7 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 		}
 		walk.task, walk.project = current.ID, current.Project
 		walk.reparent = current.MergeReparent
+		walk.merging = current.Merging
 		for _, relation := range current.Relations {
 			if relation.Kind == RelationDuplicates {
 				walk.into = relation.Other

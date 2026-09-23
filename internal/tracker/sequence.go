@@ -69,16 +69,19 @@ const (
 	// ClaimTTL is how long the durable claim a walking sequence holds
 	// survives unrenewed. FOUR HEARTBEATS, so three consecutive misses are
 	// survivable and the fourth hands the walk to the duty.
+	//
+	// THE LEASE'S OWN EXPIRY IS THE ONLY STALENESS THERE IS. The duty
+	// finishes a walk only under the walk's claim, so "abandoned" means
+	// "a claim the duty could take", and nothing else decides it: a second
+	// figure — the thirty-second ClaimStale this block used to declare,
+	// which nothing ever read — would be a second opinion about one event,
+	// and a coordination lease cannot be taken before it expires whatever
+	// that figure said.
 	ClaimTTL = 60 * time.Second
 
 	// ClaimHeartbeat is how often the holder renews that claim — a quarter
 	// of [ClaimTTL], which is the arithmetic its own comment rests on.
 	ClaimHeartbeat = 15 * time.Second
-
-	// ClaimStale is when a duty may complete somebody else's abandoned
-	// walk: half the TTL past its last heartbeat, which is the point at
-	// which a holder that is still alive would have renewed twice.
-	ClaimStale = 30 * time.Second
 )
 
 // Claims is the coordination a multi-append sequence takes its claim from.
@@ -1372,10 +1375,13 @@ func mergeTags(set TagSet, incoming []Tag) (TagSet, bool) {
 //	child onto Into → A clearing the marker and writing the cancelled
 //	status → release.
 //
-// CRASH RESIDUE: children partly re-parented. REPAIRER: the tracker duty, and
-// it is idempotent for the same reason the move's walk is — a child already
-// carrying the new parent is not selected, so a completion writes only what is
-// left.
+// CRASH RESIDUE: children partly re-parented. REPAIRER: the tracker duty, once
+// the claim this sequence heartbeats has lapsed — it finishes a walk only
+// under that claim, never beside a live holder — and it is idempotent for the
+// same reason the move's walk is: a child already carrying the new parent is
+// not selected, so a completion writes only what is left. A child in the
+// TRASH is not selected either, and stays under the duplicate: it is frozen,
+// and a walk that tried to write it could never finish.
 //
 // THE MARKER IS CLEARED LAST. While it stands, the duplicate is visibly
 // mid-merge rather than silently half-merged, which is the difference between

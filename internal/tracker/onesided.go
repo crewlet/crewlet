@@ -37,12 +37,15 @@ import (
 
 // OneSidedRepairAge is how old an edge must be before the duty repairs it.
 //
-// THIRTY SECONDS, which is [ClaimStale] and the same quantity: it is how long
-// a gesture that is still running may reasonably take to reach its own last
-// step. Shorter and the duty races live writers, publishing a mirror the
-// gesture was about to publish itself — two records on one subject where one
-// would do, and a second wake for the blocker's assignee. Longer and a
-// dependency written during a node's restart sits unannounced for no reason.
+// THIRTY SECONDS: how long a gesture that is still running may reasonably take
+// to reach its own last step. An age, because a dependency gesture takes no
+// claim — unlike a move or a merge, whose duty waits for the walk's own lease
+// to lapse ([ClaimTTL]) — so how long ago the edge was authored is the only
+// thing that can say the gesture behind it is over. Shorter and the duty races
+// live writers, publishing a mirror the gesture was about to publish itself —
+// two records on one subject where one would do, and a second wake for the
+// blocker's assignee. Longer and a dependency written during a node's restart
+// sits unannounced for no reason.
 //
 // It is measured against the AUTHORED instant carried on the EDGE rather than
 // against the task's `updated_at`, because any unrelated edit resets that

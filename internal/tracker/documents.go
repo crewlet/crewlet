@@ -296,9 +296,16 @@ func readAlias(ctx context.Context, tx *sql.Tx, key string) (string, bool, error
 func readChildBatch(ctx context.Context, tx *sql.Tx, parent, after string,
 	limit int) ([]Task, error) {
 
+	// NOT A REMOVED CHILD. A tombstoned task is frozen — every write to it
+	// is refused until somebody restores it — so a walk that selected one
+	// stopped on it, and a re-run, and the duty behind both, selected it
+	// again and stopped again: a merge with one subtask in the trash could
+	// never finish. It stays under the parent it had, which is where a
+	// restore finds it.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT document, version, 0 FROM tracker_tasks
-		WHERE parent_id = ? AND id > ? ORDER BY id LIMIT ?`, parent, after, limit)
+		WHERE parent_id = ? AND id > ? AND removed_at IS NULL
+		ORDER BY id LIMIT ?`, parent, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read the children of %s: %w", parent, err)
 	}

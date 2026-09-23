@@ -158,6 +158,54 @@ func TestAMergeRefusesARemovedItemAndSaysToRestoreIt(t *testing.T) {
 	}
 }
 
+// A MERGE WITH A SUBTASK IN THE TRASH FINISHES, and leaves that subtask where
+// a restore will look for it.
+//
+// A tombstoned task refuses every write, so a walk that selected it stopped on
+// it — and its re-run, and the duty behind both, selected it again. One
+// removed subtask made a merge impossible to finish, with the duplicate left
+// open and marked for good.
+func TestAMergeWithASubtaskInTheTrashFinishes(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	// THE APPLIER RUNS, because a fold writes the duplicate's own subject
+	// twice and its close waits for its mark. See applyWhileWriting.
+	r.applyWhileWriting()
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	parent := "dup"
+	for _, id := range []string{"kid-live", "kid-trashed"} {
+		kid := newTask(id)
+		kid.Parent, kid.Depth = &parent, 1
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, kid, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.RemoveTask(t.Context(), "op-remove", "kid-trashed", "ENG",
+		false, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+
+	if _, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "dup", "keep",
+		true, nil); err != nil {
+		t.Fatalf("a merge with a subtask in the trash: %v", err)
+	}
+	r.drain()
+	if dup := r.task(t, "dup"); dup.Task.Merging ||
+		dup.Task.Status != tracker.StatusCancelled {
+		t.Errorf("the duplicate is %q, merging %v", dup.Task.Status, dup.Task.Merging)
+	}
+	if got := parentOf(r.task(t, "kid-live")); got != "keep" {
+		t.Errorf("the live subtask's parent is %q, want keep", got)
+	}
+	if got := parentOf(r.task(t, "kid-trashed")); got != "dup" {
+		t.Errorf("the removed subtask's parent is %q — a frozen task was "+
+			"written to", got)
+	}
+}
+
 // parentOf is a task's parent, or "" where it has none.
 func parentOf(detail tracker.TaskDetail) string {
 	if detail.Task.Parent == nil {
