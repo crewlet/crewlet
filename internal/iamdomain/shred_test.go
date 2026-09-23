@@ -8,8 +8,11 @@ import (
 
 	"github.com/google/uuid"
 
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE KEY DELETE IS RETRIED UNTIL IT LANDS.
@@ -349,5 +352,143 @@ func TestAnInvitationsKeyLivesExactlyAsLongAsItsRow(t *testing.T) {
 	if len(report.Collected) != 1 || report.Collected[0] != live {
 		t.Fatalf("after the sweep collected the invitation the pass collected "+
 			"%v, want its key", report.Collected)
+	}
+}
+
+// collectAfter is the key duty's destroyer with a gesture run at the one
+// instant that matters: after the census judged a key nobody's, before the
+// destroy of it lands.
+type collectAfter struct {
+	*iamdomain.Sealer
+	between func()
+}
+
+func (c *collectAfter) Collect(ctx context.Context, personID string,
+	version uint64) (bool, error) {
+
+	if c.between != nil {
+		between := c.between
+		c.between = nil
+		between()
+	}
+	return c.Sealer.Collect(ctx, personID, version)
+}
+
+// A KEY A RETRY RE-USES IS NEVER DESTROYED UNDER IT.
+//
+// A redemption names a DERIVED person, so its retry names the same one — and
+// the same key its first attempt minted, however long ago that was. Here the
+// first attempt mints the key and stops before its first claim lands (the
+// broker answers nothing for the address), so nothing owns the key and it is
+// aged by that attempt's write. Two hours later the key duty judges it
+// nobody's, and between the judgement and the destroy the retry runs to
+// completion, sealing the person's name and address under that key.
+//
+// Destroyed anyway, every value the retry sealed was unreadable from the
+// moment it was written: a person enrolled with a name nobody could read and
+// nothing reporting it. The retry TOUCHES the key it re-uses, and the destroy
+// is of the version the census judged, so the key is spared, the pass says so,
+// and the person's name opens.
+func TestAKeyARetryReusesIsNeverDestroyedUnderIt(t *testing.T) {
+	t.Parallel()
+	var broker *silentBroker
+	rig := newWriteRigWith(t, func(inner statelog.Appender) statelog.Appender {
+		broker = &silentBroker{Appender: inner, on: ".email."}
+		return broker
+	})
+	reader := rig.reader(t)
+	sealer, err := iamdomain.NewSealer(rig.keys)
+	if err != nil {
+		t.Fatalf("NewSealer: %v", err)
+	}
+	person, err := iamdomain.InvitedPersonID("018f3a9c-0000-7000-8000-0000000000a7")
+	if err != nil {
+		t.Fatalf("InvitedPersonID: %v", err)
+	}
+	redemption := iamdomain.Enrolment{
+		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Dana Reyes", Email: "dana.reyes@example.com", Login: "dana.reyes",
+		OpID: "invite:redeem:dana", Reason: "a redemption",
+	}
+
+	// THE FIRST ATTEMPT: the key is minted, the address claim goes
+	// unanswered, and nothing owns the key.
+	broker.silent.Store(true)
+	if err := rig.draining(func() error {
+		_, err := rig.writer.Enrol(t.Context(), redemption)
+		return err
+	}); err != nil {
+		t.Fatalf("the first attempt: %v", err)
+	}
+	broker.silent.Store(false)
+	name := iamdomain.PersonDEKName(person)
+	if rig.keys.value(name) == "" {
+		t.Fatal("the first attempt minted no key, so there is nothing to re-use")
+	}
+
+	// THE DUTY, two hours on, with the retry landing between its census and
+	// its destroy.
+	destroyer := &collectAfter{Sealer: sealer, between: func() {
+		if err := rig.enrol(redemption); err != nil {
+			t.Errorf("the retry: %v", err)
+		}
+	}}
+	report, err := iamdomain.ShredKeys(t.Context(), reader, rig.keys, destroyer,
+		brokerAt.Add(2*iamdomain.OrphanKeyGrace), rig.end)
+	if err != nil {
+		t.Fatalf("ShredKeys: %v", err)
+	}
+	if destroyer.between != nil {
+		t.Fatalf("the pass never tried to destroy the first attempt's key (%+v), "+
+			"so this case proves nothing about a destroy racing the retry", report)
+	}
+	if len(report.Collected) != 0 || report.Moved != 1 {
+		t.Errorf("the pass reported %+v, want the key spared as written since "+
+			"it was judged", report)
+	}
+	sealed := rig.column("SELECT name_sealed FROM iam_people WHERE id = ?", person)
+	if len(sealed) != 1 {
+		t.Fatalf("the retry enrolled nobody: %v", sealed)
+	}
+	if plain, err := sealer.Open(t.Context(), person, iamdomain.FieldName,
+		sealed[0]); err != nil || plain != "Dana Reyes" {
+		t.Fatalf("the retried redemption's name reads (%q, %v) — its key was "+
+			"destroyed under it", plain, err)
+	}
+}
+
+// A KEY A REMOVAL DESTROYED IS NEVER WRITTEN BACK BY A LATER MINT.
+//
+// A mint that finds a key keeps it and re-dates it, and a stale retry of a
+// removed person's gesture is still a mint of that person's id. Written back,
+// the destroyed key would open every copy of their name in every backup — the
+// one thing a removal promises cannot happen. The touch finds no key and the
+// mint makes a fresh one, under which the removed person's values stay sealed.
+// Over the real secret store, because the rule lives in its conditional write.
+func TestAKeyARemovalDestroyedIsNeverWrittenBackByAMint(t *testing.T) {
+	t.Parallel()
+	store := fleetsecrets.New(coordmem.NewFleet(), realCipher(t)).Estate()
+	sealer, err := iamdomain.NewSealer(store)
+	if err != nil {
+		t.Fatalf("NewSealer: %v", err)
+	}
+	ctx := t.Context()
+	id := uuid.Must(uuid.NewV7()).String()
+	if err := sealer.Mint(ctx, id, "node-a", time.Now()); err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	artefact, err := sealer.Seal(ctx, id, iamdomain.FieldName, "Sarah Chen")
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if destroyed, err := sealer.Shred(ctx, id); err != nil || !destroyed {
+		t.Fatalf("Shred = (%v, %v)", destroyed, err)
+	}
+	if err := sealer.Mint(ctx, id, "node-a", time.Now()); err != nil {
+		t.Fatalf("the stale mint: %v", err)
+	}
+	if plain, err := sealer.Open(ctx, id, iamdomain.FieldName, artefact); err == nil {
+		t.Fatalf("a removed person's name opens again (%q) after a later mint "+
+			"of their id — the destroyed key was written back", plain)
 	}
 }

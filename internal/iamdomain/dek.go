@@ -52,15 +52,38 @@ import (
 
 // Keys is the fleet secret store, as this domain uses it.
 //
-// CONSUMER-DEFINED and four methods wide, because that is what this package
-// calls: [fleetsecrets.Store] is the concrete type and it does a great deal
-// more. A seam this narrow is also what lets the suite exercise a shredded
-// key, a store that cannot be reached and a key that is not there, none of
-// which a real coordination backend makes easy to arrange.
+// CONSUMER-DEFINED and three methods wide, because that is what this package
+// calls for a value it may simply replace — a session's refresh grant, which a
+// provider's rotation overwrites: [fleetsecrets.Estate] is the concrete type
+// and it does more. A seam this narrow is also what lets the suite exercise a
+// shredded key, a store that cannot be reached and a key that is not there,
+// none of which a real coordination backend makes easy to arrange.
 type Keys interface {
 	Get(ctx context.Context, name string) (string, error)
 	Set(ctx context.Context, name, value, by, source string, now time.Time) error
 	Unset(ctx context.Context, name string) (bool, error)
+}
+
+// PersonKeys is the store as a person's key lives and dies in it: [Keys], and
+// the three writes that never act on a key they have not seen.
+//
+// A person's key is the one value here a plain put is WRONG for, three ways,
+// and each of the three writes is the answer to one:
+//
+//   - Create writes only where no key is stored, because two minters of one
+//     id — a redemption and its own retry, both naming the derived person —
+//     each seal under the key they wrote while the store keeps one of them.
+//   - Touch re-dates a key only while it is there, because a gesture that
+//     re-uses a key has to leave a mark the key duty ages it by, and a mark
+//     written after a removal's shred would bring the removed key back.
+//   - UnsetAt destroys a key only at the version it was judged at, because
+//     the key duty judges from a census and a key a retry touched since is
+//     no longer the key it judged.
+type PersonKeys interface {
+	Keys
+	Create(ctx context.Context, name, value, by, source string, now time.Time) (bool, error)
+	Touch(ctx context.Context, name, by, source string, now time.Time) (bool, error)
+	UnsetAt(ctx context.Context, name string, version uint64) (bool, error)
 }
 
 // PersonDEKName is where one person's data encryption key lives.
@@ -153,10 +176,10 @@ func checkKeyID(id string) error {
 var ErrShredded = errors.New("iamdomain: this person's key has been destroyed")
 
 // Sealer seals and opens the values that belong to one person at a time.
-type Sealer struct{ keys Keys }
+type Sealer struct{ keys PersonKeys }
 
 // NewSealer builds one over the company's secret store.
-func NewSealer(keys Keys) (*Sealer, error) {
+func NewSealer(keys PersonKeys) (*Sealer, error) {
 	if keys == nil {
 		return nil, errors.New("iamdomain: a sealer with no key store would " +
 			"write cleartext names and addresses into every node's database, " +
@@ -165,36 +188,91 @@ func NewSealer(keys Keys) (*Sealer, error) {
 	return &Sealer{keys: keys}, nil
 }
 
-// Mint creates a person's key, and REFUSES to replace one that exists.
+// mintAttempts bounds how many times a mint goes round create-or-touch.
 //
-// THE REFUSAL IS THE POINT. Overwriting a live key does not fail anything
+// THREE, for the secret store's own reason for bounding a conditional write: each
+// round loses only to a write that landed between its two steps — a concurrent
+// minter's create, or a destroy of the key it was about to touch — and each of
+// those lands once. A key still changing after that is being written in a
+// loop, and the gesture fails naming it rather than spinning.
+const mintAttempts = 3
+
+// Mint makes sure a person's key exists, and that its WRITE TIME says a gesture
+// is using it now: it creates the key where there is none, and otherwise
+// touches the one it finds. It never replaces a key.
+//
+// NEVER A REPLACEMENT, because overwriting a live key fails nothing
 // immediately: new values seal fine, and every value already written becomes
-// unreadable — which is a silent, irreversible shred of everything that
-// person's row held, discovered whenever somebody next opens it. So a mint
-// that finds a key reports it, and the caller decides whether that is a retry
-// (it is) or a collision (it is not).
+// unreadable — a silent, irreversible shred of everything that person's row
+// held. So the key is CREATED, which the store refuses where a key exists,
+// rather than read and then put: two minters of one id — a redemption and its
+// own retry, which name the same derived person — each read "none" and each
+// put, and the loser's values were sealed under a key the store did not keep.
+//
+// A KEY IT FINDS IS TOUCHED, because a retry re-uses the key its first attempt
+// minted, and the key duty ages a key nobody owns by its write time: left at
+// the first attempt's, an hour or a week old, the key could be judged nobody's
+// and destroyed under the retry that was about to seal a person's name and
+// address under it. The touch moves the key's version too, so a destroy
+// judged before it is refused ([Sealer.Collect]). And a touch finds no key
+// that went in between — a removal's shred, the duty's collection — rather
+// than writing it back, so the round creates a fresh one instead: values
+// sealed under the destroyed key stay unreadable, which is what destroying it
+// promised.
+//
+// Every failure is the unknown answer: a store that cannot be reached is never
+// read as "no key here".
 func (s *Sealer) Mint(ctx context.Context, personID, by string, now time.Time) error {
 	if err := s.check(personID); err != nil {
 		return err
 	}
 	name := PersonDEKName(personID)
-	switch existing, err := s.keys.Get(ctx, name); {
-	case err != nil && !errors.Is(err, secrets.ErrNotFound):
-		// UNKNOWN IS NOT ABSENT. A store this node cannot reach must
-		// not be read as "no key here", because the write that follows
-		// would replace a key that exists and shred the person.
-		return fmt.Errorf("iamdomain: read %s before minting it: %w — this "+
-			"node cannot tell whether a key is already there, and minting over "+
-			"one destroys every value already sealed under it", name, err)
-	case err == nil && existing != "":
-		return nil
+	for attempt := 1; ; attempt++ {
+		key := make([]byte, keyBytes)
+		if _, err := rand.Read(key); err != nil {
+			return fmt.Errorf("iamdomain: generate a key for %s: %w", personID, err)
+		}
+		created, err := s.keys.Create(ctx, name,
+			base64.StdEncoding.EncodeToString(key), by, "iam", now)
+		if err != nil {
+			return fmt.Errorf("iamdomain: mint %s: %w — this node cannot tell "+
+				"whether a key is already there", name, err)
+		}
+		if created {
+			return nil
+		}
+		touched, err := s.keys.Touch(ctx, name, by, "iam", now)
+		if err != nil {
+			return fmt.Errorf("iamdomain: re-date %s for the gesture using it: "+
+				"%w", name, err)
+		}
+		if touched {
+			return nil
+		}
+		if attempt == mintAttempts {
+			return fmt.Errorf("iamdomain: %s was created and destroyed %d times "+
+				"while this gesture minted it; retry the gesture", name, mintAttempts)
+		}
 	}
-	key := make([]byte, keyBytes)
-	if _, err := rand.Read(key); err != nil {
-		return fmt.Errorf("iamdomain: generate a key for %s: %w", personID, err)
+}
+
+// Collect destroys a key nobody owns, but only the version of it a census
+// judged, reporting whether it destroyed it.
+//
+// FALSE IS A KEY WRITTEN SINCE — a retried gesture that touched it to seal
+// under it, or a rekey that moved it — or one already gone. The judgement was
+// about a key that is no longer what is stored, so it is void, and the next
+// census judges what is.
+func (s *Sealer) Collect(ctx context.Context, personID string, version uint64) (bool, error) {
+	if err := s.check(personID); err != nil {
+		return false, err
 	}
-	return s.keys.Set(ctx, name, base64.StdEncoding.EncodeToString(key), by,
-		"iam", now)
+	destroyed, err := s.keys.UnsetAt(ctx, PersonDEKName(personID), version)
+	if err != nil {
+		return false, fmt.Errorf("iamdomain: destroy %s's unowned key: %w",
+			personID, err)
+	}
+	return destroyed, nil
 }
 
 // Shred destroys a person's key, which is what removing them does.

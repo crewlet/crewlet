@@ -819,8 +819,19 @@ has consumed the log past that record while its rows lack it, and it judges no
 unowned key until it can apply it. Such a node, and one that is simply behind,
 says so (`iam_keys_unjudged`) and leaves them for a pass that can; a removal's
 key does not wait for that, because a removal is definitive wherever it has been
-applied. `crewlet iam check` names
-each unowned key past the hour as `key_unowned`.
+applied. `crewlet iam check` names each unowned key past the hour as
+`key_unowned`.
+
+**An hour counts from the last gesture that used a key, not the first.** A
+retried redemption names the same person — the id is derived from the
+invitation — so it re-uses the key its first attempt minted, however long ago.
+Every mint re-dates the key it finds instead of replacing it (the secret store
+refuses to create a key over one that exists), and the duty destroys a key only
+at the version its census judged: a key a retry re-dated between the census and
+the delete is spared, logged as `iam_keys_spared`, and judged again next pass.
+A re-date never writes back a key a removal destroyed — it finds nothing there,
+and the mint creates a fresh key, under which the removed person's values stay
+sealed.
 
 **And it collects every refresh token whose session is over** — by logout,
 expiry, a revocation or a session invalidation — whether or not a provider is

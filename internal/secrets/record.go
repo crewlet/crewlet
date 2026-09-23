@@ -39,6 +39,11 @@ type Record struct {
 	// whole reason they are fields rather than a log line.
 	UpdatedBy string
 	Source    string
+
+	// Version is the store's own revision of the row, where the store has
+	// one: what a write or a delete conditioned on "nothing has changed
+	// since I read it" names. Zero where the store keeps none.
+	Version uint64
 }
 
 // ErrNoKeyring reports a secret store asked to work without one.

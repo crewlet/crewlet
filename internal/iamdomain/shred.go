@@ -51,8 +51,11 @@ import (
 // nothing on rows that are not complete. So it is destroyed only when this
 // node can PROVE both halves ([KeyCensus.Judge]):
 //
-//   - it is older than [OrphanKeyGrace], so it cannot be a gesture still
-//     running; and
+//   - it was last WRITTEN longer than [OrphanKeyGrace] ago, so it cannot be a
+//     gesture still running — and a gesture that re-uses a key, a retried
+//     enrolment naming the same derived person, re-writes it first
+//     ([Sealer.Mint]), so its age is the age of the last gesture that used
+//     it rather than of the first; and
 //   - the snapshot that found no owner has APPLIED every record the log held
 //     when the question was asked ([CoversLog]) — which is not the same as
 //     having CONSUMED them. The applier's checkpoint moves past a record it
@@ -64,7 +67,13 @@ import (
 //     records it had merely retained.
 //
 // What the node cannot prove is UNPROVEN, never "nobody's": the key waits for a
-// pass on a node that can, and the pass says so. No per-key refinement narrows
+// pass on a node that can, and the pass says so.
+//
+// And the destroy is of the VERSION the census judged ([Sealer.Collect]). The
+// census and the destroy are two steps, and a retry that re-uses the key
+// between them re-writes it: a plain delete then destroyed the key the retry
+// had just sealed a person's name under. Conditioned on the version, a key
+// written after it was judged is spared, and the next census judges it afresh. No per-key refinement narrows
 // that to the buckets a retained record covers, because a key's owner may be an
 // INVITATION, whose record is filed under its address's bucket — computable
 // from the address, which is sealed, and never from the invitation's id.
@@ -139,9 +148,14 @@ type UnownedKey struct {
 	// an invitation the sweep collected.
 	ID string
 
-	// WrittenAt is when the key was last written — its mint, or a rekey
-	// since — which is what it is aged by.
+	// WrittenAt is when the key was last written — its mint, a gesture
+	// that re-used it since, or a rekey — which is what it is aged by.
 	WrittenAt time.Time
+
+	// Version is the store's version of the key when the census listed it:
+	// what a destroy is conditioned on, so a key written after it was
+	// judged is spared.
+	Version uint64
 }
 
 // KeyCensus is which person keys the store holds, and what this node's rows say
@@ -221,8 +235,8 @@ func (r *Reader) KeyCensus(ctx context.Context, keys KeyIndex) (KeyCensus, error
 		case removed[id]:
 			census.OutlivedRemoval = append(census.OutlivedRemoval, id)
 		case !owned[id]:
-			census.Unowned = append(census.Unowned,
-				UnownedKey{ID: id, WrittenAt: key.UpdatedAt})
+			census.Unowned = append(census.Unowned, UnownedKey{
+				ID: id, WrittenAt: key.UpdatedAt, Version: key.Version})
 		}
 	}
 	slices.Sort(census.OutlivedRemoval)
@@ -334,6 +348,11 @@ type ShredReport struct {
 	// destroyed.
 	Collected []string
 
+	// Moved is how many keys this node proved nobody owns were written
+	// between the census and the destroy — a retried gesture re-using one,
+	// a rekey moving one — and so were spared: the next census judges them.
+	Moved int
+
 	// Waiting is how many keys nobody owns were written inside the grace —
 	// a gesture that may still be running.
 	Waiting int
@@ -343,6 +362,15 @@ type ShredReport struct {
 	// the removals are, because a tombstone is definitive wherever it is.
 	Unproven int
 	Unjudged error
+}
+
+// KeyDestroyer is how the key duty destroys a key: a removal's outright, and an
+// unowned one only at the version its census judged.
+//
+// CONSUMER-DEFINED, and [Sealer] is the one the engine hands it.
+type KeyDestroyer interface {
+	Shredder
+	Collect(ctx context.Context, personID string, version uint64) (bool, error)
 }
 
 // ShredKeys destroys every key a removal left behind, and every key this node
@@ -357,7 +385,7 @@ type ShredReport struct {
 // one key the store would not delete must not keep the next person's name
 // readable for another interval.
 func ShredKeys(ctx context.Context, reader *Reader, keys KeyIndex,
-	shredder Shredder, now time.Time, logEnd func(context.Context) (uint64, error)) (
+	shredder KeyDestroyer, now time.Time, logEnd func(context.Context) (uint64, error)) (
 	ShredReport, error) {
 
 	if reader == nil || keys == nil || shredder == nil || logEnd == nil {
@@ -392,11 +420,15 @@ func ShredKeys(ctx context.Context, reader *Reader, keys KeyIndex,
 		if ctx.Err() != nil {
 			return report, errors.Join(append(errs, ctx.Err())...)
 		}
-		if _, err := shredder.Shred(ctx, key.ID); err != nil {
+		destroyed, err := shredder.Collect(ctx, key.ID, key.Version)
+		switch {
+		case err != nil:
 			errs = append(errs, err)
-			continue
+		case destroyed:
+			report.Collected = append(report.Collected, key.ID)
+		default:
+			report.Moved++
 		}
-		report.Collected = append(report.Collected, key.ID)
 	}
 	return report, errors.Join(errs...)
 }

@@ -35,14 +35,18 @@ type keyStore struct {
 	// written is when each value was last written, which is what the key
 	// duty ages a key nobody owns by.
 	written map[string]time.Time
+	// versions is each value's store version, drawn from one counter as the
+	// real store's are: a value deleted and written again never gets back a
+	// version an earlier one had.
+	versions map[string]uint64
+	version  uint64
 	// fail, when set, is what every call answers. It is what stands in for
 	// a coordination store this node cannot reach.
 	fail error
-	// failGet fails only the READ, which is the hazard the mint's guard is
-	// about: a store whose write path works while its read times out is
-	// exactly the state in which "I could not read a key" taken as "there
-	// is no key" replaces a live one.
-	failGet error
+	// afterFirstRead runs once, after the first READ has taken its value
+	// and before it answers — the window in which a mint that read and
+	// then put lost a concurrent mint's key.
+	afterFirstRead func()
 	// failUnset fails only the DELETE, which is the blip a removal's
 	// post-commit shred meets: the rows are durable everywhere and the key
 	// the whole removal rests on is still there.
@@ -69,14 +73,75 @@ func (k *keyStore) Keys(_ context.Context, prefix string) ([]secrets.Record, err
 	var out []secrets.Record
 	for name := range k.values {
 		if strings.HasPrefix(name, prefix) {
-			out = append(out, secrets.Record{Name: name, UpdatedAt: k.written[name]})
+			out = append(out, secrets.Record{Name: name, UpdatedAt: k.written[name],
+				Version: k.versions[name]})
 		}
 	}
 	return out, nil
 }
 
 func newKeyStore() *keyStore {
-	return &keyStore{values: map[string]string{}, written: map[string]time.Time{}}
+	return &keyStore{values: map[string]string{}, written: map[string]time.Time{},
+		versions: map[string]uint64{}}
+}
+
+// store writes one value at the next version. The caller holds the lock.
+func (k *keyStore) store(name, value string, now time.Time) {
+	k.version++
+	k.values[name] = value
+	k.written[name] = now
+	k.versions[name] = k.version
+}
+
+// Create writes a value only where none is stored, as the real store's
+// create-only write does.
+func (k *keyStore) Create(_ context.Context, name, value, _, _ string,
+	now time.Time) (bool, error) {
+
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.fail != nil {
+		return false, k.fail
+	}
+	if _, exists := k.values[name]; exists {
+		return false, nil
+	}
+	k.store(name, value, now)
+	return true, nil
+}
+
+// Touch re-dates a value only while it is there, moving its version.
+func (k *keyStore) Touch(_ context.Context, name, _, _ string, now time.Time) (bool, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.fail != nil {
+		return false, k.fail
+	}
+	value, exists := k.values[name]
+	if !exists {
+		return false, nil
+	}
+	k.store(name, value, now)
+	return true, nil
+}
+
+// UnsetAt deletes a value only while it is at version.
+func (k *keyStore) UnsetAt(_ context.Context, name string, version uint64) (bool, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.fail != nil {
+		return false, k.fail
+	}
+	if k.failUnset != nil {
+		return false, k.failUnset
+	}
+	if held, exists := k.versions[name]; !exists || version == 0 || held != version {
+		return false, nil
+	}
+	delete(k.values, name)
+	delete(k.written, name)
+	delete(k.versions, name)
+	return true, nil
 }
 
 // value and put are how a case reaches inside the fake, under its own lock.
@@ -89,7 +154,7 @@ func (k *keyStore) value(name string) string {
 func (k *keyStore) put(name, value string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.values[name] = value
+	k.store(name, value, k.written[name])
 }
 
 // count is how many reads the fake has served, under its own lock.
@@ -101,15 +166,18 @@ func (k *keyStore) count() int {
 
 func (k *keyStore) Get(_ context.Context, name string) (string, error) {
 	k.mu.Lock()
-	defer k.mu.Unlock()
 	if k.fail != nil {
+		k.mu.Unlock()
 		return "", k.fail
-	}
-	if k.failGet != nil {
-		return "", k.failGet
 	}
 	k.reads++
 	value, ok := k.values[name]
+	hold := k.afterFirstRead
+	k.afterFirstRead = nil
+	k.mu.Unlock()
+	if hold != nil {
+		hold()
+	}
 	if !ok {
 		return "", fmt.Errorf("%w: %s", secrets.ErrNotFound, name)
 	}
@@ -122,8 +190,7 @@ func (k *keyStore) Set(_ context.Context, name, value, _, _ string, now time.Tim
 	if k.fail != nil {
 		return k.fail
 	}
-	k.values[name] = value
-	k.written[name] = now
+	k.store(name, value, now)
 	return nil
 }
 
@@ -139,6 +206,7 @@ func (k *keyStore) Unset(_ context.Context, name string) (bool, error) {
 	_, had := k.values[name]
 	delete(k.values, name)
 	delete(k.written, name)
+	delete(k.versions, name)
 	return had, nil
 }
 
@@ -262,11 +330,14 @@ func TestAMintOverALiveKeyKeepsTheKeyItFound(t *testing.T) {
 	}
 }
 
-// A STORE THIS NODE CANNOT READ IS NOT AN ABSENT KEY.
+// A STORE THIS NODE CANNOT REACH IS NOT AN ABSENT KEY.
 //
-// The sharpest of the three-valued rules here: a read that failed, taken as
-// "no key", makes the write that follows replace a key that exists — which
-// shreds the person while looking exactly like a first enrolment.
+// The sharpest of the three-valued rules here: a mint that took "I could not
+// tell" as "there is no key" would write one over a key that exists — which
+// shreds the person while looking exactly like a first enrolment. A mint is a
+// create the store itself refuses over an existing key, so nothing here reads
+// and then decides; and a store that answers nothing refuses the mint rather
+// than letting it report success.
 func TestAnUnreachableStoreNeverReadsAsNoKey(t *testing.T) {
 	t.Parallel()
 	sealer, store := newSealer(t)
@@ -280,22 +351,79 @@ func TestAnUnreachableStoreNeverReadsAsNoKey(t *testing.T) {
 	}
 	live := store.value(iamdomain.PersonDEKName(who))
 
-	// ONLY THE READ FAILS. A store that failed the write too would refuse
-	// the mint whatever its guard did, and the case would pass without
-	// exercising the rule it is about.
-	store.failGet = errors.New("the coordination store could not be reached")
+	store.mu.Lock()
+	store.fail = errors.New("the coordination store could not be reached")
+	store.mu.Unlock()
 	if err := sealer.Mint(ctx, who, "operator", time.Now()); err == nil {
-		t.Fatal("a mint whose key READ failed reported success — it cannot " +
-			"tell whether a key is there, and writing one destroys every " +
-			"value already sealed under it")
+		t.Fatal("a mint against a store that answered nothing reported success")
 	}
-	store.failGet = nil
+	store.mu.Lock()
+	store.fail = nil
+	store.mu.Unlock()
 	if store.value(iamdomain.PersonDEKName(who)) != live {
 		t.Fatal("the key changed while the store was unreachable")
 	}
 	if plain, err := sealer.Open(ctx, who, iamdomain.FieldName, sealed); err != nil || plain != "Sarah Chen" {
 		t.Errorf("the person's values are unreadable after the failed mint: (%q, %v)",
 			plain, err)
+	}
+}
+
+// TWO MINTS OF ONE ID SEAL UNDER ONE KEY.
+//
+// A redemption and its own retry name the same derived person, and so do two
+// requests racing on one bootstrap code — so two gestures minting one person's
+// key at once is ordinary. A mint that read "no key here" and then PUT one lost
+// that race silently: both read none, both put, the store kept the later key,
+// and the earlier gesture's name and address were sealed under the key it did
+// not keep. The store's own create decides it now.
+//
+// The interleaving is forced rather than hoped for: the first read the store
+// serves is held until the other gesture has minted and sealed — which is
+// exactly where a read-then-put mint read "none" and then wrote over the
+// other's key.
+func TestTwoMintsOfOneIDSealUnderOneKey(t *testing.T) {
+	t.Parallel()
+	sealer, store := newSealer(t)
+	ctx := t.Context()
+	firstRead, secondSealed := make(chan struct{}), make(chan struct{})
+	store.mu.Lock()
+	store.afterFirstRead = func() {
+		close(firstRead)
+		<-secondSealed
+	}
+	store.mu.Unlock()
+
+	var (
+		first    string
+		firstErr error
+		done     = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		if firstErr = sealer.Mint(ctx, who, "node-a", time.Now()); firstErr != nil {
+			return
+		}
+		first, firstErr = sealer.Seal(ctx, who, iamdomain.FieldName, "Dana (first attempt)")
+	}()
+	<-firstRead
+	if err := sealer.Mint(ctx, who, "node-a", time.Now()); err != nil {
+		t.Fatalf("the second mint: %v", err)
+	}
+	second, err := sealer.Seal(ctx, who, iamdomain.FieldName, "Dana (the retry)")
+	if err != nil {
+		t.Fatalf("the second seal: %v", err)
+	}
+	close(secondSealed)
+	<-done
+	if firstErr != nil {
+		t.Fatalf("the first mint and seal: %v", firstErr)
+	}
+	for name, value := range map[string]string{"first": first, "second": second} {
+		if _, err := sealer.Open(ctx, who, iamdomain.FieldName, value); err != nil {
+			t.Errorf("the value the %s gesture sealed does not open (%v) — the two "+
+				"mints wrote two keys and the store kept the other", name, err)
+		}
 	}
 }
 

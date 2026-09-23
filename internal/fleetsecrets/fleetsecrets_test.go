@@ -451,6 +451,106 @@ func TestARekeyRefusesToLeaveARowBehind(t *testing.T) {
 	}
 }
 
+// betweenReadAndWrite runs one gesture after a read of one row has answered and
+// before the write that read was for.
+type betweenReadAndWrite struct {
+	coord.Fleet
+	name    string
+	between func()
+}
+
+func (f *betweenReadAndWrite) Secret(ctx context.Context, name string) (
+	coord.SecretRecord, bool, error) {
+
+	row, found, err := f.Fleet.Secret(ctx, name)
+	if name == f.name && f.between != nil {
+		between := f.between
+		f.between = nil
+		between()
+	}
+	return row, found, err
+}
+
+// THE ENGINE'S KEY LIFECYCLE NEVER ACTS ON A KEY IT HAS NOT SEEN.
+//
+// A person's key is minted with a create, re-dated with a touch when a gesture
+// re-uses it, and destroyed as nobody's only at the version a census judged:
+//
+//   - a second create finds the first's key and leaves it, so two minters of
+//     one id seal under one key;
+//   - a touch moves the write time and the version and keeps the value, which
+//     is what the key duty ages a key by and destroys one at;
+//   - a destroy at a version the key has moved past spares it;
+//   - and a touch that meets a key destroyed between its read and its write
+//     does NOT write it back: that would bring a removed person's key — and
+//     every copy of their name — back from a shred.
+func TestTheEnginesKeyLifecycleNeverActsOnAKeyItHasNotSeen(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := &betweenReadAndWrite{Fleet: coordmem.NewFleet()}
+	estate := fleetsecrets.New(fleet, ring(t, "k1")).Estate()
+	const name = "iam/person/p1/dek"
+	keys := func() secrets.Record {
+		t.Helper()
+		rows, err := estate.Keys(ctx, "iam/person/")
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("Keys = (%+v, %v), want the one key", rows, err)
+		}
+		return rows[0]
+	}
+
+	if created, err := estate.Create(ctx, name, "first-key", "node-a", "iam",
+		clock); err != nil || !created {
+		t.Fatalf("the first create = (%v, %v)", created, err)
+	}
+	if created, err := estate.Create(ctx, name, "second-key", "node-b", "iam",
+		clock); err != nil || created {
+		t.Fatalf("the second create = (%v, %v), want it refused", created, err)
+	}
+	if got, _ := estate.Get(ctx, name); got != "first-key" {
+		t.Fatalf("a refused create replaced the key: %q", got)
+	}
+	judged := keys()
+
+	later := clock.Add(3 * time.Hour)
+	if touched, err := estate.Touch(ctx, name, "node-b", "iam", later); err != nil ||
+		!touched {
+		t.Fatalf("Touch = (%v, %v)", touched, err)
+	}
+	after := keys()
+	if !after.UpdatedAt.Equal(later) || after.Version == judged.Version {
+		t.Fatalf("after the touch the key reads %+v, want it written at %s at a "+
+			"new version", after, later)
+	}
+	if got, _ := estate.Get(ctx, name); got != "first-key" {
+		t.Fatalf("the touch changed the key: %q", got)
+	}
+
+	if removed, err := estate.UnsetAt(ctx, name, judged.Version); err != nil || removed {
+		t.Fatalf("a destroy at the version before the touch = (%v, %v), want "+
+			"the key spared", removed, err)
+	}
+	if _, err := estate.Get(ctx, name); err != nil {
+		t.Fatalf("the spared key is gone: %v", err)
+	}
+
+	// THE TOUCH THAT MEETS A DESTROY.
+	fleet.name = name
+	fleet.between = func() {
+		if _, err := estate.Unset(ctx, name); err != nil {
+			t.Errorf("the removal's shred: %v", err)
+		}
+	}
+	touched, err := estate.Touch(ctx, name, "node-c", "iam", later.Add(time.Hour))
+	if err != nil || touched {
+		t.Fatalf("a touch that met a destroy = (%v, %v), want it to find no key",
+			touched, err)
+	}
+	if _, err := estate.Get(ctx, name); !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("a touch wrote back a key destroyed under it (%v)", err)
+	}
+}
+
 // ---- the migration --------------------------------------------------- //
 
 func localStore(t *testing.T, cipher secrets.Cipher) *store.SecretValues {

@@ -1922,6 +1922,16 @@ Two consequences worth knowing before you see them:
   `key_unowned`.
   A refused enrolment does not destroy its own key: the id it was handed may
   be a live person's, and only a pass that has proved nobody owns it may.
+  And a key being **re-used** is never destroyed under the gesture using it.
+  A redemption's retry names the same person — the id is derived from the
+  invitation — and so the same key its first attempt minted, an hour or a
+  week ago. A mint therefore never replaces a key: it creates one where
+  there is none, which the secret store itself refuses over an existing key,
+  and otherwise re-dates the one it finds, so the hour counts from the last
+  gesture that used it. The duty destroys only the version of a key it
+  judged, so a key re-dated between its census and its delete is spared and
+  judged again on the next pass — and a re-date never brings back a key a
+  removal destroyed; the mint makes a fresh one instead.
 - **A value that will not decrypt is not the same as an outage.** The one
   place a removed person is still read is a node that has not applied the
   removal yet, while their key — destroyed by the node that applied it first —

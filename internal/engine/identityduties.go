@@ -424,7 +424,7 @@ func duplicateAttrs(dup iamdomain.DuplicateClaim, at string) []any {
 // NO PERSON'S ID REACHES A WARNING about a key nobody owns: such a key is by
 // definition not a person's, and the count is what an operator acts on.
 func keysPass(ctx context.Context, reader *iamdomain.Reader, keys iamdomain.KeyIndex,
-	shredder iamdomain.Shredder, logEnd func(context.Context) (uint64, error),
+	shredder iamdomain.KeyDestroyer, logEnd func(context.Context) (uint64, error),
 	custody *iamdomain.Refreshes) {
 
 	report, err := iamdomain.ShredKeys(ctx, reader, keys, shredder, time.Now(),
@@ -441,6 +441,17 @@ func keysPass(ctx context.Context, reader *iamdomain.Reader, keys iamdomain.KeyI
 			"detail", "each was minted for an enrolment that was refused before "+
 				"it claimed anything, or for an invitation the sweep collected, "+
 				"and no row owned it")
+	}
+	if report.Moved > 0 {
+		// A KEY WRITTEN BETWEEN THE CENSUS AND THE DESTROY was spared:
+		// a retried gesture re-used it, or a rekey moved it. Said, because
+		// a count that fell short of what was judged would otherwise read
+		// as a delete that failed.
+		identityLog.InfoContext(ctx, "iam_keys_spared",
+			"keys", report.Moved,
+			"detail", "each was judged nobody's and written again before it "+
+				"was destroyed — a gesture is using it — so the next pass judges "+
+				"it afresh")
 	}
 	if report.Unjudged != nil && report.Unproven > 0 {
 		// INFO AND NOT A WARNING: a node behind the log is the ordinary
