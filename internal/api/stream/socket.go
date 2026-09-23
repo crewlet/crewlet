@@ -241,10 +241,9 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			return
 		}
 		// THE BUDGET IS THE PRINCIPAL'S, keyed on its ID: the same
-		// person across their tabs, and never shared between two. Not
-		// the login, which a person enrolled by address alone does not
-		// have — keyed on it, every such person shared one budget. See
-		// budget.go.
+		// person across their tabs and across a rename, and never shared
+		// between two. Not the login, which is a name somebody changes —
+		// see budget.go.
 		budgetKey := budgetKeyOf(principal)
 		who := &asking{principal: principal}
 		check := checkerFor(guard, r)

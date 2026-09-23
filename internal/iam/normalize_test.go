@@ -67,3 +67,39 @@ func TestTheAddressRuleIsOneRuleBothDomainsRead(t *testing.T) {
 			"already folded, so the second pass must be a no-op", folded, again)
 	}
 }
+
+// A PROPOSED LOGIN IS ALWAYS ONE THE PERSON GRAMMAR ACCEPTS, OR NOTHING.
+//
+// Every person enrols with a login, and somebody redeeming an invitation is
+// shown one proposed from their address. A proposal outside the grammar would
+// be a form that refuses its own default — which is what `jane@example.com`
+// produced before the domain's first label became the second segment, since a
+// login without a dot is a name an audit row cannot tell from a seat's.
+func TestAProposedLoginFitsThePersonGrammarOrIsNothing(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ in, want string }{
+		"a dotted local part":         {"Jane.Doe@example.com", "jane.doe"},
+		"a plus tag is not a name":    {"jane.doe+crewlet@example.com", "jane.doe"},
+		"one segment borrows a label": {"jane@acme.example.com", "jane.acme"},
+		"an underscore separates":     {"jane_doe@example.com", "jane.doe"},
+		"punctuation separates once":  {"o'brien..x@example.com", "o.brien.x"},
+		"a hyphen only inside a word": {"--jane--doe-@example.com", "jane-doe.example"},
+		"hyphens survive in a word":   {"mary-jane.watson@example.com", "mary-jane.watson"},
+		"no local part":               {"@example.com", ""},
+		"no domain to borrow from":    {"jane@", ""},
+		"not an address":              {"jane.doe", ""},
+		"nothing":                     {"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := LoginFromAddress(tc.in)
+			if got != tc.want {
+				t.Errorf("LoginFromAddress(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if got != "" && !ValidLoginFor(KindPerson, got) {
+				t.Errorf("LoginFromAddress(%q) proposed %q, which the person "+
+					"grammar refuses", tc.in, got)
+			}
+		})
+	}
+}

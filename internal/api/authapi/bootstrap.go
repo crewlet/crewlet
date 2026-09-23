@@ -71,7 +71,12 @@ const bootstrapLifetime = 24 * time.Hour
 
 // bootstrapRequest is what redeeming the code presents.
 type bootstrapRequest struct {
-	Code     string `json:"code"`
+	Code string `json:"code"`
+
+	// Login is REQUIRED, in the person grammar (jane.doe): the first
+	// operator is a person like every other, and a person with no login
+	// is recorded as nobody beside every change they make. An absent one
+	// is refused 400 by the enrolment, naming the rule.
 	Login    string `json:"login"`
 	Email    string `json:"email"`
 	Name     string `json:"name"`

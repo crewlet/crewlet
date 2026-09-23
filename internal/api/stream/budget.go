@@ -33,12 +33,11 @@ import (
 //
 // # Keyed on the principal's ID, never its login
 //
-// A login is OPTIONAL: a person the directory enrolled by address alone —
-// every invitation redeemed without one, every person an administrator created
-// with an email and nothing else — carries an empty login. Keyed on the login,
-// every one of them shared ONE four-slot budget, so the second such person to
-// open a dashboard queued behind the first, and a burst from any of them was an
-// outage for all of them. The id is what every row keys a principal on: it is
+// A login is a NAME, and a name is renamed — and until every enrolment was
+// required to carry one it was also optional: a person the directory enrolled
+// by address alone carried an empty login, and keyed on it every one of them
+// shared ONE four-slot budget, so the second such person to open a dashboard
+// queued behind the first. The id is what every row keys a principal on: it is
 // never empty for a resolved one and never shared between two, and a person
 // keeps it through a rename, so their tabs go on sharing one budget across
 // the change.
@@ -69,9 +68,9 @@ const MaxInFlightQueries = 4
 //
 // A FUNCTION RATHER THAN A FIELD READ AT THE CALL SITE, so the rule has one
 // place to be asserted — the socket is the only caller, and the property that
-// went wrong (two people enrolled by address alone sharing a budget because
-// both had an empty login) is invisible through a socket unless a suite signs
-// two such people in.
+// went wrong (two people sharing a budget because both carried one login
+// spelling — the empty one, while a login was optional) is invisible through a
+// socket unless a suite signs two such people in.
 func budgetKeyOf(p iam.Principal) uuid.UUID { return p.ID }
 
 // budgets hands out one in-flight budget per principal.

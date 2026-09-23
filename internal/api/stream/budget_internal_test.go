@@ -113,39 +113,38 @@ func TestAReleaseThatArrivesTwiceDoesNotEvictALiveBudget(t *testing.T) {
 	}
 }
 
-// TWO PEOPLE ENROLLED BY ADDRESS ALONE GET TWO BUDGETS.
+// THE BUDGET FOLLOWS THE PRINCIPAL, NEVER ITS LOGIN.
 //
-// A login is optional — an invitation redeemed without one, a person an
-// administrator created with only an email — so it is EMPTY for exactly the
-// people most likely to be many. The budget was keyed on it, which put every
-// one of them behind one four-slot budget: the second to open a dashboard
-// queued behind the first, and one person's burst was everybody's outage. The
-// key is the principal's id, which a resolved principal always carries and no
-// two share.
-func TestTwoPeopleWithNoLoginGetTwoBudgets(t *testing.T) {
+// A login is a name somebody renames, and it was once optional: keyed on it,
+// every person enrolled by address alone shared ONE four-slot budget under the
+// empty string, so the second to open a dashboard queued behind the first. The
+// key is the principal's id, which a resolved principal always carries, no two
+// share, and a rename does not move — so one person's tabs from before and
+// after a rename share one budget, and two people never do whatever their
+// logins say.
+func TestTheBudgetFollowsThePrincipalNotItsLogin(t *testing.T) {
 	t.Parallel()
 	b := newBudgets()
 	dana := iam.Principal{ID: uuid.MustParse("018f3a9c-0000-7000-8000-0000000000d1"),
-		Kind: iam.KindPerson, Stage: iam.StageActive}
+		Login: "dana.sre", Kind: iam.KindPerson, Stage: iam.StageActive}
 	eli := iam.Principal{ID: uuid.MustParse("018f3a9c-0000-7000-8000-0000000000e1"),
-		Kind: iam.KindPerson, Stage: iam.StageActive}
-	if dana.Login != "" || eli.Login != "" {
-		t.Fatal("the case is about two people with no login")
-	}
+		Login: "dana.sre", Kind: iam.KindPerson, Stage: iam.StageActive}
 	first, releaseFirst := b.acquire(budgetKeyOf(dana))
 	defer releaseFirst()
 	second, releaseSecond := b.acquire(budgetKeyOf(eli))
 	defer releaseSecond()
 	if first == second {
-		t.Error("two people with no login share one in-flight budget, so the " +
-			"second to open a dashboard queues behind the first")
+		t.Error("two people sharing a login spelling share one in-flight " +
+			"budget, so the second to open a dashboard queues behind the first")
 	}
-	// THE CONTROL: the same person's second tab still shares theirs, or the
-	// assertion above would pass on a key that was unique per socket.
-	again, releaseAgain := b.acquire(budgetKeyOf(dana))
+	// ONE PERSON ACROSS A RENAME keeps theirs — which is also the control:
+	// without it the assertion above would pass on a key unique per socket.
+	renamed := dana
+	renamed.Login = "dana.ops"
+	again, releaseAgain := b.acquire(budgetKeyOf(renamed))
 	defer releaseAgain()
 	if again != first {
-		t.Error("one person's two tabs got two budgets")
+		t.Error("one person's tabs from before and after a rename got two budgets")
 	}
 }
 

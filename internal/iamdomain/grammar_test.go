@@ -91,6 +91,49 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 	}
 }
 
+// EVERY PERSON ENROLS WITH A LOGIN, although their address already finds them.
+//
+// A login is the name a principal acts and is written under while they hold
+// no seat. A person enrolled by address alone was recorded as `anonymous`
+// beside every change they made — iam.ActorFor had no name to write — and
+// failed iam.Principal.Validate on every request they sent, so the directory
+// admitted a person the rest of the engine could not name. Refused before the
+// first claim, so the refusal leaves nothing holding the address.
+func TestEveryPersonEnrolsWithALogin(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	_, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
+		PersonID: "018f3a9c-0000-7000-8000-0000000005a1",
+		Kind:     iam.KindPerson, Stage: iam.StageActive,
+		Name: "Dana Sre", Email: "dana@example.com",
+		OpID: "op-loginless", Reason: "a hire",
+	})
+	if !errors.Is(err, iamdomain.ErrInvalidLogin) {
+		t.Errorf("a person with no login was refused with %v, want %v — "+
+			"every change they made would be recorded as anonymous", err,
+			iamdomain.ErrInvalidLogin)
+	}
+	rig.drain()
+	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
+		t.Errorf("a refused enrolment left rows %v holding the address", got)
+	}
+	// THE CONTROL: the same person with a login lands, and the name the
+	// directory holds is the one every unbound change is written under.
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: "018f3a9c-0000-7000-8000-0000000005a2",
+		Kind:     iam.KindPerson, Stage: iam.StageActive,
+		Name: "Dana Sre", Email: "dana@example.com", Login: "dana.sre",
+		OpID: "op-login", Reason: "a hire",
+	}); err != nil {
+		t.Fatalf("a person with a login was refused: %v", err)
+	}
+	rig.drain()
+	if got := rig.column(`SELECT login FROM iam_people`); len(got) != 1 ||
+		got[0] != "dana.sre" {
+		t.Errorf("the directory holds logins %v, want [dana.sre]", got)
+	}
+}
+
 // AND AT A RENAME, where the holder's kind is read INSIDE THE SNAPSHOT.
 //
 // A rename is a login claim on its own subject — `PATCH /iam/people/{id}`

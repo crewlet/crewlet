@@ -56,6 +56,25 @@ func TestIamIsDispatchedAndAdvertised(t *testing.T) {
 	}
 }
 
+// A CREATE WITH NO LOGIN IS REFUSED HERE, NAMING THE FLAG.
+//
+// Every principal enrols with a login — it is the name their changes are
+// recorded under while they hold no seat, and a person created by address
+// alone was recorded as `anonymous`. The node refuses one too; this is the
+// sentence an operator who left the flag off needs, before a config file is
+// read or a request is sent.
+func TestAnIamCreateWithNoLoginNamesTheFlag(t *testing.T) {
+	var out, errs bytes.Buffer
+	err := run([]string{"iam", "create", "-email", "jane@example.com",
+		"-config", "/nonexistent/crewlet.yaml"}, &out, &errs)
+	if err == nil {
+		t.Fatal("`crewlet iam create` with no -login was accepted")
+	}
+	if !strings.Contains(err.Error(), "-login") {
+		t.Errorf("the refusal is %q, want it to name -login", err)
+	}
+}
+
 // A COMMAND THAT NAMES NOTHING IS REFUSED BY NAME.
 //
 // "crewlet iam show" is an operator who typed half a command, and what they

@@ -90,6 +90,19 @@ no person can make the deployment's own credential act as their seat. The
 directory enrols people and machines only; a seat belongs to the chart and the
 engine is the node.
 
+**Every principal enrols with a login** — a person as well as a machine,
+although a person's address already finds them. The login is the name an
+unbound person's work is recorded under, and a person enrolled by address
+alone was recorded as `anonymous` beside every change they made. So every
+path that creates a person names one: an administrator types it
+(`crewlet iam create -login jane.doe -email jane@example.com`), the first
+operator types it at the bootstrap, and an invitation's form arrives with one
+**proposed from the address** — `jane.doe@example.com` proposes `jane.doe`,
+and `jane@example.com` proposes `jane.example`, borrowing the domain's first
+label because a login without a dot is not a login. The person keeps it or
+changes it; nothing is derived silently. A login is never cleared afterwards,
+only renamed.
+
 ---
 
 ## Grants: the eleven things there are to allow
@@ -396,6 +409,13 @@ is a GET, and an invitation spent by one is an account created for somebody who
 never saw it — or, far more often, a person told their link was already used by
 whoever scanned their mailbox. So the GET answers what the form needs to render
 and changes nothing; the POST is the person, having typed a password.
+
+What the form needs includes **a login to propose**. Every person enrols with
+one, and somebody following a link has typed nothing yet, so the GET answers
+`login` derived from the address in the person grammar. The POST carries
+whatever login the person settled on — the proposal or their own — and an
+absent one is refused `400`, as a login somebody else holds is refused `409`
+without saying who.
 
 Absent, redeemed and expired are **one refusal**, because the remedy is the same
 and telling them apart would say "this was already used" to somebody whose link

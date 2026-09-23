@@ -45,7 +45,7 @@ Usage:
   crewlet iam show ID                                  One person, in full
   crewlet iam invite EMAIL [-grants G,...] [-colleague L]
                                                        Issue a link, shown ONCE
-  crewlet iam create [-login L] [-email E] [-kind K]   Create somebody directly
+  crewlet iam create -login L [-email E] [-kind K]     Create somebody directly
   crewlet iam bind ID SEAT                             Bind a person to a chart seat
   crewlet iam unbind ID                                Take the binding back
   crewlet iam grant ID [-grants G,...] [-colleague L]  Change what somebody carries
@@ -134,6 +134,16 @@ func runIAM(args []string, stdout, stderr io.Writer) error {
 	// problem they do not have.
 	if err := iamSubjects.check(sub, subject, second); err != nil {
 		return err
+	}
+	// A CREATE NAMES ITS LOGIN, and is told so here rather than by the
+	// node: every principal enrols with one — it is the name their changes
+	// are recorded under while they hold no seat — and an operator who left
+	// the flag off needs that sentence, not a config file it was about to
+	// read or a round trip to a 400.
+	if sub == "create" && strings.TrimSpace(*login) == "" {
+		return errors.New("name the login to create them under: -login " +
+			"jane.doe for a person, -login ci:release (or token:<id>) for a " +
+			"machine — every principal enrols with one")
 	}
 	boot, err := config.LoadBootstrap(*bootstrapPath, config.EnvOnly())
 	if err != nil {

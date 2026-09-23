@@ -84,6 +84,12 @@ type Actor struct {
 // their work lands under their own seat handle; unbound — an operator who is
 // not in the org chart, a pipeline, an automation — they act as the
 // credential, under its login. Both are ordinary.
+//
+// WHICH IS WHY EVERY PERSON ENROLS WITH A LOGIN. The unbound arm has nothing
+// else to write, and a person enrolled by address alone was recorded as
+// [AnonymousActor] beside every change they made; the identity directory now
+// refuses an enrolment that names none, so the degradation above is reached
+// only by a principal no enrolment produced.
 func ActorFor(p Principal) Actor {
 	switch p.Kind {
 	case KindSeat:

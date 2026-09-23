@@ -170,7 +170,9 @@ flowchart LR
 ```
 
 A person who signs in is a row already, and binding it is the one command
-above. A **Tier A token** acts under the login `token:<id>`, so it acts as a
+above. Every row carries a **login** — the name an unbound person acts and is
+recorded under — which is why an enrolment names one whatever path creates
+it, and why an invitation's form proposes one from the address. A **Tier A token** acts under the login `token:<id>`, so it acts as a
 seat when the directory holds a row under that login bound to one: enrol it as
 a machine (`crewlet iam create -kind machine -login token:<id>`) and bind that
 row. The bind is a claim on the seat itself, so two people can never be bound

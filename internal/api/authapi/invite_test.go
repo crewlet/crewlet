@@ -27,6 +27,54 @@ func (liveInvitation) InvitationByID(context.Context, string) (iamdomain.Invitat
 	}, nil
 }
 
+// addressOpener opens an invitation's address as one fixed value.
+type addressOpener struct{ address string }
+
+func (o addressOpener) Open(context.Context, string, iamdomain.Field, string) (string, error) {
+	return o.address, nil
+}
+
+// sealedInvitation is [liveInvitation] with an address sealed on it, so the
+// view has something to open.
+type sealedInvitation struct{ liveInvitation }
+
+func (sealedInvitation) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	row, err := liveInvitation{}.InvitationByID(ctx, id)
+	row.Sealed = "sealed-address"
+	return row, err
+}
+
+// THE INVITATION'S FORM PROPOSES A LOGIN, because every person enrols with one.
+//
+// A login is the name an unbound person's every change is recorded under, and
+// somebody following a link has typed nothing yet — so the GET that renders
+// the form answers one derived from the address, in the person grammar, for
+// them to keep or change. Without it a redeemer was free to post no login at
+// all and was recorded as `anonymous` for as long as they held no seat.
+func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+		o.Directory = sealedInvitation{}
+		o.Opener = addressOpener{address: "Dana.SRE+invites@example.com"}
+	}).Routes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/invite/inv-1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
+	}
+	var view map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view["login"] != "dana.sre" {
+		t.Errorf("the form proposes login %v, want dana.sre — the address's "+
+			"own local part, folded into the person grammar", view["login"])
+	}
+}
+
 // refusingWriter is a writer whose enrolment the domain refuses with err.
 type refusingWriter struct {
 	stubWriter

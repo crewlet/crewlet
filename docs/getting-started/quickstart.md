@@ -461,7 +461,9 @@ uses this. On `local` or `oidc` the first operator is created once, from a
 2026-06-14 12:00 WARN engine  bootstrap_code_written path=/var/lib/crewlet/bootstrap-code
 ```
 
-Read that file on the host, open the dashboard, and set a login and a password.
+Read that file on the host, open the dashboard, and set a login (dotted, like
+`jane.doe` — every person has one, and it is the name your changes are recorded
+under until you bind a seat), your address and a password.
 Nothing ever serves the code — the log line, `/health` and the welcome screen
 carry its **path**, so reading it means having access to the machine, which is
 the only credential a company genuinely has before it has any. The file is
@@ -469,7 +471,8 @@ removed when it is used, and the route closes for good the moment anybody is
 enrolled.
 
 Everybody after the first arrives by invitation, which confers exactly the
-grants and reach whoever issued it chose. A Tier A token stays — it is the way
+grants and reach whoever issued it chose; the link's form proposes a login from
+their address, which they keep or change. A Tier A token stays — it is the way
 back in when the provider is down, and what a pipeline uses — but it is a
 machine credential rather than a person, and it is not how people should be
 signing in.

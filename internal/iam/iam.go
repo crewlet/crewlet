@@ -224,3 +224,54 @@ func NormalizeEmail(email string) string {
 	}
 	return local + "@" + domain
 }
+
+// LoginFromAddress PROPOSES a person's login from their address, or answers ""
+// when nothing in the address fits the person grammar.
+//
+// A PROPOSAL AND NEVER A DECISION. Every person enrols with a login — it is
+// the name an unbound person's changes are recorded under — and somebody
+// redeeming an invitation has typed nothing yet, so the form they are shown
+// arrives pre-filled with this and they keep it or change it. Nothing derives
+// a login SILENTLY from here: a name recorded beside everything a person does
+// is one they saw before it was theirs.
+//
+// THE LOCAL PART, FOLDED INTO THE GRAMMAR: the address is normalised by
+// [NormalizeEmail] (so a plus tag is not part of anybody's name), every run of
+// characters outside a segment becomes one separator, and a hyphen survives
+// only between two alphanumerics, which is the segment's own shape. A local
+// part that yields one segment — `jane@example.com` — borrows the domain's
+// first label as its second (`jane.example`), because the dot is what keeps a
+// login out of the seat-handle namespace and a proposal that could never be
+// accepted would be a form that refuses its own default.
+func LoginFromAddress(address string) string {
+	local, domain, ok := strings.Cut(NormalizeEmail(address), "@")
+	if !ok {
+		return ""
+	}
+	segments := loginSegments(local)
+	if len(segments) == 1 {
+		label, _, _ := strings.Cut(domain, ".")
+		segments = append(segments, loginSegments(label)...)
+	}
+	login := strings.Join(segments, ".")
+	if !ValidLogin(login) {
+		return ""
+	}
+	return login
+}
+
+// loginSegments splits text into the segments a login is made of: lowercase
+// alphanumeric runs, joined by single hyphens where the text had one between
+// two of them, and nothing else.
+func loginSegments(text string) []string {
+	var segments []string
+	for _, piece := range strings.FieldsFunc(text, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-')
+	}) {
+		words := strings.FieldsFunc(piece, func(r rune) bool { return r == '-' })
+		if len(words) > 0 {
+			segments = append(segments, strings.Join(words, "-"))
+		}
+	}
+	return segments
+}

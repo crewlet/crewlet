@@ -152,11 +152,9 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 			return statelog.Position{}, err
 		}
 	}
-	if in.Login != "" {
-		if _, err := w.claim(ctx, KindLogin, in.Login, in.PersonID, "",
-			in.OpID+":login", in.Kind); err != nil {
-			return statelog.Position{}, err
-		}
+	if _, err := w.claim(ctx, KindLogin, in.Login, in.PersonID, "",
+		in.OpID+":login", in.Kind); err != nil {
+		return statelog.Position{}, err
 	}
 
 	person := Person{
@@ -228,9 +226,11 @@ type Enrolment struct {
 	Name  string
 	Email string
 
-	// Login is optional. A machine takes one and a person may not have
-	// chosen theirs yet — an invited person has an address and no login
-	// until they redeem.
+	// Login is REQUIRED, in the holder's kind's grammar: a person's is
+	// dotted and a machine's coloned. See [Enrolment.validate] for why a
+	// person needs one although their address already finds them. An
+	// invited person has no row at all until they redeem, and choosing
+	// their login is part of redeeming.
 	Login string
 
 	Credentials []Credential
@@ -314,19 +314,31 @@ func (e Enrolment) validate() error {
 		return fmt.Errorf("%w: enrolling a person needs an address — it is "+
 			"the interactive login key, and somebody with none can never "+
 			"sign in", ErrNotFindable)
-	case e.Email == "" && e.Login == "":
+	case e.Kind == iam.KindMachine && e.Login == "":
 		// A MACHINE NEEDS NO ADDRESS and must still be FINDABLE. It has
 		// no login page and no mailbox — `svc:ci` proves itself with a
 		// token — so requiring an address would have meant inventing
-		// one, and a row that is neither addressable nor named is a
-		// credential holder nobody can list, revoke or audit.
+		// one, and a row that is not named is a credential holder
+		// nobody can list, revoke or audit.
 		return fmt.Errorf("%w: enrolling a %s needs a login — it has no login "+
 			"page and therefore no address, so the login is the only thing "+
 			"that finds it", ErrNotFindable, e.Kind)
-	case e.Login != "":
-		return loginFits(e.Kind, e.Login)
+	case e.Login == "":
+		// A PERSON NEEDS ONE TOO, and not to be found: their address
+		// already does that. A login is the NAME a principal acts and is
+		// written under while they hold no seat — iam.ActorFor records an
+		// unbound person under it — and a person with none was recorded
+		// as `anonymous` beside every change they made, and failed
+		// [iam.Principal.Validate] on every request they sent. So every
+		// path that creates a person names one: an administrator types
+		// it, the first operator types it, and an invitation's form
+		// proposes one from the address for the person to keep or change.
+		return fmt.Errorf("%w: enrolling a person needs a login — lowercase "+
+			"segments joined by DOTS (jane.doe). It is the name every change "+
+			"they make is recorded under while they hold no seat, and without "+
+			"one they would be recorded as nobody", ErrInvalidLogin)
 	}
-	return nil
+	return loginFits(e.Kind, e.Login)
 }
 
 // redeemable refuses an enrolment its invitation does not cover, read inside

@@ -39,12 +39,24 @@ type inviteView struct {
 	// checks before they act on a link.
 	InvitedBy string `json:"invited_by,omitempty"`
 
+	// Login is the login this form PROPOSES, derived from the address by
+	// [iam.LoginFromAddress]: every person enrols with one, and somebody
+	// following a link has typed nothing yet. The person keeps it or
+	// changes it — the redemption takes whatever they post and nothing
+	// is derived silently, because a name recorded beside everything they
+	// do is one they saw first. Absent when nothing in the address fits
+	// the grammar, and the form then asks for one outright.
+	Login string `json:"login,omitempty"`
+
 	// MinPasswordLength is the floor, so a form refuses before it posts.
 	MinPasswordLength int `json:"min_password_length"`
 }
 
 // inviteRedeem is what redeeming presents.
 type inviteRedeem struct {
+	// Login is REQUIRED: every person enrols with one, in the person
+	// grammar (jane.doe). The view proposes one; an absent one is refused
+	// 400 by the enrolment, naming the rule.
 	Login    string `json:"login"`
 	Name     string `json:"name"`
 	Password string `json:"password"`
@@ -70,6 +82,7 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	httpjson.Write(w, http.StatusOK, inviteView{
 		Email: email, InvitedBy: held.InvitedBy,
+		Login:             iam.LoginFromAddress(email),
 		MinPasswordLength: iam.MinPasswordChars,
 	})
 }
