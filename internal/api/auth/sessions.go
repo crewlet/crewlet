@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
@@ -310,6 +309,13 @@ type sessionAnswer struct {
 	// person. The GUARD composes that principal, through the one function
 	// the token's own bearer is composed through — see [Guard.exchanged].
 	tierA *config.APIToken
+
+	// malformed is the cookie value when it is not a bearer of this format
+	// at all — forged, truncated, or signed under a key this deployment
+	// does not hold — which is a credential presented and refused. The
+	// guard MARKS it and a guarded route's refusal counts it; see
+	// audit.go for why the count is not taken here.
+	malformed string
 }
 
 // resolve turns a cookie into an answer, or reports that this request carries
@@ -353,11 +359,15 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// existed tells an attacker holding it the same.
 		log.InfoContext(r.Context(), "api_session_refused",
 			"row", string(v.Row), "detail", v.Detail)
-		s.refused(r, v, cookie, client)
+		s.ended(r, v)
 		for _, clear := range session.Clears(s.external) {
 			http.SetCookie(w, clear)
 		}
-		return sessionAnswer{how: iam.Anonymous, presented: true}
+		answer := sessionAnswer{how: iam.Anonymous, presented: true}
+		if v.Row == session.RowMalformed {
+			answer.malformed = cookie
+		}
+		return answer
 	}
 
 	if tokens != nil {
@@ -609,12 +619,13 @@ func (s *Sessions) reuse(r *http.Request, v session.Validation, remote string) {
 	s.onReuse(ctx, v.Bearer.Person)
 }
 
-// refused records what a refusing row means for the audit trail — which, for
+// ended records what a refusing row means for the audit trail — which, for
 // most rows, is nothing.
 //
-// A MALFORMED VALUE is a credential presented and refused: a forged cookie,
-// one signed under a key this deployment does not hold. It is a failed attempt
-// of method `bearer`, counted and never a row of its own.
+// A MALFORMED VALUE is a credential presented and refused, and it is not
+// recorded here: [Sessions.resolve] hands it back for the guard to mark,
+// because whether it was somebody's failed attempt depends on whether the
+// route needed it — see audit.go.
 //
 // A DEADLINE is the one way a session ends that no record states — the idle
 // deadline lives in the bearer and nowhere else — so this is the only frame
@@ -625,14 +636,8 @@ func (s *Sessions) reuse(r *http.Request, v session.Validation, remote string) {
 // ended by a record, and whoever wrote the record already said so; a second
 // announcement from every node a stale cookie reaches would name the wrong
 // cause.
-func (s *Sessions) refused(r *http.Request, v session.Validation, cookie string,
-	client func(*http.Request) string) {
-
+func (s *Sessions) ended(r *http.Request, v session.Validation) {
 	switch {
-	case v.Row == session.RowMalformed:
-		s.audit.Failed(r.Context(), authevents.Failure{
-			Client: client(r), Method: types.FailBearer, Subject: cookie,
-		})
 	case v.Row == session.RowEnded && v.Deadline != "":
 		reason := types.EndIdle
 		if v.Deadline == session.DeadlineAbsolute {

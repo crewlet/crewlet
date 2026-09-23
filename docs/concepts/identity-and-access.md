@@ -1330,12 +1330,23 @@ sign-in, a refused second factor, an identity-provider round trip that did not
 verify, a wrong bootstrap code, an invitation link that answers `410` (nobody
 issued it, it was redeemed or aged out, or its address is already enrolled —
 the id in the link is the credential, so a source walking ids is guessing at
-one) and a refused bearer credential each do two things and publish nothing:
+one) and a bearer credential refused by a route that needs one each do two
+things and publish nothing:
 
 - add one to the `crewlet.auth.attempts.failed` counter, by `method` and
   whether the throttle turned it away — the per-attempt number, for a
   dashboard or an alert (see [Metrics](../reference/metrics.md));
 - fold into a tally keyed on the client and the minute.
+
+A credential the guard never relied on is not an attempt. The routes served
+without one — the webhooks, the sign-in routes, the per-run sandbox paths —
+authenticate by their own means, so what they carry is not the guard's to
+count: the Atlassian Forge relay sends its own signed JWT as a bearer on
+every Jira and Confluence delivery, and a browser loading the sign-in page
+may still hold a cookie signed under a key the deployment has since retired.
+Neither is a failed sign-in, and neither is an open dashboard tab re-checking
+the credential it connected with. A refusal is counted where a route that
+needs a credential answered `401` because of it.
 
 When the minute has closed, the engine publishes **one `iam_login_failures`
 row per client** carrying the number of attempts, how many the throttle turned

@@ -146,6 +146,65 @@ func TestARefusedBearerIsCountedAndNeverPublished(t *testing.T) {
 	}
 }
 
+// A CREDENTIAL AN UNGUARDED ROUTE CARRIES IS NOT A FAILED SIGN-IN.
+//
+// The Forge relay posts every Jira and Confluence delivery to /webhooks/forge
+// with its own `Authorization: Bearer <JWT>`, which that route verifies against
+// the relay's keys and which no Tier A entry will ever match. Counted at the
+// resolution, each delivery was a bearer failure — a DIFFERENT value each
+// time, so the relay's address climbed toward a spray's distinct-name count
+// every minute. The same holds for a browser loading the sign-in page with a
+// cookie signed under a retired key, and for an open socket re-checking its
+// credential: none of them is somebody's attempt to authenticate here.
+//
+// Mutation: count the refusal inside Resolve (where it was) and every arm
+// below counts one; count it before the middleware's Unguarded check and the
+// first two do.
+func TestACredentialNoGuardReliedOnIsNotAFailedAttempt(t *testing.T) {
+	t.Parallel()
+	tr := newAuditTrail(t)
+	g := tierA(t, tr, false)
+	const forgeJWT = "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJmb3JnZSJ9.c2lnbmF0dXJl"
+	for range 3 {
+		if got := call(g, answering(http.StatusOK), auth.WebhookPrefix+"forge",
+			forgeJWT); got != http.StatusOK {
+			t.Fatalf("the forge delivery answered %d, want the route's own 200", got)
+		}
+	}
+	if got := tr.failed(types.FailBearer); got != 0 {
+		t.Errorf("three Forge deliveries counted %d bearer failures, want 0: "+
+			"the route verifies its own signature and the guard relied on "+
+			"nothing", got)
+	}
+
+	// A cookie that is not a bearer of this format, on the sign-in page.
+	rig := newSignedIn(t)
+	rig.cookie = "v2.nonsense"
+	gs := rig.withAudit(tr)
+	rig.call(gs, http.MethodGet, auth.PathAuthConfig, rig.withCookie)
+	if got := tr.failed(types.FailBearer); got != 0 {
+		t.Errorf("a stale cookie on the sign-in page counted %d failures, want 0", got)
+	}
+
+	// A socket re-checking the credential it was opened with.
+	req := httptest.NewRequest(http.MethodGet, auth.SocketPath+"?token=not-the-token", nil)
+	resolved, _ := g.Resolve(httptest.NewRecorder(), req)
+	if _, how := iam.From(resolved.Context()); how != iam.Anonymous {
+		t.Fatalf("a wrong token resolved as %v, want anonymous", how)
+	}
+	if got := tr.failed(types.FailBearer); got != 0 {
+		t.Errorf("a resolution outside the middleware counted %d failures, want 0", got)
+	}
+
+	// THE CONTROL: the same wrong bearer on a guarded route IS the attempt.
+	if got := call(g, answering(http.StatusOK), auth.SocketPath, "not-the-token"); got != http.StatusUnauthorized {
+		t.Fatalf("a wrong bearer on the socket answered %d", got)
+	}
+	if got := tr.failed(types.FailBearer); got != 1 {
+		t.Errorf("a wrong bearer on a guarded route counted %d, want 1", got)
+	}
+}
+
 // A TIER A TOKEN'S USE IS ONE ROW AN HOUR, unless its entry asks for every use.
 //
 // Mutation: record per request regardless of the entry and the hourly case

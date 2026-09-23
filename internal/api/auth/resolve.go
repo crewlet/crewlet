@@ -260,11 +260,14 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 			// this node checked and the answer was no. Unknown is
 			// reserved for the question it could not ask.
 			//
-			// AND IT IS A FAILED ATTEMPT, counted — never a row of its
-			// own, because whoever holds the wrong value decides how
-			// many of these there are. See audit.go.
-			g.refused(r, candidate)
-			return r.WithContext(iam.WithAnonymous(r.Context())), nil
+			// AND IT IS MARKED, so a guarded route's refusal can count
+			// it as a failed attempt — never a row of its own, because
+			// whoever holds the wrong value decides how many of these
+			// there are, and never counted HERE, because an unguarded
+			// route's bearer was not this guard's to check. See
+			// audit.go.
+			return r.WithContext(refusedCredential(
+				iam.WithAnonymous(r.Context()), candidate)), nil
 		}
 		principal, how, refusal := g.principalFor(r.Context(), entry, g.now())
 		if how == iam.Unknown {
@@ -292,7 +295,11 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 			if answer.how == iam.Unknown {
 				return r.WithContext(iam.WithUnresolved(r.Context(), errIdentityUnavailable)), answer.refusal
 			}
-			return r.WithContext(iam.WithAnonymous(r.Context())), answer.refusal
+			ctx := iam.WithAnonymous(r.Context())
+			if answer.malformed != "" {
+				ctx = refusedCredential(ctx, answer.malformed)
+			}
+			return r.WithContext(ctx), answer.refusal
 		}
 	}
 	return r.WithContext(iam.WithAnonymous(r.Context())), nil

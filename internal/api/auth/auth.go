@@ -597,6 +597,10 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			// durable record of failed authentication is a COALESCED
 			// count, per source per minute, paced by the engine's own
 			// loop rather than by the caller.
+			//
+			// COUNTED HERE AND ONLY HERE: this is the one arm where a
+			// refused credential decided something. See audit.go.
+			g.refused(r)
 			log.Warn("api_auth_failed",
 				"route", path,
 				"reason", "missing_or_invalid_bearer",

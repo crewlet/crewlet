@@ -31,11 +31,26 @@ import (
 //     they are events, COALESCED to one per token per [TokenUseWindow] unless
 //     the token's own entry sets `audit_every_use`.
 //
-// USE AND OVERREACH ARE A REQUEST'S, and are recorded by the middleware alone.
+// ALL THREE ARE A REQUEST'S, and are recorded by the middleware alone.
 // [Guard.Resolve] also runs when an open socket re-checks the credential it was
 // opened with, once a minute, and a re-check is not somebody using a token: a
 // per-request audit that counted it would write a row a minute for every tab
 // left open.
+//
+// # A refusal is an attempt only where the guard RELIED on the credential
+//
+// Resolve runs on every request, the [Unguarded] ones included, and those
+// carry credentials that were never this guard's to check: the Atlassian Forge
+// relay's own `Authorization: Bearer` JWT on /webhooks/forge, verified by that
+// route against the relay's keys; a sign-in page loaded by a browser that
+// still holds a cookie signed under a retired key. Counted at the resolution,
+// every legitimate Jira and Confluence delivery was a failed bearer sign-in —
+// a distinct value each time, so the relay's address climbed toward a spray's
+// distinct-name count every minute, and any alert on the counter fired on
+// ordinary traffic. So Resolve only MARKS what it refused ([refusedCredential])
+// and the middleware counts the mark in the one arm where the refusal decided
+// something: a guarded route answering 401. The credential exchange at
+// `POST /auth/token` is such a route, and so is the socket's handshake.
 
 // Audit is where the guard's authentication facts go.
 //
@@ -113,13 +128,32 @@ func PresentedTierA(ctx context.Context) (config.APIToken, bool) {
 	return use.entry, ok && use.presented && use.entry.ID != ""
 }
 
-// refused records a presented credential this node checked and turned away.
+// refusedKey carries the credential [Guard.Resolve] checked and turned away,
+// from the resolution to the one arm of the middleware that counts it.
+type refusedKey struct{}
+
+// refusedCredential marks a request whose presented credential this node
+// checked and refused — a bearer no entry, token or row accepts, or a cookie
+// that is not a bearer of this format at all.
 //
-// THE VALUE GOES IN AS THE SUBJECT and no further: the trail keys it under a
-// secret of its own the moment it arrives, so what leaves the process is how
-// many DIFFERENT values one client sprayed in a minute, never any of them.
-func (g *Guard) refused(r *http.Request, presented string) {
-	if g.audit == nil {
+// A MARK AND NOT A COUNT: whether the refusal is somebody's failed attempt
+// depends on whether the route needed the credential, which the resolution
+// does not know and the middleware does. See the file doc.
+//
+// THE VALUE RIDES ON THE REQUEST'S OWN CONTEXT under an unexported key, and
+// goes no further than the trail, which keys it under a secret of its own
+// the moment it arrives — so what leaves the process is how many DIFFERENT
+// values one client sprayed in a minute, never any of them.
+func refusedCredential(ctx context.Context, presented string) context.Context {
+	return context.WithValue(ctx, refusedKey{}, presented)
+}
+
+// refused counts the credential a request's resolution refused, if it
+// refused one — called by the middleware on a guarded route's 401 and
+// nowhere else.
+func (g *Guard) refused(r *http.Request) {
+	presented, marked := r.Context().Value(refusedKey{}).(string)
+	if g.audit == nil || !marked {
 		return
 	}
 	g.audit.Failed(r.Context(), authevents.Failure{

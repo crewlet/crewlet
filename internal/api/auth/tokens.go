@@ -142,13 +142,14 @@ func (g *Guard) token(r *http.Request, presented credential.Token,
 			"credential", presented.ID, "detail", check.Detail)
 		return r.WithContext(iam.WithUnresolved(ctx, errTokenUnavailable)), nil
 	default:
-		// PRESENT AND NO GOOD IS ANONYMOUS, and a failed attempt counted
-		// like any other refused bearer — the log carries which fact
-		// decided, the caller one code for all of them.
+		// PRESENT AND NO GOOD IS ANONYMOUS, and marked like any other
+		// refused bearer, which a guarded route's refusal counts as a
+		// failed attempt — the log carries which fact decided, the caller
+		// one code for all of them.
 		log.InfoContext(ctx, "api_token_refused",
 			"credential", presented.ID, "detail", check.Detail)
-		g.refused(r, candidate)
-		return r.WithContext(iam.WithAnonymous(ctx)), nil
+		return r.WithContext(refusedCredential(iam.WithAnonymous(ctx),
+			candidate)), nil
 	}
 
 	owner := row.Owner

@@ -508,9 +508,12 @@ func Catalogue() []Instrument {
 			Attributes: []string{"method", "outcome"},
 			Shows: "Every failed attempt to prove an identity, as it happens: " +
 				"a sign-in, a step-up, a founder code, a provider round trip " +
-				"that ended in nobody, or a bearer presented and refused " +
-				"(`method`), and whether the attempt was verified and wrong " +
-				"or turned away at the throttle's ceiling (`outcome`). It is " +
+				"that ended in nobody, or a bearer presented to a route that " +
+				"needs one and refused — a credential an unguarded route " +
+				"verifies itself, such as a webhook relay's own JWT, is " +
+				"never counted (`method`), and whether the attempt was " +
+				"verified and wrong or turned away at the throttle's " +
+				"ceiling (`outcome`). It is " +
 				"the ONLY per-attempt record there is, by design: an " +
 				"unauthenticated caller authors this rate, so the event log " +
 				"gets one coalesced `iam_login_failures` row per client per " +
