@@ -179,7 +179,7 @@ node is. The dashboard's retention screen shows it beside the floor when the
 two differ.
 
 **A floor belongs to one generation of its log.** Right after a
-[reanchor](#re-anchoring-a-recreated-stream) the published floor, its terms and
+[reanchor](#re-anchoring-a-recreated-or-restored-log) the published floor, its terms and
 its blocking term describe the stream that was left, so the status shows that
 domain with no floor, no terms and not blocked until the trim's first tick on
 the adopted stream — exactly as the write fence and readiness read it. The
@@ -208,7 +208,7 @@ reason, and makes the same split reads do:
 - `wrong_stream` when the node's own checkpoint is past the log's end — judged
   on where the node's applier stands rather than on the state the write
   decided from, because whatever it appends lands relative to the former. See
-  [Re-anchoring a recreated stream](#re-anchoring-a-recreated-stream).
+  [Re-anchoring a recreated or restored log](#re-anchoring-a-recreated-or-restored-log).
 
 None of them is a conflict: a conflict tells a caller somebody else is editing
 and to re-read, and every one of these is about this node rather than the
@@ -414,7 +414,7 @@ once it has applied every record up to the one just before that bound: in
 `crewlet retention status`, its `SEQ` for each of those domains has reached one
 less than the higher of the domain's `TRIM FLOOR` and `FIRST`. The refusal's
 own `floor`, `first_seq` and `generation` are the numbers it compared — right
-after a [re-anchor](#re-anchoring-a-recreated-stream) the domain shows no
+after a [re-anchor](#re-anchoring-a-recreated-or-restored-log) the domain shows no
 `TRIM FLOOR` until the trim's first tick on the adopted stream, and the bound
 is `FIRST` alone — and running the readmission again is always safe, since a
 refusal writes nothing. A readmission that reaches one log and not the other is finished the
@@ -559,7 +559,7 @@ in `seal` mode, which refuses configuration writes, so there is nowhere legal
 for a re-apply to run. Three attempts, then the operation reports blocked and
 waits for you.
 
-## Re-anchoring a recreated stream
+## Re-anchoring a recreated or restored log
 
 If a stream is genuinely recreated — deleted and remade, restored from a
 broker-level backup, rebuilt by hand — its sequences restart at 1. Every
@@ -597,7 +597,8 @@ on from rows the log does not contain. The engine cannot tell that from the
 harmless case, so it logs `statelog_ahead_of_log_cleared` saying both. **After
 restoring a broker, deal with every node whose checkpoint was past the restored
 log's end before anything else writes to it** — re-anchor it with the verb
-below, or have it adopt a peer's snapshot through [the join
+below, which treats it as the *restored* case and follows the log from its end,
+or have it adopt a peer's snapshot through [the join
 runbook](#the-join-runbook).
 
 **A rebuild under a node that never restarts is caught too**, wherever the node
@@ -626,7 +627,7 @@ followed from its head. A refused write is an `unavailable` answer naming
 
 ```
 crewlet retention reanchor -stream CREWLET_TRACKER_LOG
-# prints the live stream's created_at, and refuses
+# prints the live stream's created_at and which case it is, and refuses
 
 crewlet retention reanchor -stream CREWLET_TRACKER_LOG -confirm 2031-04-02T03:00:00.418226517Z
 ```
@@ -638,19 +639,36 @@ and feeding it straight back — otherwise it would be confirming against its ow
 output. An instant that differs at the microsecond is another stream, and is
 refused.
 
-What a reanchor says is: *these rows are what they are; follow the new stream
-from its head.* The durable tables are the record of truth and the stream is a
+What a reanchor says is: *these rows are what they are; follow the live stream
+from here.* The durable tables are the record of truth and the stream is a
 replay window, so the rows survive and the window is replaced. The generation
 is what makes an old position **comparable and safely stale** rather than
 indistinguishable from a current one — an arbitration anchor below it forms
 `expect = 0` on its next write, and a client cursor below it is refused by name.
 
+**Two cases, and they differ in where the log is followed from.** The verb
+decides which from the same reading of the stream it keys the checkpoint to,
+prints it before you confirm, and names it in its answer and in the
+`statelog_reanchored` line:
+
+| Case | What the broker holds | Where the new checkpoint goes |
+|---|---|---|
+| `recreated` | Another stream: its creation instant is not the one this node's rows are keyed to. It holds nothing the rows came from. | One below its **first surviving record**, so the domain applies everything it still holds. |
+| `restored` | The **same** stream — creation instant and all — brought back from an older copy, ending below this node's checkpoint. What it holds is a prefix of the history the rows came from. | At the log's **end**, so none of those records is applied again. |
+
+The difference is not cosmetic. A restored copy replayed from its first record
+would be applied in a generation that outranks every row, so each object would
+roll back to the state it had when the copy was taken, and whatever the rows
+gained since would be written over. A same-stream log that ends at or past the
+checkpoint is neither case — it still holds every record the rows are missing —
+and the verb refuses it as having nothing to re-anchor.
+
 **It moves one log.** Each domain — the tracker, the knowledge base, the
 vectors — has its own stream and its own generation, and a reanchor moves only
-the one you named: that domain's checkpoint goes to the next generation, one
-below the live stream's first surviving sequence, keyed to the live instant.
-Every other domain keeps its checkpoint, its generation and its stream exactly
-as they were. If more than one log was rebuilt, re-anchor each of them.
+the one you named: that domain's checkpoint goes to the next generation, where
+its case puts it, keyed to the live instant. Every other domain keeps its
+checkpoint, its generation and its stream exactly as they were. If more than
+one log was rebuilt, re-anchor each of them.
 
 **It needs no restart.** The domain's apply loop is paused for the length of
 the transition and resumed on the adopted stream when it completes: its reads
@@ -669,10 +687,15 @@ the same generation and finds its own record already there.
 
 It rewrites no row. Nothing needs it: a version or an anchor from before the
 reanchor sits below every position the adopted stream will produce, which is
-the order every comparison wants.
+the order every comparison wants. After a restored reanchor an object whose last
+record the copy kept is written against that record — the rows already hold it
+— so nothing is held up waiting for an applier that will never re-read it.
 
-It does **not** recover records that were on the old stream and were never
-applied here.
+For a recreated log it does **not** recover records that were on the old stream
+and were never applied here. For a restored one it keeps what the rows hold
+past the copy, which is on no log any more — so no other node can replay it,
+and each of them has to adopt a snapshot from this node through [the join
+runbook](#the-join-runbook).
 
 For the tracker and the knowledge base it refuses while any peer is hydrated on
 the live stream — at this node's generation, or at a later one, which is a peer

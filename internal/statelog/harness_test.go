@@ -214,6 +214,17 @@ type fakeRows struct {
 	// reaches and a derived value never does.
 	override map[string]statelog.Position
 
+	// pinned, when a subject has one, is the anchor the snapshot reports
+	// WHATEVER this node's applier has committed — the state a restored
+	// log's reanchor leaves: the subject's record is at or below the
+	// checkpoint, and the anchor the row holds for it is in the generation
+	// before, because the new generation's checkpoint was PLACED at the log's
+	// end rather than reached by consuming it. The fake's own derivation
+	// reads every record at or below the checkpoint as consumed in the
+	// current generation, which is exactly the invariant that transition
+	// breaks.
+	pinned map[string]statelog.Position
+
 	// decideErr, when set, is what the domain's own decision returns.
 	decideErr error
 
@@ -229,6 +240,7 @@ func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statel
 	r.mu.Lock()
 	snap, err := r.snap, r.decideErr
 	staged, override := r.override[subj.String()]
+	pinned, pin := r.pinned[subj.String()]
 	after := r.afterSnapshot
 	r.calls++
 	r.mu.Unlock()
@@ -245,6 +257,9 @@ func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statel
 	snap.Anchor = r.anchorFor(ctx, subj)
 	if override && snap.Anchor.Seq == 0 {
 		snap.Anchor = staged
+	}
+	if pin {
+		snap.Anchor = pinned
 	}
 	if err != nil {
 		return statelog.Snap{}, err
@@ -284,6 +299,17 @@ func (r *fakeRows) stage(subj statelog.Subject, at statelog.Position) {
 		r.override = map[string]statelog.Position{}
 	}
 	r.override[subj.String()] = at
+}
+
+// pin makes the snapshot report at as the subject's anchor whatever the applier
+// has committed — see [fakeRows.pinned].
+func (r *fakeRows) pin(subj statelog.Subject, at statelog.Position) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pinned == nil {
+		r.pinned = map[string]statelog.Position{}
+	}
+	r.pinned[subj.String()] = at
 }
 
 func (r *fakeRows) set(fn func(*statelog.Snap)) {

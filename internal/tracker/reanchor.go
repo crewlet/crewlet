@@ -45,6 +45,23 @@ import (
 // GenerationRecord is the tracker's [statelog.GenerationEncoder].
 type GenerationRecord struct{}
 
+// generationReason is the audit row's account of why the log was adopted,
+// which differs by case.
+//
+// BY CASE, because `tracker_log_generations.reason` is the one place a later
+// reader learns what happened to the log, and the two cases are different
+// incidents with different consequences: a recreated log lost whatever this
+// node never applied, and a restored one was followed from its end because the
+// rows already held it. Every reanchor used to record the first, restored
+// brokers included.
+func generationReason(c statelog.ReanchorCase) string {
+	if c == statelog.ReanchorRestored {
+		return "the broker was restored from an older copy, so the log ended " +
+			"below the checkpoint; it is followed from its end"
+	}
+	return "the stream was recreated and its sequences restarted"
+}
+
 // GenerationRecord encodes the reanchor's record for the NEW generation.
 //
 // CREATE-ONLY ON THE GENERATION'S OWN SUBJECT, which is first-writer-wins used
@@ -71,7 +88,7 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 		NewStreamCreatedAt:  f.Inputs.StreamCreatedAt.UTC(),
 		PrevLastSeqSeen:     f.Inputs.Highest,
 		ReanchoredBy:        author,
-		Reason:              "the stream was recreated and its sequences restarted",
+		Reason:              generationReason(f.Case),
 	})
 	if err != nil {
 		return statelog.GenerationRecord{}, false, fmt.Errorf("tracker: encode "+

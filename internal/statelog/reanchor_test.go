@@ -133,7 +133,8 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 	}
 
 	// A CLEAN ONE PROCEEDS, to one past the domain's own generation.
-	gen, err := statelog.PermitReanchor(reanchorInputs(), confirmed())
+	plan, err := statelog.PermitReanchor(reanchorInputs(), confirmed())
+	gen := plan.Generation
 	if err != nil {
 		t.Fatalf("a clean reanchor was refused: %v", err)
 	}
@@ -186,7 +187,8 @@ func TestADomainClaimingNoIdentityIsNotHeldToTheFleetGuards(t *testing.T) {
 	in.PeersHydrated = 2
 	in.Position = 10
 	in.RegisterReadable = false
-	gen, err := statelog.PermitReanchor(in, confirmed())
+	plan, err := statelog.PermitReanchor(in, confirmed())
+	gen := plan.Generation
 	if err != nil {
 		t.Fatalf("a reanchor of a domain claiming no identity was refused by a "+
 			"guard that protects an identity claim: %v", err)
@@ -199,6 +201,125 @@ func TestADomainClaimingNoIdentityIsNotHeldToTheFleetGuards(t *testing.T) {
 	}); !errors.Is(err, statelog.ErrReanchorRefused) {
 		t.Fatalf("a wrong confirmation was accepted for a domain claiming no "+
 			"identity: %v", err)
+	}
+}
+
+// A REANCHOR NAMES THE CASE IT ANSWERS, AND EACH CASE PUTS THE CHECKPOINT IN
+// ITS OWN PLACE.
+//
+// Recreated — the live stream is another stream than the rows are keyed to —
+// goes one below its first surviving sequence, because the rows hold none of
+// it. Restored — the SAME stream, ending below the checkpoint — goes at the
+// log's end, because the rows hold every record the copy kept: one below the
+// first record would replay that whole prefix into a generation that outranks
+// every row, rolling every object back to the copy. A same-stream log that
+// reaches the checkpoint is neither, and there is nothing to re-anchor.
+func TestAReanchorNamesTheCaseItAnswers(t *testing.T) {
+	t.Parallel()
+	restored := func() statelog.ReanchorInputs {
+		in := reanchorInputs()
+		// THE SAME INSTANT AS THE ROW KEEPS IT — microseconds — which is
+		// the same stream as the broker's nanoseconds.
+		in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
+		in.FirstSeq, in.LastSeq, in.Position = 1, 7_000, 9_000
+		return in
+	}
+	for name, tc := range map[string]struct {
+		in     statelog.ReanchorInputs
+		want   statelog.ReanchorCase
+		cursor uint64
+		refuse string
+	}{
+		"a recreated stream still holding its first records": {
+			in: func() statelog.ReanchorInputs {
+				in := reanchorInputs()
+				in.FirstSeq, in.LastSeq = 1, 30
+				return in
+			}(),
+			want: statelog.ReanchorRecreated, cursor: 0,
+		},
+		"a recreated stream already trimmed": {
+			in: func() statelog.ReanchorInputs {
+				in := reanchorInputs()
+				in.FirstSeq, in.LastSeq = 42, 60
+				return in
+			}(),
+			want: statelog.ReanchorRecreated, cursor: 41,
+		},
+		"a recreated stream nobody has written": {
+			in: reanchorInputs(), want: statelog.ReanchorRecreated, cursor: 0,
+		},
+		"rows keyed to no stream at all": {
+			in: func() statelog.ReanchorInputs {
+				in := reanchorInputs()
+				in.KeyedTo = time.Time{}
+				in.FirstSeq, in.LastSeq = 5, 9
+				return in
+			}(),
+			want: statelog.ReanchorRecreated, cursor: 4,
+		},
+		"a restored copy ending below the checkpoint": {
+			in: restored(), want: statelog.ReanchorRestored, cursor: 7_000,
+		},
+		"a restored copy the trim has since shortened": {
+			in: func() statelog.ReanchorInputs {
+				in := restored()
+				in.FirstSeq = 6_500
+				return in
+			}(),
+			want: statelog.ReanchorRestored, cursor: 7_000,
+		},
+		"the same stream ending exactly at the checkpoint": {
+			in: func() statelog.ReanchorInputs {
+				in := restored()
+				in.LastSeq = in.Position
+				return in
+			}(),
+			refuse: "nothing to re-anchor",
+		},
+		"the same stream past the checkpoint": {
+			in: func() statelog.ReanchorInputs {
+				in := restored()
+				in.LastSeq = in.Position + 50
+				return in
+			}(),
+			refuse: "nothing to re-anchor",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			which, cursor, err := tc.in.Case()
+			plan, permitErr := statelog.PermitReanchor(tc.in, confirmed())
+			if tc.refuse != "" {
+				for _, e := range []error{err, permitErr} {
+					if !errors.Is(e, statelog.ErrReanchorRefused) ||
+						!strings.Contains(e.Error(), tc.refuse) {
+						t.Fatalf("= %v, want a refusal saying %q", e, tc.refuse)
+					}
+				}
+				return
+			}
+			if err != nil || permitErr != nil {
+				t.Fatalf("Case = %v, PermitReanchor = %v, want %s", err, permitErr, tc.want)
+			}
+			if which != tc.want || cursor != tc.cursor {
+				t.Fatalf("Case = %s at %d, want %s at %d", which, cursor, tc.want, tc.cursor)
+			}
+			if !which.Valid() {
+				t.Fatalf("%q is not a valid case", which)
+			}
+			if want := (statelog.ReanchorPlan{
+				Generation: tc.in.Generation + 1, Case: tc.want, Cursor: tc.cursor,
+			}); plan != want {
+				t.Fatalf("PermitReanchor = %+v, want %+v — the plan is the case the "+
+					"status names", plan, want)
+			}
+		})
+	}
+	for _, bad := range []statelog.ReanchorCase{"", "rebuilt", "Restored"} {
+		if bad.Valid() {
+			t.Errorf("%q reads as a valid case", bad)
+		}
 	}
 }
 
@@ -466,7 +587,8 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 
 	in := reanchorInputs()
 	in.FirstSeq = 42
-	gen, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), in, confirmed())
+	plan, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), in, confirmed())
+	gen := plan.Generation
 	if err != nil {
 		t.Fatalf("Reanchor: %v", err)
 	}
@@ -530,6 +652,59 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	}
 	if got := runner.Committed(); got != secondAt {
 		t.Fatalf("the other domain's applier stands at %s, want %s", got, secondAt)
+	}
+}
+
+// A RESTORED LOG IS RE-ANCHORED AT ITS END: the consumer, the checkpoint and
+// the runner all go to the last sequence the copy holds, and the completion
+// line names the case.
+//
+// The rows already hold every record the copy kept, so nothing below its end
+// is applied again — and the generation record, appended after the end was
+// read, is the first thing the resumed applier reads.
+func TestARestoredLogIsReanchoredAtItsEnd(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	f := newReanchorFixture(t)
+	seedCursor(t, f.db, probeStream,
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, reanchorCreated)
+	deps := f.deps(probeDomain{})
+	deps.Logger = slog.New(slog.NewJSONHandler(&buf, nil))
+	in := reanchorInputs()
+	in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
+	in.FirstSeq, in.LastSeq = 1, 7_000
+
+	plan, err := statelog.Reanchor(t.Context(), deps, in, confirmed())
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	want := statelog.Position{Stream: probeStream, Generation: 2, Seq: 7_000}
+	if plan.Case != statelog.ReanchorRestored || plan.Cursor != want.Seq {
+		t.Fatalf("the plan is %+v, want the restored case at %d", plan, want.Seq)
+	}
+	if at, created := cursorOf(t, f.db, probeStream); at != want ||
+		statelog.IdentityOf(created, reanchorCreated, true) != statelog.StreamSame {
+		t.Fatalf("the checkpoint is %s keyed to %s, want %s keyed to the same "+
+			"stream — one below the first record would replay the whole copy", at,
+			created, want)
+	}
+	if len(f.consumer.after) != 1 || f.consumer.after[0] != want.Seq {
+		t.Fatalf("the consumer was moved to %v, want [%d]", f.consumer.after, want.Seq)
+	}
+	if len(f.runner.at) != 1 || f.runner.at[0] != want {
+		t.Fatalf("the runner was re-keyed to %v, want %s", f.runner.at, want)
+	}
+	for _, event := range []string{"statelog_reanchor_started", "statelog_reanchored"} {
+		lines := logRecords(t, buf.Bytes(), event)
+		if len(lines) != 1 || lines[0]["case"] != string(statelog.ReanchorRestored) {
+			t.Fatalf("%s = %v, want one line naming the restored case", event, lines)
+		}
+	}
+	done := logRecords(t, buf.Bytes(), "statelog_reanchored")
+	if detail, _ := done[0]["detail"].(string); !strings.Contains(detail, "restored") ||
+		!strings.Contains(detail, "replays none") {
+		t.Errorf("statelog_reanchored does not say the copy was replayed from its "+
+			"end: %q", detail)
 	}
 }
 
@@ -656,7 +831,8 @@ func TestAReanchorInterruptedAfterItsRecordIsFinishedByRerunningIt(t *testing.T)
 	}
 
 	f.consumer.fail = nil
-	gen, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), reanchorInputs(), confirmed())
+	plan, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), reanchorInputs(), confirmed())
+	gen := plan.Generation
 	if err != nil {
 		t.Fatalf("the re-run failed: %v — a record already on the subject is the "+
 			"re-run racing itself, which first-writer-wins exists to settle", err)
@@ -723,7 +899,8 @@ func TestADomainKeepingNoGenerationRecordStillMoves(t *testing.T) {
 	f := newReanchorFixture(t)
 	deps := f.deps(probeDomain{})
 	deps.Record = probeGeneration{keeps: false}
-	gen, err := statelog.Reanchor(t.Context(), deps, reanchorInputs(), confirmed())
+	plan, err := statelog.Reanchor(t.Context(), deps, reanchorInputs(), confirmed())
+	gen := plan.Generation
 	if err != nil {
 		t.Fatalf("Reanchor: %v", err)
 	}
@@ -766,6 +943,7 @@ func TestAReanchorIsReportedOnceNamingWhatItDiscarded(t *testing.T) {
 		"cursor":             float64(0),
 		"prev_last_seq_seen": float64(9_000),
 		"stream":             probeStream,
+		"case":               string(statelog.ReanchorRecreated),
 	} {
 		if done[0][key] != want {
 			t.Errorf("statelog_reanchored %s = %v, want %v", key, done[0][key], want)
@@ -819,6 +997,123 @@ func TestAnAnchorBelowTheNewGenerationWritesAtZero(t *testing.T) {
 			"names a sequence in a dead number space, and publishing at it is "+
 			"refused for ever", *expects[0])
 	}
+}
+
+// A WRITE AFTER A RESTORED LOG'S REANCHOR ARBITRATES ON THE RECORD ITS ROWS
+// ALREADY HOLD.
+//
+// The restored case puts the new generation's checkpoint at the log's END, so
+// every record the copy kept is below it and was never consumed in the new
+// generation: the subject's anchor is still the one from the generation before.
+// The publisher used to read that as "a peer wrote this and I have not applied
+// it" and wait for the applier to reach the subject's last record — which it
+// already stood past, so the wait returned at once, the fresh snapshot read the
+// same anchor, and every write to every object the copy kept spent its sixteen
+// rounds and came back a conflict nobody was causing.
+func TestAWriteAfterARestoredReanchorArbitratesOnTheRecordItsRowsHold(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	subject := probeSubject("kept")
+
+	// THE RESTORED COPY: the subject's own record, and another object's
+	// after it, so the log ends past the subject.
+	kept, _, err := h.log.Append(t.Context(), probePrefix+".object.kept", "op-old",
+		nil, []byte("old"))
+	if err != nil {
+		t.Fatalf("the copy's record for the subject: %v", err)
+	}
+	end, _, err := h.log.Append(t.Context(), probePrefix+".object.other", "op-other",
+		nil, []byte("other"))
+	if err != nil {
+		t.Fatalf("the copy's later record: %v", err)
+	}
+
+	// THE REANCHOR: generation 2, its checkpoint at the log's end, and the
+	// row's anchor left where the generation before put it.
+	h.gen.Store(2)
+	h.applier.advance(statelog.Position{Stream: probeStream, Generation: 2, Seq: end})
+	h.rows.pin(subject, statelog.Position{Stream: probeStream, Generation: 1, Seq: kept})
+
+	res, err := h.write(subject, "op-after-restore", "new")
+	if err != nil {
+		t.Fatalf("a write to an object the restored copy kept = %v — the rows hold "+
+			"its last record, so it is the expectation, not a position to wait for", err)
+	}
+	if res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("outcome = %q, want applied", res.Outcome)
+	}
+	expects := h.appends.expectations()
+	if len(expects) != 1 || expects[0] == nil || *expects[0] != kept {
+		t.Fatalf("the write appended with expectations %v, want one at %d — the "+
+			"subject's last record, which the checkpoint covers", derefAll(expects), kept)
+	}
+	if got := h.rows.snapshots(); got != 1 {
+		t.Fatalf("the write took %d snapshots, want one: nothing was behind", got)
+	}
+}
+
+// A RECORD THE SNAPSHOT'S CHECKPOINT DOES NOT COVER IS WAITED FOR, never
+// taken as the expectation — whatever the generation of the anchor below it.
+//
+// The rule above is sound only because the rows the decision read hold the
+// record it expects against. A subject whose last record is past the snapshot's
+// checkpoint, or a checkpoint in another generation's number space, is a
+// record those rows have not seen: expecting it would publish a decision
+// taken without it, and the broker would accept it.
+func TestARecordTheCheckpointDoesNotCoverIsWaitedFor(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		// committed is where this node's checkpoint stands when the write
+		// takes its first snapshot, given the peer's record at seq.
+		committed func(seq uint64) statelog.Position
+	}{
+		"a peer's record past the checkpoint": {
+			committed: func(seq uint64) statelog.Position {
+				return statelog.Position{Stream: probeStream, Generation: 2, Seq: seq - 1}
+			},
+		},
+		"a checkpoint still in the generation before": {
+			committed: func(seq uint64) statelog.Position {
+				return statelog.Position{Stream: probeStream, Generation: 1, Seq: seq + 10}
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			subject := probeSubject("a")
+			peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op",
+				nil, []byte("peer"))
+			if err != nil {
+				t.Fatalf("the peer's write: %v", err)
+			}
+			h.gen.Store(2)
+			h.applier.advance(tc.committed(peer))
+			h.rows.stage(subject, statelog.Position{Stream: probeStream, Generation: 1, Seq: 500})
+
+			if _, err := h.write(subject, "op-1", "mine"); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if got := h.rows.snapshots(); got != 2 {
+				t.Fatalf("the write took %d snapshot(s), want two — it must wait for "+
+					"the peer's record at %d and decide again, because the first "+
+					"snapshot's rows had not seen it", got, peer)
+			}
+		})
+	}
+}
+
+// derefAll renders a list of expectations for a failure message.
+func derefAll(expects []*uint64) []string {
+	out := make([]string, len(expects))
+	for i, e := range expects {
+		if e == nil {
+			out[i] = "none"
+			continue
+		}
+		out[i] = fmt.Sprint(*e)
+	}
+	return out
 }
 
 // A RE-ANCHORED RUNNER FOLLOWS THE ADOPTED STREAM, WITH NO RESTART.
@@ -886,7 +1181,7 @@ func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 	in := reanchorInputs()
 	in.StreamCreatedAt, in.KeyedTo, in.Generation, in.Position, in.Highest =
 		rebuilt, born, old.Generation, old.Seq, old.Seq
-	gen, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
+	plan, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
 		Domain: probeDomain{}, Stream: newReanchorLog(&order, rebuilt),
 		Record: probeGeneration{keeps: true}, Consumer: &reanchorConsumer{},
 		Runner: h.runner, DB: h.db.Replicated(), NodeID: "node-a",
@@ -894,6 +1189,7 @@ func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 	if err != nil {
 		t.Fatalf("Reanchor: %v", err)
 	}
+	gen := plan.Generation
 	if err := h.runner.StreamIdentity(); err != nil {
 		t.Fatalf("the re-anchored runner still refuses its writes: %v", err)
 	}

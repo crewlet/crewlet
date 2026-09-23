@@ -101,13 +101,20 @@ type ReanchorInputs struct {
 
 	// KeyedTo is the instant this domain's rows were keyed to before the
 	// transition — its checkpoint row's own — and zero where there was no
-	// checkpoint. Provenance only: the generation record carries it so the
+	// checkpoint. Compared with StreamCreatedAt it decides the case: the
+	// same instant is the same stream, restored rather than recreated
+	// ([ReanchorInputs.Case]). The generation record carries it too, so the
 	// audit says which stream the fleet walked away from.
 	KeyedTo time.Time
 
-	// FirstSeq is the live stream's first surviving sequence. The new
-	// cursor is one below it, which is zero on a fresh stream.
+	// FirstSeq is the live stream's first surviving sequence, and LastSeq
+	// the last one it wrote — both in the SAME answer as StreamCreatedAt,
+	// because together they are what decides the case ([ReanchorCase]) and
+	// where its checkpoint goes, and read separately they can straddle a
+	// rebuild. A recreated stream's new checkpoint is one below FirstSeq
+	// (zero on a fresh stream); a restored one's is LastSeq.
 	FirstSeq uint64
+	LastSeq  uint64
 
 	// PeersHydrated is how many peers are caught up on the LIVE stream —
 	// at this domain's generation or a later one, since a peer that has
@@ -148,8 +155,101 @@ type ReanchorInputs struct {
 	ClaimsIdentity bool
 }
 
-// PermitReanchor decides whether the transition may run, and to which
-// generation.
+// ReanchorCase is which of the two things that can happen to a log under a
+// node's rows a reanchor is answering. They put the new generation's checkpoint
+// in different places, and getting that wrong either loses records or applies
+// them twice.
+//
+// # Recreated: the live stream is not the one the rows are keyed to
+//
+// The stream was deleted and remade, or rebuilt by hand, so it has a new
+// creation instant and its sequences started again at 1. The rows hold nothing
+// from it, so the checkpoint goes one below its first surviving sequence and
+// the domain applies everything it still holds.
+//
+// # Restored: the live stream IS the one the rows are keyed to, and it ends below the checkpoint
+//
+// The broker was brought back from an older copy of its store, which keeps the
+// stream's creation instant. Its surviving records are a PREFIX of the history
+// the rows were derived from, so the rows already hold every one of them — and
+// the checkpoint goes at the log's END. One below the first surviving sequence
+// would replay that whole prefix into the new generation, and a record from a
+// higher generation outranks every version a row holds: every object would roll
+// back to the state it had when the copy was taken, and whatever the rows
+// gained since — the tail the copy never had — would be written over.
+//
+// A same-instant stream that ends AT OR PAST the checkpoint is neither case: it
+// holds every record the rows are missing, so there is nothing to re-anchor
+// ([ReanchorInputs.Case] refuses it).
+//
+// A named string for the reason every enum here is one: it travels — in the
+// log lines, the API's answer and the CLI's text — and an unknown value off the
+// wire is a value rather than a panic.
+type ReanchorCase string
+
+const (
+	// ReanchorRecreated is a stream with another creation instant than the
+	// one the rows are keyed to — or rows keyed to none — so the rows hold
+	// none of its records.
+	ReanchorRecreated ReanchorCase = "recreated"
+
+	// ReanchorRestored is the stream the rows are keyed to, ending below
+	// their checkpoint: a broker brought back from an older copy.
+	ReanchorRestored ReanchorCase = "restored"
+)
+
+// Valid reports whether c is one of the two cases.
+func (c ReanchorCase) Valid() bool {
+	return c == ReanchorRecreated || c == ReanchorRestored
+}
+
+// ReanchorPlan is what a permitted reanchor does: the generation it moves the
+// domain to, which case it is answering, and the sequence the new checkpoint
+// sits at.
+type ReanchorPlan struct {
+	Generation uint32
+	Case       ReanchorCase
+	Cursor     uint64
+}
+
+// Case is which case these facts describe and where the new checkpoint goes,
+// or a refusal when they describe neither.
+//
+// A PURE FUNCTION OF ONE READING, so the status an operator reads before
+// confirming and the transition that runs after name the same case from the
+// same rule.
+//
+// The live instant is compared with the rows' own through [IdentityOf], at the
+// resolution a checkpoint keeps. Rows keyed to NO instant — a domain with no
+// checkpoint — are the recreated case: they hold none of this stream's
+// records, whatever it is.
+func (in ReanchorInputs) Case() (ReanchorCase, uint64, error) {
+	if IdentityOf(in.KeyedTo, in.StreamCreatedAt, !in.KeyedTo.IsZero()) != StreamSame {
+		// ONE BELOW THE LIVE STREAM'S FIRST SURVIVING SEQUENCE — zero on a
+		// fresh stream — because that is the position from which everything
+		// the stream still holds is un-applied here.
+		if in.FirstSeq == 0 {
+			return ReanchorRecreated, 0, nil
+		}
+		return ReanchorRecreated, in.FirstSeq - 1, nil
+	}
+	if !pastEnd(in.Position, in.LastSeq) {
+		return "", 0, fmt.Errorf("%w: %s is the stream this node's rows are keyed "+
+			"to (created %s) and it ends at %d, at or past this node's checkpoint "+
+			"at %d — it still holds every record the rows are missing, so there is "+
+			"nothing to re-anchor: the applier follows it, and a node below its "+
+			"first surviving sequence adopts a peer's snapshot instead",
+			ErrReanchorRefused, in.Stream, ConfirmationOf(in.StreamCreatedAt),
+			in.LastSeq, in.Position)
+	}
+	// AT THE LOG'S END, because the rows already hold every record the
+	// restored copy kept — see [ReanchorRestored] for what replaying them
+	// into a new generation does.
+	return ReanchorRestored, in.LastSeq, nil
+}
+
+// PermitReanchor decides whether the transition may run, to which generation,
+// and where it puts the checkpoint.
 //
 // # The two fleet guards belong to a domain that claims identity
 //
@@ -164,27 +264,33 @@ type ReanchorInputs struct {
 // leave every node but the first stranded on a stream it can neither read nor
 // write, since the one remedy the refusal names — adopting a peer's snapshot —
 // replaces every domain's rows to repair one derived index.
-func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (uint32, error) {
+func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error) {
 	live := ConfirmationOf(in.StreamCreatedAt)
 	switch {
 	case in.StreamCreatedAt.IsZero():
 		// NO INSTANT IS NO CONFIRMATION, whatever was typed: the check
 		// below would compare against the year one, and the checkpoint
 		// would be keyed to a stream nobody can name.
-		return 0, fmt.Errorf("%w: %s's creation instant is unknown, so there is "+
+		return ReanchorPlan{}, fmt.Errorf("%w: %s's creation instant is unknown, so there is "+
 			"nothing a confirmation could name — read the stream again",
 			ErrReanchorRefused, in.Stream)
 	case guard.Confirm == "":
-		return 0, fmt.Errorf("%w: confirm the live stream's creation instant "+
+		return ReanchorPlan{}, fmt.Errorf("%w: confirm the live stream's creation instant "+
 			"(%s) — this verb declares every position this node holds on %s "+
 			"stale and there is no undo", ErrReanchorRefused, live, in.Stream)
 	case !confirms(guard.Confirm, in.StreamCreatedAt):
-		return 0, fmt.Errorf("%w: the confirmation names %q and the live stream "+
-			"%s was created at %s — running this on the wrong estate cannot be "+
-			"undone", ErrReanchorRefused, guard.Confirm, in.Stream, live)
+		return ReanchorPlan{}, fmt.Errorf("%w: the confirmation names %q and the "+
+			"live stream %s was created at %s — running this on the wrong estate "+
+			"cannot be undone", ErrReanchorRefused, guard.Confirm, in.Stream, live)
+	}
+	// WHICH CASE, BEFORE THE FLEET: a stream that holds every record the rows
+	// are missing is one no guard below has anything to weigh on.
+	which, cursor, err := in.Case()
+	if err != nil {
+		return ReanchorPlan{}, err
 	}
 	if in.ClaimsIdentity && in.PeersHydrated > 0 {
-		return 0, fmt.Errorf("%w: %d peer(s) are hydrated on the live stream. "+
+		return ReanchorPlan{}, fmt.Errorf("%w: %d peer(s) are hydrated on the live stream. "+
 			"Two nodes that reanchor independently each keep whatever they "+
 			"applied off the old stream before it vanished, and if those "+
 			"prefixes differ the identity claim is violated silently and for "+
@@ -193,27 +299,28 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (uint32, error) {
 	}
 	if in.ClaimsIdentity && !guard.Force {
 		if !in.RegisterReadable {
-			return 0, fmt.Errorf("%w: the positions register could not be read, "+
+			return ReanchorPlan{}, fmt.Errorf("%w: the positions register could not be read, "+
 				"so whether this is the most caught-up node is unknown — and "+
 				"whatever it did not apply is what the fleet loses. Re-run with "+
 				"the force flag if that is accepted", ErrReanchorRefused)
 		}
 		if in.Position < in.Highest {
-			return 0, fmt.Errorf("%w: this node is at %d and the fleet reached "+
+			return ReanchorPlan{}, fmt.Errorf("%w: this node is at %d and the fleet reached "+
 				"%d — only the most caught-up node may reanchor, because "+
 				"everything above its own position is what the reanchor "+
 				"discards", ErrReanchorRefused, in.Position, in.Highest)
 		}
 	}
 	if in.Generation >= MaxGeneration {
-		return 0, fmt.Errorf("%w: %s is at generation %d, the last the packed "+
-			"position can carry", ErrReanchorRefused, in.Stream, in.Generation)
+		return ReanchorPlan{}, fmt.Errorf("%w: %s is at generation %d, the last "+
+			"the packed position can carry", ErrReanchorRefused, in.Stream,
+			in.Generation)
 	}
 	// THE NEW GENERATION IS DERIVED LOCALLY, from this domain's own
 	// checkpoint: this verb runs when the broker estate has been lost, so a
 	// generation that needed a coordination read could not be computed at
 	// the one moment it is needed.
-	return in.Generation + 1, nil
+	return ReanchorPlan{Generation: in.Generation + 1, Case: which, Cursor: cursor}, nil
 }
 
 // GenerationRecord is the one record a reanchor appends: the domain's own
@@ -233,8 +340,10 @@ type GenerationRecord struct {
 
 // GenerationFacts is what a domain's generation record is written from.
 type GenerationFacts struct {
-	// Generation is the one the transition moves to.
+	// Generation is the one the transition moves to, and Case what it is
+	// answering — which is what the record's own account of why has to say.
 	Generation uint32
+	Case       ReanchorCase
 
 	// Inputs are the facts the transition was decided from.
 	Inputs ReanchorInputs
@@ -333,11 +442,14 @@ func (d ReanchorDeps) resolved() ReanchorDeps {
 	return d
 }
 
-// Reanchor runs one domain's generation transition.
+// Reanchor runs one domain's generation transition, and reports what it did.
 //
 // # Seven steps, and the order is its crash matrix
 //
-//  1. Check the operator's confirmation against the LIVE stream's instant.
+//  1. Check the operator's confirmation against the LIVE stream's instant, and
+//     decide the case ([ReanchorCase]): recreated or restored, or neither — a
+//     stream that still holds every record the rows are missing, which is
+//     refused because there is nothing to re-anchor.
 //  2. Refuse while any peer is hydrated on it, and — when none is — require
 //     this to be the most caught-up node. Refuse on a node evicted from the
 //     domain, whose every record every applier drops.
@@ -350,17 +462,23 @@ func (d ReanchorDeps) resolved() ReanchorDeps {
 //     thing it is perfectly suited to. Then read the stream's instant AGAIN:
 //     the same instant before and after the append is the same stream
 //     throughout, because an instant never comes back.
-//  5. Move this node's consumer to one below the stream's first surviving
-//     sequence. BEFORE the checkpoint, so a consumer that cannot be moved
-//     leaves nothing committed: the broker will not move a consumer's start
-//     on its own, and one left at the old checkpoint on a rebuilt stream
-//     starts past every record the applier then waits for.
-//  6. ONE transaction: the domain's checkpoint, at the new generation and one
-//     below the first surviving sequence, keyed to the live instant. A crash
-//     before it leaves the domain as it was.
+//  5. Move this node's consumer to the case's checkpoint: one below the
+//     stream's first surviving sequence for a recreated one, the log's end as
+//     it was read for a restored one. BEFORE the checkpoint, so a consumer
+//     that cannot be moved leaves nothing committed: the broker will not move
+//     a consumer's start on its own, and one left at the old checkpoint on a
+//     rebuilt stream starts past every record the applier then waits for.
+//  6. ONE transaction: the domain's checkpoint, at the new generation and that
+//     sequence, keyed to the live instant. A crash before it leaves the domain
+//     as it was.
 //  7. Re-key the domain's applier to that checkpoint and that instant, which
-//     clears the verdict that the stream was recreated — so the engine starts
-//     the loop again and the domain resumes without a restart.
+//     clears the verdict that the stream was recreated or that the checkpoint
+//     was past its end — so the engine starts the loop again and the domain
+//     resumes without a restart.
+//
+// Both checkpoints sit below the generation record the transition appended —
+// the first sequence and the end were both read before the append — so the
+// resumed applier applies that record first, whichever case it was.
 //
 // # What it no longer does, and why
 //
@@ -377,32 +495,35 @@ func (d ReanchorDeps) resolved() ReanchorDeps {
 // new stream from its head, the record is on it, and the row is then derived
 // like every other — where a row written beside the checkpoint was one no
 // replay of the log could reproduce.
-func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard ReanchorGuard) (uint32, error) {
+func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
+	guard ReanchorGuard) (ReanchorPlan, error) {
+
 	switch {
 	case d.Domain == nil:
-		return 0, errors.New("statelog: a reanchor names no domain, and a " +
-			"reanchor moves exactly one — the one whose stream the operator " +
+		return ReanchorPlan{}, errors.New("statelog: a reanchor names no domain, " +
+			"and a reanchor moves exactly one — the one whose stream the operator " +
 			"confirmed")
 	case d.DB == nil:
-		return 0, errors.New("statelog: a reanchor has no store")
+		return ReanchorPlan{}, errors.New("statelog: a reanchor has no store")
 	case d.Stream == nil || d.Record == nil || d.Consumer == nil || d.Runner == nil:
-		return 0, fmt.Errorf("statelog: a reanchor of %s is missing its log, its "+
-			"generation record, its consumer or its applier, and a partial one "+
-			"leaves the domain unable to follow the stream it adopted", d.Domain.Name())
+		return ReanchorPlan{}, fmt.Errorf("statelog: a reanchor of %s is missing "+
+			"its log, its generation record, its consumer or its applier, and a "+
+			"partial one leaves the domain unable to follow the stream it "+
+			"adopted", d.Domain.Name())
 	case d.NodeID == "":
-		return 0, fmt.Errorf("statelog: a reanchor of %s has no node id — the "+
-			"generation record is stamped with it for the eviction gate",
+		return ReanchorPlan{}, fmt.Errorf("statelog: a reanchor of %s has no node "+
+			"id — the generation record is stamped with it for the eviction gate",
 			d.Domain.Name())
 	}
 	spec := d.Domain.Stream()
 	if in.Stream != spec.Name {
-		return 0, fmt.Errorf("statelog: a reanchor of %s was handed facts about %q, "+
-			"and every one of them has to be about %s's own stream (%s)",
-			d.Domain.Name(), in.Stream, d.Domain.Name(), spec.Name)
+		return ReanchorPlan{}, fmt.Errorf("statelog: a reanchor of %s was handed "+
+			"facts about %q, and every one of them has to be about %s's own "+
+			"stream (%s)", d.Domain.Name(), in.Stream, d.Domain.Name(), spec.Name)
 	}
 	t, err := newTables(d.Domain)
 	if err != nil {
-		return 0, err
+		return ReanchorPlan{}, err
 	}
 	d = d.resolved()
 
@@ -410,10 +531,11 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 	// what decides whether the fleet guards apply, and a caller that
 	// filled it wrongly would waive them for the tracker.
 	in.ClaimsIdentity = d.Domain.ClaimsIdentity()
-	gen, err := PermitReanchor(in, guard)
+	plan, err := PermitReanchor(in, guard)
 	if err != nil {
-		return 0, err
+		return ReanchorPlan{}, err
 	}
+	gen := plan.Generation
 	if d.Evicted != nil {
 		// THE SAME QUESTION FENCE 0 ASKS BEFORE EVERY APPEND, because the
 		// record below is an append: an evicted node's is dropped by every
@@ -422,61 +544,58 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 		// nowhere. The remedy is the readmission, first.
 		evicted, readErr := d.Evicted(ctx)
 		if refusal := evictionRefusal(ctx, evicted, readErr); refusal != nil {
-			return 0, fmt.Errorf("%w: %s: %w", ErrReanchorRefused, d.Domain.Name(), refusal)
+			return ReanchorPlan{}, fmt.Errorf("%w: %s: %w", ErrReanchorRefused,
+				d.Domain.Name(), refusal)
 		}
 	}
-	cursor := uint64(0)
-	if in.FirstSeq > 0 {
-		// ONE BELOW THE LIVE STREAM'S FIRST SURVIVING SEQUENCE — zero on a
-		// fresh stream — because that is the position from which
-		// everything the stream still holds is un-applied.
-		cursor = in.FirstSeq - 1
-	}
-	at := Position{Stream: spec.Name, Generation: gen, Seq: cursor}
+	at := Position{Stream: spec.Name, Generation: gen, Seq: plan.Cursor}
 	if err = at.Valid(); err != nil {
-		return 0, err
+		return ReanchorPlan{}, err
 	}
 	d.Logger.WarnContext(ctx, "statelog_reanchor_started",
-		"domain", d.Domain.Name(), "generation", gen, "stream", in.Stream,
-		"stream_created_at", in.StreamCreatedAt, "keyed_to", in.KeyedTo,
-		"position", in.Position, "forced", guard.Force)
+		"domain", d.Domain.Name(), "generation", gen, "case", string(plan.Case),
+		"stream", in.Stream, "stream_created_at", in.StreamCreatedAt,
+		"keyed_to", in.KeyedTo, "position", in.Position, "last_seq", in.LastSeq,
+		"cursor", plan.Cursor, "forced", guard.Force)
 
 	// 4. THE RECORD, first-writer-wins, and the instant read again.
 	record, keeps, err := d.Record.GenerationRecord(GenerationFacts{
-		Generation: gen, Inputs: in, By: d.By, Writer: d.NodeID, At: d.Now().UTC(),
+		Generation: gen, Case: plan.Case, Inputs: in, By: d.By, Writer: d.NodeID,
+		At: d.Now().UTC(),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("statelog: encode %s's generation %d record: %w",
-			d.Domain.Name(), gen, err)
+		return ReanchorPlan{}, fmt.Errorf("statelog: encode %s's generation %d "+
+			"record: %w", d.Domain.Name(), gen, err)
 	}
 	if keeps {
 		if err := appendGeneration(ctx, d.Stream, spec, record); err != nil {
-			return 0, fmt.Errorf("statelog: publish %s's generation %d: %w",
-				d.Domain.Name(), gen, err)
+			return ReanchorPlan{}, fmt.Errorf("statelog: publish %s's generation "+
+				"%d: %w", d.Domain.Name(), gen, err)
 		}
 	}
 	if err := stillConfirmed(ctx, d.Stream, in); err != nil {
-		return 0, err
+		return ReanchorPlan{}, err
 	}
 
 	// 5. THIS NODE'S CONSUMER, before the checkpoint it resumes from.
-	if err := d.Consumer.Reset(ctx, cursor); err != nil {
-		return 0, fmt.Errorf("statelog: move this node's %s consumer to sequence %d "+
-			"of the adopted stream — nothing is committed, so re-running the "+
-			"reanchor repeats it: %w", d.Domain.Name(), cursor, err)
+	if err := d.Consumer.Reset(ctx, plan.Cursor); err != nil {
+		return ReanchorPlan{}, fmt.Errorf("statelog: move this node's %s consumer "+
+			"to sequence %d of the adopted stream — nothing is committed, so "+
+			"re-running the reanchor repeats it: %w", d.Domain.Name(),
+			plan.Cursor, err)
 	}
 
 	// 6. THE ONE CHECKPOINT, alone in its transaction.
 	if err := d.DB.Tx(ctx, func(tx *sql.Tx) error {
 		return t.setCursor(ctx, tx, at, in.StreamCreatedAt, d.Now())
 	}); err != nil {
-		return 0, fmt.Errorf("statelog: move %s's checkpoint into generation %d: %w",
-			d.Domain.Name(), gen, err)
+		return ReanchorPlan{}, fmt.Errorf("statelog: move %s's checkpoint into "+
+			"generation %d: %w", d.Domain.Name(), gen, err)
 	}
 
 	// 7. THE APPLIER, re-keyed to what just committed.
 	if err := d.Runner.Reanchored(at, in.StreamCreatedAt); err != nil {
-		return 0, fmt.Errorf("statelog: re-key %s's applier to %s: %w",
+		return ReanchorPlan{}, fmt.Errorf("statelog: re-key %s's applier to %s: %w",
 			d.Domain.Name(), at, err)
 	}
 
@@ -484,15 +603,29 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 	// carrying the operator) and the generation record's, and neither is a
 	// fact this function has.
 	d.Logger.WarnContext(ctx, "statelog_reanchored",
-		"domain", d.Domain.Name(), "generation", gen, "stream", in.Stream,
-		"stream_created_at", in.StreamCreatedAt, "cursor", cursor,
-		"prev_last_seq_seen", in.Highest,
-		"detail", "this domain now follows the adopted stream from its head, "+
-			"its applier resumes without a restart, and every position below "+
-			"this generation is comparable and safely stale; no other domain's "+
-			"checkpoint moved, and records that were on the old stream and "+
-			"were never applied here are not recovered")
-	return gen, nil
+		"domain", d.Domain.Name(), "generation", gen, "case", string(plan.Case),
+		"stream", in.Stream, "stream_created_at", in.StreamCreatedAt,
+		"cursor", plan.Cursor, "prev_last_seq_seen", in.Highest,
+		"detail", reanchoredDetail(plan.Case))
+	return plan, nil
+}
+
+// reanchoredDetail is the completion line's account of what the transition
+// kept and what it could not, which differs by case.
+func reanchoredDetail(c ReanchorCase) string {
+	const common = "; its applier resumes without a restart, every position " +
+		"below this generation is comparable and safely stale, and no other " +
+		"domain's checkpoint moved"
+	if c == ReanchorRestored {
+		return "the log was restored from an older copy: the rows already hold " +
+			"every record it kept, so this domain follows it from its end and " +
+			"replays none of them" + common + "; what the rows hold past the " +
+			"copy is on no log, so every other node adopts this node's snapshot " +
+			"rather than replaying"
+	}
+	return "the log was recreated: this domain follows it from the first " +
+		"record it holds" + common + "; records that were on the old stream " +
+		"and were never applied here are not recovered"
 }
 
 // appendGeneration appends a domain's generation record at an expectation of
@@ -523,9 +656,9 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 //     create-only.
 //   - THE RESOLUTION is not waited for. The applier that would resolve it is
 //     the one this transition is about to point at the stream, and it applies
-//     the record the moment it resumes, from one below the stream's first
-//     sequence — which the record is above, because that first sequence was
-//     read before the append.
+//     the record the moment it resumes, from the case's checkpoint — which the
+//     record is above, because the first sequence and the end that checkpoint
+//     was taken from were both read before the append.
 //
 // A REFUSAL IS THE SUBJECT ALREADY HOLDING THE RECORD — a re-run racing its own
 // earlier append, or the operator who got there first — and the transition

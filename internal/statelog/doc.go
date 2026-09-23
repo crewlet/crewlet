@@ -258,7 +258,11 @@
 // ([ZeroFence]) — against the applier's LIVE checkpoint rather than C, because
 // where an append lands against where the applier stands is a property of the
 // node, and the applier only leads C — and the identity answers for it on
-// every other pattern ([Runner.ObserveEnd]).
+// every other pattern ([Runner.ObserveEnd]). Its reanchor is the RESTORED case
+// ([ReanchorRestored]): the log is a prefix of the history the rows came from,
+// so the new generation's checkpoint goes at the log's END rather than one
+// below its first record, and replaying none of it is what keeps every object
+// from rolling back to the copy.
 //
 // # The alarm table borrows every threshold it fires at
 //

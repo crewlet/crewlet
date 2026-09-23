@@ -21,6 +21,12 @@ type fakeCapacityNode struct {
 	status                 map[string]any
 	operation              map[string]any
 	reanchorConfirm        string
+
+	// reanchorCase is the case the node's status reports — "recreated" when
+	// unset, and none at all when it is "-" — with reanchorCursor the
+	// sequence it would put the checkpoint at.
+	reanchorCase   string
+	reanchorCursor uint64
 }
 
 func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
@@ -56,15 +62,29 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 		reply(w, body)
 	})
 	mux.HandleFunc("GET /work/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, map[string]any{
+		body := map[string]any{
 			"stream": r.URL.Query().Get("stream"), "generation": 0,
 			"created_at": "2031-04-02T03:00:00Z",
-		})
+		}
+		switch n.reanchorCase {
+		case "-":
+			body["nothing_to_reanchor"] = "it still holds every record the rows are missing"
+		case "":
+			body["case"], body["cursor"] = "recreated", n.reanchorCursor
+		default:
+			body["case"], body["cursor"] = n.reanchorCase, n.reanchorCursor
+		}
+		reply(w, body)
 	})
 	mux.HandleFunc("POST /work/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
 		n.reanchorConfirm = r.URL.Query().Get("confirm")
+		which := n.reanchorCase
+		if which == "" {
+			which = "recreated"
+		}
 		reply(w, map[string]any{
 			"stream": r.URL.Query().Get("stream"), "generation": 1,
+			"case": which, "cursor": n.reanchorCursor,
 		})
 	})
 	n.server = httptest.NewServer(mux)
@@ -227,6 +247,11 @@ func TestAReanchorPrintsTheValueItWillConfirmAgainst(t *testing.T) {
 	if !strings.Contains(stdout, "does NOT recover records") {
 		t.Errorf("the verb does not say what a reanchor loses:\n%s", stdout)
 	}
+	for _, want := range []string{"RECREATED", "first surviving record"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the recreated prompt never says %q:\n%s", want, stdout)
+		}
+	}
 	if node.reanchorConfirm != "" {
 		t.Fatalf("the node was asked to re-anchor anyway, confirming %q",
 			node.reanchorConfirm)
@@ -240,8 +265,51 @@ func TestAReanchorPrintsTheValueItWillConfirmAgainst(t *testing.T) {
 	if node.reanchorConfirm != "2031-04-02T03:00:00Z" {
 		t.Fatalf("the node was asked to re-anchor confirming %q", node.reanchorConfirm)
 	}
-	if !strings.Contains(stdout, "generation 1") {
-		t.Errorf("the report does not name the new generation:\n%s", stdout)
+	for _, want := range []string{"generation 1", "(recreated)", "first surviving record"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the report never says %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// TestAReanchorNamesTheCaseTheOperatorConfirms: a restored log is followed from
+// its END and a recreated one from its first record, which is the one fact
+// about the transition the operator has to agree with — so the prompt says
+// which, before the confirmation, and the report says which again after. And a
+// log with nothing to re-anchor offers no command to run.
+func TestAReanchorNamesTheCaseTheOperatorConfirms(t *testing.T) {
+	node := newFakeCapacityNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	node.reanchorCase, node.reanchorCursor = "restored", 7000
+
+	stdout, _, err := cli(t, "retention", "reanchor", base, "-stream", "CREWLET_TRACKER_LOG")
+	if err == nil {
+		t.Fatal("a reanchor with no confirmation was accepted")
+	}
+	for _, want := range []string{"RESTORED", "7000", "END", "none of them is replayed",
+		"-confirm 2031-04-02T03:00:00Z"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the restored prompt never says %q:\n%s", want, stdout)
+		}
+	}
+	stdout, _, err = cli(t, "retention", "reanchor", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "2031-04-02T03:00:00Z")
+	if err != nil {
+		t.Fatalf("reanchor: %v", err)
+	}
+	for _, want := range []string{"(restored)", "from its end, after sequence 7000"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the restored report never says %q:\n%s", want, stdout)
+		}
+	}
+
+	node.reanchorCase, node.reanchorConfirm = "-", ""
+	stdout, _, err = cli(t, "retention", "reanchor", base, "-stream", "CREWLET_TRACKER_LOG")
+	if err == nil || !strings.Contains(stdout, "nothing to re-anchor") {
+		t.Fatalf("a log with nothing to re-anchor = %v:\n%s", err, stdout)
+	}
+	if strings.Contains(stdout, "-confirm") {
+		t.Errorf("a log with nothing to re-anchor was offered a command to run:\n%s", stdout)
 	}
 }
 

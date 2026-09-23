@@ -478,8 +478,8 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 // Declared here, by the consumer: a route that could also reach the seat host
 // or the config surface would eventually be given a reason to.
 type capacityRunner interface {
-	Reanchor(ctx context.Context, req engine.ReanchorRequest) (uint32, error)
-	ReanchorStatus(ctx context.Context, stream string) (time.Time, uint32, error)
+	Reanchor(ctx context.Context, req engine.ReanchorRequest) (statelog.ReanchorPlan, error)
+	ReanchorStatus(ctx context.Context, stream string) (engine.ReanchorView, error)
 	StreamGeneration(stream string) (uint32, error)
 	SetCapacity(ctx context.Context, req engine.CapacityRequest) (coord.MaintenanceOperation, error)
 	AbandonCapacity(ctx context.Context, stream string) (coord.MaintenanceOperation, error)
@@ -509,7 +509,11 @@ func (a *App) mountCapacity(mux *http.ServeMux) {
 }
 
 // serveReanchorStatus answers GET /work/retention/reanchor: the stream's own
-// creation instant, which is the value the confirmation has to echo.
+// creation instant, which is the value the confirmation has to echo, and the
+// case a reanchor would answer now — `recreated` (followed from its first
+// surviving record) or `restored` (followed from its end), with the sequence
+// the checkpoint would go to — or, with no case, why there is nothing to
+// re-anchor.
 //
 // A SEPARATE READ, because the confirmation is meant to say "I looked at the
 // thing I am re-anchoring": a verb that printed the value and accepted it back
@@ -521,7 +525,7 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"error": "stream_required"})
 		return
 	}
-	createdAt, generation, err := a.capacity.ReanchorStatus(r.Context(), stream)
+	view, err := a.capacity.ReanchorStatus(r.Context(), stream)
 	switch {
 	case errors.Is(err, engine.ErrUnknownStream):
 		writeJSON(w, http.StatusNotFound,
@@ -536,9 +540,15 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"error": "stream_unreadable", "detail": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"stream": stream, "created_at": createdAt, "generation": generation,
-	})
+	answer := map[string]any{
+		"stream": stream, "created_at": view.CreatedAt, "generation": view.Generation,
+	}
+	if view.Case != "" {
+		answer["case"], answer["cursor"] = view.Case, view.Cursor
+	} else {
+		answer["nothing_to_reanchor"] = view.Refusal
+	}
+	writeJSON(w, http.StatusOK, answer)
 }
 
 // serveReanchor answers POST /work/retention/reanchor.
@@ -555,7 +565,7 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	operator, _ := auth.OperatorFrom(r.Context())
-	gen, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
+	plan, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
 		Stream: stream, Confirm: confirm, By: operator,
 		Force: r.URL.Query().Get("force") == "true",
 	})
@@ -565,9 +575,11 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"error": "reanchor_refused", "detail": err.Error()})
 		return
 	}
-	log.Warn("reanchored", "operator", operator, "stream", stream, "generation", gen)
+	log.Warn("reanchored", "operator", operator, "stream", stream,
+		"generation", plan.Generation, "case", string(plan.Case), "cursor", plan.Cursor)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"stream": stream, "generation": gen,
+		"stream": stream, "generation": plan.Generation, "case": plan.Case,
+		"cursor": plan.Cursor,
 	})
 }
 

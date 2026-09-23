@@ -1041,10 +1041,11 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 	rebuildLog(t, js, s.Domain(pagesName).domain.Stream())
 	s.publishPositions(t.Context())
 	stream := s.Domain(pagesName).domain.Stream().Name
-	live, _, err := e.ReanchorStatus(t.Context(), stream)
+	view, err := e.ReanchorStatus(t.Context(), stream)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
 	}
+	live := view.CreatedAt
 	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
 		Stream: stream, Confirm: statelog.ConfirmationOf(live), By: "ops-1",
 	}); err != nil {

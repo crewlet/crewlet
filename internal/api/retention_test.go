@@ -42,20 +42,25 @@ type fakeStateLog struct {
 	// unreadable is the broker's answer to a LIVE read of a stream's
 	// instant, nil while it answers.
 	unreadable error
+
+	// view is the case the status reports, beside the generation above.
+	view engine.ReanchorView
 }
 
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
-	time.Time, uint32, error) {
+	engine.ReanchorView, error) {
 
 	generation, err := f.StreamGeneration(stream)
 	if err != nil {
-		return time.Time{}, 0, err
+		return engine.ReanchorView{}, err
 	}
 	if f.unreadable != nil {
-		return time.Time{}, 0, fmt.Errorf("engine: read %s's creation instant: %w",
-			stream, f.unreadable)
+		return engine.ReanchorView{}, fmt.Errorf("engine: read %s's creation "+
+			"instant: %w", stream, f.unreadable)
 	}
-	return time.Unix(1700000000, 0).UTC(), generation, nil
+	view := f.view
+	view.CreatedAt, view.Generation = time.Unix(1700000000, 0).UTC(), generation
+	return view, nil
 }
 
 func (f *fakeStateLog) StreamGeneration(stream string) (uint32, error) {
@@ -67,8 +72,10 @@ func (f *fakeStateLog) StreamGeneration(stream string) (uint32, error) {
 	return generation, nil
 }
 
-func (f *fakeStateLog) Reanchor(context.Context, engine.ReanchorRequest) (uint32, error) {
-	return 0, errors.New("not exercised here")
+func (f *fakeStateLog) Reanchor(context.Context, engine.ReanchorRequest) (
+	statelog.ReanchorPlan, error) {
+
+	return statelog.ReanchorPlan{}, errors.New("not exercised here")
 }
 
 func (f *fakeStateLog) SetCapacity(context.Context, engine.CapacityRequest) (
@@ -442,6 +449,22 @@ func TestTheReanchorStatusTellsAnUnknownStreamFromAnUnreadableOne(t *testing.T) 
 		body["created_at"] == nil || body["generation"] != float64(1) {
 		t.Fatalf("a readable stream answered %d: %v", code, body)
 	}
+	// THE CASE A REANCHOR WOULD ANSWER is in the same answer, so the
+	// operator confirms knowing whether the log is followed from its first
+	// record or from its end — and, with no case, why there is nothing to do.
+	node.view = engine.ReanchorView{Case: statelog.ReanchorRestored, Cursor: 7_000}
+	if code, body := get("/work/retention/reanchor?stream=CREWLET_PAGES_LOG"); code != http.StatusOK ||
+		body["case"] != "restored" || body["cursor"] != float64(7_000) {
+		t.Fatalf("a restored stream's status answered %d: %v, want the restored "+
+			"case at 7000", code, body)
+	}
+	node.view = engine.ReanchorView{Refusal: "nothing to re-anchor: the applier follows it"}
+	if code, body := get("/work/retention/reanchor?stream=CREWLET_PAGES_LOG"); code != http.StatusOK ||
+		body["case"] != nil || body["nothing_to_reanchor"] != node.view.Refusal {
+		t.Fatalf("a stream with nothing to re-anchor answered %d: %v, want no case "+
+			"and the reason", code, body)
+	}
+	node.view = engine.ReanchorView{}
 	if code, body := get("/work/retention/reanchor?stream=CREWLET_PAGSE_LOG"); code != http.StatusNotFound ||
 		body["error"] != "unknown_stream" {
 		t.Fatalf("a stream this node does not run answered %d: %v", code, body)

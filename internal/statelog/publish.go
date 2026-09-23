@@ -855,6 +855,27 @@ func (p *Publisher) expectation(ctx context.Context, req Request, snap Snap, gen
 		zero := uint64(0)
 		return &zero, nil, nil
 	}
+	// A RECORD THE SNAPSHOT'S CHECKPOINT ALREADY COVERS is one these rows
+	// hold, so it is the expectation rather than a position to wait for.
+	//
+	// On an ordinary log this cannot be reached: every record at or below
+	// the checkpoint was consumed in this generation, and consuming an
+	// arbitrated one writes its anchor, so the branch above answered. What
+	// reaches it is a checkpoint placed where the log's records were never
+	// consumed in this generation — a RESTORED log's reanchor, which puts it
+	// at the log's end because the rows already hold every record the copy
+	// kept ([ReanchorRestored]). There the subject's last record is below
+	// the checkpoint and its anchor is in the generation before; waiting for
+	// the applier to reach it returns at once, the snapshot reads the same
+	// anchor, and every write to every object the copy kept ran out of
+	// rounds as a conflict nobody was causing.
+	//
+	// AT THE SNAPSHOT'S checkpoint, not the applier's live one, for the
+	// reason the zero fence takes it: the claim is about the rows the
+	// decision read.
+	if snap.Checkpoint.Generation == gen && seq <= snap.Checkpoint.Seq {
+		return &seq, nil, nil
+	}
 	at := Position{Stream: p.stream, Generation: gen, Seq: seq}
 	return nil, &at, nil
 }

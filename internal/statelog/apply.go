@@ -411,8 +411,9 @@ func (r *Runner) StreamCreatedAt() time.Time {
 // reanchor's transaction — writing back the generation and the instant the
 // reanchor had just left — so the engine halts this domain's loop before the
 // transition and starts it again after this. The next run loads the committed
-// row, which this has already agreed with, and resumes from it: one below the
-// stream's first surviving sequence, in the new generation.
+// row, which this has already agreed with, and resumes from it in the new
+// generation: one below the stream's first surviving sequence for a recreated
+// stream, the log's end for a restored one ([ReanchorCase]).
 //
 // The readers that run beside the stopped loop are the heartbeat and the zero
 // fence, which hand this runner live readings. A reading of the instant taken

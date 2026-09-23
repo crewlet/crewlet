@@ -22,7 +22,7 @@ subcommand below is served by it.
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of the tracker's or the pages log, and the refusal prints the numbers. Nothing is written to either log on a refusal; a partial readmission is finished with `-op-id` like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
-| `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart |
+| `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
@@ -889,12 +889,25 @@ crewlet retention reanchor -stream CREWLET_TRACKER_LOG
 crewlet retention reanchor -stream CREWLET_TRACKER_LOG -confirm 2031-04-02T03:00:00.418226517Z
 ```
 
-The recovery for a stream that was genuinely recreated. Run without `-confirm`
-it **prints the live stream's own `created_at` and refuses**: the confirmation
-means *I looked at the thing I am re-anchoring*, and a verb that read the value
-and fed it straight back would be confirming against its own output. Paste the
-instant back exactly as printed — it is the same one a `wrong_stream` refusal
-names as the broker's.
+The recovery for a stream that was genuinely recreated, or for a broker
+restored from an older copy. Run without `-confirm` it **prints the live
+stream's own `created_at`, and which case it is, and refuses**: the
+confirmation means *I looked at the thing I am re-anchoring*, and a verb that
+read the value and fed it straight back would be confirming against its own
+output. Paste the instant back exactly as printed — it is the same one a
+`wrong_stream` refusal names as the broker's.
+
+The two cases are where the log is followed **from**:
+
+- **recreated** — the stream is not the one this node's rows are keyed to, so it
+  is followed from its first surviving record;
+- **restored** — it is the same stream, ending below this node's checkpoint, so
+  the rows already hold every record it kept and it is followed from its end;
+  none of them is applied again.
+
+A same-stream log that reaches the checkpoint is neither, and the verb prints
+that there is nothing to re-anchor rather than a command to run. The answer
+names the case and the sequence the checkpoint went to.
 
 It moves **only the log you name**: that domain's checkpoint goes to the next
 generation on the live stream, every other domain's stays where it is, and the
@@ -906,9 +919,9 @@ history a reanchor discards. Otherwise only the most caught-up node may run it;
 `-force` overrides that rule, and an unreadable positions register, and never a
 hydrated peer.
 
-It does not recover records that were on the old stream and were never applied
-here, and the refusal says so. See
-[Re-anchoring a recreated stream](../guides/retention.md#re-anchoring-a-recreated-stream).
+For a recreated log it does not recover records that were on the old stream
+and were never applied here, and the refusal says so. See
+[Re-anchoring a recreated or restored log](../guides/retention.md#re-anchoring-a-recreated-or-restored-log).
 
 ### `crewlet retention verify --restore`
 

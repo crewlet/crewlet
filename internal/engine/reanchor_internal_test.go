@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -119,7 +121,7 @@ func TestAReanchorOfAStreamThatCannotBeReadRefuses(t *testing.T) {
 		t.Fatalf("Reanchor over a stream that cannot be read = %v, want a refusal "+
 			"saying so", err)
 	}
-	if _, _, err := e.ReanchorStatus(t.Context(), stream); err == nil {
+	if _, err := e.ReanchorStatus(t.Context(), stream); err == nil {
 		t.Fatal("ReanchorStatus answered an instant for a stream it could not read")
 	}
 }
@@ -173,29 +175,41 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	waitUntil(t, 10*time.Second, "the tracker to stop on its recreated log", func() bool {
 		return errors.Is(running.runner.Stopped(), statelog.ErrStreamRecreated)
 	})
+	// A RECORD THE REBUILT LOG ALREADY HOLDS, which the rows have never seen:
+	// the recreated case follows the log from its FIRST record, so this is
+	// applied — where the restored case's end would skip it for good.
+	onRebuilt := appendEviction(t, running, "op-on-rebuilt", "node-z")
 
 	// THE STATUS NAMES THE LIVE INSTANT, which is what the operator confirms.
 	stats, err := running.log.Stats(t.Context())
 	if err != nil {
 		t.Fatalf("read the recreated log: %v", err)
 	}
-	live, generation, err := e2.ReanchorStatus(t.Context(), trackerStream)
+	view, err := e2.ReanchorStatus(t.Context(), trackerStream)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
+	}
+	live, generation := view.CreatedAt, view.Generation
+	if view.Case != statelog.ReanchorRecreated || view.Cursor != onRebuilt-1 {
+		t.Fatalf("ReanchorStatus names the %q case at %d, want the recreated case "+
+			"at %d — the log was deleted and made again", view.Case, view.Cursor,
+			onRebuilt-1)
 	}
 	if !live.Equal(stats.CreatedAt.UTC()) || generation != 0 {
 		t.Fatalf("ReanchorStatus = %s at generation %d, want the live %s at 0",
 			live, generation, stats.CreatedAt)
 	}
 
-	gen, err := e2.Reanchor(t.Context(), ReanchorRequest{
+	plan, err := e2.Reanchor(t.Context(), ReanchorRequest{
 		Stream: trackerStream, Confirm: statelog.ConfirmationOf(live), By: "ops-1",
 	})
 	if err != nil {
 		t.Fatalf("Reanchor: %v", err)
 	}
-	if gen != 1 {
-		t.Fatalf("reanchored to generation %d, want 1", gen)
+	gen := plan.Generation
+	if gen != 1 || plan.Case != statelog.ReanchorRecreated || plan.Cursor != onRebuilt-1 {
+		t.Fatalf("reanchored as %+v, want generation 1 in the recreated case, one "+
+			"below the log's first record", plan)
 	}
 
 	// WITHOUT A RESTART: the same runner resumes, the node admits seats, and
@@ -213,11 +227,19 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	if res.Position.Generation != gen {
 		t.Fatalf("the write landed at %s, want generation %d", res.Position, gen)
 	}
-	// AND THE RECORD OF IT, applied from the adopted log by the resumed loop.
+	// AND THE RECORD OF IT, applied from the adopted log by the resumed loop,
+	// saying which case it was.
 	waitUntil(t, 10*time.Second, "the generation record to apply", func() bool {
 		return countRows(t, e2, `SELECT COUNT(*) FROM tracker_log_generations
-			WHERE generation = 1 AND by = 'ops-1'`) == 1
+			WHERE generation = 1 AND by = 'ops-1' AND reason LIKE '%recreated%'`) == 1
 	})
+	// AND WHAT THE REBUILT LOG HELD BEFORE IT, from its first record.
+	if n := countRows(t, e2, `SELECT COUNT(*) FROM tracker_evictions
+		WHERE node_id = 'node-z'`); n != 1 {
+		t.Fatalf("the record the rebuilt log held before the reanchor applied %d "+
+			"time(s), want once — a recreated log is followed from its first "+
+			"record, and nothing else will ever deliver this one", n)
+	}
 
 	// NO OTHER DOMAIN MOVED.
 	for name, before := range untouched {
@@ -257,6 +279,195 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	}
 }
 
+// A BROKER RESTORED FROM AN OLDER COPY IS RE-ANCHORED AT ITS END, AND NOTHING
+// THE ROWS ALREADY HOLD IS APPLIED AGAIN.
+//
+// Bringing the broker's store directory back from a copy keeps the stream,
+// creation instant and all, so every identity check passes and the log merely
+// ENDS below this node's checkpoint. Its surviving records are a prefix of the
+// history the rows were derived from. The reanchor used to put the new
+// generation's checkpoint one below the first of them regardless, so the
+// resumed applier replayed the whole copy in a generation that outranks every
+// row: each object rolled back to the state it had when the copy was taken, and
+// what the rows had gained since — the tail the copy never had — was written
+// over. The history and the inbox are keyed on the record, so they did not
+// double; the objects are what went wrong, and they are what is checked.
+func TestARestoredBrokerIsReanchoredAtItsEndReplayingNothing(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	copyDir := filepath.Join(t.TempDir(), "copy")
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	trackerStream := tracker.Domain{}.Stream().Name
+	watched := &tracker.Notify{
+		Kind:     tracker.ChangeStatus,
+		Snapshot: tracker.Snapshot{Key: "ENG-1", Assignee: "ceo", Watchers: []string{"cfo"}},
+	}
+
+	// FIRST BOOT: a project and a task — and then the copy is taken.
+	e, back := bootNode(t, &b, cfg)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	at := time.Now().UTC()
+	mustApply(t, "the project", func() (tracker.WriteResult, error) {
+		return e.native.writer.WriteDocument(t.Context(), "op-project",
+			tracker.ProjectSubject("ENG"), "", tracker.Project{
+				V: tracker.DocumentVersion, Key: "ENG", Name: "Engineering",
+				CreatedAt: at, UpdatedAt: at,
+			}, tracker.ChangeProjectCreated, nil)
+	})
+	mustApply(t, "the task", func() (tracker.WriteResult, error) {
+		return e.native.writer.CreateTask(t.Context(), "op-create", tracker.Task{
+			V: tracker.DocumentVersion, ID: "t-1", Project: "ENG", Type: "task",
+			Title: "copied", Status: tracker.StatusTodo,
+			StatusGroup: tracker.GroupNotStarted, Priority: tracker.PriorityNormal,
+			CreatedAt: at, UpdatedAt: at,
+		}, nil)
+	})
+	mustApply(t, "the first edit", func() (tracker.WriteResult, error) {
+		title, doing := "in the copy", tracker.StatusInProgress
+		return e.native.writer.UpdateTask(t.Context(), "op-edit-1", "t-1", "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Title: &title, Status: &doing},
+			tracker.ChangeStatus, watched)
+	})
+	e.Stop(context.Background())
+	back.Close(context.Background())
+	if err := os.CopyFS(copyDir, os.DirFS(b.Stream.StoreDir)); err != nil {
+		t.Fatalf("take the copy of the broker's store: %v", err)
+	}
+
+	// SECOND BOOT: the tail the copy never had.
+	e2, back2 := bootNode(t, &b, cfg)
+	waitUntil(t, 20*time.Second, "the node to admit seats again", e2.NativeHydrated)
+	mustApply(t, "the edit after the copy", func() (tracker.WriteResult, error) {
+		title, done := "after the copy", tracker.StatusDone
+		return e2.native.writer.UpdateTask(t.Context(), "op-edit-2", "t-1", "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Title: &title, Status: &done},
+			tracker.ChangeStatus, watched)
+	})
+	before := taskState(t, e2, "t-1")
+	history := countRows(t, e2, `SELECT COUNT(*) FROM tracker_history`)
+	inbox := countRows(t, e2, `SELECT COUNT(*) FROM tracker_notifications`)
+	checkpoint := readCursorRow(t, e2, tracker.Domain{}.Name())
+	e2.Stop(context.Background())
+	back2.Close(context.Background())
+
+	// THE RESTORE: the broker's store directory brought back from the copy.
+	if err := os.RemoveAll(b.Stream.StoreDir); err != nil {
+		t.Fatalf("remove the broker's store: %v", err)
+	}
+	if err := os.CopyFS(b.Stream.StoreDir, os.DirFS(copyDir)); err != nil {
+		t.Fatalf("restore the broker's store from the copy: %v", err)
+	}
+
+	// THIRD BOOT: the same stream, ending below this node's checkpoint.
+	e3, _ := bootNode(t, &b, cfg)
+	running := e3.native.log.Domain(tracker.Domain{}.Name())
+	waitUntil(t, 10*time.Second, "the tracker to find its checkpoint past the log", func() bool {
+		return errors.Is(running.runner.StreamIdentity(), statelog.ErrAheadOfLog)
+	})
+	stats, err := running.log.Stats(t.Context())
+	if err != nil {
+		t.Fatalf("read the restored log: %v", err)
+	}
+	if stats.LastSeq >= checkpoint.at.Seq {
+		t.Fatalf("the restored log ends at %d and the checkpoint is %d — the copy "+
+			"was not older than the rows, so nothing below is checked",
+			stats.LastSeq, checkpoint.at.Seq)
+	}
+	view, err := e3.ReanchorStatus(t.Context(), trackerStream)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v", err)
+	}
+	if view.Case != statelog.ReanchorRestored || view.Cursor != stats.LastSeq {
+		t.Fatalf("ReanchorStatus names the %q case at %d, want the restored case at "+
+			"the log's end, %d", view.Case, view.Cursor, stats.LastSeq)
+	}
+	plan, err := e3.Reanchor(t.Context(), ReanchorRequest{
+		Stream: trackerStream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: "ops-1",
+	})
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	if plan.Generation != 1 || plan.Case != statelog.ReanchorRestored ||
+		plan.Cursor != stats.LastSeq {
+		t.Fatalf("reanchored as %+v, want generation 1 in the restored case at %d",
+			plan, stats.LastSeq)
+	}
+	waitUntil(t, 10*time.Second, "the tracker's applier to resume", func() bool {
+		return running.runner.StreamIdentity() == nil &&
+			running.runner.Committed().Generation == plan.Generation &&
+			running.runner.Committed().Seq > plan.Cursor
+	})
+	waitUntil(t, 10*time.Second, "the generation record to apply", func() bool {
+		return countRows(t, e3, `SELECT COUNT(*) FROM tracker_log_generations
+			WHERE generation = 1 AND reason LIKE '%restored%'`) == 1
+	})
+
+	// NOTHING ROLLED BACK: the task is the one the rows held, not the copy's.
+	if got := taskState(t, e3, "t-1"); got != before {
+		t.Fatalf("the task is %+v after the reanchor and was %+v before it — the "+
+			"restored copy was replayed over the rows it is a prefix of", got, before)
+	}
+	// NOTHING DOUBLED.
+	if n := countRows(t, e3, `SELECT COUNT(*) FROM tracker_tasks`); n != 1 {
+		t.Fatalf("%d task rows after the reanchor, want the one", n)
+	}
+	if n := countRows(t, e3, `SELECT COUNT(*) FROM tracker_history`); n != history {
+		t.Fatalf("%d history rows after the reanchor, want the %d before it", n, history)
+	}
+	if n := countRows(t, e3, `SELECT COUNT(*) FROM tracker_notifications`); n != inbox {
+		t.Fatalf("%d inbox rows after the reanchor, want the %d before it", n, inbox)
+	}
+
+	// AND THE TASK IS WRITABLE: its last record on the log is the copy's, below
+	// the checkpoint, and the rows already hold it.
+	res := mustApply(t, "an edit after the reanchor", func() (tracker.WriteResult, error) {
+		title := "after the reanchor"
+		return e3.native.writer.UpdateTask(t.Context(), "op-edit-3", "t-1", "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
+	})
+	if res.Position.Generation != plan.Generation {
+		t.Fatalf("the edit landed at %s, want generation %d", res.Position, plan.Generation)
+	}
+	if got := taskState(t, e3, "t-1"); got.title != "after the reanchor" ||
+		got.status != string(tracker.StatusDone) {
+		t.Fatalf("the task is %+v after the edit, want the new title over the "+
+			"status the rows held", got)
+	}
+}
+
+// mustApply runs one tracker write and requires it applied on this node.
+func mustApply(t *testing.T, what string, write func() (tracker.WriteResult, error)) statelog.Result {
+	t.Helper()
+	res, err := write()
+	if err != nil || res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("%s: %+v, %v", what, res.Result, err)
+	}
+	return res.Result
+}
+
+// taskFields is what a rollback would change about a task.
+type taskFields struct {
+	title, status string
+}
+
+func taskState(t *testing.T, e *Engine, id string) taskFields {
+	t.Helper()
+	var got taskFields
+	if err := e.backends.Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT title, status FROM tracker_tasks WHERE id = ?`, id).
+			Scan(&got.title, &got.status)
+	}); err != nil {
+		t.Fatalf("read task %s: %v", id, err)
+	}
+	return got
+}
+
 // A LOG REBUILT UNDER A RUNNING NODE IS RE-ANCHORED WITH THE INSTANT ITS
 // REFUSAL NAMES.
 //
@@ -282,22 +493,24 @@ func TestALogRebuiltUnderARunningNodeIsReanchoredWithTheInstantItsRefusalNames(t
 	if named == nil {
 		t.Fatalf("the refusal names no live instant: %v", err)
 	}
-	live, _, err := e.ReanchorStatus(t.Context(), tracker.Domain{}.Stream().Name)
+	view, err := e.ReanchorStatus(t.Context(), tracker.Domain{}.Stream().Name)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
 	}
+	live := view.CreatedAt
 	if statelog.ConfirmationOf(live) != named[1] {
 		t.Fatalf("ReanchorStatus names %s and the refusal %s — the operator would "+
 			"be asked to confirm a stream the refusal does not name",
 			statelog.ConfirmationOf(live), named[1])
 	}
 
-	gen, err := e.Reanchor(t.Context(), ReanchorRequest{
+	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
 		Stream: tracker.Domain{}.Stream().Name, Confirm: named[1], By: "ops-1",
 	})
 	if err != nil {
 		t.Fatalf("Reanchor confirming the instant the refusal named: %v", err)
 	}
+	gen := plan.Generation
 	waitUntil(t, 10*time.Second, "the tracker to resume", func() bool {
 		return running.runner.StreamIdentity() == nil &&
 			running.runner.Committed().Generation == gen
@@ -345,16 +558,18 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 	rebuildLog(t, js, pages.Domain{}.Stream())
 	s.publishPositions(t.Context())
 	stream := pages.Domain{}.Stream().Name
-	live, _, err := e.ReanchorStatus(t.Context(), stream)
+	view, err := e.ReanchorStatus(t.Context(), stream)
 	if err != nil {
 		t.Fatalf("ReanchorStatus: %v", err)
 	}
-	gen, err := e.Reanchor(t.Context(), ReanchorRequest{
+	live := view.CreatedAt
+	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
 		Stream: stream, Confirm: statelog.ConfirmationOf(live), By: "ops-1",
 	})
 	if err != nil {
 		t.Fatalf("Reanchor: %v", err)
 	}
+	gen := plan.Generation
 
 	// THE PAGES LOG CARRIES THE PAGES RECORD, applied as the pages audit row.
 	waitUntil(t, 10*time.Second, "the pages generation record to apply", func() bool {
@@ -457,6 +672,41 @@ func TestARefusedReanchorLeavesTheDomainServing(t *testing.T) {
 }
 
 // ---- helpers -------------------------------------------------------- //
+
+// appendEviction puts one tracker eviction record straight onto the domain's
+// live log — around this node's own publisher, which refuses while the log is
+// not the one its rows are keyed to — and answers the sequence it landed at.
+func appendEviction(t *testing.T, running *runningDomain, opID, node string) uint64 {
+	t.Helper()
+	subject := tracker.EvictionSubject(node)
+	body, err := json.Marshal(tracker.Eviction{
+		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "ops-1",
+		EvictedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction: %v", err)
+	}
+	record, err := tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			V: tracker.RecordVersion, OpID: opID, Subject: subject,
+			Op: tracker.OpEviction, CreatedAt: time.Now().UTC(),
+			Scope: tracker.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "ops-1", ActorKind: tracker.AuthorOperator,
+		OperatorID: "ops-1",
+	}.Encode()
+	if err != nil {
+		t.Fatalf("encode the record: %v", err)
+	}
+	spec := running.domain.Stream()
+	wire := statelog.Subject{Kind: string(subject.Kind), ID: subject.ID}
+	seq, _, err := running.log.Append(t.Context(), spec.SubjectPrefix+"."+wire.String(),
+		opID, nil, record)
+	if err != nil {
+		t.Fatalf("append the eviction of %s: %v", node, err)
+	}
+	return seq
+}
 
 // cursorRow is one domain's checkpoint row, whole.
 type cursorRow struct {

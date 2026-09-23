@@ -43,6 +43,15 @@ import (
 //
 // It does NOT recover records that were on the old stream and never applied
 // here, and the refusal says so.
+//
+// TWO CASES, and they differ in where the log is followed FROM
+// ([statelog.ReanchorCase]). A RECREATED stream — another creation instant than
+// the rows are keyed to — holds none of what the rows came from, so the domain
+// follows it from its first surviving record. A RESTORED one — the broker
+// brought back from an older copy, same instant, ending below this node's
+// checkpoint — holds a prefix of exactly that history, which the rows already
+// have, so the domain follows it from its END: replaying the prefix into a new
+// generation would roll every object back to the copy.
 
 // ReanchorRequest is what an operator asked for.
 type ReanchorRequest struct {
@@ -83,15 +92,15 @@ type ReanchorRequest struct {
 // running before: a mistyped confirmation must not leave a healthy domain
 // without its applier, and a loop that had stopped on a recreated stream stays
 // stopped rather than logging the same stop again.
-func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (uint32, error) {
+func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.ReanchorPlan, error) {
 	running, err := e.runningStream(req.Stream)
 	if err != nil {
-		return 0, err
+		return statelog.ReanchorPlan{}, err
 	}
 	s := e.native.log
 	record, err := generationEncoder(running.domain)
 	if err != nil {
-		return 0, err
+		return statelog.ReanchorPlan{}, err
 	}
 	name := running.domain.Name()
 
@@ -117,9 +126,9 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (uint32, err
 
 	in, err := e.reanchorInputs(ctx, running)
 	if err != nil {
-		return 0, err
+		return statelog.ReanchorPlan{}, err
 	}
-	gen, err := statelog.Reanchor(ctx, statelog.ReanchorDeps{
+	plan, err := statelog.Reanchor(ctx, statelog.ReanchorDeps{
 		Domain:   running.domain,
 		Stream:   reanchorStream{log: running.log},
 		Record:   record,
@@ -134,17 +143,17 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (uint32, err
 	if err != nil {
 		if in.PeersHydrated > 0 && running.domain.ClaimsIdentity() {
 			rows, _ := e.backends.Fleet.Positions(ctx)
-			return 0, fmt.Errorf("%w (hydrated peers: %v)", err,
+			return statelog.ReanchorPlan{}, fmt.Errorf("%w (hydrated peers: %v)", err,
 				hydratedPeers(rows, name, in.Generation, e.native.nodeID))
 		}
-		return 0, err
+		return statelog.ReanchorPlan{}, err
 	}
 	completed = true
 	// NO LINE OF ITS OWN: [statelog.Reanchor] writes `statelog_reanchored`
-	// with the domain, the generation, the stream and its prior high-water
-	// mark, and a second line under that name here made one transition
-	// read as two.
-	return gen, nil
+	// with the domain, the generation, the case, the stream and its prior
+	// high-water mark, and a second line under that name here made one
+	// transition read as two.
+	return plan, nil
 }
 
 // generationEncoder is the domain's own record of a reanchor, or its
@@ -199,9 +208,9 @@ func (r reanchorStream) CreatedAt(ctx context.Context) (time.Time, error) {
 //
 // # The stream is read LIVE, and an unreadable one refuses
 //
-// The creation instant and the first sequence come from ONE reading of the
-// stream as it is now, because they are what the checkpoint is about to be
-// keyed to and positioned at. The instant used to be the one sampled at boot,
+// The creation instant and both ends of the log come from ONE reading of the
+// stream as it is now, because they decide the case and are what the checkpoint
+// is about to be keyed to and positioned at. The instant used to be the one sampled at boot,
 // which is a different stream once a log has been rebuilt under a running node:
 // the refusal every read and write gave named the live instant, this asked the
 // operator to confirm the old one, and confirming it keyed the checkpoint to a
@@ -232,15 +241,8 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	if err != nil {
 		return statelog.ReanchorInputs{}, err
 	}
-	in := statelog.ReanchorInputs{
-		Stream:          stream,
-		StreamCreatedAt: stats.CreatedAt.UTC(),
-		KeyedTo:         keyed,
-		FirstSeq:        stats.FirstSeq,
-		Generation:      at.Generation,
-		Position:        at.Seq,
-		ClaimsIdentity:  running.domain.ClaimsIdentity(),
-	}
+	in := streamFacts(stream, stats, at, keyed)
+	in.ClaimsIdentity = running.domain.ClaimsIdentity()
 
 	// UNREADABLE IS NOT "no peers". A register nobody could list is exactly
 	// the outage during which re-anchoring is most tempting and least
@@ -304,28 +306,77 @@ func (e *Engine) StreamGeneration(stream string) (uint32, error) {
 	return running.runner.Committed().Generation, nil
 }
 
+// streamFacts is the part of a reanchor's inputs that ONE reading of the stream
+// and ONE of the checkpoint row answer.
+//
+// SHARED by the status an operator reads before confirming and by the
+// transition itself, so the two name the case from the same facts by the same
+// rule ([statelog.ReanchorInputs.Case]) — a status that described a recreated
+// stream while the transition went on to treat it as restored would have the
+// operator confirm one thing and get the other.
+func streamFacts(stream string, stats jetstream.LogStats, at statelog.Position,
+	keyed time.Time) statelog.ReanchorInputs {
+
+	return statelog.ReanchorInputs{
+		Stream:          stream,
+		StreamCreatedAt: stats.CreatedAt.UTC(),
+		KeyedTo:         keyed,
+		FirstSeq:        stats.FirstSeq,
+		LastSeq:         stats.LastSeq,
+		Generation:      at.Generation,
+		Position:        at.Seq,
+	}
+}
+
+// ReanchorView is what an operator reads before confirming a reanchor.
+type ReanchorView struct {
+	// CreatedAt is the LIVE stream's creation instant: the value the
+	// confirmation has to echo.
+	CreatedAt time.Time
+
+	// Generation is the generation the domain's checkpoint stands at.
+	Generation uint32
+
+	// Case is what a reanchor run now would answer — the log recreated, or
+	// restored from an older copy — and Cursor the sequence it would put the
+	// new checkpoint at. Case is empty when there is nothing to re-anchor,
+	// and Refusal then says why, in the transition's own words.
+	Case    statelog.ReanchorCase
+	Cursor  uint64
+	Refusal string
+}
+
 // ReanchorStatus is what an operator reads before running it: the LIVE
 // stream's own creation instant, which is the value the confirmation has to
-// echo, and the generation the domain stands at.
+// echo, the generation the domain stands at, and which case a reanchor would
+// answer — so the operator confirms knowing whether the log is followed from
+// its first record or from its end.
 //
 // LIVE, for the reason [Engine.reanchorInputs] gives: it is the same instant a
 // `wrong_stream` refusal names and the same one the permission check compares
 // against, and a value the node sampled at boot is neither once the stream has
 // been rebuilt under it. A stream that cannot be read is an error that is NOT
 // [ErrUnknownStream], because the log exists and the broker did not answer.
-func (e *Engine) ReanchorStatus(ctx context.Context, stream string) (
-	time.Time, uint32, error) {
-
+func (e *Engine) ReanchorStatus(ctx context.Context, stream string) (ReanchorView, error) {
 	running, err := e.runningStream(stream)
 	if err != nil {
-		return time.Time{}, 0, err
+		return ReanchorView{}, err
 	}
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("engine: read %s's creation instant: %w",
+		return ReanchorView{}, fmt.Errorf("engine: read %s's creation instant: %w",
 			stream, err)
 	}
-	return stats.CreatedAt.UTC(), running.runner.Committed().Generation, nil
+	at, keyed, _, err := statelog.CursorFor(ctx, e.backends.Store.Replicated(), stream)
+	if err != nil {
+		return ReanchorView{}, fmt.Errorf("engine: read %s's checkpoint: %w", stream, err)
+	}
+	in := streamFacts(stream, stats, at, keyed)
+	view := ReanchorView{CreatedAt: in.StreamCreatedAt, Generation: in.Generation}
+	if view.Case, view.Cursor, err = in.Case(); err != nil {
+		view.Refusal = err.Error()
+	}
+	return view, nil
 }
 
 // hydratedPeers names every peer that is caught up on the LIVE stream.
