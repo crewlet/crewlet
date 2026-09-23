@@ -853,3 +853,61 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 			"stays behind", waited, 250*time.Millisecond)
 	}
 }
+
+// A NODE GATE IS THE ONE WRITE A NODE THE FLEET RE-ANCHORED PAST STILL MAKES.
+//
+// Such a node's rows are a history the log no longer continues, so everything
+// it decides from them is refused — but an eviction is decided from nothing in
+// them, and the eviction of the decommissioned peer that stranded a fleet is
+// the gesture that releases it. Refused, no stranded node could ever make it.
+// A RECREATED stream is never excused: this node's expectations there are
+// sequences on another stream.
+func TestANodeGateIsTheOneWriteAPassedNodeStillMakes(t *testing.T) {
+	t.Parallel()
+	gate := func(h *harness) error {
+		_, err := h.pub.Publish(t.Context(), statelog.Request{
+			Subject:  probeSubject("gate"),
+			Scope:    statelog.ScopeSet{Paths: []string{"object.gate"}},
+			OpID:     "op-gate",
+			Pattern:  statelog.PatternArbitrated,
+			NodeGate: true,
+			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				return statelog.Decision{Payload: probeRecord(stamp, "op-gate", "evict"), Version: 1}, nil
+			},
+		})
+		return err
+	}
+	for _, c := range []struct {
+		name    string
+		trip    func(h *harness)
+		excused bool
+	}{
+		{"a generation the fleet moved past", func(h *harness) { h.applier.passedBy() }, true},
+		{"a stream rebuilt under the node", func(h *harness) { h.applier.rebuilt() }, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			c.trip(h)
+			_, err := h.write(probeSubject("a"), "op-1", "decided from these rows")
+			var refusal *statelog.Unavailable
+			if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonWrongStream {
+				t.Fatalf("an ordinary write = %v, want a %s refusal", err,
+					statelog.ReasonWrongStream)
+			}
+			before := h.appends.appends.Load()
+			err = gate(h)
+			appended := h.appends.appends.Load() - before
+			switch {
+			case c.excused && (err != nil || appended != 1):
+				t.Fatalf("the node gate = %v after %d append(s), want it published", err, appended)
+			case !c.excused:
+				requireWrongStream(t, err)
+				if appended != 0 {
+					t.Fatalf("appended %d time(s) onto a log this node's rows are not "+
+						"keyed to", appended)
+				}
+			}
+		})
+	}
+}

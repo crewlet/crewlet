@@ -453,6 +453,17 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 				"list the evictions on its own log, so the trim could never stop "+
 				"counting an evicted node there", domain.Name())
 		}
+		// AND MUST LET ITS LOG BE ASKED DIRECTLY. A node a peer re-anchored
+		// past never applies an eviction written after its applier
+		// stopped, and the eviction of that peer is what releases it —
+		// see [statelog.EvictedOnLog] and [stateLog.evictedOn].
+		if _, probes := domain.(statelog.EvictionProbe); domain.ClaimsIdentity() && !probes {
+			s.Stop()
+			return nil, fmt.Errorf("engine: domain %q claims identity and cannot "+
+				"say who is evicted on its log without applying it, so a node a "+
+				"decommissioned peer re-anchored past could never see that "+
+				"peer's eviction", domain.Name())
+		}
 		running, err := s.start(ctx, consumerCtx, host, domain, logs[domain.Name()], epoch)
 		if err != nil {
 			// EVERY DOMAIN OR NONE. A node running half its register
@@ -2065,10 +2076,23 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		Generations:     map[string]uint32{},
 		StreamCreatedAt: map[string]time.Time{},
 	}
+	// WHERE EACH DOMAIN'S ROWS STAND, read first: the fleet read below asks
+	// whether a node is evicted only of one ahead of these, so a fleet on
+	// one generation asks nothing of the logs.
+	above := map[string]uint32{}
+	for _, domain := range registeredDomains() {
+		at, _, found, readErr := statelog.CursorFor(ctx, s.db.Replicated(), domain.Stream().Name)
+		if readErr != nil {
+			return nil, nil, statelog.OfferRequest{}, readErr
+		}
+		if found {
+			above[domain.Name()] = at.Generation
+		}
+	}
 	// THE FLEET'S GENERATIONS, READ ONCE for every domain: two
 	// coordination reads per join rather than two per domain, and one
 	// answer the domains are all judged against.
-	fleet, err := s.fleetGenerations(ctx)
+	fleet, err := s.fleetGenerations(ctx, logs, above)
 	if err != nil {
 		return nil, nil, statelog.OfferRequest{}, err
 	}
@@ -2206,46 +2230,6 @@ func passedByAReanchor(domain statelog.Domain, at statelog.Position, found bool,
 	fleet uint32) bool {
 
 	return domain.ClaimsIdentity() && found && fleet > at.Generation
-}
-
-// fleetGenerations is the number space the FLEET is on for each domain — for a
-// node whose own rows cannot say, and for one whose rows the fleet may have
-// left behind.
-//
-// TWO SOURCES BECAUSE EITHER MAY BE THE ONLY ONE. Every live node publishes
-// its own generation per domain in the position register, and the trim
-// publishes the one it concluded at; a fleet whose peers are all restarting
-// has the floor and no positions, and one that has never trimmed has positions
-// and no floor. The MAXIMUM is taken because a re-anchor moves the fleet one
-// node at a time: the highest anybody reports is the space the company is
-// moving into, and an artefact from below it is one this node would have to
-// adopt again.
-//
-// Zero is a real answer — a company that has never re-anchored — and it is
-// what makes a genuinely new node in a genuinely new fleet replay from the
-// beginning rather than ask for a snapshot nobody has. A domain nobody has
-// published anything for is absent from the map, which reads as that zero.
-func (s *stateLog) fleetGenerations(ctx context.Context) (map[string]uint32, error) {
-	newest := map[string]uint32{}
-	rows, err := s.fleet.Positions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("engine: read the fleet's published positions to "+
-			"establish which generation each domain is on: %w", err)
-	}
-	for _, row := range rows {
-		for domain, at := range row.Domains {
-			newest[domain] = max(newest[domain], at.Generation)
-		}
-	}
-	floors, err := s.fleet.Floors(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("engine: read the fleet's published trim floors to "+
-			"establish which generation each domain is on: %w", err)
-	}
-	for _, f := range floors {
-		newest[f.Domain] = max(newest[f.Domain], f.Generation)
-	}
-	return newest, nil
 }
 
 // stillUsable re-checks, after the transfer, that every position the artefact
@@ -3036,8 +3020,15 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	// that nothing on its own log shows it: a peer re-anchored the log past
 	// this node's generation. Unread, this beat judges nothing by them —
 	// the same coordination store takes this node's own row below, and a
-	// failure there is what gets said.
-	generations, genErr := s.fleetGenerations(ctx)
+	// failure there is what gets said. An EVICTED peer's generation is not
+	// the fleet's ([stateLog.fleetGenerations]), which is what lets the
+	// eviction of a decommissioned peer that had re-anchored stop sending
+	// this node to ask for a donor that no longer exists.
+	above := make(map[string]uint32, len(s.order))
+	for _, name := range s.order {
+		above[name] = s.domains[name].runner.Committed().Generation
+	}
+	generations, genErr := s.fleetGenerations(ctx, s.openLogs(), above)
 	for _, name := range s.order {
 		running := s.domains[name]
 		at := running.runner.Committed()

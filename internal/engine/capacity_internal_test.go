@@ -655,7 +655,7 @@ func TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream(t *testing.T) {
 			"vectors": {Generation: 9, AppliedThrough: 900},
 		}},
 	}
-	got := reanchoredPeers(rows, "tracker", 3, "self")
+	got := reanchoredPeers(rows, "tracker", 3, "self", nil)
 	want := []string{"already-reanchored", "reanchored-onto-an-empty-log"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("re-anchored peers = %v, want exactly %v: this node is not its own "+

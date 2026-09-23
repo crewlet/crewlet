@@ -35,6 +35,17 @@ func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 		}
 		return statelog.EvictionRow{}, false
 	}
+	// AND THE SAME STANDING READ OFF THE LOG ITSELF ([statelog.EvictedOnLog]),
+	// which is how a node a peer re-anchored past sees an eviction its
+	// stopped applier never reaches.
+	onLog := func(want bool) {
+		t.Helper()
+		evicted, found, err := statelog.EvictedOnLog(t.Context(), pages.Domain{}, r.log, "node-b")
+		if err != nil || !found || evicted != want {
+			t.Fatalf("node-b's standing read off the log = evicted %v, found %v (%v), "+
+				"want evicted %v", evicted, found, err, want)
+		}
+	}
 
 	res, err := r.store.EvictNode(t.Context(), operator, "op-evict", "node-b")
 	if err != nil {
@@ -63,6 +74,7 @@ func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 			"measured from it")
 	}
 
+	onLog(true)
 	back, err := r.store.ReadmitNode(t.Context(), operator, "op-back", "node-b")
 	if err != nil {
 		t.Fatalf("ReadmitNode: %v", err)
@@ -75,6 +87,7 @@ func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 			"delete", row, held, back.Position.Packed())
 	}
 
+	onLog(false)
 	if _, err := r.store.EvictNode(t.Context(), operator, "op-again", "node-b"); err != nil {
 		t.Fatalf("EvictNode again: %v", err)
 	}
@@ -83,6 +96,7 @@ func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 		t.Fatalf("node-b evicted a second time reads %+v (held %v) — a "+
 			"re-eviction clears the readmission", row, held)
 	}
+	onLog(true)
 }
 
 // A GATE WRITE REFUSES WHAT IT CANNOT MEAN, before it forms a record.

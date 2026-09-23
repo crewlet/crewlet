@@ -44,14 +44,17 @@ import (
 // It does NOT recover records that were on the old stream and never applied
 // here, and the refusal says so.
 //
-// TWO CASES, and they differ in where the log is followed FROM
+// THREE CASES, and they differ in where the log is followed FROM
 // ([statelog.ReanchorCase]). A RECREATED stream — another creation instant than
 // the rows are keyed to — holds none of what the rows came from, so the domain
 // follows it from its first surviving record. A RESTORED one — the broker
 // brought back from an older copy, same instant, ending below this node's
 // checkpoint — holds a prefix of exactly that history, which the rows already
 // have, so the domain follows it from its END: replaying the prefix into a new
-// generation would roll every object back to the copy.
+// generation would roll every object back to the copy. An ABANDONED one — the
+// rows' own stream, continuing in a generation only a peer the fleet has since
+// evicted held — is followed from the rows' own checkpoint, with that
+// generation's records void.
 
 // ReanchorRequest is what an operator asked for.
 type ReanchorRequest struct {
@@ -81,7 +84,9 @@ type ReanchorRequest struct {
 // the fleet's history in it. A second reanchor from this node's rows would open
 // the same generation number over a different prefix of what was lost, which
 // nothing could ever reconcile; this node adopts the peer's snapshot instead.
-// The refusal names the peer.
+// The refusal names the peer. A peer the fleet has EVICTED is not one: its
+// generation is abandoned, and the transition opens the one after it
+// ([statelog.ReanchorAbandoned]).
 //
 // # The loop is halted around it, and restarted whatever happened before
 //
@@ -126,7 +131,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		}
 	}()
 
-	in, err := e.reanchorInputs(ctx, running)
+	in, peers, err := e.reanchorInputs(ctx, running)
 	if err != nil {
 		return statelog.ReanchorPlan{}, err
 	}
@@ -143,10 +148,8 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		Now:      time.Now,
 	}, in, statelog.ReanchorGuard{Confirm: req.Confirm, Force: req.Force})
 	if err != nil {
-		if in.PeersReanchored > 0 && running.domain.ClaimsIdentity() {
-			rows, _ := e.backends.Fleet.Positions(ctx)
-			return statelog.ReanchorPlan{}, fmt.Errorf("%w (re-anchored peers: %v)", err,
-				reanchoredPeers(rows, name, in.Generation, e.native.Load().nodeID))
+		if len(peers) > 0 {
+			return statelog.ReanchorPlan{}, fmt.Errorf("%w (re-anchored peers: %v)", err, peers)
 		}
 		return statelog.ReanchorPlan{}, err
 	}
@@ -238,14 +241,26 @@ func (r reanchorStream) CreatedAt(ctx context.Context) (time.Time, error) {
 // unreadable register leaves RegisterReadable false, which [statelog.Reanchor]
 // refuses on unless the operator forces it. A read error returned there instead
 // would abort the call before the refusal that names what is actually wrong.
+//
+// # And every peer the fleet has EVICTED is left out, and its generation named
+//
+// Neither the most-caught-up rule nor the already-re-anchored one counts an
+// evicted node: it is not coming back, and a decommissioned node that had
+// re-anchored held every other node's reanchor refused for ever
+// ([stateLog.evictedOn] says why that is asked of the log). What it DID open is
+// kept, as [statelog.ReanchorInputs.Abandoned]: from its row, a floor it
+// published, and the generation records on the log — read whether or not the
+// register can be, because a node that died between its append and its
+// position row opened a generation no row names. The second value is the
+// peers that have already re-anchored, by name, for the refusal.
 func (e *Engine) reanchorInputs(ctx context.Context,
-	running *runningDomain) (statelog.ReanchorInputs, error) {
+	running *runningDomain) (statelog.ReanchorInputs, []string, error) {
 
 	stream := running.domain.Stream().Name
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
-		return statelog.ReanchorInputs{}, fmt.Errorf("%w: %s could not be read, so "+
-			"neither its creation instant nor its first sequence — what the "+
+		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: %s could not be read, "+
+			"so neither its creation instant nor its first sequence — what the "+
 			"checkpoint would be keyed to and positioned at — is known; check the "+
 			"broker and re-run: %w", statelog.ErrReanchorRefused, stream, err)
 	}
@@ -254,39 +269,109 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	// durable ones, and the loop that would move them is halted.
 	at, keyed, _, err := statelog.CursorFor(ctx, e.backends.Store.Replicated(), stream)
 	if err != nil {
-		return statelog.ReanchorInputs{}, err
+		return statelog.ReanchorInputs{}, nil, err
 	}
 	in := streamFacts(stream, stats, at, keyed)
 	in.ClaimsIdentity = running.domain.ClaimsIdentity()
+	if !in.ClaimsIdentity {
+		// NO FLEET GUARD APPLIES, and no generation is anybody's but this
+		// node's own: every node re-anchors its own copy of such a log.
+		return in, nil, nil
+	}
+	domain := running.domain.Name()
+	n := e.native.Load()
+	self := n.nodeID
 
 	// UNREADABLE IS NOT "no peers". A register nobody could list is exactly
 	// the outage during which re-anchoring is most tempting and least
 	// justified, so RegisterReadable stays false and the permission refuses
 	// on it — which is why the read's error goes no further than this.
 	rows, readErr := e.backends.Fleet.Positions(ctx)
-	if readErr != nil {
-		return in, nil //nolint:nilerr // an unreadable register is the refusal's input, not this read's failure
-	}
-	in.RegisterReadable = true
-	domain := running.domain.Name()
-	for _, row := range rows {
-		if row.NodeID == e.native.Load().nodeID {
-			continue
-		}
-		// THE SAME GENERATION AND THE SAME STREAM ONLY: a sequence at
-		// another generation is a number in another space — a peer that has
-		// already re-anchored reports the adopted stream's sequences — and so
-		// is one at this generation on another stream: a node that came up
-		// with no rows after the rebuild counts the NEW stream from 1 at the
-		// same generation number. Neither says anything about who went
-		// further along the stream this node's rows came from.
-		if at, runs := row.Domains[domain]; runs && at.Generation == in.Generation &&
-			sameStream(at.StreamCreatedAt, in.KeyedTo) && at.Seq > in.Highest {
-			in.Highest = at.Seq
+	// A FLOOR IS ONLY EVER A SOURCE OF AN ABANDONED GENERATION here, and one
+	// that cannot be read leaves that number to the log's own records.
+	floors, _ := e.backends.Fleet.Floors(ctx)
+	through := in.Generation
+	var candidates []string
+	if readErr == nil {
+		for _, row := range rows {
+			if at, runs := row.Domains[domain]; runs && row.NodeID != self &&
+				at.Generation >= in.Generation {
+				candidates = append(candidates, row.NodeID)
+				through = max(through, at.Generation)
+			}
 		}
 	}
-	in.PeersReanchored = len(reanchoredPeers(rows, domain, in.Generation, e.native.Load().nodeID))
-	return in, nil
+	for _, f := range floors {
+		if f.Domain == domain && f.Generation > in.Generation && f.By != "" && f.By != self {
+			candidates = append(candidates, f.By)
+			through = max(through, f.Generation)
+		}
+	}
+	enc, err := generationEncoder(running.domain)
+	if err != nil {
+		return statelog.ReanchorInputs{}, nil, err
+	}
+	openers, err := statelog.GenerationOpeners(ctx, running.domain, enc, running.log,
+		in.Generation, through)
+	if err != nil {
+		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: which generations of %s "+
+			"are already open could not be read off its log, so the one this "+
+			"reanchor would open is unknown — check the broker and re-run: %w",
+			statelog.ErrReanchorRefused, stream, err)
+	}
+	for _, writer := range openers {
+		if writer != "" && writer != self {
+			candidates = append(candidates, writer)
+		}
+	}
+	evicted, err := n.log.evictedOn(ctx, running.domain, running.log, candidates)
+	if err != nil {
+		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether the peers ahead "+
+			"of this node on %s are evicted could not be read, and an evicted "+
+			"peer's generation is abandoned where a live one's is the fleet's — "+
+			"check the broker and re-run: %w", statelog.ErrReanchorRefused, stream, err)
+	}
+
+	var peers []string
+	if readErr == nil {
+		in.RegisterReadable = true
+		for _, row := range rows {
+			if row.NodeID == self || evicted[row.NodeID] {
+				continue
+			}
+			// THE SAME GENERATION AND THE SAME STREAM ONLY: a sequence at
+			// another generation is a number in another space — a peer that
+			// has already re-anchored reports the adopted stream's sequences
+			// — and so is one at this generation on another stream: a node
+			// that came up with no rows after the rebuild counts the NEW
+			// stream from 1 at the same generation number. Neither says
+			// anything about who went further along the stream this node's
+			// rows came from.
+			if at, runs := row.Domains[domain]; runs && at.Generation == in.Generation &&
+				sameStream(at.StreamCreatedAt, in.KeyedTo) && at.Seq > in.Highest {
+				in.Highest = at.Seq
+			}
+		}
+		peers = reanchoredPeers(rows, domain, in.Generation, self, evicted)
+		in.PeersReanchored = len(peers)
+		for _, row := range rows {
+			if at, runs := row.Domains[domain]; runs && evicted[row.NodeID] &&
+				at.Generation > in.Generation {
+				in.Abandoned = max(in.Abandoned, at.Generation)
+			}
+		}
+	}
+	for _, f := range floors {
+		if f.Domain == domain && evicted[f.By] && f.Generation > in.Generation {
+			in.Abandoned = max(in.Abandoned, f.Generation)
+		}
+	}
+	for gen, writer := range openers {
+		if evicted[writer] {
+			in.Abandoned = max(in.Abandoned, gen)
+		}
+	}
+	return in, peers, nil
 }
 
 // sameStream reports whether a peer's position can be on the stream this node's
@@ -370,10 +455,11 @@ type ReanchorView struct {
 	// Generation is the generation the domain's checkpoint stands at.
 	Generation uint32
 
-	// Case is what a reanchor run now would answer — the log recreated, or
-	// restored from an older copy — and Cursor the sequence it would put the
-	// new checkpoint at. Case is empty when there is nothing to re-anchor,
-	// and Refusal then says why, in the transition's own words.
+	// Case is what a reanchor run now would answer — the log recreated,
+	// restored from an older copy, or continuing in a generation only an
+	// evicted peer held — and Cursor the sequence it would put the new
+	// checkpoint at. Case is empty when there is nothing to re-anchor, and
+	// Refusal then says why, in the transition's own words.
 	Case    statelog.ReanchorCase
 	Cursor  uint64
 	Refusal string
@@ -383,7 +469,16 @@ type ReanchorView struct {
 // stream's own creation instant, which is the value the confirmation has to
 // echo, the generation the domain stands at, and which case a reanchor would
 // answer — so the operator confirms knowing whether the log is followed from
-// its first record or from its end.
+// its first record, its end or this node's own checkpoint.
+//
+// FROM THE SAME INPUTS THE TRANSITION READS ([Engine.reanchorInputs]), fleet
+// included: whether the log continues in a generation an evicted peer
+// abandoned is a fact about the register and the log together, and a status
+// that read only the stream named no case at all for the one situation the
+// operator's eviction had just made re-anchorable — so the command it prints
+// would never have been offered. The guards are not run: whether this node is
+// the one that may is the transition's answer, and the status says what it
+// would do if it may.
 //
 // LIVE, for the reason [Engine.reanchorInputs] gives: it is the same instant a
 // `wrong_stream` refusal names and the same one the permission check compares
@@ -395,16 +490,11 @@ func (e *Engine) ReanchorStatus(ctx context.Context, stream string) (ReanchorVie
 	if err != nil {
 		return ReanchorView{}, err
 	}
-	stats, err := running.log.Stats(ctx)
+	in, _, err := e.reanchorInputs(ctx, running)
 	if err != nil {
-		return ReanchorView{}, fmt.Errorf("engine: read %s's creation instant: %w",
-			stream, err)
+		return ReanchorView{}, fmt.Errorf("engine: read what a reanchor of %s would "+
+			"be decided from: %w", stream, err)
 	}
-	at, keyed, _, err := statelog.CursorFor(ctx, e.backends.Store.Replicated(), stream)
-	if err != nil {
-		return ReanchorView{}, fmt.Errorf("engine: read %s's checkpoint: %w", stream, err)
-	}
-	in := streamFacts(stream, stats, at, keyed)
 	view := ReanchorView{CreatedAt: in.StreamCreatedAt, Generation: in.Generation}
 	if view.Case, view.Cursor, err = in.Case(); err != nil {
 		view.Refusal = err.Error()
@@ -435,12 +525,18 @@ func (e *Engine) ReanchorStatus(ctx context.Context, stream string) (ReanchorVie
 // no joiner can adopt. Such a peer is weighed by the most-caught-up rule
 // instead, against the stream this node's rows came from
 // ([statelog.ReanchorInputs]).
+//
+// # Nor is an EVICTED peer
+//
+// Its rows are not the fleet's history in any generation any more, and counted
+// here a decommissioned node that had re-anchored refused every other node's
+// reanchor for ever — see [stateLog.evictedOn].
 func reanchoredPeers(rows []coord.NodePositions, domain string, generation uint32,
-	self string) []string {
+	self string, evicted map[string]bool) []string {
 
 	var reanchored []string
 	for _, row := range rows {
-		if row.NodeID == self {
+		if row.NodeID == self || evicted[row.NodeID] {
 			continue
 		}
 		if at, runs := row.Domains[domain]; runs && at.Generation > generation {

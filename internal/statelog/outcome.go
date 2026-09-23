@@ -160,6 +160,13 @@ const (
 	// faulting on them wedges the newest node in the fleet.
 	ReasonRetired Reason = "retired"
 
+	// ReasonAbandoned — the record was written in a generation a reanchor
+	// ABANDONED: one only a node the fleet has since evicted held, whose
+	// history is on no disk the fleet still has. It was decided from rows
+	// nobody holds, so it produces rows nowhere the reanchor's checkpoint is
+	// followed from — see [ReanchorPlan.From].
+	ReasonAbandoned Reason = "abandoned"
+
 	// ReasonLogFull — the log is at its byte ceiling and refuses
 	// appends rather than dropping records. An operator raises the
 	// ceiling or unblocks the trim.

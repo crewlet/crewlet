@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -104,6 +105,32 @@ func (Domain) Envelope(payload []byte) (statelog.Envelope, error) {
 // node with no inverse that repairs it.
 func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind).InstallsGate() || OpKind(env.Op) == OpPurge
+}
+
+// EvictionSubject is where a node's evictions and readmissions are published
+// on this log — the [statelog.EvictionProbe] half a node the fleet re-anchored
+// past reads its peers' standing through, since its applier never reaches an
+// eviction written after it stopped.
+func (Domain) EvictionSubject(node string) statelog.Subject {
+	return wire(EvictionSubject(node))
+}
+
+// Evicts decodes one record from a node's eviction subject: true for an
+// eviction, false for the readmission that inverts one.
+func (Domain) Evicts(payload []byte) (bool, error) {
+	record, err := Decode(payload)
+	if err != nil {
+		return false, fmt.Errorf("tracker: decode a record from an eviction subject: %w", err)
+	}
+	if record.Subject.Kind != KindEviction {
+		return false, fmt.Errorf("tracker: the record on an eviction subject is a %s",
+			record.Subject.Kind)
+	}
+	var eviction Eviction
+	if err := decodePayload(record.Mutation, &eviction); err != nil {
+		return false, fmt.Errorf("tracker: decode the eviction: %w", err)
+	}
+	return !eviction.Readmitted, nil
 }
 
 // Tables is every durable table this domain writes, with its class.

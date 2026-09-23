@@ -550,9 +550,10 @@ func (a *App) mountCapacity(mux *http.ServeMux) {
 // serveReanchorStatus answers GET /work/retention/reanchor: the stream's own
 // creation instant, which is the value the confirmation has to echo, and the
 // case a reanchor would answer now — `recreated` (followed from its first
-// surviving record) or `restored` (followed from its end), with the sequence
-// the checkpoint would go to — or, with no case, why there is nothing to
-// re-anchor.
+// surviving record), `restored` (followed from its end) or `abandoned`
+// (followed from this node's own checkpoint, a generation only an evicted peer
+// held made void), with the sequence the checkpoint would go to — or, with no
+// case, why there is nothing to re-anchor.
 //
 // A SEPARATE READ, because the confirmation is meant to say "I looked at the
 // thing I am re-anchoring": a verb that printed the value and accepted it back

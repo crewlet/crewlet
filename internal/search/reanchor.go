@@ -40,3 +40,9 @@ type GenerationRecord struct{}
 func (GenerationRecord) GenerationRecord(statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	return statelog.GenerationRecord{}, false, nil
 }
+
+// GenerationSubject reports false for the same reason: there is no record, so
+// there is no subject to find one on.
+func (GenerationRecord) GenerationSubject(uint32) (statelog.Subject, bool) {
+	return statelog.Subject{}, false
+}

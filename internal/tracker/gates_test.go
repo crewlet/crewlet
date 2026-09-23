@@ -187,6 +187,20 @@ func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 		}
 		return false, false
 	}
+	// AND THE SAME STANDING READ OFF THE LOG ITSELF ([statelog.EvictedOnLog]),
+	// which is how a node a peer re-anchored past sees an eviction its
+	// stopped applier never reaches.
+	onLog := func(node string, want bool) {
+		t.Helper()
+		evicted, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{}, r.log, node)
+		if err != nil || !found || evicted != want {
+			t.Fatalf("%s's standing read off the log = evicted %v, found %v (%v), "+
+				"want evicted %v", node, evicted, found, err, want)
+		}
+	}
+	if _, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{}, r.log, "node-b"); err != nil || found {
+		t.Fatalf("a node never gated has a standing on the log: found %v, %v", found, err)
+	}
 
 	for _, node := range []string{"node-b", "node-c"} {
 		if _, err := r.writer.EvictNode(t.Context(), "op-evict-"+node, node); err != nil {
@@ -197,6 +211,7 @@ func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 	if held, back := standing("node-b"); !held || back {
 		t.Fatalf("node-b after its eviction: held %v, back %v — want evicted", held, back)
 	}
+	onLog("node-b", true)
 
 	if _, err := r.writer.ReadmitNode(t.Context(), "op-back", "node-b"); err != nil {
 		t.Fatalf("ReadmitNode: %v", err)
@@ -209,6 +224,8 @@ func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 	if held, back := standing("node-c"); !held || back {
 		t.Fatalf("node-c, never readmitted, reads held %v, back %v", held, back)
 	}
+	onLog("node-b", false)
+	onLog("node-c", true)
 
 	if _, err := r.writer.EvictNode(t.Context(), "op-evict-again", "node-b"); err != nil {
 		t.Fatalf("EvictNode again: %v", err)
@@ -219,6 +236,7 @@ func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 			"re-eviction must clear the readmission, or the row would still "+
 			"say the node is back", held, back)
 	}
+	onLog("node-b", true)
 }
 
 // EVERY GATE-INSTALLING RECORD IS DECLARED, AND PINNED.

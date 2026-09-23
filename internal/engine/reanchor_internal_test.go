@@ -40,7 +40,7 @@ func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 	for _, name := range s.order {
 		running := s.domains[name]
 		want := running.domain.Stream().Name
-		in, err := e.reanchorInputs(t.Context(), running)
+		in, _, err := e.reanchorInputs(t.Context(), running)
 		if err != nil {
 			t.Fatalf("read %s's inputs: %v", name, err)
 		}
@@ -109,7 +109,7 @@ func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 			t.Fatalf("publish %s's row: %v", row.node, err)
 		}
 	}
-	in, err := e.reanchorInputs(t.Context(), running)
+	in, _, err := e.reanchorInputs(t.Context(), running)
 	if err != nil {
 		t.Fatalf("reanchorInputs: %v", err)
 	}
@@ -857,6 +857,15 @@ func TestARefusedReanchorLeavesTheDomainServing(t *testing.T) {
 // not the one its rows are keyed to — and answers the sequence it landed at.
 func appendEviction(t *testing.T, running *runningDomain, opID, node string) uint64 {
 	t.Helper()
+	return appendEvictionAs(t, running, opID, node, 0, "")
+}
+
+// appendEvictionAs is [appendEviction] as a named writer standing in a given
+// generation publishes it: the two stamps a peer's record carries.
+func appendEvictionAs(t *testing.T, running *runningDomain, opID, node string,
+	gen uint32, writer string) uint64 {
+
+	t.Helper()
 	subject := tracker.EvictionSubject(node)
 	body, err := json.Marshal(tracker.Eviction{
 		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "ops-1",
@@ -869,7 +878,7 @@ func appendEviction(t *testing.T, running *runningDomain, opID, node string) uin
 		RecordEnvelope: tracker.RecordEnvelope{
 			V: tracker.GateRecordVersion, OpID: opID, Subject: subject,
 			Op: tracker.OpEviction, CreatedAt: time.Now().UTC(),
-			Scope: tracker.ScopeSet{Subject: true},
+			Scope: tracker.ScopeSet{Subject: true}, Gen: gen, Writer: writer,
 		},
 		Mutation: body, Actor: "ops-1", ActorKind: tracker.AuthorOperator,
 		OperatorID: "ops-1",

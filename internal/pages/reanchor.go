@@ -34,6 +34,14 @@ import (
 // GenerationRecord is the knowledge base's [statelog.GenerationEncoder].
 type GenerationRecord struct{}
 
+// GenerationSubject is the subject generation gen's record is published on —
+// what a reader of the log asks to learn who opened a generation
+// ([statelog.GenerationOpeners]).
+func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
+	subject := GenerationSubject(gen)
+	return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID}, true
+}
+
 // GenerationRecord encodes the reanchor's record for the NEW generation,
 // create-only on the generation's own subject so two operators deriving the
 // same number race at the broker and exactly one record lands.

@@ -85,10 +85,11 @@ func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSe
 		// than the applier's live position, for the reason
 		// [Snap.Checkpoint] gives — and it is read BEFORE the decision
 		// because the decision is stamped with its generation.
-		checkpoint, _, _, err := r.tables.readCursor(ctx, tx)
+		row, _, err := r.tables.readCursor(ctx, tx)
 		if err != nil {
 			return err
 		}
+		checkpoint := row.at
 		snap.Checkpoint = checkpoint
 
 		decision, err := decide(tx, checkpoint)

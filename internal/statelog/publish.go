@@ -279,6 +279,14 @@ type Request struct {
 	// Pattern is how this write arbitrates.
 	Pattern Pattern
 
+	// NodeGate marks an eviction or a readmission of a node: a statement
+	// about a MACHINE, arbitrated on that machine's own subject, whose
+	// content nothing in this node's rows decided. It is the one write a
+	// node the fleet re-anchored past may still make, because the gesture
+	// that releases a fleet stranded by a decommissioned peer is exactly
+	// that peer's eviction — see [Publisher.checkIdentity].
+	NodeGate bool
+
 	// Decide runs inside the snapshot's transaction and returns the
 	// record to publish. It may run more than once — each round takes a
 	// fresh snapshot — and must decide only from rows it reads there.
@@ -1365,9 +1373,25 @@ func (p *Publisher) clearForZero(ctx context.Context, req Request, cursor Positi
 // checkIdentity is fence 0's identity half: a node whose log is not the one
 // its positions are on refuses every write — see [Identity] for why every
 // pattern and not only the retry at zero.
+//
+// # With one exception: a node gate over a passed generation
+//
+// A node a peer re-anchored past holds rows the log no longer continues, so
+// anything it decides from them is refused — but an eviction or a readmission
+// ([Request.NodeGate]) is decided from nothing in them. Its content is the
+// operator's gesture; its arbitration is on the gated node's own subject,
+// which only another such gesture writes, so an expectation formed from this
+// node's rows is either the broker's own last record there or refused by the
+// broker; and the generation it is stamped with is below the fleet's, which
+// every applier in the new generation applies at its own position. Refused
+// here, it was the gesture no node of a fleet stranded by a decommissioned peer
+// could make: every one of them had been passed by that peer, and evicting it
+// is how the peer's generation stops being the fleet's. A RECREATED stream is
+// never excused — this node's expectations there are sequences on another
+// stream — and that finding outranks the passed one, so it is what is asked.
 func (p *Publisher) checkIdentity(req Request) error {
 	err := p.identity.StreamIdentity()
-	if err == nil {
+	if err == nil || (req.NodeGate && errors.Is(err, ErrGenerationPassed)) {
 		return nil
 	}
 	return &Unavailable{

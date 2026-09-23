@@ -93,23 +93,44 @@ func newTables(d Domain) (tables, error) {
 	return t, nil
 }
 
+// cursorRow is one domain's checkpoint row, whole.
+type cursorRow struct {
+	at      Position
+	created time.Time
+
+	// void is the generations the reanchor that placed this checkpoint
+	// ABANDONED — see [ReanchorPlan.From].
+	void voidRange
+}
+
+// voidRange is the generations strictly between after and before: the ones a
+// reanchor ABANDONED, whose records are void wherever its checkpoint is
+// followed from. Zero and zero, the empty range, on every checkpoint no such
+// reanchor placed.
+type voidRange struct{ after, before uint32 }
+
+// holds reports whether generation gen is one of them.
+func (v voidRange) holds(gen uint32) bool { return gen > v.after && gen < v.before }
+
 // readCursor reads this domain's checkpoint, reporting false when the applier
 // has never committed on this stream.
-func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (Position, time.Time, bool, error) {
-	var gen int64
-	var seq int64
-	var created int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT generation, seq, stream_created_at FROM statelog_cursor WHERE stream = ?`,
-		t.stream).Scan(&gen, &seq, &created)
+func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, error) {
+	var gen, seq, created, voidAfter, voidBefore int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT generation, seq, stream_created_at, void_after, void_before
+		FROM statelog_cursor WHERE stream = ?`,
+		t.stream).Scan(&gen, &seq, &created, &voidAfter, &voidBefore)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Position{Stream: t.stream}, time.Time{}, false, nil
+		return cursorRow{at: Position{Stream: t.stream}}, false, nil
 	case err != nil:
-		return Position{}, time.Time{}, false, fmt.Errorf("statelog: read the cursor: %w", err)
+		return cursorRow{}, false, fmt.Errorf("statelog: read the cursor: %w", err)
 	}
-	return Position{Stream: t.stream, Generation: uint32(gen), Seq: uint64(seq)},
-		store.DecodeTime(created), true, nil
+	return cursorRow{
+		at:      Position{Stream: t.stream, Generation: uint32(gen), Seq: uint64(seq)},
+		created: store.DecodeTime(created),
+		void:    voidRange{after: uint32(voidAfter), before: uint32(voidBefore)},
+	}, true, nil
 }
 
 // setCursor writes the checkpoint, in the SAME transaction as the rows it
@@ -135,6 +156,40 @@ func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created t
 		store.EncodeTime(created), store.EncodeTime(now))
 	if err != nil {
 		return fmt.Errorf("statelog: write the cursor at %s: %w", p, err)
+	}
+	return nil
+}
+
+// reanchorCursor writes the checkpoint a reanchor places — at p, keyed to
+// created — together with the generations it abandoned: every one strictly
+// between from and p's own ([ReanchorPlan.From]).
+//
+// ITS OWN STATEMENT rather than a flag on setCursor, because the two write
+// different things for a reason: the applier's checkpoint moves every batch
+// and must leave the abandoned range alone, since a node part-way through the
+// abandoned generation's records keeps voiding them after a restart; and a
+// reanchor must REPLACE it, since the range an earlier reanchor abandoned says
+// nothing about the log this one follows.
+func (t tables) reanchorCursor(ctx context.Context, tx *sql.Tx, p Position,
+	created time.Time, from uint32, now time.Time) error {
+
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO statelog_cursor
+			(stream, generation, seq, stream_created_at, updated_at,
+			 void_after, void_before)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (stream) DO UPDATE SET
+			generation        = excluded.generation,
+			seq               = excluded.seq,
+			stream_created_at = excluded.stream_created_at,
+			updated_at        = excluded.updated_at,
+			void_after        = excluded.void_after,
+			void_before       = excluded.void_before`,
+		t.stream, int64(p.Generation), int64(p.Seq),
+		store.EncodeTime(created), store.EncodeTime(now),
+		int64(from), int64(p.Generation))
+	if err != nil {
+		return fmt.Errorf("statelog: write the reanchored cursor at %s: %w", p, err)
 	}
 	return nil
 }

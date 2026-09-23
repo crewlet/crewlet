@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -230,6 +233,9 @@ func TestAReanchorNamesTheCaseItAnswers(t *testing.T) {
 		want   statelog.ReanchorCase
 		cursor uint64
 		refuse string
+		// skip is how many generations past the next one the plan opens:
+		// the ones an evicted node abandoned.
+		skip uint32
 	}{
 		"a recreated stream still holding its first records": {
 			in: func() statelog.ReanchorInputs {
@@ -286,6 +292,41 @@ func TestAReanchorNamesTheCaseItAnswers(t *testing.T) {
 			}(),
 			refuse: "nothing to re-anchor",
 		},
+		"the same stream continuing in a generation only an evicted node held": {
+			in: func() statelog.ReanchorInputs {
+				in := restored()
+				in.LastSeq = in.Position + 50
+				in.Abandoned = in.Generation + 1
+				return in
+			}(),
+			want: statelog.ReanchorAbandoned, cursor: 9_000, skip: 1,
+		},
+		"a restored copy an evicted node had already re-anchored": {
+			in: func() statelog.ReanchorInputs {
+				in := restored()
+				in.Abandoned = in.Generation + 3
+				return in
+			}(),
+			want: statelog.ReanchorRestored, cursor: 7_000, skip: 3,
+		},
+		"a recreated stream an evicted node had already re-anchored": {
+			in: func() statelog.ReanchorInputs {
+				in := reanchorInputs()
+				in.FirstSeq, in.LastSeq = 42, 60
+				in.Abandoned = in.Generation + 1
+				return in
+			}(),
+			want: statelog.ReanchorRecreated, cursor: 41, skip: 1,
+		},
+		"an evicted node at this node's own generation abandoned nothing": {
+			in: func() statelog.ReanchorInputs {
+				in := restored()
+				in.LastSeq = in.Position + 50
+				in.Abandoned = in.Generation
+				return in
+			}(),
+			refuse: "nothing to re-anchor",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -310,7 +351,8 @@ func TestAReanchorNamesTheCaseItAnswers(t *testing.T) {
 				t.Fatalf("%q is not a valid case", which)
 			}
 			if want := (statelog.ReanchorPlan{
-				Generation: tc.in.Generation + 1, Case: tc.want, Cursor: tc.cursor,
+				Generation: tc.in.Generation + 1 + tc.skip, Case: tc.want,
+				Cursor: tc.cursor, From: tc.in.Generation,
 			}); plan != want {
 				t.Fatalf("PermitReanchor = %+v, want %+v — the plan is the case the "+
 					"status names", plan, want)
@@ -445,6 +487,10 @@ func (l *reanchorLog) records() int {
 // probeGeneration is the probe domain's generation record: its own subject, and a
 // body that names the generation.
 type probeGeneration struct{ keeps bool }
+
+func (p probeGeneration) GenerationSubject(gen uint32) (statelog.Subject, bool) {
+	return statelog.Subject{Kind: "generation", ID: fmt.Sprint(gen)}, p.keeps
+}
 
 func (p probeGeneration) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	if !p.keeps {
@@ -1792,5 +1838,205 @@ func TestAGenerationAnotherNodeOpenedIsNeverOpenedAgain(t *testing.T) {
 		if at, _ := cursorOf(t, f.db, probeStream); at.Generation != plan.Generation {
 			t.Fatalf("the re-run left the checkpoint at %s", at)
 		}
+	}
+}
+
+// AN ABANDONED GENERATION'S RECORDS ARE VOID WHEREVER ITS REANCHOR IS FOLLOWED.
+//
+// A node that re-anchored and was evicted before anybody adopted from it left
+// records on the log in a generation whose history is on no disk the fleet
+// still has. The reanchor that skips past it follows the log from the rows'
+// own checkpoint, so those records are ahead of it — and applied into these
+// rows they would mix two histories. The transition says which generations it
+// abandoned on the checkpoint, and the applier drops their records: consumed,
+// the anchor moved to them (they are the subject's last messages on the
+// broker), and applied into no row. Records in every other generation apply.
+func TestAnAbandonedGenerationsRecordsAreVoidWhereItsReanchorIsFollowed(t *testing.T) {
+	t.Parallel()
+
+	// THE TRANSITION WRITES THE RANGE: rows at generation 1, a log that
+	// holds everything past their checkpoint, and an evicted node that
+	// opened generation 2.
+	f := newReanchorFixture(t)
+	seedCursor(t, f.db, probeStream,
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 10}, reanchorCreated)
+	in := reanchorInputs()
+	in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
+	in.Position, in.FirstSeq, in.LastSeq, in.Highest = 10, 1, 20, 10
+	in.Abandoned = 2
+	plan, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), in, confirmed())
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	if plan.Case != statelog.ReanchorAbandoned || plan.Generation != 3 ||
+		plan.Cursor != 10 || plan.From != 1 {
+		t.Fatalf("the plan is %+v, want the abandoned case into generation 3 at the "+
+			"rows' own checkpoint, 10, abandoning what lies between 1 and 3", plan)
+	}
+	var after, before int64
+	if err := f.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `
+			SELECT void_after, void_before FROM statelog_cursor WHERE stream = ?`,
+			probeStream).Scan(&after, &before)
+	}); err != nil {
+		t.Fatalf("read the checkpoint: %v", err)
+	}
+	if after != 1 || before != 3 {
+		t.Fatalf("the checkpoint abandons (%d, %d), want (1, 3)", after, before)
+	}
+
+	// THE APPLIER DROPS THE ABANDONED GENERATION'S RECORDS, over a checkpoint
+	// carrying that range — and only those.
+	h := newApplyHarness(t, probeDomain{})
+	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO statelog_cursor
+				(stream, generation, seq, stream_created_at, updated_at,
+				 void_after, void_before)
+			VALUES (?, 3, 0, ?, ?, 1, 3)`,
+			probeStream, store.EncodeTime(reanchorCreated), store.EncodeTime(reanchorCreated))
+		return err
+	}); err != nil {
+		t.Fatalf("seed the checkpoint: %v", err)
+	}
+	stamped := func(seq uint64, id string, gen uint32) statelog.Envelope {
+		e := env(seq, "edit", id, "op-"+id, 1)
+		e.Gen = gen
+		return e
+	}
+	h.fetch.offer(1, stamped(1, "abandoned", 2))
+	h.fetch.offer(2, stamped(2, "older", 1))
+	h.fetch.offer(3, stamped(3, "current", 3))
+	if err := h.run(3); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	h.applier.mu.Lock()
+	applied := slices.Clone(h.applier.applied)
+	h.applier.mu.Unlock()
+	want := []statelog.Position{
+		{Stream: probeStream, Generation: 3, Seq: 2},
+		{Stream: probeStream, Generation: 3, Seq: 3},
+	}
+	if !slices.Equal(applied, want) {
+		t.Fatalf("applied %v, want %v — a record written in the abandoned "+
+			"generation was applied into these rows, or a record in another was not",
+			applied, want)
+	}
+	var anchor int64
+	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(),
+			`SELECT anchor FROM statelog_anchor WHERE subject = ?`,
+			probePrefix+".object.abandoned").Scan(&anchor)
+	}); err != nil {
+		t.Fatalf("read the void record's anchor: %v", err)
+	}
+	if want := (statelog.Position{Stream: probeStream, Generation: 3, Seq: 1}); anchor != want.Packed() {
+		t.Fatalf("the void record's subject is anchored at packed %d, want %d — it "+
+			"is still that subject's last message on the broker, and a writer "+
+			"expecting anything else is refused for ever", anchor, want.Packed())
+	}
+}
+
+// A NODE'S STANDING ON A LOG IS READ OFF THE LOG, whether or not its applier
+// has reached it.
+//
+// A node a peer re-anchored past stops before the first record of the new
+// generation, so the eviction of that peer never reaches its rows — and that
+// eviction is exactly what it must see for the peer's generation to stop
+// being the fleet's. The last record on the node's eviction subject is its
+// standing: an eviction, or the readmission that inverted one.
+func TestANodesStandingIsReadOffTheLog(t *testing.T) {
+	t.Parallel()
+	log := newReanchorLog(nil)
+	subject := probePrefix + ".eviction.node-x"
+	put := func(evicts bool) {
+		log.put(subject, fmt.Sprintf("op-%d", log.records()),
+			[]byte(fmt.Sprintf(`{"evicts":%t}`, evicts)))
+	}
+	ask := func() (bool, bool) {
+		t.Helper()
+		evicted, found, err := statelog.EvictedOnLog(t.Context(), evictingProbe{}, log, "node-x")
+		if err != nil {
+			t.Fatalf("EvictedOnLog: %v", err)
+		}
+		return evicted, found
+	}
+	if _, found := ask(); found {
+		t.Fatal("a node never gated reads as having a standing")
+	}
+	put(true)
+	if evicted, found := ask(); !found || !evicted {
+		t.Fatalf("after its eviction the node reads evicted=%v found=%v", evicted, found)
+	}
+	put(false)
+	if evicted, found := ask(); !found || evicted {
+		t.Fatalf("after its readmission the node reads evicted=%v found=%v — the "+
+			"LAST record is its standing", evicted, found)
+	}
+	// A DOMAIN WITH NO GATE has nothing to read.
+	if _, found, err := statelog.EvictedOnLog(t.Context(), probeDomain{}, log, "node-x"); err != nil || found {
+		t.Fatalf("a domain with no eviction gate answered found=%v, %v", found, err)
+	}
+}
+
+// evictingProbe is the probe domain with an eviction gate on its log.
+type evictingProbe struct{ probeDomain }
+
+func (evictingProbe) EvictionSubject(node string) statelog.Subject {
+	return statelog.Subject{Kind: "eviction", ID: node}
+}
+
+func (evictingProbe) Evicts(payload []byte) (bool, error) {
+	var body struct {
+		Evicts bool `json:"evicts"`
+	}
+	err := json.Unmarshal(payload, &body)
+	return body.Evicts, err
+}
+
+// WHO OPENED EACH GENERATION IS READ OFF THE LOG, past what the register knows.
+//
+// A reanchor appends its record before it commits and before it publishes its
+// position, so a node that died in between opened a generation no row names —
+// and a later reanchor deriving that number from the register alone lost to
+// its record on every attempt.
+func TestWhoOpenedEachGenerationIsReadOffTheLog(t *testing.T) {
+	t.Parallel()
+	log := newReanchorLog(nil)
+	open := func(gen uint32, writer string) {
+		rec, _, err := probeGeneration{keeps: true}.GenerationRecord(statelog.GenerationFacts{
+			Generation: gen, Writer: writer,
+		})
+		if err != nil {
+			t.Fatalf("encode generation %d: %v", gen, err)
+		}
+		log.put(probePrefix+"."+rec.Subject.String(), rec.OpID, rec.Payload)
+	}
+	open(2, "node-b")
+	open(3, "node-c")
+	open(5, "node-e")
+	read := func(above, through uint32) map[uint32]string {
+		t.Helper()
+		got, err := statelog.GenerationOpeners(t.Context(), probeDomain{},
+			probeGeneration{keeps: true}, log, above, through)
+		if err != nil {
+			t.Fatalf("GenerationOpeners: %v", err)
+		}
+		return got
+	}
+	if got, want := read(1, 1), map[uint32]string{2: "node-b", 3: "node-c"}; !maps.Equal(got, want) {
+		t.Fatalf("above 1 = %v, want %v — every generation opened on the log past "+
+			"what the register named, up to the first that holds nothing", got, want)
+	}
+	if got, want := read(1, 5), map[uint32]string{2: "node-b", 3: "node-c", 5: "node-e"}; !maps.Equal(got, want) {
+		t.Fatalf("through 5 = %v, want %v — a generation the register names is read "+
+			"across a gap below it", got, want)
+	}
+	if got := read(5, 5); len(got) != 0 {
+		t.Fatalf("above 5 = %v, want nothing", got)
+	}
+	if got, err := statelog.GenerationOpeners(t.Context(), probeDomain{},
+		probeGeneration{keeps: false}, log, 1, 5); err != nil || len(got) != 0 {
+		t.Fatalf("a domain keeping no generation record = %v, %v, want nothing", got, err)
 	}
 }

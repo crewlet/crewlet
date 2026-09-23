@@ -72,10 +72,11 @@ func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 	scope := ScopeSet{Subject: true}
 	at := s.now()
 	return s.publish(ctx, statelog.Request{
-		Subject: statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
-		Scope:   scope.Resolve(subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
+		Subject:  statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
+		Scope:    scope.Resolve(subject),
+		OpID:     opID,
+		Pattern:  statelog.PatternArbitrated,
+		NodeGate: true,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return s.decide(stamp, actor, subject, OpEviction, scope, opID, Eviction{
 				V: GateRecordVersion, NodeID: nodeID,

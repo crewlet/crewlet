@@ -137,6 +137,15 @@ func (a *applier) rebuilt() {
 		statelog.ErrStreamRecreated)
 }
 
+// passedBy is what a reading of the register establishes about this node once a
+// peer has re-anchored the log past it.
+func (a *applier) passedBy() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.foreign = fmt.Errorf("%w: a peer re-anchored the probe log past this node",
+		statelog.ErrGenerationPassed)
+}
+
 func newApplier() *applier {
 	return &applier{
 		committed: statelog.Position{Stream: probeStream, Generation: 1},

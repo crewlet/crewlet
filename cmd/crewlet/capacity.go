@@ -450,9 +450,14 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 	}
 	from := fmt.Sprintf("from its first surviving record, after sequence %d",
 		answer.Cursor)
-	if answer.Case == statelog.ReanchorRestored {
+	switch answer.Case {
+	case statelog.ReanchorRestored:
 		from = fmt.Sprintf("from its end, after sequence %d, replaying none of "+
 			"the records the restored copy kept", answer.Cursor)
+	case statelog.ReanchorAbandoned:
+		from = fmt.Sprintf("from this node's own checkpoint, after sequence %d, "+
+			"with every record of the generation the evicted node abandoned void",
+			answer.Cursor)
 	}
 	fmt.Fprintf(stdout, "%s is re-anchored at generation %d (%s): it is followed "+
 		"%s. Every position below the generation is now comparable and safely "+
@@ -466,12 +471,22 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 //
 // ONE PARAGRAPH PER CASE, because where the log is followed from is the whole
 // difference between them and the one fact the operator has to agree with: a
-// recreated log holds none of what the rows came from, and a restored one
-// holds a prefix the rows already have.
+// recreated log holds none of what the rows came from, a restored one holds a
+// prefix the rows already have, and an abandoned one holds everything the rows
+// are missing in a generation nobody left can vouch for.
 func reanchorCaseText(c statelog.ReanchorCase, cursor uint64) string {
 	common := "A reanchor moves THIS log alone to its NEXT generation, declaring " +
 		"every position below it stale; its applier resumes on this node with no " +
 		"restart, and no other log moves."
+	if c == statelog.ReanchorAbandoned {
+		return fmt.Sprintf("This log CONTINUES IN A GENERATION ONLY AN EVICTED NODE "+
+			"HELD: it is the stream this node's rows are keyed to and it holds every "+
+			"record they are missing, but that generation's history was on the "+
+			"evicted node's disk and nowhere else. It is followed from THIS NODE'S "+
+			"CHECKPOINT, after sequence %d, in the generation after the evicted "+
+			"node's; every record written in the generation it abandoned is void "+
+			"here. %s Every other node adopts a snapshot from this one.", cursor, common)
+	}
 	if c == statelog.ReanchorRestored {
 		return fmt.Sprintf("This log was RESTORED from an older copy: it is the "+
 			"stream this node's rows are keyed to, and it ends at sequence %d, "+

@@ -201,7 +201,11 @@ type Runner struct {
 	// generation fixed at construction and a checkpoint a reanchor had
 	// moved — and a loop resumed after a reanchor then placed the adopted
 	// stream's records in the generation it had just left.
-	cursor    Position
+	cursor Position
+	// void is the generations the reanchor that placed the checkpoint
+	// ABANDONED, read with it by [Runner.loadCursor]: a record written in
+	// one is consumed and applied into no row — see [ReanchorPlan.From].
+	void      voidRange
 	deferred  Deferral
 	hasDefer  bool
 	stopped   error
@@ -1197,16 +1201,22 @@ func (r *Runner) backOff(ctx context.Context, pause time.Duration) time.Duration
 // loadCursor reads this domain's checkpoint at boot.
 func (r *Runner) loadCursor(ctx context.Context) error {
 	return r.db.Read(ctx, func(tx *sql.Tx) error {
-		at, created, found, err := r.tables.readCursor(ctx, tx)
+		row, found, err := r.tables.readCursor(ctx, tx)
 		if err != nil {
 			return err
 		}
+		at, created := row.at, row.created
 		d, hasDefer, err := r.tables.oldestDeferred(ctx, tx)
 		if err != nil {
 			return err
 		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		// THE ABANDONED GENERATIONS TRAVEL WITH THE CHECKPOINT, and are read
+		// with it for the reason the range is on the row at all: this loop
+		// may be the one resuming part-way through them, after a restart or
+		// over a peer's snapshot.
+		r.void = row.void
 		if found {
 			r.cursor = at
 		}
@@ -1890,9 +1900,18 @@ func (r *Runner) Commits() float64 {
 func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (int, bool, error) {
 	started := r.now()
 	opts.StoredAt = rec.StoredAt
-	reason, gated, err := r.applier.Gated(ctx, tx, rec)
-	if err != nil {
-		return 0, false, fmt.Errorf("statelog: read the apply gates at %s: %w", rec.Position, err)
+	// THE FRAMEWORK'S OWN GATE FIRST: a record written in a generation the
+	// reanchor that placed this checkpoint abandoned. It is the framework's
+	// because the range is the checkpoint's, and it is asked of the record's
+	// OWN generation — the writer's stamp — never of the position the loop
+	// composed, which is this checkpoint's generation for every record.
+	reason, gated := ReasonAbandoned, r.void.holds(rec.Gen)
+	if !gated {
+		var err error
+		reason, gated, err = r.applier.Gated(ctx, tx, rec)
+		if err != nil {
+			return 0, false, fmt.Errorf("statelog: read the apply gates at %s: %w", rec.Position, err)
+		}
 	}
 	if gated {
 		// A DURABLE RECORD THAT APPLIES NOWHERE. It still advanced the

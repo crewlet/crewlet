@@ -479,10 +479,11 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject: wire(subject),
-		Scope:   scope.Resolve(subject),
-		OpID:    opID,
-		Pattern: statelog.PatternArbitrated,
+		Subject:  wire(subject),
+		Scope:    scope.Resolve(subject),
+		OpID:     opID,
+		Pattern:  statelog.PatternArbitrated,
+		NodeGate: true,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return w.decide(stamp, subject, OpEviction, "", scope, opID, Eviction{
 				V: GateRecordVersion, NodeID: nodeID,

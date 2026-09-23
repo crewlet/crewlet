@@ -49,17 +49,30 @@ type GenerationRecord struct{}
 // which differs by case.
 //
 // BY CASE, because `tracker_log_generations.reason` is the one place a later
-// reader learns what happened to the log, and the two cases are different
+// reader learns what happened to the log, and the cases are different
 // incidents with different consequences: a recreated log lost whatever this
-// node never applied, and a restored one was followed from its end because the
-// rows already held it. Every reanchor used to record the first, restored
+// node never applied, a restored one was followed from its end because the
+// rows already held it, and an abandoned one skipped a generation whose history
+// only an evicted node held. Every reanchor used to record the first, restored
 // brokers included.
 func generationReason(c statelog.ReanchorCase) string {
-	if c == statelog.ReanchorRestored {
+	switch c {
+	case statelog.ReanchorRestored:
 		return "the broker was restored from an older copy, so the log ended " +
 			"below the checkpoint; it is followed from its end"
+	case statelog.ReanchorAbandoned:
+		return "the log continued in a generation only an evicted node held; it " +
+			"is followed from these rows' checkpoint and that generation's " +
+			"records are void"
 	}
 	return "the stream was recreated and its sequences restarted"
+}
+
+// GenerationSubject is the subject generation gen's record is published on —
+// what a reader of the log asks to learn who opened a generation
+// ([statelog.GenerationOpeners]).
+func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
+	return wire(GenerationSubject(gen)), true
 }
 
 // GenerationRecord encodes the reanchor's record for the NEW generation.

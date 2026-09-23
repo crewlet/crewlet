@@ -390,6 +390,44 @@ adopts a snapshot from a node in the new generation, **on its own**:
 The vectors are exempt: each node re-anchors its own copy, so a peer ahead there
 is a recovery in progress rather than a history this node has lost.
 
+**If the node that re-anchored is gone for good** — decommissioned, or its disk
+lost, before any peer adopted from it — nothing can donate the new generation:
+its history was on that one machine. Every other node keeps refusing the
+domain and asking for a donor, and a reanchor on any of them refuses, naming
+the peer that "has already re-anchored" — force does not override that, because
+while the peer might come back its rows are the fleet's history. The remedy is
+to say it will not come back:
+
+```
+crewlet retention evict node-4 -confirm node-4
+crewlet retention reanchor -stream CREWLET_TRACKER_LOG
+```
+
+1. **Evict the peer**, from any remaining node. The eviction is the one write a
+   node the peer re-anchored past still makes, so it lands even though that
+   node refuses everything else; the command reports the stranded logs as
+   `pending`, because the node's own applier is stopped and applies the record
+   only after step 2.
+2. From then on an evicted node's position row — and any trim floor it
+   published — counts toward neither the generation the fleet is on nor the
+   reanchor guards. Every node reads the peer's standing off the log itself,
+   since a stranded node's applier never reaches the eviction record; so the
+   nodes stop asking for a donor at the peer's generation.
+3. **Re-anchor the most caught-up remaining node.** `reanchor` names the
+   `abandoned` case: the log is the one these rows are keyed to and still holds
+   everything they are missing, but it continues in a generation only the
+   evicted peer held. The reanchor opens the generation **after** the peer's —
+   its number was used, and its record holds that generation's subject — and
+   follows the log from this node's own checkpoint. Every record written in the
+   generation it skips is **void**: consumed, and applied into no row, because
+   it was decided from rows nobody holds. Records the other nodes wrote in this
+   node's own generation before they learned of the peer's move are kept.
+4. Every other node then adopts from the re-anchored one, as above.
+
+What the evicted peer applied that nobody else did — the tail it re-anchored
+from, and anything written in its generation — is lost with its disk; the
+reanchor keeps everything else.
+
 **`rejoin_window`** (default 30 m) is your budget for a node to become a
 complete replica. `crewlet retention status` prints this node's store size, the
 projected join against a conservative profile, and the window — so a fleet
@@ -405,6 +443,13 @@ that is not.
 ```
 crewlet retention evict node-4 -confirm node-4
 ```
+
+It is also what stops an absent node's position counting anywhere else: an
+evicted node's row — and any trim floor it published — counts toward neither
+the generation the fleet is on nor a reanchor's guards, which is how a fleet
+stranded by a node that re-anchored and then vanished is released ([a node a
+peer re-anchored past](#a-node-a-peer-re-anchored-past)). The row itself stays:
+a readmission is judged by it.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on: the tracker's log and the pages log. (The vector log counts
@@ -702,7 +747,7 @@ is what makes an old position **comparable and safely stale** rather than
 indistinguishable from a current one — an arbitration anchor below it forms
 `expect = 0` on its next write, and a client cursor below it is refused by name.
 
-**Two cases, and they differ in where the log is followed from.** The verb
+**Three cases, and they differ in where the log is followed from.** The verb
 decides which from the same reading of the stream it keys the checkpoint to,
 prints it before you confirm, and names it in its answer and in the
 `statelog_reanchored` line:
@@ -711,6 +756,14 @@ prints it before you confirm, and names it in its answer and in the
 |---|---|---|
 | `recreated` | Another stream: its creation instant is not the one this node's rows are keyed to. It holds nothing the rows came from. | One below its **first surviving record**, so the domain applies everything it still holds. |
 | `restored` | The **same** stream — creation instant and all — brought back from an older copy, ending below this node's checkpoint. What it holds is a prefix of the history the rows came from. | At the log's **end**, so none of those records is applied again. |
+| `abandoned` | The **same** stream, holding everything the rows are missing — but continuing in a generation only an [evicted peer](#a-node-a-peer-re-anchored-past) held. | At this node's **own checkpoint**, in the generation after the evicted peer's, with every record of the generation it skips void. |
+
+**An evicted peer's generation only ever raises the number.** Whichever case it
+is, a reanchor opens the generation after every one this domain has used —
+this node's own, and any a peer the fleet has evicted opened, found from its
+position row, a floor it published, or its generation record on the log — and
+the records of any generation it skips are void wherever its checkpoint is
+followed from.
 
 The difference is not cosmetic. A restored copy replayed from its first record
 would be applied in a generation that outranks every row, so each object would
@@ -759,7 +812,9 @@ that peer's rows are the fleet's history in the new generation, and a second
 reanchor from another node's rows would open the same generation over a
 different prefix of what was lost, which nothing could reconcile. This node
 adopts that peer's snapshot instead, and does so on its own ([a node a peer
-re-anchored past](#a-node-a-peer-re-anchored-past)). Otherwise only
+re-anchored past](#a-node-a-peer-re-anchored-past)). A peer the fleet has
+**evicted** is not counted, in this rule or the next: its generation is
+abandoned rather than the fleet's. Otherwise only
 the most caught-up node on the stream its rows came from may re-anchor. Every
 node publishes, beside its position, the creation instant of the stream its
 rows are keyed to, so a peer still on the lost stream is compared with this

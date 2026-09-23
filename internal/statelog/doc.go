@@ -324,7 +324,14 @@
 // fleet's published generation or from a record written in a generation the
 // node never entered, and refused exactly as the other two are. Its repair is
 // the node's own: it adopts a snapshot from the new generation, and the join
-// re-keys its runner to what it adopted ([Runner.Rejoined]).
+// re-keys its runner to what it adopted ([Runner.Rejoined]). Where no node in
+// the new generation survives to donate — the node that opened it was
+// decommissioned first — the operator's eviction of that node is what releases
+// the rest: an evicted node's generation is not the fleet's, it can be read off
+// the log by a node whose applier never reaches the eviction ([EvictedOnLog]),
+// the eviction is the one write such a node may still make
+// ([Request.NodeGate]), and a reanchor then opens the generation after the
+// abandoned one with its records void ([ReanchorAbandoned]).
 //
 // # The alarm table borrows every threshold it fires at
 //
