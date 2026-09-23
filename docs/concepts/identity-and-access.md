@@ -154,8 +154,8 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 | Grant | What it opens |
 |---|---|
 | `work:write` | Filing and moving work: create, update, comment, merge, and the project facets a writer may declare |
-| `knowledge:write` | Authoring the company's own pages: write, save, comment |
-| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children — and the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's |
+| `knowledge:write` | Authoring the company's own pages: write, save, comment — except in the tool-skills container, which takes `config:write` as well |
+| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children — the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's, and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn |
 | `secrets:write` | Sealing, rotating, deleting and re-keying the fleet's credentials |
 | `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, `POST /budgets/reset`, a work item's purge, and `POST /iam/invalidate-all` |
 | `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them |
@@ -838,15 +838,16 @@ unlocks.
 | **Chart object** | The public half of the org chart: a unit's name and purpose, a seat's goal and responsibilities | Whoever leads that unit or seat, or `fleet:operate` — a seat never edits its own |
 | **Destructive** | Removing and restoring a task; trashing and restoring a page | The **container's** lead, or `fleet:operate` |
 | **Authored** | Editing and removing a page comment | Whoever wrote it, or `fleet:operate` |
-| **Operator** | Configuration, secrets, integrations, the node itself, the tracker's workspace catalogue | The grant the verb names |
+| **Operator** | Configuration, secrets, integrations, the node itself, the tracker's workspace catalogue, and writing a page in the tool-skills container | The grant the verb names — `config:write` for a tool skill, which is injected into every seat's turn and so rewrites the prompt the company runs under |
 | **Directory read** | Who can reach the company: the directory, one person's row, their credentials and sessions | The person the row is about, `people:manage`, or `audit:read` |
 | **Directory self** | Minting and revoking a credential, ending sessions | The person themselves, or `people:manage` |
 
 **Some verbs are no agent's, whatever their rule says.** Purging a task or a
-page, and archiving a project, carry a mark beside their rule rather than a
-rule of their own: no seat takes them, whatever it holds or leads, because an
-irreversible delete or a project nobody can file into again is not something
-a model decides inside a turn. The mark composes with the rule rather than
+page, archiving a project, and writing a tool skill carry a mark beside their
+rule rather than a rule of their own: no seat takes them, whatever it holds or
+leads, because an irreversible delete, a project nobody can file into again
+and the instructions every seat obeys are not something a model decides inside
+a turn. The mark composes with the rule rather than
 replacing it — archiving is still the project lead's, and a purge still needs
 `fleet:operate` — and it is checked **first**, so an agent is told it is a seat
 rather than that it lacks a capability it may well hold.

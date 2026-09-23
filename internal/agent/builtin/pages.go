@@ -73,6 +73,19 @@ type PageDeps struct {
 	// unit's space. Empty makes the container argument required.
 	DefaultContainer func(handle string) string
 
+	// SkillsContainer is the tool-skills container at this instant, or
+	// empty for a company that runs none. A write into it is asked
+	// [authz.ActionSkillPageWrite] on top of its own verb — see
+	// [PageDeps.SkillPage].
+	//
+	// A FUNCTION because the key is Tier B and moves on an apply, while the
+	// deps outlive the epoch they were built in. NIL IS NOT "NO SKILLS"
+	// BY ACCIDENT: a surface that wired none serves a company whose
+	// skills container would then be written on the colleague grant alone,
+	// which is exactly the hole this closes — so every surface that builds
+	// these deps over a live company sets it.
+	SkillsContainer func() string
+
 	// Actor decides who a write is attributed to. Nil takes the turn's
 	// seat; the operator surface sets it. See [WorkDeps.Actor] for why
 	// this is a seam rather than a second copy of these five tools.
@@ -122,6 +135,50 @@ func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, e
 		return d.Actor(ctx, turn)
 	}
 	return pageActor(turn)
+}
+
+// SkillPage reports whether a page container is the tool-skills container, and
+// the object [authz.ActionSkillPageWrite] is decided on when it is.
+//
+// # Why a page write asks a second question here
+//
+// A page is ordinarily a colleague's to write — `knowledge:write` — and the
+// skills container's pages are pages. But they are also the instructions the
+// engine injects into a phase of every seat's turn, so writing one rewrites
+// the prompt the whole company runs under, and a credential holding only the
+// colleague grant could do it: internal/pages refuses an AGENT every write
+// there, and exempts every person, because whether a person may is a matter of
+// capability and the store holds no grants. This is where that capability is
+// asked, once the container is known — from the arguments on a create, and
+// from the stored page on every other write.
+//
+// EXPORTED for the one surface that writes pages without a tool — the HTTP
+// routes for a rename, the trash, a restore and a purge — so the question is
+// spelled once however the write arrives.
+//
+// THE KEY IS CANONICALISED on both sides, for [pages.ContainerKey]'s reason: a
+// comparison that read `ts` and `TS` as two containers would let the one a
+// caller was refused be written under the other spelling.
+func (d PageDeps) SkillPage(container string) (authz.Object, bool) {
+	if d.SkillsContainer == nil {
+		return authz.Object{}, false
+	}
+	skills := pages.ContainerKey(d.SkillsContainer())
+	key := pages.ContainerKey(container)
+	if skills == "" || key != skills {
+		return authz.Object{}, false
+	}
+	return authz.Object{Kind: authz.KindContainer, Container: key}, true
+}
+
+// maySkillPage asks [authz.ActionSkillPageWrite] for a write into container,
+// and answers nil — the allow — for a write anywhere else.
+func (d PageDeps) maySkillPage(ctx context.Context, container string) *tools.Result {
+	object, skill := d.SkillPage(container)
+	if !skill {
+		return nil
+	}
+	return d.mayWrite(ctx, authz.ActionSkillPageWrite, object)
 }
 
 func unconfiguredKB(name string) tools.Result {
@@ -345,6 +402,11 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 				"so there is no default. Ask where this belongs rather than guessing."), nil
 		}
 	}
+	// A NEW TOOL SKILL IS CONFIGURATION, and the container is known only
+	// now — see [PageDeps.SkillPage].
+	if refused := t.deps.maySkillPage(ctx, in.Container); refused != nil {
+		return *refused, nil
+	}
 	got, err := t.deps.Writer.Create(ctx, actor, in)
 	if err != nil {
 		return pageWriteFailed(WritePageTool, err), nil
@@ -437,6 +499,13 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return failedBy(err, fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
 		return readFailed(SavePageTool, err), nil
+	}
+
+	// A CHANGED TOOL SKILL IS CONFIGURATION, and which container the page
+	// is in is the stored row's — see [PageDeps.SkillPage]. Asked before
+	// anything lands, so a caller who may not lands nothing.
+	if refused := t.deps.maySkillPage(ctx, detail.Page.Container); refused != nil {
+		return *refused, nil
 	}
 
 	// A RENAME IS THE CONTAINER LEAD'S, however it is asked for. The tool's

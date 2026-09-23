@@ -2803,7 +2803,12 @@ func nativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 		kb = builtin.PageDeps{
 			Reader: reader, Writer: writer,
 			Mentions: engine.LiveMentions(e),
-			Await:    e.WaitCommitted,
+			// THE SKILLS CONTAINER, so a person's write into it is asked
+			// for the grant a tool skill takes rather than admitted on
+			// knowledge:write alone — the store exempts every person,
+			// because capability is not its question.
+			SkillsContainer: engine.LiveSkillsContainer(e),
+			Await:           e.WaitCommitted,
 		}
 	}
 	return work, kb

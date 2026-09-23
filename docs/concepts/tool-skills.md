@@ -58,9 +58,13 @@ renaming one, and adding, editing or removing a comment — whichever tool asked
 A seat cannot see that a page there is machinery rather than knowledge, and one
 it wrote would be excluded from every search — and, declaring a `trigger:`,
 injected into every seat's phase as an instruction. A person publishing through
-their own assistant is not refused: putting skills there on purpose is what the
-container is for. On Confluence the same question is Confluence's own page
-permissions.
+their own assistant is not refused by that rule — putting skills there on
+purpose is what the container is for — but writing one is a configuration
+change, so it takes **`config:write`** on top of `knowledge:write`: creating,
+saving, renaming, trashing, restoring or purging a skill page is decided as
+`pages.skill.write` ([who may write
+where](knowledge-system.md#who-may-write-where)). On Confluence the same
+question is Confluence's own page permissions.
 
 **One skill sync per node, reading the single-homed knowledge backend** (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). A walk and a single-page read apply the same **admission test** (`skills.AdmitPage`): the page lives in the configured container *and* its leading YAML frontmatter declares a `trigger:`. A page with no frontmatter, or frontmatter with no trigger, is an ordinary page and is skipped quietly; a page that declares a trigger and does not parse is reported (`skill_page_undecodable`) and skipped. A previously admitted page that stops passing the test (deleted, moved out, or edited into a non-skill) is **dropped**, never left serving its last-good body.
 

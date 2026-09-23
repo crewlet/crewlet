@@ -165,6 +165,9 @@ func (s *Service) postPagePurge(w http.ResponseWriter, r *http.Request) {
 				"page is %q — nothing was destroyed", confirm, detail.Page.Title)})
 		return
 	}
+	if !s.maySkillPage(w, r, detail.Page.Container) {
+		return
+	}
 	key := operationKey(r)
 	actor, ok := s.pageActor(w, r, key)
 	if !ok {
@@ -232,6 +235,9 @@ func (s *Service) pageGesture(w http.ResponseWriter, r *http.Request,
 	}); !ok {
 		return
 	}
+	if !s.maySkillPage(w, r, detail.Page.Container) {
+		return
+	}
 	key := operationKey(r)
 	actor, ok := s.pageActor(w, r, key)
 	if !ok {
@@ -247,6 +253,27 @@ func (s *Service) pageGesture(w http.ResponseWriter, r *http.Request,
 		page = detail.Page
 	}
 	answerPage(w, key, page, written)
+}
+
+// maySkillPage decides [authz.ActionSkillPageWrite] for a write into a page's
+// container when that container is the tool-skills one, and reports whether
+// the write may go ahead — answering the refusal itself when it may not.
+//
+// THE TOOLS ASK THE SAME QUESTION through [builtin.PageDeps.SkillPage], and
+// this surface's rename, trash, restore and purge reach the store without a
+// tool — so without this a caller refused a tool skill's body by `save_page`
+// could still take the skill out of every seat's turn with `DELETE /pages`.
+// Asked AFTER the verb's own decision, so a caller who may not trash the page
+// at all is told that rather than something about skills.
+func (s *Service) maySkillPage(w http.ResponseWriter, r *http.Request,
+	container string) bool {
+
+	object, skill := s.pageDeps.SkillPage(container)
+	if !skill {
+		return true
+	}
+	_, ok := s.decide(w, r, authz.ActionSkillPageWrite, object)
+	return ok
 }
 
 // answerPage renders a page write the store made.

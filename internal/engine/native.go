@@ -1638,9 +1638,17 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 				func(u *org.Unit) string { return u.Space },
 				func(r *org.Role) string { return r.Space })
 		},
-		Await: e.WaitCommitted,
+		SkillsContainer: e.skillsContainer,
+		Await:           e.WaitCommitted,
 	}
 }
+
+// LiveSkillsContainer is the tool-skills container off the CURRENT epoch, for
+// the page tools a surface outside this package builds — the operator's
+// assistant and the HTTP write surface — so a write into it is asked the
+// grant a tool skill takes wherever it arrives from. See
+// [builtin.PageDeps.SkillPage].
+func LiveSkillsContainer(e *Engine) func() string { return e.skillsContainer }
 
 // reservedContainers are the containers a seat's own writes are held back
 // from, each under its own rule — see [pages.Reserved].

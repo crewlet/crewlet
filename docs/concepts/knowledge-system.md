@@ -358,7 +358,7 @@ The tool-skills container is excluded from every result. A tool skill is machine
 
 #### Who may write where
 
-Authoring a page — `write_page`, `save_page`, `comment_on_page` — is an ordinary colleague write, decided by `knowledge:write`, which every seat carries. Three rules sit beside it.
+Authoring a page — `write_page`, `save_page`, `comment_on_page` — is an ordinary colleague write, decided by `knowledge:write`, which every seat carries. Four rules sit beside it.
 
 **Two containers are reserved from agents, for two different reasons, so they hold back different writes.** The knowledge base's own **store** enforces both, answering `ErrReserved`:
 
@@ -368,6 +368,8 @@ Authoring a page — `write_page`, `save_page`, `comment_on_page` — is an ordi
 | The org root (`knowledge.root_space`) | What is true of the whole company, starting with the Onboarding page every seat reads first. Searched and routed like any other container | **Add a page.** A new page at the top of the company is a person's decision, and a seat publishes into its own team's space. Keeping a root page current, renaming it and remarking on it is ordinary upkeep, and is not refused |
 
 The rule lives in the store rather than beside one tool because it was once one check on `write_page`, and a seat that could not create a page in the skills container could still save over one, rename it and comment on it. It is a rule about the **actor**, not about capability: an agent cannot see from anything it holds that a page is machinery, or that a container is the company's canon, while a person publishing into either on purpose — through their own assistant over [`/operator/mcp`](#on-the-native-backend-your-own-assistant) — is what the containers are for. The container keys are read off the configuration current at each write, so an apply that moves `skills_container` or `root_space` moves the rule with it.
+
+**A tool skill is configuration, and a person writing one needs `config:write`.** The store's rule above is about agents and exempts every person, because whether a person may is a capability and the store holds no grants — so the tool layer asks it, once the container is known. Creating or saving a page in the skills container (`write_page`, `save_page`), and renaming, trashing, restoring or purging one over the [write surface](../reference/api-endpoints.md#the-human-write-surface), is decided as `pages.skill.write` on top of the verb's own rule: `config:write`, the grant that edits the company document, because a skill page is injected into every seat's turn and rewrites the prompt the whole company runs under. `knowledge:write` alone is not a way to put words in every agent's mouth. A remark on a skill page is not the skill, and stays the ordinary colleague write. The org root needs nothing beyond the colleague write: publishing the onboarding tree there is what a person with `knowledge:write` does.
 
 **A remark is its author's.** Editing a comment is the author's alone — nobody puts words in somebody else's mouth, on a record that outlives the page's body. Removing one is the author's, or a caller holding the deployment's own `fleet:operate`: a lead is not automatically a moderator of what is said on their team's pages.
 
@@ -442,7 +444,9 @@ a file that turns out to be a [tool skill](tool-skills.md) rather than prose.
 The [reserved containers](#who-may-write-where) are **not** refused to it, which
 is the difference from a seat: they are refused to an agent, and publishing the
 tool skills and the onboarding tree on purpose is exactly what a person does
-there. It is also why this is the native way to seed [tool
+there. The onboarding tree takes the token's ordinary `knowledge:write`; the
+tool skills take **`config:write`** as well, because each one is injected into
+every seat's turn. It is also why this is the native way to seed [tool
 skills](tool-skills.md) — a file with a `trigger:` in its frontmatter belongs in
 the skills container, where it is injected into a phase as an instruction
 rather than read as knowledge, and every other file belongs anywhere else.

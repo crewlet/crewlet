@@ -92,6 +92,14 @@ const (
 	ActionPageRename     Action = "pages.rename"
 	ActionContainerWrite Action = "pages.container"
 
+	// --- a page every seat is handed ---------------------------------- //
+	//
+	// DOTTED because no tool is named for it: it is asked from inside
+	// every page write — create, save, rename, trash, restore and purge —
+	// once the container the page lives in is known, and the container is
+	// the tool-skills one.
+	ActionSkillPageWrite Action = "pages.skill.write"
+
 	// --- taking something out of circulation ------------------------ //
 	ActionWorkRemove  Action = "remove_work_item"
 	ActionWorkRestore Action = "restore_work_item"
@@ -262,6 +270,21 @@ var rules = map[Action]rule{
 	// rather than the arguments.
 	ActionWorkRoute:      {class: ClassContainer},
 	ActionContainerWrite: {class: ClassContainer},
+
+	// A TOOL SKILL IS CONFIGURATION WRITTEN AS A PAGE. The skills container's
+	// pages are injected into a phase of EVERY seat's turn as instructions,
+	// so writing one rewrites the prompt the whole company runs under — the
+	// same reach as editing the company document, and it takes the grant
+	// that edits that document rather than the colleague write that
+	// authors an ordinary page. `knowledge:write` alone must not be a way
+	// to put words in every agent's mouth.
+	//
+	// AND NEVER AN AGENT'S, which internal/pages' store also refuses: a
+	// seat writing the instructions every seat obeys is a model editing
+	// the rules it is judged by. Marked here too, so a seat is told it is
+	// a seat rather than that it lacks a grant.
+	ActionSkillPageWrite: {class: ClassOperator, grant: iam.GrantConfigWrite,
+		humanOnly: true},
 
 	// THE CATALOGUE IS THE COMPANY'S, NOT A CONTAINER'S. Task types and
 	// custom fields are declared once for the whole workspace — the tool

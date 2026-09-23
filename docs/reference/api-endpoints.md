@@ -321,7 +321,7 @@ as the first, which tells them to go and get a new credential.
 | `people:manage` | `/iam/*` — inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them. **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
 | `work:write` | Filing and moving work — the [write surface's](#the-human-write-surface) item routes — and `/operator/mcp`'s write half. Some of those verbs also ask a RELATION: re-routing, a project's policy and taking an item out of circulation are its project lead's |
 | `knowledge:write` | Writing the company's own pages. A rename, the trash and a restore are also the container's lead's; see [the write surface](#the-human-write-surface) |
-| `config:write` | `PUT`/`PATCH /config`, `/chart/batch`, the rename and import routes, and `/setup`'s writes |
+| `config:write` | `PUT`/`PATCH /config`, `/chart/batch`, the rename and import routes, and `/setup`'s writes — and, on top of the page's own rule, every write to a page in the tool-skills container |
 | `secrets:write` | `POST`/`DELETE /secrets/*` |
 | `fleet:operate` | The deployment rather than the company: `/fleet`, `/work/retention*`, `/backup`, `/budgets/reset`, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`) — which no seat may make whatever it holds. It is also the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `sandbox:run` | Starting a coding run |
@@ -2580,7 +2580,12 @@ does not need to be one:
 The assistant calls `write_page` per file. That handles what a flag-driven CLI
 handles badly: the parent chain, a title that already exists (`save_page` with
 the version it read), and a file that turns out to be a tool skill rather than
-prose. The reserved containers are refused to it exactly as they are to a seat.
+prose. The [reserved containers](../concepts/knowledge-system.md#who-may-write-where)
+are refused to a seat and not to it: a person publishing the onboarding tree
+and the tool skills is what they are for. A tool skill takes `config:write` on
+top of `knowledge:write`, though — it is injected into every seat's turn, so
+writing one is a configuration change — and a token without it is refused
+`pages.skill.write`.
 
 ### Who a write is attributed to
 
@@ -2694,6 +2699,13 @@ for a verb with no tool, by the route.
 | `DELETE` | `/pages/{id}` | Put the page in the trash | the lead of the page's container, or `fleet:operate` |
 | `POST` | `/pages/{id}/restore` | Take it back | the same |
 | `POST` | `/pages/{id}/purge` | Destroy it: `?confirm=` repeats its **title**, `?reason=` is required | `fleet:operate`, and **never a seat** |
+
+**A page in the tool-skills container asks one question more.** Creating,
+saving, renaming, trashing, restoring or purging one is decided as
+`pages.skill.write` on top of the rule in the table — **`config:write`**, and
+never a seat — because a tool skill is injected into every seat's turn and
+writing one rewrites the prompt the company runs under. A remark on one is an
+ordinary comment. See [who may write where](../concepts/knowledge-system.md#who-may-write-where).
 
 `{key}` is an item's key (`ENG-42`) or its id; `{id}` is a page's id. A body
 naming a different object than the path is refused `400` rather than

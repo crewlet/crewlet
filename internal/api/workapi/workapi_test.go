@@ -361,6 +361,70 @@ func TestThePageTrashIsTheContainersLeads(t *testing.T) {
 	}
 }
 
+// A TOOL SKILL'S PAGE TAKES config:write ON EVERY ROUTE THAT CHANGES IT.
+//
+// The skills container's pages are injected into every seat's turn, so taking
+// one out of circulation, putting it back, renaming it or destroying it
+// changes the prompt the company runs under exactly as editing its body does.
+// `save_page` asks for the grant through the tool; these four reach the store
+// without one, so without asking here a caller refused a skill's body could
+// still delete the skill. Asked on top of each verb's own rule: `root` holds
+// fleet:operate and knowledge:write — every destructive rule's admin path —
+// and is refused until it also holds config:write.
+func TestEveryRouteThatChangesAToolSkillNeedsConfigWrite(t *testing.T) {
+	t.Parallel()
+	operator := person("root", iam.GrantStateRead, iam.GrantKnowledgeWrite,
+		iam.GrantFleetOperate)
+	for _, c := range []struct {
+		method, target string
+		body           any
+		did            string
+	}{
+		{http.MethodDelete, "/pages/p-1", nil, "trash p-1"},
+		{http.MethodPost, "/pages/p-1/restore", nil, "restore p-1"},
+		{http.MethodPost, "/pages/p-1/rename", map[string]any{"title": "Runbook v2"},
+			"rename p-1 Runbook v2"},
+		{http.MethodPost, "/pages/p-1/purge?confirm=runbook&reason=why", nil,
+			"purge p-1 why"},
+		{http.MethodPut, "/pages/p-1", map[string]any{"body": "new steps"}, "save p-1"},
+	} {
+		t.Run(c.method+" "+c.target, func(t *testing.T) {
+			t.Parallel()
+			r := &rig{t: t, mux: http.NewServeMux(), reader: newReader(),
+				writes: &writes{}, kb: newKB()}
+			r.kb.page.Page.Container = "TS"
+			opts := r.options(chart{})
+			opts.Pages.SkillsContainer = func() string { return "ts" }
+			svc, err := workapi.New(opts)
+			if err != nil || svc == nil {
+				t.Fatalf("New: %v (%v)", err, svc)
+			}
+			if err := svc.Routes(r.mux); err != nil {
+				t.Fatalf("Routes: %v", err)
+			}
+			headers := []string{"If-Match", "2"}
+
+			got := r.do(as(operator), c.method, c.target, c.body, headers...)
+			if got.status != http.StatusForbidden {
+				t.Errorf("without config:write it answered %d: %v", got.status, got.body)
+			}
+			if len(r.kb.did) != 0 {
+				t.Fatalf("a refused caller reached the store: %v", r.kb.did)
+			}
+
+			withConfig := operator
+			withConfig.Grants = append(slices.Clone(operator.Grants), iam.GrantConfigWrite)
+			got = r.do(as(withConfig), c.method, c.target, c.body, headers...)
+			if got.status != http.StatusOK {
+				t.Errorf("with config:write it answered %d: %v", got.status, got.body)
+			}
+			if !slices.Equal(r.kb.did, []string{c.did}) {
+				t.Errorf("the store did %v, want %q", r.kb.did, c.did)
+			}
+		})
+	}
+}
+
 // A REMARK IS TAKEN DOWN BY ITS AUTHOR, OR BY A MODERATOR — and the store is
 // told which.
 func TestARemarkIsTakenDownByItsAuthorOrAModerator(t *testing.T) {
