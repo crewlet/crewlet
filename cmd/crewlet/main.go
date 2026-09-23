@@ -1733,7 +1733,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// company: an apply replaces it, and a screen bound to the
 			// one this process booted on would describe a company that
 			// is no longer running.
-			Company:  func() (*config.Company, *org.Organization) { return companyConfig(e) },
+			Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },
+			// THE LEAD RELATIONS the personal questions are scoped by —
+			// somebody's inbox, their day, their person record — asked
+			// through the SAME seam every other surface asks, so a lead
+			// is told the same thing by a question as by the tool that
+			// writes the same record. Left out, every one of those
+			// decisions was UNKNOWN for ever: a lead reading a report's
+			// inbox was answered 503 on every retry, on every node.
+			Chart:    engine.ChartAuthorityOf(e),
 			Coord:    e.Backends().Coord,
 			Plane:    e.Backends().Fleet,
 			Runs:     sqlledger.New(e.Backends().Store.SQL()),
@@ -1839,13 +1847,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// under the answer and the other half is this node's own
 			// loops.
 			Retention: nativeRetention(ctx, e),
-			// WHO LEADS WHOM, for the personal questions a lead asks about
-			// a report — the SAME seam every chart and work route decides
-			// by. It was never set here, so every lead's read of a report's
-			// inbox, queue or pins answered "this node cannot say who leads"
-			// for the life of the process.
-			Chart:  engine.ChartAuthorityOf(e),
-			NodeID: nodeID,
+			NodeID:    nodeID,
 		},
 		// The WRITE half of the counter, for POST /budgets/reset. On the
 		// default topology the coordination store is this engine's own

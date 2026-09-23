@@ -174,10 +174,10 @@ type chartMounter interface {
 //
 // # What is required, and why a nil is refused rather than served around
 //
-// Runtime, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
-// Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup, Budgets,
-// Retention, Capacity and Backup are REQUIRED, and [New] refuses a missing one
-// by name.
+// Runtime, Sources.Company, Sources.Chart, Sources.Events, Sources.NodeID, the
+// Inbound edge's Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup,
+// Budgets, Retention, Capacity and Backup are REQUIRED, and [New] refuses a
+// missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that

@@ -144,6 +144,13 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Sources.Company == nil {
 		opts.Sources.Company = companySource(t, nil)
 	}
+	if opts.Sources.Chart == nil {
+		// A CHART THAT CAN ANSWER NOTHING, and says so. A fixture that
+		// needs a lead relation states its own; the default must not
+		// quietly answer "leads nobody", which is a policy rather than
+		// an absence.
+		opts.Sources.Chart = authz.NoChart{}
+	}
 	if opts.Sources.Events == nil {
 		opts.Sources.Events = sharedEvents
 	}
