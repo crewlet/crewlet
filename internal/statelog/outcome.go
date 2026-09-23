@@ -177,6 +177,14 @@ const (
 	// stream and means a store or stream was restored out of step.
 	ReasonSkew Reason = "skew"
 
+	// ReasonLogTruncated — the log lost records a peer's rows hold
+	// ([ErrLogTruncated]): a broker restored from an older copy, and a peer
+	// whose rows are newer than the copy. This node's own rows are the log's
+	// history, so only its WRITES refuse, and they do until the operator
+	// settles which history the fleet keeps — a write made before that is one
+	// the restored reanchor of the peer would apply nowhere.
+	ReasonLogTruncated Reason = "log_truncated"
+
 	// ReasonWrongStream — the log under this domain's name is not the
 	// one this node's rows were derived from. Each finding has its own
 	// cause a caller can recognise without switching on the reason: the

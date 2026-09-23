@@ -320,6 +320,10 @@
 // after a reading found the end below — and the heartbeat every interval
 // ([Runner.VerifyCheckpoint]): another record there is [ErrLogDiverged], which
 // refuses like the rest and, unlike an end, never lifts on a later reading.
+// The nodes whose rows are the copy's age see none of it — the log is their
+// own history — so what stops them writing records the restored reanchor of a
+// newer peer would apply nowhere is that peer's published position or flag
+// ([ErrLogTruncated], [Identity]): their writes refuse, their reads do not.
 // Its reanchor is the RESTORED case
 // ([ReanchorRestored]): up to the copy the log is a prefix of the history the rows came from,
 // so the new generation's checkpoint goes at the log's END rather than one

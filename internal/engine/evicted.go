@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -99,14 +100,12 @@ func (s *stateLog) evictedOn(ctx context.Context, domain statelog.Domain,
 // what makes a genuinely new node in a genuinely new fleet replay from the
 // beginning rather than ask for a snapshot nobody has. A domain nobody has
 // published anything for is absent from the map, which reads as that zero.
-func (s *stateLog) fleetGenerations(ctx context.Context,
+//
+// rows is the positions register as the caller read it — once, for every
+// question its caller asks of it ([stateLog.publishPositions] asks two).
+func (s *stateLog) fleetGenerations(ctx context.Context, rows []coord.NodePositions,
 	logs map[string]*jetstream.DomainLog, above map[string]uint32) (map[string]uint32, error) {
 
-	rows, err := s.fleet.Positions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("engine: read the fleet's published positions to "+
-			"establish which generation each domain is on: %w", err)
-	}
 	floors, err := s.fleet.Floors(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("engine: read the fleet's published trim floors to "+

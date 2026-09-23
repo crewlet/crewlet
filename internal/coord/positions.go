@@ -75,7 +75,9 @@ type DomainPosition struct {
 	// PUBLISHED because it is the one such node the fleet cannot otherwise
 	// see: its position is at or below the log's end, where a lagging node's
 	// is, so nothing else on this row says its rows and the log are two
-	// histories.
+	// histories — and every other node on that log refuses its own writes of
+	// it while this says so, as it does for a peer whose position is past the
+	// log's end, until the operator decides which history the fleet keeps.
 	LogDiverged bool `json:"log_diverged,omitempty"`
 }
 

@@ -710,6 +710,7 @@ func (embedWaiter) Committed() statelog.Position { return statelog.Position{} }
 // StreamIdentity is always the live stream: this harness never rebuilds its
 // log.
 func (embedWaiter) StreamIdentity() error { return nil }
+func (embedWaiter) Truncated() error      { return nil }
 func (embedWaiter) WaitCommitted(context.Context, statelog.Position) error {
 	return nil
 }

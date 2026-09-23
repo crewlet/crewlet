@@ -534,7 +534,16 @@ from which point the domain applies nothing past its checkpoint and refuses
 until it is [re-anchored](retention.md#re-anchoring-a-recreated-or-restored-log)
 or its rows are replaced; and `statelog_checkpoint_unverified` (`WARN`) is a
 heartbeat that could not read the record at the checkpoint to compare it, which
-the applier asks again before it applies past it.
+the applier asks again before it applies past it. And three are the same
+restore seen from a node whose rows are the copy's age:
+`statelog_log_truncated` (`ERROR`) is the heartbeat finding a peer whose rows
+hold records the log lost — past its end, or reporting `log_diverged` — naming
+it (`peer`, `peer_seq`, `last_seq`, `peer_diverged`), from which point the
+node's writes of that domain refuse `log_truncated` while its reads go on;
+`statelog_log_truncated_cleared` (`WARN`) is that ending, once the peer has
+re-anchored, been rebuilt or been evicted; and `statelog_truncation_unread`
+(`WARN`) is a beat that could not establish it either way, which leaves the
+verdict where it was.
 
 ## Three things CI cannot prove
 

@@ -121,12 +121,31 @@ type applier struct {
 	// positions are on the live stream, and a recreation once a reading
 	// found them not to be.
 	foreign error
+
+	// truncated is what Truncated answers: nil while no peer's rows hold
+	// records the log lost.
+	truncated error
 }
 
 func (a *applier) StreamIdentity() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.foreign
+}
+
+func (a *applier) Truncated() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.truncated
+}
+
+// truncatedBy is what a reading of the register establishes about this node
+// once a peer's rows are found to hold records the log lost.
+func (a *applier) truncatedBy(peer string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.truncated = fmt.Errorf("%w: %s stands past the probe log's end",
+		statelog.ErrLogTruncated, peer)
 }
 
 // rebuilt is what a reading of a rebuilt log establishes about this node.

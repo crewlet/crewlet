@@ -2133,7 +2133,13 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 	// THE FLEET'S GENERATIONS, READ ONCE for every domain: two
 	// coordination reads per join rather than two per domain, and one
 	// answer the domains are all judged against.
-	fleet, err := s.fleetGenerations(ctx, logs, above)
+	rows, err := s.fleet.Positions(ctx)
+	if err != nil {
+		return nil, nil, statelog.OfferRequest{}, fmt.Errorf("engine: read the "+
+			"fleet's published positions to establish which generation each "+
+			"domain is on: %w", err)
+	}
+	fleet, err := s.fleetGenerations(ctx, rows, logs, above)
 	if err != nil {
 		return nil, nil, statelog.OfferRequest{}, err
 	}
@@ -3070,7 +3076,16 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	for _, name := range s.order {
 		above[name] = s.domains[name].runner.Committed().Generation
 	}
-	generations, genErr := s.fleetGenerations(ctx, s.openLogs(), above)
+	//
+	// THE REGISTER IS READ ONCE for both questions this beat asks of it —
+	// which generation the fleet is on, and whether a peer's rows hold
+	// records a log lost ([stateLog.truncation]) — and unread, neither is
+	// judged.
+	rows, rowsErr := s.fleet.Positions(ctx)
+	generations, genErr := map[string]uint32(nil), rowsErr
+	if rowsErr == nil {
+		generations, genErr = s.fleetGenerations(ctx, rows, s.openLogs(), above)
+	}
 	for _, name := range s.order {
 		running := s.domains[name]
 		at := running.runner.Committed()
@@ -3166,6 +3181,22 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			established, verifyErr := running.runner.VerifyCheckpoint(ctx)
 			if established {
 				s.logDiverged(ctx, name, running.runner)
+			}
+			// AND WHETHER A PEER'S ROWS HOLD RECORDS THIS LOG LOST, which
+			// refuses this node's writes of it — against the same end, and
+			// only on a register this beat could read.
+			if rowsErr == nil {
+				truncation, truncErr := s.truncation(ctx, running, rows, at, stats.LastSeq)
+				switch {
+				case truncErr == nil:
+					s.observeTruncation(ctx, name, running.runner, truncation)
+				case ctx.Err() == nil:
+					log.WarnContext(ctx, "statelog_truncation_unread",
+						"node", s.nodeID, "domain", name, "error", truncErr.Error(),
+						"detail", "whether a peer's rows hold records this log lost "+
+							"could not be established this beat; the verdict stays "+
+							"where it was until one can")
+				}
 			}
 			if verifyErr != nil && ctx.Err() == nil {
 				log.WarnContext(ctx, "statelog_checkpoint_unverified",

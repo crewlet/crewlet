@@ -36,11 +36,21 @@ type divergedBroker struct {
 }
 
 // stageDivergedBroker stages it on one embedded broker, one node at a time:
-// A writes a project, a task and an edit, the broker's store is copied — and so
-// is A's, which becomes B — A writes the tail the copy never has, the broker is
-// restored from the copy, and B boots on it and writes until the log ends past
-// A's checkpoint.
+// the restore ([stageRestoredBroker]), and then B booting on it and writing
+// until the log ends past A's checkpoint.
 func stageDivergedBroker(t *testing.T) divergedBroker {
+	t.Helper()
+	d := stageRestoredBroker(t)
+	d.writePast(t)
+	return d
+}
+
+// stageRestoredBroker stages the restore alone: A writes a project, a task and
+// an edit, the broker's store is copied — and so is A's, which becomes B — A
+// writes the tail the copy never has, and the broker is restored from the
+// copy. Nothing has written the restored log yet, so A's checkpoint is past
+// its end.
+func stageRestoredBroker(t *testing.T) divergedBroker {
 	t.Helper()
 	base := t.TempDir()
 	d := divergedBroker{a: config.DefaultBootstrap()}
@@ -92,15 +102,19 @@ func stageDivergedBroker(t *testing.T) divergedBroker {
 		t.Fatalf("copy node A's store as node B's: %v", err)
 	}
 
-	// A, SECOND BOOT: the tail the copy never has.
+	// A, SECOND BOOT: the tail the copy never has — several records, so the
+	// log's end stays below A's checkpoint across a record or two the
+	// restored log is written with.
 	e2, back2 := bootNode(t, &d.a, cfg)
 	waitUntil(t, 20*time.Second, "node A to admit seats again", e2.NativeHydrated)
-	mustApply(t, "the edit after the copy", func() (tracker.WriteResult, error) {
-		title, done := "after the copy", tracker.StatusDone
-		return e2.native.Load().writer.UpdateTask(t.Context(), "op-edit-2", "t-1", "ENG",
-			tracker.NoIfMatch, tracker.TaskPatch{Title: &title, Status: &done},
-			tracker.ChangeStatus, nil)
-	})
+	for i := range 3 {
+		mustApply(t, "an edit after the copy", func() (tracker.WriteResult, error) {
+			title, done := fmt.Sprintf("after the copy %d", i), tracker.StatusDone
+			return e2.native.Load().writer.UpdateTask(t.Context(), fmt.Sprintf("op-edit-2-%d", i),
+				"t-1", "ENG", tracker.NoIfMatch,
+				tracker.TaskPatch{Title: &title, Status: &done}, tracker.ChangeStatus, nil)
+		})
+	}
 	d.before = taskState(t, e2, "t-1")
 	d.checkpoint = readCursorRow(t, e2, tracker.Domain{}.Name())
 	e2.Stop(context.Background())
@@ -113,10 +127,14 @@ func stageDivergedBroker(t *testing.T) divergedBroker {
 	if err := os.CopyFS(d.a.Stream.StoreDir, os.DirFS(copyDir)); err != nil {
 		t.Fatalf("restore the broker's store from the copy: %v", err)
 	}
+	return d
+}
 
-	// B, ON THE RESTORED BROKER: its rows are the copy's age, so nothing it
-	// can see is wrong, and it writes the log past A's checkpoint.
-	eb, backB := bootNode(t, &d.b, cfg)
+// writePast boots B on the restored broker — its rows are the copy's age, so
+// nothing it can see is wrong — and writes the log past A's checkpoint.
+func (d *divergedBroker) writePast(t *testing.T) {
+	t.Helper()
+	eb, backB := bootNode(t, &d.b, d.cfg)
 	waitUntil(t, 20*time.Second, "node B to admit seats", eb.NativeHydrated)
 	running := eb.native.Load().log.Domain(tracker.Domain{}.Name())
 	for {
@@ -138,7 +156,6 @@ func stageDivergedBroker(t *testing.T) divergedBroker {
 	}
 	eb.Stop(context.Background())
 	backB.Close(context.Background())
-	return d
 }
 
 // A NODE WHOSE RESTORED LOG WAS WRITTEN PAST ITS ROWS BEFORE IT BOOTED REFUSES

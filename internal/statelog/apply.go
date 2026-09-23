@@ -366,6 +366,18 @@ type Runner struct {
 	// runner no longer stands at drops it ([Runner.loadCursor]).
 	diverged *divergedLog
 
+	// truncated is the verdict that the log lost records a PEER's rows hold
+	// ([ErrLogTruncated]), nil while no reading of the positions register
+	// has found such a peer ([Runner.ObserveTruncation]). NOT part of
+	// [Runner.StreamIdentity]: this node's rows are the log's own history,
+	// so its reads are served, and only its writes refuse ([Runner.Truncated]).
+	//
+	// RECOMPUTED ON EVERY READING rather than sticky, because it is a fact
+	// about other nodes' rows: it ends when the peer is evicted, re-anchors
+	// (and stands in another generation), is rebuilt from a peer, or the
+	// log turns out to hold its checkpoint after all.
+	truncated *Truncation
+
 	// drain is this loop's measured records per second, smoothed.
 	//
 	// # Why it is measured rather than a constant
@@ -559,6 +571,9 @@ func (r *Runner) Reanchored(at Position, created, storedAt time.Time) error {
 	r.cursor, r.checkpointAt = at, storedAt
 	r.rows++
 	r.foreign, r.ahead, r.diverged = nil, nil, nil
+	// AND A PEER'S TRUNCATION, which was about peers in the generation this
+	// left: in the one it opened, this node's rows are the fleet's history.
+	r.truncated = nil
 	if r.passed != nil && at.Generation >= r.passed.fleet {
 		r.passed = nil
 	}
@@ -753,6 +768,44 @@ func (r *Runner) StreamIdentity() error {
 		return ahead.err(r.spec.Name)
 	}
 	return nil
+}
+
+// ObserveTruncation takes one reading of the positions register — the peer
+// whose rows hold records the log lost, or nil when no peer's do — and reports
+// the transition it made: established the one time a reading finds such a peer,
+// cleared the one time a later reading finds none.
+//
+// THE ENGINE'S READING, not this runner's, because the facts are other nodes':
+// their published positions and flags, which of them the fleet has evicted, and
+// whether the log holds the record at a peer's checkpoint. A reading that could
+// not be taken is not handed here at all, so an unreadable register leaves the
+// verdict where it was rather than clearing it.
+func (r *Runner) ObserveTruncation(t *Truncation) (established, cleared bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	had := r.truncated != nil
+	if t == nil {
+		r.truncated = nil
+		return false, had
+	}
+	// A NEW VALUE, never a write through the shared pointer: [Runner.Truncated]
+	// reads it after the lock is released.
+	found := *t
+	r.truncated = &found
+	return !had, false
+}
+
+// Truncated is nil while no peer's rows are known to hold records the log lost,
+// and the refusal naming the peer once one is — see [ErrLogTruncated]. The
+// publisher refuses every write on it but an eviction or a readmission.
+func (r *Runner) Truncated() error {
+	r.mu.Lock()
+	t := r.truncated
+	r.mu.Unlock()
+	if t == nil {
+		return nil
+	}
+	return t.err(r.spec.Name)
 }
 
 // Diverged reports whether this applier holds the verdict that the log diverged

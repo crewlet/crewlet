@@ -119,8 +119,19 @@ type Waiter interface {
 // widens the window [Publisher.clearForZero] states by one missed reading,
 // inside which harm still needs the rebuilt log's history on the subject to
 // end at exactly the sequence this node's row names.
+//
+// # And what the fleet knows that this node's own log cannot show
+//
+// Truncated answers for a PEER: a node whose rows hold records the log lost
+// ([ErrLogTruncated]). This node's rows are the log's history, so its reads are
+// served and StreamIdentity says nothing — but on a broker restored from an
+// older copy, a write from here is one the restored reanchor of that peer would
+// apply nowhere, acknowledged to a caller who then loses it. So every write
+// refuses on it too, but for the one gesture that is how the operator ends it:
+// the peer's eviction ([Request.NodeGate]).
 type Identity interface {
 	StreamIdentity() error
+	Truncated() error
 }
 
 // Fence refuses a write this node must not make.
@@ -1294,7 +1305,29 @@ func (p *Publisher) fence0(ctx context.Context, req Request) error {
 	if err := p.checkIdentity(req); err != nil {
 		return err
 	}
+	if err := p.checkTruncated(req); err != nil {
+		return err
+	}
 	return p.checkEvicted(ctx)
+}
+
+// checkTruncated refuses a write while a peer's rows hold records the log lost
+// — see [Identity] — except a node gate, whose content is the operator's and
+// whose purpose may be exactly to evict that peer.
+//
+// AFTER THE IDENTITY, because a node whose own rows are not the log's history
+// has the truer refusal: its writes would be wrong whatever the fleet chose.
+func (p *Publisher) checkTruncated(req Request) error {
+	err := p.identity.Truncated()
+	if err == nil || req.NodeGate {
+		return nil
+	}
+	return &Unavailable{
+		Reason: ReasonLogTruncated,
+		Detail: fmt.Sprintf("%v — so %s was not published", err, req.Subject),
+		OpID:   req.OpID,
+		Cause:  err,
+	}
 }
 
 // clearForZero is the fence on an expectation of zero, with the identity asked

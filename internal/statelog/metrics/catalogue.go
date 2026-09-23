@@ -142,8 +142,12 @@ func Catalogue() []Instrument {
 				"is replaying up to), a full log, a node below the log or " +
 				"unable to read the floor (`below_floor`, `floor_unknown`), a " +
 				"log that is not the one this node's rows " +
-				"came from (`wrong_stream`: rebuilt, or ending below this " +
-				"node's checkpoint) — plus `conflict` for a write that lost " +
+				"came from (`wrong_stream`: rebuilt, ending below this " +
+				"node's checkpoint, holding another record at it, or " +
+				"re-anchored past it by a peer), a log that lost records a " +
+				"peer's rows hold (`log_truncated`: a broker restored from " +
+				"an older copy, refused until an operator decides which " +
+				"history the fleet keeps) — plus `conflict` for a write that lost " +
 				"every round, which nothing else is counted as. A refusal is " +
 				"not one of the three outcomes: it says the write never " +
 				"happened, and each reason has a different remedy, so one " +

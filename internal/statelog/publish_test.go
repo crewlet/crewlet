@@ -854,6 +854,55 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 	}
 }
 
+// A LOG THAT LOST WHAT A PEER'S ROWS HOLD REFUSES THIS NODE'S WRITES — BUT NOT
+// THE EVICTION OF THAT PEER.
+//
+// This node's rows are the log's own history, so nothing about its identity is
+// wrong; what is wrong is that a write from here, on a broker restored from an
+// older copy, is one the restored reanchor of the newer peer applies nowhere.
+// So an ordinary write refuses `log_truncated`, before anything reaches the
+// broker, naming the finding a caller can recognise — and a node gate is
+// published, because evicting that peer is one of the operator's ways out and a
+// fence that refused it would leave the fleet with one fewer.
+func TestALogThatLostWhatAPeerHoldsRefusesWritesButNotTheEviction(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.applier.truncatedBy("node-newer")
+
+	before := h.appends.appends.Load()
+	_, err := h.write(probeSubject("a"), "op-1", "decided from the log's own history")
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonLogTruncated ||
+		!errors.Is(err, statelog.ErrLogTruncated) || errors.Is(err, statelog.ErrConflict) {
+		t.Fatalf("an ordinary write = %v, want a %s refusal over the truncation",
+			err, statelog.ReasonLogTruncated)
+	}
+	if n := h.appends.appends.Load() - before; n != 0 {
+		t.Fatalf("appended %d time(s) onto a log a peer's rows hold more than", n)
+	}
+
+	before = h.appends.appends.Load()
+	_, err = h.pub.Publish(t.Context(), statelog.Request{
+		Subject:  probeSubject("gate"),
+		Scope:    statelog.ScopeSet{Paths: []string{"object.gate"}},
+		OpID:     "op-gate",
+		Pattern:  statelog.PatternArbitrated,
+		NodeGate: true,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return statelog.Decision{Payload: probeRecord(stamp, "op-gate", "evict"), Version: 1}, nil
+		},
+	})
+	if n := h.appends.appends.Load() - before; err != nil || n != 1 {
+		t.Fatalf("the eviction = %v after %d append(s), want it published", err, n)
+	}
+
+	// AND A NODE WHOSE OWN ROWS ARE NOT THE LOG'S HISTORY is refused for
+	// that, the truer finding.
+	h.applier.rebuilt()
+	_, err = h.write(probeSubject("b"), "op-2", "decided from these rows")
+	requireWrongStream(t, err)
+}
+
 // A NODE GATE IS THE ONE WRITE A NODE THE FLEET RE-ANCHORED PAST STILL MAKES.
 //
 // Such a node's rows are a history the log no longer continues, so everything

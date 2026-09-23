@@ -124,7 +124,11 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 			"every log must hold it, and a node the fleet re-anchored past refused "+
 			"it as it refuses every other write", res, err)
 	}
-	gens, err := s.fleetGenerations(t.Context(), s.openLogs(),
+	rows, err := s.fleet.Positions(t.Context())
+	if err != nil {
+		t.Fatalf("read the register: %v", err)
+	}
+	gens, err := s.fleetGenerations(t.Context(), rows, s.openLogs(),
 		map[string]uint32{name: own.Generation})
 	if err != nil {
 		t.Fatalf("fleetGenerations: %v", err)

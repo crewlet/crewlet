@@ -435,3 +435,60 @@ func TestACheckpointThatNamesNoRecordIsNeverCalledDiverged(t *testing.T) {
 		t.Fatalf("the checkpoint names %s after a batch, want %s", got, probeStoredAt(4))
 	}
 }
+
+// A PEER'S TRUNCATION IS THE RUNNER'S WRITE FENCE, NOT ITS IDENTITY.
+//
+// A reading of the register that finds a peer holding records the log lost is
+// established once and cleared once, so each of its two lines is written once;
+// it refuses writes (Truncated) and leaves reads alone (StreamIdentity), since
+// this node's rows are the log's own history; and a reanchor, which puts this
+// node's rows at the head of a generation of their own, ends it.
+func TestAPeersTruncationIsTheRunnersWriteFenceNotItsIdentity(t *testing.T) {
+	t.Parallel()
+	h := appliedThrough(t, 3)
+	peer := &statelog.Truncation{Peer: "node-newer", Seq: 9, Last: 3}
+
+	if established, cleared := h.runner.ObserveTruncation(peer); !established || cleared {
+		t.Fatalf("the first reading = (established %v, cleared %v)", established, cleared)
+	}
+	if established, _ := h.runner.ObserveTruncation(peer); established {
+		t.Fatal("the same reading established the truncation twice")
+	}
+	err := h.runner.Truncated()
+	if !errors.Is(err, statelog.ErrLogTruncated) {
+		t.Fatalf("Truncated = %v, want the truncation", err)
+	}
+	for _, want := range []string{"node-newer", "sequence 9", "ends at 3", "reanchor", "evict"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not name %q", err, want)
+		}
+	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("a peer's truncation refused this node's reads: %v", err)
+	}
+
+	diverged := &statelog.Truncation{Peer: "node-newer", Seq: 3, Last: 5, Diverged: true}
+	h.runner.ObserveTruncation(diverged)
+	if err := h.runner.Truncated(); err == nil || !strings.Contains(err.Error(), "another record") {
+		t.Fatalf("a diverged peer's truncation reads %v", err)
+	}
+
+	if _, cleared := h.runner.ObserveTruncation(nil); !cleared {
+		t.Fatal("a reading that found no such peer did not clear the truncation")
+	}
+	if _, cleared := h.runner.ObserveTruncation(nil); cleared {
+		t.Fatal("the truncation was cleared twice")
+	}
+	if err := h.runner.Truncated(); err != nil {
+		t.Fatalf("Truncated after clearing = %v", err)
+	}
+
+	h.runner.ObserveTruncation(peer)
+	at := statelog.Position{Stream: probeStream, Generation: 2, Seq: 3}
+	if err := h.runner.Reanchored(at, time.Now(), probeStoredAt(3)); err != nil {
+		t.Fatalf("Reanchored: %v", err)
+	}
+	if err := h.runner.Truncated(); err != nil {
+		t.Fatalf("after a reanchor the truncation still refuses: %v", err)
+	}
+}

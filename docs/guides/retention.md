@@ -211,6 +211,11 @@ reason, and makes the same split reads do:
   when the log holds, at that checkpoint, another record than the one the node
   consumed there. See
   [Re-anchoring a recreated or restored log](#re-anchoring-a-recreated-or-restored-log).
+- `log_truncated` when a **peer's** rows hold records the log lost — a broker
+  restored from an older copy, with a peer whose rows are newer. This node's
+  own rows are the log's history, so only its writes refuse, until the
+  operator decides which history the fleet keeps; an eviction is still
+  written. See the same section.
 
 None of them is a conflict: a conflict tells a caller somebody else is editing
 and to re-read, and every one of these is about this node rather than the
@@ -712,6 +717,23 @@ it the same way when it **boots** on a log already written past its rows — its
 checkpoint is then not past the end at all, and the record is the only thing
 that shows it — and when a broker is restored under it while it runs. It is
 compared for equality, so no clock is ever ordered against another.
+
+**The rest of the fleet stops writing to it too.** A node whose rows were the
+copy's age sees a log that is its own history, so nothing about its own log
+refuses it — yet every write it makes after the restore is one the restored
+reanchor of a newer node would apply nowhere, acknowledged to a caller who then
+loses it. So every node reads the positions register on its heartbeat, and a
+peer on the same stream, in the same generation and not evicted, whose position
+is past the log's end — confirmed against the log, which must not hold the
+record there — or whose row says `log_diverged`, stops this node's **writes**
+of that domain: each refuses `log_truncated`, naming the peer, and the node
+logs `statelog_log_truncated`. Its **reads** go on, being the log's own history.
+The eviction of that peer is still written, because it is one of the ways out.
+The refusal lifts on its own (`statelog_log_truncated_cleared`) once the peer
+re-anchors, is rebuilt from a peer's snapshot, or is evicted. What this cannot
+see is a newer node that has not published since the restore — after a whole
+broker restore the register is the copy's too — so writes made before it boots
+still land.
 
 **After restoring a broker, re-anchor the most caught-up node whose checkpoint
 was past the restored log's end, before anything else writes to it** — the verb

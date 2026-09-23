@@ -455,6 +455,7 @@ func (w *testWaiter) Committed() statelog.Position {
 // StreamIdentity is always the live stream: this harness never rebuilds its
 // log, so every position the waiter holds is a sequence on it.
 func (w *testWaiter) StreamIdentity() error { return nil }
+func (w *testWaiter) Truncated() error      { return nil }
 
 func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
 	for {

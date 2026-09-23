@@ -210,6 +210,48 @@ func (d divergedLog) err(stream string) error {
 		d.at.Seq, d.held.UTC().Format(time.RFC3339Nano), stream)
 }
 
+// ErrLogTruncated reports a log that has lost records a PEER's rows hold: a
+// node on the same stream, in the same generation and not evicted, stands past
+// the log's end, or says the log diverged from its rows.
+//
+// ITS OWN SENTINEL, and a finding about the FLEET rather than about this node:
+// this node's rows are the log's own history, so its reads are served — but a
+// broker restored from an older copy is the one state in which a write from
+// here makes things worse whichever history the operator keeps. Kept, the
+// peer's rows (the restored reanchor) apply this node's write nowhere, and the
+// caller it was acknowledged to has lost it; kept the other way, the peer's rows
+// are replaced and nothing needed refusing. So the write waits for the
+// operator's choice instead of spending it. An eviction or a readmission is the
+// exception ([Request.NodeGate]): evicting the peer is one of the choices.
+var ErrLogTruncated = errors.New("statelog: the log lost records a peer's rows hold")
+
+// Truncation is what established that the log lost records a peer's rows hold:
+// the peer, its checkpoint, where the log ends, and whether the peer reported
+// the log diverged from its rows rather than standing past its end.
+type Truncation struct {
+	Peer     string
+	Seq      uint64
+	Last     uint64
+	Diverged bool
+}
+
+// err is the one sentence every refusal over a truncated log carries.
+func (t Truncation) err(stream string) error {
+	what := fmt.Sprintf("stands at sequence %d of %s, which ends at %d", t.Seq, stream, t.Last)
+	if t.Diverged {
+		what = fmt.Sprintf("reports that %s holds, at its checkpoint %d, another "+
+			"record than the one it consumed there", stream, t.Seq)
+	}
+	return fmt.Errorf("%w: peer %s %s — the broker was restored from a copy older "+
+		"than that node's rows, which hold records the log lost; a write from here "+
+		"would be applied nowhere if the operator keeps those rows (a restored "+
+		"reanchor of that node), so this node refuses its writes of the log until "+
+		"the operator decides — `crewlet retention reanchor -stream %s` on that "+
+		"node, its rows replaced with a peer's, or its eviction (`crewlet "+
+		"retention evict`) — and serves its reads, which are the log's own history",
+		ErrLogTruncated, t.Peer, what, stream)
+}
+
 // sameRecord reports whether two broker instants name one record at one
 // sequence — at the resolution a checkpoint row keeps, for the reason
 // [identityResolution] gives.

@@ -203,6 +203,7 @@ type suiteWaiter struct{ at statelog.Position }
 func (w suiteWaiter) Committed() statelog.Position                         { return w.at }
 func (suiteWaiter) WaitCommitted(context.Context, statelog.Position) error { return nil }
 func (suiteWaiter) StreamIdentity() error                                  { return nil }
+func (suiteWaiter) Truncated() error                                       { return nil }
 
 func (suiteWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return errNoApplier
