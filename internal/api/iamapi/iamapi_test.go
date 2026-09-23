@@ -954,3 +954,41 @@ func TestAReleaseNamesThePersonItReleasesFrom(t *testing.T) {
 		}
 	}
 }
+
+// TWO EDITS ARE TWO OPERATIONS, AND A RETRY IS ONE.
+//
+// An op id is the identity of ONE operation, and the broker collapses a second
+// publish carrying it inside its duplicate window into the first. It used to
+// be derived from the person alone, so a second, DIFFERENT edit of somebody
+// inside two minutes was acknowledged as the first and never happened. With no
+// Idempotency-Key every request is its own operation; with one, the caller's
+// key is the id, which is what makes a retry after `unknown` land once.
+func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	patch := func(key string, grants []iam.Grant) string {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"grants": grants})
+		req := httptest.NewRequest(http.MethodPatch, "/iam/people/"+bob.String(),
+			strings.NewReader(string(body)))
+		if key != "" {
+			req.Header.Set(iamapi.IdempotencyHeader, key)
+		}
+		req = req.WithContext(iam.WithPrincipal(req.Context(), administrator()))
+		rec := httptest.NewRecorder()
+		r.mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
+		}
+		return r.writer.updated.OpID
+	}
+	first := patch("", []iam.Grant{iam.GrantStateRead})
+	second := patch("", []iam.Grant{iam.GrantAuditRead})
+	if first == second {
+		t.Errorf("two different edits of one person were published under one "+
+			"op id %q, so the broker acknowledges the second as the first", first)
+	}
+	if again := patch("retry-7", []iam.Grant{iam.GrantStateRead}); again != "retry-7" {
+		t.Errorf("a request carrying an Idempotency-Key was published as %q", again)
+	}
+}

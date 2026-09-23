@@ -609,6 +609,13 @@ position to see it. `unknown` is `503` with the op id, and the only safe retry
 is the **same** one: send it back as `Idempotency-Key`, because a fresh id
 would defeat the ledger that makes the retry safe.
 
+A request **without** an `Idempotency-Key` is a new operation every time, with
+an op id of its own. Two different edits of one person, a second "end every
+session", or a second company-wide invalidation are two operations, and an op
+id derived from the object alone made the broker collapse the second into the
+first inside its duplicate window — acknowledged, and never applied. Send a key
+when you mean a retry, and only then.
+
 A lost race on an address, a login or a seat is `409` **naming who holds it**.
 An authority refusal is `403` and will never land however often it is retried.
 A login that is absent or outside its holder's kind is `400` — `POST

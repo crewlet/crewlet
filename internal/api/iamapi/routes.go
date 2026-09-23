@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -176,11 +178,20 @@ func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 // THE CALLER'S OWN WHERE THEY SENT ONE, which is what makes a retry after an
 // `unknown` land once: the ledger resolves it, and a fresh id per attempt
 // would defeat the mechanism that exists for exactly this case.
+//
+// AND A FRESH ONE PER REQUEST WHERE THEY DID NOT. An op id is the identity of
+// ONE operation, and the broker collapses a second publish carrying it inside
+// its duplicate window into the first. The id used to be derived from the
+// object alone — `people:update:<id>` — so a second, DIFFERENT edit of the
+// same person inside two minutes, a second "end every session" after signing
+// back in, or a second company-wide invalidation was acknowledged as the first
+// and silently never happened. A request with no key is a new operation; the
+// key is how a caller says it is not.
 func (s *Service) opIDFor(r *http.Request, derived string) string {
 	if given := strings.TrimSpace(r.Header.Get(IdempotencyHeader)); given != "" {
 		return given
 	}
-	return derived
+	return derived + ":" + uuid.NewString()
 }
 
 // statelog0 is the zero position, for the arms that refuse before publishing.
