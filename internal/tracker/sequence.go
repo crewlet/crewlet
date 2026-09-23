@@ -1555,18 +1555,26 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 // it rather than refuse ([localClaims]). That holds with the store unreachable
 // too, because a bulk running here is something this node knows rather than
 // something the store has to say.
-func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
+func (w *Writer) admit(ctx context.Context, records int) (func(), error) {
 	if w.claims == nil {
 		return func() {}, nil
 	}
 	resource := bulkClaim(trackerStream)
-	// TWICE THE PROJECTED APPLY TIME, so the lease outlives the work it
-	// admits without outliving it by so much that a crashed holder blocks
-	// the company. The projection is the bulk's records — one per task —
-	// over the applier's own measured drain in records a second, the same
-	// rate a refused read's retry hint divides its backlog by.
-	projected := float64(rows) / w.drainRows()
-	ttl := 2 * time.Duration(projected*float64(time.Second))
+	// THE PROJECTION is the bulk's records — one per task — over the
+	// applier's own measured drain in records a second, through
+	// [statelog.BacklogTime]: the conversion a refused read's retry hint
+	// and a stale read's staleness bound take too, so one backlog is one
+	// time wherever it is stated, and a drain nobody has measured reads at
+	// [statelog.DrainFloor] — long, which is the direction a lease must
+	// err in.
+	//
+	// THE LEASE IS TWICE IT, so it outlives the work it admits without
+	// outliving it by so much that a crashed holder blocks the company:
+	// the projection of twice the records, which is twice the time and
+	// takes the conversion's own ceiling rather than overflowing past it.
+	drain := w.drain()
+	projected := statelog.BacklogTime(uint64(records), drain).Seconds()
+	ttl := statelog.BacklogTime(2*uint64(records), drain)
 	if ttl < ClaimHeartbeat {
 		ttl = ClaimHeartbeat
 	}
@@ -1621,21 +1629,17 @@ func (w *Writer) bulkInFlight(ctx context.Context, resource string) error {
 		statelog.ErrUnavailable)
 }
 
-// drainRows is the applier's measured drain in RECORDS a second, and the
-// divisor of every projection computed from it.
+// drain is the applier's measured drain in RECORDS a second, and zero when
+// nothing measures it — a writer built with no [Writer.Drain].
 //
-// A FLOOR RATHER THAN A DEFAULT, because dividing by a drain that has not been
-// measured yet — zero — is an infinite lease, which is worse than any wrong
-// number. One record a second is deliberately pessimistic: it makes the first
-// projection too long rather than too short, and a lease held too long delays a
-// caller where one held too briefly admits the concurrency it exists to stop.
-// A measured rate at or below it is floored too.
-func (w *Writer) drainRows() float64 {
+// NO FLOOR HERE. The projection divides through [statelog.BacklogTime], which
+// owns the one floor every backlog-to-time conversion takes and applies it to
+// the unmeasured zero alone: a lease held too long delays a caller where one
+// held too briefly admits the concurrency it exists to stop, so a measured
+// rate below the floor is used as measured rather than raised to it.
+func (w *Writer) drain() float64 {
 	if w.Drain == nil {
-		return 1
+		return 0
 	}
-	if rows := w.Drain(); rows > 1 {
-		return rows
-	}
-	return 1
+	return w.Drain()
 }

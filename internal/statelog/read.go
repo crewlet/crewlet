@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"time"
 
@@ -103,6 +102,14 @@ const (
 	// levels that append; the ones that do not keep answering.
 	RefuseLogFull ReadRefusal = "log_full"
 
+	// RefuseBarrierRefused — the broker refused the barrier for a reason
+	// other than a full log: a size limit set on the stream below a
+	// barrier's own size, a sealed stream, a server at its storage limit.
+	// The broker's words are the detail. Like a full log it costs only the
+	// levels that append, and waiting on this node does not change a
+	// broker's setting.
+	RefuseBarrierRefused ReadRefusal = "barrier_refused"
+
 	// RefuseWrongStream — the position this read was asked to reach is on
 	// another stream, which is a caller bug rather than a state.
 	RefuseWrongStream ReadRefusal = "wrong_stream"
@@ -118,7 +125,8 @@ const (
 var ReadRefusals = []ReadRefusal{
 	RefuseBehind, RefuseDeferred, RefuseDeferredScopeUnknown, RefuseStalled,
 	RefuseBelowFloor, RefuseFloorUnknown, RefuseEvicted, RefuseBrokerUnreachable,
-	RefuseNoQuorum, RefuseLogFull, RefuseWrongStream, RefuseTooStale,
+	RefuseNoQuorum, RefuseLogFull, RefuseBarrierRefused, RefuseWrongStream,
+	RefuseTooStale,
 }
 
 // Valid reports whether a refusal code off the wire is one this build knows.
@@ -137,6 +145,23 @@ func (r ReadRefusal) Retryable() bool {
 		return true
 	}
 	return false
+}
+
+// OrdinaryLag reports whether the refusal says only that this node is behind
+// what the read accepts — which every node is, for a moment after every write
+// — rather than naming a fault.
+//
+// It is the one classification the `read_refusals` alarm separates on, and
+// both halves of that alarm read it: the reading that decides whether the
+// alarm fires, and the remedy that tells an operator which codes are a wait.
+// Two lists of which codes are waits would be two answers that drift.
+//
+// NOT [ReadRefusal.Retryable]. The two sets differ in both directions: a
+// barrier that did not commit is worth coming back for and is a fault while it
+// lasts, and a read bounded tighter than this node's lag is refused with no
+// hint at all and is still nothing but lag.
+func (r ReadRefusal) OrdinaryLag() bool {
+	return r == RefuseBehind || r == RefuseTooStale
 }
 
 // ElectionRetryHint is what a caller is told to wait after a barrier that did
@@ -183,8 +208,9 @@ func (r *Refused) Unwrap() error { return ErrUnavailable }
 // FROM THE OBSERVED DRAIN, not from a constant. A flat hint is wrong in both
 // directions on the same fleet: it sends a caller back too early on a node
 // grinding through a bulk apply, and holds one waiting on a node that caught
-// up in milliseconds. Zero means no hint at all, which is what a refusal
-// waiting cannot clear deserves.
+// up in milliseconds. So the backlog is converted through [BacklogTime], the
+// one conversion every record count stated as a time goes through. Zero means
+// no hint at all, which is what a refusal waiting cannot clear deserves.
 func RetryHint(code ReadRefusal, lag uint64, recordsPerSecond float64) time.Duration {
 	if !code.Retryable() {
 		return 0
@@ -193,19 +219,23 @@ func RetryHint(code ReadRefusal, lag uint64, recordsPerSecond float64) time.Dura
 	case RefuseNoQuorum, RefuseBrokerUnreachable:
 		return ElectionRetryHint
 	}
-	if recordsPerSecond <= 0 || lag == 0 {
-		// Nothing measured, or nothing to catch up on. A hint derived
-		// from a rate nobody observed is a constant wearing a
-		// derivation's clothes.
+	if lag == 0 {
+		// NO BACKLOG TO DIVIDE. What the caller is waiting for is not a
+		// record this node has yet to apply — it is a position the log has
+		// not reached, or a stalled applier's next attempt — and nothing
+		// here measures either, so the hint is the short constant a
+		// barrier that did not commit gets.
 		return ElectionRetryHint
 	}
-	seconds := float64(lag) / recordsPerSecond
-	if math.IsInf(seconds, 0) || math.IsNaN(seconds) {
-		return ElectionRetryHint
+	// ROUNDED UP to a whole second, because a hint is read by a person and
+	// by a retry loop and neither wants milliseconds. [BacklogTime]'s
+	// ceiling is itself a whole number of seconds, so rounding up to the
+	// next one cannot pass it.
+	hint := BacklogTime(lag, recordsPerSecond)
+	if part := hint % time.Second; part != 0 {
+		hint += time.Second - part
 	}
-	// Rounded up to a whole second, because a hint is read by a person
-	// and by a retry loop and neither wants milliseconds.
-	return time.Duration(math.Ceil(seconds)) * time.Second
+	return hint
 }
 
 // Query is what a read is about and how fresh it has to be.
@@ -342,9 +372,10 @@ type ReaderDeps struct {
 	// every one of its terms can change between two of them.
 	Health func() Health
 
-	// Drain is the observed records-per-second, which every retry hint
-	// divides by. A hint derived from a rate nobody measured is a
-	// constant wearing a derivation's clothes.
+	// Drain is this node's measured drain in records a second, which a
+	// refusal's retry hint and a read's staleness bound divide a backlog
+	// by, through [BacklogTime]. Nil is a rate nobody measured, which
+	// [DrainFloor] stands in for.
 	Drain func() float64
 
 	Metrics *metrics.Recorder
@@ -637,17 +668,17 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 
 // pastBound is the staleness bound's whole rule, against ONE health snapshot.
 //
-// # Why it is a function and not the lines it replaced
+// # Why it is a function
 //
-// Because the bound has to be applied to TWO snapshots and there must be one
-// rule for both. It was enforced only against the snapshot taken before the
-// read waited — and a read can now wait for the caller's own floor
-// ([Query.MinPosition]) for up to [ReadBudget], a wait whose ending says this
-// node reached a position and says nothing whatever about how far the log has
-// run on in the meantime. A caller declaring `max_lag_seq=250` could therefore
-// be served an answer assembled when the node was thousands behind, with
-// `Lag` reporting the figure from before the wait: the bound checked, the
-// answer past it, and the number beside the rows agreeing with neither.
+// Because the bound is applied to TWO snapshots and there must be one rule for
+// both: the one taken before the read waits, and the one taken after. A read
+// may wait for the caller's own floor ([Query.MinPosition]) for up to
+// [ReadBudget], a wait whose ending says this node reached a position and says
+// nothing whatever about how far the log has run on in the meantime. Checked
+// only before the wait, a caller declaring `max_lag_seq=250` would be served
+// an answer assembled when the node was thousands behind, with `Lag` reporting
+// the figure from before the wait: the bound checked, the answer past it, and
+// the number beside the rows agreeing with neither.
 //
 // A nil return is "within the bound", which includes a read that declared no
 // bound at all — zero accepts anything, and that is what makes declaring one
@@ -674,7 +705,10 @@ func (r *Reader) pastBound(q Query, h Health) *Refused {
 				"read accepts %d", *h.Lag, q.MaxLagSeq),
 		}
 	}
-	behind := time.Duration(*h.Lag) * time.Second / time.Duration(max(int64(r.drain()), 1))
+	// THE DURATION IS THE RECORD COUNT OVER THIS NODE'S MEASURED DRAIN,
+	// through [BacklogTime], the one conversion every backlog stated as a
+	// time takes — fraction of a rate and all.
+	behind := BacklogTime(*h.Lag, r.drain())
 	if q.MaxLag > 0 && behind > q.MaxLag {
 		return &Refused{
 			Code: RefuseTooStale, Level: q.Level,
@@ -687,19 +721,24 @@ func (r *Reader) pastBound(q Query, h Health) *Refused {
 
 // barrierRefusal maps the read index's own failures onto refusal codes.
 //
-// The three are genuinely different: a broker that did not answer, a majority
-// that did not agree, and a log that is full. Only the first two are worth
-// coming back for, and only the third names a field an operator has to change.
+// They are genuinely different: a barrier no majority committed, a log that is
+// full, and a broker that refused the append for a reason of its own. Only the
+// first is worth coming back for, and the other two name a setting an operator
+// has to change — so each is read from the refusal [ReadIndex] made out of the
+// broker's answer, and anything that is not one is the barrier that did not
+// commit within its budget.
 func barrierRefusal(level ReadLevel, err error) error {
+	const answering = " — it costs every level that appends, while `stale` and " +
+		"`session` keep answering"
 	var unavailable *Unavailable
 	if errors.As(err, &unavailable) {
 		switch unavailable.Reason {
 		case ReasonLogFull:
-			return &Refused{
-				Code: RefuseLogFull, Level: level,
-				Detail: unavailable.Detail + " — a full log costs every level " +
-					"that appends, while `stale` and `session` keep answering",
-			}
+			return &Refused{Code: RefuseLogFull, Level: level,
+				Detail: unavailable.Detail + answering}
+		case ReasonTooLarge, ReasonRefused:
+			return &Refused{Code: RefuseBarrierRefused, Level: level,
+				Detail: unavailable.Detail + answering}
 		case ReasonSkew:
 			return &Refused{Code: RefuseNoQuorum, Level: level, Detail: unavailable.Detail}
 		}

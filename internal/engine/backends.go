@@ -270,37 +270,40 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	return out, nil
 }
 
+// StoreOptions is how a process opens this node's store from its Tier A
+// document: the engine at boot, and every `crewlet` command that reads, writes
+// or migrates the files while the engine is stopped.
+//
+// ONE HELPER FOR EVERY OPENER, because each field is a fact about the node's
+// files rather than about whoever opens them. An opener that left one out
+// would open a different store: without store.replicated_path, [store.Open]
+// derives the replicated estate's file from store.path, so that opener would
+// lock, create and migrate a database the engine never reads.
+//
+// What an opener adds on top is its own: the engine declares its appliers'
+// pinned writers and the company's embedding width ([openStore]), and a
+// command has neither.
+func StoreOptions(b *config.Bootstrap) store.Options {
+	return store.Options{
+		ReplicatedPath: b.Store.ReplicatedPath,
+		MaxOpenConns:   b.Store.MaxOpenConns,
+		BusyTimeout:    b.Store.BusyTimeout(),
+	}
+}
+
 // openStore opens this node's two local databases — the node estate at
 // store.path and the replicated estate at store.replicated_path, or beside it
 // when that is empty.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
-	opts := store.Options{
-		MaxOpenConns:   b.Store.MaxOpenConns,
-		ReplicatedPath: b.Store.ReplicatedPath,
-		BusyTimeout:    b.Store.BusyTimeout(),
-		// ONE PINNED CONNECTION PER STATE-LOG DOMAIN, and nothing
-		// else. Each domain's apply loop holds one for its life: it is
-		// the single writer of that domain's tables, and a loop that
-		// had to reacquire one per batch would be competing with the
-		// readers it is applying for. The count is DECLARED rather
-		// than discovered so the pool is sized for them: an undeclared
-		// pin is a reader starved out of the pool by a writer that
-		// never gives its connection back.
-		//
-		// It carried a `+ sweepWriterPins` term for the maintenance
-		// worker, whose inbox sweep and duplicate-rank repair each took
-		// a pin of their own and were refused on every tick of a
-		// running node, the apply loops having taken every declared pin
-		// before the first sweep asked. That term was the pool sized
-		// for a job list in another package, holding on an invariant
-		// nothing enforces — a tick runs its jobs in series, so at most
-		// one pin at a time — and a third pinning job, or a tick that
-		// ran two in parallel, would have under-declared it silently.
-		// Neither sweep is a long-lived writer, so neither wants a pin:
-		// both take a pooled write transaction now, which reaches the
-		// same lock through the same queue.
-		PinnedWriters: len(registeredDomains()),
-	}
+	opts := StoreOptions(b)
+	// ONE PINNED CONNECTION PER STATE-LOG DOMAIN. Each domain's apply loop
+	// holds one for its life: it is the single writer of that domain's
+	// tables, and a loop that had to reacquire one per batch would be
+	// competing with the readers it is applying for. The count is DECLARED
+	// rather than discovered so the pool is sized for them: an undeclared
+	// pin is a reader starved out of the pool by a writer that never gives
+	// its connection back.
+	opts.PinnedWriters = len(registeredDomains())
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it
 	// and a caller that has vectors anyway is not refused. That is the

@@ -223,7 +223,7 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		// refusal rather than an answer.
 		seq, duplicate, err := r.log.Append(appendCtx, r.subject, "", nil, body)
 		if err != nil {
-			run.err = fmt.Errorf("statelog: append a barrier on %s: %w", r.subject, err)
+			run.err = r.refusal(err)
 			return
 		}
 		if duplicate {
@@ -244,4 +244,33 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 				metrics.Attrs{"domain": r.domain})
 		}
 	}()
+}
+
+// refusal is what a barrier append the broker did not acknowledge means, in
+// the write path's own vocabulary.
+//
+// THROUGH [classify], the write path's one reading of a broker error, because
+// a barrier is an append like any other and the broker refuses it for the same
+// reasons: the real appender hands back the client's own error, so a full log
+// arrives as the broker's API error naming "maximum bytes exceeded" and not as
+// a refusal this package made. Read any other way, that full log reads as a
+// majority that did not agree — a read told to wait out an election, about a
+// log only an operator can empty.
+//
+// NO ANSWER STAYS AN ERROR rather than a refusal: an append nobody answered
+// within the barrier's budget is the one a quorum did not commit, which is
+// what [barrierRefusal] names it.
+func (r *ReadIndex) refusal(err error) error {
+	switch f, detail := classify(err); f {
+	case faultFull:
+		return &Unavailable{Reason: ReasonLogFull, Detail: fmt.Sprintf(
+			"the broker refused to store the barrier on %s: %s", r.subject, detail)}
+	case faultTooLarge:
+		return &Unavailable{Reason: ReasonTooLarge, Detail: fmt.Sprintf(
+			"the barrier on %s was refused for its size: %s", r.subject, detail)}
+	case faultRefused:
+		return &Unavailable{Reason: ReasonRefused, Detail: fmt.Sprintf(
+			"the broker refused the barrier on %s: %s", r.subject, detail)}
+	}
+	return fmt.Errorf("statelog: append a barrier on %s: %w", r.subject, err)
 }

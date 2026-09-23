@@ -157,6 +157,16 @@ type Engine struct {
 	// would announce a second stop for one shutdown.
 	drainOnce sync.Once
 
+	// stopOnce makes [Engine.Stop]'s teardown one operation however many
+	// callers ask for it. A second pass would run every stop again against
+	// a broker and a coordination store the first pass had closed, and
+	// report each duty it had already released as one it could not.
+	stopOnce sync.Once
+
+	// teardowns counts the passes [Engine.teardown] has made, which is how
+	// a test sees that a second Stop made none without reading the log.
+	teardowns atomic.Int32
+
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment on this node.
 	//
@@ -1204,10 +1214,15 @@ func (e *Engine) ShuttingDown() bool { return e.shuttingDown.Load() }
 // The DRAIN comes first and is the difference between a restart that resumes
 // cleanly and one that redelivers half-finished turns: it stops claiming, hands
 // back every seat, and waits for in-flight handlers before anything closes.
+//
+// ONCE, however many callers ask: a later call returns when the first one has
+// finished, and does nothing itself.
 func (e *Engine) Stop(ctx context.Context) {
 	e.Drain(ctx)
-	e.teardown(ctx)
-	log.InfoContext(ctx, "engine_stopped")
+	e.stopOnce.Do(func() {
+		e.teardown(ctx)
+		log.InfoContext(ctx, "engine_stopped")
+	})
 }
 
 // teardown stops everything a node started, in the one order that is correct.
@@ -1231,6 +1246,7 @@ func (e *Engine) Stop(ctx context.Context) {
 // it stops was never started, and the node is absent entirely where the
 // failure came before [node.New].
 func (e *Engine) teardown(ctx context.Context) {
+	e.teardowns.Add(1)
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.

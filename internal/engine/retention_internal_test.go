@@ -40,9 +40,8 @@ func (p *probe) at(seq uint64) (time.Time, bool, error) {
 // the age term exists for: `min_age` is a FLOOR on trimming, so every record
 // younger than it must be at or above the answer.
 //
-// The inversion this protects against is the one three readers of this design
-// got backwards — reading `min_age` as a ceiling on retention, which trims
-// exactly the records it was set to keep.
+// The inversion this protects against is reading `min_age` as a ceiling on
+// retention, which trims exactly the records it was set to keep.
 func TestTheAgeFloorNeverLetsTheTrimPassARecordInsideTheWindow(t *testing.T) {
 	base := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 	cutoff := base.Add(50 * time.Minute)
@@ -369,9 +368,9 @@ func TestABackupThatDoesNotCoverALogIsNotABackupAtZero(t *testing.T) {
 //
 // `search_scoped`, `search_degraded` and `search_slow` are each a property of
 // the answers this node gave, and the alarm table can only read them off a
-// [statelog.Reading]. Nothing recorded them for the life of the alarm table:
-// the rows existed, the conditions were right, and all three were permanently
-// silent — which is indistinguishable from a node with nothing wrong.
+// [statelog.Reading]. An input nothing records leaves its alarm permanently
+// silent while its row and its condition are both right — which is
+// indistinguishable from a node with nothing wrong.
 func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
@@ -508,9 +507,10 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 // Every reading here is a THRESHOLD, and a threshold against a counter that
 // only grows latches. `search_degraded` fires on a fraction being above zero,
 // so computed from [metrics.Recorder.Read]'s cumulative totals one degraded
-// search after boot lights it for the life of the process; `search_slow` and
-// `barrier_slow` take a maximum, so one slow observation ever is permanent.
-// [metrics.Window] exists for precisely this and had no caller at all.
+// search after boot would light it for the life of the process; `search_slow`
+// and `barrier_slow` take a p95, and a p95 over every observation since boot
+// dilutes a bad hour and never forgets it. [metrics.Window] is what bounds
+// each reading to the last day.
 //
 // `crewlet retention status` derives its exit code from these, so an alarm
 // that cannot clear is a cron that fires for ever.
@@ -560,7 +560,7 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	}
 	if cleared.SearchP95 != 0 {
 		t.Errorf("SearchP95 = %v a day after the last search, so `search_slow` "+
-			"is reading a maximum with no window", cleared.SearchP95)
+			"is reading a distribution with no window", cleared.SearchP95)
 	}
 }
 

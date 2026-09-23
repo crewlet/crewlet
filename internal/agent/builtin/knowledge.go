@@ -15,13 +15,17 @@ import (
 // SearchKnowledgeTool is the tool's wire name.
 const SearchKnowledgeTool = "search_knowledge"
 
-// searchHits is how many pages one call renders.
+// SearchKnowledgeHits is how many pages one call renders.
 //
-// Six, matching the turn-start prefetch block: each result is a title and a
-// snippet the agent uses to decide what to open, and a dozen crowds out the
-// task they were fetched for. Distinct from [knowledge.DefaultLimit], which
-// is what the seam asks a backend for when nobody says.
-const searchHits = 6
+// THE TURN-START BLOCK'S OWN COUNT, named rather than copied: each result is a
+// pointer the agent uses to decide what to open, the same as a bullet in that
+// block, and a dozen crowds out the task they were fetched for. Distinct from
+// [knowledge.DefaultLimit], which is what the seam asks a backend for when
+// nobody says.
+//
+// EXPORTED so internal/engine's ceiling test holds it under what a native
+// search can answer, beside every other caller's ask.
+const SearchKnowledgeHits = prefetch.KnowledgeHits
 
 // searchQueryMax bounds the query a model may send.
 //
@@ -29,51 +33,56 @@ const searchHits = 6
 // model that pasted a whole thread in would search on prose no ranker can
 // use. Four hundred bytes is a long sentence and several keywords.
 //
-// REFUSED, NOT CUT, which is the same call [ToolAnswerBytes] makes one
-// direction over and the same one [github.com/crewlet/crewlet/internal/tracker.MaxQueryText]
+// REFUSED, NOT CUT, which is the call [ToolAnswerBytes] makes in the other
+// direction and [github.com/crewlet/crewlet/internal/tracker.MaxQueryText]
 // makes on the query it bounds. A cut query is not a shorter query — it is a
 // DIFFERENT one, and the hits that come back are a plausible answer to
 // something the model never asked, which it has no way to detect: the results
-// are real pages, ranked, about the half of the sentence that survived. The
-// cut was silent besides, so the tool's own `clip` sits two files away
-// refusing to shorten an echoed argument for exactly this reason — "a
-// shortened echo names a query the model never sent". A refusal naming the
-// field costs one round and is the one failure a model reliably fixes.
+// are real pages, ranked, about the half of the sentence that survived. [clip]
+// refuses to shorten an echoed argument for the same reason. A refusal naming
+// the field costs one round and is the one failure a model reliably fixes.
 const searchQueryMax = 400
 
 // KnowledgeSearcher is query-time search over the team knowledge base, as
 // this tool needs it.
 //
-// The two methods of [knowledge.Searcher] a search actually uses. Declared
+// The three methods of [knowledge.Searcher] a search actually uses. Declared
 // here rather than taking the seam's own interface so the tool can be
 // exercised with a stub, and so this package never grows a second opinion
 // about what a knowledge backend is.
+//
+// BUILDING IS REQUIRED, not asked for through an optional interface, so the
+// compiler holds every adapter between the engine's searcher and this tool to
+// forward it. An optional method is one an adapter drops with nothing failing,
+// and a seat behind such an adapter on a node still indexing is told the
+// company has written nothing down.
 type KnowledgeSearcher interface {
 	CanSearch(seat *org.Role, o *org.Organization) bool
+	Building(ctx context.Context) bool
 	Search(ctx context.Context, q knowledge.Query) []knowledge.Hit
 }
 
-// knowledgeBuilding is the optional half of a searcher that keeps an index of
-// its own: whether this node's index has yet to finish its first build.
+// partialKnowledgeNote closes an answer found while this node's index is still
+// on its first build.
 //
-// OPTIONAL, on the turn-start prefetch's terms: a live vendor search has no
-// index and nothing to report, so requiring it of every backend would be
-// implementations of "false". A searcher that does not have it is never
-// building.
-type knowledgeBuilding interface {
-	Building(ctx context.Context) bool
-}
+// A NON-EMPTY ANSWER IS NOT A WHOLE ONE THEN. Where the fleet divides a
+// search across its nodes, a node still building counts its own share of the
+// buckets missing and drops any page a peer ranked that its own index has no
+// row for yet — so what comes back is real and incomplete, and a seat reading
+// it as complete concludes a page it did not see does not exist. The
+// turn-start block says the same state in [prefetch.BuildingKnowledgeHint];
+// this is its sentence for an answer that did find something.
+const partialKnowledgeNote = "(this node is still indexing the knowledge " +
+	"base, so this answer may be missing pages that exist — before " +
+	"concluding a page does not exist, search again shortly or ask a " +
+	"colleague who would know)"
 
 // searchKnowledge searches the team knowledge base on demand.
 //
-// It replaces the engine's mid-turn re-fetch seam, which existed for one
-// case the three-phase turn could not otherwise serve: a trigger that was a
-// bare POINTER ("PR #42 got a comment") is unsearchable at turn start, so the
-// turn-start block was skipped and the engine re-ran the search between the
-// planning and acting phases, keyed on the plan the first had written. With
-// one phase deciding and acting there is nothing between them and nothing to
-// key on, and there no longer needs to be: the agent that just did the recon
-// knows what to search for, and asks.
+// It serves the trigger the turn-start block cannot: a bare POINTER ("PR #42
+// got a comment") is unsearchable at turn start, so that block skips its
+// search, and the agent that has since done the recon knows what to search
+// for, and asks.
 //
 // BEST EFFORT, like every other read of the seam: a backend that is slow,
 // unreachable or unconfigured yields an empty result and a sentence saying
@@ -84,11 +93,12 @@ type searchKnowledge struct {
 	// org answers which company is in scope when there is no turn to ask.
 	//
 	// A SEAT'S SEARCH IS ITS SEAT'S, and the turn carries both halves. An
-	// OPERATOR has no turn and no seat — they hold the company's own
-	// credential and read everything — so the org comes from the wiring
-	// and the seat is nil, which both searchers already read as "the
-	// company's own account rather than somebody's". Nil here means a
-	// caller that must bring a turn, which is every seat registry.
+	// OPERATOR has no turn and no seat, so the org comes from the wiring
+	// and the seat is nil, which each backend reads as the company's own
+	// account rather than somebody's: every page natively, and on
+	// Confluence the org credential, which searches only a declared
+	// `knowledge.scope`. Nil here means a caller that must bring a turn,
+	// which is every seat registry.
 	org func() *org.Organization
 }
 
@@ -98,15 +108,16 @@ func (t *searchKnowledge) Name() string { return SearchKnowledgeTool }
 
 func (t *searchKnowledge) Description() string {
 	return "Search your team's knowledge base — the shared docs, runbooks " +
-		"and conventions the company has written down. Returns ranked " +
-		"page titles with a one-line snippet each, so you can decide what " +
-		"to open; read a page in full with your knowledge-base MCP tools. " +
-		"Your prompt already carries what a search on the trigger found at " +
-		"turn start, so use this once you know what the task actually " +
-		"needs — above all when the trigger was a bare pointer (a webhook " +
-		"naming an item, a thread reply) and that block came back empty. " +
-		"For a procedure you distilled from your own turns, use `use_skill` " +
-		"instead: those are yours, not the team's."
+		"and conventions the company has written down. Returns the best " +
+		"matches, most relevant first: each page's title, its container, " +
+		"its page id and a one-line snippet, so you can decide what to " +
+		"open; read a page in full by passing its page id to your knowledge " +
+		"base's page-read tool. Your prompt already carries what a search " +
+		"on the trigger found at turn start, so use this once you know what " +
+		"the task actually needs — above all when the trigger was a bare " +
+		"pointer (a webhook naming an item, a thread reply) and that block " +
+		"came back empty. For a procedure you distilled from your own turns, " +
+		"use `use_skill` instead: those are yours, not the team's."
 }
 
 func (t *searchKnowledge) Parameters() map[string]any {
@@ -153,9 +164,9 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"weakly and nothing well.", len(query), searchQueryMax)), nil
 	}
 	// THE TURN'S ORG, or the wiring's where there is no turn — see
-	// [searchKnowledge.org]. Reading the turn unconditionally made this
-	// tool refuse every call on the operator surface, where it is
-	// registered and where there is never a turn to read.
+	// [searchKnowledge.org]. Reading only the turn would refuse every call
+	// on the operator surface, where this tool is registered and where
+	// there is never a turn to read.
 	var seat *org.Role
 	var company *org.Organization
 	switch {
@@ -179,7 +190,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 
 	hits := t.search.Search(ctx, knowledge.Query{
-		Text: query, Seat: seat, Org: company, Limit: searchHits,
+		Text: query, Seat: seat, Org: company, Limit: SearchKnowledgeHits,
 		// AUTO-DRAFTS HIDDEN, the same exclusion the turn-start prefetch
 		// applies. Those pages are unreviewed proposals a synthesis pass
 		// wrote; an agent cannot tell one from a ratified runbook, and
@@ -187,19 +198,24 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
-	if len(hits) == 0 {
-		// "NOT INDEXED YET" IS NOT "NOTHING MATCHED", and the two send a
-		// seat to opposite places: this answer invites different keywords,
-		// which on an index still on its first build find nothing either,
-		// and a seat that concludes nothing was written down acts on it by
-		// writing a page that already exists. So a node still building
-		// says so, in the turn-start block's own sentence — one text for
-		// both, because the seat reads both.
-		//
-		// ASKED ONLY ON AN EMPTY ANSWER, because that is the only answer
-		// it changes: a search that found something has found it whether
-		// or not this node's own index is still catching up.
-		if builder, ok := t.search.(knowledgeBuilding); ok && builder.Building(ctx) {
+	var bullets []string
+	for _, hit := range hits {
+		if bullet := prefetch.KnowledgeBullet(hit); bullet != "" {
+			bullets = append(bullets, bullet)
+		}
+	}
+	// ASKED AFTER THE SEARCH, WHATEVER IT FOUND. "Not indexed yet" is not
+	// "nothing matched", and the two send a seat to opposite places: the
+	// no-match answer invites different keywords, which on an index still
+	// on its first build find nothing either, and a seat that concludes
+	// nothing was written down acts on it by writing a page that already
+	// exists. A non-empty answer on such a node is real and incomplete —
+	// see [partialKnowledgeNote] — so it carries the caveat too.
+	building := t.search.Building(ctx)
+	if len(bullets) == 0 {
+		if building {
+			// THE TURN-START BLOCK'S OWN SENTENCE — one text for one
+			// state, because the seat reads both.
 			return tools.Result{Output: prefetch.BuildingKnowledgeHint}, nil
 		}
 		return tools.Result{Output: fmt.Sprintf(
@@ -208,37 +224,21 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d team documents match %q:\n", len(hits), clip(query))
-	for _, hit := range hits {
-		if line := renderHit(hit); line != "" {
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
+	// THE BEST MATCHES, NOT A COUNT OF WHAT MATCHED. The answer is the top
+	// of a ranking cut at [SearchKnowledgeHits], so "six documents match"
+	// would tell a seat the company has six pages on the subject when it
+	// may have sixty.
+	fmt.Fprintf(&b, "Best matches for %q, most relevant first:\n", clip(query))
+	for _, bullet := range bullets {
+		b.WriteString(bullet)
+		b.WriteString("\n")
+	}
+	if building {
+		b.WriteString("\n" + partialKnowledgeNote + "\n")
 	}
 	// THE POINTER IS THE POINT: these are titles and snippets, not the
 	// pages. A seat that acted on a snippet would be acting on the first
 	// two hundred characters of a runbook.
-	b.WriteString("\nTo read any of these in full, look it up by title with your " +
-		"knowledge-base tools.")
+	b.WriteString("\n" + prefetch.KnowledgeReadHint)
 	return tools.Result{Output: b.String()}, nil
-}
-
-// renderHit renders one page as a bullet.
-//
-// Falls back to the title alone where a page has no snippet — an empty page,
-// or one whose body is a table the extractor could not read — because the
-// title is still enough to decide whether to open it.
-func renderHit(hit knowledge.Hit) string {
-	title := strings.TrimSpace(hit.Title)
-	snippet := strings.Join(strings.Fields(hit.Snippet), " ")
-	switch {
-	case title == "" && snippet == "":
-		return ""
-	case title == "":
-		title = "(untitled)"
-	}
-	if snippet == "" {
-		return "- **" + title + "**"
-	}
-	return "- **" + title + "**: " + snippet
 }

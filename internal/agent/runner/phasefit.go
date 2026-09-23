@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -35,26 +36,29 @@ import (
 //     it — the bytes the event store would have held — cut into consecutive
 //     ranges of [phasePartBytes], each published as an agent_phase_record_part
 //     under an id derived from the record's own ([types.PhaseRecordPartID]).
-//     A part refused as too large is split in two and each half published,
-//     down to [phasePartFloor]; the parts carry their offsets, so parts of
-//     mixed sizes reassemble. First, so a record that names its whole names
-//     parts that are already durable.
+//     A part refused as too large is retried at half its size, or at
+//     [phasePartFloor] when half would be smaller, and the parts after it go
+//     at that size; the parts carry their offsets, so parts of mixed sizes
+//     reassemble. First, so a record that names its whole names parts that
+//     are already durable.
 //   - THE RECORD, in the largest form the transport accepts. First its longest
 //     texts cut to a common level — the tool results, because they are what a
 //     record's size is made of, then the tool arguments, then the prose and
-//     the prompts, and the phase's own error LAST, in a tier of its own,
-//     because it is what says why a failed phase failed: it is cut only when
-//     cutting everything else to its mark cannot make the room — each cut
-//     text ending in "…" and, on a tool call or a round, with its whole
-//     length beside it as `<field>_bytes`. Failing that, the LEAST form:
-//     every text, the error included, reduced to its mark. Failing that, the
-//     least form carrying its first rows, tool calls given up before rounds,
-//     and counting the rest in tool_executions_omitted and
-//     round_narration_omitted. Every form carries the scalars whole — the
-//     tokens, the cost, the model, the decision, the phase, the iteration, the
-//     host phase — so the spend totals never lose a phase that published
-//     anything. The record names its whole with whole_bytes and whole_parts,
-//     and its notes say what was cut and where the whole is.
+//     the prompts — each cut text ending in "…" and, on a tool call or a
+//     round, with its whole length beside it as `<field>_bytes`. A text no
+//     longer than that mark is never cut: the mark would weigh what the text
+//     does and say less. Failing that, the LEAST form: every one of those
+//     texts longer than its mark reduced to it, and every row carried.
+//     Failing that, the least form carrying its first rows, tool calls given
+//     up before rounds, and counting the rest in tool_executions_omitted and
+//     round_narration_omitted. THE PHASE'S OWN ERROR IS WHOLE IN EVERY ONE OF
+//     THOSE FORMS, because it is what says why a failed phase failed: it is
+//     cut — on a character boundary, ending in "…" — only in a form with no
+//     row left that is still too large. Every form carries the scalars whole
+//     — the tokens, the cost, the model, the decision, the phase, the
+//     iteration, the host phase — so the spend totals never lose a phase that
+//     published anything. The record names its whole with whole_bytes and
+//     whole_parts, and its notes say what was cut and where the whole is.
 //
 // WHERE THE WHOLE IS: in its parts, under the record's own event id, in the
 // event store of the node that published them, for as long as that store
@@ -69,20 +73,21 @@ import (
 // larger than [phaseRecordCeiling] — means the server this node reached
 // accepts less than the contract says every connection carries, and the
 // Publisher contract does not say how much less: nothing above the queue may
-// ask which backend is running. So nothing is guessed. A refused part is split
-// in two, down to [phasePartFloor]. The record's walk starts below the
-// SMALLEST MESSAGE ALREADY REFUSED, parts included — a server that refused a
-// part of some size refuses a record of that size too, since both are measured
-// as the publisher encodes them — and halves its target on each refusal within
-// the ceiling (see [nextTarget]). It is logged once per record at ERROR,
-// naming max_payload.
+// ask which backend is running. So nothing is guessed. A refused part is
+// retried at half its size, down to [phasePartFloor]. The record's walk starts
+// below the SMALLEST MESSAGE ALREADY REFUSED, parts included — a server that
+// refused a part of some size refuses a record of that size too, since both
+// are measured as the publisher encodes them — and halves its target on each
+// refusal within the ceiling (see [nextTarget]). It is logged once per record
+// at ERROR, naming max_payload.
 //
 // THE ONE FLOOR: when the transport refuses the smallest form this record has
-// — every text at its mark and every row counted rather than carried — no
-// record of the phase is published, and phase_record_not_published is logged
-// at ERROR. Its parts, if they all landed, still hold it whole, and
-// PhaseRecordWhole answers from them alone; but with no agent_phase_completed
-// row its tokens and cost are missing from every spend total.
+// — every text at its mark, the error included, and every row counted rather
+// than carried — no record of the phase is published, and
+// phase_record_not_published is logged at ERROR. Its parts, if they all
+// landed, still hold it whole, and PhaseRecordWhole answers from them alone;
+// but with no agent_phase_completed row its tokens and cost are missing from
+// every spend total.
 //
 // WHAT PARTS COST: the whole's bytes again, and then a third more for base64.
 // On the CREWLET_EVENTS stream, which keeps by age (Tier A's
@@ -109,13 +114,6 @@ import (
 // reconnect, and there a record within this ceiling is refused — see
 // [nextTarget].
 const phaseRecordCeiling = queue.MaxPayloadBytes
-
-// phaseCutOverhead is what one text's first cut can add back to the record:
-// the "…" that marks it and the `<field>_bytes` entry that says how long it
-// was — a key, a colon, up to twenty digits and a comma, well under this. It
-// is charged per text when choosing the level, so one choice fits the record
-// rather than a cut that its own marks push back over the target.
-const phaseCutOverhead = 64
 
 // phasePartReserve is how much of one event a part leaves for everything but
 // its data: the envelope's id, time and trace, the record's id, its index, its
@@ -157,10 +155,12 @@ const (
 	phaseWhole phaseForm = "whole"
 	// phaseFitted: its longest texts were cut to a common level.
 	phaseFitted phaseForm = "fitted"
-	// phaseLeast: every text was reduced to its mark, every row carried.
+	// phaseLeast: every text but the error was reduced to its mark, every
+	// row carried.
 	phaseLeast phaseForm = "least"
-	// phaseRowsOmitted: every text at its mark, and only its first rows
-	// carried.
+	// phaseRowsOmitted: every text but the error at its mark, and only its
+	// first rows carried — with none carried, the error cut too when the
+	// record was still too large.
 	phaseRowsOmitted phaseForm = "rows_omitted"
 )
 
@@ -333,7 +333,8 @@ func (e emitter) publishCut(ctx context.Context, cut *phaseCutter, refusal error
 				"record_bytes", cut.whole, "refused_bytes", refused, "whole_parts", cut.kept.parts,
 				"error", last.Error(),
 				"detail", "the transport refused even the smallest form of this phase record — "+
-					"every text reduced to its mark, every row counted rather than carried — so "+
+					"every text reduced to its mark, the error included, and every row counted "+
+					"rather than carried — so "+
 					"the event store has no record of the phase and every spend total is missing "+
 					"its tokens and cost; "+cut.wholeWhere())
 			return phaseAccount{Err: last}, within
@@ -397,9 +398,10 @@ func (e emitter) reportWithinCeiling(ctx context.Context, cut *phaseCutter, reco
 		"ceiling_bytes", phaseRecordCeiling,
 		"detail", "the NATS server this node is connected to refused a message the contract "+
 			"says it carries: set max_payload to at least the ceiling on every server of the "+
-			"cluster. Each refused part of the record's whole was split in two, down to the "+
-			"floor, and from the first refusal within the ceiling, of a part or of the record, "+
-			"the record was cut to half the smallest message refused so far; "+
+			"cluster. Each refused part of the record's whole was retried at half its size, or "+
+			"at the floor when half would be smaller, and from the first refusal within the "+
+			"ceiling, of a part or of the record, the record was cut to half the smallest "+
+			"message refused so far, halving again on each further refusal; "+
 			"phase_record_fitted or phase_record_not_published says what the record came to, "+
 			"and phase_record_whole_not_kept is logged when its whole was not kept")
 }
@@ -439,8 +441,15 @@ type phaseShape struct {
 // shapeBelow is the largest form of the record the transport may still accept,
 // given that it refused one of `refused` bytes: a form fitted to target when
 // one fits, otherwise the least form, otherwise the least form carrying the
-// first rows that fit target. False when even the smallest form weighs at
+// first rows that fit target — and, with no row left, its error cut to fit
+// ([phaseCutter.rowsFitting]). False when even the smallest form weighs at
 // least what was refused.
+//
+// THE LEAST FORM IS THE BOUND BETWEEN THE FIT AND THE ROWS: the smallest form
+// that carries every row, since the fit never cuts the error and cuts every
+// other text no further than its mark. So a target it fits is answered by a
+// fit, and one it does not is answered by giving up rows before the error is
+// touched.
 func (c *phaseCutter) shapeBelow(target, refused int) (phaseShape, bool, error) {
 	least, err := c.leastForm()
 	if err != nil {
@@ -506,7 +515,8 @@ func measure(env *events.Event) (int, error) {
 }
 
 // fitted cuts the longest texts on a copy of the record, tier by tier, to the
-// highest common level at which the envelope fits target.
+// highest common level at which the envelope fits target. The error is not
+// among them: every form that carries a row carries it whole.
 //
 // THE NOTE IS MEASURED WITH THE CUTS, never added after them. It is part of
 // the record, and the level is the highest one that sheds the excess, so a
@@ -525,18 +535,26 @@ func (c *phaseCutter) fitted(target int) (phaseShape, error) {
 	if err := remeasure(); err != nil {
 		return shape, err
 	}
-	for _, tier := range phaseRecordTiers(rec) {
+	return shape, fitTiers(&shape, phaseRecordTiers(rec), target, remeasure)
+}
+
+// fitTiers cuts the texts of each tier in turn to the highest common level at
+// which shape fits target, remeasuring it after every level, and stops as soon
+// as it fits or the last tier has nothing left to shed.
+//
+// A CUT THAT DOES NOT SHORTEN THE RECORD IS NO CUT ([textSlot.shortens]): a
+// text under the level stays whole, and so does one no longer than the mark
+// its cut would put in its place.
+func fitTiers(shape *phaseShape, tiers [][]*textSlot, target int, remeasure func() error) error {
+	for _, tier := range tiers {
 		for shape.bytes > target {
 			level, ok := waterLevel(tier, shape.bytes-target)
 			if !ok {
 				break
 			}
 			for _, slot := range tier {
-				// A cut that would not SHORTEN the text is no cut: a text
-				// under the level stays whole, and so does one no longer
-				// than the mark a cut would put in its place.
 				short := textcut.Within(slot.text, level)
-				if len(short) >= len(slot.text) {
+				if !slot.shortens(short) {
 					continue
 				}
 				if !slot.cut {
@@ -546,18 +564,18 @@ func (c *phaseCutter) fitted(target int) (phaseShape, error) {
 				slot.text, slot.cut = short, true
 			}
 			if err := remeasure(); err != nil {
-				return shape, err
+				return err
 			}
 		}
 		if shape.bytes <= target {
-			break
+			return nil
 		}
 	}
-	return shape, nil
+	return nil
 }
 
-// leastForm is the record with every text reduced to its mark and every row
-// carried: made once, since it does not depend on any target.
+// leastForm is the record with every text but the error reduced to its mark
+// and every row carried: made once, since it does not depend on any target.
 func (c *phaseCutter) leastForm() (phaseShape, error) {
 	if c.least != nil {
 		return *c.least, nil
@@ -567,11 +585,11 @@ func (c *phaseCutter) leastForm() (phaseShape, error) {
 	for _, tier := range phaseRecordTiers(rec) {
 		for _, slot := range tier {
 			// The fit's own cut at a level of nothing, so this is exactly
-			// where every fit ends at worst. A text no longer than the mark
-			// is left whole: the mark in its place would claim a cut of
-			// nothing.
+			// where every fit ends at worst. A text no longer than its mark
+			// is left whole: the mark in its place would claim a cut while
+			// the record grew.
 			mark := textcut.Within(slot.text, 0)
-			if len(mark) >= len(slot.text) {
+			if !slot.shortens(mark) {
 				continue
 			}
 			slot.set(mark, len(slot.text))
@@ -590,8 +608,13 @@ func (c *phaseCutter) leastForm() (phaseShape, error) {
 // rowsFitting is the least form carrying the FIRST rows of each list that fit
 // target and counting the rest — the tool calls given up first, from the end,
 // because they are the bulk of a record, and the rounds only once no call is
-// left. With no row left it is the smallest form the record has, whatever it
-// weighs, and its size says whether that fits.
+// left.
+//
+// THE ERROR ONLY THEN. With no row left and the record still over target, the
+// phase's error is cut to fit, the last text any form cuts: rune-safe, ending
+// in "…" like every other cut, and counted among the texts the note says were
+// shortened. Cut to its mark it is the smallest form the record has, whatever
+// that weighs, and its size says whether it fits.
 func (c *phaseCutter) rowsFitting(target int) (phaseShape, error) {
 	least, err := c.leastForm()
 	if err != nil {
@@ -606,7 +629,7 @@ func (c *phaseCutter) rowsFitting(target int) (phaseShape, error) {
 	carry := func(k, m int) (int, error) {
 		rec.ToolExecutions, rec.RoundNarration = calls[:k], rounds[:m]
 		rec.ToolExecutionsOmitted, rec.RoundNarrationOmitted = len(calls)-k, len(rounds)-m
-		rec.Notes = joinNotes(c.original.Notes, c.note(least.texts, len(calls)-k, len(rounds)-m))
+		rec.Notes = joinNotes(c.original.Notes, c.note(shape.texts, len(calls)-k, len(rounds)-m))
 		return measure(&env)
 	}
 	k, err := mostThatFit(len(calls), target, func(k int) (int, error) { return carry(k, len(rounds)) })
@@ -625,7 +648,16 @@ func (c *phaseCutter) rowsFitting(target int) (phaseShape, error) {
 		return shape, err
 	}
 	shape.calls, shape.rounds = len(calls)-k, len(rounds)-m
-	return shape, nil
+	// Over target only with no row left: any row carried was carried
+	// because the form fit with it.
+	if shape.bytes <= target {
+		return shape, nil
+	}
+	failure := []*textSlot{{text: rec.Error, set: func(cut string, _ int) { rec.Error = cut }}}
+	return shape, fitTiers(&shape, [][]*textSlot{failure}, target, func() (err error) {
+		shape.bytes, err = carry(0, 0)
+		return err
+	})
 }
 
 // mostThatFit is the largest n in [0, most] whose size fits target, or -1 when
@@ -680,41 +712,67 @@ type textSlot struct {
 	// recording it and every later one leaving it alone.
 	set func(cut string, whole int)
 	cut bool
+	// mark is what the slot's FIRST cut writes beside the text it leaves, in
+	// encoded bytes: the `<field>_bytes` entry a tool call's or a round's text
+	// gets, and nothing for a text that gets none.
+	mark int
 }
+
+// adds is what cutting the slot now writes beside the text it leaves: its
+// mark on the first cut, and nothing once the mark is there.
+func (s *textSlot) adds() int {
+	if s.cut {
+		return 0
+	}
+	return s.mark
+}
+
+// shortens reports whether putting short in the slot's place, with what the
+// cut adds beside it, leaves the record shorter.
+//
+// IN THE TEXTS' OWN BYTES, which the encoder never writes shorter: every byte
+// of a text encodes to at least one, and the "…" a cut ends in to exactly its
+// three. So a cut this says shortens the record does, by at least what it
+// counts.
+func (s *textSlot) shortens(short string) bool {
+	return len(short)+s.adds() < len(s.text)
+}
+
+// room is how much of the slot's length a cut can take: its length less what
+// the cut adds beside it.
+func (s *textSlot) room() int { return len(s.text) - s.adds() }
 
 // waterLevel is the length to cut a tier's texts to so that, together, they
 // shed at least excess bytes and every text at or under it is left whole. It
-// reports false when the tier has nothing left to shed.
+// reports false when the tier has nothing left to shed — no text a cut to its
+// mark would shorten.
 //
-// The classic water level over the texts' lengths, longest first: cutting the
-// k longest to one level L sheds their total minus k·L, less what their marks
-// add back ([phaseCutOverhead] for each text cut for the first time). The
-// answer is the HIGHEST level that sheds enough, which is the one that leaves
-// the most of every text; when no level sheds enough the tier is cut to
-// nothing but its marks, and the next tier is asked for the rest.
+// The classic water level over the texts' ROOM, most first: cutting the k
+// with the most to one level L sheds their room minus k·L, the room being a
+// text's length less the `<field>_bytes` entry its first cut adds. The answer
+// is the HIGHEST level that sheds enough, which is the one that leaves the
+// most of every text; when no level sheds enough the tier is cut to nothing
+// but its marks, and the next tier is asked for the rest.
 func waterLevel(tier []*textSlot, excess int) (int, bool) {
-	lengths := make([]*textSlot, 0, len(tier))
+	rooms := make([]int, 0, len(tier))
 	for _, slot := range tier {
-		if len(slot.text) > len("…") {
-			lengths = append(lengths, slot)
+		if slot.shortens(textcut.Within(slot.text, 0)) {
+			rooms = append(rooms, slot.room())
 		}
 	}
-	if len(lengths) == 0 {
+	if len(rooms) == 0 {
 		return 0, false
 	}
-	slices.SortFunc(lengths, func(a, b *textSlot) int { return cmp.Compare(len(b.text), len(a.text)) })
-	total, marks := 0, 0
-	for k, slot := range lengths {
-		total += len(slot.text)
-		if !slot.cut {
-			marks += phaseCutOverhead
-		}
+	slices.SortFunc(rooms, func(a, b int) int { return cmp.Compare(b, a) })
+	total := 0
+	for k, room := range rooms {
+		total += room
 		floor := 0
-		if k+1 < len(lengths) {
-			floor = len(lengths[k+1].text)
+		if k+1 < len(rooms) {
+			floor = rooms[k+1]
 		}
-		// Cutting these k+1 texts to level L sheds total-(k+1)·L-marks.
-		level := (total - marks - excess) / (k + 1)
+		// Cutting these k+1 texts to level L sheds total-(k+1)·L.
+		level := (total - excess) / (k + 1)
 		if level >= floor {
 			return level, true
 		}
@@ -725,12 +783,12 @@ func waterLevel(tier []*textSlot, excess int) (int, bool) {
 // phaseRecordTiers are the texts on a phase record the fit may cut, in the
 // order it cuts them.
 //
-// THE PHASE'S OWN ERROR IS THE LAST TIER, alone. It is what says why a failed
-// phase failed, so it is cut only once every other text is at its mark and the
-// record still does not fit. Nothing bounds it before this: its text is
-// whatever the failing provider, tool or decoder wrote. Whatever the cut
-// leaves off is in the record's whole, which carries the error as the phase
-// returned it.
+// THE PHASE'S OWN ERROR IS NOT AMONG THEM. It is what says why a failed phase
+// failed, so every form that carries a row carries it whole, and only a form
+// with no row left cuts it ([phaseCutter.rowsFitting]). Nothing bounds it
+// before that: its text is whatever the failing provider, tool or decoder
+// wrote, and what a cut leaves off is in the record's whole, which carries the
+// error as the phase returned it, when that whole is kept.
 func phaseRecordTiers(rec *types.AgentPhaseCompleted) [][]*textSlot {
 	var results, arguments, prose []*textSlot
 	for _, row := range rec.ToolExecutions {
@@ -747,8 +805,7 @@ func phaseRecordTiers(rec *types.AgentPhaseCompleted) [][]*textSlot {
 		&textSlot{text: rec.SystemPrompt, set: func(cut string, _ int) { rec.SystemPrompt = cut }},
 		&textSlot{text: rec.UserPrompt, set: func(cut string, _ int) { rec.UserPrompt = cut }},
 	)
-	failure := []*textSlot{{text: rec.Error, set: func(cut string, _ int) { rec.Error = cut }}}
-	return [][]*textSlot{results, arguments, prose, failure}
+	return [][]*textSlot{results, arguments, prose}
 }
 
 // appendRowSlot adds a row's text field as a slot, marking its first cut with
@@ -758,7 +815,13 @@ func appendRowSlot(slots []*textSlot, row map[string]any, key string) []*textSlo
 	if !ok || text == "" {
 		return slots
 	}
-	return append(slots, &textSlot{text: text, set: func(cut string, whole int) {
+	mark := 0
+	if _, marked := row[key+"_bytes"]; !marked {
+		// `,"<key>_bytes":<digits>` — the row already holds this text's own
+		// key, so the entry comes with exactly one comma.
+		mark = len(`,"`+key+`_bytes":`) + len(strconv.Itoa(len(text)))
+	}
+	return append(slots, &textSlot{text: text, mark: mark, set: func(cut string, whole int) {
 		row[key] = cut
 		if _, marked := row[key+"_bytes"]; !marked {
 			row[key+"_bytes"] = whole

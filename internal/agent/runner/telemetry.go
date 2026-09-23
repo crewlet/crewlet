@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -424,6 +425,8 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 	if !e.on() {
 		return
 	}
+	calls, earlierCalls := liveExecutions(res.Executions)
+	narration, earlierRounds := liveNarration(res.Narration)
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
@@ -435,17 +438,16 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		Trigger:   e.turn.Trigger,
 		// NO PROMPT. It is sent once, on the opening frame, and the live
 		// projection carries it forward from there — exactly as it already
-		// carries the trigger.
+		// carries the trigger. It is the one thing on this event that never
+		// changes over a phase, and a seat with a 30 KB system prompt would
+		// republish the whole of it with every frame.
 		//
-		// It was the largest thing on this event by a wide margin and the
-		// one thing on it that never changes: a seat with a 30 KB system
-		// prompt republished the whole of it five times a second, for the
-		// length of every phase, to every open dashboard. Past
+		// EVERYTHING ELSE HERE IS BOUNDED, because past
 		// [queue.MaxPayloadBytes] the publish is refused outright, this
-		// publisher logs and moves on, and the live row simply stops for
-		// the rest of the phase with nothing on screen to say why — which
-		// is likeliest at the tail of exactly the long phases somebody is
-		// watching.
+		// publisher logs and moves on, and the live row stops for the rest
+		// of the phase with nothing on screen to say why — likeliest at the
+		// tail of exactly the long phases somebody is watching. See
+		// [liveWindow] for what the bounds add up to.
 		Response:     tail(res.Text),
 		InputTokens:  res.InputTokens,
 		OutputTokens: res.OutputTokens,
@@ -453,10 +455,12 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		// RoundsUsed is 1-based and RoundNum is 0-based; see the sentinel
 		// above. Subtracting rather than counting separately keeps the two
 		// from ever disagreeing about which round this is.
-		RoundNum:       res.RoundsUsed - 1,
-		ToolExecutions: liveExecutions(res.Executions),
-		RoundNarration: roundNarration(res.Narration),
-		PartialRound:   partialRound(res.Partial),
+		RoundNum:              res.RoundsUsed - 1,
+		ToolExecutions:        calls,
+		ToolExecutionsEarlier: earlierCalls,
+		RoundNarration:        narration,
+		RoundNarrationEarlier: earlierRounds,
+		PartialRound:          partialRound(res.Partial),
 	}, e.traceFor(ctx)))
 }
 
@@ -681,11 +685,12 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          res.Failed(),
 		// A CHILD'S failure text, WHOLE, however long whatever failed made
-		// it. A record too large for one event is fit by publishPhase, and
-		// the error is the last text that fit cuts (phaseRecordTiers), only
-		// once every other text is at its mark; the record's whole, this
-		// text included, goes out first as parts, which hold it when every
-		// one of them lands.
+		// it. A record too large for one event is cut by publishPhase, and
+		// the error is the last text any of its forms cuts: only once every
+		// other text is at its mark and every row is given up
+		// (phaseCutter.rowsFitting). The record's whole, this text
+		// included, goes out first as parts, which hold it when every one
+		// of them lands.
 		Error:     res.Error,
 		ErrorKind: string(res.Status),
 	}
@@ -762,8 +767,9 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	}
 	if rec.Err != nil {
 		// WHOLE, as the worker's error above is and for the same reason:
-		// a record too large for one event is fit by publishPhase, which
-		// cuts the error last and publishes the whole record first as parts.
+		// a record too large for one event is cut by publishPhase, which
+		// cuts the error last of all, once every row is given up, and
+		// publishes the whole record first as parts.
 		ev.Error = rec.Err.Error()
 		ev.ErrorKind = classifyError(rec.Err)
 	}
@@ -871,6 +877,10 @@ func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
 // `omitempty` drops the key entirely: a consumer reads "absent" as "no round
 // is open", and an empty object would read as "a round is open and has said
 // nothing", which is a different fact.
+//
+// The attempts a provider gave up on partway through ride along, each cut to
+// its tail like the round itself: one for each member of the provider chain,
+// or each credential rotated to, that abandoned a stream in this round.
 func partialRound(p *toolloop.Partial) map[string]any {
 	if p == nil {
 		return nil
@@ -881,28 +891,65 @@ func partialRound(p *toolloop.Partial) map[string]any {
 		"content":   tail(p.Content),
 	}
 	if len(p.Abandoned) > 0 {
-		out["abandoned"] = roundNarration(p.Abandoned)
+		out["abandoned"] = tailedNarration(p.Abandoned)
 	}
 	return out
 }
 
-// liveExecutions is the round's tool calls with their OUTPUT bounded.
+// liveWindow bounds how many of a phase's calls, and how many of its narrated
+// rounds, one live frame carries: the LATEST of each, with how many come
+// before them counted on the frame ([types.AgentTurnProgress]'s
+// ToolExecutionsEarlier and RoundNarrationEarlier).
 //
-// Only on the live event, which is republished five times a second for the
-// length of the phase. A tool result is routinely the largest thing on the
-// frame — a knowledge search, a file read — and it is already final: the
-// reader opens it on the completed record, which carries it whole. A record
-// too large for one event is published cut, and then the result is whole in
-// the record's parts, under the record's id, when every part landed; when
-// one did not, the record's notes say its whole was not kept, and the rest of
-// the result is kept nowhere.
+// A WINDOW, because a frame is republished several times a second for the
+// length of the phase and a phase has no bound of its own on either list: a
+// round makes as many calls as the model asks for in it, and the round budget
+// is an operator's setting. Carrying every one, a long phase's frame grows past
+// [queue.MaxPayloadBytes], every frame after that is refused, and the live
+// row freezes for the rest of the phase. The earlier calls and rounds are on
+// the phase's completed record, whole — or, on a record published cut, in
+// the whole GET /phases/{id} reassembles from its parts, unless a part could
+// not be published, which the record's notes then say.
 //
-// The arguments are NOT bounded. They are what a reader scans a running phase
-// for ("which file is it reading now?"), and cutting JSON in the middle
-// produces something no consumer can parse.
-func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
-	out := toolExecutions(execs)
+// FORTY-EIGHT: the executor's default round ceiling
+// (turn_engine.execute_max_tool_rounds_ceiling), so an executor phase within
+// its default budget has every narrated round on the frame. And small enough
+// that a frame holding both windows full — every text it bounds at its bound,
+// in a character JSON writes six bytes for, and every call a failure carrying
+// its output twice — measures about 5 MiB of the 8 MiB the transport carries
+// (TestALiveFrameAtEveryBoundStaysUnderTheCeiling).
+const liveWindow = 48
+
+// liveArgsBytes bounds the arguments one call on a live frame carries whole:
+// the budget every other text on the frame gets ([partialTail]). Arguments are
+// what a reader scans a running phase for — which file, which query — and
+// cutting JSON in the middle produces text no consumer can parse, so longer
+// ones are replaced whole by [liveArgsMarker] rather than cut.
+const liveArgsBytes = partialTail
+
+// liveArgsMarker is what a live frame carries in place of arguments longer
+// than [liveArgsBytes]: a one-member JSON object, keyed "…" like every marker
+// that stands for arguments, saying how long they are and where they are
+// whole. Still JSON, so every consumer that parses arguments shows it.
+func liveArgsMarker(bytes int) string {
+	return `{"…":"` + strconv.Itoa(bytes) + ` bytes of arguments, whole on this phase's ` +
+		`completed record (GET /phases/{id} when that record is published cut)"}`
+}
+
+// liveExecutions is the latest [liveWindow] of a phase's calls as a live frame
+// carries them, and how many calls come before them.
+//
+// Each call's OUTPUT is cut to its tail: a tool result is routinely the
+// largest thing on a frame — a knowledge search, a file read — and it is
+// already final, so the reader opens it on the completed record. Arguments
+// past [liveArgsBytes] are replaced by [liveArgsMarker].
+func liveExecutions(execs []toolloop.Execution) ([]types.ToolExecution, int) {
+	earlier := max(0, len(execs)-liveWindow)
+	out := toolExecutions(execs[earlier:])
 	for _, row := range out {
+		if args, ok := row["arguments"].(string); ok && len(args) > liveArgsBytes {
+			row["arguments"] = liveArgsMarker(len(args))
+		}
 		if result, ok := row["result"].(string); ok {
 			row["result"] = tail(result)
 		}
@@ -910,29 +957,49 @@ func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			row["error"] = tail(failure)
 		}
 	}
+	return out, earlier
+}
+
+// liveNarration is the latest [liveWindow] of a phase's narrated rounds as a
+// live frame carries them, each text cut to its tail, and how many narrated
+// rounds come before them.
+func liveNarration(narr []toolloop.Narration) ([]types.RoundNarration, int) {
+	earlier := max(0, len(narr)-liveWindow)
+	return tailedNarration(narr[earlier:]), earlier
+}
+
+// tailedNarration is [roundNarration] with every text cut to its tail.
+func tailedNarration(narr []toolloop.Narration) []types.RoundNarration {
+	out := roundNarration(narr)
+	for _, row := range out {
+		for _, key := range []string{"reasoning", "content"} {
+			if text, ok := row[key].(string); ok {
+				row[key] = tail(text)
+			}
+		}
+	}
 	return out
 }
 
-// partialTail bounds, in BYTES, how much of a round in flight goes on the
-// wire.
+// partialTail bounds, in BYTES, how much of any one text a live frame carries:
+// the round in flight, a committed round's narration, a call's result.
 //
-// The whole accumulated text is republished five times a second — deltas
-// cannot be sent instead, because the socket hub drops the OLDEST frame when a
-// client falls behind and a consumer that had missed one would splice the
-// remaining fragments into nonsense. Republishing the accumulation is
-// therefore the correct shape for a lossy channel, and it is also quadratic in
-// the length of the round.
+// The whole accumulated text of a round in flight is republished five times a
+// second — deltas cannot be sent instead, because the socket hub drops the
+// OLDEST frame when a client falls behind and a consumer that had missed one
+// would splice the remaining fragments into nonsense. Republishing the
+// accumulation is therefore the correct shape for a lossy channel, and it is
+// also quadratic in the length of the round.
 //
 // The tail is what a reader is actually watching — text appears at the END —
-// and once the round commits its text is carried whole in the round narration
-// of every frame after it, and kept on the phase's completed record: whole
-// there, or, on a record too large for one event, whole in its parts when
-// every part landed — when one did not, the record's notes say its whole was
-// not kept. At four thousand bytes, each field this cuts adds at most that
-// much (plus the three-byte marker) to a frame, however long the round runs.
-// Bytes rather than characters because that cost is what the bound is for, so
-// a round written in a script whose characters take three bytes each shows a
-// third as many of them.
+// and every text is kept on the phase's completed record: whole there, or, on
+// a record too large for one event, whole in its parts when every part landed
+// — when one did not, the record's notes say its whole was not kept. At four
+// thousand bytes, each field this cuts adds at most that much (plus the
+// three-byte marker) to a frame, however long the text runs. Bytes rather than
+// characters because that cost is what the bound is for, so a text written in
+// a script whose characters take three bytes each shows a third as many of
+// them.
 const partialTail = 4000
 
 // tail is the last [partialTail] bytes of text, with a leading "…" when it

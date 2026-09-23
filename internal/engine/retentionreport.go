@@ -260,19 +260,33 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		if running == nil {
 			continue
 		}
+		// THE WORST OF THE DOMAINS throughout, because the reading
+		// describes one NODE: a two-domain node whose second applier is
+		// wedged is a node that is behind, and averaging would hide it.
+		//
+		// THE TWO SERIES FIRST, and whatever the health read below says,
+		// because each is how long a state has held — observed on the
+		// position heartbeat, since no single read can say it — and the
+		// floor's is exactly the state in which the health read fails.
+		// Both are the real age, so each alarm fires at the grace it names
+		// and not at a stand-in pinned to the grace itself, which a
+		// strictly-past comparison never passes.
+		if held := running.progress.deferredSinceValue(); held.Held && !held.Since.IsZero() {
+			out.DeferredAge = max(out.DeferredAge, now.Sub(held.Since))
+		}
+		if lost, unreadable := running.floor.unreadableFor(now); unreadable {
+			out.FloorUnknownFor = max(out.FloorUnknownFor, lost)
+		}
 		health, err := r.state.health(ctx, running)
 		if err != nil {
 			continue
 		}
-		// THE WORST OF THE DOMAINS, because the reading describes one
-		// NODE: a two-domain node whose second applier is wedged is a
-		// node that is behind, and averaging would hide it.
-		out.ApplyLag = max(out.ApplyLag, applyLagOf(health, running.runner.Drain()))
-		if health.Deferred > 0 {
-			out.DeferredAge = max(out.DeferredAge, statelog.DeferralGrace)
-		}
-		if health.TrimFloor == nil {
-			out.FloorUnknownFor = max(out.FloorUnknownFor, statelog.FloorCacheStale)
+		// An age that could not be read contributes nothing, which every
+		// condition reads as "nothing to report" — the same view the
+		// gauge takes.
+		age, err := r.state.applyAge(ctx, running, health, now)
+		if err == nil {
+			out.ApplyLag = max(out.ApplyLag, age)
 		}
 	}
 	out.SemanticCoverage = r.semanticCoverage(ctx, now)
@@ -308,25 +322,6 @@ func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelo
 			out.MaintenanceOpenFor, out.MaintenancePhase = since, string(op.Phase)
 		}
 	}
-}
-
-// applyLagOf converts a health's record backlog into the time the alarm table
-// is written in, at drain records a second.
-//
-// AT THE MEASURED DRAIN, so the number an alarm fires on is a duration rather
-// than a count: "this node is 4m12s behind" is actionable and "this node is
-// 500 000 records behind" is a number an operator has to divide.
-//
-// DIVIDED AS A FLOAT, because the drain is one: a rate of 1.5 records a second
-// truncated to a whole one before the division reads the backlog half as long
-// again as it is. The rate is floored at [statelog.DrainFloor], which is also
-// what an unmeasured drain — zero — reads as.
-func applyLagOf(health statelog.Health, drain float64) time.Duration {
-	if health.Lag == nil || *health.Lag == 0 {
-		return 0
-	}
-	seconds := float64(*health.Lag) / max(drain, statelog.DrainFloor)
-	return time.Duration(seconds * float64(time.Second))
 }
 
 // observed fills the fields that come from this process's own recorder.
@@ -421,11 +416,11 @@ func quantileDuration(s metrics.Snapshot, q float64) time.Duration {
 // refusalIsOrdinaryLag reports whether a refusal series is one a caller only
 // has to wait out.
 //
-// FROM THE CODE'S OWN CLASSIFICATION rather than from a list written here: the
-// alarm exists to separate a fault from a wait, and a second list of which
-// codes are waits is a second answer that drifts from the first. The names
-// come off the series' own attribute, which is what the recorder wrote.
+// FROM THE CODE'S OWN CLASSIFICATION ([statelog.ReadRefusal.OrdinaryLag])
+// rather than from a list written here: the alarm exists to separate a fault
+// from a wait, and its remedy names the waits from that same method, so a
+// second list here would be a second answer that drifts from the first. The
+// names come off the series' own attribute, which is what the recorder wrote.
 func refusalIsOrdinaryLag(s metrics.Snapshot) bool {
-	code := statelog.ReadRefusal(s.Attrs["code"])
-	return code == statelog.RefuseBehind || code == statelog.RefuseTooStale
+	return statelog.ReadRefusal(s.Attrs["code"]).OrdinaryLag()
 }

@@ -477,8 +477,7 @@ func (s *CoordStore) record(ctx context.Context, run PendingRun, call BridgeCall
 		// answers that, and dropping the call would leave a gap in the one
 		// log a resume reads with nothing to say it is there. So its whole
 		// goes to parts split small enough for that server, and its record
-		// is its LEAST form — its name and outcome, both texts replaced by
-		// their marks, a few hundred bytes.
+		// is its LEAST form ([leastBridgeCall]).
 		refused = true
 		s.refusedWithinCeiling(ctx, run, call, len(whole), err)
 	}
@@ -486,27 +485,29 @@ func (s *CoordStore) record(ctx context.Context, run PendingRun, call BridgeCall
 }
 
 // refusedWithinCeiling says that the server refused a record the contract's
-// ceiling admits, and what the node files in its place.
+// ceiling admits, and what to change.
 //
 // LOGGED AS IT HAPPENS, whatever becomes of the call afterwards: the refusal is
 // a fact about a server's setting that an operator has to change either way,
 // and a line that waited for the call's fate would say nothing when the store
-// then failed outright. What the call's record ends up holding is told by the
-// lines [CoordStore.recordInParts] logs once it has landed.
+// then failed outright. It says nothing about what is filed instead, which is
+// [CoordStore.reportFiled]'s to say once a record has landed. Once per call:
+// the refusal is carried into every later pass at the call's record
+// ([CoordStore.recordInParts]).
 func (s *CoordStore) refusedWithinCeiling(ctx context.Context, run PendingRun, call BridgeCall, bytes int, err error) {
 	s.logger().ErrorContext(ctx, "sandbox_bridge_call_refused_within_ceiling",
 		"turn_id", run.TurnID, "launch_id", run.LaunchID, "tool", call.Name,
 		"record_bytes", bytes, "record_limit_bytes", MaxBridgeCallBytes, "error", err.Error(),
 		"detail", "the NATS server this node is connected to refused a record the contract's "+
 			"ceiling admits, so its max_payload is below queue.MaxPayloadBytes: set max_payload to "+
-			"at least queue.MaxPayloadBytes on every server of the cluster. The call's record is "+
-			"filed in its least form instead: its name and outcome, both texts replaced by their marks")
+			"at least queue.MaxPayloadBytes on every server of the cluster")
 }
 
 // recordInParts keeps a call's whole in part records filed under the call's
-// own record, then files the record: the call's fitted form and a reference
-// to the parts — or, when the parts could not all be written, its fitted form
-// saying the whole was not kept, and NO reference.
+// own record, then files the record: the call cut — its fitted form, or its
+// least form once a server has refused a record the ceiling admits — and a
+// reference to the parts; or, when the parts could not all be written, the
+// call cut and saying its whole was not kept, with NO reference.
 //
 // A NUMBER OF ITS OWN FIRST, reserved with nothing filed at it, because the
 // parts are filed under the call's number and BEFORE its record: a record
@@ -517,7 +518,10 @@ func (s *CoordStore) refusedWithinCeiling(ctx context.Context, run PendingRun, c
 // a stray a late write left after this launch was purged. The call takes
 // another number rather than share an address with it, at most
 // [bridgeCallAddressRetries] times; the stray, and whatever this call filed at
-// the number before meeting it, are left for the sweep.
+// the number before meeting it, are left for the sweep. A REFUSAL IS CARRIED
+// INTO THE NEXT PASS: a server that refused the fitted record at one number
+// refuses it at the next, so that pass files the least form without asking
+// again, or saying so again.
 //
 // WHAT THE RECORD HOLDS IS REPORTED ONCE IT HAS LANDED, and only then: a record
 // that failed to land holds nothing, and a pass that met a stray is followed by
@@ -531,7 +535,9 @@ func (s *CoordStore) recordInParts(ctx context.Context, run PendingRun, call Bri
 			return BridgeCall{}, 0, err
 		}
 		ref := wholeRef{bytes: len(whole)}
-		parts, partsErr := s.fileParts(ctx, run.TurnID, run.LaunchID, seq, whole)
+		parts, partsErr := fileParts(whole, func(part int, value []byte) (bool, error) {
+			return s.calls.CreateBridgeCallPart(ctx, run.TurnID, run.LaunchID, seq, part, value)
+		})
 		switch {
 		case errors.Is(partsErr, errAddressTaken):
 			continue
@@ -547,10 +553,11 @@ func (s *CoordStore) recordInParts(ctx context.Context, run PendingRun, call Bri
 			}
 			return BridgeCall{}, 0, err
 		}
+		refused = refused || filed.least
 		if !filed.created {
 			continue
 		}
-		s.reportFiled(ctx, run, call, seq, ref, filed.cut, parts, partsErr)
+		s.reportFiled(ctx, run, call, seq, ref, filed, parts, partsErr)
 		return filed.call, seq, nil
 	}
 	return BridgeCall{}, 0, fmt.Errorf("every number the launch handed out for the call's "+
@@ -558,18 +565,27 @@ func (s *CoordStore) recordInParts(ctx context.Context, run PendingRun, call Bri
 }
 
 // reportFiled says what a call's record holds, now that it has landed at seq:
-// what its fitted form did not keep whole, and a whole that was not kept.
+// what its fitted form did not keep whole, its least form, and a whole that
+// was not kept.
 func (s *CoordStore) reportFiled(ctx context.Context, run PendingRun, call BridgeCall, seq uint64,
-	ref wholeRef, cut bridgeCallCut, partsWritten int, partsErr error,
+	ref wholeRef, filed filedRecord, partsWritten int, partsErr error,
 ) {
-	if cut != (bridgeCallCut{}) {
-		where := "its whole is in the parts filed under it, which a resume reads"
-		if !ref.kept() {
-			where = "its whole was not kept, and its marks say so"
-		}
+	where := "its whole is in the parts filed under it, which a resume reads"
+	if !ref.kept() {
+		where = "its whole was not kept, and its marks say so"
+	}
+	switch {
+	case filed.least:
+		s.logger().WarnContext(ctx, "sandbox_bridge_call_least_form_filed",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "seq", seq, "tool", call.Name,
+			"whole_bytes", ref.bytes, "whole_parts", ref.parts,
+			"detail", "a server refused the call's record although the contract's ceiling admits "+
+				"it, so the record holds the call's least form: its name and outcome, each text "+
+				"longer than its mark set aside and marked; "+where)
+	case filed.cut != (bridgeCallCut{}):
 		s.logger().WarnContext(ctx, "sandbox_bridge_call_fitted",
 			"turn_id", run.TurnID, "launch_id", run.LaunchID, "seq", seq, "tool", call.Name,
-			"output_bytes", cut.outputBytes, "args_bytes", cut.argsBytes,
+			"output_bytes", filed.cut.outputBytes, "args_bytes", filed.cut.argsBytes,
 			"whole_bytes", ref.bytes, "whole_parts", ref.parts,
 			"record_limit_bytes", MaxBridgeCallBytes,
 			"detail", "the call's record could not hold it whole and holds what fits, marked where "+
@@ -594,9 +610,15 @@ type filedRecord struct {
 	// call is the call as its record holds it.
 	call BridgeCall
 
-	// cut is what the fitted form did not keep whole, zero for a call it kept
-	// whole and for the least form, which the refusal that forced it reports.
+	// cut is what the fitted form did not keep whole: zero for a call it kept
+	// whole, and on the least form.
 	cut bridgeCallCut
+
+	// least says the record is the call's least form: the server refused a
+	// record the contract's ceiling admits, before this number or at it. Set
+	// whether or not the least form was created, since the server refuses the
+	// fitted record at every number alike.
+	least bool
 
 	// created is false when the address already held a record, and nothing
 	// was filed.
@@ -605,10 +627,11 @@ type filedRecord struct {
 
 // fileRecord files a call's record at a reserved number, reporting false when
 // that address is taken: the fitted form with ref, or the least form when the
-// server has refused a record within the ceiling — before this one, or now.
+// server has refused a record within the ceiling — at an earlier pass, or now.
 //
-// IT LOGS NOTHING ABOUT THE RECORD, which holds nothing until it is created:
-// [CoordStore.recordInParts] reports it once it has landed.
+// IT LOGS ONLY THE REFUSAL, a fact about the server's setting, and nothing
+// about the record, which holds nothing until it is created:
+// [CoordStore.reportFiled] reports it once it has landed.
 func (s *CoordStore) fileRecord(ctx context.Context, run PendingRun, call BridgeCall, seq uint64,
 	ref wholeRef, refused bool,
 ) (filedRecord, error) {
@@ -625,38 +648,43 @@ func (s *CoordStore) fileRecord(ctx context.Context, run PendingRun, call Bridge
 	}
 	least, raw, err := leastBridgeCall(call, ref)
 	if err != nil {
-		return filedRecord{}, err
+		return filedRecord{least: true}, err
 	}
 	created, err := s.calls.CreateBridgeCall(ctx, run.TurnID, run.LaunchID, seq, raw)
-	return filedRecord{call: least, created: created}, err
+	return filedRecord{call: least, least: true, created: created}, err
 }
 
-// errAddressTaken is a part or a record already filed at an address a call
-// reserved for itself: a stray a late write left after the launch was purged.
-var errAddressTaken = errors.New("sandbox: the call's reserved address already holds a record")
+// errAddressTaken is a part or a record already filed at an address a caller
+// took for itself: a stray a late write left after the launch was purged.
+var errAddressTaken = errors.New("sandbox: the address already holds a record")
 
-// fileParts files a call's whole as parts under call seq, in order, and
-// reports how many it filed.
+// fileParts files a whole as parts through create, in order from part 1, and
+// reports how many it filed. It is how every whole a record cannot hold is kept
+// — a bridged call's, and a suspension's — so the two split, refuse and stop
+// by one rule.
 //
 // A PART REFUSED AS TOO LARGE IS RETRIED SMALLER — at half its size, or at
-// [bridgeCallPartFloorBytes] when half would be smaller — and so is every part
-// after it, since the server that refused it will refuse their size too. Only
-// a refused part of the floor or smaller ends the split. A part is a byte range
-// of the whole's encoding rather than a cut of any text in it: no reader ever
-// decodes a part alone, and the reassembled bytes are the whole exactly, so
-// where a part boundary falls is invisible to everything that reads the call.
-func (s *CoordStore) fileParts(ctx context.Context, turnID, launchID string, seq uint64, whole []byte) (int, error) {
-	size, filed := bridgeCallPartBytes, 0
+// [partFloorBytes] when half would be smaller — and so is every part after it,
+// since the server that refused it will refuse their size too. Only a refused
+// part of the floor or smaller ends the split. A part is a byte range of the
+// whole's encoding rather than a cut of any text in it: no reader ever decodes
+// a part alone, and the reassembled bytes are the whole exactly, so where a
+// part boundary falls is invisible to everything that reads the whole.
+//
+// A PART ALREADY FILED is [errAddressTaken]: create never overwrites, and the
+// part there is not this whole's.
+func fileParts(whole []byte, create func(part int, value []byte) (bool, error)) (int, error) {
+	size, filed := partBytes, 0
 	for rest := whole; len(rest) > 0; {
 		n := min(size, len(rest))
-		created, err := s.calls.CreateBridgeCallPart(ctx, turnID, launchID, seq, filed+1, rest[:n])
+		created, err := create(filed+1, rest[:n])
 		switch {
 		case errors.Is(err, coord.ErrTooLarge):
-			if n <= bridgeCallPartFloorBytes {
+			if n <= partFloorBytes {
 				return filed, fmt.Errorf("a part of %d bytes was refused as too large, and a refused "+
-					"part is not split below %d bytes: %w", n, bridgeCallPartFloorBytes, err)
+					"part is not split below %d bytes: %w", n, partFloorBytes, err)
 			}
-			size = max((n+1)/2, bridgeCallPartFloorBytes)
+			size = max((n+1)/2, partFloorBytes)
 			continue
 		case err != nil:
 			return filed, err
@@ -677,30 +705,44 @@ type wholeRef struct {
 	// parts is how many part records hold those bytes, zero when they could
 	// not all be written: the whole is then kept nowhere.
 	parts int
+
+	// refused says the record it goes with is the least form, filed because
+	// a server refused a record the contract's ceiling admits: what that
+	// record sets aside is set aside for that reason, not for its size, and
+	// its marks say so.
+	refused bool
 }
 
 func (w wholeRef) kept() bool { return w.parts > 0 }
 
-// argsMark is what stands in a record for arguments too large for it.
+// argsMark is what stands in a record for arguments it sets aside.
 func (w wholeRef) argsMark(bytes int) string {
-	if w.kept() {
+	switch {
+	case w.refused && w.kept():
+		return RefusedArgsInParts(bytes)
+	case w.refused:
+		return RefusedArgsNotKept(bytes)
+	case w.kept():
 		return ArgsInParts(bytes)
 	}
 	return ArgsNotKept(bytes)
 }
 
 // outputNote is what follows a cut output's mark: nothing when the whole is in
-// the parts, whose reference says so, and [WholeNotKept]'s note when it is
-// nowhere.
+// the parts, whose reference says so, and a note saying it is nowhere when it
+// is not ([WholeNotKept], [RefusedWholeNotKept]).
 func (w wholeRef) outputNote() string {
-	if w.kept() {
+	switch {
+	case w.kept():
 		return ""
+	case w.refused:
+		return RefusedWholeNotKept(w.bytes)
 	}
 	return WholeNotKept(w.bytes)
 }
 
-// wholeUnreadable is the note a call read back in its fitted form ends with
-// when its record names parts and they do not reassemble into it.
+// wholeUnreadable is the note a call read back in its record's cut form ends
+// with when its record names parts and they do not reassemble into it.
 //
 // WORDED AS WHAT HAPPENED, for the reason [ArgsInParts] is: it is carried into
 // the resumed phase's record, which outlives the parts.
@@ -783,20 +825,33 @@ func fitBridgeCall(call BridgeCall, whole wholeRef) (BridgeCall, []byte, bridgeC
 	return call, raw, cut, nil
 }
 
-// leastBridgeCall is the smallest record a call can be kept as: its name and
-// its outcome, with its arguments replaced by their marker and its output by
-// the cut's mark and note, beside whole's reference when the parts hold it —
-// each mark only where there was something to replace, so a reader can still
-// tell a call made with nothing from one whose texts were not kept here.
+// leastBridgeCall is the smallest record a call is kept as, filed once a
+// server has refused a record the contract's ceiling admits: its name and its
+// outcome, beside whole's reference when the parts hold it, and each text
+// LONGER THAN ITS MARK set aside for that mark — the arguments for their
+// marker, the output for the cut's "…" and, when the whole was not kept, the
+// note after it — each the refusal's own mark, since a least form is filed
+// for nothing else.
+//
+// A TEXT NO LONGER THAN ITS MARK IS KEPT AS IT IS. Its mark would weigh as
+// much and say less, and would claim it was set aside; arguments of a few
+// bytes set aside with a whole that was not kept would be lost for nothing.
+// Measured in the texts' own bytes, since the arguments and their marker are
+// both JSON text encoded into one string field, and the least form is sized
+// against no target that a byte would decide.
+//
+// A mark only where something was set aside, so a reader can still tell a
+// call made with nothing from one whose texts were not kept here.
 func leastBridgeCall(call BridgeCall, whole wholeRef) (BridgeCall, []byte, error) {
+	whole.refused = true
 	if whole.kept() {
 		call.WholeBytes, call.WholeParts = whole.bytes, whole.parts
 	}
-	if call.Args != "" {
-		call.Args = whole.argsMark(len(call.Args))
+	if mark := whole.argsMark(len(call.Args)); len(call.Args) > len(mark) {
+		call.Args = mark
 	}
-	if call.Output != "" {
-		call.Output = bridgeCallCutMarker + whole.outputNote()
+	if mark := bridgeCallCutMarker + whole.outputNote(); len(call.Output) > len(mark) {
+		call.Output = mark
 	}
 	raw, err := encodeBridgeCall(call)
 	return call, raw, err
@@ -856,7 +911,7 @@ func (s *CoordStore) BridgeCalls(ctx context.Context, run PendingRun) (BridgeLog
 }
 
 // whole reassembles a call from the parts filed under its record, or answers
-// the record's fitted form with a note saying why it could not.
+// the record's cut form with a note saying why it could not.
 //
 // THE PARTS ARE CHECKED AGAINST THE REFERENCE before any is believed: every
 // part the record names, in order, adding up to exactly the length it names,
@@ -864,71 +919,95 @@ func (s *CoordStore) BridgeCalls(ctx context.Context, run PendingRun) (BridgeLog
 // missing (purged under a read, lost) or a whole that disagrees with its
 // record would otherwise be handed to the resume as the call itself, shorter
 // or other than what the run did, with nothing to say so. What is handed over
-// instead is the fitted form, which is honest about being cut ([unreadable]).
-// A part past the count the record names belongs to no reference and is not
-// read.
-func (s *CoordStore) whole(ctx context.Context, run PendingRun, fitted BridgeCall, parts []coord.BridgeCallPart) BridgeCall {
-	whole, why := reassemble(fitted, parts)
+// instead is the record's cut form, which is honest about being cut
+// ([unreadable]). A part past the count the record names belongs to no
+// reference and is not read.
+func (s *CoordStore) whole(ctx context.Context, run PendingRun, cut BridgeCall, parts []coord.Part) BridgeCall {
+	whole, why := reassemble(cut, parts)
 	if why == "" {
 		return whole
 	}
 	s.logger().ErrorContext(ctx, "sandbox_bridge_call_whole_unreadable",
-		"turn_id", run.TurnID, "launch_id", run.LaunchID, "seq", fitted.Seq, "tool", fitted.Name,
-		"whole_bytes", fitted.WholeBytes, "whole_parts", fitted.WholeParts, "parts_found", len(parts),
+		"turn_id", run.TurnID, "launch_id", run.LaunchID, "seq", cut.Seq, "tool", cut.Name,
+		"whole_bytes", cut.WholeBytes, "whole_parts", cut.WholeParts, "parts_found", len(parts),
 		"reason", why,
 		"detail", "the call is read back in the form its record was cut to: arguments the record set "+
 			"aside are marked as not read back, and its output ends in a note saying why")
-	return unreadable(fitted, why)
+	return unreadable(cut, why)
 }
 
-// unreadable is a call's fitted form as the whole-log read hands it over when
-// the parts it was filed in do not reassemble into it.
+// unreadable is a call's cut form — fitted or least — as the whole-log read
+// hands it over when the parts it was filed in do not reassemble into it.
 //
-// NOTHING IN IT MAY POINT AT THE PARTS AS WHERE THE REST IS. The record's own
-// marker for arguments it set aside says they went into the parts, and those
-// are exactly what could not be read — while this form is what the resume
-// carries into the phase's record and the reviewer's evidence, and the run's
-// end purges the parts. So that marker gives way to [ArgsUnreadable], with the
-// same byte count, and the output ends in the note saying why. Arguments the
-// record kept whole are left exactly as they are.
-func unreadable(fitted BridgeCall, why string) BridgeCall {
-	if n, ok := argsInPartsBytes(fitted.Args); ok {
-		fitted.Args = ArgsUnreadable(n)
+// NOTHING IN IT POINTS AT THE PARTS AS WHERE THE REST IS. Those parts are
+// exactly what could not be read, while this form is what the resume carries
+// into the phase's record and the reviewer's evidence, and the run's end
+// purges the parts. So the record's marker saying its arguments went into the
+// parts gives way to the unreadable one, with the same byte count
+// ([ArgsUnreadable], [RefusedArgsUnreadable]); the reference is CLEARED, once
+// the note has taken its length and count; and the output ends in that note,
+// saying why. Arguments the record kept whole are left exactly as they are.
+func unreadable(cut BridgeCall, why string) BridgeCall {
+	if n, refused, ok := argsInPartsBytes(cut.Args); ok {
+		cut.Args = ArgsUnreadable(n)
+		if refused {
+			cut.Args = RefusedArgsUnreadable(n)
+		}
 	}
-	note := wholeUnreadable(fitted, why)
-	if fitted.Output == "" {
+	note := wholeUnreadable(cut, why)
+	if cut.Output == "" {
 		// A call that returned nothing has no text for the note to follow.
 		note = strings.TrimPrefix(note, "\n")
 	}
-	fitted.Output += note
-	return fitted
+	cut.Output += note
+	cut.WholeBytes, cut.WholeParts = 0, 0
+	return cut
 }
 
 // reassemble is [CoordStore.whole]'s check and join, answering the reason in
 // place of the call when the parts do not make the whole the record names.
-func reassemble(fitted BridgeCall, parts []coord.BridgeCallPart) (BridgeCall, string) {
-	var buf bytes.Buffer
-	buf.Grow(fitted.WholeBytes)
-	for i := range fitted.WholeParts {
-		if i >= len(parts) || parts[i].Part != i+1 {
-			return BridgeCall{}, fmt.Sprintf("part %d of %d is missing", i+1, fitted.WholeParts)
-		}
-		buf.Write(parts[i].Value)
-	}
-	if buf.Len() != fitted.WholeBytes {
-		return BridgeCall{}, fmt.Sprintf("its parts hold %d bytes, not %d", buf.Len(), fitted.WholeBytes)
+func reassemble(cut BridgeCall, parts []coord.Part) (BridgeCall, string) {
+	joined, why := joinParts(parts, cut.WholeParts, cut.WholeBytes)
+	if why != "" {
+		return BridgeCall{}, why
 	}
 	var whole BridgeCall
-	if err := json.Unmarshal(buf.Bytes(), &whole); err != nil {
+	if err := json.Unmarshal(joined, &whole); err != nil {
 		return BridgeCall{}, "its parts do not decode as a call: " + err.Error()
 	}
-	if whole.Name != fitted.Name || !whole.At.Equal(fitted.At) {
+	if whole.Name != cut.Name || !whole.At.Equal(cut.At) {
 		return BridgeCall{}, fmt.Sprintf("its parts hold a different call, %q at %s",
 			whole.Name, whole.At.Format(time.RFC3339Nano))
 	}
 	// The KEY is the call's place, as for every record.
-	whole.Seq = fitted.Seq
+	whole.Seq = cut.Seq
 	return whole, ""
+}
+
+// joinParts joins the first count parts into the whole a record names, or
+// answers why they do not make it: a part missing or out of order, or a length
+// other than size. The parts are checked against the record's reference before
+// any byte is believed, and a part past count belongs to no reference and is
+// not read — the one check and join every whole kept in parts is read back by.
+func joinParts(parts []coord.Part, count, size int) ([]byte, string) {
+	if count < 1 {
+		return nil, fmt.Sprintf("its record names %d parts", count)
+	}
+	held := 0
+	for i := range count {
+		if i >= len(parts) || parts[i].Part != i+1 {
+			return nil, fmt.Sprintf("part %d of %d is missing", i+1, count)
+		}
+		held += len(parts[i].Value)
+	}
+	if held != size {
+		return nil, fmt.Sprintf("its parts hold %d bytes, not %d", held, size)
+	}
+	joined := make([]byte, 0, held)
+	for _, part := range parts[:count] {
+		joined = append(joined, part.Value...)
+	}
+	return joined, ""
 }
 
 // rowLog is the log an older build kept on the run's row: the list, and the
@@ -1110,25 +1189,40 @@ func (s *CoordStore) purgeCalls(ctx context.Context, turnID, launchID string) {
 	}
 }
 
-// rowViewBytes bounds what the run's row may weigh, encoded, once older builds'
-// view of its calls is on it.
+// rowBytes bounds what the run's row may weigh, encoded, with what the store
+// decides to keep on it: its suspended conversation, and older builds' view of
+// its calls.
 //
 // HALF THE TRANSPORT'S CEILING ([queue.MaxPayloadBytes]), and the other half is
 // the point. The row is one message, rewritten whole by every mutation, and the
 // mutations that matter are the lifecycle's own — the claim that resumes the
-// run, the park on a person's question, the release a failed resume hands back.
-// A row the view had filled to the ceiling refuses every one of them, for every
-// build: a run no node can claim or finish, beside a billed box nobody
-// reclaims. So the view is kept to half, and the fields the lifecycle writes —
-// a question, a branch, a suspended conversation — keep the rest.
-const rowViewBytes = queue.MaxPayloadBytes / 2
+// run, the park on a person's question, the release a failed resume hands back
+// — and a park adds a question no fit bounds. A row the store had filled to
+// the ceiling refuses every one of them, for every build: a run no node can
+// claim or finish, beside a billed box nobody reclaims. So a suspension goes
+// on the row only while the row holding it is within half the ceiling
+// ([withinRow]), the view is fitted into what that leaves ([fitRowView]), and
+// the other half is the lifecycle's.
+const rowBytes = queue.MaxPayloadBytes / 2
 
 // rowViewFraming is what the view's two fields cost around their contents on
 // the encoded row: two keys, the list's brackets and a count, a few dozen
 // bytes, which this covers with room.
 const rowViewFraming = 128
 
-// fitRowView keeps a row's list of calls within [rowViewBytes], dropping from
+// withinRow reports whether a run's row, without older builds' view of its
+// calls, is within [rowBytes]: whether it can hold what it carries and leave
+// the view room to be fitted into.
+func withinRow(run PendingRun) bool {
+	bare := run
+	bare.BridgeCalls, bare.BridgeCallsElided = nil, 0
+	raw, err := encodeRun(bare)
+	// An encode that fails is reported by the write that encodes the row;
+	// what it says here is only that the row cannot be shown to fit.
+	return err == nil && len(raw) <= rowBytes
+}
+
+// fitRowView keeps a row's list of calls within [rowBytes], dropping from
 // the MIDDLE and counting what it drops, as [appendBounded] does for the count.
 //
 // Each entry is measured once, by the encoder that writes the row, so one
@@ -1146,7 +1240,7 @@ func fitRowView(run PendingRun) ([]BridgeCall, int) {
 		// mutation's own encode reports; nothing here can decide by it.
 		return calls, elided
 	}
-	room := rowViewBytes - len(base) - rowViewFraming
+	room := rowBytes - len(base) - rowViewFraming
 	sizes := make([]int, len(calls))
 	total := 0
 	for i, call := range calls {
@@ -1197,16 +1291,182 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 
 // MarkSuspended writes the suspended Execute loop and opens the run to the
 // completion poll. See the contract on [PendingStore].
+//
+// ON THE ROW WHEN IT FITS ([withinRow]): one write, and the one form every
+// build can resume. A suspension the row cannot hold — past [rowBytes], or
+// refused by a server set below the contract's ceiling — keeps its whole in
+// parts filed under the run's launch ([CoordStore.suspendInParts]).
 func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error) {
+	var launch string
+	overRow := false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		overRow = false
 		if run.Status != StatusLaunching {
 			return false
 		}
+		launch = run.LaunchID
 		run.ExecuteState = maps.Clone(state)
+		if !withinRow(*run) {
+			overRow = true
+			return false
+		}
 		run.Status = StatusRunning
+		run.BridgeCalls, run.BridgeCallsElided = fitRowView(*run)
 		return true
 	})
-	return won, err
+	switch {
+	case errors.Is(err, coord.ErrTooLarge):
+		// REFUSED ALTHOUGH IT IS WITHIN THE ROW'S BUDGET, which only a server
+		// configured below the contract does: a node does not boot on one,
+		// but a reconnect can reach one. Its parts are split to what that
+		// server takes.
+		s.logger().ErrorContext(ctx, "sandbox_suspension_refused_within_ceiling",
+			"turn_id", turnID, "launch_id", launch, "row_limit_bytes", rowBytes, "error", err.Error(),
+			"detail", "the NATS server this node is connected to refused a run record the contract's "+
+				"ceiling admits, so its max_payload is below queue.MaxPayloadBytes: set max_payload to "+
+				"at least queue.MaxPayloadBytes on every server of the cluster. The suspended "+
+				"conversation is kept in parts that server takes instead")
+		return s.suspendInParts(ctx, turnID, launch, state, "a server refused the run's record holding it")
+	case err != nil:
+		return false, err
+	case overRow:
+		return s.suspendInParts(ctx, turnID, launch, state, fmt.Sprintf(
+			"the run's record holding it is past the %d bytes a record keeps a suspension within", rowBytes))
+	}
+	return won, nil
+}
+
+// suspendInParts keeps a suspended conversation's whole in parts filed under
+// the run's launch, then writes the row that names them and opens the run to
+// the poll, in one write.
+//
+// THE PARTS FIRST, so a row naming them is never visible without them — the
+// completion poll fires the moment the row says running. The row then holds
+// the reference in execute_state ([suspensionInPartsKey]), because that is the
+// one place a build that predates suspension parts carries whole through every
+// write it makes to the row and refuses to resume from, rather than dropping
+// it or reading it as no conversation at all.
+//
+// A WHOLE THAT CANNOT BE KEPT IS AN ERROR, and the run is left launching: the
+// caller fails a run whose suspension has nowhere to go ([PendingStore.
+// MarkSuspended]). Its error says why the row could not hold the suspension
+// (why) and names the limit that refused its parts. Parts filed before a
+// failure are named by nothing, and go with the purge of the launch when the
+// run ends.
+func (s *CoordStore) suspendInParts(ctx context.Context, turnID, launch string, state map[string]any, why string) (bool, error) {
+	if launch == "" {
+		// Every launch this build begins names itself, and only the build
+		// that began a launch suspends it.
+		return false, fmt.Errorf("sandbox: run %s names no launch, so its suspended conversation, "+
+			"which its record cannot hold, has no address to be kept under", turnID)
+	}
+	whole, err := json.Marshal(state)
+	if err != nil {
+		return false, fmt.Errorf("sandbox: encode the suspended conversation of run %s: %w", turnID, err)
+	}
+	parts, err := fileParts(whole, func(part int, value []byte) (bool, error) {
+		return s.calls.CreateSuspensionPart(ctx, turnID, launch, part, value)
+	})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: the suspended conversation of run %s, %d bytes, could not be "+
+			"kept: %s, and its parts could not all be filed (%d were): %w",
+			turnID, len(whole), why, parts, err)
+	}
+	ref := suspensionRef{Bytes: len(whole), Parts: parts}
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		// THE SAME LAUNCH, still launching: the parts are that launch's,
+		// and a row that has moved on is left as it stands.
+		if run.Status != StatusLaunching || run.LaunchID != launch {
+			return false
+		}
+		run.ExecuteState = ref.stub()
+		run.Status = StatusRunning
+		run.BridgeCalls, run.BridgeCallsElided = fitRowView(*run)
+		return true
+	})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: record the suspended conversation of run %s, kept in %d "+
+			"parts: %w", turnID, parts, err)
+	}
+	if won {
+		s.logger().InfoContext(ctx, "sandbox_suspension_kept_in_parts",
+			"turn_id", turnID, "launch_id", launch, "suspension_bytes", ref.Bytes,
+			"suspension_parts", ref.Parts, "row_limit_bytes", rowBytes,
+			"detail", "the run's record names the parts its suspended conversation is kept in, and "+
+				"the resume reads it back whole; a build that predates suspension parts hands the "+
+				"resume back for a build that reads them")
+	}
+	return won, nil
+}
+
+// suspensionInPartsKey is the ONE key of the execute_state a run's row holds
+// in place of a suspended conversation whose whole is kept in parts: its value
+// is the [suspensionRef].
+//
+// EXACTLY ONE KEY, and not one an Execute state has: the agent layer's encoding
+// always carries its version beside the conversation, so a map holding this
+// key alone is this reference and nothing else. A build that predates the
+// reference reads the map as a state of version zero, which no build writes,
+// and hands the resume back for a node that can read it — where an empty
+// execute_state would have been failed as a run with no conversation.
+const suspensionInPartsKey = "suspension_in_parts"
+
+// suspensionRef is where a suspension is, when its run's row cannot hold it:
+// how long its whole is, encoded, and how many parts under the run's launch
+// hold those bytes.
+type suspensionRef struct {
+	Bytes int `json:"bytes"`
+	Parts int `json:"parts"`
+}
+
+// stub is the execute_state a row holds for this reference.
+func (r suspensionRef) stub() map[string]any {
+	return map[string]any{suspensionInPartsKey: map[string]any{"bytes": r.Bytes, "parts": r.Parts}}
+}
+
+// suspensionRefOf reports whether a row's execute_state is a reference to a
+// suspension kept in parts, and the reference. A reference it cannot decode is
+// still one — the row's suspension is in parts it cannot name — and comes back
+// zero, which no whole was kept as.
+func suspensionRefOf(state map[string]any) (suspensionRef, bool) {
+	value, ok := state[suspensionInPartsKey]
+	if !ok || len(state) != 1 {
+		return suspensionRef{}, false
+	}
+	var ref suspensionRef
+	raw, err := json.Marshal(value)
+	if err != nil || json.Unmarshal(raw, &ref) != nil {
+		return suspensionRef{}, true
+	}
+	return ref, true
+}
+
+// Suspension returns a run's suspended conversation whole. See the contract on
+// [PendingStore].
+func (s *CoordStore) Suspension(ctx context.Context, run PendingRun) (map[string]any, error) {
+	ref, inParts := suspensionRefOf(run.ExecuteState)
+	if !inParts {
+		return run.ExecuteState, nil
+	}
+	if run.LaunchID == "" {
+		return nil, fmt.Errorf("%w: run %s names no launch its parts could be filed under",
+			ErrSuspensionUnreadable, run.TurnID)
+	}
+	parts, err := s.calls.SuspensionParts(ctx, run.TurnID, run.LaunchID)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: read the suspended conversation of run %s: %w", run.TurnID, err)
+	}
+	whole, why := joinParts(parts, ref.Parts, ref.Bytes)
+	if why != "" {
+		return nil, fmt.Errorf("%w: run %s's suspended conversation, %d bytes kept in %d parts: %s",
+			ErrSuspensionUnreadable, run.TurnID, ref.Bytes, ref.Parts, why)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(whole, &state); err != nil {
+		return nil, fmt.Errorf("%w: run %s's suspended conversation does not decode from its %d parts: %w",
+			ErrSuspensionUnreadable, run.TurnID, ref.Parts, err)
+	}
+	return state, nil
 }
 
 // ListActive returns every run that has not finished.

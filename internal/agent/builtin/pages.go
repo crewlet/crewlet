@@ -68,12 +68,29 @@ type PageDeps struct {
 	// unit's space. Empty makes the container argument required.
 	DefaultContainer func(handle string) string
 
-	// Reserved are the containers a seat may not write to directly: the
-	// tool-skills container (whose pages are machinery published by the
-	// sync CLI) and the org root. A write there is refused naming the
-	// container, rather than silently landing somewhere excluded from
-	// every search.
-	Reserved []string
+	// Reserved are the containers this surface may not write into: create
+	// a page in, or change a page of. A write there is refused naming the
+	// container.
+	//
+	// A SEAT'S SURFACE RESERVES TWO, and they are reserved for different
+	// reasons. The tool-skills container holds the guidance the engine
+	// injects into seats' phases, so a seat writing there would be
+	// rewriting its own instructions — self-modification nobody reviewed.
+	// The org root holds the organisation's own pages, starting with the
+	// Onboarding page every seat reads first, which the company publishes
+	// rather than any one seat.
+	//
+	// THE OPERATOR'S SURFACE RESERVES NONE: a person's own assistant is
+	// how a company on the native knowledge base publishes both, and
+	// write_page is the only thing that creates a native page.
+	//
+	// A FUNCTION, read per call, and nil reserves nothing. Both containers
+	// are named in Tier B config, so an apply can move either, and a
+	// seat's tools are cloned into its lease and not rebuilt by an apply:
+	// a list captured when the surface was built would go on closing a
+	// container that is now ordinary and opening the one that now holds
+	// the skills.
+	Reserved func() []string
 
 	// Actor decides who a write is attributed to. Nil takes the turn's
 	// seat; the operator surface sets it. See [WorkDeps.Actor] for why
@@ -127,12 +144,28 @@ func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, e
 }
 
 func (d PageDeps) reserved(container string) bool {
-	for _, key := range d.Reserved {
-		if strings.EqualFold(strings.TrimSpace(key), container) {
+	if d.Reserved == nil {
+		return false
+	}
+	for _, key := range d.Reserved() {
+		if strings.EqualFold(strings.TrimSpace(key), strings.TrimSpace(container)) {
 			return true
 		}
 	}
 	return false
+}
+
+// refuseReserved is the answer to a write into a reserved container — see
+// [PageDeps.Reserved] for which are and why.
+//
+// IT SAYS WHERE THE WRITE CAN GO INSTEAD, because the refusal is the one
+// failure here a model cannot fix by retrying: the container is not wrong in
+// its arguments, it is closed to this surface.
+func refuseReserved(name, container string) tools.Result {
+	return failed(fmt.Sprintf("%s refused that: %s is reserved for pages the "+
+		"company publishes — its tool skills, or the organisation's own pages — "+
+		"and a seat may not write there. Write this in your team's container "+
+		"instead, or ask a person to publish it.", name, clip(container)))
 }
 
 func unconfiguredKB(name string) tools.Result {
@@ -404,10 +437,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		}
 	}
 	if t.deps.reserved(in.Container) {
-		return failed(fmt.Sprintf(
-			"%s is a reserved container and pages written there are excluded "+
-				"from every search. Write this somewhere a reader will find it.",
-			clip(in.Container))), nil
+		return refuseReserved(WritePageTool, in.Container), nil
 	}
 
 	got, err := t.deps.Writer.Create(ctx, actor, in)
@@ -507,6 +537,13 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
 		return failed(readFailure(SavePageTool, err)), nil
+	}
+	// A CHANGE IS A WRITE TOO. Reserving a container against creates alone
+	// would leave every page already in it open to a seat's edit — a
+	// tool skill's body included, which is the write the reservation
+	// exists to stop. Judged on the page's own container, read above.
+	if t.deps.reserved(detail.Page.Container) {
+		return refuseReserved(SavePageTool, detail.Page.Container), nil
 	}
 
 	save := pages.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message"))}

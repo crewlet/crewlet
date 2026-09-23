@@ -24,12 +24,17 @@ import (
 // because a turn id and a launch id are values from elsewhere and a subject
 // token cannot carry every byte they can:
 //
-//	call.<turn>.<launch>.<seq>         one call's record, created once and
-//	                                   never written again
-//	call.<turn>.<launch>.<seq>.<part>  one part of the whole of that call,
-//	                                   filed UNDER its key, created once
-//	next.<turn>.<launch>               the launch's numbering: the last Seq
-//	                                   handed out, advanced by compare-and-set
+//	call.<turn>.<launch>.<seq>                one call's record, created once
+//	                                          and never written again
+//	call.<turn>.<launch>.<seq>.<part>         one part of the whole of that
+//	                                          call, filed UNDER its key,
+//	                                          created once
+//	call.<turn>.<launch>.suspension.<part>    one part of the whole of the
+//	                                          launch's suspended conversation,
+//	                                          created once
+//	next.<turn>.<launch>                      the launch's numbering: the last
+//	                                          Seq handed out, advanced by
+//	                                          compare-and-set
 //
 // The CLASS LEADS, so each is a wildcard the broker can match: a launch's
 // calls are `call.<turn>.<launch>.>`, which the counter beside them — one
@@ -48,10 +53,22 @@ import (
 // a launch that holds nothing BUT parts ([FleetStore.BridgeLaunches] here
 // does), so a part filed after its launch was purged waits for a sweep run by
 // a build that knows parts.
+//
+// A SUSPENSION PART IS FILED UNDER THE SAME FILTER, at a call part's depth,
+// behind [suspensionSegment] where a call part has its call's number. Both
+// decoders read that fourth segment as a call's number, and it is not one, so
+// neither this build nor one that predates suspension parts takes one for a
+// call or for a part of one — while the launch's filter still selects it, so
+// every build's purge of the launch removes it with the calls.
 
 const (
 	bridgeCallClass = "call"
 	bridgeNextClass = "next"
+
+	// suspensionSegment is the fourth segment of a suspension part's key,
+	// where a call part carries its call's number: a word, so that no
+	// decoder of call numbers ever reads one.
+	suspensionSegment = "suspension"
 
 	// kvStreamPrefix is what the NATS key-value protocol names a bucket's
 	// stream: KV_<bucket>. A purge by subject is a STREAM operation, so it
@@ -68,6 +85,31 @@ func bridgeCallKey(turnID, launchID string, seq uint64) string {
 func bridgePartKey(turnID, launchID string, seq uint64, part int) string {
 	return coord.DocumentKey(bridgeCallClass, turnID, launchID,
 		strconv.FormatUint(seq, 10), strconv.Itoa(part))
+}
+
+// suspensionPartKey is one part of a launch's suspended conversation.
+func suspensionPartKey(turnID, launchID string, part int) string {
+	return coord.DocumentKey(bridgeCallClass, turnID, launchID, suspensionSegment, strconv.Itoa(part))
+}
+
+// suspensionPartFilter selects every part of one launch's suspension, and
+// nothing else under the launch.
+func suspensionPartFilter(turnID, launchID string) string {
+	return coord.DocumentFilter(bridgeCallClass, turnID, launchID, suspensionSegment)
+}
+
+// suspensionPart recovers a suspension part key's number, reporting false for
+// any other key — a call's and a call part's included.
+func suspensionPart(key string) (int, bool) {
+	segs, ok := coord.DocumentSegments(key)
+	if !ok || len(segs) != 5 || segs[0] != bridgeCallClass || segs[3] != suspensionSegment {
+		return 0, false
+	}
+	part, err := strconv.Atoi(segs[4])
+	if err != nil || part < 1 {
+		return 0, false
+	}
+	return part, true
 }
 
 func bridgeNextKey(turnID, launchID string) string {
@@ -172,6 +214,45 @@ func (f *FleetStore) CreateBridgeCallPart(ctx context.Context, turnID, launchID 
 	return f.createBridgeKey(ctx, "a part of a bridged call", bridgePartKey(turnID, launchID, seq, part), value)
 }
 
+// CreateSuspensionPart files one part of a launch's suspended conversation.
+func (f *FleetStore) CreateSuspensionPart(ctx context.Context, turnID, launchID string, part int, value []byte) (bool, error) {
+	if err := validBridgeLaunch(turnID, launchID); err != nil {
+		return false, err
+	}
+	if part < 1 {
+		return false, fmt.Errorf("coord/kv: a part of a suspension is numbered from 1, got %d", part)
+	}
+	const what = "a part of a suspended conversation"
+	if err := withinCeiling(what, value); err != nil {
+		return false, err
+	}
+	return f.createBridgeKey(ctx, what, suspensionPartKey(turnID, launchID, part), value)
+}
+
+// SuspensionParts returns every part of one launch's suspension, in order.
+//
+// Its own filter, one segment narrower than the launch's, so the walk moves
+// the suspension's parts and none of the launch's calls.
+func (f *FleetStore) SuspensionParts(ctx context.Context, turnID, launchID string) ([]coord.Part, error) {
+	if err := validBridgeLaunch(turnID, launchID); err != nil {
+		return nil, err
+	}
+	out := []coord.Part{}
+	err := f.eachUnder(ctx, f.calls, suspensionPartFilter(turnID, launchID), "the suspension's parts",
+		func(kve jetstream.KeyValueEntry) error {
+			if part, ok := suspensionPart(kve.Key()); ok {
+				// COPIED: the entry's buffer is the client's.
+				out = append(out, coord.Part{Part: part, Value: slices.Clone(kve.Value())})
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, func(a, b coord.Part) int { return cmp.Compare(a.Part, b.Part) })
+	return out, nil
+}
+
 // createBridgeKey creates one key of the log, reporting false when it is
 // already there: every key here is written once, and one that is taken is a
 // record or a part a purge missed, which is never overwritten. what names the
@@ -184,29 +265,28 @@ func (f *FleetStore) createBridgeKey(ctx context.Context, what, key string, valu
 	case errors.Is(err, jetstream.ErrKeyExists):
 		return false, nil
 	default:
-		// The limit is read off the LIVE connection, after the refusal: a
-		// reconnect in between names the server the connection is on now.
-		return false, createRefusal(err, what, len(value), f.js.Conn().MaxPayload())
+		return false, f.writeRefusal(err, "record "+what, what, len(value))
 	}
 }
 
-// withinCeiling refuses a value past the contract's ceiling.
+// withinCeiling refuses a value past the contract's ceiling: a run's record, a
+// bridged call, or a part.
 //
 // REFUSED HERE rather than by the client, so the refusal names the contract's
 // ceiling instead of the connection's, and so the memory twin and this backend
 // refuse at the same length.
 func withinCeiling(what string, value []byte) error {
-	if len(value) > coord.MaxBridgeCallBytes {
+	if len(value) > coord.MaxRecordBytes {
 		return fmt.Errorf("coord/kv: %s of %d bytes is past the %d-byte ceiling one record "+
-			"may hold (coord.MaxBridgeCallBytes): %w",
-			what, len(value), coord.MaxBridgeCallBytes, coord.ErrTooLarge)
+			"may hold (coord.MaxRecordBytes): %w",
+			what, len(value), coord.MaxRecordBytes, coord.ErrTooLarge)
 	}
 	return nil
 }
 
-// createRefusal classifies a call record or part the broker did not take:
-// what names it, size is its value's length, and accepts is the max_payload the
-// server this connection is on announces.
+// writeRefusal classifies a write of a detached run's records the broker did
+// not take — a run's record, a bridged call, a part: doing is the operation an
+// unavailable store failed, what names the value, and size is its length.
 //
 // THE CLIENT'S SIZE REFUSAL IS PERMANENT. It measures a message against the
 // max_payload the server announced, and [OpenFleet] refuses a server that
@@ -221,15 +301,21 @@ func withinCeiling(what string, value []byte) error {
 // would send a reader looking for an oversized value, when a value within the
 // contract's ceiling was refused and the fault is a server's setting.
 //
-// Read after the refusal, off the live connection, so it is what the server
-// the connection is on NOW announces, and the error says so rather than that
-// the value exceeds it: a reconnect in between replaces the announcement the
-// value was measured against. A limit at or above the contract's is always
-// such a replacement, since no value within the contract's ceiling reaches it
-// with the headers a create carries.
-func createRefusal(err error, what string, size int, accepts int64) error {
+// THE LIMIT IS READ AFTER THE REFUSAL, off the live connection, so it is what
+// the server the connection is on NOW announces, and the error says so rather
+// than that the value exceeds it: a reconnect in between replaces the
+// announcement the value was measured against. A limit at or above the
+// contract's is always such a replacement, since no value within the
+// contract's ceiling reaches it with the header a write carries.
+func (f *FleetStore) writeRefusal(err error, doing, what string, size int) error {
+	return refusal(err, doing, what, size, f.js.Conn().MaxPayload())
+}
+
+// refusal is [FleetStore.writeRefusal] with the announced limit, accepts,
+// passed in, so the classification can be exercised without a connection.
+func refusal(err error, doing, what string, size int, accepts int64) error {
 	if !errors.Is(err, nats.ErrMaxPayload) {
-		return unavailable("record "+what, err)
+		return unavailable(doing, err)
 	}
 	limit := fmt.Sprintf("the server this connection is on announces %d bytes, below the %d bytes "+
 		"a coordination record is sized against (queue.MaxPayloadBytes)", accepts, queue.MaxPayloadBytes)
@@ -240,7 +326,7 @@ func createRefusal(err error, what string, size int, accepts int64) error {
 			"lower", accepts, queue.MaxPayloadBytes)
 	}
 	return fmt.Errorf("coord/kv: %s of %d bytes was refused by the NATS client, which measures a "+
-		"value and the headers its create carries against the max_payload the server announces; "+
+		"value and the header its write carries against the max_payload the server announces; "+
 		"%s: set max_payload to at least %d on every server of the cluster: %w: %w",
 		what, size, limit, queue.MaxPayloadBytes, coord.ErrTooLarge, err)
 }
@@ -295,7 +381,7 @@ func (f *FleetStore) BridgeCalls(ctx context.Context, turnID, launchID string) (
 		return nil, err
 	}
 	out := []coord.BridgeCallRecord{}
-	parts := map[uint64][]coord.BridgeCallPart{}
+	parts := map[uint64][]coord.Part{}
 	err := f.eachUnder(ctx, f.calls, bridgeCallFilter(turnID, launchID), "the bridged calls",
 		func(kve jetstream.KeyValueEntry) error {
 			if seq, ok := bridgeCallSeq(kve.Key()); ok {
@@ -307,7 +393,7 @@ func (f *FleetStore) BridgeCalls(ctx context.Context, turnID, launchID string) (
 				return nil
 			}
 			if seq, part, ok := bridgePartAddress(kve.Key()); ok {
-				parts[seq] = append(parts[seq], coord.BridgeCallPart{
+				parts[seq] = append(parts[seq], coord.Part{
 					Part: part, Value: slices.Clone(kve.Value()),
 				})
 			}
@@ -325,7 +411,7 @@ func (f *FleetStore) BridgeCalls(ctx context.Context, turnID, launchID string) (
 		// Parts under a number with no record belong to no call, and are
 		// left for the purge of their launch.
 		found := parts[out[i].Seq]
-		slices.SortFunc(found, func(a, b coord.BridgeCallPart) int { return cmp.Compare(a.Part, b.Part) })
+		slices.SortFunc(found, func(a, b coord.Part) int { return cmp.Compare(a.Part, b.Part) })
 		out[i].Parts = found
 	}
 	return out, nil
@@ -404,8 +490,10 @@ func (f *FleetStore) BridgeCallPage(ctx context.Context, q coord.BridgeCallQuery
 // EVERY KIND OF KEY, because each can outlive the others: a launch whose
 // counter a purge took can still hold a record a late append left, one whose
 // every record-create failed holds only its counter, and one purged while a
-// call's parts were being filed can hold nothing but the parts filed after the
-// purge. A sweep that listed fewer would never find the rest's strays.
+// call's parts or its suspension's were being filed can hold nothing but the
+// parts filed after the purge. A sweep that listed fewer would never find the
+// rest's strays. A suspension part is a five-segment key of the call class, so
+// the depth test below lists its launch with the call parts'.
 func (f *FleetStore) BridgeLaunches(ctx context.Context) ([]coord.BridgeLaunch, error) {
 	seen := map[coord.BridgeLaunch]struct{}{}
 	err := eachKeyUnder(ctx, f.calls, jetstream.AllKeys, "the bridged-call launches",
@@ -432,14 +520,14 @@ func (f *FleetStore) BridgeLaunches(ctx context.Context) ([]coord.BridgeLaunch, 
 }
 
 // PurgeBridgeCalls removes every record of one launch, the parts filed under
-// them, and its numbering.
+// them, the parts of its suspension, and its numbering.
 //
 // A STREAM PURGE BY SUBJECT rather than a key purge per record. A key purge
 // leaves a marker message behind for every key, and in a bucket with no age
 // each marker is kept for the life of the deployment — one per call, for every
 // run the company ever made. A purge by subject removes the messages and
 // leaves nothing. The launch's filter selects every key beneath it, so the
-// parts go in the same purge as their calls.
+// parts — a call's and the suspension's — go in the same purge as the calls.
 //
 // RECORDS FIRST, THEN THE COUNTER. A failure between the two leaves the
 // counter, which the sweep lists and purges again; the other order would leave

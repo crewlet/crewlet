@@ -265,9 +265,10 @@ large for one record keeps its whole in parts filed under that record, and
 the resume reads it back whole, so the resumed phase is rebuilt from the
 tool's whole output and the whole arguments it was called with. Where the
 parts could not be written, or do not reassemble into the call, the resume
-gets the record's fitted form instead, marked where it was cut and saying
-that its whole was not kept, or could not be read back — never a shortened
-text posing as the whole.
+gets the record's cut form instead — fitted, or its least form when a NATS
+server set below the engine's ceiling refused the record — marked where it
+was cut and saying that its whole was not kept, or could not be read back —
+never a shortened text posing as the whole.
 See
 [Code Sandbox § The tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
 for the bounded copy the run's row still keeps for older builds, and for
@@ -282,26 +283,33 @@ events; the
 [`phase_record` question](../reference/api-endpoints.md#ws-wsstream)
 (`GET /phases/{id}`) reassembles them. Then the **record** is published in
 the largest form the transport accepts: its longest texts cut to a common
-level — the tool results first, then the tool arguments, then the prose —
-each ending in `…`, a cut tool call carrying its whole length as
-`result_bytes`, `error_bytes` or `arguments_bytes`; failing that every text
-reduced to its mark; and failing that its first calls carried and the rest
-counted in `tool_executions_omitted`. Texts shorter than the level are left
-whole, the tokens and the cost always are, and the record's `whole_bytes`,
-`whole_parts` and notes say what was cut and where the whole is
-(`phase_record_fitted` in the log). If a part cannot be published the whole
-is not kept, and the record's notes say so and why
+level — the tool results first, then the tool arguments, then the prose and
+the prompts — each ending in `…`, a cut tool call carrying its whole length as
+`result_bytes`, `error_bytes` or `arguments_bytes`, and a text no longer than
+that mark left as it is; failing that each of those texts reduced to its mark;
+and failing that its first calls carried and the rest counted in
+`tool_executions_omitted`, then its rounds the same way. The phase's own
+`error` is whole in every one of those forms: it is the last text cut, only
+once no call or round is left and the record is still too large. Texts shorter
+than the level are left whole, the tokens and the cost always are, and the
+record's `whole_bytes`, `whole_parts` and notes say what was cut and where the
+whole is (`phase_record_fitted` in the log). If a part cannot be published the
+whole is not kept, and the record's notes say so and why
 (`phase_record_whole_not_kept`).
 
 A record, or a part, refused although it is *within* 8 MiB was refused by a
-NATS server configured below that ceiling. The node halves what it cuts the
-record to on each such refusal and splits a refused part in two, rather than
-guessing the server's limit, and logs `phase_record_refused_within_ceiling`,
+NATS server configured below that ceiling, and the node does not guess that
+server's limit. Each part of the whole it refuses is retried at half its size,
+or at 64 KiB of data when half would be smaller, and the whole is given up
+only when a part of 64 KiB or less is refused; the record is cut to half the
+smallest message the server has refused, a part or the record, halving again
+on each further refusal. The node logs `phase_record_refused_within_ceiling`,
 naming `max_payload`. Only a server that refuses even the record's smallest
-form — every text at its mark, every call counted — leaves the phase with no
-record (`phase_record_not_published`), and its whole is still readable if its
-parts landed. A node does not boot against an external cluster whose server
-announces less, so this is a server it met later, after a reconnect.
+form — every text at its mark, the error included, every call and round
+counted — leaves the phase with no record (`phase_record_not_published`), and
+its whole is still readable if its parts landed. A node does not boot against
+an external cluster whose server announces less, so this is a server it met
+later, after a reconnect.
 
 #### Code work inside the run
 

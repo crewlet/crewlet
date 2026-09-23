@@ -1,6 +1,7 @@
 package coordtest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -2049,6 +2050,44 @@ var runCases = []fleetCase{{
 		again, _ := h.run("turn-1")
 		if string(again.Value) != `{"status":"running"}` {
 			h.t.Errorf("the store took a caller's mutation: %q", again.Value)
+		}
+	},
+}, {
+	// A RUN'S RECORD IS ONE MESSAGE, and the twin has no transport to refuse
+	// one: without the ceiling stated by the contract it would keep a run
+	// the broker refuses. PERMANENT, and said so, because the same record is
+	// refused the same way every time — read as "unavailable" it would be
+	// retried for ever, and a refused update must leave the record as it was.
+	name: "a run at the ceiling is stored whole, and one past it is refused",
+	fn: func(h *fleetHarness) {
+		whole := bytes.Repeat([]byte("r"), coord.MaxRecordBytes)
+		created, err := h.f.CreateSandboxRun(h.ctx, "turn-1", whole)
+		if err != nil || !created {
+			h.t.Fatalf("a run of exactly coord.MaxRecordBytes = %v, %v", created, err)
+		}
+		record, found := h.run("turn-1")
+		if !found || !bytes.Equal(record.Value, whole) {
+			h.t.Fatal("the run at the ceiling did not come back whole")
+		}
+		refused := func(what string, err error) {
+			h.t.Helper()
+			switch {
+			case err == nil:
+				h.t.Errorf("%s one byte past coord.MaxRecordBytes was accepted", what)
+			case !errors.Is(err, coord.ErrTooLarge) || errors.Is(err, coord.ErrUnavailable):
+				h.t.Errorf("%s past the ceiling = %v, want coord.ErrTooLarge and not "+
+					"coord.ErrUnavailable", what, err)
+			}
+		}
+		_, err = h.f.UpdateSandboxRun(h.ctx, "turn-1", append(whole, 'z'), record.Version)
+		refused("an update", err)
+		if again, _ := h.run("turn-1"); again.Version != record.Version || !bytes.Equal(again.Value, whole) {
+			h.t.Error("a refused update changed the record")
+		}
+		_, err = h.f.CreateSandboxRun(h.ctx, "turn-2", append(whole, 'z'))
+		refused("a create", err)
+		if _, found := h.run("turn-2"); found {
+			h.t.Error("a refused create left a run")
 		}
 	},
 }, {

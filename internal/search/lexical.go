@@ -798,6 +798,20 @@ func (x *Indexer) Run(ctx context.Context) {
 // could not be read says so rather than reporting zero, which is the healthy
 // reading and would be a claim nobody made.
 func (x *Indexer) announceBuilt(ctx context.Context, announced map[string]bool) {
+	for _, attrs := range x.builtLines(ctx, announced) {
+		log.InfoContext(ctx, "lexical_index_built", attrs...)
+	}
+}
+
+// builtLines is the attributes of one `lexical_index_built` line per corpus
+// whose first lap has finished since the last call — see [Indexer.announceBuilt].
+//
+// ITS OWN FUNCTION so what the line says can be asserted: which corpus, and
+// that corpus's own pending count or the reason it could not be read. The
+// count is read PER CORPUS, because a line about the pages that carried the
+// work items' error would be a line about a corpus it does not name.
+func (x *Indexer) builtLines(ctx context.Context, announced map[string]bool) [][]any {
+	var out [][]any
 	for _, name := range x.newlyBuilt(announced) {
 		attrs := []any{"source", name}
 		if pending, err := x.Pending(ctx, name); err != nil {
@@ -805,8 +819,9 @@ func (x *Indexer) announceBuilt(ctx context.Context, announced map[string]bool) 
 		} else {
 			attrs = append(attrs, "pending", pending)
 		}
-		log.InfoContext(ctx, "lexical_index_built", attrs...)
+		out = append(out, attrs)
 	}
+	return out
 }
 
 // newlyBuilt is each source whose first lap has finished and that announced
@@ -859,7 +874,7 @@ const indexIdle = 2 * time.Second
 // EXPORTED because two callers need exactly this and neither should reach past
 // it: [Indexer.Run] is the loop, and a test drives the index to a fixed point
 // by calling this until it stops finding work. The alternative — a test that
-// waited on [Indexer.ReadyFor] — waits on the FIRST-BUILD gate, which closes
+// waited on [Indexer.ReadyFor] — waits on the FIRST-BUILD gate, which opens
 // once per process and is deliberately blind to a row that is merely stale.
 func (x *Indexer) Sweep(ctx context.Context) (bool, error) {
 	stale, err := x.Stale(ctx, IndexBatch)

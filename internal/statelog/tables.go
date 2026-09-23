@@ -506,6 +506,25 @@ func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool,
 	}, true, nil
 }
 
+// retainedState is the earliest record this node could not decode and how
+// many it holds, read in the caller's one transaction so the two describe the
+// same table.
+func (t tables) retainedState(ctx context.Context, tx *sql.Tx) (Deferral, uint64, error) {
+	var held int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM `+t.deferred).Scan(&held); err != nil {
+		return Deferral{}, 0, fmt.Errorf("statelog: count the retained records: %w", err)
+	}
+	if held == 0 {
+		return Deferral{}, 0, nil
+	}
+	d, _, err := t.oldestDeferred(ctx, tx)
+	if err != nil {
+		return Deferral{}, 0, err
+	}
+	return d, uint64(held), nil
+}
+
 // placeholders renders n bind markers.
 func placeholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")

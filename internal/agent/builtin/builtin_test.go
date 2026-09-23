@@ -777,6 +777,8 @@ type searcher struct{}
 
 func (searcher) CanSearch(*org.Role, *org.Organization) bool { return true }
 
+func (searcher) Building(context.Context) bool { return false }
+
 func (searcher) Search(context.Context, knowledge.Query) []knowledge.Hit { return nil }
 
 func fullDeps(t *testing.T) builtin.Deps {

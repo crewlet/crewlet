@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -82,13 +83,17 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	// A COPY PASSED BY PATH IS OPENED ON THE STORE'S OWN DEFAULTS: it
+	// belongs to no node, so no Tier A document describes how to open it.
 	path := strings.TrimSpace(*storePath)
+	var opts store.Options
 	if path == "" {
 		boot, err := config.LoadBootstrap(*configPath, config.EnvOnly())
 		if err != nil {
 			return err
 		}
-		path = store.ReplicatedPath(boot.Store.Path, boot.Store.ReplicatedPath)
+		opts = engine.StoreOptions(boot)
+		path = store.ReplicatedPath(boot.Store.Path, opts.ReplicatedPath)
 	}
 
 	ctx := context.Background()
@@ -96,7 +101,7 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 	// estate — the node's own or a backup's — and opening it as a node
 	// would apply the OTHER estate's whole migration sequence into it and
 	// open a second file beside it.
-	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
+	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, opts)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}

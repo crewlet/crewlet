@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -18,8 +19,16 @@ func Reference() string {
 	for _, kind := range []Kind{KindHistogram, KindGauge, KindCounter} {
 		b.WriteString("\n## " + sectionTitle(kind) + "\n\n")
 		b.WriteString(sectionBlurb(kind))
-		b.WriteString("\n| Metric | Unit | Attributes | What it makes visible |\n")
-		b.WriteString("|---|---|---|---|\n")
+		// A HISTOGRAM'S BUCKETS ARE A COLUMN OF ITS OWN, because they are
+		// per instrument: a quantile read off a panel is only as fine as
+		// the boundaries it was counted against.
+		if kind == KindHistogram {
+			b.WriteString("\n| Metric | Unit | Buckets | Attributes | What it makes visible |\n")
+			b.WriteString("|---|---|---|---|---|\n")
+		} else {
+			b.WriteString("\n| Metric | Unit | Attributes | What it makes visible |\n")
+			b.WriteString("|---|---|---|---|\n")
+		}
 		for _, inst := range Catalogue() {
 			if inst.Kind != kind {
 				continue
@@ -28,12 +37,29 @@ func Reference() string {
 			if len(inst.Attributes) > 0 {
 				attrs = "`" + strings.Join(inst.Attributes, "`, `") + "`"
 			}
+			if kind == KindHistogram {
+				fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s |\n",
+					inst.Name, inst.Unit, bucketsOf(inst), attrs, inst.Shows)
+				continue
+			}
 			fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s |\n",
 				inst.Name, inst.Unit, attrs, inst.Shows)
 		}
 	}
 	b.WriteString(referenceFooter)
 	return b.String()
+}
+
+// bucketsOf names a histogram's boundaries for the reference: the default set
+// by name, and an instrument's own by its span and how many there are.
+func bucketsOf(inst Instrument) string {
+	if inst.Bounds == nil {
+		return "default"
+	}
+	bounds := inst.Buckets()
+	return fmt.Sprintf("%d, from %s to %s", len(bounds),
+		strconv.FormatFloat(bounds[0], 'f', -1, 64),
+		strconv.FormatFloat(bounds[len(bounds)-1], 'f', -1, 64))
 }
 
 func sectionTitle(k Kind) string {
@@ -50,14 +76,17 @@ func sectionTitle(k Kind) string {
 func sectionBlurb(k Kind) string {
 	switch k {
 	case KindHistogram:
-		return "A distribution, exported with the engine's own bucket " +
-			"boundaries: twenty-one powers of two from 1/16 to 65 536 in the " +
-			"instrument's own unit — 62.5 µs to about 65.5 s for a duration " +
-			"in milliseconds — so a percentile read from them is within a " +
-			"factor of two anywhere in that range. The SDK's default " +
-			"boundaries stop at 10 000, which for a duration in milliseconds " +
-			"is 10 s: anything slower would land in the overflow bucket and " +
-			"read only as \"more than 10 s\".\n"
+		return "A distribution, exported with each instrument's own bucket " +
+			"boundaries, so a bucket on your panel is the bucket the engine " +
+			"counted into. The default set is twenty-one powers of two from " +
+			"1/16 to 65 536 in the instrument's own unit — 62.5 µs to about " +
+			"65.5 s for a duration in milliseconds — so a percentile read " +
+			"from them is within a factor of two anywhere in that range. An " +
+			"instrument whose range that does not cover declares its own, " +
+			"listed in its row. The SDK's default boundaries stop at " +
+			"10 000, which for a duration in milliseconds is 10 s: anything " +
+			"slower would land in the overflow bucket and read only as " +
+			"\"more than 10 s\".\n"
 	case KindGauge:
 		return "A value that goes both ways, sampled at each export.\n"
 	default:
@@ -99,9 +128,15 @@ rather than by how much work your company has done.
 const referenceFooter = `
 ## What is deliberately not here
 
-**Rates.** Every counter is a monotonic total and your collector divides. A
-rate computed in this process would be a rate over a window nobody chose,
-disagreeing with the one on your dashboard.
+**Rates, bar the applier's own.** Every counter is a monotonic total and your
+collector divides: a rate computed in this process would be a rate over a
+window nobody chose, disagreeing with the one on your dashboard. The two
+` + "`crewlet.statelog.drain.*`" + ` gauges are the exception, because the engine needs
+the rate itself: it divides a record backlog by the records-a-second drain to
+state that backlog as a time — against a stale read's staleness bound, in a
+refused read's retry hint and in a bulk edit's projection — and the commits a
+second beside it is measured over the same apply runs. Both are smoothed across
+those runs rather than taken over a window.
 
 **A ` + "`/metrics`" + ` route.** OTLP reaches Prometheus through the collector you
 already run for traces. A second wire format would be a second thing to

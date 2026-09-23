@@ -603,6 +603,33 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// take the slot first.
 	c.clearBusy(run.AgentHandle)
 
+	// THE CONVERSATION WHOLE: a row that could not hold its suspension holds
+	// a reference to the parts it is kept in, and the resume re-enters what
+	// they hold. A reference is never empty, so the check above has already
+	// asked the right question of it.
+	state, err := c.pending.Suspension(ctx, run)
+	switch {
+	case errors.Is(err, ErrSuspensionUnreadable):
+		// Its parts are what the row names, and a retry reads the same ones:
+		// the conversation is lost, like a row that never carried one.
+		log.ErrorContext(ctx, "sandbox_resume_suspension_unreadable",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", err.Error(),
+			"detail", "the run's suspended conversation was kept in parts that do not make the "+
+				"whole its record names; the turn cannot be resumed and the run is failed")
+		c.settleFailed(ctx, run, types.SandboxFailureNoConversation,
+			"the run's suspended conversation was kept in parts that could not be read back "+
+				"whole, so the turn that started it cannot be continued")
+		return nil
+	case err != nil:
+		// UN-CLAIMED, as a resume that failed is: the store could not be
+		// read, and the retry the signal's redelivery brings may.
+		log.ErrorContext(ctx, "sandbox_resume_failed",
+			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
+		c.unclaim(ctx, run, false)
+		return err
+	}
+	run.ExecuteState = state
+
 	// STRAIGHT TO THE RESUMER, which [NewCoordinator] refuses to be built
 	// without: "this node cannot resume this run" is the resumer's own
 	// answer, wrapping [ErrResumeUnavailable], and it takes the failure

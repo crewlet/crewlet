@@ -305,6 +305,61 @@ func TestASmallCorpusIsAnsweredWithoutTheFleet(t *testing.T) {
 	}
 }
 
+// AN ASK PAST WHAT A FAN-OUT CAN ANSWER IS REFUSED, NAMING THE CEILING.
+//
+// Each participant returns its top [search.FuseN] per method, so a lexical
+// search can never fuse more than that many however many the caller asked for.
+// Answered, a larger ask comes back short with nothing saying so — a short
+// result set is indistinguishable from a short corpus. At the ceiling the ask
+// is served whole, and an ask that names none takes the ceiling.
+func TestAnAskPastWhatAFanOutCanAnswerIsRefused(t *testing.T) {
+	t.Parallel()
+	// MORE DOCUMENTS THAN THE CEILING in each half, and no document in
+	// both, so the fused list is longer than the ceiling and an answer
+	// held to it is the ceiling's doing rather than the corpus's.
+	var lexical, semantic []search.Scored
+	for i := range search.FuseN + 10 {
+		lexical = append(lexical, search.Scored{
+			Key: fmt.Sprintf("page:lex-%03d", i), Score: float64(1000 - i)})
+		semantic = append(semantic, search.Scored{
+			Key: fmt.Sprintf("page:sem-%03d", i), Score: float64(-i)})
+	}
+	scans := 0
+	fan := &search.FanOut{Self: "n1", Local: scanFunc(func() search.Slice {
+		scans++
+		return search.Slice{Node: "n1", Lexical: lexical, Semantic: semantic}
+	})}
+
+	_, err := fan.Search(t.Context(), search.FanQuery{Limit: search.FuseN + 1})
+	if !errors.Is(err, search.ErrLimit) {
+		t.Fatalf("an ask for %d answered %v, want %v", search.FuseN+1, err, search.ErrLimit)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprint(search.FuseN)) {
+		t.Errorf("the refusal %q does not name the ceiling", err)
+	}
+	if scans != 0 {
+		t.Errorf("a refused ask scanned the corpus %d time(s)", scans)
+	}
+
+	for _, ask := range []int{search.FuseN, 0} {
+		answer, err := fan.Search(t.Context(), search.FanQuery{Limit: ask})
+		if err != nil {
+			t.Fatalf("an ask for %d was refused: %v", ask, err)
+		}
+		if len(answer.Hits) != search.FuseN {
+			t.Errorf("an ask for %d answered %d hits, want %d", ask,
+				len(answer.Hits), search.FuseN)
+		}
+	}
+}
+
+// scanFunc is a local scan answering whatever the function returns.
+type scanFunc func() search.Slice
+
+func (f scanFunc) Scan(context.Context, search.FanQuery, search.Assignment) (search.Slice, error) {
+	return f(), nil
+}
+
 // AN UNREADABLE ROSTER STILL ANSWERS.
 //
 // Fleet membership is a coordination read, and a company must be able to

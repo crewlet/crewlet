@@ -325,6 +325,17 @@ type Page struct {
 	// Ancestors are the parent chain, outermost first. It is what the
 	// auto-draft exclusion reads.
 	Ancestors []string
+	// AncestorsKnown says the answer carried the `ancestors` key as a list,
+	// so Ancestors is the page's whole chain and an empty one is a page at
+	// the top of its space.
+	//
+	// ITS OWN FIELD because the list alone cannot say it: a page at the top
+	// of its space comes back with `"ancestors": []`, and an answer that
+	// lost the expand comes back with no key at all, and both decode to an
+	// empty list. The exclusion needs the two apart — the first page is
+	// under nothing, the second might be under the draft parent — see
+	// [knowledge.Hit.AncestorsKnown].
+	AncestorsKnown bool
 	// Labels are the page's global labels, which is where this tool
 	// records that it wrote a page. See [ImportedSkillLabel].
 	Labels  []string
@@ -357,7 +368,10 @@ type pageWire struct {
 			Value string `json:"value"`
 		} `json:"storage"`
 	} `json:"body"`
-	Ancestors []struct {
+	// A POINTER, so the key's absence survives the decode: nil is an answer
+	// with no `ancestors` key (or a null one), and a non-nil pointer to an
+	// empty list is `"ancestors": []`. See [Page.AncestorsKnown].
+	Ancestors *[]struct {
 		Title string `json:"title"`
 	} `json:"ancestors"`
 	Version struct {
@@ -379,9 +393,12 @@ func (w pageWire) page() Page {
 	page := Page{
 		ID: w.ID, Title: w.Title, Space: w.Space.Key,
 		Body: w.Body.Storage.Value, Version: w.Version.Number,
+		AncestorsKnown: w.Ancestors != nil,
 	}
-	for _, ancestor := range w.Ancestors {
-		page.Ancestors = append(page.Ancestors, ancestor.Title)
+	if w.Ancestors != nil {
+		for _, ancestor := range *w.Ancestors {
+			page.Ancestors = append(page.Ancestors, ancestor.Title)
+		}
 	}
 	for _, label := range w.Metadata.Labels.Results {
 		page.Labels = append(page.Labels, label.Name)

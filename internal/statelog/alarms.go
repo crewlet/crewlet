@@ -15,6 +15,7 @@ package statelog
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -36,11 +37,14 @@ import (
 // So an alarm fires at the threshold that MATTERS, and where the constant
 // belongs to another package it is taken from there.
 const (
-	// StallGrace is how far behind a node may be before its lag is worth
-	// a person's attention. Sixty seconds, which is four heartbeats: long
-	// enough that a rolling restart or one oversized record passes
-	// through it, short enough that a node that has actually stopped is
-	// named within a minute.
+	// StallGrace is how long a node may owe records before that is worth
+	// a person's attention: the age past which the oldest record it has
+	// not applied raises `apply_lag`, and how long its applied prefix may
+	// stand still with records waiting before its reads refuse as
+	// stalled and its seats move. Sixty seconds: long enough that a
+	// rolling restart or one oversized record passes through it, short
+	// enough that a node that has actually stopped is named by the first
+	// report assembled a minute after the first record it did not apply.
 	StallGrace = 60 * time.Second
 
 	// DeferralGrace is how long a node may hold records it could not
@@ -161,13 +165,13 @@ const (
 	KindCensusDrift      Kind = "census_drift"
 )
 
-// Reading is everything an alarm evaluation looks at, gathered once per tick.
+// Reading is everything an alarm evaluation looks at, gathered once per report.
 //
 // ONE STRUCT rather than a callback per condition, because the whole table is
-// evaluated together on ticks that already run — the trim's fifteen minutes
-// and the heartbeat's fifteen seconds — and a condition that fetched its own
-// input would make the cost of the table a function of how many alarms are
-// defined rather than of how many facts it reads.
+// evaluated together every time a node assembles its report ([NewReport]), and
+// a condition that fetched its own input would make the cost of the table a
+// function of how many alarms are defined rather than of how many facts it
+// reads.
 //
 // A field this node cannot measure is left at its zero value, and every
 // condition is written so that a zero reads as "nothing to report" rather than
@@ -175,7 +179,10 @@ const (
 // snapshot and no maintenance in flight evaluate the same table as one with
 // all three.
 type Reading struct {
-	// ApplyLag is how old the oldest unapplied record is.
+	// ApplyLag is how old the oldest record this node has not applied is,
+	// in whichever of its domains is furthest behind — an AGE, which grows
+	// with the clock whether the applier runs or not, so a stopped applier
+	// on a quiet log is named as surely as a slow one on a busy log.
 	ApplyLag time.Duration
 
 	// RefusalsSince is how long reads have been refused for a reason other
@@ -318,9 +325,8 @@ var table = []rule{
 					"than ordinary lag", round(r.RefusalsSince)),
 				r.RefusalsSince > coord.ReconcileInterval
 		},
-		remedy: "Read the refusal code in the logs. Anything other than `" +
-			string(RefuseBehind) + "` or `" + string(RefuseTooStale) +
-			"` is a fault rather than a wait.",
+		remedy: "Read the refusal code in the logs. Anything other than " +
+			ordinaryLagCodes() + " is a fault rather than a wait.",
 	},
 	{
 		kind: KindBarrierSlow,
@@ -589,6 +595,19 @@ func bytesHuman(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// ordinaryLagCodes names every refusal code [ReadRefusal.OrdinaryLag] reads as
+// a wait, in [ReadRefusals] order, for the remedy that tells an operator which
+// codes are not a fault.
+func ordinaryLagCodes() string {
+	var codes []string
+	for _, code := range ReadRefusals {
+		if code.OrdinaryLag() {
+			codes = append(codes, "`"+string(code)+"`")
+		}
+	}
+	return strings.Join(codes, " or ")
 }
 
 // RefusalAlarmFloor is what a surface reports when it can see that reads are

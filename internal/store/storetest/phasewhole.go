@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -212,31 +213,53 @@ func testPhaseRecordWholeRefusesPartsThatDoNotContinueIt(t *testing.T, db *store
 
 // testPhaseRecordWholeReadsTheNewestRow: an id names more than one row only
 // when it is shared — the key is (event_time, event_id) — and then the read
-// answers the newest, as ByID does: here a whole record written after a cut
-// one under the same id, and a part written twice.
+// answers the newest, as ByID does: here a part written twice, and a whole
+// record beside a cut one under the same id.
+//
+// THE NEWER ROW IS WRITTEN FIRST in both. The read walks an id's rows in the
+// order they were written, so a read that kept the last row it walked would
+// answer the newest of rows written oldest first — and pass a case that
+// wrote them that way.
 func testPhaseRecordWholeReadsTheNewestRow(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	c := newCutRecord(t, base, 2000, 0)
-	for _, rec := range append(c.parts, c.row) {
+	// The first part twice, the newer row carrying other bytes of the same
+	// length: the whole reads back with the newer row's.
+	newerPart := c.parts[0]
+	newerPart.Time = base.Add(time.Second)
+	var body map[string]any
+	if err := json.Unmarshal(newerPart.Payload, &body); err != nil {
+		t.Fatal(err)
+	}
+	newerBytes := bytes.Repeat([]byte("#"), 2000)
+	body["data"] = newerBytes
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerPart.Payload = raw
+	for _, rec := range append([]store.EventRecord{newerPart}, append(c.parts, c.row)...) {
 		write(t, log, rec)
 	}
-	// The first part again, later, carrying the same bytes: the parts still
-	// reassemble, from whichever row of it the read keeps.
-	again := c.parts[0]
-	again.Time = base.Add(time.Second)
-	write(t, log, again)
-	if got, err := log.PhaseRecordWhole(ctx, c.id.String()); err != nil || !bytes.Equal(got.Payload, c.whole) {
-		t.Fatalf("a part written twice reads back as %d bytes (%v); want the whole", len(got.Payload), err)
+	want := append(slices.Clone(newerBytes), c.whole[2000:]...)
+	got, err := log.PhaseRecordWhole(ctx, c.id.String())
+	if err != nil || !bytes.Equal(got.Payload, want) {
+		t.Fatalf("a part written twice reads back as %d bytes (%v); want the whole with the newer "+
+			"row's part", len(got.Payload), err)
 	}
 
-	// A NEWER ROW UNDER THE RECORD'S ID, this one whole: it is the answer.
+	// A NEWER ROW UNDER A CUT RECORD'S ID, this one whole: it is the answer,
+	// though every part the cut row names is here too.
+	cut := newCutRecord(t, base.Add(time.Hour), 2000, 0)
 	newer := store.EventRecord{
-		ID: c.id.String(), Type: "agent_phase_completed", Time: base.Add(time.Minute),
+		ID: cut.id.String(), Type: "agent_phase_completed", Time: base.Add(2 * time.Hour),
 		Category: "llm", Payload: json.RawMessage(`{"phase":"execute","response":"the newer row"}`),
 	}
-	write(t, log, newer)
-	got, err := log.PhaseRecordWhole(ctx, c.id.String())
+	for _, rec := range append([]store.EventRecord{newer}, append(cut.parts, cut.row)...) {
+		write(t, log, rec)
+	}
+	got, err = log.PhaseRecordWhole(ctx, cut.id.String())
 	if err != nil || !bytes.Equal(got.Payload, newer.Payload) || got.Parts != 0 {
 		t.Fatalf("the record reads back as %d bytes from %d parts (%v); want its newest row, %q",
 			len(got.Payload), got.Parts, err, newer.Payload)

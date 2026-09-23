@@ -181,10 +181,7 @@ type searcher struct {
 	queries []knowledge.Query
 	cannot  bool
 
-	// building reports the backend's index as still catching up. A real
-	// one that keeps no index does not implement this at all, which is
-	// why the fetcher reaches it through an optional interface — the
-	// method is here unconditionally because a fake cannot be two types.
+	// building reports the backend's index as still on its first build.
 	building bool
 }
 
@@ -636,14 +633,52 @@ func TestTheModelWritesTheSearchQuery(t *testing.T) {
 	if len(asked) != 1 || asked[0].Text != "login redirect loop staging proxy" {
 		t.Fatalf("the search ran as %+v", asked)
 	}
+	if asked[0].Limit != prefetch.KnowledgeHits {
+		t.Errorf("the block asked for %d pages, want the %d it renders",
+			asked[0].Limit, prefetch.KnowledgeHits)
+	}
 	if !strings.Contains(got, "Staging runbook") ||
 		!strings.Contains(got, "how the proxy is wired") {
 		t.Fatalf("the hit did not render:\n%s", got)
 	}
 	// THE POINTER IS THE POINT: a seat acting on a snippet would be acting
 	// on the first two hundred characters of a runbook.
-	if !strings.Contains(got, "look it up by title") {
-		t.Fatalf("the block does not say to open the page:\n%s", got)
+	if !strings.HasSuffix(got, prefetch.KnowledgeReadHint) {
+		t.Fatalf("the block does not say how to open a page:\n%s", got)
+	}
+}
+
+// A BULLET CARRIES WHAT IT TAKES TO OPEN THE PAGE.
+//
+// The page-read tool on either backend takes the page id, and a bullet without
+// it costs the seat a listing round to find the page it was just shown. The
+// title and the snippet are what decide WHETHER to open it; the container and
+// the id are what open it.
+func TestAKnowledgeBulletCarriesWhatOpensThePage(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		hit  knowledge.Hit
+		want string
+	}{
+		{"everything",
+			knowledge.Hit{Title: "Staging runbook", Container: "ENG", PageID: "p-17",
+				Snippet: "how the  proxy\nis wired"},
+			"- **Staging runbook** (ENG, page id p-17): how the proxy is wired"},
+		{"no snippet",
+			knowledge.Hit{Title: "Staging runbook", Container: "ENG", PageID: "p-17"},
+			"- **Staging runbook** (ENG, page id p-17)"},
+		{"no container",
+			knowledge.Hit{Title: "Staging runbook", PageID: "p-17", Snippet: "x"},
+			"- **Staging runbook** (page id p-17): x"},
+		{"no title, but something to open",
+			knowledge.Hit{Container: "ENG", PageID: "p-17"},
+			"- **(untitled)** (ENG, page id p-17)"},
+		{"nothing to show and nothing to open", knowledge.Hit{}, ""},
+	} {
+		if got := prefetch.KnowledgeBullet(tc.hit); got != tc.want {
+			t.Errorf("%s: rendered %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -724,12 +759,16 @@ func TestTheKnowledgeCountSeparatesPagesFromTheEmptyHint(t *testing.T) {
 	found := fetch(t, prefetch.Sources{
 		Knowledge: &searcher{hits: []knowledge.Hit{
 			{Title: "Staging runbook", Snippet: "how the proxy is wired"},
+			// NOTHING TO SHOW AND NOTHING TO OPEN, so it renders as
+			// nothing — and a count that included it would report a page
+			// the block never surfaced.
+			{},
 			{Title: "Rollback drill", Snippet: "who to page"},
 		}},
 		Models: models{provider: &aux{answers: []string{"q"}}},
 	}, request(t))
 	if found.RelevantKnowledgeHits != 2 {
-		t.Errorf("two pages rendered as %d hits", found.RelevantKnowledgeHits)
+		t.Errorf("two rendered pages were counted as %d hits", found.RelevantKnowledgeHits)
 	}
 
 	empty := fetch(t, prefetch.Sources{

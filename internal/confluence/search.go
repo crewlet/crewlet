@@ -86,11 +86,14 @@ func (s *Searcher) CanSearch(seat *org.Role, o *org.Organization) bool {
 	return allowed
 }
 
+// Building implements [knowledge.Searcher], and is always false: this search
+// is a live query against the site, with no index of this node's own to build.
+func (s *Searcher) Building(context.Context) bool { return false }
+
 // Search implements [knowledge.Searcher].
 //
 // BEST EFFORT: it never reports an error. Every failure path is an empty
-// result and the prefetch degrades to an empty block — a turn must not die
-// because a wiki was slow.
+// result — a turn must not die because a wiki was slow.
 func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
 	if s == nil || strings.TrimSpace(q.Text) == "" {
 		return nil
@@ -139,14 +142,14 @@ func (s *Searcher) hits(pages []Page, q knowledge.Query) []knowledge.Hit {
 		hit := knowledge.Hit{
 			Title: page.Title, URL: s.link(page), Container: page.Space,
 			PageID: page.ID, Ancestors: page.Ancestors,
-			// KNOWN ONLY WHEN IT CAME BACK NON-EMPTY. The chain is the
-			// search's `ancestors` expand, and an empty one is either a
-			// page at the top of its space or an answer that lost the
-			// expand — which [Page] does not tell apart. Claimed as
-			// known, the second would publish every draft whose parent
-			// the site left out; left unknown, a draft at the top of its
-			// space is judged by its title prefix, which fails closed.
-			AncestorsKnown: len(page.Ancestors) > 0,
+			// KNOWN WHEN THE ANSWER CARRIED THE CHAIN, an empty one
+			// included: `"ancestors": []` is a page at the top of its
+			// space, so a draft a lead moved there is published by the
+			// move like one moved under another page. An answer that lost
+			// the expand carries no key at all, and that one stays unknown
+			// — claimed as known, it would publish every draft whose
+			// parent the site left out.
+			AncestorsKnown: page.AncestorsKnown,
 		}
 		if knowledge.Excludes(hit, excluded) {
 			continue

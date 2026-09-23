@@ -43,9 +43,14 @@
 // returns one: they are machinery, and a seat told to read one would follow an
 // instruction written for a different phase of a different turn. The ROOT
 // container holds the organisation's own pages, starting with the Onboarding
-// page every seat reads first. Both are refused as a unit's own space by the
-// config loader, and both are named there rather than here so an operator can
-// move either.
+// page every seat reads first, and is searched like any other. Both are
+// refused as a unit's own space by the config loader, and both are named there
+// rather than here so an operator can move either.
+//
+// Neither is closed by this package: a seat's page tools refuse to write into
+// either, and an operator's own assistant writes both — which is how a
+// company on this knowledge base publishes its skills and its root Onboarding
+// page. See [github.com/crewlet/crewlet/internal/agent/builtin.PageDeps].
 //
 // # The two-key sequences this no longer has
 //

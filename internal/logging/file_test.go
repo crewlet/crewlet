@@ -359,9 +359,9 @@ func TestReopeningAppendsAndCountsWhatIsAlreadyThere(t *testing.T) {
 
 // THE DIRECTORY IS CREATED, and both it and the file are private.
 //
-// A log line is redacted but it is not a public document, and a path under a
-// directory the operator has not made yet is the ordinary case
-// (`/var/log/crewlet/crewlet.log`) rather than a mistake.
+// A log line is not a public document, and a path under a directory the
+// operator has not made yet is the ordinary case (`/var/log/crewlet/crewlet.log`)
+// rather than a mistake.
 func TestTheDirectoryIsCreatedAndBothArePrivate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "deeper", "crewlet.log")
 	f, err := OpenFile(FileOptions{Path: path}, nil)

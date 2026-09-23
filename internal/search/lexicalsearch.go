@@ -774,13 +774,16 @@ func binds(n int) string {
 // THE FAN-OUT RETURNS KEYS, not rows, and it has to: a slice that carried
 // titles and snippets across the broker would move a kilobyte per candidate to
 // render ten. So the coordinator fuses ids and reads the rows here — locally,
-// from tables that hold the whole corpus, which is what makes hydrating a
-// PEER's hit an ordinary local read rather than a second round trip.
+// from this node's own index, which is what makes hydrating a PEER's hit an
+// ordinary local read rather than a second round trip.
 //
-// A key whose row is gone is SKIPPED rather than rendered blank, on
-// [Indexer.hydrateHits]'s terms: between the scan and this read the indexer
-// may have removed a document, and a document that no longer exists is not an
-// answer.
+// A key this node's index holds no row for is SKIPPED rather than rendered
+// blank, on [Indexer.hydrateHits]'s terms. Two things leave one: the indexer
+// removed a document between the scan and this read, and a document that no
+// longer exists is not an answer; or this node's index is still on its first
+// build and has not reached a document a peer ranked — which is why a search
+// on such a node reports itself as building rather than as a whole answer
+// ([Indexer.ReadyFor]).
 //
 // # IT RETURNS [FusedHit], WHICH HAS NO SCORE, AND THAT IS THE POINT
 //
@@ -789,13 +792,9 @@ func binds(n int) string {
 // on. What comes back HERE has been through reciprocal rank fusion across two
 // rankers and across disjoint slices, so the only thing left is an ORDER — the
 // fused number is a sum of reciprocal placements and means nothing beside a
-// BM25 score.
-//
-// It used to return [LexicalHit] and set no score at all, so every hit the two
-// ranked readers in this tree render carried a confident `Score: 0`. A zero
-// that is not a value is exactly the shape a type has to refuse rather than
-// document, so this one does: a caller cannot read a score that does not
-// exist.
+// BM25 score. A score field here could only ever carry a zero that is not a
+// value, which is the shape a type has to refuse rather than document: a
+// caller cannot read a score that does not exist.
 func (x *Indexer) Hydrate(ctx context.Context, keys []string, text string) ([]FusedHit, error) {
 	if len(keys) == 0 {
 		return nil, nil

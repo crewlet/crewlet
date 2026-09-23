@@ -13,31 +13,36 @@
 // The container vocabulary. A caller passes a seat, a plain-text query and
 // ancestor exclusions — never a CQL fragment, a space key or a project list.
 //
-// TWO IMPLEMENTATIONS SHIP, which is what the seam was built for and is now
-// the argument for it rather than a promise about one: the engine's own pages
-// ([internal/pages.Searcher], the default) and Confluence. The interface is
-// declared by its CONSUMERS, so the second backend was one new implementation
-// rather than a rewrite of everything that searches — and a caller that knew
-// Confluence's own narrowing vocabulary would have been a caller to rewrite
-// the day a company ran the native one.
+// TWO IMPLEMENTATIONS SHIP: the engine's own pages ([internal/pages.Searcher],
+// the default) and Confluence. The interface belongs to the package its
+// readers share rather than to either backend, so each backend is one
+// implementation of it, and no caller ever learns a backend's own narrowing
+// vocabulary.
 //
-// [engine.Knowledge] is what picks between them, and it is a NIL CHECK rather
-// than a preference: a company on `backend: confluence` has no native
-// searcher at all, and the config refuses a company that configures both.
+// The engine answers with the searcher of the backend its RUNNING
+// configuration names, never with whichever one it happens to hold: a node
+// keeps its native searcher for as long as it runs, so a company that moved
+// to Confluence, or to none, has to stop being answered from it at once. See
+// the engine's Knowledge method.
 //
 // # The rules every backend honours
 //
 //   - SCOPE LIVES BEHIND THE SEAM, and is derived per call from the org, so a
 //     live config edit to the read scope takes effect with no refresh hook.
-//   - UNSCOPED IS NOT THE SAME AS UNBOUNDED. An empty scope plus a seat that
-//     authenticates as its own backend user means an unscoped search, bounded
-//     by that account's own ACLs. An empty scope plus a seat with no
-//     credential of its own means NO results — searching the whole instance
-//     on a shared engine credential is how one seat reads what its own
-//     account never could.
+//   - WHAT AN EMPTY SCOPE MEANS IS THE BACKEND'S, and the two differ. On
+//     Confluence a seat can authenticate as its own user, so an empty scope
+//     there is unscoped only for such a seat, bounded by that account's own
+//     ACLs, and NOTHING for a seat on the shared engine credential —
+//     searching the whole instance on that credential is how one seat reads
+//     what its own account never could ([Permitted]). The native backend has
+//     no per-seat credential and no second account to read through, so an
+//     empty scope there is the whole company.
 //   - BEST EFFORT. Search never fails the caller: every failure path is an
-//     empty result and the prefetch degrades to an empty block. A turn must
-//     not die because a wiki was slow.
+//     empty result. A turn must not die because a wiki was slow.
+//   - A BUILDING INDEX SAYS SO. A backend that answers from an index of its
+//     own reports whether that index has finished its first build
+//     ([Searcher.Building]), because "nothing matched" and "not indexed yet"
+//     send a seat to opposite places. A backend with no index answers false.
 package knowledge
 
 import (
@@ -59,10 +64,11 @@ const AutoDraftedParent = "Auto-Drafted Skills"
 
 // DraftPage is an auto-drafted page a promotion writer created or found.
 //
-// Declared here rather than in internal/learning because BOTH sides need it
-// (the pass that asks for a draft and the two integration writers that make
-// one), and internal/knowledge is the package neither of them would have to
-// import the other to reach.
+// Declared here rather than in internal/learning because BOTH sides need it —
+// the promotion pass that asks for a draft, and the writer that makes one,
+// which is Confluence's: the native knowledge base has no promotion writer —
+// and internal/knowledge is the package neither of them would have to import
+// the other to reach.
 type DraftPage struct {
 	ID    string
 	Title string
@@ -137,9 +143,11 @@ type Query struct {
 	// Text is plain language. Never a backend query fragment.
 	Text string
 
-	// Seat is who is searching; its credentials decide whether an
-	// unscoped search is allowed at all. Nil is a search with no seat,
-	// which is a search with no credential.
+	// Seat is who is searching. On Confluence its own credential, when it
+	// has one, is what the search runs as, and decides whether an unscoped
+	// search runs at all ([Permitted]); nil there is a search with no
+	// credential of its own. The native backend reads no credential: every
+	// seat reads every page.
 	Seat *org.Role
 
 	// Org supplies the read scope, per call so a live config edit takes
@@ -183,18 +191,28 @@ type Searcher interface {
 	// CanSearch is a cheap, NO-I/O pre-gate: could a search possibly hit
 	// anything at all?
 	//
-	// Its only job is letting the prefetch skip the auxiliary model call
-	// that generates the query, when the search is a guaranteed no-op.
-	// That call is the expensive half — a network round trip to an LLM
-	// before any wiki is touched — so a gate that had to do I/O of its
-	// own to answer would cost more than it saves.
+	// It lets a caller skip a search that is a guaranteed no-op, and say
+	// why. The prefetch is the caller it matters most to: it skips the
+	// auxiliary model call that writes the query, which is the expensive
+	// half — a network round trip to an LLM before any wiki is touched — so
+	// a gate that had to do I/O of its own to answer would cost more than
+	// it saves.
 	CanSearch(seat *org.Role, o *org.Organization) bool
+
+	// Building reports that this node's own index has not finished its
+	// first build, so a search here can miss pages that exist.
+	//
+	// REQUIRED OF EVERY BACKEND, a live one included, which answers false:
+	// an optional method is one an adapter drops without anything failing,
+	// and a seat behind such an adapter on a node still indexing is told
+	// the company has written nothing down. NO I/O, for [CanSearch]'s
+	// reason: the prefetch asks it before it spends the query call.
+	Building(ctx context.Context) bool
 
 	// Search returns up to Limit ranked hits.
 	//
 	// BEST EFFORT: it never reports an error. Every failure path is an
-	// empty result, and the prefetch degrades to an empty block rather
-	// than failing a turn because a wiki was slow.
+	// empty result, so a turn never fails because a wiki was slow.
 	Search(ctx context.Context, q Query) []Hit
 }
 
@@ -229,14 +247,19 @@ func Scope(containers []string) []string {
 	return out
 }
 
-// Permitted reports whether a search may run at all, and with what scope.
+// Permitted reports whether a search may run at all, and with what scope, on a
+// backend whose seats may authenticate as themselves.
 //
-// THE UNSCOPED-VS-NOTHING RULE, in one place rather than once per backend.
-// An empty scope is not "search everything": it is "search everything THIS
-// SEAT's own account can read", which is only meaningful when the seat has
-// an account. A seat riding the shared engine credential and given an
-// unscoped search reads whatever the engine can reach, which is how one seat
-// sees a page its own account never could.
+// THE UNSCOPED-VS-NOTHING RULE. There, an empty scope is not "search
+// everything": it is "search everything THIS SEAT's own account can read",
+// which is only meaningful when the seat has an account. A seat riding the
+// shared engine credential and given an unscoped search reads whatever the
+// engine can reach, which is how one seat sees a page its own account never
+// could.
+//
+// Confluence is the backend that asks it. The native backend does not: it
+// has no per-seat credential, so selfAuth has no meaning there and an empty
+// scope is the whole company.
 //
 // selfAuth is the backend's own question — does this seat authenticate as
 // itself here? — because only the backend knows which credential field
@@ -259,9 +282,10 @@ func Permitted(scope []string, selfAuth bool) (allowed bool, unscoped bool) {
 //
 // The TITLE PREFIX is the fail-closed backstop, and it applies ONLY when the
 // backend could not read the hit's whole chain ([Hit.AncestorsKnown] false):
-// a lookup that did not come back, a chain that ran into a parent the backend
-// no longer holds, or an answer that cannot tell an empty chain from an absent
-// one. An outage must hide drafts rather than leak them.
+// an answer that came back without the chain (a Confluence search whose
+// `ancestors` expand is missing), or a chain that ran into a parent the
+// backend no longer holds (natively). An outage must hide drafts rather than
+// leak them.
 //
 // It deliberately does NOT apply to a hit whose whole chain was read and
 // carries no excluded title — an empty chain included, which is a page at the

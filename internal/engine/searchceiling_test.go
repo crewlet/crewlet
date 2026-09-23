@@ -3,26 +3,30 @@ package engine_test
 import (
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// NOBODY MAY ASK THE FAN-OUT FOR MORE THAN IT CAN ANSWER.
+// NO CALLER ASKS THE FAN-OUT FOR MORE THAN IT CAN ANSWER.
 //
 // A participant returns its top-[search.FuseN] PER METHOD, so the fusion sees
-// at most that many of each however many the caller asks for. A limit above
-// it is answered short, and a short result set is indistinguishable from a
-// short corpus — the exact confusion `buckets_missing` exists to prevent on
-// the other axis.
+// at most that many of each however many the caller asks for, and
+// [search.FanOut.Search] refuses a larger limit rather than answer it short.
+// A caller past the ceiling would therefore meet that refusal — which a
+// knowledge search, best effort by contract, turns into an empty answer and a
+// log line on every call.
 //
-// Today every caller sits under it: the tracker's ceiling is fifty and the
-// knowledge seam's widest ask is its default times the page reader's
-// over-fetch. That is an AGREEMENT BETWEEN CONSTANTS IN FOUR PACKAGES, none
-// of which mentions the others, and it is the shape this repository keeps
-// finding out about late. This is where it is held, because this package is
-// where the searcher and its callers are wired together.
+// Every caller's ask is an AGREEMENT BETWEEN CONSTANTS IN SEVERAL PACKAGES,
+// none of which mentions the others, and this is where it is held, because
+// this package is where the searchers and their callers are wired together.
+// The knowledge seam's callers reach the fan-out through the native page
+// reader, which over-fetches by [pages.SearchOverfetch] to leave room for what
+// it drops after the ranking; the tracker's reach it with their own limit.
 //
 // If a ceiling legitimately has to rise, raise FuseN with it — and read
 // [search.Stage1Depth] first, which is derived from it.
@@ -34,14 +38,19 @@ func TestNoSearchCallerAsksForMoreThanAFanOutCanAnswer(t *testing.T) {
 		asks int
 	}{
 		{"the tracker's own search ceiling", tracker.MaxSearchLimit},
-		{"the knowledge seam, through the page reader's over-fetch",
+		{"a knowledge query that names no limit",
 			knowledge.DefaultLimit * pages.SearchOverfetch},
+		{"the turn-start knowledge block",
+			prefetch.KnowledgeHits * pages.SearchOverfetch},
+		{"a seat's or an operator's search_knowledge",
+			builtin.SearchKnowledgeHits * pages.SearchOverfetch},
+		{"the dashboard's knowledge search",
+			queries.KnowledgeHitLimit * pages.SearchOverfetch},
 	} {
 		if c.asks > search.FuseN {
 			t.Errorf("%s asks for %d and a fan-out answers at most %d "+
-				"per method: the extra would come back missing, "+
-				"looking exactly like a corpus that holds no more",
-				c.who, c.asks, search.FuseN)
+				"per method: the ask is refused, and the caller's search "+
+				"answers nothing", c.who, c.asks, search.FuseN)
 		}
 	}
 }

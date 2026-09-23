@@ -785,15 +785,18 @@ func testByKey(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 	older, newer := base, base.Add(time.Minute)
-	write(t, log, store.EventRecord{
-		ID: "shared", Type: "task_assigned", Source: "pm", Time: older,
-		Category: "task", Summary: "the older",
-		Payload: json.RawMessage(`{"which":"older"}`),
-	})
+	// THE NEWER ROW IS WRITTEN FIRST. The read walks an id's rows in the order
+	// they were written, so a read that kept the last row it walked would
+	// answer the newest of rows written oldest first.
 	write(t, log, store.EventRecord{
 		ID: "shared", Type: "task_assigned", Source: "pm", Time: newer,
 		Category: "task", Summary: "the newer",
 		Payload: json.RawMessage(`{"which":"newer"}`),
+	})
+	write(t, log, store.EventRecord{
+		ID: "shared", Type: "task_assigned", Source: "pm", Time: older,
+		Category: "task", Summary: "the older",
+		Payload: json.RawMessage(`{"which":"older"}`),
 	})
 
 	// The guess ByID documents, so the case below is not passing by accident.

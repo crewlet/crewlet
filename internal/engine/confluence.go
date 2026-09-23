@@ -69,10 +69,11 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 	site := resolved.ShareableBaseURL()
 	skillsSpace := c.Config.SkillsContainerKey()
 
-	// THE ORG CREDENTIAL IS WHAT SEARCH RESTS ON. Without it a seat with
-	// its own credential still searches — as itself, which is the better
-	// path anyway — and a seat without one gets nothing. Routing is
-	// unaffected either way, which is why this warns rather than refusing.
+	// THE ORG CREDENTIAL IS WHAT SEARCH RESTS ON, as the file head says:
+	// without it no searcher is built, so no seat searches — not even one
+	// holding a credential of its own — and the tool-skill walk cannot run.
+	// Routing is unaffected either way, which is why this warns rather than
+	// refusing.
 	var orgClient *confluence.Client
 	if token := strings.TrimSpace(env.Value(cfg.Token)); token != "" {
 		client, err := confluence.NewClient(confluence.ClientOptions{
@@ -84,8 +85,9 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 		orgClient = client
 	} else {
 		log.Warn("confluence_has_no_org_token",
-			"detail", "a seat with no Confluence credential of its own reads "+
-				"nothing, and the tool-skill walk cannot run")
+			"detail", "no knowledge search runs, for any seat, and the "+
+				"tool-skill walk cannot run; page activity still routes. "+
+				"Set integrations.confluence.token")
 	}
 
 	leads := confluence.LeadsFrom(c.Org)
@@ -142,28 +144,17 @@ func (e *Engine) reconcileConfluence(c *Company) {
 		// (see [Engine.startInbound]).
 		return
 	}
-	// IT REVIVES AS WELL AS RETIRES, and it did not.
+	// IT CONVERGES IN BOTH DIRECTIONS. The parser set is assembled once,
+	// in New, so a revision that ADDS Confluence after boot finds no
+	// parser running, and one that removes it finds one: disconnecting and
+	// reconnecting is that sequence, and a reconciler that handled only
+	// one direction would leave the route verifying and storing every
+	// delivery while nothing turned one into work for a seat, or leave the
+	// boot-time parser routing page activity under the credential being
+	// revoked.
 	//
-	// This returned early unless a parser was ALREADY running, on the
-	// reasoning that boot owns the first build. Boot owns the first one and
-	// nothing owned the second: the parser set is assembled once, in New,
-	// so a revision that ADDS Confluence after boot found no parser
-	// running, took this branch, and registered nothing. Disconnecting and
-	// reconnecting is exactly that sequence, and it left the route
-	// verifying and storing every delivery while nothing turned one into
-	// work for a seat, until the process was restarted.
-	//
-	// A reconciler that converges in one direction is not a reconciler.
-	// The other three here have always had this shape; this one is the odd
-	// case because it also owns a searcher, which is what the guard was
-	// really protecting and which [startConfluence] rebuilds anyway.
-	// RETIRED when the revision no longer declares it, like the other
-	// three reconcilers — each converged only toward "configured", so
-	// removing the block applied cleanly and left the boot-time parser
-	// routing page activity under the credential being revoked.
-	//
-	// Confluence needs one step the others do not: the SEARCHER goes as
-	// well. It is what the turn-start knowledge prefetch reads through, so
+	// RETIRED when the revision no longer declares it, and the SEARCHER
+	// goes as well: it is what the knowledge search reads through, so
 	// leaving it would have every seat go on searching a wiki the company
 	// has removed, using the same credential.
 	if cfg == nil {
@@ -248,32 +239,54 @@ func (e *Engine) noteConfluencePage(ctx context.Context, change confluence.PageC
 // confluencePrompt is the knowledge base's trigger builder.
 func confluencePrompt() notify.Prompt { return confluence.Prompt{} }
 
-// Knowledge is the company's knowledge-base searcher, or nil.
+// Knowledge is the searcher of the knowledge base the CURRENT epoch runs, or
+// nil.
 //
 // EXACTLY ONE per company, which is the seam's own rule and not a limitation
 // of this function: "what do we already know about this" must not depend on
-// which searcher was asked, so `knowledge.backend` picks one and config
-// refuses a company that configures two. The NATIVE one is answered first
-// because it is the default; a company on `backend: confluence` has no
-// native projector at all, so the branch is a nil check rather than a
-// preference.
+// which searcher was asked, so `knowledge.backend` picks one.
+//
+// # It answers by that field, never by which searchers exist
+//
+// This node can hold both at once. The native searcher belongs to the NODE:
+// it starts with the node's native backends and lives as long as they do,
+// whatever a later revision says. The Confluence one is built whenever a
+// revision declares `integrations.confluence`, and a company on
+// `backend: none` may declare the block for its page routing alone. Answered
+// by which searcher exists instead, a company that moved off the native
+// knowledge base by a live apply would go on searching its pages until the
+// node restarted, and a company that turned its knowledge base off would be
+// searched on Confluence all the same.
+//
+// The other direction cannot be answered at once: a company moved ONTO the
+// native knowledge base gets nil here until the node restarts, because the
+// native backends start with the node. Nil is honest there — the node holds
+// no copy of the pages to search.
 //
 // Nil means no backend is wired, and every consumer treats that as "search
 // nothing" rather than as an error — a turn must not die because a company
 // has no wiki.
 func (e *Engine) Knowledge() knowledge.Searcher {
+	c := e.Company()
+	if c == nil || c.Config == nil {
+		return nil
+	}
 	// A NIL INTERFACE, never a typed nil wrapping a nil pointer: the
 	// consumers check `searcher == nil`, and a typed nil passes that check
 	// and then answers as though a search had run and found nothing —
 	// indistinguishable from a real empty result, and it hides the fact
 	// that nothing is configured.
-	if native := e.NativeSearcher(); native != nil {
-		return native
+	switch c.Config.KnowledgeBackendFor() {
+	case config.KnowledgeNative:
+		if native := e.NativeSearcher(); native != nil {
+			return native
+		}
+	case config.KnowledgeConfluence:
+		e.notify.mu.Lock()
+		defer e.notify.mu.Unlock()
+		if searcher := e.notify.confluence.searcher; searcher != nil {
+			return searcher
+		}
 	}
-	e.notify.mu.Lock()
-	defer e.notify.mu.Unlock()
-	if e.notify.confluence.searcher == nil {
-		return nil
-	}
-	return e.notify.confluence.searcher
+	return nil
 }

@@ -25,7 +25,7 @@ import (
 // AT THE PRODUCTION PAYLOAD CEILING, which the embedded broker is configured
 // with: a record is one message, so a suite run against the server's own
 // default would certify a smaller store than the one that ships — and the
-// contract's coord.MaxBridgeCallBytes case is written against the real one.
+// contract's coord.MaxRecordBytes case is written against the real one.
 func embeddedNATS(t *testing.T) *nats.Conn {
 	t.Helper()
 	return embeddedNATSAt(t, queue.MaxPayloadBytes)

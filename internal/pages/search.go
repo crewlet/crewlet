@@ -347,20 +347,26 @@ func (s *Searcher) ancestry(ctx context.Context, ids []string) (map[string]hitCh
 	return out, nil
 }
 
-// SearchOverfetch is how many times the limit is asked for before exclusions.
+// SearchOverfetch is how many times the limit is asked for before the drops
+// that follow the ranking.
 //
-// Three, a judgement. The exclusions are the tool-skills container and the
-// caller's excluded ancestors, so they alone leave an answer SHORT of the
-// limit only when more than two in three of the hits the fan-out ranked are
-// excluded — and short silently, because the seam's answer is a list of hits
-// with nothing beside it.
+// Three, a judgement. [Searcher.Search] drops four kinds of ranked hit after
+// the fan-out has answered: a key this node's index holds no row for, which
+// [search.Indexer.Hydrate] skips; a page in the tool-skills container; a page
+// this node's rows no longer hold as published — indexed and gone, or trashed
+// or unpublished since; and a page under an excluded ancestor. Together they
+// leave an answer SHORT of the limit only when more than two in three of the
+// hits the fan-out ranked are dropped — and short silently, because the
+// seam's answer is a list of hits with nothing beside it. The first drop is
+// the one that can be large, on a node whose index is still on its first
+// build, and that node says it is building ([Searcher.Building]).
 //
 // EXPORTED BECAUSE IT IS HALF OF AN INVARIANT NOTHING ELSE CAN SEE: it
 // multiplies the caller's limit into what the fan-out is asked for, and a
-// fan-out answers at most [github.com/crewlet/crewlet/internal/search.FuseN]
-// per method. internal/engine's TestNoSearchCallerAsksForMoreThanAFanOutCanAnswer
-// holds the seam's DEFAULT limit times this under that ceiling; a caller that
-// passes a limit of its own is held there by nothing but its value.
+// fan-out refuses to be asked for more than
+// [github.com/crewlet/crewlet/internal/search.FuseN]. internal/engine's
+// TestNoSearchCallerAsksForMoreThanAFanOutCanAnswer holds every real caller's
+// limit times this under that ceiling.
 const SearchOverfetch = 3
 
 // isExcluded reports a container a search never returns.

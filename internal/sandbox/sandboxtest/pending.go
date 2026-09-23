@@ -70,6 +70,9 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AStaleFenceCannotWrite", testAStaleFenceCannotWrite},
 		{"ReleasingABoxClearsBothHalves", testReleasingABoxClearsBothHalves},
 		{"ExecuteStateRoundTrips", testExecuteStateRoundTrips},
+		{"ASuspensionThatFitsStaysOnTheRow", testASuspensionThatFitsStaysOnTheRow},
+		{"ASuspensionTheRowCannotHoldIsReadBackWhole", testASuspensionTheRowCannotHoldIsReadBackWhole},
+		{"ASecondLaunchDropsAFirstSuspensionKeptInParts", testASecondLaunchDropsAFirstSuspensionKeptInParts},
 		{"ActiveIncludesResumed", testActiveIncludesResumed},
 		{"AnAnswerFindsTheRunThatAsked", testAnAnswerFindsTheRunThatAsked},
 		{"AnAnswerWithNoConversationMatchesNothing", testAnAnswerWithNoConversationMatchesNothing},
@@ -1036,6 +1039,109 @@ func testExecuteStateRoundTrips(t *testing.T, s sandbox.PendingStore) {
 	msgs, ok := got.ExecuteState["messages"].([]any)
 	if !ok || len(msgs) != 1 {
 		t.Errorf("the suspended conversation did not survive: %+v", got.ExecuteState["messages"])
+	}
+}
+
+// largeSuspension is a suspended conversation past what a run's row keeps one
+// within, which is half the transport's ceiling: one message the size of that
+// whole ceiling's worth of tool output a long turn can accumulate.
+func largeSuspension() map[string]any {
+	state := suspension()
+	state["messages"] = []any{map[string]any{
+		"role": "assistant", "content": strings.Repeat("w", 6<<20),
+	}}
+	return state
+}
+
+// sameState reports whether two suspended conversations are the same JSON,
+// which is what a resume decodes: a map built here and one read back from a
+// store differ in their number types and nothing a decoder sees.
+func sameState(t *testing.T, got, want map[string]any) bool {
+	t.Helper()
+	g, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("encode what was read back: %v", err)
+	}
+	w, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("encode what was suspended: %v", err)
+	}
+	return string(g) == string(w)
+}
+
+func mustSuspension(t *testing.T, s sandbox.PendingStore, run sandbox.PendingRun) map[string]any {
+	t.Helper()
+	state, err := s.Suspension(t.Context(), run)
+	if err != nil {
+		t.Fatalf("Suspension(%s): %v", run.TurnID, err)
+	}
+	return state
+}
+
+func testASuspensionThatFitsStaysOnTheRow(t *testing.T, s sandbox.PendingStore) {
+	// ON THE ROW, where every build reads it: a rolling upgrade can hand the
+	// completion to a build that knows nothing but the row, and a
+	// conversation that fits there is one that build resumes.
+	mustLaunched(t, s, run("t1"))
+	got := mustGet(t, s, "t1")
+	if !sameState(t, got.ExecuteState, suspension()) {
+		t.Errorf("the row holds %+v, want the suspension itself", got.ExecuteState)
+	}
+	if !sameState(t, mustSuspension(t, s, got), suspension()) {
+		t.Error("the conversation read back is not the one suspended")
+	}
+}
+
+func testASuspensionTheRowCannotHoldIsReadBackWhole(t *testing.T, s sandbox.PendingStore) {
+	// A CONVERSATION OUTGROWS ITS ROW, which is one record and rewritten
+	// whole by every step of the run's lifecycle. Refused there, the turn
+	// was lost however healthy the store; kept on the row to the ceiling, it
+	// left no room for the question the run parks on. So its whole is kept
+	// in parts, and the run opens to the poll with it reachable: claimable,
+	// able to park on a question of the size a coding agent asks, and read
+	// back whole — never an empty conversation, which an older build would
+	// fail as a run with nothing to resume.
+	mustBeginLaunch(t, s, run("t1"))
+	state := largeSuspension()
+	suspended, err := s.MarkSuspended(t.Context(), "t1", state)
+	if err != nil || !suspended {
+		t.Fatalf("a suspension past what the row holds = %v, %v; want it kept", suspended, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusRunning {
+		t.Errorf("status = %q, want %q", got.Status, sandbox.StatusRunning)
+	}
+	if len(got.ExecuteState) == 0 {
+		t.Error("the row holds no conversation at all: a build that reads only the row fails the run")
+	}
+	if !sameState(t, mustSuspension(t, s, got), state) {
+		t.Fatal("the conversation read back is not the whole one suspended")
+	}
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
+		Question: strings.Repeat("q", 3<<20), Audience: "requester",
+	}); err != nil {
+		t.Fatalf("the row left no room for the question the run parks on: %v", err)
+	}
+	claimed, won, err := s.ClaimForResume(t.Context(), "t1", sandbox.AnswerTail(got.LaunchID))
+	if err != nil || !won {
+		t.Fatalf("the parked run was not claimable: won=%v err=%v", won, err)
+	}
+	if !sameState(t, mustSuspension(t, s, claimed), state) {
+		t.Error("the claimed run's conversation read back is not the whole one suspended")
+	}
+}
+
+func testASecondLaunchDropsAFirstSuspensionKeptInParts(t *testing.T, s sandbox.PendingStore) {
+	// THE RELAUNCH RESET, for a conversation that was not on the row: the
+	// new job has no suspension until its own is written, whatever the last
+	// job's was kept in.
+	mustBeginLaunch(t, s, run("t1"))
+	if suspended, err := s.MarkSuspended(t.Context(), "t1", largeSuspension()); err != nil || !suspended {
+		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
+	}
+	mustBeginLaunch(t, s, run("t1"))
+	if state := mustSuspension(t, s, mustGet(t, s, "t1")); len(state) != 0 {
+		t.Errorf("the relaunch reads a suspension of %d keys, want none", len(state))
 	}
 }
 

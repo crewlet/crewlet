@@ -16,10 +16,10 @@ import (
 // incident-hardened lesson in this engine. Here the same three are a PubAck, a
 // wrong-last-sequence refusal, and no answer at all.
 //
-// The boolean that used to sit beside this — saying whether the apply wait
-// succeeded — is deliberately absent. Durability is carried by the position
-// being set and the wait is carried by the enum itself, so a third field could
-// only ever disagree with one of them.
+// There is deliberately no boolean beside it saying whether the apply wait
+// succeeded. Durability is carried by the position being set and the wait is
+// carried by the enum itself, so a third field could only ever disagree with
+// one of them.
 type Outcome string
 
 const (
@@ -136,6 +136,21 @@ const (
 	// appends rather than dropping records. An operator raises the
 	// ceiling or unblocks the trim.
 	ReasonLogFull Reason = "log_full"
+
+	// ReasonTooLarge — the record is larger than the transport carries:
+	// the NATS client refused it against the max_payload its server
+	// announced, or the broker against the stream's max_msg_size. Nothing
+	// was stored, and the same record is refused the same way on every
+	// attempt, so nothing retries it. The detail names the setting that
+	// refused it.
+	ReasonTooLarge Reason = "too_large"
+
+	// ReasonRefused — the broker refused the record for a reason this
+	// framework does not act on, such as a sealed stream or a server at
+	// its own storage limit. Its words are the detail, because they are
+	// the only statement of which reason it was, and the write is not
+	// retried: nothing a new round decides changes the broker's answer.
+	ReasonRefused Reason = "refused"
 
 	// ReasonSkew — the broker answered a last sequence BELOW an
 	// expectation this node formed, which cannot happen on a healthy

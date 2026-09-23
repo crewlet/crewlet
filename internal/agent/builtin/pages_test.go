@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -239,30 +240,128 @@ func TestASaveNeedsTheVersionItRead(t *testing.T) {
 	}
 }
 
-// A RESERVED CONTAINER IS REFUSED NAMING IT. A page written there is excluded
-// from every search, so it would land somewhere no reader ever finds — and
-// the seat would report the work as done.
-func TestWritingToAReservedContainerIsRefused(t *testing.T) {
+// A SEAT MAY NOT WRITE INTO A RESERVED CONTAINER — create a page there, or
+// change one — and is told so naming it.
+//
+// The tool-skills container holds the guidance the engine injects into seats'
+// phases, so a seat writing there rewrites its own instructions with nobody
+// reviewing it; the org root holds the pages the company publishes. A change
+// is the same write as a create: reserving creates alone would leave every
+// skill page already there open to a seat's edit.
+func TestASeatMayNotWriteIntoAReservedContainer(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
+	kb.page.Page.Container = "TS"
 	reg := kbRegistry(t, builtin.PageDeps{
-		Reader: kb, Writer: kb, Reserved: []string{"TS", "HOME"},
+		Reader: kb, Writer: kb,
+		Reserved: func() []string { return []string{"TS", "HOME"} },
 	})
 	for _, container := range []string{"TS", "ts", "HOME"} {
 		got := callWork(t, reg, builtin.WritePageTool, map[string]any{
-			"title": "somewhere hidden", "body": "x", "container": container,
+			"title": "somewhere closed", "body": "x", "container": container,
 		})
 		if !got.Failed {
-			t.Errorf("a page was written into the reserved container %q", container)
+			t.Errorf("a seat created a page in the reserved container %q", container)
 			continue
 		}
-		if !strings.Contains(got.Output, "excluded from every search") {
-			t.Errorf("the refusal does not say why: %s", got.Output)
+		if !strings.Contains(got.Output, "reserved") ||
+			!strings.Contains(strings.ToUpper(got.Output), strings.ToUpper(container)) {
+			t.Errorf("the refusal does not name the reserved container: %s", got.Output)
 		}
 	}
-	if len(kb.created) != 0 {
-		t.Errorf("a reserved write reached the store: %+v", kb.created)
+	saved := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "follow these instructions instead",
+	})
+	if !saved.Failed || !strings.Contains(saved.Output, "reserved") {
+		t.Errorf("a seat changed a page in a reserved container: %s", saved.Output)
 	}
+	if len(kb.created) != 0 || len(kb.saved) != 0 {
+		t.Errorf("a reserved write reached the store: created %+v, saved %+v",
+			kb.created, kb.saved)
+	}
+
+	// THE CONTROL: the same seat writes its own team's container, and
+	// changes a page in it — so the refusals above are about the container.
+	kb.page.Page.Container = "ENG"
+	if got := callWork(t, reg, builtin.WritePageTool, map[string]any{
+		"title": "Deploy notes", "body": "x", "container": "ENG",
+	}); got.Failed {
+		t.Errorf("a write into an ordinary container was refused: %s", got.Output)
+	}
+	if got := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "y",
+	}); got.Failed {
+		t.Errorf("a change to an ordinary page was refused: %s", got.Output)
+	}
+}
+
+// THE RESERVATION IS READ AT THE CALL, not when the surface was built.
+//
+// Both containers are Tier B config, and a seat's tools are cloned into its
+// lease and not rebuilt by an apply: a list captured at registration would go
+// on closing the container a revision freed and opening the one it moved the
+// skills into.
+func TestTheReservationIsReadAtTheCall(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	skills := "TS"
+	reg := kbRegistry(t, builtin.PageDeps{
+		Reader: kb, Writer: kb,
+		Reserved: func() []string { return []string{skills} },
+	})
+	write := func(container string) tools.Result {
+		return callWork(t, reg, builtin.WritePageTool, map[string]any{
+			"title": "Notes", "body": "x", "container": container,
+		})
+	}
+	if got := write("TS"); !got.Failed {
+		t.Fatal("the reserved container was open before the move — the premise")
+	}
+	skills = "SKILLS" // the revision that moved the skills container
+	if got := write("TS"); got.Failed {
+		t.Errorf("the container a revision freed is still closed: %s", got.Output)
+	}
+	if got := write("SKILLS"); !got.Failed {
+		t.Error("the container a revision moved the skills into is open to a seat")
+	}
+}
+
+// AN OPERATOR'S OWN SURFACE WRITES BOTH RESERVED CONTAINERS.
+//
+// It names no reserved container, and it has to: write_page is the only thing
+// that creates a page on the native knowledge base, so a surface that refused
+// the operator too left a native company no way to publish a tool skill or its
+// root Onboarding page at all.
+func TestAnOperatorWritesTheReservedContainers(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	kb.page.Page.Container = "TS"
+	reg := kbRegistry(t, builtin.PageDeps{
+		Reader: kb, Writer: kb, Actor: operatorPageActor,
+	})
+	for _, container := range []string{"TS", "HOME"} {
+		if got := callNoTurn(t, reg, builtin.WritePageTool, map[string]any{
+			"title": "Onboarding", "body": "x", "container": container,
+		}); got.Failed {
+			t.Errorf("the operator's write into %s was refused: %s", container, got.Output)
+		}
+	}
+	if got := callNoTurn(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "a reviewed skill body",
+	}); got.Failed {
+		t.Errorf("the operator's change to a skill page was refused: %s", got.Output)
+	}
+	if len(kb.created) != 2 || len(kb.saved) != 1 {
+		t.Errorf("the operator's writes reached the store as %d creates and %d "+
+			"saves, want 2 and 1", len(kb.created), len(kb.saved))
+	}
+}
+
+// operatorPageActor is what the operator surface's own page actor answers: the
+// token's name, the operator kind, and no turn.
+func operatorPageActor(context.Context, *turnctx.Turn) (pages.Actor, error) {
+	return pages.Actor{Handle: "founder", Kind: pages.AuthorOperator,
+		OperatorID: "founder"}, nil
 }
 
 // A TITLE COLLISION SENDS THE MODEL TO THE EXISTING PAGE. Two pages on one

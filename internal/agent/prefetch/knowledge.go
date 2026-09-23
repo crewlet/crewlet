@@ -11,14 +11,14 @@ import (
 
 // Relevant knowledge: what the company has written down.
 //
-// # Searched live, never indexed
+// # Searched at turn start, through the one seam
 //
-// There is no local copy and no embedding step. The knowledge base is
-// queried at turn time, so the block always reflects what the page says
-// now — which is the whole reason procedural knowledge lives in a wiki
-// rather than in the engine. The engine's contribution is searching it on
-// the agent's behalf, so an executor sees the runbook without having to think
-// to go and look.
+// The block is a search run on the agent's behalf, so an executor sees the
+// runbook without having to think to go and look. What answers it is the
+// company's one knowledge backend: natively, this node's own index over the
+// pages the fleet's log wrote, which can be behind those rows and says so while
+// it is still on its first build; on Confluence, a live query against the
+// site, with no local copy at all.
 //
 // # An auxiliary model writes the query
 //
@@ -41,12 +41,17 @@ const (
 	// otherwise reconsider.
 	auxTemperature = 0.2
 
-	// knowledgeHits is how many pages are rendered.
+	// KnowledgeHits is how many pages the block renders.
 	//
 	// Six, against a block that is a pointer rather than the content: each
-	// bullet is a title and a snippet, and the seat opens what looks
-	// relevant. A dozen would crowd the task it was fetched for.
-	knowledgeHits = 6
+	// bullet is a title, where the page is and a snippet, and the seat opens
+	// what looks relevant. A dozen would crowd the task it was fetched for.
+	//
+	// EXPORTED because two other readers show the same slice and name this
+	// value rather than a copy of it: a seat's own `search_knowledge`, and
+	// the dashboard's knowledge search, which shows an operator what an
+	// agent would be shown.
+	KnowledgeHits = 6
 
 	// knowledgeQueryTokens is headroom for the query call. The visible
 	// answer is one short line; the cap covers a thinking model's
@@ -81,6 +86,17 @@ const BuildingKnowledgeHint = "(the knowledge base is not searchable from " +
 	"found by a search right now, so ask a colleague who would know rather " +
 	"than concluding nothing has been written down)"
 
+// KnowledgeReadHint closes every rendering of hits, the block's and the
+// `search_knowledge` tool's alike: these are pointers, and here is how to
+// follow one.
+//
+// THE CAPABILITY, NOT A TOOL NAME. The reader is the engine's own page tool on
+// the native backend and a vendor server's tool on Confluence, and each
+// bullet carries the page id either one takes — so the sentence names what to
+// pass rather than which tool to pass it to.
+const KnowledgeReadHint = "To read one in full, open it by its page id with " +
+	"your knowledge base's page-read tool."
+
 // knowledgeQuerySystemPrompt turns a task into a search query.
 const knowledgeQuerySystemPrompt = `You turn an AI agent's current task into a search query for its team's knowledge base.
 
@@ -114,18 +130,12 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 	if !f.src.Knowledge.CanSearch(r.Seat, r.Org) {
 		return "", 0
 	}
-	// A BACKEND THAT KEEPS AN INDEX can be behind its own projection, and
-	// during that window every search answers empty. Said out loud rather
-	// than searched anyway, and BEFORE the query call: the auxiliary model
-	// round trip would be spent producing a query nothing can match, which
-	// is the same waste CanSearch's gate exists to avoid.
-	//
-	// An optional interface rather than a method on [knowledge.Searcher]:
-	// a live vendor search has no index and nothing to report, so
-	// requiring it of every backend would be implementations of "false".
-	if builder, ok := f.src.Knowledge.(interface {
-		Building(ctx context.Context) bool
-	}); ok && builder.Building(ctx) {
+	// AN INDEX STILL ON ITS FIRST BUILD can miss any page, and on a single
+	// node it answers every search empty. Said out loud rather than searched
+	// anyway, and BEFORE the query call: the auxiliary model round trip
+	// would be spent producing a query whose answer the block could not
+	// vouch for, which is the same waste CanSearch's gate exists to avoid.
+	if f.src.Knowledge.Building(ctx) {
 		return BuildingKnowledgeHint, 0
 	}
 	if r.RequiresRecon {
@@ -141,29 +151,30 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 		return "", 0
 	}
 	hits := f.src.Knowledge.Search(ctx, knowledge.Query{
-		Text: query, Seat: r.Seat, Org: r.Org, Limit: knowledgeHits,
+		Text: query, Seat: r.Seat, Org: r.Org, Limit: KnowledgeHits,
 		// AUTO-DRAFTS HIDDEN. Those pages are unreviewed proposals a
 		// synthesis pass wrote; an executor cannot tell one from a
 		// ratified runbook, and following an unratified one is how a
 		// draft becomes policy without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
-	if len(hits) == 0 {
-		return EmptyKnowledgeHint, 0
-	}
-	bullets := make([]string, 0, len(hits)+1)
+	bullets := make([]string, 0, len(hits))
 	for _, hit := range hits {
-		bullets = append(bullets, renderHit(hit))
+		if bullet := KnowledgeBullet(hit); bullet != "" {
+			bullets = append(bullets, bullet)
+		}
 	}
-	rendered := joinBullets(bullets)
-	if rendered == "" {
+	if len(bullets) == 0 {
 		return EmptyKnowledgeHint, 0
 	}
 	// THE POINTER IS THE POINT: these are titles and snippets, not the
 	// pages. A seat that acted on a snippet would be acting on the first
 	// two hundred characters of a runbook.
-	return rendered + "\nTo read any of these in full, look it up by title " +
-		"with your knowledge-base tools.", len(hits)
+	//
+	// THE COUNT IS OF WHAT RENDERED, not of what came back: a hit with
+	// nothing to show and nothing to open is dropped above, and counting it
+	// would report a page the block never surfaced.
+	return joinBullets(bullets) + "\n" + KnowledgeReadHint, len(bullets)
 }
 
 // knowledgeQuery asks the auxiliary model for a search query.
@@ -186,24 +197,53 @@ func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 	return ""
 }
 
-// renderHit renders one page as a bullet.
+// KnowledgeBullet renders one hit as a bullet: its title, where the page is,
+// and its snippet.
 //
-// Falls back to the title alone where a page has no snippet — an empty page,
-// or one whose body is a table the extractor could not read — because the
-// title is still enough to decide whether to open it.
-func renderHit(hit knowledge.Hit) string {
+// ONE RENDERER for the block and the `search_knowledge` tool, so a seat reads
+// one shape for one thing wherever it meets it.
+//
+// WHERE THE PAGE IS travels with it — its container and its page id — because
+// a pointer is only as good as what it takes to follow it: the page-read tool
+// on either backend takes the id, and a bullet without it costs the seat a
+// listing round to find what it was just shown.
+//
+// Falls back to what there is. A page with no snippet — an empty page, or one
+// whose body is a table the extractor could not read — keeps its title and
+// its id, which are still enough to decide whether to open it; a hit with
+// nothing to show and nothing to open renders as nothing.
+func KnowledgeBullet(hit knowledge.Hit) string {
 	title := strings.TrimSpace(hit.Title)
 	snippet := collapse(hit.Snippet)
-	switch {
-	case title == "" && snippet == "":
+	where := pageLocation(hit)
+	if title == "" && snippet == "" && where == "" {
 		return ""
-	case title == "":
+	}
+	if title == "" {
 		title = "(untitled)"
 	}
-	if snippet == "" {
-		return "- **" + title + "**"
+	bullet := "- **" + title + "**"
+	if where != "" {
+		bullet += " (" + where + ")"
 	}
-	return "- **" + title + "**: " + snippet
+	if snippet != "" {
+		bullet += ": " + snippet
+	}
+	return bullet
+}
+
+// pageLocation names a hit's container and page id, whichever it carries.
+func pageLocation(hit knowledge.Hit) string {
+	container := strings.TrimSpace(hit.Container)
+	id := strings.TrimSpace(hit.PageID)
+	switch {
+	case container != "" && id != "":
+		return container + ", page id " + id
+	case id != "":
+		return "page id " + id
+	default:
+		return container
+	}
 }
 
 // auxRequest is the shape every auxiliary pass here sends.

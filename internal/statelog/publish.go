@@ -436,16 +436,24 @@ const (
 	dispRetake
 )
 
-// ReasonTooLarge — the record is larger than the transport carries: the NATS
-// client refused it against the max_payload its server announced, or the
-// broker against the stream's max_msg_size. Nothing was stored, and the same
-// record is refused the same way on every attempt, so nothing retries it. The
-// detail names the setting that refused it.
-const ReasonTooLarge Reason = "too_large"
-
 // attempt publishes once and reads the answer.
 func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect *uint64, gen uint32, round int) (Result, disposition, error) {
-	seq, _, err := p.append(ctx, req, snap, expect)
+	// FENCE 0 AGAIN, because a round is not free of it: a write that has
+	// spent fifteen rounds losing races has been running for as long as
+	// those races took, and the eviction it must not publish under may have
+	// landed inside that window.
+	//
+	// ITS REFUSAL IS THE ANSWER, returned as it is. It is checked here
+	// rather than inside the append so it never reaches [classify], which
+	// reads every error that is not the broker's as no answer at all — and
+	// an eviction read that way is probed for, retaken and re-decided for
+	// the whole round budget, then reported as a colleague editing the same
+	// object.
+	if err := p.checkEvicted(ctx); err != nil {
+		return Result{Rounds: round}, dispDone, err
+	}
+	seq, _, err := p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect,
+		snap.Decision.Payload)
 	switch f, detail := classify(err); f {
 	case faultNone:
 		at := Position{Stream: p.stream, Generation: gen, Seq: seq}
@@ -482,6 +490,17 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 			Detail: fmt.Sprintf("the record for %s was refused for its size, and "+
 				"nothing was stored: %s", req.Subject, detail),
 			OpID: req.OpID,
+		}
+
+	case faultRefused:
+		// ANSWERED AT ONCE, for the size refusal's reason: the broker
+		// decided, and a new round's decision is refused the same way.
+		// The broker's words are the detail because they are the only
+		// statement of which refusal this was.
+		return Result{Rounds: round}, dispDone, &Unavailable{
+			Reason: ReasonRefused,
+			Detail: fmt.Sprintf("the broker refused the record for %s: %s", req.Subject, detail),
+			OpID:   req.OpID,
 		}
 
 	case faultUnknown:
@@ -612,11 +631,10 @@ func (p *Publisher) expectation(ctx context.Context, req Request, snap Snap, gen
 func (p *Publisher) afterRejection(ctx context.Context, req Request, expect *uint64) (*uint64, error) {
 	subject := p.subjectOf(req.Subject)
 
-	// ON EVERY REJECTION, and the cheap pre-filter that used to stand in
-	// front of this call is deliberately absent: it skipped the broker
-	// call on the lost-race path, and the lost-race path needs the call
-	// anyway — it needs the sequence to know what to wait for before it
-	// re-decides.
+	// ON EVERY REJECTION, with no cheaper pre-filter in front of it: a
+	// filter that skipped the broker call on the lost-race path would skip
+	// the call that path needs — it needs the sequence to know what to wait
+	// for before it re-decides.
 	seq, found, err := p.log.LastSeq(ctx, subject)
 	if err != nil {
 		return nil, fmt.Errorf("statelog: discriminate a rejection on %s: %w", subject, err)
@@ -728,24 +746,25 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 // acknowledgement names a position — INCLUDING the branch where the wait
 // succeeds.
 //
-// # Why the ordinary branch needs it too, which is where the lie was
+// # Why the ordinary branch needs it too
 //
 // A live node E is current at 100; a peer commits E's eviction at 101; E
 // publishes at 102 and is acknowledged; E's own applier applies 101, applies
 // 102, DROPS 102 under its own eviction gate, and passes 102 well inside the
 // budget. A design answering from the wait alone reports the record as
 // APPLIED — the strictly stronger and equally false answer, on the COMMON
-// branch rather than on a timeout — while the fact that killed the record sat
-// in a durable local table in the same database the answer came from.
+// branch rather than on a timeout — while the fact that killed the record sits
+// in a durable local table in the same database the answer comes from.
 //
-// One resolution function, called by both paths. Two copies of it is how the
-// ordinary path came to have none.
+// One resolution function, called by both paths, so neither path can answer
+// without the gates.
 //
 // It needs no coordination read, no clock and no cadence, because the applier
 // is contiguous: passing p forces applying everything below it, an eviction
 // gate drops a record only when the eviction commit is strictly below it, and
 // a deletion marker that could gate p is on the record's own subject and
 // therefore below it, or the broker would have refused the append.
+//
 // mine says whether the caller KNOWS the record at at is its own — true when
 // the broker acknowledged it, false when the ambiguous path merely found
 // something above the anchor. The two differ in one arm and it matters: an
@@ -850,19 +869,6 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 	return Result{}, nil
 }
 
-// append publishes one record, stamping the framework's own fields onto the
-// envelope the domain decided.
-func (p *Publisher) append(ctx context.Context, req Request, snap Snap, expect *uint64) (uint64, bool, error) {
-	// FENCE 0 AGAIN, because a round is not free of it: a write that has
-	// spent fifteen rounds losing races has been running for as long as
-	// those races took, and the eviction it must not publish under may
-	// have landed inside that window.
-	if err := p.checkEvicted(ctx); err != nil {
-		return 0, false, err
-	}
-	return p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
-}
-
 // checkEvicted is fence 0.
 func (p *Publisher) checkEvicted(ctx context.Context) error {
 	evicted, err := p.fence.Evicted(ctx)
@@ -965,7 +971,7 @@ func (p *Publisher) subjectOf(s Subject) string {
 // A REFUSAL IS NOT AN OUTCOME and is counted separately. The three outcomes
 // say what happened to a record; a refusal says no record happened, and each
 // reason has its own remedy — so folding them into one dimension would give
-// an operator a rate with four different meanings in it.
+// an operator one rate carrying a different meaning per reason.
 func (p *Publisher) observe(started time.Time, req Request, res Result, err error) {
 	domain := p.domain.Name()
 	if err != nil {

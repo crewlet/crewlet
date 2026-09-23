@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -179,10 +180,16 @@ type Runner struct {
 
 	waiters waiters
 
-	mu        sync.Mutex
-	cursor    Position
-	deferred  Deferral
-	hasDefer  bool
+	mu     sync.Mutex
+	cursor Position
+
+	// deferred is the earliest record this node holds and cannot decode,
+	// and retained how many it holds — zero when it holds none. Read
+	// together in one transaction and kept together under mu, so no
+	// reader pairs a count from one refresh with an earliest from another.
+	deferred Deferral
+	retained uint64
+
 	stopped   error
 	appliedAt time.Time
 
@@ -199,17 +206,22 @@ type Runner struct {
 	// asking for the store's writer to acknowledging the run. A backlog is
 	// counted in records, so records are what it is divided by.
 	//
+	// THE WHOLE RUN, deliberately wider than the transaction the
+	// `apply.tx.duration` histogram times: the wait for the writer, an
+	// attempt the store rolled back and ran again, and the acknowledgement
+	// after the commit are all time a backlog costs to apply, so a rate that
+	// left them out would state every backlog as shorter than it is.
+	//
 	// # Why it is measured rather than a constant
 	//
-	// A record backlog divided by it is how this node states how far behind
-	// it is as a TIME: against a stale read's staleness bound, in a
-	// refusal's `retry_after_seconds`, on the apply-lag gauge and alarm, and
-	// in a bulk edit's projected occupancy. Divided by a constant instead,
-	// every one of those is wrong wherever the real rate differs from it: at
-	// [DrainFloor], a node two thousand records behind reports itself over
-	// half an hour behind whatever its real rate — refusing a stale read
-	// whose bound that rate would meet, and firing an alarm nobody can act
-	// on.
+	// A record backlog divided by it — through [BacklogTime] — is how this
+	// node states a backlog as a TIME: against a stale read's staleness
+	// bound, in a refusal's `retry_after_seconds`, and in a bulk edit's
+	// projected occupancy and the lease that follows from it. Divided by a
+	// constant instead, every one of those is wrong wherever the real rate
+	// differs from it: at [DrainFloor], a node two thousand records behind
+	// states itself over half an hour behind whatever its real rate, and
+	// refuses a stale read whose bound that rate would meet.
 	//
 	// SMOOTHED rather than last-batch, because a single small batch at the
 	// tail of a burst is not this loop's rate: an exponentially weighted
@@ -240,17 +252,63 @@ type Runner struct {
 // one anomalous batch moves it by a quarter of its own error.
 const DrainSmoothing = 0.25
 
-// DrainFloor is the lowest rate, in records a second, that a record backlog is
-// divided by when it is stated as a time.
+// DrainFloor is the rate, in records a second, that [BacklogTime] divides a
+// backlog by when nobody has measured one: [Runner.Drain] is zero until the
+// loop has consumed a batch, and a backlog divided by zero is infinite.
 //
-// It exists for the rate nobody has measured: [Runner.Drain] is zero until the
-// loop has consumed a batch, and a backlog divided by zero is infinite. ONE A
-// SECOND, deliberately low, so that before the loop has measured its own rate
-// a backlog reads long rather than short: at the floor a backlog of n records
-// reads as n seconds. A measured rate below the floor is floored too, which
-// reads an applier slower than one record a second as further ahead than it
-// is.
+// ONE A SECOND, deliberately low, so that before the loop has measured its own
+// rate a backlog reads long rather than short: at the floor a backlog of n
+// records reads as n seconds. Long is the safe direction for every consumer of
+// the conversion — a refused read's retry hint ([RetryHint]) that sends its
+// caller back after the backlog rather than into a second refusal, a staleness
+// bound ([Query.MaxLag]) that refuses rather than serves past what its caller
+// accepts, and a bulk edit's projection in the tracker, whose lease must
+// outlive the bulk it admits.
+//
+// THE UNMEASURED ZERO ONLY. A MEASURED rate below one record a second is used
+// as measured, for the same reason: flooring it would state a slow applier's
+// backlog as shorter than that applier will take — a hint that sends its
+// caller back early, a bound that serves a read past it, a lease that expires
+// before its bulk has applied.
 const DrainFloor = 1.0
+
+// maxBacklog is the longest time [BacklogTime] states: the largest whole
+// number of seconds a time.Duration holds, about 292 years.
+//
+// A CEILING THE CONVERSION CAN REACH, because a measured drain can be a small
+// fraction of a record a second — one slow run is enough, since the first run
+// after a boot is the estimate — and a large backlog over it passes a
+// Duration's range. Converted past that range a float is
+// implementation-defined, and on amd64 it is the most negative duration: a
+// backlog stated as a node AHEAD of the log, which passes every staleness bound
+// and hands out a retry hint already due.
+//
+// WHOLE SECONDS, so [RetryHint] can round a hint up to the next second without
+// passing it.
+const maxBacklog = time.Duration(math.MaxInt64/int64(time.Second)) * time.Second
+
+// BacklogTime is how long this node needs to apply a backlog of records at
+// drain records a second: the ONE conversion from a record count to a time, so
+// the staleness bound, the retry hint and the tracker's bulk projection cannot
+// state one backlog as three different times.
+//
+// DIVIDED AS A FLOAT, because the drain is one: a rate of 1.5 records a second
+// truncated to a whole one before the division states a backlog half as long
+// again as it is. A drain that is not a positive rate is a rate nobody
+// measured, which [DrainFloor] stands in for.
+func BacklogTime(records uint64, drain float64) time.Duration {
+	if records == 0 {
+		return 0
+	}
+	if !(drain > 0) {
+		drain = DrainFloor
+	}
+	seconds := float64(records) / drain
+	if seconds >= float64(maxBacklog/time.Second) {
+		return maxBacklog
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
 
 // NewRunner builds a domain's apply loop, refusing a dependency set that
 // cannot produce a correct apply rather than discovering it mid-stream.
@@ -344,15 +402,23 @@ func (r *Runner) Fault(now time.Time) (string, bool) {
 		r.faultSince.UTC().Format(time.RFC3339)), true
 }
 
-// Deferred is the earliest record this node holds and cannot decode, and false
-// when it holds none.
-func (r *Runner) Deferred() (Deferral, bool) {
+// Deferred is the earliest record this node holds and cannot decode, and how
+// many it holds; the count is zero when it holds none.
+//
+// THE COUNT IS THE RETAINED TABLE'S OWN rather than a flag: it is what the
+// register row and the `deferred.count` gauge publish, and a flag would state
+// one retained record and a thousand as the same thing.
+func (r *Runner) Deferred() (Deferral, uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.deferred, r.hasDefer
+	return r.deferred, r.retained
 }
 
-// Waiting is how many callers are blocked on this applier.
+// Waiting is how many callers are blocked on this applier right now.
+//
+// READ FROM THE WAITERS THEMSELVES rather than from the loop, so it goes on
+// counting while the loop is stopped — which is when callers pile up behind
+// it, and when the engine's position heartbeat publishing this matters most.
 func (r *Runner) Waiting() int { return r.waiters.len() }
 
 // WaitCommitted blocks until this node's applier has committed through p.
@@ -378,7 +444,7 @@ func (r *Runner) WaitApplied(ctx context.Context, s ScopeSet, p Position) error 
 	if err := r.WaitCommitted(ctx, p); err != nil {
 		return err
 	}
-	if _, blocked := r.Deferred(); !blocked {
+	if _, held := r.Deferred(); held == 0 {
 		return nil
 	}
 	var hit bool
@@ -668,7 +734,7 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		d, hasDefer, err := r.tables.oldestDeferred(ctx, tx)
+		d, held, err := r.tables.retainedState(ctx, tx)
 		if err != nil {
 			return err
 		}
@@ -677,7 +743,7 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		if found {
 			r.cursor = at
 		}
-		r.deferred, r.hasDefer = d, hasDefer
+		r.deferred, r.retained = d, held
 		// A RECREATED STREAM IS DETECTED HERE and nowhere else, and IT
 		// IS A STOP. The generation is the response and this is what
 		// notices: the broker's own creation instant moving means every
@@ -844,8 +910,8 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 // FILLED TOWARD THE BUDGET while records are pending, rather than one fetch
 // per transaction: a fetch is bounded by bytes and a transaction by rows and
 // time, and committing whatever one fetch happened to contain makes the commit
-// rate a property of the fetch size instead of the budget. On a barrier-heavy
-// stream that is one commit — and one fsync — per two dozen records.
+// rate — and the fsync rate with it — a property of the fetch size instead of
+// the budget.
 func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuffer) ([]Record, error) {
 	run := tail
 	for {
@@ -991,21 +1057,14 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 
 	// THE ABORTS ARE COUNTED HERE, and this is the only place that can.
 	//
-	// `crewlet.statelog.apply.tx.aborts` was declared and catalogued and
-	// never written, so the series was permanently absent and the gauge
-	// documented as "measured on the operator's own hardware rather than on
-	// a benchmark's" read as no-data for ever. What it answers is whether
-	// an apply's body is ever run twice, which is the assumption fourteen
-	// of this design's throughput figures rest on.
-	//
-	// IT READS ZERO BY CONSTRUCTION NOW, and that is a stronger statement
-	// than the one it replaced rather than a reason to retire it. The
-	// driver detects write conflicts per FILE, so internal/store takes the
-	// write lock at BEGIN and queues its writers for it: nothing committing
+	// What `crewlet.statelog.apply.tx.aborts` answers is whether an apply's
+	// body is ever run twice. It reads zero by construction: the driver
+	// detects write conflicts per FILE, so internal/store takes the write
+	// lock at BEGIN and queues its writers for it — nothing committing
 	// elsewhere in the file can abort an apply, and a contended one waits
-	// rather than losing. What a count here means is therefore a TRANSIENT
-	// FAILURE that surfaced from inside a body the store then ran again —
-	// the retry budget being spent rather than held in reserve.
+	// rather than losing. A count here is therefore a TRANSIENT FAILURE that
+	// surfaced from inside a body the store then ran again: the retry budget
+	// being spent rather than held in reserve.
 	//
 	// It cannot be counted in the store: [store.DB.Tx]'s retry is where the
 	// re-run happens, and internal/store may not import a metrics package
@@ -1014,6 +1073,13 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	// the one that committed — read from the layer that owns the
 	// instrument.
 	attempts := 0
+	// txStart is when the attempt now running began its body, and after
+	// the commit it is the COMMITTING attempt's. The store has taken the
+	// file's write lock by the time a body runs and holds it to the commit,
+	// so the span from there to the commit is the transaction's hold on the
+	// writer — what every writer queued behind it waits out, and what
+	// `apply.tx.duration` times.
+	var txStart time.Time
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
 		attempts++
 		// RESET ON EVERY ATTEMPT. The store re-runs the body of an
@@ -1021,7 +1087,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// across attempts counts the abandoned one too — and the
 		// metrics would report work that was rolled back.
 		consumed, committedAt, tally, rows, boundBy = consumed[:0], Position{}, results{}, 0, ""
-		txStart := r.now()
+		txStart = r.now()
 
 		hasDeferred, err := r.anyDeferred(ctx, tx)
 		if err != nil {
@@ -1155,6 +1221,10 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		committedAt = highest(consumed, r.Committed())
 		return r.tables.setCursor(ctx, tx, committedAt, r.created, r.now())
 	})
+	// THE COMMIT'S OWN INSTANT, taken before anything that follows it: the
+	// hold ends here, and a record is applied here rather than when its
+	// acknowledgement goes out.
+	committed := r.now()
 	if err != nil {
 		if errors.Is(err, ErrStopped) {
 			return nil, r.stop(ctx, err)
@@ -1190,7 +1260,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	// from a record's own StoredAt, and a stale redelivery's is an hour
 	// old, so reading the tail reports the redelivery's age as this
 	// batch's latency.
-	r.observe(started, rows, boundBy, tally, topRecord(consumed))
+	r.observe(committed.Sub(txStart), committed, rows, boundBy, tally, topRecord(consumed))
 	return consumed, nil
 }
 
@@ -1227,10 +1297,10 @@ func (r *Runner) measureDrain(started time.Time, records int) {
 // Drain is this loop's measured records per second, and 0 before it has
 // consumed anything.
 //
-// ZERO MEANS UNMEASURED, and a caller that divides a backlog by it must not
-// divide by zero: it floors the rate at [DrainFloor], or gives an answer that
-// does not depend on the rate at all. A node that has consumed nothing has no
-// rate, which is a different fact from a node applying nothing per second.
+// ZERO MEANS UNMEASURED: a node that has consumed nothing has no rate, which
+// is a different fact from a node applying nothing per second. A backlog is
+// divided by it through [BacklogTime], which reads the zero as exactly that
+// and takes [DrainFloor] in its place.
 func (r *Runner) Drain() float64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1238,11 +1308,12 @@ func (r *Runner) Drain() float64 {
 }
 
 // Commits is this loop's measured transactions per second, and 0 before it
-// has applied anything.
+// has consumed anything — the same zero [Runner.Drain] answers, from the same
+// runs.
 //
-// ZERO MEANS UNMEASURED, exactly as [Runner.Drain]'s does. Nothing divides by
-// this one — it is published rather than consumed, because what an operator
-// does with it is compare it against the device's own committed write rate.
+// NOTHING DIVIDES BY IT. The engine's position heartbeat reads it and
+// publishes it beside the drain, because what an operator does with it is
+// compare it against the device's own committed write rate.
 func (r *Runner) Commits() float64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1324,16 +1395,17 @@ func (r *Runner) ack(ctx context.Context, consumed []Record) {
 	}
 }
 
-// refreshDeferred re-reads the earliest record this node cannot decode.
+// refreshDeferred re-reads the earliest record this node cannot decode and how
+// many it holds.
 func (r *Runner) refreshDeferred(ctx context.Context) error {
 	return r.db.Read(ctx, func(tx *sql.Tx) error {
-		d, ok, err := r.tables.oldestDeferred(ctx, tx)
+		d, held, err := r.tables.retainedState(ctx, tx)
 		if err != nil {
 			return err
 		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		r.deferred, r.hasDefer = d, ok
+		r.deferred, r.retained = d, held
 		return nil
 	})
 }
@@ -1391,7 +1463,11 @@ func (r *Runner) countAborts(attempts int) {
 		metrics.Attrs{"domain": r.domain.Name()})
 }
 
-func (r *Runner) observe(started time.Time, rows int, boundBy string, tally results, last Record) {
+// observe records one committed run: held is the committing attempt's hold on
+// the writer and committed the commit's own instant.
+func (r *Runner) observe(held time.Duration, committed time.Time, rows int, boundBy string,
+	tally results, last Record) {
+
 	if r.metrics == nil {
 		return
 	}
@@ -1399,8 +1475,7 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 	if boundBy == "" {
 		boundBy = "drained"
 	}
-	now := r.now()
-	r.metrics.Observe(metrics.StatelogApplyTxDuration, now.Sub(started),
+	r.metrics.Observe(metrics.StatelogApplyTxDuration, held,
 		metrics.Attrs{"domain": domain, "bound_by": boundBy})
 	r.metrics.ObserveValue(metrics.StatelogApplyBatchRows, float64(rows),
 		metrics.Attrs{"domain": domain})
@@ -1417,12 +1492,15 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 	// than from when this node fetched the record: every read level is a
 	// policy about this quantity, and a node's own fetch time hides
 	// exactly the delay the policy is about.
+	//
+	// NO WAITERS GAUGE HERE. How many callers are blocked is a STATE, and
+	// sampled as a run ends it stops moving exactly when it matters — an
+	// applier that has stopped ends no runs while its waiters pile up — so
+	// the position heartbeat samples [Runner.Waiting] instead.
 	if !last.StoredAt.IsZero() {
-		r.metrics.Observe(metrics.StatelogApplyLatency, now.Sub(last.StoredAt),
+		r.metrics.Observe(metrics.StatelogApplyLatency, committed.Sub(last.StoredAt),
 			metrics.Attrs{"domain": domain})
 	}
-	r.metrics.Set(metrics.StatelogWaiters, float64(r.waiters.len()),
-		metrics.Attrs{"domain": domain})
 }
 
 func (r *Runner) count(name string) {

@@ -77,9 +77,10 @@ type Ranker interface {
 	// RankItems returns work-item ids in rank order, best first.
 	RankItems(ctx context.Context, text string, limit int) ([]RankedDoc, error)
 
-	// Building reports an index that has not caught up with this node's
-	// own rows, so a caller can tell "nothing matched" from "not indexed
-	// yet" — which are different answers a person acts on differently.
+	// Building reports an index that has not finished its first build over
+	// the work items, so a caller can tell "nothing matched" from "not
+	// indexed yet" — which are different answers a person acts on
+	// differently. NO I/O: it is asked on every search.
 	Building(ctx context.Context) bool
 }
 
@@ -91,7 +92,16 @@ type Ranker interface {
 // answer's budget is the same as the first's.
 const SearchLimit = 20
 
-// MaxSearchLimit caps what a caller may ask for.
+// MaxSearchLimit is the most a caller may ask for, and a larger ask is
+// REFUSED naming it ([ErrSearchLimit]) rather than answered with this many.
+//
+// FIFTY, and it is not a free choice: it is at most what one fan-out can
+// answer — a participant returns its top
+// [github.com/crewlet/crewlet/internal/search.FuseN] per method, and a larger
+// limit is refused there too — which internal/engine's
+// TestNoSearchCallerAsksForMoreThanAFanOutCanAnswer holds.
+// An ask past it answered with fifty would be a list the caller took for the
+// whole of what it asked for.
 const MaxSearchLimit = 50
 
 // Searcher answers a ranked item search.
@@ -105,7 +115,7 @@ func NewSearcher(db *store.DB, rank Ranker) *Searcher {
 	return &Searcher{db: db, rank: rank}
 }
 
-// ErrIndexBuilding reports an index that has not caught up.
+// ErrIndexBuilding reports an index that has not finished its first build.
 //
 // ITS OWN SENTINEL, because the caller's answer differs from every other
 // refusal: nothing is wrong, the company's work is simply not all searchable
@@ -113,28 +123,40 @@ func NewSearcher(db *store.DB, rank Ranker) *Searcher {
 // is nothing" — which it would otherwise act on by filing a duplicate.
 var ErrIndexBuilding = fmt.Errorf("tracker: the search index is still building")
 
+// ErrSearchLimit reports an ask for more than [MaxSearchLimit] items.
+var ErrSearchLimit = fmt.Errorf("tracker: a search answers at most %d items",
+	MaxSearchLimit)
+
 // Search ranks the company's work items against plain text.
+//
+// # A building index is refused, whatever it found
+//
+// While this node's index is on its first build, a ranking it returns is one
+// it cannot vouch for: alone it scans nothing, and where the fleet divides a
+// search it counts its own share of the buckets missing and drops any item a
+// peer ranked that it has no row for yet. The answer is a list of rows with
+// nothing beside it, so a partial one reads as the whole — and a seat that
+// took a short list for every match acts on it by filing a duplicate. So the
+// gate is asked on EVERY search, which costs nothing: it reads the index's own
+// first-lap flag.
 func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked, error) {
 	switch {
 	case s == nil || s.rank == nil || s.db == nil:
 		return nil, fmt.Errorf("tracker: this node has no search index")
+	case limit > MaxSearchLimit:
+		return nil, fmt.Errorf("%w: `limit` asked for %d — ask for %d or fewer",
+			ErrSearchLimit, limit, MaxSearchLimit)
 	case limit <= 0:
 		limit = SearchLimit
-	case limit > MaxSearchLimit:
-		limit = MaxSearchLimit
+	}
+	if s.rank.Building(ctx) {
+		return nil, ErrIndexBuilding
 	}
 	docs, err := s.rank.RankItems(ctx, text, limit)
 	if err != nil {
 		return nil, err
 	}
 	if len(docs) == 0 {
-		// THE GATE IS ASKED ONLY ON AN EMPTY ANSWER, because that is the
-		// only answer it changes: a search that found something has
-		// found it whether or not the index is still catching up, and
-		// asking every time would put one indexed count on every call.
-		if s.rank.Building(ctx) {
-			return nil, ErrIndexBuilding
-		}
 		return nil, nil
 	}
 	rows, err := s.itemsByID(ctx, docs)

@@ -1674,22 +1674,42 @@ counter has since left behind as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
-tool_executions, round_narration, partial_round, rounds, in_progress }` while an
-LLM call is under way.  A call whose phase failed keeps `in_progress: false`
+tool_executions, tool_executions_earlier, round_narration,
+round_narration_earlier, partial_round, rounds, in_progress }` while an LLM
+call is under way.  A call whose phase failed keeps `in_progress: false`
 plus `failed: true` and an `error` object, so the dashboard renders the failure
 instead of an answer that never arrives — and no `partial_round`, because the
-phase is over and nothing is still arriving.
+phase is over and nothing is still arriving. Its lists become the failed
+record's own when that record carries every row; a record cut to its first
+rows leaves the call holding the frame's latest ones.
 
 **What the projection carries, and what the wire sends.** The whole call is
 republished to every open dashboard five times a second for the length of a
-phase, so the frames behind it are trimmed and the projection reassembles them:
-the `prompt` and `prompt_messages` are sent **once**, on the phase's opening
-frame, and carried forward from there (a 30 KB system prompt does not change
-mid-phase, and past `queue.MaxPayloadBytes` the publish is refused outright and
-the live row simply stops); a tool result and the joined `response` are sent
-**tail-bounded** on a live frame, because they are what a reader is watching
-the end of. The durable `agent_phase_completed` record carries them whole,
-which is what a reader opens the finished card for.
+phase, and past `queue.MaxPayloadBytes` the publish is refused outright and
+the live row simply stops — so every frame is bounded however long the phase
+runs, and the projection reassembles what it can:
+
+- The `prompt` and `prompt_messages` are sent **once**, on the phase's opening
+  frame, and carried forward from there: a 30 KB system prompt does not change
+  mid-phase.
+- A frame carries the phase's **latest 48 tool calls** and its **latest 48
+  narrated rounds**, not all of them: `tool_executions_earlier` and
+  `round_narration_earlier` count how many came before the first one it
+  carries, and are `0` while the window holds every one. 48 is the executor's
+  default round ceiling, so an executor phase within its default budget has
+  every narrated round on the frame.
+- A tool call's result and error, each round's reasoning and content, the
+  round in flight and the joined `response` are sent **tail-bounded** — at
+  most their last 4,000 bytes, behind a leading `…` when cut — because they are
+  what a reader is watching the end of.
+- A call's `arguments` longer than 4,000 bytes are replaced by a one-member
+  JSON object keyed `…`, saying how many bytes they were and that they are
+  whole on the phase's completed record.
+
+The durable `agent_phase_completed` record carries every call and every round
+whole — or, when it is too large for one event, cut, with the whole kept in
+parts that `GET /phases/{id}` reassembles — which is what a reader opens the
+finished card for.
 
 **A record too large for one event is published cut, and its whole is kept.**
 Past `queue.MaxPayloadBytes` (8 MiB) the transport refuses an event outright,
@@ -1701,11 +1721,12 @@ ends them, and the whole is then not kept (`phase_record_whole_not_kept` in
 the log). Then the **record**, in the
 largest form the transport accepts: its longest texts cut to a common level,
 the tool results first, then the tool arguments, then the prose and the
-prompts, and the phase's own `error` last — it is cut only when every other
-text is already at its mark; failing that, every text reduced to its mark;
-failing that, its first rows carried and the rest counted. A cut text ends in
-`…`, a cut tool call or round carries its whole length beside it as
-`<field>_bytes`, and the record carries:
+prompts; failing that, each of those texts reduced to its mark; failing that,
+its first rows carried and the rest counted. The phase's own `error` is whole
+in every one of those forms: it is cut only in a form with no row left that is
+still too large. A cut text ends in `…`, a cut tool call or round carries its
+whole length beside it as `<field>_bytes`, a text no longer than that mark is
+never cut, and the record carries:
 
 | Field | What it says |
 |---|---|
@@ -1718,14 +1739,14 @@ decision, the phase — so a cut phase is still in every spend total. A record
 refused although it is within 8 MiB was refused by a NATS server whose
 `max_payload` is set lower (see
 [Deployment § An external NATS server](../guides/deployment.md#an-external-nats-server)):
-the node splits each part the server refuses in two, never below 64 KiB of
-data — a part larger than that is asked for at 64 KiB before the whole is
-given up — and cuts the record to half the smallest message the server has
-refused, part or record, halving again on each further refusal; it logs
-`phase_record_refused_within_ceiling`. A part refused at 64 KiB ends the
-parts, and the record goes out with no whole behind it. Only when the
-server refuses even the smallest form — every text at its mark, every row
-counted — is the phase left with no record, logged as
+the node retries each part the server refuses at half its size, or at 64 KiB
+of data when half would be smaller, and cuts the record to half the smallest
+message the server has refused, part or record, halving again on each further
+refusal; it logs `phase_record_refused_within_ceiling`. A part of 64 KiB or
+less refused ends the parts, and the record goes out with no whole behind it
+(`phase_record_whole_not_kept`). Only when the
+server refuses even the smallest form — every text at its mark, the error
+included, and every row counted — is the phase left with no record, logged as
 `phase_record_not_published`; its whole, if its parts landed, still reads
 back through `phase_record`.
 
@@ -2664,7 +2685,8 @@ those runs stored a key no chat message can reproduce. Telling somebody to
 the [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box),
 and its row carries those calls as `bridge_calls`, each
 `{seq, name, args, output, failed, at}` — plus `whole_bytes` and `whole_parts`
-on a call whose whole was filed in parts — in the order the run made them (the
+on a call its record holds cut, with its whole kept in parts under that
+record — in the order the run made them (the
 example shows one from each end). A long run makes thousands, each carrying
 its output, so an answer does not carry them all, and it says what it left
 out:
@@ -2700,21 +2722,20 @@ out:
   it: fitted to it, and marked in whichever field was cut — a cut `output`
   ends in `…`, and arguments that did not fit are replaced by a one-member
   object keyed `…` saying how many bytes they were and what became of them. A
-  call whose whole was filed in parts under that record names them with
-  `whole_bytes`, the length of its whole, and `whole_parts`, how many parts
-  hold it; the whole reassembled from them, not the fitted form shown here, is
-  what the run's resume reads. No answer carries a part, and
-  `bridge_calls_total` counts none. A fitted call that carries neither and
-  whose whole could not be kept says so in whichever field was cut: arguments
-  set aside are an object saying they were not kept, and a cut `output` ends
-  in a note after its `…`. A call an older build fitted, before parts, has
-  neither the reference nor the note: its cut `output` ends in `…` alone. A
   call a NATS server set below the engine's ceiling refused is shown in its
-  least form — its name and outcome, each text it had replaced by its mark —
-  beside `whole_bytes` and `whole_parts` when that server took the parts, and
-  saying its whole was not kept when it did not. A refused part is retried at
-  half its size, or at 64 KiB when half would be smaller, and only a refused
-  part of 64 KiB or less ends the split.
+  least form: its name and outcome, each text no longer than its mark as it
+  was, and each longer one set aside — the arguments for the `…` object, which
+  then says they were set aside because a server refused the call's record,
+  and the output for `…`. A cut call whose whole is kept in parts under its
+  record names them with `whole_bytes`, the length of its whole, and
+  `whole_parts`, how many parts hold it; the whole reassembled from them, not
+  the cut form shown here, is what the run's resume reads. No answer carries a
+  part, and `bridge_calls_total` counts none. A cut call that carries neither
+  says its whole could not be kept in whichever field was cut: arguments set
+  aside are an object saying they were not kept, and a cut `output` ends in a
+  note after its `…`. A refused part is retried at half its size, or at 64 KiB
+  when half would be smaller, and only a refused part of 64 KiB or less ends
+  the split.
 
 `execute_state` — the serialised Execute-loop conversation — is
 deliberately not returned: it is the largest column in the row and every

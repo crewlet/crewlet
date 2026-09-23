@@ -582,3 +582,76 @@ func TestAnOpeningFrameThatArrivesLateStillDeliversThePrompt(t *testing.T) {
 		t.Errorf("the late opening frame overwrote the round it arrived after: %+v", call)
 	}
 }
+
+// A LIVE CALL HOLDS THE FRAME'S WINDOW AND THE FRAME'S COUNT, TOGETHER.
+//
+// A progress frame carries the phase's latest calls and rounds, not all of
+// them, and says how many came before. Held apart — the window without its
+// count — the live row would present the latest calls as every call the phase
+// made. A failure's record replaces them only when it carries its whole list:
+// then nothing came before its first row. A record cut past its least form
+// carries its FIRST rows and counts the rest, and the frame's window of the
+// latest ones is kept instead, with its count.
+func TestALiveCallHoldsTheFramesWindowAndItsCount(t *testing.T) {
+	t.Parallel()
+	frame := func(s *livestate.LiveState) {
+		s.Apply(env("agent_phase_started", planCall()))
+		s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+			"round_num": 30,
+			"tool_executions": []any{
+				map[string]any{"name": "read_page", "round": 30},
+				map[string]any{"name": "slack_post", "round": 31},
+			},
+			"tool_executions_earlier": 120,
+			"round_narration":         []any{map[string]any{"round": 31, "content": "posting"}},
+			"round_narration_earlier": 7,
+		}), streamOnly, at("2026-06-14T12:00:04+00:00")))
+	}
+
+	s := livestate.New()
+	frame(s)
+	call := liveCallOf(t, s, "Lead")
+	if len(call.ToolExecutions) != 2 || call.ToolExecutionsEarlier != 120 ||
+		len(call.RoundNarration) != 1 || call.RoundNarrationEarlier != 7 {
+		t.Fatalf("the call holds %d calls after %d and %d rounds after %d; want the frame's 2 after 120 "+
+			"and 1 after 7", len(call.ToolExecutions), call.ToolExecutionsEarlier,
+			len(call.RoundNarration), call.RoundNarrationEarlier)
+	}
+
+	// A record carrying every row: its lists, and nothing before them.
+	whole := livestate.New()
+	frame(whole)
+	whole.Apply(env("agent_phase_completed", with(planCall(), map[string]any{
+		"failed": true, "error": "boom",
+		"tool_executions": []any{
+			map[string]any{"name": "a"}, map[string]any{"name": "b"}, map[string]any{"name": "c"},
+		},
+		"round_narration": []any{map[string]any{"round": 1, "content": "first"}},
+	}), at("2026-06-14T12:00:05+00:00")))
+	call = liveCallOf(t, whole, "Lead")
+	if len(call.ToolExecutions) != 3 || call.ToolExecutionsEarlier != 0 ||
+		len(call.RoundNarration) != 1 || call.RoundNarrationEarlier != 0 {
+		t.Errorf("after a record carrying every row the call holds %d calls after %d and %d rounds after "+
+			"%d; want the record's 3 and 1, with nothing before them", len(call.ToolExecutions),
+			call.ToolExecutionsEarlier, len(call.RoundNarration), call.RoundNarrationEarlier)
+	}
+
+	// A record cut to its first rows: the frame's window and count stay.
+	cut := livestate.New()
+	frame(cut)
+	cut.Apply(env("agent_phase_completed", with(planCall(), map[string]any{
+		"failed": true, "error": "boom",
+		"tool_executions":         []any{map[string]any{"name": "a"}},
+		"tool_executions_omitted": 121,
+		"round_narration":         []any{map[string]any{"round": 1, "content": "first"}},
+		"round_narration_omitted": 7,
+	}), at("2026-06-14T12:00:05+00:00")))
+	call = liveCallOf(t, cut, "Lead")
+	if len(call.ToolExecutions) != 2 || call.ToolExecutionsEarlier != 120 ||
+		len(call.RoundNarration) != 1 || call.RoundNarrationEarlier != 7 ||
+		call.RoundNarration[0].(map[string]any)["content"] != "posting" {
+		t.Errorf("after a record cut to its first rows the call holds %d calls after %d and %d rounds "+
+			"after %d; want the frame's latest, with its counts", len(call.ToolExecutions),
+			call.ToolExecutionsEarlier, len(call.RoundNarration), call.RoundNarrationEarlier)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -618,17 +619,19 @@ func a2aChannelTotals(matched []coord.Channel) map[string]int {
 // knowledgeSearch runs the company's own knowledge search.
 //
 // Deliberately identical to what a seat's own turn does: same seam, same
-// backend, same live read with no local copy. That is the point of the screen —
-// an operator asking "what would an agent find" gets the answer an agent would
-// get, not an answer from an index somebody would have to keep fresh.
+// backend, same number of pages. That is the point of the screen — an operator
+// asking "what would an agent find" gets the answer an agent would get, not an
+// answer from a second search somebody would have to keep in step.
 //
 // WHOSE IDENTITY IT SEARCHES AS is the one real decision here, and it is
-// answered conservatively: as the ORG, with no seat. A search with no seat is a
-// search with no per-seat credential, so the backend applies whatever the
-// engine's own account can see and nothing more. Searching as a named seat
-// would let a dashboard reader read, through that seat's account, material
-// their own account may not have — which is the exact confusion the seam's
-// "unscoped is not unbounded" rule exists to prevent.
+// answered conservatively: as the ORG, with no seat. On Confluence a search
+// with no seat is a search with no per-seat credential, so the backend applies
+// whatever the engine's own account can see within a declared scope and
+// nothing more. Searching as a named seat would let a dashboard reader read,
+// through that seat's account, material their own account may not have —
+// which is the exact confusion the seam's unscoped-versus-nothing rule exists
+// to prevent. The native backend has no per-seat credential, so there the
+// answer is every page, as it is for every seat.
 func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	text := p.String("q")
 	if text == "" {
@@ -673,17 +676,14 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	if !searcher.CanSearch(nil, organization) {
 		return unavailable(KnowledgeNoScope, "the "+searcher.Backend()+" backend is configured but knowledge.scope lists no container, so an org-wide search has nothing to read")
 	}
-	// A BACKEND THAT KEEPS AN INDEX can be behind its own projection, and
-	// during that window every search answers empty. The optional
-	// interface rather than a method on the seam: a live vendor search has
-	// no index and nothing to report, so requiring it of every backend
-	// would be four implementations of "false".
-	if builder, ok := searcher.(interface {
-		Building(ctx context.Context) bool
-	}); ok && builder.Building(ctx) {
+	// AN INDEX STILL ON ITS FIRST BUILD can miss any page, and on a single
+	// node it answers every search empty. Refused naming why rather than
+	// shown: a screen showing a list this node cannot vouch for would read
+	// as everything that matched.
+	if searcher.Building(ctx) {
 		return unavailable(KnowledgeBuilding,
-			"this node is still indexing what it has projected, so a search "+
-				"here would answer empty for pages that exist")
+			"this node is still indexing the knowledge base, so a search here "+
+				"could miss pages that exist")
 	}
 	if text == "" {
 		return out, nil
@@ -734,8 +734,8 @@ const (
 	// KnowledgeNoScope — a backend is wired, with no org-wide read scope.
 	KnowledgeNoScope KnowledgeReason = "no_scope"
 
-	// KnowledgeBuilding — the backend is wired and its index is still
-	// catching up with what this node has projected.
+	// KnowledgeBuilding — the backend is wired and this node's index is
+	// still on its first build.
 	//
 	// SEPARATE FROM AN EMPTY RESULT, and that is the entire reason it
 	// exists: "the company has written nothing down" and "this node has
@@ -744,9 +744,8 @@ const (
 	// node. A screen that showed the first for the second would send
 	// somebody looking for a wiki that is right there.
 	//
-	// Only a backend that keeps a local index can report it — a live
-	// vendor search has nothing to build — so it is read through an
-	// optional interface rather than added to [knowledge.Searcher].
+	// Only a backend that keeps an index of its own ever reports it: a
+	// live vendor search answers [knowledge.Searcher.Building] with false.
 	KnowledgeBuilding KnowledgeReason = "building"
 )
 
@@ -761,9 +760,9 @@ func (r KnowledgeReason) Valid() bool {
 	return false
 }
 
-// KnowledgeHitLimit bounds one search. It matches what a turn-start prefetch
-// asks for, so the screen and the agent see the same top slice.
-const KnowledgeHitLimit = 10
+// KnowledgeHitLimit bounds one search: the turn-start block's own count, named
+// rather than copied, so the screen and the agent see the same top slice.
+const KnowledgeHitLimit = prefetch.KnowledgeHits
 
 // organization resolves the running company's org, or nil.
 func (s Sources) organization() *org.Organization {

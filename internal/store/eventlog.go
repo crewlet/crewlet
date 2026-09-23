@@ -360,8 +360,10 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	//
 	// [RecordFor] sets it from the one decode it already makes, and the
 	// event writer builds every row it writes through RecordFor, so this
-	// branch runs for a record assembled by hand: the webhook receiver's
-	// (see RecordFor for why it builds its own), or a test's.
+	// derives a spend only for an agent_phase_completed row assembled by
+	// hand, which only tests assemble. The webhook receiver assembles its
+	// rows by hand too, but a delivery is not a phase completion, and
+	// [SpendFor] derives nothing for any other type.
 	//
 	// The zero value writes the same empty strings and zeroes the column
 	// defaults would, so every non-phase row is unaffected.

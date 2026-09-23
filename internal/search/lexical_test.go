@@ -42,7 +42,7 @@ func page(t testing.TB, db *store.DB, id, container, title, body string, version
 // indexAll drives the indexer to a fixed point.
 //
 // UNTIL IT FINDS NOTHING TWICE, not until [search.Indexer.ReadyFor]. That is
-// the first-build gate — it closes once per process, on each corpus's first
+// the first-build gate — it opens once per process, on each corpus's first
 // lap — and is deliberately blind to a row that is merely stale, so waiting on
 // it would return the instant an edit's page was represented by its PREVIOUS
 // text.
