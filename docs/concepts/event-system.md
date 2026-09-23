@@ -389,7 +389,12 @@ Two facts are kept out by having **no type at all**: a per-request
 authorization decision (a fact about a poll rather than about the company; a
 Tier A token refused by a route is the coalesced `iam_token_overreach`
 instead) and a session touch (a clock, not an event). The exclusion map is
-for types something publishes, and nothing publishes either.
+for types something publishes, and nothing publishes either. Nothing *refuses*
+them either, and that is stated rather than implied: both are caused by a
+caller the guard admitted, so a type for either would declare an
+authenticated rate, which the walk below admits. They stay out because no type
+exists, and adding one is a decision a reviewed change has to argue against
+those two reasons.
 
 The rule is enforced by a walk over the taxonomy rather than remembered: a type
 given a category while declaring an anonymous rate, and a type given a category

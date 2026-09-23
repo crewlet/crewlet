@@ -303,14 +303,22 @@ var categories = map[string]placement{
 // type only to exclude it would be a wire name with no producer, which reads
 // to the next person exactly like a type whose publisher was lost.
 //
-// What keeps them out is therefore the same rule [AdmissionViolations] states,
-// applied one step earlier: a refused request is a 403 the authority table
-// wrote and a log line, a request a Tier A token overreached on is the
-// COALESCED `iam_token_overreach`, and a session's use moves nothing at all —
-// its rotation is derived, so an hour of use writes nothing anywhere. A change
-// that wanted a row per decision or per touch would have to add the type, and
-// the type would have to state a rate author; an unauthenticated caller
-// authors the rate of both, so the walk refuses it there.
+// # And NOTHING HERE REFUSES THEM — they stay out because no type exists
+//
+// [AdmissionViolations] cannot hold either one out, and it would be false to
+// say it does. Both are caused by a caller the guard ADMITTED — a decision is
+// taken on an authenticated request, a touch is a valid session being used —
+// so a type for either would be filed [RateAuthenticated], and the walk
+// refuses only an anonymous or an unstated author. What keeps them out is
+// what each fact already is: a refused request is the 403 the authority
+// table wrote and a log line, a request a Tier A token overreached on is the
+// COALESCED `iam_token_overreach` (one per token per window, not one per
+// request), and a session's use moves nothing at all — its rotation is
+// derived, so an hour of use writes nothing anywhere. A change that wanted a
+// row per decision or per touch would add the type in a reviewed diff, and
+// the reasons above — volume and a poll rather than a fact for the decision,
+// a clock rather than an event for the touch — are what that review has to
+// answer; no test here would stop it.
 var excluded = map[string]Exclusion{
 	"agent_turn_progress": {Cause: CauseIntermediate, Reason: "fires once per LLM round as a live-only signal; the " +
 		"matching agent_phase_completed is its durable record, so persisting " +
