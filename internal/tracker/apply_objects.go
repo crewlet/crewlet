@@ -301,8 +301,14 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 		// move ranks backwards on a redelivery.
 		return 0, nil
 	}
+	// THE PLACEMENT THE RECORD WAS WRITTEN FOR, by its version — see
+	// [RankOrderRecordVersion] for why an older record keeps its own.
+	place := placeTask
+	if c.record.V < RankOrderRecordVersion {
+		place = placeByColumn
+	}
 	for _, placement := range order.Placements {
-		n, err := placeTask(ctx, tx, c, c.subject().ID, placement)
+		n, err := place(ctx, tx, c, c.subject().ID, placement)
 		if err != nil {
 			return 0, err
 		}
@@ -359,7 +365,8 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 }
 
 // placeTask writes one placement onto the task it names — the `rank` column
-// AND the document.
+// AND the document. It is how a rank order at [RankOrderRecordVersion] places a
+// task; [placeByColumn] is how one at [RecordVersion] still does.
 //
 // # The document, because the document is what every later commit starts from
 //
@@ -403,6 +410,26 @@ func placeTask(ctx context.Context, tx *sql.Tx, c applyContext, project string,
 		UPDATE tracker_tasks SET rank = ?, scoped_through = ?, document = ?
 		WHERE id = ?`,
 		string(placement.Rank), c.packed, document, placement.Task)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: move task %s at %s: %w",
+			placement.Task, c.position, err)
+	}
+	return affected(moved)
+}
+
+// placeByColumn is how a rank order at [RecordVersion] places a task: the
+// `rank` column alone, on the task whatever project it is now in, and only
+// forward of what the row already reflects. It is kept for the records written
+// at that version, which every node — and every replay — must apply exactly as
+// they were first applied; [placeTask] is what a record at
+// [RankOrderRecordVersion] does instead.
+func placeByColumn(ctx context.Context, tx *sql.Tx, c applyContext, _ string,
+	placement Placement) (int, error) {
+
+	moved, err := tx.ExecContext(ctx, `
+		UPDATE tracker_tasks SET rank = ?, scoped_through = ?
+		WHERE id = ? AND ? > MAX(version, scoped_through)`,
+		string(placement.Rank), c.packed, placement.Task, c.packed)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: move task %s at %s: %w",
 			placement.Task, c.position, err)

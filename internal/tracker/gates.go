@@ -347,7 +347,7 @@ type PurgeResult struct {
 // tell is told nothing, and the record still names itself `purged` because the
 // kind is the writer's and not the notification's. The purge's row in the feed
 // carries the same line either way — with no notification to bring it, the
-// applier writes it ([Applier.purgeLine]).
+// feed builds it from the deletion marker ([readActivity]).
 func purgeWake(task Task, reason, actor string, leads Leads) *Notify {
 	if leads == nil {
 		return nil
@@ -399,13 +399,14 @@ const purgeReasonSeparator = ": "
 // reason fits one task and not another with a longer key. The refusal names
 // this number so the operator knows how much to shorten by.
 //
-// THE REASON IS REFUSED RATHER THAN CUT because the excerpt is where it is
-// read: the lead's notification carries it, and so does the purge's row in
-// the activity feed — from that notification, or written by the applier when
-// there was no lead to notify ([Applier.purgeLine]). The whole reason is also
-// on the purge record's payload and in the deletion marker's `reason` column,
-// but no read surface returns either, so a reason cut on the excerpt would
-// have no way back.
+// THE REASON IS REFUSED RATHER THAN CUT because this line is where it is read,
+// and it is read in two places that must agree: the lead's notification
+// carries it as an excerpt, which [Notify.Validate] bounds at [MaxExcerpt], and
+// the purge's row in the activity feed carries the same line — the
+// notification's, or with no lead to notify, the one the feed builds from the
+// deletion marker ([readActivity]). A reason cut to fit the notification
+// would leave the lead reading a different sentence from the one the feed
+// shows.
 //
 // Applied whether or not the project has a lead to tell, so that what a purge
 // accepts does not change when somebody is appointed lead.

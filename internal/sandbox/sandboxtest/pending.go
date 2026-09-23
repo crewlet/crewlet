@@ -1611,7 +1611,9 @@ func testAFirstPageCarriesTheEndOfTheLog(t *testing.T, s sandbox.PendingStore) {
 			"want all 7 and nothing else", len(whole.Calls), len(whole.End), whole.Between, whole.Next)
 	}
 
-	// A page whose end would overlap it carries only what it does not.
+	// A page whose end would overlap it carries only what it does not — and,
+	// with the two together holding the whole log, no cursor: paging on from
+	// one would fetch the end's calls a second time.
 	near, err := s.BridgeCallPage(ctx, mustGet(t, s, r.TurnID), 0, 4)
 	if err != nil {
 		t.Fatalf("BridgeCallPage: %v", err)
@@ -1619,6 +1621,9 @@ func testAFirstPageCarriesTheEndOfTheLog(t *testing.T, s sandbox.PendingStore) {
 	if got := names(near.End); !slices.Equal(got, []string{"c4", "c5", "c6"}) || near.Between != 0 {
 		t.Errorf("the end beside a 4-call first page = %q with %d between, want c4 to c6 and none",
 			got, near.Between)
+	}
+	if near.Next != 0 {
+		t.Errorf("a first page that, with its end, holds the whole log hands out cursor %d", near.Next)
 	}
 }
 

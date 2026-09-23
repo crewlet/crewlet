@@ -536,3 +536,44 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 		})
 	}
 }
+
+// A PURGE'S SCRUB SEEKS THE ROWS IT EMPTIES.
+//
+// Both statements run inside the applier's one serial transaction, on every
+// node, for every purge — and the inbox table has no index on the one column a
+// purge knows its notices by, the task's id. Written as a predicate on that
+// column, the inbox half read every notice the company held. The rows are
+// reached through the task's history instead, and this is what says so: the
+// planner, over the statements [scrubPurgedContent] actually runs.
+//
+// A FRESH STORE, not [planStore]'s corpus: that fixture seeds neither table,
+// and what is asserted is that no index-less read of either is planned at all,
+// which a table the planner knows nothing about cannot make look cheaper.
+func TestAPurgesScrubSeeksTheRowsItEmpties(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
+		store.Options{})
+	if err != nil {
+		t.Fatalf("open a store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close the store: %v", err)
+		}
+	})
+	for name, statement := range map[string]string{
+		"the history": purgeScrubHistory,
+		"the inbox":   purgeScrubInbox,
+	} {
+		t.Run(name, func(t *testing.T) {
+			plan := explain(t, db, statement,
+				[]any{string(KindTask), "t-00001", "op-purge"})
+			for _, table := range []string{"tracker_history", "tracker_notifications"} {
+				if scansHeap(plan, table) {
+					t.Errorf("the purge's scrub of %s reads %s with no index:\n%s",
+						name, table, strings.Join(plan, "\n"))
+				}
+			}
+		})
+	}
+}

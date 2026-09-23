@@ -10,15 +10,50 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the record shape this build writes.
+// RecordVersion is the version this build writes every record at but one —
+// [RankOrderRecordVersion] — and the version of every record encoded without
+// one.
 //
-// A record at a HIGHER version leaves the envelope decoded and everything else
-// opaque, and is RETAINED at its position rather than skipped — which is the
-// whole reason the decode is two passes. The one exception is a record that
-// installs a gate: there an unknown version stops the applier, because a
-// deferred gate licenses every later record on this node and the eviction gate
-// has no inverse that repairs it.
+// A record at a version higher than [ReadableRecordVersion] leaves the envelope
+// decoded and everything else opaque, and is RETAINED at its position rather
+// than skipped — which is the whole reason the decode is two passes. The one
+// exception is a record that installs a gate: there an unknown version stops
+// the applier, because a deferred gate licenses every later record on this node
+// and the eviction gate has no inverse that repairs it.
 const RecordVersion = 1
+
+// RankOrderRecordVersion is the version a rank-order record is written at.
+//
+// A record at it places each task by writing the key into the task's DOCUMENT
+// as well as its `rank` column, and only while the task is still in the order's
+// project ([placeTask]). A rank order at [RecordVersion] placed by the column
+// alone and placed a task whatever its project, and it still applies that way
+// ([placeByColumn]).
+//
+// # Why the change is a version and not an edit
+//
+// Every node applies a record with the build it runs, and a node that replays
+// the log from its start applies every record again. Had the new placement
+// replaced the old one in place, a node on an older build — mid-upgrade — would
+// apply a new writer's placement the old way while its peers applied it the new
+// way, and a replay would apply the old records the new way: the same record,
+// at the same position, leaving different ranks and different documents. A
+// version is the one thing a record carries that says which apply it was
+// written for. An older build RETAINS a record above what it reads, together
+// with every later record its scope covers, and applies them after its upgrade.
+const RankOrderRecordVersion = 2
+
+// ReadableRecordVersion is the highest record version this build decodes —
+// what [Domain.RecordVersion] declares to the framework.
+const ReadableRecordVersion = RankOrderRecordVersion
+
+// recordVersionOf is the version a record on this subject is written at.
+func recordVersionOf(subject Subject) int {
+	if subject.Kind == KindRankOrder {
+		return RankOrderRecordVersion
+	}
+	return RecordVersion
+}
 
 // DocumentVersion is the object shape this build writes.
 //
@@ -671,9 +706,9 @@ func Decode(payload []byte) (MutationRecord, error) {
 	if err != nil {
 		return MutationRecord{}, err
 	}
-	if env.V > RecordVersion {
+	if env.V > ReadableRecordVersion {
 		return MutationRecord{RecordEnvelope: env}, &ErrFutureVersion{
-			Got: env.V, Want: RecordVersion, Subject: env.Subject,
+			Got: env.V, Want: ReadableRecordVersion, Subject: env.Subject,
 		}
 	}
 	var rec MutationRecord

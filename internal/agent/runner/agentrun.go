@@ -171,7 +171,9 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // be the one that launched, so the surface here is fresh and remembers
 // nothing. That log is also where the submission is: the CLI ended its run by
 // calling submit_work over the bridge, and replaying that call through a fresh
-// submission tool is what recovers the outcome it declared.
+// submission tool is what recovers the outcome it declared. A run an older
+// build recorded can be missing a stretch of its calls, and then the pass's
+// record and its review both say where ([Resume.BridgedDropped]).
 //
 // An absent submission is NOT a value — the same rule a native pass follows.
 // A run that stopped without saying what it did is rescued as incomplete and
@@ -203,6 +205,9 @@ func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
 		surface:  surface,
 		snapshot: snapshot,
 		run:      r.cfg.Resume.Run,
+		// The calls the log does not hold, said on the record of the pass
+		// whose calls they were. See [Resume.BridgedDropped].
+		notes: droppedNote(r.cfg.Resume.BridgedDropped),
 	})
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err

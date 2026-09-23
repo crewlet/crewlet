@@ -217,8 +217,8 @@ func TitleSubject(container, title string) Subject {
 // hex. Truncated because the subject is a durable per-member index key and 128
 // bits is already far past what the collision matters: a company with a
 // million pages sits at about 1.5e-27, and a collision's whole consequence is
-// that two titles contend at the broker and one create retries — not a wrong
-// row and not a lost write.
+// that two titles contend for one address in their container and the second
+// is refused as taken — not a wrong row and not a lost write.
 func TitleToken(title string) string {
 	sum := sha256.Sum256([]byte(NormalizeTitle(title)))
 	return hex.EncodeToString(sum[:16])

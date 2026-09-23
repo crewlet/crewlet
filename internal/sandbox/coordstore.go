@@ -384,6 +384,27 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, call B
 				"handed the whole output, and the record keeps what fits, marked")
 	}
 	seq, err := s.calls.AppendBridgeCall(ctx, turnID, run.LaunchID, raw)
+	if errors.Is(err, coord.ErrTooLarge) {
+		// REFUSED ALTHOUGH IT FITS THE CEILING, which only a server
+		// configured below the contract does: a node does not boot on one,
+		// but a reconnect can reach one. No fit to the contract's number
+		// answers that, and dropping the call would leave a gap in the one
+		// log a resume reads with nothing to say it is there. So the call is
+		// recorded in its LEAST form — its name and its outcome, both texts
+		// replaced by their marks, a few hundred bytes — and only a refusal
+		// of that is the append's failure.
+		log.ErrorContext(ctx, "sandbox_bridge_call_refused_within_ceiling",
+			"turn_id", turnID, "launch_id", run.LaunchID, "tool", call.Name,
+			"record_bytes", len(raw), "record_limit_bytes", MaxBridgeCallBytes, "error", err.Error(),
+			"detail", "the NATS server this node is connected to accepts less than the contract's "+
+				"ceiling: set max_payload to at least queue.MaxPayloadBytes on every server of the "+
+				"cluster; the call is recorded with its name and outcome, and neither its arguments "+
+				"nor its output")
+		if fitted, raw, err = leastBridgeCall(call); err != nil {
+			return false, fmt.Errorf("sandbox: record bridged call %q of run %s: %w", call.Name, turnID, err)
+		}
+		seq, err = s.calls.AppendBridgeCall(ctx, turnID, run.LaunchID, raw)
+	}
 	if err != nil {
 		return false, fmt.Errorf("sandbox: record bridged call %q of run %s: %w", call.Name, turnID, err)
 	}
@@ -476,6 +497,22 @@ func fitBridgeCall(call BridgeCall) (BridgeCall, []byte, bridgeCallCut, error) {
 	return call, raw, cut, nil
 }
 
+// leastBridgeCall is the smallest record a call can be kept as: its name and
+// its outcome, with its arguments replaced by [ArgsNotKept] and its output by
+// the cut's mark — each mark only where there was something to replace, so a
+// reader can still tell a call made with nothing from one whose texts were not
+// kept.
+func leastBridgeCall(call BridgeCall) (BridgeCall, []byte, error) {
+	if call.Args != "" {
+		call.Args = ArgsNotKept(len(call.Args))
+	}
+	if call.Output != "" {
+		call.Output = bridgeCallCutMarker
+	}
+	raw, err := encodeBridgeCall(call)
+	return call, raw, err
+}
+
 // bridgeCallCut is what [fitBridgeCall] did not keep whole: the whole length
 // of an output it cut and of arguments it replaced, zero for each it kept.
 // For the log line that says so; the record's own fields carry the marks.
@@ -547,25 +584,16 @@ func (s *CoordStore) BridgeCallPage(ctx context.Context, run PendingRun, after u
 			return page, err
 		}
 	}
-	// The row's list, for a launch an older build recorded. It numbers
-	// nothing, so its cursor is a POSITION in the list, counted from 1 the
-	// way a Seq is — and the whole list is one row, so this is paging what
-	// is already in hand rather than bounding a read.
-	calls := run.BridgeCalls
-	out := BridgeCallPage{Calls: []BridgeCall{}, Total: len(calls), Dropped: run.BridgeCallsElided}
-	if after >= uint64(len(calls)) {
+	// The row's list, for a launch an older build recorded: ONE PAGE,
+	// whatever the limit (see the contract). It hands out no cursor, so a
+	// page asked for past the first has nothing to carry.
+	log := rowLog(run)
+	out := BridgeCallPage{Calls: []BridgeCall{}, Total: len(log.Calls)}
+	if after > 0 {
 		return out, nil
 	}
-	stop := min(len(calls), int(after)+limit)
-	out.Calls = slices.Clone(calls[after:stop])
-	if stop < len(calls) {
-		out.Next = uint64(stop)
-		if after == 0 {
-			from := max(stop, len(calls)-limit)
-			out.End = slices.Clone(calls[from:])
-			out.Between = from - stop
-		}
-	}
+	out.Calls = append(out.Calls, log.Calls...)
+	out.Dropped, out.DroppedAfter = log.Dropped, log.DroppedAfter
 	return out, nil
 }
 
@@ -590,13 +618,14 @@ func (s *CoordStore) recordPage(ctx context.Context, run PendingRun, after uint6
 	if !page.More || len(out.Calls) == 0 {
 		return out, true, nil
 	}
-	out.Next = out.Calls[len(out.Calls)-1].Seq
+	cursor := out.Calls[len(out.Calls)-1].Seq
 	if after != 0 {
+		out.Next = cursor
 		return out, true, nil
 	}
 	// THE END OF THE LOG, on the first page that does not reach it: the
 	// newest calls past this page, read back from the newest.
-	q.After, q.Last = out.Next, true
+	q.After, q.Last = cursor, true
 	end, err := s.calls.BridgeCallPage(ctx, q)
 	if err != nil {
 		return BridgeCallPage{}, false, fmt.Errorf("sandbox: read the bridged calls of run %s: %w", run.TurnID, err)
@@ -609,6 +638,10 @@ func (s *CoordStore) recordPage(ctx context.Context, run PendingRun, after uint6
 		// the two: a call that landed between the reads is newer than
 		// the page, so it is in End or between, never in Calls.
 		out.Between = max(0, end.Total-len(out.Calls)-len(out.End))
+		// The cursor only when something is left to page to: an End that
+		// reaches back to the page leaves nothing, and a cursor there would
+		// send a reader to fetch End's calls a second time.
+		out.Next = cursor
 	}
 	return out, true, nil
 }

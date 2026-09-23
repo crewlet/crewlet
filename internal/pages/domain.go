@@ -180,8 +180,10 @@ func (Domain) ReadinessInput() bool { return true }
 // into something a fleet reports on, and nothing builds one — see
 // [github.com/crewlet/crewlet/internal/tracker.Domain.ClaimsIdentity], which
 // carries the argument and the one column that a naive checksum would trip
-// over. Every column this domain writes is owned by a record, so the exclusion
-// that domain needs does not arise here.
+// over. Every column of this domain's Replicated tables is owned by a record —
+// the one answer a node derives for itself, whether a page is a tool skill,
+// is in `pages_skills`, which [Domain.Tables] declares Divergent — so the
+// exclusion that domain needs does not arise here.
 func (Domain) ClaimsIdentity() bool { return true }
 
 // BarrierTables is the empty set, DECLARED.

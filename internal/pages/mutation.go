@@ -179,7 +179,7 @@ type PagePatch struct {
 // happens to test the fields in.
 //
 // A COMMENT IS NOT HERE. Whether it is a `comment` or a `comment_edited` is
-// decided by the apply, from whether the comment's row was new
+// decided by the apply, from whether the comment's row is already there
 // ([Applier.applyComment]), and it outranks every field above: the only other
 // field a comment patch carries is the watcher pair a mention subscribes, and
 // that comment is still a comment.
@@ -203,9 +203,10 @@ func (p PagePatch) editKind() (ChangeKind, bool) {
 type CommentPatch struct {
 	ID string `json:"id"`
 
-	// Removed is the tombstone. Body is nil on a removal and non-nil on a
-	// create or an edit, which is what tells the three apart without a
-	// fourth field naming the operation.
+	// Removed is the tombstone, and Body is nil on it and non-nil on a
+	// create or an edit. A create and an edit carry the same fields: the
+	// applier tells them apart by whether the comment's row is already
+	// there ([Applier.applyComment]), so no field names the operation.
 	Removed bool `json:"removed,omitempty"`
 
 	Body       *string    `json:"body,omitempty"`

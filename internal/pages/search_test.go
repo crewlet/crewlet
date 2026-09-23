@@ -83,6 +83,18 @@ func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 		t.Errorf("a searcher with no store returned %v, want every match but "+
 			"the prefixed one", got)
 	}
+
+	// AND A CHAIN THAT CANNOT BE READ IS AN EMPTY ANSWER, never the hits
+	// without it: served with no chain, the two drafts under the parent
+	// that carry no prefix would reach a seat's prompt. The replicated
+	// estate is closed LAST, because every read above goes through it.
+	if err := r.db.CloseReplicated(); err != nil {
+		t.Fatalf("close the replicated estate: %v", err)
+	}
+	if got := searcher.Search(t.Context(), knowledge.Query{Text: words}); len(got) != 0 {
+		t.Errorf("a search whose chains could not be read returned %v, want "+
+			"nothing", hitTitles(got))
+	}
 }
 
 func hitIDs(hits []knowledge.Hit) []string {

@@ -137,8 +137,8 @@ const (
 	//     as long as the page keeps it ([RevisionsKept]).
 	//   - A comment is whole on its own row, which the page's detail read
 	//     returns and the change names by its comment id. Only its latest
-	//     form, though: a comment keeps no past versions, so the text of an
-	//     edit that a later edit replaced survives only as this excerpt.
+	//     form, though: a comment keeps no past versions, so no read serves
+	//     the text of an edit that a later edit replaced beyond this excerpt.
 	MaxExcerpt = 600
 
 	// MaxLabels bounds a page's labels.

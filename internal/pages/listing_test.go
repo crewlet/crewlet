@@ -108,9 +108,8 @@ func (r *roundTrip) containers() []pages.ContainerListing {
 // putting it there would have every page create rewrite its container and two
 // writers adding a page to one space contend on a counter neither touched.
 //
-// TRASHED PAGES DO NOT COUNT. A trashed page is invisible to every default
-// listing this reader serves, so counting it would put a number on the rail
-// the list beside it cannot account for — a reader clicks "3" and finds two.
+// TRASHED PAGES DO NOT COUNT: a trashed page is deleted as far as any reader
+// is concerned, so it is not one of the pages a container holds.
 func TestAContainerSaysHowManyPagesItHolds(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -144,9 +143,8 @@ func TestAContainerSaysHowManyPagesItHolds(t *testing.T) {
 		counts[c.Key] = c.Pages
 	}
 	if counts["ENG"] != 3 {
-		t.Errorf("ENG holds %d pages, want 3 — the fourth is trashed, and a "+
-			"rail that counted it sends a reader to a list of three",
-			counts["ENG"])
+		t.Errorf("ENG holds %d pages, want 3 — the fourth is trashed, which "+
+			"is deleted as far as any reader is concerned", counts["ENG"])
 	}
 	if counts["PROD"] != 1 {
 		t.Errorf("PROD holds %d pages, want 1", counts["PROD"])

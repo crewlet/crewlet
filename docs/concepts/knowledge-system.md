@@ -404,38 +404,43 @@ What differs from the vendor path, and is visible:
 - **A LISTING IS ONE PAGE OF WHAT MATCHED, AND SAYS SO.** `list_pages` and the
   `pages` query return 50 pages when no limit is named and at most 500, in
   container-then-title order. When more match, the answer carries
-  `truncated: true` and `offset` reaches the rest — so the number of rows is
-  the page, never the count of what matched. An offset counts rows, so a page
-  ahead of it that leaves the listing between two reads — trashed out of
+  `truncated: true` — so the number of rows is the page, never the count of
+  what matched — and `offset` reaches the rest. An offset counts rows, so a
+  page ahead of it that leaves the listing between two reads — trashed out of
   `list_pages`, renamed past it, purged — moves every later page up by one,
   and the next read skips one.
 - **A PAGE'S DETAIL CARRIES ITS PUBLISHED CHILDREN**, the first 50 in
   container-then-title order, with `children_truncated` when it has more. A
   draft or trashed child is not among them, because a detail is read by seats
   as well as people. `list_pages` with `parent` set to that page lists the same
-  children in the same order, so `offset: 50` continues exactly where the
-  detail stopped; the `pages` query with `parent` lists every child whatever
-  its status.
+  children in the same order, so `offset: 50` continues where the detail
+  stopped; the `pages` query with `parent` lists every child whatever its
+  status.
 - **A PAGE'S PARENT IS A PAGE, AND NEVER ONE BENEATH IT.** A create or a save
   naming a parent this node has no page for, the page itself, or a page
-  below it is refused naming `parent_id`. Its breadcrumb (`ancestors`) is the
-  whole parent chain however deep it is. Two moves of two different pages
-  made at the same moment can still close a loop between them; a chain that
-  loops back on itself names each page on the loop once.
-- **A CHANGE HAS ONE KIND.** An edit that changes the body and anything else
-  — labels, parent, status — is a `saved` change, in the activity feed and in
-  the notification its watchers receive alike.
+  below it is refused naming `parent_id`. A parent in another container is
+  allowed, and the child is among that parent's children all the same. Its
+  breadcrumb (`ancestors`) is the whole parent chain however deep it is. Two
+  moves of two different pages made at the same moment can still close a loop
+  between them; a breadcrumb that runs into one names every page it reaches
+  once and never the page itself, and the node logs `pages_ancestor_cycle`
+  naming the page. Moving any page on the loop to the top of its container
+  breaks it.
+- **A CHANGE HAS ONE KIND, in the activity feed and in the notification its
+  watchers receive alike.** An edit that changes the body and anything else —
+  labels, parent, status — is a `saved` change, and an edited comment is a
+  `comment_edited` one.
 - **A CHANGE'S CARD IS AN EXCERPT, MARKED WHERE IT WAS CUT.** The text a
-  change shows — in the activity feed, and under "What changed" in the
-  notification a watcher or a mentioned seat receives — is at most 600 bytes:
+  change shows — in the activity feed, and in the notification a watcher or a
+  mentioned seat receives — is at most 600 bytes:
   a create's or a save's first line, a save's message, a comment, or the
   page's title for a save that carried neither a body nor a message. Only a
   first line and a comment can be longer than that; they end in `…`, inside
   the 600, and are whole elsewhere — a first line in the body of the version
   the change produced (a create is version 1, and a notification names its
   version), a comment on the page itself. A comment keeps no past versions,
-  so once it is edited again, an earlier edit's text survives only as that
-  excerpt.
+  so once it is edited again, no read serves an earlier edit's text beyond
+  that excerpt.
 - **A body is MARKDOWN**, and the only format — see `internal/pages`. The
   dashboard renders it (headings, lists, tables, code, links), with raw HTML
   shown as its own text and a link's scheme restricted to `http(s):`,
@@ -453,14 +458,14 @@ What differs from the vendor path, and is visible:
   by the second. So renaming "Deploy Runbook" to "Deploy Guide" moves the
   address (the old one is freed and can be taken again), while renaming it to
   "DEPLOY RUNBOOK" leaves the address exactly where it is and changes only what
-  every reader sees. **Both are real changes**: each writes a revision to the
-  page's history and tells its watchers. Only a rename to the title the page
-  already displays does nothing — and it reports success, because it has
-  already happened.
+  every reader sees. **Both are real changes**: each is an entry in the page's
+  activity and tells its watchers. Only a rename to the title the page already
+  displays does nothing — and it reports success, because it has already
+  happened.
 
 The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
 
-`Query.ExcludeAncestors` applies here as it does on Confluence. The native searcher reads each hit's parent chain from this node's own page rows, as titles outermost first, and drops a hit whose chain names an excluded title at any depth — so with the default, a page anywhere under a page titled `Auto-Drafted Skills` is not returned. A hit with no chain to judge by (a page at the top of its container) is dropped by the `[Auto-draft] ` title prefix instead. A chain that cannot be read makes the whole search answer empty rather than answer without the exclusion.
+`Query.ExcludeAncestors` applies here too. The native searcher reads each hit's parent chain from this node's own page rows, as titles outermost first — the same chain a page's breadcrumb shows — and drops a hit whose chain carries an excluded title at any depth, compared without regard to case. So with the default, a page anywhere under a page titled `Auto-Drafted Skills` is not returned. A hit with no chain to judge by, a page at the top of its container, is dropped when its title carries the `[Auto-draft] ` prefix and `Auto-Drafted Skills` is among the exclusions. A chain that cannot be read makes the whole search answer empty rather than answer without the exclusion.
 
 ### Confluence backend — the Confluence searcher
 

@@ -220,7 +220,7 @@ func (r *roundTrip) deferRecordOn(taskID, project string) {
 				(position, subject, subject_kind, subject_id, version, payload, stored_at)
 			VALUES (?, ?, 'task', ?, ?, x'00', 0)`,
 			int64(1)<<40|9_000_000, "task."+taskID, taskID,
-			tracker.RecordVersion+1); err != nil {
+			tracker.ReadableRecordVersion+1); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(r.t.Context(), `

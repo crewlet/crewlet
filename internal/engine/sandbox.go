@@ -450,7 +450,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	if err != nil {
 		return err
 	}
-	bridged, err := e.resumeBridged(ctx, in)
+	bridged, dropped, err := e.resumeBridged(ctx, in)
 	if err != nil {
 		return err
 	}
@@ -512,12 +512,14 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 					CostUSD:       in.CostUSD,
 					DeliveredRefs: in.DeliveredRefs,
 				},
-				// THE RUN'S OWN TOOL CALLS, every one, off its durable
-				// log. An agent-mode executor called them over the bridge,
-				// possibly in another process, so this list is the only
-				// record of what the phase did — its submission included.
-				// See [Engine.resumeBridged].
-				Bridged: bridged,
+				// THE RUN'S OWN TOOL CALLS, off its durable log. An
+				// agent-mode executor called them over the bridge, possibly
+				// in another process, so this list is the only record of
+				// what the phase did — its submission included — and the
+				// stretch no log kept travels beside it rather than being
+				// passed over. See [Engine.resumeBridged].
+				Bridged:        bridged,
+				BridgedDropped: dropped,
 			},
 		})
 	if err != nil {

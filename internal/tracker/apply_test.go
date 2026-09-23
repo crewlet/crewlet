@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -437,6 +438,230 @@ func TestAPurgeTakesTheMirrorOfADependencyWithIt(t *testing.T) {
 	r.drain()
 	if got := naming(); len(got) != 0 {
 		t.Errorf("the purged task is still named by the dependency mirrors %v", got)
+	}
+}
+
+// A RANK ORDER IS APPLIED AS THE VERSION IT WAS WRITTEN AT SAYS.
+//
+// A placement that moved only the `rank` column was undone by the task's next
+// commit, which rewrites the column from the document; the fix writes the key
+// into the document too. But a record is applied by every node on whatever
+// build it runs, and again by any node that replays the log — so the fix cannot
+// change what an existing record does. A record at the first version keeps the
+// column-only placement it was first applied with, and the document placement
+// belongs to the version writers now stamp, which an older build retains
+// rather than applies the old way.
+func TestARankOrderIsAppliedAsTheVersionItWasWrittenAtSays(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	at := time.Unix(1_700_000_100, 0).UTC()
+	if _, err := h.apply(taskRecord("t-1", tracker.OpCreate, newTask("t-1"), nil), at); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	created := h.text(`SELECT json_extract(CAST(document AS TEXT), '$.rank')
+		FROM tracker_tasks WHERE id = 't-1'`)
+	order := func(v int, op string, rank tracker.Rank) tracker.MutationRecord {
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				V: v, OpID: op, Subject: tracker.RankOrderSubject("ENG"),
+				Op: tracker.OpPatch, Writer: "node-a",
+				Scope: tracker.ScopeSet{Terms: []tracker.ScopeTerm{
+					{Kind: tracker.TermContainer, ID: "ENG"},
+				}},
+			},
+			Mutation: mustJSON(tracker.RankOrder{
+				V: tracker.DocumentVersion, Project: "ENG",
+				Placements: []tracker.Placement{{Task: "t-1", Rank: rank}},
+			}),
+		}
+	}
+	placed := func() (string, string) {
+		return h.text(`SELECT rank FROM tracker_tasks WHERE id = 't-1'`),
+			h.text(`SELECT json_extract(CAST(document AS TEXT), '$.rank')
+				FROM tracker_tasks WHERE id = 't-1'`)
+	}
+
+	if _, err := h.apply(order(tracker.RecordVersion, "op-v1", "a5"), at); err != nil {
+		t.Fatalf("apply the first version's placement: %v", err)
+	}
+	if column, document := placed(); column != "a5" || document != created {
+		t.Fatalf("a first-version rank order left the column at %q and the "+
+			"document at %q, want %q and the untouched %q — the placement it was "+
+			"first applied with", column, document, "a5", created)
+	}
+	if _, err := h.apply(order(tracker.RankOrderRecordVersion, "op-v2", "a7"), at); err != nil {
+		t.Fatalf("apply the current version's placement: %v", err)
+	}
+	if column, document := placed(); column != "a7" || document != "a7" {
+		t.Fatalf("a current rank order left the column at %q and the document "+
+			"at %q, want both at %q", column, document, "a7")
+	}
+}
+
+// A RANK ORDER IS WRITTEN AT ITS OWN VERSION, AND EVERY OTHER RECORD AT THE FIRST.
+//
+// The version is what tells a node which placement a rank order was written
+// for, so the writer has to stamp it — and only there: a record of any other
+// kind stamped above what an older build reads would be retained by every such
+// node for no change in what it does, together with every later record its
+// scope covers.
+func TestARankOrderIsWrittenAtItsOwnVersionAndNothingElseIs(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+	filedTask(t, r, "t-2")
+	if _, err := r.writer.MoveTask(t.Context(), "op-drop", "ENG", "t-2", "",
+		"t-1"); err != nil {
+		t.Fatalf("MoveTask: %v", err)
+	}
+	r.drain()
+	versions := map[tracker.ObjectKind]int{}
+	for seq := uint64(1); seq <= r.consumed; seq++ {
+		_, payload, _, ok, err := r.log.At(t.Context(), seq)
+		if err != nil || !ok {
+			t.Fatalf("read record %d: ok=%v %v", seq, ok, err)
+		}
+		env, err := tracker.DecodeEnvelope(payload)
+		if err != nil {
+			t.Fatalf("decode record %d: %v", seq, err)
+		}
+		versions[env.Subject.Kind] = env.V
+	}
+	for kind, want := range map[tracker.ObjectKind]int{
+		tracker.KindRankOrder: tracker.RankOrderRecordVersion,
+		tracker.KindTask:      tracker.RecordVersion,
+		tracker.KindProject:   tracker.RecordVersion,
+	} {
+		if got, held := versions[kind]; !held || got != want {
+			t.Errorf("a %s record was written at version %d (present=%v), want %d",
+				kind, got, held, want)
+		}
+	}
+	// AND AN OLDER BUILD RETAINS IT RATHER THAN STOPPING: a rank order
+	// installs no gate, so the framework files it for a build that can
+	// read it.
+	if (tracker.Domain{}).InstallsGate(statelog.Envelope{
+		Kind: string(tracker.KindRankOrder), Op: string(tracker.OpPatch),
+	}) {
+		t.Error("a rank order reads as a gate, so a build that cannot read its " +
+			"version would stop its applier rather than retain the record")
+	}
+	if got := (tracker.Domain{}).RecordVersion(); got != tracker.RankOrderRecordVersion {
+		t.Errorf("the domain declares it reads version %d, below the %d it writes",
+			got, tracker.RankOrderRecordVersion)
+	}
+}
+
+// A PURGED TASK IS NOT WRITTEN BACK BY THE NEXT COMMIT ON EITHER END OF AN EDGE.
+//
+// The purge deletes every row naming the task, but the tasks on the other end
+// still carry the edge in their own documents — the dependent its `waiting_on`,
+// the blocker its `Dependents` — and a commit rewrites a task's rows from its
+// document. So the dependent's next comment put the edge back and it waited, for
+// good, on a task whose status can never move.
+func TestAPurgedTaskIsNotWrittenBackByTheNextCommitOnEitherEnd(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
+	filedTask(t, r, "later")
+	for _, edge := range []struct{ dependent, blocker string }{
+		{"dep", "blk"}, {"blk", "later"},
+	} {
+		if _, err := r.writer.Depend(t.Context(), "op-"+edge.dependent,
+			tracker.DependencyChange{
+				Task: edge.dependent, Project: "ENG",
+				WaitingOnAdd: []string{edge.blocker},
+			}, nil); err != nil {
+			t.Fatalf("Depend %s on %s: %v", edge.dependent, edge.blocker, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "blk", "ENG",
+		"a duplicate import"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	r.drain()
+
+	// A COMMIT ON EACH END, neither of which touches the edge.
+	for _, id := range []string{"dep", "later"} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-touch-"+id, id, "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Title: ptr("touched " + id)},
+			tracker.ChangeFields, nil); err != nil {
+			t.Fatalf("touch %s: %v", id, err)
+		}
+		r.drain()
+	}
+	if got := r.strings(`
+		SELECT 'relation ' || task_id || '->' || other_id FROM tracker_relations
+		WHERE task_id = 'blk' OR other_id = 'blk'
+		UNION ALL
+		SELECT 'dependency ' || task_id || '->' || blocker_id FROM tracker_task_deps
+		WHERE task_id = 'blk' OR blocker_id = 'blk'
+		UNION ALL
+		SELECT 'mirror ' || task_id || '<-' || dependent_id FROM tracker_task_dependents
+		WHERE task_id = 'blk' OR dependent_id = 'blk'`); len(got) != 0 {
+		t.Fatalf("the purged task is named again after a commit on each end: %v", got)
+	}
+	for _, row := range r.ask(map[string]any{"container": "project:ENG"}).Rows {
+		if row.ID == "dep" && row.Blocked {
+			t.Fatal("dep reads as blocked by a task that was purged")
+		}
+	}
+}
+
+// A BLOCKER'S CAP COUNTS THE DEPENDENTS THAT ARE STILL THERE.
+//
+// A purged dependent stays listed in its blocker's own document — the purge
+// rewrites no other task's — and a new dependent was refused against that list,
+// so a blocker full to the cap with one of its dependents purged could take no
+// replacement: "64 tasks already wait on it", of which one no longer exists.
+// The gesture resolves from the live edges, and the record it publishes
+// carries the list without the purged entry.
+func TestABlockersCapCountsTheDependentsThatAreStillThere(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	filedTask(t, r, "blk")
+	dependents := make([]string, 0, tracker.MaxDependents)
+	for i := range tracker.MaxDependents {
+		id := fmt.Sprintf("d-%02d", i)
+		filedTask(t, r, id)
+		dependents = append(dependents, id)
+	}
+	if _, err := r.writer.Depend(t.Context(), "op-fill", tracker.DependencyChange{
+		Task: "blk", Project: "ENG", BlockingAdd: dependents,
+	}, nil); err != nil {
+		t.Fatalf("fill blk to the cap: %v", err)
+	}
+	r.drain()
+	filedTask(t, r, "new")
+	if _, err := r.writer.Depend(t.Context(), "op-over", tracker.DependencyChange{
+		Task: "new", Project: "ENG", WaitingOnAdd: []string{"blk"},
+	}, nil); err == nil {
+		t.Fatal("a blocker at the cap took one more dependent, so this case " +
+			"is not the shape it names")
+	}
+
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "d-00", "ENG",
+		"filed in error"); err != nil {
+		t.Fatalf("purge a dependent: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.Depend(t.Context(), "op-replace", tracker.DependencyChange{
+		Task: "new", Project: "ENG", WaitingOnAdd: []string{"blk"},
+	}, nil); err != nil {
+		t.Fatalf("a blocker whose purged dependent freed a place refused its "+
+			"replacement: %v", err)
+	}
+	r.drain()
+	listed := oneTask(t, r, "blk").Dependents
+	if len(listed) != tracker.MaxDependents || slices.Contains(listed, "d-00") ||
+		!slices.Contains(listed, "new") {
+		t.Fatalf("blk's own list holds %d dependents, d-00 present=%v, new "+
+			"present=%v — want the cap exactly, the purged one gone and the "+
+			"replacement in", len(listed), slices.Contains(listed, "d-00"),
+			slices.Contains(listed, "new"))
 	}
 }
 

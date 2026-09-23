@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -85,7 +86,14 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	children, err := a.explodeTask(ctx, tx, next, c)
+	// ITS ROWS NAME NO PURGED TASK, whatever its document still lists —
+	// see [withoutPurged]. The document itself is written as the record
+	// left it, above.
+	live, err := withoutPurged(ctx, tx, next, c.maxVariables)
+	if err != nil {
+		return 0, err
+	}
+	children, err := a.explodeTask(ctx, tx, live, c)
 	if err != nil {
 		return 0, err
 	}
@@ -690,6 +698,73 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	return written + deps + refs + keys + closure, nil
 }
 
+// withoutPurged is a task with every edge to a purged task dropped from its
+// relations and its dependents — the collections its rows are written from.
+//
+// # Why the rows and not the document
+//
+// A purge deletes every row that names the task it destroys, in both
+// directions ([Applier.purgeTask]). But the task on the other end of such a row
+// still carries the edge in its own document — the `waiting_on` on a
+// dependent, the entry in a blocker's `Dependents` — and every commit to it
+// rewrites its rows from that document. So its next comment or status change
+// wrote the edge back: a dependent waited again on a task that no longer
+// exists, whose status can never move, and read as blocked for good. The purge
+// record names its own task and project and no other subject, so it does not
+// rewrite those documents; each task drops the edge here instead, on its own
+// commits, against the deletion markers every node holds identically at this
+// position. The document keeps the stale entry until a gesture on that
+// collection rewrites it — and the writer resolves such a gesture from this
+// same function ([Writer.UpdateTask]), so the record it publishes carries the
+// collection clean and the document heals.
+//
+// ONLY A TASK WITH EDGES PAYS FOR IT, and most tasks have none. Its ids are
+// bound in chunks of the estate's own parameter limit — one statement for any
+// task the relation caps allow — and one at a time when no limit was probed
+// ([applyContext.maxVariables]).
+func withoutPurged(ctx context.Context, tx *sql.Tx, task Task, maxVariables int) (Task, error) {
+	ids := make([]string, 0, len(task.Relations)+len(task.Dependents))
+	for _, relation := range task.Relations {
+		ids = append(ids, relation.Other)
+	}
+	ids = append(ids, task.Dependents...)
+	if len(ids) == 0 {
+		return task, nil
+	}
+	chunk := max(maxVariables, 1)
+	purged := map[string]bool{}
+	for from := 0; from < len(ids); from += chunk {
+		part := ids[from:min(from+chunk, len(ids))]
+		rows, err := tx.QueryContext(ctx, `SELECT task_id FROM tracker_deletions
+			WHERE task_id IN (`+placeholders(len(part))+`)`, anyOf(part)...)
+		if err != nil {
+			return Task{}, fmt.Errorf("tracker: read which of %s's edges name a "+
+				"purged task: %w", task.ID, err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return Task{}, err
+			}
+			purged[id] = true
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return Task{}, err
+		}
+	}
+	if len(purged) == 0 {
+		return task, nil
+	}
+	task.Relations = slices.DeleteFunc(slices.Clone(task.Relations),
+		func(r Relation) bool { return purged[r.Other] })
+	task.Dependents = slices.DeleteFunc(slices.Clone(task.Dependents),
+		func(id string) bool { return purged[id] })
+	return task, nil
+}
+
 // maintainDeps derives the dependency edges from the task's own relations.
 //
 // DERIVED RATHER THAN CARRIED, so the two flags a query reads — is this task
@@ -949,7 +1024,10 @@ func bucketOf(task Task) string {
 // with the alias rows that made the key resolvable at all — because a
 // reference to a key nothing resolves is a dangling link a reader cannot tell
 // from a typo. All in one transaction, and the marker it writes is what stops
-// a redelivery months later resurrecting any of it.
+// a redelivery months later resurrecting any of it. The same marker is what
+// stops the tasks on the other end of an edge writing it back: they still
+// carry the edge in their own documents, and [withoutPurged] drops it from the
+// rows each of their commits writes.
 //
 // # Its HISTORY is scrubbed rather than deleted
 //
@@ -1066,41 +1144,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	line, err := a.purgeLine(ctx, tx, c, task)
-	if err != nil {
-		return 0, err
-	}
-	return written + marker + moved + scrubbed + history + line, nil
-}
-
-// purgeLine writes the purge's own line onto its history row when the record
-// carried no notification to bring it.
-//
-// A HISTORY ROW TAKES ITS EXCERPT FROM THE NOTIFICATION, and a purge carries
-// one only when its project has a lead to tell ([purgeWake]). Without one the
-// purge's row in the feed said nothing — not the key, not who, not the reason
-// — and no read surface returns the reason from anywhere else: it is also on
-// the record's payload and in the deletion marker's `reason` column, and
-// nothing reads either. So the applier writes the same line [purgeExcerpt]
-// builds for the lead, from the record's own actor and reason and the task
-// row it read before deleting it: inputs every node holds identically at this
-// position, so every node writes the same text.
-//
-// ONLY ONTO AN EMPTY EXCERPT, which is what makes a redelivery a no-op: the
-// task row is gone by then, and the line it would build names no key.
-func (a *Applier) purgeLine(ctx context.Context, tx *sql.Tx, c applyContext,
-	task Task) (int, error) {
-
-	if c.record.Notify != nil {
-		return 0, nil
-	}
-	res, err := tx.ExecContext(ctx,
-		`UPDATE tracker_history SET excerpt = ? WHERE id = ? AND excerpt = ''`,
-		purgeExcerpt(task, purgeReason(c), c.record.Actor), historyID(c))
-	if err != nil {
-		return 0, fmt.Errorf("tracker: write the purge's line at %s: %w", c.position, err)
-	}
-	return affected(res)
+	return written + marker + moved + scrubbed + history, nil
 }
 
 // scrubPurgedContent empties the content a purged task's history and inbox
@@ -1132,31 +1176,46 @@ func (a *Applier) purgeLine(ctx context.Context, tx *sql.Tx, c applyContext,
 // by order, because the applier runs this again on a redelivery of the purge
 // record, when those rows already exist.
 func scrubPurgedContent(ctx context.Context, tx *sql.Tx, taskID, purgeRow string) (int, error) {
-	history, err := tx.ExecContext(ctx, `
+	written := 0
+	for _, statement := range []string{purgeScrubHistory, purgeScrubInbox} {
+		res, err := tx.ExecContext(ctx, statement, string(KindTask), taskID, purgeRow)
+		if err != nil {
+			return 0, err
+		}
+		n, err := affected(res)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// purgeScrubHistory and purgeScrubInbox are [scrubPurgedContent]'s two
+// statements, each bound to (subject kind, task id, the purge's own row id).
+// Named so the plan test explains exactly what the applier runs.
+//
+// # Both SEEK, because both run inside the applier's one serial transaction
+//
+// The history rows are found through `tracker_history_subject_idx`. The inbox
+// rows are found through the SAME history rows and then the notices' primary
+// key, because `tracker_notifications` has no index on `subject_id` — a
+// predicate on that column scans every notice a company holds, on every node,
+// for every purge. It reaches the same rows: [Applier.writeInbox] keys each
+// notice on its commit's history row id and files it under that commit's
+// subject, and no statement in this package deletes a history row.
+const (
+	purgeScrubHistory = `
 		UPDATE tracker_history SET excerpt = '', fields_json = '{}', document = x''
 		WHERE subject_kind = ? AND subject_id = ? AND id <> ?
-		  AND (excerpt <> '' OR fields_json <> '{}' OR length(document) > 0)`,
-		string(KindTask), taskID, purgeRow)
-	if err != nil {
-		return 0, err
-	}
-	n, err := affected(history)
-	if err != nil {
-		return 0, err
-	}
-	inbox, err := tx.ExecContext(ctx, `
+		  AND (excerpt <> '' OR fields_json <> '{}' OR length(document) > 0)`
+	purgeScrubInbox = `
 		UPDATE tracker_notifications SET excerpt = ''
-		WHERE subject_id = ? AND record_id <> ? AND excerpt <> ''`,
-		taskID, purgeRow)
-	if err != nil {
-		return 0, err
-	}
-	m, err := affected(inbox)
-	if err != nil {
-		return 0, err
-	}
-	return n + m, nil
-}
+		WHERE record_id IN (
+		        SELECT id FROM tracker_history
+		        WHERE subject_kind = ? AND subject_id = ? AND id <> ?)
+		  AND excerpt <> ''`
+)
 
 // reparent moves each child onto parent and rebuilds its subtree's ancestry.
 //

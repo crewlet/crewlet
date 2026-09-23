@@ -492,6 +492,20 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext,
 }
 
 // applyComment writes one comment's create, edit or removal.
+//
+// A CREATE AND AN EDIT ARE TOLD APART BY WHETHER THE COMMENT'S ROW IS ALREADY
+// HERE, read before anything is written, rather than by a field on the patch
+// that a writer could set wrongly. Not by the upsert's affected count either:
+// the store counts an ON CONFLICT update as one row changed, exactly like an
+// insert, so every edit told apart that way was recorded as a new comment
+// while its watchers were woken with `comment_edited`. Every node holds the
+// same rows at the same position, so every node reads the same answer.
+//
+// AN EDIT STARTS FROM THE ROW IT EDITS. The patch carries the new text and
+// what it mentions; who wrote the comment, when, and what it answers are the
+// row's, and so is any field a newer build stored in its document. A document
+// rebuilt from the patch alone restamps the comment's creation with the
+// edit's instant and drops those fields.
 func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 	pageID string, c CommentPatch) (int, ChangeKind, error) {
 
@@ -506,12 +520,23 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 		n, _ := res.RowsAffected()
 		return int(n), ChangeCommentEdited, nil
 	}
-	document, err := EncodeComment(Comment{
-		V: DocumentVersion, ID: c.ID, PageID: pageID,
-		Author: c.Author, AuthorKind: c.AuthorKind, Body: deref(c.Body),
-		Mentions: sorted(c.Mentions), ReplyTo: c.ReplyTo,
-		CreatedAt: at.brokerAt, UpdatedAt: at.brokerAt,
-	})
+	comment, held, err := readComment(ctx, tx, pageID, c.ID)
+	if err != nil {
+		return 0, "", err
+	}
+	kind := ChangeCommentEdited
+	if !held {
+		kind = ChangeComment
+		comment = Comment{
+			V: DocumentVersion, ID: c.ID, PageID: pageID,
+			Author: c.Author, AuthorKind: c.AuthorKind, ReplyTo: c.ReplyTo,
+			CreatedAt: at.brokerAt,
+		}
+	}
+	comment.Body = deref(c.Body)
+	comment.Mentions = sorted(c.Mentions)
+	comment.UpdatedAt = at.brokerAt
+	document, err := EncodeComment(comment)
 	if err != nil {
 		return 0, "", err
 	}
@@ -524,21 +549,14 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 			body = excluded.body, updated_at = excluded.updated_at,
 			version = excluded.version, document = excluded.document
 		WHERE excluded.version > pages_comments.version`,
-		c.ID, pageID, c.Author, string(c.AuthorKind), deref(c.Body), c.ReplyTo,
-		store.EncodeTime(at.brokerAt), store.EncodeTime(at.brokerAt),
-		at.packed, document)
+		c.ID, pageID, comment.Author, string(comment.AuthorKind), comment.Body,
+		comment.ReplyTo, store.EncodeTime(comment.CreatedAt),
+		store.EncodeTime(comment.UpdatedAt), at.packed, document)
 	if err != nil {
 		return 0, "", fmt.Errorf("pages: apply comment %s at %s: %w",
 			c.ID, at.position, err)
 	}
 	n, _ := res.RowsAffected()
-	// A CREATE AND AN EDIT ARE TOLD APART BY WHETHER THE INSERT WAS NEW,
-	// which the affected count answers — rather than by a fourth field on
-	// the patch that a writer could set wrongly.
-	kind := ChangeCommentEdited
-	if n == 1 {
-		kind = ChangeComment
-	}
 	return int(n), kind, nil
 }
 

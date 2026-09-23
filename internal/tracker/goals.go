@@ -382,7 +382,14 @@ func appendUpdates(goalID string, stored, incoming []GoalUpdate, actor string,
 			At: at, Author: actor, Health: update.Health, Text: text,
 		})
 	}
-	if len(out) > MaxGoalUpdates {
+	// ONLY A SAVE THAT ADDS past the cap is refused. A goal can already hold
+	// more than the cap — [Writer.WriteGoal] never grows one past it, but the
+	// applier takes a goal whole from its record, so a record written under
+	// a larger cap (by an earlier build, or by an older peer mid-upgrade)
+	// lands as it is. Refusing every save to such a goal would refuse the
+	// very saves this refusal names as the way forward — a health change, a
+	// rename, an archive — and leave the goal unwritable for good.
+	if len(out) > len(stored) && len(out) > MaxGoalUpdates {
 		return nil, fmt.Errorf("%w: goal %s holds %d updates, this save adds %d, "+
 			"and a goal stores at most %d (tracker.MaxGoalUpdates) — nothing "+
 			"was saved. No update is ever dropped to make room, because a "+

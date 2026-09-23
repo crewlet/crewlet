@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -101,8 +100,8 @@ type SearcherOptions struct {
 
 	// DB is the store whose replicated estate holds `pages_heads`. Each
 	// hit's parent chain is read from it, as titles outermost first, and
-	// [knowledge.Query.ExcludeAncestors] drops a hit whose chain names an
-	// excluded page — which is how an unreviewed page under
+	// [knowledge.Query.ExcludeAncestors] drops a hit whose chain carries an
+	// excluded title — which is how a page under
 	// [knowledge.AutoDraftedParent] stays out of every seat's search.
 	//
 	// NIL READS NO CHAIN, so every hit reaches [knowledge.Excludes] with
@@ -247,28 +246,31 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 	return out
 }
 
-// ancestry is each page's parent chain as titles, outermost first, read in one
-// transaction. A page with no parent has no entry, and so does every page when
-// there is no store to read.
-//
-// EACH CHAIN IS WALKED WHOLE, with a record of what it has visited, for the
-// reason [Reader.ancestors] walks a breadcrumb that way: nothing bounds a
-// tree's depth, and two concurrent moves can close a loop no single write
-// could. A parent this node has no row for ends the chain.
+// ancestry is each hit's parent chain as titles, outermost first, read in one
+// transaction by the same walk a page's breadcrumb is ([parentChains]). A page
+// with no parent has no entry, and so does every page when there is no store
+// to read.
 func (s *Searcher) ancestry(ctx context.Context, ids []string) (map[string][]string, error) {
 	if s.db == nil || len(ids) == 0 {
 		return nil, nil
 	}
 	out := make(map[string][]string, len(ids))
 	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		walk := chainWalk{tx: tx, read: map[string]chainLink{}}
+		chains := newParentChains(tx)
 		for _, id := range ids {
-			chain, err := walk.titlesAbove(ctx, id)
+			page, held, err := chains.page(ctx, id)
 			if err != nil {
 				return err
 			}
-			if len(chain) > 0 {
-				out[id] = chain
+			if !held {
+				continue
+			}
+			above, _, err := chains.above(ctx, id, page.ParentID)
+			if err != nil {
+				return err
+			}
+			for _, ancestor := range above {
+				out[id] = append(out[id], ancestor.Title)
 			}
 		}
 		return nil
@@ -278,59 +280,6 @@ func (s *Searcher) ancestry(ctx context.Context, ids []string) (map[string][]str
 			len(ids), err)
 	}
 	return out, nil
-}
-
-// chainWalk reads parent chains inside one transaction, reading each page at
-// most once however many hits share it as an ancestor.
-type chainWalk struct {
-	tx   *sql.Tx
-	read map[string]chainLink
-}
-
-// chainLink is one page as a chain needs it.
-type chainLink struct{ title, parent string }
-
-// titlesAbove is one page's parent chain as titles, outermost first.
-func (w chainWalk) titlesAbove(ctx context.Context, id string) ([]string, error) {
-	page, held, err := w.link(ctx, id)
-	if err != nil || !held {
-		return nil, err
-	}
-	var chain []string
-	seen := map[string]bool{id: true}
-	for above := page.parent; above != "" && !seen[above]; above = page.parent {
-		seen[above] = true
-		if page, held, err = w.link(ctx, above); err != nil {
-			return nil, err
-		}
-		if !held {
-			break
-		}
-		chain = append(chain, page.title)
-	}
-	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
-		chain[i], chain[j] = chain[j], chain[i]
-	}
-	return chain, nil
-}
-
-// link reads one page's title and parent, or reports it absent.
-func (w chainWalk) link(ctx context.Context, id string) (chainLink, bool, error) {
-	if l, ok := w.read[id]; ok {
-		return l, true, nil
-	}
-	var l chainLink
-	err := w.tx.QueryRowContext(ctx,
-		`SELECT title, parent_id FROM pages_heads WHERE id = ?`, id).
-		Scan(&l.title, &l.parent)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return chainLink{}, false, nil
-	case err != nil:
-		return chainLink{}, false, fmt.Errorf("pages: read page %s: %w", id, err)
-	}
-	w.read[id] = l
-	return l, true, nil
 }
 
 // SearchOverfetch is how many times the limit is asked for before exclusions.

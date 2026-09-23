@@ -46,7 +46,17 @@ type roundTrip struct {
 
 func newRoundTrip(t *testing.T) *roundTrip {
 	t.Helper()
-	r := newRoundTripWithoutProject(t)
+	return newRoundTripAppending(t, nil)
+}
+
+// newRoundTripAppending is [newRoundTrip] with the publisher's appender
+// wrapped, which is how a case puts a broker that stops answering under a real
+// writer. Nil wraps nothing.
+func newRoundTripAppending(t *testing.T,
+	wrap func(statelog.Appender) statelog.Appender) *roundTrip {
+
+	t.Helper()
+	r := newRoundTripOver(t, wrap)
 	// THE PROJECT FIRST, because a create is a SEQUENCE: it takes a key
 	// from that project's counter before it writes a task, and a project
 	// this node has not applied is one whose counter it cannot mint from.
@@ -67,6 +77,13 @@ func newRoundTrip(t *testing.T) *roundTrip {
 // which is the state a company is actually in the moment it boots. The chart
 // apply is what leaves it, and its own cases need to see the before.
 func newRoundTripWithoutProject(t *testing.T) *roundTrip {
+	t.Helper()
+	return newRoundTripOver(t, nil)
+}
+
+func newRoundTripOver(t *testing.T,
+	wrap func(statelog.Appender) statelog.Appender) *roundTrip {
+
 	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
 	if err != nil {
@@ -127,8 +144,12 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 		t.Fatalf("build a metrics recorder: %v", err)
 	}
 	r.metrics = recorder
+	var appender statelog.Appender = log
+	if wrap != nil {
+		appender = wrap(log)
+	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: tracker.Domain{}, Log: log, Rows: rows, Fence: fence,
+		Domain: tracker.Domain{}, Log: appender, Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(db), Waiter: waiter, NodeID: "node-a",
 		Metrics:       recorder,
 		Generation:    func() uint32 { return 0 },

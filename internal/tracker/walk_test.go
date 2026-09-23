@@ -1,13 +1,16 @@
 package tracker_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -821,4 +824,142 @@ func TestAWalkYieldsABoardSomebodyIsArrangingAndTheSweepWalksTheRest(t *testing.
 		t.Error("OPS is still flagged: the sweep stopped at the busy project " +
 			"instead of walking the rest")
 	}
+}
+
+// A WALK THE BROKER CANNOT CONFIRM IS REPORTED AS A FAULT, NOT AS SOMEBODY
+// ARRANGING THE BOARD.
+//
+// A walk plans again for two causes: a batch refused because the order moved,
+// and a batch whose outcome the broker could not establish. The sweep reported
+// both as the first — an informational "somebody is arranging this board" —
+// so a broker that had stopped answering looked like a colleague at work. The
+// second is counted apart, logged as a warning, and fails the job once the
+// other flagged projects have had their walk.
+func TestAWalkTheBrokerCannotConfirmIsReportedAsAFault(t *testing.T) {
+	t.Parallel()
+	broker := &unansweringAppender{silent: tracker.RankOrderSubject("ENG").Wire()}
+	r := newRoundTripAppending(t, func(a statelog.Appender) statelog.Appender {
+		broker.Appender = a
+		return broker
+	})
+	if _, err := r.writer.WriteDocument(t.Context(), "op-ops",
+		tracker.ProjectSubject("OPS"), "", tracker.Project{
+			V: 1, Key: "OPS", Name: "Operations",
+			CreatedAt: wednesday, UpdatedAt: wednesday,
+		}, tracker.ChangeProjectCreated, nil); err != nil {
+		t.Fatalf("seed OPS: %v", err)
+	}
+	r.drain()
+	const total = 4
+	for i := range total {
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			newTask(fmt.Sprintf("t-%02d", i)), nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	crowd(t, r, total)
+	var ops []tracker.Placement
+	for i := range 2 {
+		task := newTask(fmt.Sprintf("o-%d", i))
+		task.Project, task.Key = "OPS", ""
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+task.ID, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", task.ID, err)
+		}
+		r.drain()
+		ops = append(ops, tracker.Placement{Task: task.ID, Rank: tracker.Rank(
+			"a0" + strings.Repeat("0", tracker.RankRenormaliseAt) + fmt.Sprint(i+1))})
+	}
+	if _, err := r.writer.MoveTasks(t.Context(), "op-crowd-ops", "OPS",
+		r.order("OPS"), ops); err != nil {
+		t.Fatalf("crowd OPS: %v", err)
+	}
+	r.drain()
+	r.applyWhileWriting()
+
+	// THE BROKER STOPS ANSWERING FOR ENG'S ORDER, and for nothing else.
+	broker.stop()
+	report, err := r.writer.Respread(t.Context(), "op-walk", "ENG")
+	if !errors.Is(err, tracker.ErrRespreadUnconfirmed) ||
+		errors.Is(err, tracker.ErrRespreadYielded) {
+		t.Fatalf("a walk the broker never confirmed ended %v, want "+
+			"ErrRespreadUnconfirmed and not ErrRespreadYielded", err)
+	}
+	if report.Unconfirmed != tracker.RespreadPlans || report.Moved != 0 {
+		t.Fatalf("the walk counts %d unconfirmed and %d moved plans, want %d "+
+			"and 0 — nobody moved a card", report.Unconfirmed, report.Moved,
+			tracker.RespreadPlans)
+	}
+
+	// AND THE SWEEP SAYS SO, walks the rest, and reports the job failed.
+	log := &capturedLog{}
+	holdTheAppliersPin(t, r)
+	_, err = trackerWorkerLogging(t, r, slog.New(log)).Tick(t.Context())
+	if !errors.Is(err, tracker.ErrRespreadUnconfirmed) {
+		t.Fatalf("the sweep over a walk the broker could not confirm returned "+
+			"%v, want the fault it hit", err)
+	}
+	line := log.only(t, "tracker_respread_unconfirmed")
+	if line.attrs["project"] != "ENG" ||
+		line.attrs["unconfirmed"] != int64(tracker.RespreadPlans) {
+		t.Fatalf("the warning names %v with %v unconfirmed plans, want ENG "+
+			"with %d", line.attrs["project"], line.attrs["unconfirmed"],
+			tracker.RespreadPlans)
+	}
+	for _, logged := range log.lines {
+		if logged.msg == "tracker_respread_yielded" {
+			t.Fatalf("the sweep also reported a board somebody is arranging: %v",
+				logged.attrs)
+		}
+	}
+	flaggedIn := func(project string) bool {
+		return r.strings(`SELECT CAST(rank_respread_pending AS TEXT)
+			FROM tracker_projects WHERE key = ?`, project)[0] == "1"
+	}
+	if !flaggedIn("ENG") {
+		t.Error("ENG lost its flag, so no later sweep walks it")
+	}
+	if flaggedIn("OPS") {
+		t.Error("OPS is still flagged: the fault on ENG stopped the sweep " +
+			"before it walked the rest")
+	}
+}
+
+// unansweringAppender is a broker that stops answering for one subject: an
+// append there has no outcome, and neither does the probe that would settle
+// it — which is what leaves a publish's outcome unknown.
+type unansweringAppender struct {
+	statelog.Appender
+	silent string
+
+	mu      sync.Mutex
+	stopped bool
+}
+
+func (a *unansweringAppender) stop() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stopped = true
+}
+
+func (a *unansweringAppender) mute(subject string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stopped && subject == a.silent
+}
+
+func (a *unansweringAppender) Append(ctx context.Context, subject, msgID string,
+	expect *uint64, body []byte) (uint64, bool, error) {
+
+	if a.mute(subject) {
+		return 0, false, errors.New("nats: no responders available for request")
+	}
+	return a.Appender.Append(ctx, subject, msgID, expect, body)
+}
+
+func (a *unansweringAppender) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
+	if a.mute(subject) {
+		return 0, false, errors.New("nats: timeout")
+	}
+	return a.Appender.LastSeq(ctx, subject)
 }

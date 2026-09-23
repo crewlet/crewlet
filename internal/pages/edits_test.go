@@ -65,6 +65,67 @@ func TestAnEditThatAlsoRelabelsOrMovesAPageIsASaveInTheFeed(t *testing.T) {
 	}
 }
 
+// AN EDITED COMMENT IS AN EDIT, IN THE FEED AND IN THE WAKE ALIKE, AND IT IS
+// STILL THE COMMENT IT WAS.
+//
+// The writer knows which it made — [pages.Store.Comment] or
+// [pages.Store.EditComment] — and wakes the page's watchers with that kind, so
+// the history row the applier writes for the same record has to name it the
+// same way. A comment's row is written with an upsert, which reports one row
+// affected for an update exactly as for an insert, so a kind read off that
+// count names every edit a new comment. And an edit changes the text, not when
+// the comment was made: a row rebuilt from the patch alone restamps its
+// creation with the edit's instant.
+func TestAnEditedCommentIsAnEditInTheFeed(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	comment, _, err := r.store.Comment(t.Context(), author("bob"), page.Page.ID,
+		pages.NewComment{Body: "is this still right?"})
+	if err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	wakes := []pages.ChangeKind{r.notifyKind()}
+	r.drain()
+	made := r.get(page.Page.ID).Comments
+	if len(made) != 1 {
+		t.Fatalf("the page holds %d comments, want the one just made", len(made))
+	}
+	const edited = "it was, until the migration"
+	if _, _, err := r.store.EditComment(t.Context(), author("bob"), page.Page.ID,
+		comment.ID, edited); err != nil {
+		t.Fatalf("EditComment: %v", err)
+	}
+	wakes = append(wakes, r.notifyKind())
+	r.drain()
+
+	if want := []pages.ChangeKind{pages.ChangeComment, pages.ChangeCommentEdited}; !slices.Equal(wakes, want) {
+		t.Fatalf("the comment and its edit woke their watchers as %v, want %v",
+			wakes, want)
+	}
+	switch after := r.get(page.Page.ID).Comments; {
+	case len(after) != 1 || after[0].Body != edited:
+		t.Errorf("after the edit the page's comments are %+v, want the one "+
+			"comment reading %q", after, edited)
+	case !after[0].CreatedAt.Equal(made[0].CreatedAt):
+		t.Errorf("the edit moved the comment's creation from %s to %s",
+			made[0].CreatedAt, after[0].CreatedAt)
+	case !after[0].UpdatedAt.After(made[0].UpdatedAt):
+		t.Errorf("the edit left the comment's update at %s, where it was "+
+			"before it", after[0].UpdatedAt)
+	}
+	// NEWEST FIRST: the edit, then the comment, then the create.
+	var feed []pages.ChangeKind
+	for _, change := range r.activity(pages.PageActivityQuery{Page: page.Page.ID}).Changes {
+		feed = append(feed, change.Kind)
+	}
+	if want := []pages.ChangeKind{pages.ChangeCommentEdited, pages.ChangeComment,
+		pages.ChangeCreated}; !slices.Equal(feed, want) {
+		t.Errorf("the page's feed reads %v, want %v — the same kinds its "+
+			"watchers were woken with", feed, want)
+	}
+}
+
 // notifyKind is the kind the newest record's wake carries.
 func (r *roundTrip) notifyKind() pages.ChangeKind {
 	r.t.Helper()
@@ -171,31 +232,43 @@ func TestAParentThatDoesNotExistOrWouldCloseALoopIsRefused(t *testing.T) {
 	}
 }
 
-// A PARENT CHAIN THAT LOOPS STILL ANSWERS, AND NAMES EACH PAGE ON IT ONCE.
+// A PARENT CHAIN THAT LOOPS STILL ANSWERS, AND NAMES EVERY OTHER PAGE ON IT
+// ONCE.
 //
 // A single write cannot close a loop — the test above is that refusal — but
 // two can between them: each moves a different page, on its own page's
 // subject, decided before the other applied, so neither snapshot holds the
 // other's move and the broker orders the two independently. With no depth cap
 // the walk's record of what it has visited is the only thing that ends it, so
-// this is the test that goes red, by never finishing, if that record goes.
-func TestAParentChainThatLoopsNamesEachPageOnce(t *testing.T) {
+// this is the test that goes red if that record goes. And a page is never
+// listed above itself: its breadcrumb is the OTHER pages on the loop, each
+// once.
+func TestAParentChainThatLoopsNamesEveryOtherPageOnce(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	one := r.write(author("jane"), pages.NewPage{Title: "One", Body: "prose"})
 	two := r.write(author("jane"), pages.NewPage{Title: "Two", Body: "prose"})
+	three := r.write(author("jane"), pages.NewPage{
+		Title: "Three", Body: "prose", ParentID: two.Page.ID,
+	})
 
 	// NO DRAIN BETWEEN THEM: that is what makes the two decisions
-	// concurrent, since each reads this node's applied rows.
+	// concurrent, since each reads this node's applied rows. Each move is
+	// legal on its own — Three is under Two, which is at the top, and One is
+	// at the top — and together they close One → Three → Two → One.
 	if _, err := r.store.SavePage(t.Context(), author("jane"), one.Page.ID,
-		pages.Save{BaseVersion: one.Page.Version, ParentID: &two.Page.ID}); err != nil {
-		t.Fatalf("put One under Two: %v", err)
+		pages.Save{BaseVersion: one.Page.Version, ParentID: &three.Page.ID}); err != nil {
+		t.Fatalf("put One under Three: %v", err)
 	}
 	if _, err := r.store.SavePage(t.Context(), author("jane"), two.Page.ID,
 		pages.Save{BaseVersion: two.Page.Version, ParentID: &one.Page.ID}); err != nil {
 		t.Fatalf("put Two under One: %v", err)
 	}
 	r.drain()
+	if got := r.get(two.Page.ID).Page.ParentID; got != one.Page.ID {
+		t.Fatalf("Two's parent is %q, want One — the loop this test is about "+
+			"never formed", got)
+	}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -204,17 +277,14 @@ func TestAParentChainThatLoopsNamesEachPageOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a page on a loop cannot be read: %v", err)
 	}
-	if detail.Page.ParentID != two.Page.ID {
-		t.Fatalf("One's parent is %q, want Two — the loop this test is about "+
-			"never formed", detail.Page.ParentID)
-	}
-	seen := map[string]int{}
+	var above []string
 	for _, ancestor := range detail.Ancestors {
-		seen[ancestor.ID]++
+		above = append(above, ancestor.Title)
 	}
-	if len(detail.Ancestors) != 2 || seen[one.Page.ID] != 1 || seen[two.Page.ID] != 1 {
-		t.Errorf("the loop's breadcrumb is %+v, want each of its two pages once",
-			detail.Ancestors)
+	// OUTERMOST FIRST, as the walk found them from One: Three, then Two.
+	if want := []string{"Two", "Three"}; !slices.Equal(above, want) {
+		t.Errorf("One's breadcrumb is %v, want %v — every other page on the "+
+			"loop once, and never One itself", above, want)
 	}
 }
 

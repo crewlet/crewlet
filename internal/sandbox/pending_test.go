@@ -148,24 +148,39 @@ func TestALaunchAnOlderBuildRecordedIsReadFromItsRow(t *testing.T) {
 		t.Errorf("dropped = %d after %d, want the row's 3, after the calls it kept first",
 			log.Dropped, log.DroppedAfter)
 	}
+	// ONE PAGE, whatever the limit, with the dropped stretch placed in it:
+	// the list was read whole with the row, and a page that split it would
+	// leave the stretch on neither side.
 	page, err := store.BridgeCallPage(t.Context(), run, 0, 1)
 	if err != nil {
 		t.Fatalf("BridgeCallPage: %v", err)
 	}
-	if len(page.Calls) != 1 || page.Total != 2 || page.Dropped != 3 || page.Next != 1 {
-		t.Errorf("first page = %+v, want one of two calls, the row's dropped three, and a cursor", page)
+	if got := names(page.Calls); !slices.Equal(got, []string{"slack_post", "submit_work"}) {
+		t.Errorf("the page = %q, want both calls the row kept", got)
 	}
-	if len(page.End) != 1 || page.End[0].Name != "submit_work" || page.Between != 0 {
-		t.Errorf("the first page's end = %+v with %d between, want the submission and nothing between",
-			page.End, page.Between)
+	if page.Total != 2 || page.Dropped != 3 || page.DroppedAfter != 2 {
+		t.Errorf("total = %d, dropped = %d after %d; want 2, and the row's 3 after the calls it kept",
+			page.Total, page.Dropped, page.DroppedAfter)
 	}
-	next, err := store.BridgeCallPage(t.Context(), run, page.Next, 1)
+	if page.Next != 0 || len(page.End) != 0 || page.Between != 0 {
+		t.Errorf("the page hands out cursor %d, an end of %d and %d between; want none of them",
+			page.Next, len(page.End), page.Between)
+	}
+	later, err := store.BridgeCallPage(t.Context(), run, 1, 1)
 	if err != nil {
 		t.Fatalf("BridgeCallPage: %v", err)
 	}
-	if len(next.Calls) != 1 || next.Calls[0].Name != "submit_work" || next.Next != 0 || len(next.End) != 0 {
-		t.Errorf("second page = %+v, want the last call, no cursor and no end beside it", next)
+	if len(later.Calls) != 0 || later.Dropped != 0 {
+		t.Errorf("a page past the row's one = %+v, want nothing", later)
 	}
+}
+
+func names(calls []sandbox.BridgeCall) []string {
+	out := make([]string, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, call.Name)
+	}
+	return out
 }
 
 // THE DROPPED MIDDLE IS PLACED WHERE THE OLDER BUILD DROPPED IT. Its bounded
@@ -412,4 +427,70 @@ func TestARowWithRoomForOneCallKeepsTheNewest(t *testing.T) {
 		t.Errorf("the view = %d calls ending %q with %d dropped, want the newest alone and 2 counted",
 			len(row.BridgeCalls), row.BridgeCalls[len(row.BridgeCalls)-1].Name, row.BridgeCallsElided)
 	}
+}
+
+// lowServer is a coordination store behind a server configured below the
+// contract's ceiling: it refuses a call record past one kilobyte as too large,
+// the way a NATS server with a small max_payload refuses one.
+type lowServer struct{ *memory.Fleet }
+
+func (l lowServer) AppendBridgeCall(ctx context.Context, turnID, launchID string, value []byte) (uint64, error) {
+	if len(value) > 1<<10 {
+		return 0, fmt.Errorf("the server accepts less: %w", coord.ErrTooLarge)
+	}
+	return l.Fleet.AppendBridgeCall(ctx, turnID, launchID, value)
+}
+
+// A SERVER BELOW THE CEILING DOES NOT LOSE THE CALL.
+//
+// A node is refused at boot by a server announcing less than the contract's
+// ceiling, but a reconnect can reach one, and it refuses a record the fit
+// already sized to the contract. Dropped, the call would leave a gap in the one
+// log a resume reads with nothing to say it is there — a post that the
+// delivery check never counts. Kept in its least form, the call is still
+// there: its name and outcome, both texts replaced by their marks.
+func TestACallAServerBelowTheCeilingRefusesIsKeptInItsLeastForm(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(lowServer{memory.NewFleet()})
+	run := begun(t, store, "t-low")
+	args := `{"channel":"C1","text":"` + strings.Repeat("x", 4<<10) + `"}`
+	ok, err := store.AppendBridgeCall(t.Context(), "t-low", sandbox.BridgeCall{
+		Name: "slack_post", Args: args, Output: strings.Repeat("y", 4<<10),
+	})
+	if err != nil || !ok {
+		t.Fatalf("a call the server refused as too large was not recorded: %v, %v", ok, err)
+	}
+	log, err := store.BridgeCalls(t.Context(), run)
+	if err != nil || len(log.Calls) != 1 {
+		t.Fatalf("the log = %+v, %v; want the one call", log, err)
+	}
+	call := log.Calls[0]
+	if call.Name != "slack_post" || call.Failed {
+		t.Errorf("the call kept as %q (failed %v), want the post and its outcome", call.Name, call.Failed)
+	}
+	if call.Args != sandbox.ArgsNotKept(len(args)) || call.Output != "…" {
+		t.Errorf("the least form = args %.60q, output %.20q; want both replaced by their marks",
+			call.Args, call.Output)
+	}
+
+	// A text the call did not have gets no mark: arguments that were never
+	// passed read as none, not as arguments that were not kept.
+	if ok, err := store.AppendBridgeCall(t.Context(), "t-low", sandbox.BridgeCall{
+		Name: "read_page", Output: strings.Repeat("y", 4<<10),
+	}); err != nil || !ok {
+		t.Fatalf("append: %v, %v", ok, err)
+	}
+	if bare := mustBridgeCalls(t, store, run)[1]; bare.Args != "" || bare.Output != "…" {
+		t.Errorf("the least form of a call with no arguments = args %q, output %.20q; want none, and "+
+			"the output's mark", bare.Args, bare.Output)
+	}
+}
+
+func mustBridgeCalls(t *testing.T, store *sandbox.CoordStore, run sandbox.PendingRun) []sandbox.BridgeCall {
+	t.Helper()
+	log, err := store.BridgeCalls(t.Context(), run)
+	if err != nil {
+		t.Fatalf("BridgeCalls: %v", err)
+	}
+	return log.Calls
 }

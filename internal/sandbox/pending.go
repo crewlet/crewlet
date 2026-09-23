@@ -235,6 +235,11 @@ type BridgeCall struct {
 // can read back — everything downstream of the record, the resumed phase's own
 // event included, is built from the record — which is why the cut is marked
 // in the record's own fields, where every reader of them sees it.
+//
+// A SERVER THAT REFUSES A FITTED RECORD accepts less than this ceiling: a
+// node does not boot against one, but can meet one later, after a reconnect.
+// The call is then kept in its least form — its name and outcome, both texts
+// replaced by their marks — rather than lost from the log.
 const MaxBridgeCallBytes = coord.MaxBridgeCallBytes
 
 // ArgsNotKept is the [BridgeCall.Args] a call is recorded with when its
@@ -268,8 +273,9 @@ type BridgeCallPage struct {
 	// Calls are in the order the run made them.
 	Calls []BridgeCall
 
-	// Next is the cursor for the page after this one: the Seq to pass as
-	// `after`. Zero when this page ends the log.
+	// Next is the cursor for the calls this page does not carry: the Seq to
+	// pass as `after`. Zero when the page — with End, on a first page —
+	// carries every call the log holds from its cursor on.
 	Next uint64
 
 	// End is the log's NEWEST calls, carried by a FIRST page (after zero)
@@ -287,9 +293,11 @@ type BridgeCallPage struct {
 	Total int
 
 	// Dropped is how many calls the run made that the log does not hold at
-	// all, which only a log an older build kept on the run's row can have;
-	// see [BridgeLog.Dropped]. No page reaches them.
-	Dropped int
+	// all, and DroppedAfter how many of Calls come before the place they
+	// were. Only a log an older build kept on the run's row can have them
+	// (see [BridgeLog.Dropped]), and no page reaches them.
+	Dropped      int
+	DroppedAfter int
 }
 
 // BridgeLog is a run's whole bridged-call log, as a resume reads it.
@@ -725,6 +733,11 @@ type PendingStore interface {
 	// calls, at most limit of them and bounded the same way, in
 	// [BridgeCallPage.End], and counts the calls between the two. A limit
 	// below one is an error.
+	//
+	// A LOG AN OLDER BUILD KEPT ON THE ROW IS ONE PAGE, whatever the limit:
+	// it is at most [MaxBridgeCalls] calls, already read whole with the row,
+	// so a limit would bound no read. The page places the calls that build
+	// dropped within Calls, at [BridgeCallPage.DroppedAfter].
 	BridgeCallPage(ctx context.Context, run PendingRun, after uint64, limit int) (BridgeCallPage, error)
 
 	// ListActive returns every run that still owns engine-side state.

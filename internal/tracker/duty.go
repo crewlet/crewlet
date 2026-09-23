@@ -147,22 +147,37 @@ func (d *duty) respread(ctx context.Context, now, _ time.Time) (int64, error) {
 		return 0, err
 	}
 	var walked int64
+	var unconfirmed []error
 	for _, project := range projects {
 		opID := d.opID("respread", project, now)
 		report, err := d.deps.Writer.Respread(ctx, opID, project)
 		walked += int64(report.Batches)
-		if errors.Is(err, errReplan) {
-			// SOMEBODY IS ARRANGING THIS BOARD RIGHT NOW, and the walk
-			// yielded to them — see [RespreadPlans]. The project stays
-			// flagged and the next sweep plans from where they left it;
-			// the other flagged projects are not held up behind it.
+		switch {
+		case errors.Is(err, ErrRespreadUnconfirmed):
+			// THE BROKER COULD NOT CONFIRM THIS WALK'S BATCHES, which is a
+			// fault and is reported as one: a warning here, and the job's
+			// own error once every other flagged project has had its
+			// walk, so a fault on one project's order does not hold the
+			// rest up. The project stays flagged for the next sweep.
+			d.deps.Logger.WarnContext(ctx, "tracker_respread_unconfirmed",
+				"project", project, "batches", report.Batches,
+				"plans", report.Plans, "unconfirmed", report.Unconfirmed,
+				"moved", report.Moved, "error", err)
+			unconfirmed = append(unconfirmed, err)
+			continue
+		case errors.Is(err, ErrRespreadYielded):
+			// SOMEBODY IS ARRANGING THIS BOARD RIGHT NOW: every plan was
+			// abandoned because the order moved under it, and the walk
+			// gave way — see [RespreadPlans]. Nothing is wrong. The
+			// project stays flagged and the next sweep plans from where
+			// they left it; the other flagged projects are not held up
+			// behind it.
 			d.deps.Logger.InfoContext(ctx, "tracker_respread_yielded",
 				"project", project, "batches", report.Batches,
 				"plans", report.Plans, "error", err)
 			continue
-		}
-		if err != nil {
-			return walked, err
+		case err != nil:
+			return walked, errors.Join(append(unconfirmed, err)...)
 		}
 		// THE FLAG CLEARS ITSELF. The applier sets and clears it from
 		// one probe over the project's own long keys, so the walk's
@@ -174,7 +189,7 @@ func (d *duty) respread(ctx context.Context, now, _ time.Time) (int64, error) {
 			"project", project, "batches", report.Batches,
 			"plans", report.Plans)
 	}
-	return walked, nil
+	return walked, errors.Join(unconfirmed...)
 }
 
 // clearDuplicates re-mints one of every pair of tasks that share a rank.
@@ -491,14 +506,22 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 		done := false
 		if walk.into == "" {
 			// MID-MERGE WITH NO TARGET is a marker whose relation never
-			// landed. The honest repair is to clear the marker and
-			// NOTHING ELSE: the merge did not happen, so cancelling
-			// the task would close an item nobody merged — and leaving
-			// the flag set would make this tick run for ever against a
-			// task nothing is merging.
-			d.deps.Logger.WarnContext(ctx, "tracker_merge_marker_without_target",
-				"task", id, "detail", "the marker is cleared and the task left "+
-					"open; the merge it names never linked anything")
+			// landed, or one whose target has since been purged. The
+			// honest repair is to clear the marker and NOTHING ELSE: the
+			// merge did not happen and now cannot, so cancelling the task
+			// would close an item nobody merged — and leaving the flag set
+			// would make this tick run for ever against a task nothing is
+			// merging.
+			if walk.purged != "" {
+				d.deps.Logger.WarnContext(ctx, "tracker_merge_target_purged",
+					"task", id, "target", walk.purged, "detail", "the task "+
+						"this one was being merged into was purged; the marker "+
+						"is cleared and the task left open with its subtasks")
+			} else {
+				d.deps.Logger.WarnContext(ctx, "tracker_merge_marker_without_target",
+					"task", id, "detail", "the marker is cleared and the task left "+
+						"open; the merge it names never linked anything")
+			}
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if _, err := d.deps.Writer.UpdateTask(ctx, opID, walk.task,
 				walk.project, NoIfMatch, TaskPatch{Merging: &done},
@@ -566,6 +589,13 @@ type abandonedMerge struct {
 	// is can be moved afterwards, and one moved against an explicit
 	// `move_subtasks: false` has to be put back by hand.
 	reparent bool
+
+	// purged is the target the mark named when that task has since been
+	// PURGED, and `into` is then empty: there is nothing left to merge
+	// into, and re-parenting subtasks onto it would give them a parent no
+	// row holds — the dangling parent a purge itself re-parents children
+	// to avoid ([Applier.purgeTask]).
+	purged string
 }
 
 func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, error) {
@@ -585,6 +615,19 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 			if relation.Kind == RelationDuplicates {
 				walk.into = relation.Other
 			}
+		}
+		if walk.into == "" {
+			return nil
+		}
+		var purged int
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM tracker_deletions WHERE task_id = ?)`,
+			walk.into).Scan(&purged); err != nil {
+			return fmt.Errorf("tracker: read whether %s's merge target %s was "+
+				"purged: %w", id, walk.into, err)
+		}
+		if purged == 1 {
+			walk.purged, walk.into = walk.into, ""
 		}
 		return nil
 	})
