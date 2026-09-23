@@ -81,8 +81,14 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	fence := pages.NewFence(db, "node-a")
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
-	// an absent anchor really does mean an unclaimed address.
+	// an absent anchor really does mean an unclaimed address. The log's own
+	// first sequence is the fence's other bound, read from the stream the
+	// way the engine reads it.
 	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
+	fence.First = func(ctx context.Context) (uint64, error) {
+		first, _, err := log.Bounds(ctx)
+		return first, err
+	}
 	waiter := &testWaiter{}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: pages.Domain{}, Log: log, Rows: rows, Fence: fence,

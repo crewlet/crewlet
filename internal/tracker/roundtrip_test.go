@@ -115,8 +115,14 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	fence := tracker.NewFence(db, "node-a")
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
-	// an absent anchor really does mean an empty subject.
+	// an absent anchor really does mean an empty subject. The log's own
+	// first sequence is the fence's other bound, read from the stream the
+	// way the engine reads it.
 	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
+	fence.First = func(ctx context.Context) (uint64, error) {
+		first, _, err := log.Bounds(ctx)
+		return first, err
+	}
 	waiter := &testWaiter{}
 	// A REAL RECORDER, because two of this harness's invariants are only
 	// visible as instruments: the session wait is a HISTOGRAM and nothing

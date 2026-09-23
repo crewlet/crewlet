@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -11,9 +12,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // probe answers a sequence's stored instant from a table, and reports which
@@ -165,7 +168,7 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	}
 	first := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 
-	if err := r.publish(ctx, "tracker", 1, blocked, fleetInputs{
+	if err := r.publish(ctx, "tracker", 1, blocked, 0, fleetInputs{
 		at: first, previous: map[string]coord.TrimFloor{},
 	}); err != nil {
 		t.Fatalf("publish: %v", err)
@@ -182,7 +185,7 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	// floor its predecessor published.
 	later := first.Add(3 * time.Hour)
 	peer := &retention{fleet: r.fleet, nodeID: "node-b"}
-	if err := peer.publish(ctx, "tracker", 1, blocked, fleetInputs{
+	if err := peer.publish(ctx, "tracker", 1, blocked, 0, fleetInputs{
 		at: later, previous: map[string]coord.TrimFloor{"tracker": published[0]},
 	}); err != nil {
 		t.Fatalf("publish from the new holder: %v", err)
@@ -216,7 +219,7 @@ func TestATrimThatAdvancesClearsItsBlockedClock(t *testing.T) {
 		To:    900,
 		Terms: []statelog.Term{{Name: statelog.TermBackupFloor, Seq: 900, Known: true}},
 	}
-	if err := r.publish(ctx, "tracker", 1, advancing, fleetInputs{
+	if err := r.publish(ctx, "tracker", 1, advancing, 0, fleetInputs{
 		at: first.Add(time.Hour), previous: map[string]coord.TrimFloor{"tracker": was},
 	}); err != nil {
 		t.Fatalf("publish: %v", err)
@@ -250,7 +253,7 @@ func TestATrimThatAdvancedAndBlockedAgainStartsANewClock(t *testing.T) {
 	if err := r.publish(ctx, "tracker", 1, statelog.TrimDecision{
 		BlockedBy: statelog.TermApplied,
 		Terms:     []statelog.Term{{Name: statelog.TermApplied}},
-	}, fleetInputs{at: now, previous: map[string]coord.TrimFloor{"tracker": was}}); err != nil {
+	}, 0, fleetInputs{at: now, previous: map[string]coord.TrimFloor{"tracker": was}}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	published, _ := r.fleet.Floors(ctx)
@@ -275,7 +278,7 @@ func TestABlockedTrimsClockSurvivesTheTermChangingUnderIt(t *testing.T) {
 	if err := r.publish(ctx, "tracker", 1, statelog.TrimDecision{
 		BlockedBy: statelog.TermApplied,
 		Terms:     []statelog.Term{{Name: statelog.TermApplied}},
-	}, fleetInputs{
+	}, 0, fleetInputs{
 		at: first.Add(9 * time.Hour), previous: map[string]coord.TrimFloor{"tracker": was},
 	}); err != nil {
 		t.Fatalf("publish: %v", err)
@@ -288,6 +291,264 @@ func TestABlockedTrimsClockSurvivesTheTermChangingUnderIt(t *testing.T) {
 	if published[0].BlockedBy != string(statelog.TermApplied) {
 		t.Fatalf("the floor names %q as its blocking term, want the current one",
 			published[0].BlockedBy)
+	}
+}
+
+// TestTheFloorNeverMovesDownWithinAGeneration is what makes the published
+// floor an upper bound on what is gone rather than a report of one tick.
+//
+// A tick's conclusion falls on every blocked tick and whenever the lowest
+// counted node is below the log, and records an earlier tick licensed removing
+// are gone all the same — so a floor that followed it down tells exactly that
+// node it holds everything that may be missing, which is the one node the
+// write fence exists to refuse.
+func TestTheFloorNeverMovesDownWithinAGeneration(t *testing.T) {
+	t.Parallel()
+	at := func(gen uint32, floor uint64) coord.TrimFloor {
+		return coord.TrimFloor{Domain: "tracker", Generation: gen, Floor: floor}
+	}
+	for name, tc := range map[string]struct {
+		previous  coord.TrimFloor
+		had       bool
+		to, first uint64
+		want      uint64
+		refused   bool
+	}{
+		"the first tick there has ever been": {to: 900, first: 1, want: 900},
+		"a blocked tick keeps what an earlier one licensed": {
+			previous: at(1, 900), had: true, to: 0, first: 10, want: 900},
+		"a conclusion the counted minimum dragged down": {
+			previous: at(1, 900), had: true, to: 300, first: 10, want: 900},
+		"an advancing tick raises it": {
+			previous: at(1, 900), had: true, to: 1_200, first: 900, want: 1_200},
+		"the stream has lost more than any tick licensed": {
+			previous: at(1, 900), had: true, to: 0, first: 1_500, want: 1_500},
+		"a floor from a previous generation is not carried": {
+			previous: at(0, 900), had: true, to: 50, first: 40, want: 50},
+		"a floor from a generation ahead refuses": {
+			previous: at(2, 900), had: true, to: 50, first: 40, refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := nextFloor(tc.previous, tc.had, 1, tc.to, tc.first)
+			if (err != nil) != tc.refused {
+				t.Fatalf("nextFloor = (%d, %v), want refused=%v", got, err, tc.refused)
+			}
+			if !tc.refused && got != tc.want {
+				t.Fatalf("nextFloor(previous %d, to %d, first %d) = %d, want %d",
+					tc.previous.Floor, tc.to, tc.first, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestABlockedTickPublishesTheFloorAnEarlierTickLicensed is the same
+// property through the register, where a reader actually meets it: after an
+// advance and a block, the conclusion reads zero and the floor reads what the
+// advance licensed.
+func TestABlockedTickPublishesTheFloorAnEarlierTickLicensed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := floorFleet(t)
+	now := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
+	if err := r.publish(ctx, "tracker", 1, statelog.TrimDecision{
+		To:    900,
+		Terms: []statelog.Term{{Name: statelog.TermApplied, Seq: 900, Known: true}},
+	}, 1, fleetInputs{at: now, previous: map[string]coord.TrimFloor{}}); err != nil {
+		t.Fatalf("publish the advance: %v", err)
+	}
+	advanced, err := r.fleet.Floors(ctx)
+	if err != nil || len(advanced) != 1 {
+		t.Fatalf("floors = %v (err %v)", advanced, err)
+	}
+	if err := r.publish(ctx, "tracker", 1, statelog.TrimDecision{
+		BlockedBy: statelog.TermApplied,
+		Terms:     []statelog.Term{{Name: statelog.TermApplied, Known: true}},
+	}, 1, fleetInputs{
+		at: now.Add(RetentionInterval), previous: map[string]coord.TrimFloor{"tracker": advanced[0]},
+	}); err != nil {
+		t.Fatalf("publish the block: %v", err)
+	}
+	floors, err := r.fleet.Floors(ctx)
+	if err != nil || len(floors) != 1 {
+		t.Fatalf("floors = %v (err %v)", floors, err)
+	}
+	if floors[0].TrimTo != 0 || floors[0].Floor != 900 {
+		t.Fatalf("a blocked tick after an advance to 900 published trim_to %d and "+
+			"floor %d, want 0 and 900 — records below 900 may be gone, and a floor "+
+			"that says zero clears every node to publish over them",
+			floors[0].TrimTo, floors[0].Floor)
+	}
+	if got, err := floorFor(floors, "tracker", 1); err != nil || got != 900 {
+		t.Fatalf("the fence reads a floor of %d (err %v) after the block, want 900",
+			got, err)
+	}
+}
+
+// fleetRegister is [coord.Fleet] under a name that does not collide with the
+// interface's own Fleet method, so a wrapper can embed it.
+type fleetRegister = coord.Fleet
+
+// orderFleet is a register that notes what the log still held at the instant
+// a floor reached it, and can refuse the write.
+type orderFleet struct {
+	fleetRegister
+	stream *jetstream.DomainLog
+	refuse error
+
+	// firstAt is the log's first surviving sequence when PutFloor ran.
+	firstAt uint64
+	puts    int
+}
+
+func (f *orderFleet) PutFloor(ctx context.Context, row coord.TrimFloor) error {
+	first, _, err := f.stream.Bounds(ctx)
+	if err != nil {
+		return err
+	}
+	f.firstAt, f.puts = first, f.puts+1
+	if f.refuse != nil {
+		return f.refuse
+	}
+	return f.fleetRegister.PutFloor(ctx, row)
+}
+
+// trimmedTracker is one node on a real embedded broker with its own trim
+// stopped, and three records on the tracker's log — so every purge and every
+// floor a case sees is the case's own, and a purge has something to remove.
+func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningDomain) {
+	t.Helper()
+	b := config.DefaultBootstrap()
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	back, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	// THE NODE'S OWN TRIM IS THE OTHER WRITER of both the floor and the
+	// log's first sequence; stopped, it waits out an in-flight tick.
+	e.stopRetention()
+	running := e.native.log.Domain(tracker.Domain{}.Name())
+	if running == nil {
+		t.Fatal("the tracker domain is not running")
+	}
+	for range 3 {
+		barrierOn(t, running)
+	}
+	return e, back, running
+}
+
+// barrierOn puts one record on a domain's log that no gate drops and no
+// build refuses to decode, and answers its sequence.
+func barrierOn(t *testing.T, running *runningDomain) uint64 {
+	t.Helper()
+	body, err := tracker.EncodeBarrier(statelog.Envelope{
+		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
+		Subject: statelog.Subject{Kind: statelog.BarrierKind},
+		Gen:     running.runner.Committed().Generation,
+		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+	})
+	if err != nil {
+		t.Fatalf("encode a barrier: %v", err)
+	}
+	seq, _, err := running.log.Append(t.Context(),
+		running.domain.Stream().SubjectPrefix+"."+statelog.BarrierKind, "", nil, body)
+	if err != nil {
+		t.Fatalf("append a barrier: %v", err)
+	}
+	return seq
+}
+
+// TestTheFloorIsPublishedBeforeThePurgeItLicenses is the order the floor
+// theorem assumes, on a real stream.
+//
+// The write fence clears an expectation of zero against the published floor,
+// so every record the log has lost must already sit below it. Purged first,
+// the floor trails the purge by however long its write takes to succeed, and a
+// node the purge just left below the log is cleared against the old number —
+// publishing at zero over a record it never applied.
+func TestTheFloorIsPublishedBeforeThePurgeItLicenses(t *testing.T) {
+	t.Parallel()
+	_, back, running := trimmedTracker(t)
+	first, last, err := running.log.Bounds(t.Context())
+	if err != nil {
+		t.Fatalf("bounds: %v", err)
+	}
+	if last < first+2 {
+		t.Fatalf("the log holds %d..%d, want at least three records to purge", first, last)
+	}
+	fleet := &orderFleet{fleetRegister: back.Fleet, stream: running.log}
+	r := &retention{fleet: fleet, nodeID: "node-a"}
+	name := running.domain.Name()
+	to := last
+	if err := r.apply(t.Context(), running.log, name, running.runner.Committed().Generation,
+		statelog.TrimDecision{
+			To:    to,
+			Terms: []statelog.Term{{Name: statelog.TermApplied, Seq: to, Known: true}},
+		}, first, fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if fleet.puts != 1 {
+		t.Fatalf("the tick published %d floor(s), want 1", fleet.puts)
+	}
+	if fleet.firstAt >= to {
+		t.Fatalf("the floor reached the register when the log already started at %d "+
+			"— the purge below %d had run first, so a write fence reading the "+
+			"register in between cleared nodes the purge had left below the log",
+			fleet.firstAt, to)
+	}
+	floors, err := back.Fleet.Floors(t.Context())
+	if err != nil {
+		t.Fatalf("floors: %v", err)
+	}
+	published, err := floorFor(floors, name, running.runner.Committed().Generation)
+	if err != nil || published < to {
+		t.Fatalf("the published floor is %d (err %v), want at least the %d it licensed",
+			published, err, to)
+	}
+	if now, _, err := running.log.Bounds(t.Context()); err != nil || now != to {
+		t.Fatalf("after the tick the log starts at %d (err %v), want %d — the "+
+			"purge the floor licensed did not run", now, err, to)
+	}
+}
+
+// TestAFloorThatCouldNotBePublishedPurgesNothing is the failure half of the
+// same order. Purge-then-publish did not leave a window one tick wide: a purge
+// whose publish then FAILED left the register naming the old floor for as long
+// as the register refused writes, and every write fence in the fleet cleared
+// against it.
+func TestAFloorThatCouldNotBePublishedPurgesNothing(t *testing.T) {
+	t.Parallel()
+	_, back, running := trimmedTracker(t)
+	first, last, err := running.log.Bounds(t.Context())
+	if err != nil {
+		t.Fatalf("bounds: %v", err)
+	}
+	fleet := &orderFleet{fleetRegister: back.Fleet, stream: running.log,
+		refuse: errors.New("the register refuses writes")}
+	r := &retention{fleet: fleet, nodeID: "node-a"}
+	err = r.apply(t.Context(), running.log, running.domain.Name(),
+		running.runner.Committed().Generation, statelog.TrimDecision{
+			To:    last,
+			Terms: []statelog.Term{{Name: statelog.TermApplied, Seq: last, Known: true}},
+		}, first, fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}})
+	if err == nil {
+		t.Fatal("a tick whose floor could not be published reported success")
+	}
+	if now, _, err := running.log.Bounds(t.Context()); err != nil || now != first {
+		t.Fatalf("the log starts at %d (err %v) after a tick whose floor was never "+
+			"published, want the %d it held — the purge ran on a licence nobody "+
+			"can read", now, err, first)
 	}
 }
 

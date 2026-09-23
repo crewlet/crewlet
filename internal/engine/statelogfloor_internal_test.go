@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"sync/atomic"
@@ -15,14 +16,22 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// THE FLOOR IS THE TRIM'S PUBLISHED DECISION, and every branch of reading it
-// is reachable without a fleet.
-func TestTheFloorIsReadFromThePublishedTrimDecision(t *testing.T) {
+// THE FLOOR IS THE TRIM'S PUBLISHED FLOOR, NOT ITS LAST CONCLUSION, and every
+// branch of reading it is reachable without a fleet.
+//
+// The two differ exactly where a write fence needs the floor most. A blocked
+// tick concludes zero, and a tick whose lowest counted node is below the log —
+// readmitted, restored from an old backup, up on its own history — concludes
+// that node's own position; records earlier ticks licensed removing are gone
+// all the same. Read as the floor, either conclusion cleared that node to
+// publish at an expectation of zero over records it never applied.
+func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 	t.Parallel()
 	floors := []coord.TrimFloor{
-		{Domain: "tracker", Generation: 3, TrimTo: 4_200},
-		{Domain: "pages", Generation: 3, TrimTo: 0, BlockedBy: "backup_floor"},
-		{Domain: "vectors", Generation: 5, TrimTo: 90},
+		{Domain: "tracker", Generation: 3, TrimTo: 4_200, Floor: 4_200},
+		{Domain: "pages", Generation: 3, TrimTo: 0, Floor: 3_000, BlockedBy: "backup_floor"},
+		{Domain: "readmitted", Generation: 3, TrimTo: 700, Floor: 3_000},
+		{Domain: "vectors", Generation: 5, TrimTo: 90, Floor: 90},
 	}
 	for name, tc := range map[string]struct {
 		domain string
@@ -30,11 +39,12 @@ func TestTheFloorIsReadFromThePublishedTrimDecision(t *testing.T) {
 		want   uint64
 		err    bool
 	}{
-		"the trim's own conclusion":          {domain: "tracker", gen: 3, want: 4_200},
-		"a blocked trim licenses nothing":    {domain: "pages", gen: 3, want: 0},
-		"a domain the trim never reached":    {domain: "other", gen: 3, want: 0},
-		"a floor from a previous generation": {domain: "tracker", gen: 4, want: 0},
-		"a floor from a generation ahead":    {domain: "vectors", gen: 3, err: true},
+		"the trim's own floor":                     {domain: "tracker", gen: 3, want: 4_200},
+		"a blocked trim keeps what it licensed":    {domain: "pages", gen: 3, want: 3_000},
+		"a conclusion the counted minimum dragged": {domain: "readmitted", gen: 3, want: 3_000},
+		"a domain the trim never reached":          {domain: "other", gen: 3, want: 0},
+		"a floor from a previous generation":       {domain: "tracker", gen: 4, want: 0},
+		"a floor from a generation ahead":          {domain: "vectors", gen: 3, err: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := floorFor(floors, tc.domain, tc.gen)
@@ -97,7 +107,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	at := running.runner.Committed()
 	if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
 		Domain: tracker.Domain{}.Name(), Generation: at.Generation,
-		TrimTo: at.Seq + 5, At: time.Now().UTC(), By: "peer",
+		TrimTo: at.Seq + 5, Floor: at.Seq + 5, At: time.Now().UTC(), By: "peer",
 	}); err != nil {
 		t.Fatalf("publish a floor: %v", err)
 	}
@@ -129,7 +139,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	// consumed everything the trim may have removed.
 	if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
 		Domain: tracker.Domain{}.Name(), Generation: at.Generation,
-		TrimTo: at.Seq + 1, At: time.Now().UTC(), By: "peer",
+		TrimTo: at.Seq + 1, Floor: at.Seq + 1, At: time.Now().UTC(), By: "peer",
 	}); err != nil {
 		t.Fatalf("publish a floor: %v", err)
 	}
@@ -352,5 +362,74 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 		t.Fatalf("an artefact at %d against a log whose first record is %d was "+
 			"accepted — record %d is gone and it does not hold it",
 			applied, missed+1, missed)
+	}
+}
+
+// A NODE BELOW THE LOG IS NOT CLEARED TO PUBLISH AT ZERO, WHATEVER THE
+// PUBLISHED FLOOR SAYS — the write fence as the engine wires it, on a real
+// stream.
+//
+// The floor is one of two witnesses to what the log has lost, and it cannot
+// see everything: a floor published at another generation reads as zero, and
+// so does one no trim ever wrote. The stream's own first sequence is the other
+// witness, and the fence asks of the higher. Wired with the floor alone —
+// which is how it stood — this node, whose next record had been purged,
+// published an eviction at an expectation of zero over a subject whose history
+// it had never applied: the retry-at-zero the floor theorem forbids below the
+// log.
+func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T) {
+	t.Parallel()
+	e, _, running := trimmedTracker(t)
+	s := e.native.log
+	writer := e.native.writer
+	if writer == nil {
+		t.Fatal("the node runs no tracker writer")
+	}
+
+	// THE CONTROL: at the log, a write at zero goes through. Without it a
+	// fence that refused everything would pass the case below.
+	res, err := writer.EvictNode(t.Context(), "op-control", "node-control")
+	if err != nil {
+		t.Fatalf("a node at the log was refused a write at zero: %v", err)
+	}
+	if res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the control write answered %q, want applied", res.Outcome)
+	}
+
+	// THE NODE MISSES A RECORD AND THE LOG LOSES IT: appliers halted, one
+	// record appended past this node's checkpoint, and the log purged
+	// through it — the next record this node needs is gone.
+	s.haltAppliers()
+	at := running.runner.Committed()
+	missed := barrierOn(t, running)
+	if missed != at.Seq+1 {
+		t.Fatalf("the unapplied record landed at %d, want %d", missed, at.Seq+1)
+	}
+	if err := running.log.Purge(t.Context(), missed+1); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+
+	// AND THE PUBLISHED FLOOR CANNOT SEE IT: the one this node's own trim
+	// wrote at boot, before any of this, still clears the checkpoint.
+	floor, err := s.trimFloor(running.domain.Name(),
+		func() uint32 { return at.Generation })(t.Context())
+	if err != nil {
+		t.Fatalf("read the published floor: %v", err)
+	}
+	if !statelog.Replayable(at.Seq, floor) {
+		t.Fatalf("the published floor %d already refuses checkpoint %d, so this "+
+			"case would not show which bound the fence reads", floor, at.Seq)
+	}
+
+	_, err = writer.EvictNode(t.Context(), "op-below", "node-below")
+	if !errors.Is(err, statelog.ErrUnavailable) {
+		t.Fatalf("a node at %d against a log whose first record is %d wrote at "+
+			"an expectation of zero (err %v), want %v — record %d is gone and "+
+			"it never applied it", at.Seq, missed+1, err, statelog.ErrUnavailable,
+			missed)
+	}
+	if _, last, err := running.log.Bounds(t.Context()); err != nil || last != missed {
+		t.Fatalf("the log's last record is %d (err %v), want %d — an append "+
+			"landed from a node the fence should have refused", last, err, missed)
 	}
 }

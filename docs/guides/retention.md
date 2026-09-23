@@ -135,6 +135,41 @@ retention status` names it in the backup term's remedy, the retention answer
 renders it, and **`crewlet backup`'s manifest records it** — which is where it
 stops being configuration and becomes durable evidence.
 
+## The trim floor
+
+`crewlet retention status` prints a **trim floor** per domain. Everything below
+it may already have been deleted from the log, so a node that has applied
+every record up to the one just before it holds everything that may be
+missing, and a node further behind may have to adopt a snapshot. Two
+properties make it something the fleet can rely on:
+
+- **It is published before the purge it licenses.** The trim writes its
+  conclusion to the fleet first and deletes second. A tick whose floor could
+  not be published deletes nothing; a tick that published and then failed to
+  delete leaves the floor ahead of the log for a moment, which costs nothing —
+  the next tick deletes again.
+- **It never moves down within a generation.** A tick that is blocked, or whose
+  lowest counted node is lower than last time — a readmitted node, one
+  restored from an old backup, one that came up on its own history because no
+  peer could donate — leaves the floor where it was. Records an earlier tick
+  deleted do not come back because a later tick concluded less.
+
+What the last tick itself concluded is `trim_to` on the retention answer:
+zero while the trim is blocked, and below the floor whenever the lowest counted
+node is. The dashboard's retention screen shows it beside the floor when the
+two differ.
+
+The floor is load-bearing for **writes**, not only for recovery. A write to an
+object whose last record has been deleted from the log cannot compare against
+that record any more, so it is retried as "this object's history on the log is
+empty" — which is only true on a node that has applied everything that may be
+gone. So every such write first checks, freshly, that the node has applied
+every record up to the one just before the **higher of the floor and the log's
+own first record**, and a node that has not is refused `unavailable` rather
+than allowed to overwrite a change it never saw. The same comparison is what
+reports `below_floor`, and a node whose missing records are gone from the log
+itself [adopts a snapshot](#the-join-runbook).
+
 ## The cross-field rule
 
 `snapshot_interval × (SnapshotsKept + 1)` must be **less than** `min_age`, or

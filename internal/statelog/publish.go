@@ -77,7 +77,10 @@ type Fence interface {
 
 	// ClearForZero verifies, freshly, that publishing at an expectation
 	// of ZERO is safe from this node: that it is not evicted, and that
-	// the published trim floor is at or below this node's own cursor.
+	// [Replayable](cursor, F) holds for F the HIGHER of the published trim
+	// floor and the log's own first surviving sequence — the F the floor
+	// theorem in this package's doc is stated over. Either bound alone
+	// clears a node the other refuses.
 	//
 	// A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is a deliberate
 	// departure from the fail-open rule a delivery claim uses. Failing

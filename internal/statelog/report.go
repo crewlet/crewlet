@@ -167,11 +167,13 @@ type DomainReport struct {
 	MaxBytes         uint64   `json:"max_bytes,omitempty"`
 	HeadroomFraction *float64 `json:"headroom_fraction,omitempty"`
 
-	// TrimFloor is the floor the fleet has published — what has actually
-	// been removed. TrimTo is what THIS tick concluded may be removed.
-	// Two numbers because they answer different questions: the first is
-	// where a joining node's replay can start, the second is whether the
-	// gate is moving at all.
+	// TrimFloor is the floor the fleet has published — everything below it
+	// may already have been removed, by the last tick or any earlier one
+	// at this generation, and it never moves down. TrimTo is what THIS
+	// tick concluded may be removed: zero while blocked, and lower than
+	// the floor whenever the lowest counted node is. Two numbers because
+	// they answer different questions: the first is where a joining node's
+	// replay can start, the second is whether the gate is moving at all.
 	TrimFloor uint64 `json:"trim_floor"`
 	TrimTo    uint64 `json:"trim_to"`
 

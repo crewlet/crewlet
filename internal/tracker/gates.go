@@ -80,11 +80,13 @@ type Fence struct {
 	db     *store.DB
 	nodeID string
 
-	// Floor is the published trim floor, and Cursor this node's own
-	// committed position. Both are needed by the one check that costs a
-	// round trip.
-	Floor  func(ctx context.Context) (uint64, error)
-	Cursor func() statelog.Position
+	// Floor is the fleet's published trim floor and First the log's own
+	// first surviving sequence: the two bounds the one check that costs a
+	// round trip takes the higher of — see [Fence.ClearForZero]. The cursor
+	// it compares them against is the caller's, passed per call, because
+	// it has to be the position the write's own snapshot was taken at.
+	Floor func(ctx context.Context) (uint64, error)
+	First func(ctx context.Context) (uint64, error)
 }
 
 // NewFence builds the write fence for one node.
@@ -134,14 +136,24 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 // been TRIMMED away beneath this node. In the second case publishing at zero
 // overwrites a mutation nothing can recover.
 //
-// What makes the first case safe is the floor: if the published trim floor is
-// at or below this node's own cursor, then nothing was trimmed that this node
+// What makes the first case safe is that nothing was removed which this node
 // has not already consumed, so an absent anchor really does mean an empty
 // subject. That reading has to be FRESH — a cached floor is a floor that moved
 // — and A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is a deliberate
 // departure from the fail-open rule the delivery claim uses: failing open
 // there is a duplicate delivery and is recoverable, failing open here is a
 // lost update and is not.
+//
+// # Why it asks of TWO bounds, and takes the higher
+//
+// "Nothing was removed below this" has two witnesses and neither is enough
+// alone. The published floor is written before the purge it licenses, so it
+// covers a purge in flight and one the stream's own answer has not caught up
+// with. The stream's first sequence covers what the floor cannot see — a
+// floor published at another generation reads as zero here. Asked of the
+// floor alone, this check cleared a node below the log whenever the floor
+// said zero; asked of the stream alone, it cleared one a purge was about to
+// pass. The floor theorem in [statelog] is stated over the higher of the two.
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
 	evicted, err := f.Evicted(ctx)
 	if err != nil {
@@ -152,10 +164,11 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 			"expectation of zero would be dropped by every peer: %w",
 			statelog.ErrConflict)
 	}
-	if f.Floor == nil {
-		return fmt.Errorf("tracker: no published trim floor is readable, so " +
-			"this node cannot establish that an absent anchor means an empty " +
-			"subject rather than a record trimmed beneath it")
+	if f.Floor == nil || f.First == nil {
+		return fmt.Errorf("tracker: this fence reads no published trim floor or " +
+			"no first sequence of the log, so this node cannot establish that " +
+			"an absent anchor means an empty subject rather than a record " +
+			"trimmed beneath it")
 	}
 	floor, err := f.Floor(ctx)
 	if err != nil {
@@ -163,17 +176,26 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 			"that cannot be read is not a floor that is low, and publishing at "+
 			"zero on the guess is a lost update nothing recovers", err)
 	}
-	// THE FLOOR IS THE FIRST SEQUENCE THE TRIM HAS NOT LICENSED REMOVING,
-	// so a node that has consumed through the one before it has consumed
-	// everything that may be gone. Compared against the cursor itself the
-	// check refused a node exactly at the floor, which is the ordinary
-	// state of every node the instant the trim advances to it — and
-	// [statelog.Replayable] is now the one place that boundary is written.
-	if !statelog.Replayable(cursor.Seq, floor) {
-		return fmt.Errorf("tracker: the trim may have removed everything below %d "+
-			"and this node has consumed through %d, so an absent anchor may be a "+
-			"record trimmed beneath it rather than a subject that was never "+
-			"written: %w", floor, cursor.Seq, statelog.ErrUnavailable)
+	first, err := f.First(ctx)
+	if err != nil {
+		return fmt.Errorf("tracker: read the log's first surviving sequence: %w — "+
+			"a log that cannot be read is not one that has lost nothing, and "+
+			"publishing at zero on the guess is a lost update nothing recovers", err)
+	}
+	// EVERYTHING BELOW THE HIGHER OF THE TWO MAY BE GONE, so a node that
+	// has consumed through the one before it has consumed everything that
+	// may be gone. Compared against the cursor itself the check refused a
+	// node ONE BELOW that bound although it holds everything it needs —
+	// which is where a node that has just adopted a snapshot sits, since
+	// the snapshot term licenses trimming through the artefact's own
+	// position — and [statelog.Replayable] is the one place that boundary
+	// is written.
+	if held := max(floor, first); !statelog.Replayable(cursor.Seq, held) {
+		return fmt.Errorf("tracker: records below %d may have been removed from "+
+			"the log (published floor %d, first surviving sequence %d) and this "+
+			"node has consumed through %d, so an absent anchor may be a record "+
+			"trimmed beneath it rather than a subject that was never written: %w",
+			held, floor, first, cursor.Seq, statelog.ErrUnavailable)
 	}
 	return nil
 }

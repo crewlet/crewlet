@@ -87,7 +87,11 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			d.StreamReadable = true
 		}
 		if floor, published := floors[name]; published {
-			d.TrimFloor = floor.TrimTo
+			// THE FLOOR AND THE CONCLUSION ARE TWO FIELDS OF THE ROW,
+			// and the report carries both: filled from one, the two
+			// figures were always equal and a blocked domain reported
+			// a floor of zero over a log a purge had already emptied.
+			d.TrimFloor = floor.Floor
 			d.BlockedSince = floor.BlockedSince
 			d.Decision = decisionOf(floor)
 		}

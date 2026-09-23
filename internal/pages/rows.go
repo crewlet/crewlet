@@ -103,12 +103,13 @@ type Fence struct {
 	db     *store.DB
 	nodeID string
 
-	// Cursor is this node's committed position, and Floor the published
-	// trim floor. Both are set by the engine after the runner exists,
-	// because a fence built before its applier would compare against a
-	// position that does not move.
-	Cursor func() statelog.Position
-	Floor  func(ctx context.Context) (uint64, error)
+	// Floor is the fleet's published trim floor and First the log's own
+	// first surviving sequence — the two bounds [Fence.ClearForZero] takes
+	// the higher of, for the reason the tracker's fence gives. The cursor
+	// they are compared against is passed per call, because it has to be
+	// the position the write's own snapshot was taken at.
+	Floor func(ctx context.Context) (uint64, error)
+	First func(ctx context.Context) (uint64, error)
 }
 
 // NewFence builds it.
@@ -170,10 +171,11 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 			"expectation of zero would be dropped by every peer: %w",
 			statelog.ErrConflict)
 	}
-	if f.Floor == nil {
-		return fmt.Errorf("pages: no published trim floor is readable, so this " +
-			"node cannot establish that an absent anchor means an unclaimed " +
-			"address rather than a claim trimmed beneath it")
+	if f.Floor == nil || f.First == nil {
+		return fmt.Errorf("pages: this fence reads no published trim floor or " +
+			"no first sequence of the log, so this node cannot establish that " +
+			"an absent anchor means an unclaimed address rather than a claim " +
+			"trimmed beneath it")
 	}
 	floor, err := f.Floor(ctx)
 	if err != nil {
@@ -181,16 +183,23 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 			"that cannot be read is not a floor that is low, and publishing at "+
 			"zero on the guess is a lost update nothing recovers", err)
 	}
-	// THE FLOOR IS THE FIRST SEQUENCE THE TRIM HAS NOT LICENSED REMOVING,
-	// so a node that has consumed through the one before it has consumed
-	// everything that may be gone — see the tracker's fence, which makes
-	// the same comparison for the same reason, through the same
+	first, err := f.First(ctx)
+	if err != nil {
+		return fmt.Errorf("pages: read the log's first surviving sequence: %w — "+
+			"a log that cannot be read is not one that has lost nothing, and "+
+			"publishing at zero on the guess is a lost update nothing recovers", err)
+	}
+	// EVERYTHING BELOW THE HIGHER OF THE TWO MAY BE GONE, so a node that
+	// has consumed through the one before it has consumed everything that
+	// may be gone — see the tracker's fence, which makes the same
+	// comparison for the same reason, through the same
 	// [statelog.Replayable].
-	if !statelog.Replayable(cursor.Seq, floor) {
-		return fmt.Errorf("pages: the trim may have removed everything below %d "+
-			"and this node has consumed through %d, so an absent anchor may be a "+
-			"claim trimmed beneath it rather than an address that was never "+
-			"taken: %w", floor, cursor.Seq, statelog.ErrUnavailable)
+	if held := max(floor, first); !statelog.Replayable(cursor.Seq, held) {
+		return fmt.Errorf("pages: records below %d may have been removed from "+
+			"the log (published floor %d, first surviving sequence %d) and this "+
+			"node has consumed through %d, so an absent anchor may be a claim "+
+			"trimmed beneath it rather than an address that was never taken: %w",
+			held, floor, first, cursor.Seq, statelog.ErrUnavailable)
 	}
 	return nil
 }

@@ -2202,6 +2202,7 @@ is three per-node facts attributed to a fleet.
       "max_bytes": 4294967296,
       "headroom_fraction": 0.984,
       "trim_floor": 918100000,
+      "trim_to": 0,
       "blocked_by": "backup_floor",
       "blocked_since": "2031-03-30T02:00:00Z",
       "prose": "Nothing is being trimmed on tracker: ...",
@@ -2215,6 +2216,15 @@ is three per-node facts attributed to a fleet.
   "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "..."}]
 }
 ```
+
+`trim_floor` and `trim_to` are two different numbers, and a blocked domain is
+where they part. `trim_floor` is the floor the fleet has published: everything
+below it may already have been deleted, it is written before the delete it
+licenses, and it never moves down within a generation — so a blocked domain
+keeps the floor its last advance reached. `trim_to` is what the last tick
+itself concluded: zero while blocked, and below the floor whenever the lowest
+counted node is. The first is what a node must hold to replay; the second says
+whether the trim is moving. See [Retention](../guides/retention.md#the-trim-floor).
 
 A term's `state` is one of four, and `seq` is an answer in exactly one of them:
 `ok` carries the sequence the term permits, `unknown` is a term that could not

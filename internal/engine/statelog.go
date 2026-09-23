@@ -688,8 +688,8 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
 		fence := tracker.NewFence(s.db, s.nodeID)
-		fence.Cursor = runner.Committed
 		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
+		fence.First = firstSeqOf(appendTo)
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, tracker.NewGates(s.db)
 		evicted = fence.Evicted
 	case search.Domain{}.Name():
@@ -708,8 +708,8 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
 		fence := pages.NewFence(s.db, s.nodeID)
-		fence.Cursor = runner.Committed
 		fence.Floor = s.trimFloor(domain.Name(), func() uint32 { return runner.Committed().Generation })
+		fence.First = firstSeqOf(appendTo)
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.db)
 		evicted = fence.Evicted
 	default:
@@ -801,11 +801,11 @@ func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainL
 	return reader, nil
 }
 
-// trimFloor is the published floor for one domain, as the write fence, the
-// readiness gate and the join read it: the first sequence the trim has NOT
-// licensed removing, at the generation the caller is on.
+// trimFloor is the published floor for one domain, at the generation the caller
+// is on: the first sequence every node must hold, because everything below it
+// may have been removed.
 //
-// # It is the trim's own decision, and it used to be something else
+// # It is the trim's own record, and it used to be something else — twice
 //
 // The value here was the minimum over every node's published position —
 // including this node's own row. A minimum that includes the reader can never
@@ -816,9 +816,32 @@ func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainL
 // node's own position. The floor theorem's second clause — F <= C+1 verified
 // within the call — was verified against a number that could not fail it.
 //
-// The trim publishes what it concluded on every tick, blocked or not, and
-// that record is the floor: [coord.TrimFloor.TrimTo], the exclusive sequence
-// it may remove up to, which is exactly the first sequence a node has to hold.
+// Its replacement read [coord.TrimFloor.TrimTo], the last tick's conclusion,
+// and that is the same flaw by a second route. The conclusion is zero on every
+// blocked tick, and whenever a node below the log is counted — readmitted,
+// restored from an old backup, up on its own history because nobody could
+// donate — it IS that node's position, since the applied term is a minimum
+// that includes it. So the fence cleared exactly the node it exists to refuse.
+// What is read now is [coord.TrimFloor.Floor], which never moves down within a
+// generation and is written before the purge it licenses.
+//
+// # Which bound each reader takes
+//
+// Every reader that must SURVIVE THE NEXT TRIM takes the higher of this and
+// the stream's own first sequence: the write fences, readiness
+// ([stateLog.health] and [statelog.Health.Established]), what the join asks an
+// artefact to cover, and the re-check after a transfer. The floor covers
+// every purge the trim has licensed, including one still in flight; the
+// stream covers what this number cannot see — a floor published at another
+// generation, which [floorFor] reads as zero.
+//
+// The two readers that ask whether a replay is POSSIBLE — the join's behind
+// test and the heartbeat's rejoin request — take the stream's first sequence
+// alone, because only what IS gone makes a replay impossible: a node between
+// the stream's first sequence and this floor can still read every record it
+// lacks, and sending it to adopt a snapshot would halt its appliers to fetch
+// what it could simply replay.
+//
 // An unreadable register is UNKNOWN and refuses; an absent record is a trim
 // that has never run and therefore licensed nothing.
 //
@@ -842,13 +865,15 @@ func (s *stateLog) trimFloor(domain string, generation func() uint32) func(conte
 //     this log, so nothing has been licensed for removal. Zero.
 //   - A record at a LOWER generation: it names a dead number space, and in
 //     this one the trim has concluded nothing yet. Zero — and the stream's
-//     own first sequence, which every reader takes as a maximum beside this,
-//     covers a purge that raced a reanchor. Reading it as unknown instead
-//     would refuse every write at an expectation of zero for a whole trim
-//     interval after every reanchor.
+//     own first sequence, which every reader that must survive the next trim
+//     takes as a maximum beside this (see [stateLog.trimFloor]), covers a
+//     purge that raced a reanchor. Reading it as unknown instead would refuse
+//     every write at an expectation of zero for a whole trim interval after
+//     every reanchor.
 //   - A record at a HIGHER generation: this node is the one on the dead
 //     number space. Unknown, which refuses.
-//   - Otherwise TrimTo, which is zero while the trim is blocked.
+//   - Otherwise the record's Floor — never its TrimTo, which is zero while
+//     the trim is blocked and falls with the counted minimum.
 func floorFor(floors []coord.TrimFloor, domain string, generation uint32) (uint64, error) {
 	for _, f := range floors {
 		if f.Domain != domain {
@@ -863,9 +888,28 @@ func floorFor(floors []coord.TrimFloor, domain string, generation uint32) (uint6
 				"space the fleet has left, so nothing it holds can be compared "+
 				"against the floor", domain, f.Generation, generation)
 		}
-		return f.TrimTo, nil
+		return f.Floor, nil
 	}
 	return 0, nil
+}
+
+// firstSeqOf is a domain log's own first surviving sequence, as the write
+// fences read it beside [stateLog.trimFloor].
+//
+// IT MAY ONLY RAISE THE FLOOR, for the reason [statelog.Health.FirstSeq]
+// gives: a stale answer is LOWER than the truth, never higher. That is why the
+// published floor is written before the purge — it is what covers a purge the
+// stream's own answer has not caught up with — and why this is still read: it
+// covers what the floor cannot see. An unreadable stream is an error the fence
+// refuses on, for the reason every unreadable floor is.
+func firstSeqOf(l *jetstream.DomainLog) func(context.Context) (uint64, error) {
+	return func(ctx context.Context) (uint64, error) {
+		first, _, err := l.Bounds(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("engine: read the log's first surviving sequence: %w", err)
+		}
+		return first, nil
+	}
 }
 
 // Domain answers one running domain by name, or nil.
@@ -1079,11 +1123,11 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	// construction rather than by agreement: [statelog.Replayable] is the
 	// one predicate [statelog.Health.Established], the join, the
 	// heartbeat, a backup and the write fences all call. What each site
-	// still chooses is the BOUND it asks of — here, like Established and
-	// the re-check after a transfer, the higher of the floor and the
-	// stream's first sequence; the join and the heartbeat ask of `first`
-	// alone, for the reason [stateLog.replayable] gives, and the write
-	// fences of the published floor alone.
+	// still chooses is the BOUND it asks of — here, like Established, the
+	// write fences and the re-check after a transfer, the higher of the
+	// floor and the stream's first sequence; the join's behind test and the
+	// heartbeat ask of `first` alone, for the reason [stateLog.trimFloor]
+	// gives.
 	if !statelog.Replayable(at.Seq, max(floor, first)) {
 		health.Floor.State = statelog.FloorBelow
 	}
@@ -1460,13 +1504,12 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 
 		// WHETHER THIS NODE IS BEHIND is a different question, and it
 		// is asked of `first` ALONE. The floor says what MAY be
-		// deleted; only the stream says what IS. Testing against the
-		// floor would make a single-node company adopt from itself:
-		// the floor is a minimum over the fleet's published positions,
-		// which on one node IS that node's own — so every moment its
-		// published row ran ahead of its checkpoint would read as a
-		// node below the floor, and the boot would spend the offer
-		// window asking a fleet of one for a snapshot of itself.
+		// deleted; only the stream says what IS. The floor is written
+		// before the purge it licenses and a purge can fail after it,
+		// so a node between the two can still replay every record it
+		// lacks — and judging it behind would spend the offer window
+		// asking the fleet for a snapshot of records it could simply
+		// read, which on a node alone is a snapshot of itself.
 		//
 		// `first` is the first sequence the stream still HOLDS, and it
 		// has two zero cases that are easy to confuse: a stream nobody
@@ -2173,7 +2216,7 @@ func newestSnapshot(dir string) (statelog.Manifest, bool) {
 //
 // # What reads it, and what an absent row costs
 //
-// The register is not telemetry. Four things read it and each one is wrong
+// The register is not telemetry. Three things read it and each one is wrong
 // without this node's row:
 //
 //   - THE TRIM takes a minimum across every counted node's position to decide
@@ -2181,10 +2224,6 @@ func newestSnapshot(dir string) (statelog.Manifest, bool) {
 //     is a node the trim cannot see, so the log is trimmed past records this
 //     node still needs — and the node discovers that by falling below the
 //     floor and having to adopt a snapshot.
-//   - THE WRITE FENCE reads the published floor to decide whether an
-//     expectation of zero is safe on a quiet subject. With nobody publishing,
-//     the floor is zero for ever, which is the conservative direction — but
-//     it is conservative by accident rather than by design.
 //   - THE SNAPSHOT GATE counts the register to decide whether there is
 //     anybody to donate to. An empty register reads as a fleet of one, so no
 //     node ever takes a snapshot and no node can ever donate one. That is not
@@ -2195,6 +2234,13 @@ func newestSnapshot(dir string) (statelog.Manifest, bool) {
 //     removing anything, so a row that carries a position but no artefact
 //     blocks the trim of every domain for the life of the deployment while
 //     every other surface reports a healthy fleet.
+//
+// THE WRITE FENCE DOES NOT READ IT, and must not. It reads the floor the trim
+// publishes and the stream's own first sequence — never a number derived from
+// rows that include its own, because a minimum that includes the reader can
+// never refuse it. That is also what makes the first bullet survivable: a
+// node the trim passed because its row went missing is refused at the fence,
+// and sent to adopt by this loop's own below-the-log check.
 //
 // # Why it is a heartbeat rather than a write per commit
 //

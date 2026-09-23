@@ -28,9 +28,10 @@ import (
 // counts has committed past a record — and nothing else needs it — the record
 // can go. [statelog.Trim] is the arithmetic that decides how far, from six
 // terms that each move the point DOWN; this file is what reads those terms
-// from a live fleet, applies the answer to the broker, and publishes what it
-// concluded so a node that is not holding the duty can still say why the log
-// is not shrinking.
+// from a live fleet, publishes what it concluded — so a node that is not
+// holding the duty can still say why the log is not shrinking, and so every
+// write fence knows what may be gone — and only THEN applies the answer to the
+// broker, for the reason [retention.apply] gives.
 //
 // # Why nothing here re-decides
 //
@@ -381,15 +382,86 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 
 	decision := statelog.Trim(in.Terms())
 	r.gauges(name, stats, decision, shared)
-	if !decision.Blocked() && decision.To > stats.FirstSeq {
-		if err := running.log.Purge(ctx, decision.To); err != nil {
+	return r.apply(ctx, running.log, name, generation, decision, stats.FirstSeq, shared)
+}
+
+// apply carries out what one tick decided: it publishes the conclusion, and
+// then it purges.
+//
+// THE FLOOR IS PUBLISHED BEFORE THE PURGE IT LICENSES, and a floor that
+// could not be published licenses nothing.
+//
+// The write fence clears an expectation of zero against this floor —
+// [statelog]'s floor theorem, clause (ii) — and the proof needs every record
+// ever removed to sit below the floor a writer reads. Purged first, the two
+// steps leave a window in which the log has lost records the published floor
+// still says are held, and a node the purge just left behind is cleared
+// against the old number. Nor is that window one tick wide: a purge followed
+// by a publish that FAILS leaves it open until some later tick's publish
+// succeeds, for as long as the register refuses writes.
+//
+// The opposite failure — published, then the purge fails or this process dies
+// between the two — is the safe one. Readers treat records the log still holds
+// as possibly gone, which refuses only a node below what this tick licensed; no
+// node the tick counted is, because the applied term put it at or under every
+// counted position, and one it did not count catches up by replay, since the
+// records are still there. The next tick purges again.
+func (r *retention) apply(ctx context.Context, stream *jetstream.DomainLog, name string,
+	generation uint32, decision statelog.TrimDecision, first uint64, shared fleetInputs) error {
+
+	if err := r.publish(ctx, name, generation, decision, first, shared); err != nil {
+		return err
+	}
+	if !decision.Blocked() && decision.To > first {
+		if err := stream.Purge(ctx, decision.To); err != nil {
 			return fmt.Errorf("purge below %d: %w", decision.To, err)
 		}
 		log.InfoContext(ctx, "retention_trimmed", "domain", name,
-			"trim_to", decision.To, "was", stats.FirstSeq,
-			"generation", generation)
+			"trim_to", decision.To, "was", first, "generation", generation)
 	}
-	return r.publish(ctx, name, generation, decision, shared)
+	return nil
+}
+
+// nextFloor is the [coord.TrimFloor.Floor] a tick publishes: the previous
+// row's floor carried forward, raised by what this tick licenses removing and
+// by what the stream has already lost.
+//
+// # Why it never moves down
+//
+// A tick's own conclusion does. It is zero on every blocked tick, and it falls
+// to the lowest counted node's position whenever that node is lower than the
+// last tick's minimum — a readmitted node, one restored from an old backup,
+// one that came up on its own history because nobody could donate. Records an
+// earlier tick licensed removing are gone all the same, so a floor that
+// followed the conclusion down would tell exactly that node it holds
+// everything that may be missing: a minimum that includes a node can never
+// exceed it. That is the vacuous comparand [stateLog.trimFloor] once was,
+// arriving by a second route.
+//
+// # Why a row from a HIGHER generation refuses
+//
+// This node's positions and this tick's conclusion name a sequence space the
+// fleet has left, and publishing over that row would put a floor nobody on the
+// live generation can read where theirs was — the reader's own rule in
+// [floorFor], applied to the writer. Refusing publishes nothing, and so purges
+// nothing: the purge is licensed only by a floor that was published.
+//
+// A row from a LOWER generation is not carried either: its sequences name a
+// dead number space, so this generation's floor starts from what this tick
+// licenses and what the stream still holds.
+func nextFloor(previous coord.TrimFloor, had bool, generation uint32, to, first uint64) (uint64, error) {
+	floor := max(to, first)
+	switch {
+	case !had || previous.Generation < generation:
+	case previous.Generation > generation:
+		return 0, fmt.Errorf("the published floor for %s is at generation %d and "+
+			"this node is on %d — its positions name a sequence space the fleet "+
+			"has left, so it neither publishes over that floor nor purges",
+			previous.Domain, previous.Generation, generation)
+	default:
+		floor = max(floor, previous.Floor)
+	}
+	return floor, nil
 }
 
 // publish writes what this tick concluded.
@@ -398,14 +470,21 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 // and it is carried through the register rather than in memory for exactly
 // that reason: the duty moves, and a value held by the holder would reset on
 // every flap — so the twenty-four-hour backup condition would never be
-// reached, which is the bug the field exists to close.
+// reached, which is the bug the field exists to close. The floor is the other,
+// and it is carried for the reason [nextFloor] gives.
 func (r *retention) publish(ctx context.Context, name string, generation uint32,
-	decision statelog.TrimDecision, shared fleetInputs) error {
+	decision statelog.TrimDecision, first uint64, shared fleetInputs) error {
 
+	previous, had := shared.previous[name]
+	floor, err := nextFloor(previous, had, generation, decision.To, first)
+	if err != nil {
+		return err
+	}
 	row := coord.TrimFloor{
 		Domain:     name,
 		Generation: generation,
 		TrimTo:     decision.To,
+		Floor:      floor,
 		BlockedBy:  string(decision.BlockedBy),
 		At:         shared.at,
 		By:         r.nodeID,
@@ -416,7 +495,6 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 			Absent: t.Absent, Detail: t.Detail,
 		})
 	}
-	previous, had := shared.previous[name]
 	switch {
 	case !decision.Blocked():
 		// NOT BLOCKED IS NOT "blocked since now": the field is only

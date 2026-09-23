@@ -27,6 +27,24 @@ import (
 // reason: the node that did the work is the only one that can say what it
 // found.
 //
+// # Two sequences, because they answer two different questions
+//
+// TrimTo is what ONE TICK concluded, and it moves in both directions: it is
+// zero on every blocked tick, and it falls whenever the lowest counted node
+// is lower than it was — a readmitted node, a node restored from an old
+// backup, a node that came up on its own history because nobody could donate.
+// That is the right figure for "is the trim moving", and it is the wrong one
+// for "what may already be gone", because a record an EARLIER tick licensed
+// removing does not come back when a later tick concludes less.
+//
+// Floor is that second answer: everything below it may have been removed. It
+// never moves down within a generation, and the trim writes it BEFORE the
+// purge it licenses — so at every instant, including while a purge is in
+// flight and after one that was delayed or retried, no record the trim has
+// ever removed or may yet remove sits at or above it. A floor derived from
+// the counted minimum alone would fail that for exactly the nodes a write
+// fence exists to refuse: a minimum that includes a node can never exceed it.
+//
 // # It has no TTL, for the register's own reason
 //
 // This row lives in the positions bucket, which is the one bucket in the
@@ -74,9 +92,24 @@ type TrimFloor struct {
 	// read as unknown rather than as a low floor.
 	Generation uint32 `json:"generation"`
 
-	// TrimTo is the exclusive sequence the tick concluded may be removed
-	// up to. Zero while blocked.
+	// TrimTo is the exclusive sequence THIS tick concluded may be removed
+	// up to. Zero while blocked, and lower than the previous tick's
+	// whenever the counted minimum fell — which is why no reader that
+	// asks "what may be gone" reads it.
 	TrimTo uint64 `json:"trim_to"`
+
+	// Floor is the first sequence every node must hold: every record below
+	// it may have been removed, by this tick or any earlier one at this
+	// generation. It is never lower than TrimTo, never lower than the
+	// previous row's Floor at the same generation, and never lower than
+	// the stream's own first sequence as the tick read it.
+	//
+	// WRITTEN BEFORE THE PURGE IT LICENSES, which is what makes it an
+	// upper bound on what is gone rather than a report of it: published
+	// after, it would trail a purge by however long the write took to
+	// succeed, and a write fence reading it inside that gap clears a node
+	// the purge has just left below the log.
+	Floor uint64 `json:"floor"`
 
 	// BlockedBy names the term that came lowest and permitted nothing, or
 	// that could not be read. Empty while the trim is advancing.
@@ -141,6 +174,12 @@ func (f TrimFloor) Validate() error {
 			"and names no blocking term: a tick that removed nothing did so for "+
 			"a reason, and an empty `blocked_by` is read as a healthy fleet",
 			f.Domain)
+	}
+	if f.Floor < f.TrimTo {
+		return fmt.Errorf("coord: the trim floor for %s licenses removing up to "+
+			"%d and tells every reader it need only hold from %d — the purge "+
+			"this row licenses would leave a node the write fence clears below "+
+			"the log", f.Domain, f.TrimTo, f.Floor)
 	}
 	return nil
 }
