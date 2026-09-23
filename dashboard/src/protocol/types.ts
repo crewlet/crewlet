@@ -1250,7 +1250,7 @@ export interface RetentionDomain {
   headroom_fraction?: number;
   /** What the log took in over the trailing day — the rate `log_ceiling_short`
    *  holds the ceiling against `min_age` of. ABSENT where nothing was measured
-   *  (a compacted log, one younger than a day, a node whose trim has not
+   *  (a compacted log, one in its first two days, a node whose trim has not
    *  ticked), and `0` only for a log that took in nothing: the two are
    *  opposite facts and must never share a rendering. */
   bytes_per_day?: number;

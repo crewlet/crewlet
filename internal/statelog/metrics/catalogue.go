@@ -362,7 +362,10 @@ func Catalogue() []Instrument {
 				"`min_age` of this, because the trim never removes a record " +
 				"younger than that — a log whose ceiling is smaller fills with " +
 				"every trim term satisfied, which is what `log_ceiling_short` " +
-				"fires on. Absent for a compacted log and one younger than a day.",
+				"fires on. Absent for a compacted log and for one in its first " +
+				"two days, whose trailing day would contain the day it was " +
+				"imported into; a log that could not be read keeps its last " +
+				"measurement, as the report does.",
 		},
 		{
 			Name: StatelogLogMaxBytes, Kind: KindGauge, Unit: UnitBytes,
@@ -466,7 +469,9 @@ func Catalogue() []Instrument {
 			Attributes: nil,
 			Shows: "The fraction of sources carrying a current vector. It is " +
 				"how a stalled embedding backlog is reported, since it never " +
-				"drops a seat.",
+				"drops a seat. Absent where the company configures no " +
+				"embeddings and while the corpus cannot be measured — an " +
+				"unreadable corpus is neither covered nor uncovered.",
 		},
 
 		// ---- the change feed ------------------------------------------

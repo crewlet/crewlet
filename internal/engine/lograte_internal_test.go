@@ -83,27 +83,128 @@ func TestALogThatTookInNothingMeasuresZero(t *testing.T) {
 	}
 }
 
-// A LOG YOUNGER THAN THE DAY MEASURES NOTHING, which the alarm reads as "has
-// never measured" and is silent on.
+// A LOG IN ITS FIRST TWO DAYS MEASURES NOTHING, which the alarm reads as "has
+// never measured" and is silent on — and the day it does measure never
+// contains the day it was created.
 //
-// Its first hours are the ones a company imports into, and a day extrapolated
-// from an import is a ceiling alarm on day one for a log that settles an
-// order of magnitude lower. A log re-anchored under a running fleet is the
-// same shape and gets the same answer.
-func TestALogYoungerThanTheDayMeasuresNothing(t *testing.T) {
+// Its first day is the one a company imports into, and a day extrapolated from
+// an import is a ceiling alarm for a log that settles an order of magnitude
+// lower. The guard used to ask only that the log be a day old, which is exactly
+// when the trailing day IS the first day: a log created a day and ten minutes
+// ago with ten thousand kilobyte records imported in its first two hours and a
+// hundred written since measured about nine mebibytes a day — ninety times the
+// intake it settles at, which is what a ceiling sized for that intake fires
+// log_ceiling_short on, on every node at once.
+// The control is the same company a day later, whose trailing day lies wholly
+// after the import and measures the steady intake it has.
+func TestALogInItsFirstTwoDaysMeasuresNothing(t *testing.T) {
 	t.Parallel()
-	stats, p := hourlyLog(10, 0)
-	stats.CreatedAt = rateNow.Add(-12 * time.Hour)
+	stats, p := importedLog(rateNow.Add(-(24*time.Hour + 10*time.Minute)))
 	got, err := bytesPerDayOf(stats, rateNow, p.at)
 	if err != nil || got != nil {
-		t.Errorf("a twelve-hour-old log measured %v (err %v), want nothing",
-			deref(got), err)
+		t.Errorf("a log a day and ten minutes old, its import inside the day "+
+			"behind it, measured %v (err %v), want nothing", deref(got), err)
 	}
+
+	// THE CONTROL: the same shape two days on, measured over a day that
+	// holds none of the import.
+	stats, p = importedLog(rateNow.Add(-72 * time.Hour))
+	got, err = bytesPerDayOf(stats, rateNow, p.at)
+	if err != nil || got == nil {
+		t.Fatalf("a settled log measured %v (err %v)", deref(got), err)
+	}
+	if *got > 200*1024 {
+		t.Errorf("a settled log measured %d bytes a day, want its steady intake "+
+			"of about a hundred kilobyte records rather than the import", *got)
+	}
+
 	// AND A STREAM THAT DID NOT SAY WHEN IT WAS CREATED is not one that
 	// is old enough.
 	stats.CreatedAt = time.Time{}
 	if got, _ := bytesPerDayOf(stats, rateNow, p.at); got != nil {
 		t.Errorf("a stream with no creation instant measured %v", *got)
+	}
+}
+
+// importedLog is a strict log created at created: ten thousand kilobyte
+// records imported over its first two hours, then a hundred a day, evenly, up
+// to rateNow.
+func importedLog(created time.Time) (jetstream.LogStats, *probe) {
+	stored := map[uint64]time.Time{}
+	seq := uint64(0)
+	for i := range 10_000 {
+		seq++
+		stored[seq] = created.Add(time.Duration(i) * (2 * time.Hour) / 10_000)
+	}
+	steady := created.Add(2 * time.Hour)
+	for at := steady; at.Before(rateNow); at = at.Add(24 * time.Hour / 100) {
+		seq++
+		stored[seq] = at
+	}
+	return jetstream.LogStats{
+		FirstSeq: 1, LastSeq: seq, Messages: seq, Bytes: seq * 1024,
+		MaxBytes: 1 << 30, CreatedAt: created,
+	}, &probe{stored: stored}
+}
+
+// A GAUGE FOLLOWS A MEASUREMENT THAT BECAME UNKNOWN.
+//
+// A log re-anchored under a running fleet starts its first two days again, so
+// its intake is not measured and the report, the CLI and the screen all show
+// it absent. The gauge used to keep the old stream's figure, which is one
+// evaluation giving two answers; it is withdrawn now. A log that merely could
+// not be read keeps its last measurement everywhere, the gauge included.
+func TestAGaugeFollowsAMeasurementThatBecameUnknown(t *testing.T) {
+	t.Parallel()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	r := &retention{metrics: rec}
+	stats, p := hourlyLog(100, 0)
+	iam := &fakeRateLog{stats: stats, p: p}
+	logs := []measuredLog{{domain: "iam", log: iam, replay: statelog.ReplayStrict}}
+	r.recordRates(t.Context(), rateNow, logs)
+	if got := gaugeValue(t, rec, "iam"); got != 25*1024 {
+		t.Fatalf("precondition: the gauge reads %v", got)
+	}
+
+	iam.stats.CreatedAt = rateNow.Add(-time.Hour)
+	r.recordRates(t.Context(), rateNow, logs)
+	if got := r.rateOf("iam"); got != nil {
+		t.Fatalf("a re-anchored log still holds a rate of %d", *got)
+	}
+	for _, s := range rec.Read() {
+		if s.Name == metrics.StatelogLogBytesPerDay && s.Attrs["domain"] == "iam" {
+			t.Errorf("the gauge still reads %v for a log the report shows as "+
+				"unmeasured", s.Value)
+		}
+	}
+}
+
+// AND THE COVERAGE GAUGE, on the same terms: a scan that failed leaves the
+// report with no coverage, so it leaves the collector with none either.
+func TestTheCoverageGaugeFollowsAScanThatFailed(t *testing.T) {
+	t.Parallel()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	var fail error
+	r := &retention{metrics: rec, coverage: func(context.Context) (float64, bool, error) {
+		return 0.97, true, fail
+	}}
+	r.measureCoverage(t.Context())
+	fail = errors.New("the corpus could not be scanned")
+	r.measureCoverage(t.Context())
+	if r.semanticCoverage() != nil {
+		t.Fatal("a failed scan left a coverage in the report")
+	}
+	for _, s := range rec.Read() {
+		if s.Name == metrics.TrackerVectorCoverage {
+			t.Errorf("the coverage gauge still reads %v after a scan that failed",
+				s.Value)
+		}
 	}
 }
 

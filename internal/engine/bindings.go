@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -30,8 +31,9 @@ import (
 //     the binding. It clears when this node's chart applier catches up.
 //
 // Both are LEGAL — neither is corruption — and both are reported: by `crewlet
-// iam check` and the Access screen, and, once one has outlived the race that
-// makes it, by the `iam_binding_dangling` alarm.
+// iam check` and `GET /iam/check` (`binding_dangling`, with the seat and which
+// residue it is), and, once one has outlived the race that makes it, by the
+// `iam_binding_dangling` alarm.
 //
 // # Why the rule is the REQUEST PATH's own table
 //
@@ -50,12 +52,26 @@ import (
 // Nothing records when a binding began to dangle: it began when THIS node
 // applied the later of a bind and a removal, which no record carries. So the
 // age the alarm compares against the stall grace is how long this node's own
-// evaluations have kept finding the residue — first sighting to latest — and
-// never a persistence nobody saw. The evaluations are the alarm table's own
-// tick, on every node (see [retention.tick]), which is what keeps the three
-// surfaces in step: the gauge, the log line and the screen all read the same
-// observation, so none of them can call a residue old that the others have not
-// seen persist.
+// observations have kept finding the residue — first sighting to latest — and
+// never a persistence nobody saw. The observations are the alarm table's own
+// heartbeat, every [statelog.AlarmInterval] on every node (see
+// [retention.heartbeat]), which is what lets the alarm fire at the stall grace
+// the design gives it rather than at the trim's quarter-hour, and what keeps
+// the three surfaces in step: the gauge, the log line and the screen all read
+// the same observation.
+//
+// # Why a heartbeat can afford it
+//
+// An observation reads nothing that has not moved. A residue is a function of
+// this node's identity rows and its chart rows and nothing else, and each has
+// an applier position that moves whenever a row does — so a beat on which
+// neither position moved re-reads nothing and extends what the last one found.
+// When one did move, the bindings are one read over the bound people rather
+// than a walk of the directory, and a binding is re-classified against the
+// chart only when it, or the chart, changed since it was last classified.
+// The chart moving is the rare case — an org-chart edit — and the identity
+// log moving is the common one, since every sign-in is a record on it: that
+// arm costs one indexed read and no chart read at all.
 
 // BindingResidue is one person whose seat binding this node's chart view does
 // not hold as a human seat.
@@ -83,10 +99,10 @@ func (r BindingResidue) key() string { return r.Person + "\x00" + r.Seat }
 
 // bindingProbeBudget bounds one person's seat lookup.
 //
-// TWO SECONDS, and it is a per-ROW budget on a walk that may cover the whole
-// directory — so the number is what one local SQL read on a busy node costs at
-// its worst rather than what a network call would. A lookup that cannot answer
-// inside it is the unknown arm, which both surfaces skip.
+// TWO SECONDS, and it is a per-ROW budget on a classification that may cover
+// every binding in the company — so the number is what one local SQL read on a
+// busy node costs at its worst rather than what a network call would. A lookup
+// that cannot answer inside it is the unknown arm, which both surfaces skip.
 const bindingProbeBudget = 2 * time.Second
 
 // errSeatUnknown is the unknown arm when the resolver has no read failure of
@@ -106,15 +122,15 @@ var errSeatUnknown = errors.New("engine: this node's org chart cannot say " +
 func (e *Engine) DanglingBinding(ctx context.Context, row iamdomain.PersonRow) (
 	BindingResidue, bool, error) {
 
-	return danglingBinding(ctx, SeatViewOf(e), row)
+	return danglingBinding(ctx, SeatViewOf(e), row.Binding())
 }
 
 // danglingBinding is the rule, over any chart view.
-func danglingBinding(ctx context.Context, chart session.Chart, row iamdomain.PersonRow) (
+func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatBinding) (
 	BindingResidue, bool, error) {
 
-	residue := BindingResidue{Person: row.ID, Login: row.Login, Seat: row.Seat}
-	if row.Seat == "" || row.Shredded {
+	residue := BindingResidue{Person: b.Person, Login: b.Login, Seat: b.Seat}
+	if b.Seat == "" || b.Shredded {
 		// NO BINDING, or a person a removal has already shredded: the
 		// directory keeps their row so the audit trail resolves, and a
 		// seat named on a row that can never act again binds nobody.
@@ -123,7 +139,7 @@ func danglingBinding(ctx context.Context, chart session.Chart, row iamdomain.Per
 	ctx, cancel := context.WithTimeout(ctx, bindingProbeBudget)
 	defer cancel()
 	binding := session.ResolveSeat(ctx, chart, session.PersonRow{
-		Found: true, Stage: row.Stage, Seat: row.Seat, SeatAt: row.SeatAt,
+		Found: true, Stage: b.Stage, Seat: b.Seat, SeatAt: b.SeatAt,
 	})
 	switch binding.Row {
 	case session.SeatRowGone:
@@ -142,60 +158,38 @@ func danglingBinding(ctx context.Context, chart session.Chart, row iamdomain.Per
 			cause = errSeatUnknown
 		}
 		return residue, false, fmt.Errorf("engine: resolve %q's seat %q: %s: %w",
-			row.ID, row.Seat, binding.Detail, cause)
+			b.Person, b.Seat, binding.Detail, cause)
 	}
 	return residue, false, nil
 }
 
-// peopleLister is the directory's read side, as narrowly as a walk needs it.
-type peopleLister interface {
-	People(ctx context.Context, q iamdomain.PeopleQuery) (iamdomain.PeoplePage, error)
+// bindingSource is the directory's read side, as narrowly as the watch needs
+// it: every binding in one read, and the position that read reflects.
+type bindingSource interface {
+	SeatBindings(ctx context.Context) ([]iamdomain.SeatBinding, error)
+	At() statelog.Position
 }
 
-// bindingSighting is what one walk of the directory found.
+// bindingSighting is what one classification of the bindings found.
 type bindingSighting struct {
-	// residues are the bindings that dangle, in directory order.
+	// residues are the bindings that dangle, in the order they were read.
 	residues []BindingResidue
 
-	// unknown are the residues' keys this walk could not classify. They
-	// are neither dangling nor clear, and the clock treats them as
+	// unknown are the residues' keys this classification could not settle.
+	// They are neither dangling nor clear, and the clock treats them as
 	// neither: a residue that was dangling before a chart stall is still
 	// dangling after it unless something said otherwise.
 	unknown map[string]bool
 }
 
-// sightBindings walks the whole directory once and classifies every binding.
-//
-// A FAILED PAGE FAILS THE WALK rather than yielding what the pages before it
-// found: a walk that stopped halfway would clear every residue in the second
-// half, and a clock reset by a read error is an alarm that can never age past
-// a flaky minute.
-func sightBindings(ctx context.Context, dir peopleLister, chart session.Chart) (
-	bindingSighting, error) {
-
-	out := bindingSighting{unknown: map[string]bool{}}
-	after := ""
-	for {
-		page, err := dir.People(ctx, iamdomain.PeopleQuery{
-			After: after, Limit: iamdomain.MaxPageSize,
-		})
-		if err != nil {
-			return bindingSighting{}, fmt.Errorf("engine: walk the directory: %w", err)
-		}
-		for _, row := range page.People {
-			residue, dangling, err := danglingBinding(ctx, chart, row)
-			switch {
-			case err != nil:
-				out.unknown[residue.key()] = true
-			case dangling:
-				out.residues = append(out.residues, residue)
-			}
-		}
-		if page.Next == "" {
-			return out, nil
-		}
-		after = page.Next
-	}
+// classified is one binding's last classification, and what it was taken
+// against — so an observation re-classifies a binding only when the binding or
+// the chart moved.
+type classified struct {
+	binding  iamdomain.SeatBinding
+	chartAt  uint64
+	residue  BindingResidue
+	dangling bool
 }
 
 // bindingWatch is how long each dangling binding has persisted on this node.
@@ -209,18 +203,28 @@ func sightBindings(ctx context.Context, dir peopleLister, chart session.Chart) (
 type bindingWatch struct {
 	// dir and chart are this node's directory and chart view. A nil dir
 	// is a node running no identity domain, which observes nothing.
-	dir   peopleLister
+	dir   bindingSource
 	chart session.Chart
 
 	mu sync.Mutex
-	// first is when each residue was first found, carried across walks
-	// that found it again or could not classify it.
+	// first is when each residue was first found, carried across
+	// observations that found it again or could not classify it.
 	first map[string]time.Time
-	// at, seen and known are the latest walk: when it ran, what it found
-	// and whether it could read the directory at all.
+	// at, seen and known are the latest observation: when it was taken,
+	// what dangled and whether any classification has ever succeeded.
 	at    time.Time
 	seen  []BindingResidue
 	known bool
+
+	// dirAt and chartAt are the two positions the latest classification
+	// was taken at, and unsettled marks one that could not classify
+	// every binding — which the next beat re-reads whether or not
+	// anything moved.
+	dirAt     statelog.Position
+	chartAt   uint64
+	unsettled bool
+	// classes is each binding's last classification, by person.
+	classes map[string]classified
 }
 
 // newBindingWatch is the watch over one engine, or nil on a node that runs no
@@ -232,42 +236,122 @@ func newBindingWatch(e *Engine) *bindingWatch {
 	if dir == nil {
 		return nil
 	}
-	return &bindingWatch{dir: dir, chart: SeatViewOf(e), first: map[string]time.Time{}}
+	return newWatchOver(dir, SeatViewOf(e))
 }
 
-// observe walks the directory once and records what it found at now.
+// newWatchOver is a watch over any directory and chart view.
+func newWatchOver(dir bindingSource, chart session.Chart) *bindingWatch {
+	return &bindingWatch{dir: dir, chart: chart, first: map[string]time.Time{},
+		classes: map[string]classified{}}
+}
+
+// observe takes one observation of this node's bindings at now.
+//
+// NOTHING MOVED IS NOTHING TO READ: when neither the identity applier nor the
+// chart applier has committed since the last classification, and that one
+// settled every binding, the residues are exactly what they were, and the
+// observation extends them to now. The positions are read BEFORE the bindings,
+// so they are a floor under what the read saw: a record landing between the
+// two is one the next beat re-reads for.
 func (w *bindingWatch) observe(ctx context.Context, now time.Time) {
 	if w == nil || w.dir == nil {
 		return
 	}
-	sighting, err := sightBindings(ctx, w.dir, w.chart)
-	if err != nil {
-		w.mu.Lock()
-		// UNREADABLE IS NOT CLEAR, and it is not "still dangling"
-		// either: the reading says nothing until a walk succeeds, and
-		// the clocks are KEPT, so a residue that outlives an outage is
-		// not made to wait out the grace again.
-		w.known = false
+	dirAt := w.dir.At()
+	chartAt, _, chartErr := w.chart.Position(ctx)
+	w.mu.Lock()
+	quiet := w.known && !w.unsettled && chartErr == nil &&
+		dirAt == w.dirAt && chartAt == w.chartAt
+	if quiet {
+		w.at = now
 		w.mu.Unlock()
+		return
+	}
+	previous := w.classes
+	w.mu.Unlock()
+
+	bindings, err := w.dir.SeatBindings(ctx)
+	if err != nil {
+		// UNREADABLE IS NOT CLEAR, and it is not "still dangling" either:
+		// the observation is not taken at all, so a firing alarm stays up
+		// on the reading it fired on and a residue that has not fired
+		// does not age through an outage it was not seen through. The
+		// clocks are kept, so a residue that outlives the outage is not
+		// made to wait out the grace again.
 		if errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled) {
 			// A stop this process asked for — a shutdown, an
 			// adoption's rename — is not an unreadable directory.
 			return
 		}
 		log.WarnContext(ctx, "iam_binding_walk_failed", "err", err,
-			"detail", "the iam_binding_dangling alarm says nothing until a "+
-				"walk succeeds; the residues it was following keep their age")
+			"detail", "the iam_binding_dangling alarm holds what it last "+
+				"observed until a read of the bindings succeeds")
 		return
 	}
-	w.record(now, sighting)
+	sighting, classes, settled := classify(ctx, w.chart, bindings, previous,
+		chartAt, chartErr == nil)
+	w.record(now, sighting, classes, dirAt, chartAt, !settled || chartErr != nil)
 }
 
-// record folds one successful walk into the clocks.
-func (w *bindingWatch) record(now time.Time, s bindingSighting) {
+// classify settles every binding, re-using a classification whose binding and
+// chart position have not moved since it was taken.
+//
+// A binding whose seat the chart cannot judge is left out of the cache, so the
+// next observation asks again; settled reports whether there was none.
+func classify(ctx context.Context, chart session.Chart, bindings []iamdomain.SeatBinding,
+	previous map[string]classified, chartAt uint64, chartKnown bool) (
+	bindingSighting, map[string]classified, bool) {
+
+	out := bindingSighting{unknown: map[string]bool{}}
+	classes := make(map[string]classified, len(bindings))
+	settled := true
+	for _, b := range bindings {
+		if c, ok := previous[b.Person]; ok && chartKnown && c.chartAt == chartAt &&
+			c.binding == b {
+			classes[b.Person] = c
+			if c.dangling {
+				out.residues = append(out.residues, c.residue)
+			}
+			continue
+		}
+		residue, dangling, err := danglingBinding(ctx, chart, b)
+		if err != nil {
+			out.unknown[residue.key()] = true
+			settled = false
+			continue
+		}
+		if chartKnown {
+			classes[b.Person] = classified{binding: b, chartAt: chartAt,
+				residue: residue, dangling: dangling}
+		}
+		if dangling {
+			out.residues = append(out.residues, residue)
+		}
+	}
+	return out, classes, settled
+}
+
+// record folds one classification into the clocks.
+//
+// A RESIDUE THE CHART COULD NOT JUDGE THIS TIME STAYS A RESIDUE if it was one
+// before: the chart stalling says nothing about the binding, and dropping it
+// would clear a firing alarm on the stall and raise it again a beat after the
+// applier recovered — two transitions on every surface for a state that never
+// changed.
+func (w *bindingWatch) record(now time.Time, s bindingSighting,
+	classes map[string]classified, dirAt statelog.Position, chartAt uint64,
+	unsettled bool) {
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	next := make(map[string]time.Time, len(s.residues))
-	for _, r := range s.residues {
+	residues := slices.Clone(s.residues)
+	for _, r := range w.seen {
+		if s.unknown[r.key()] {
+			residues = append(residues, r)
+		}
+	}
+	next := make(map[string]time.Time, len(residues))
+	for _, r := range residues {
 		if since, seen := w.first[r.key()]; seen {
 			next[r.key()] = since
 			continue
@@ -279,19 +363,21 @@ func (w *bindingWatch) record(now time.Time, s bindingSighting) {
 			next[key] = since
 		}
 	}
-	// A RESIDUE THIS WALK FOUND CLEAR IS DROPPED, so the same binding
-	// dangling again later — a seat removed, restored and removed — starts
-	// a new clock rather than firing at once on an age it did not have.
-	w.first, w.at, w.seen, w.known = next, now, s.residues, true
+	// A RESIDUE THIS CLASSIFICATION FOUND CLEAR IS DROPPED, so the same
+	// binding dangling again later — a seat removed, restored and removed —
+	// starts a new clock rather than firing at once on an age it did not
+	// have.
+	w.first, w.at, w.seen, w.known = next, now, residues, true
+	w.classes, w.dirAt, w.chartAt, w.unsettled = classes, dirAt, chartAt, unsettled
 }
 
-// fill writes the latest walk into a reading.
+// fill writes the latest observation into a reading.
 //
-// THE AGE IS FIRST SIGHTING TO LATEST WALK, never to now: a report assembled
-// between two walks knows the residue was there at the last one and nothing
-// since, so measuring to now would call a residue old that may have been
-// repaired a minute after the walk — and would let the screen fire an alarm
-// the gauge beside it, set at the walk, does not.
+// THE AGE IS FIRST SIGHTING TO LATEST OBSERVATION, never to now: a report
+// assembled between two beats knows the residue was there at the last one and
+// nothing since, so measuring to now would call a residue old that may have
+// been repaired a moment after the beat — and would let the screen fire an
+// alarm the gauge beside it, set at the beat, does not.
 func (w *bindingWatch) fill(out *statelog.Reading) {
 	if w == nil {
 		return

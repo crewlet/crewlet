@@ -294,8 +294,8 @@ type Reading struct {
 	// A POINTER, and here zero is the BENIGN end rather than the alarming
 	// one, which is exactly why it needs one: a log that took in nothing
 	// yesterday is a measurement — it can hold any window — while a node
-	// that has not measured, or a log younger than the day the
-	// measurement spans, knows nothing. Given the zero's representation,
+	// that has not measured, or a log in its first two days (whose
+	// trailing day would contain its import), knows nothing. Given the zero's representation,
 	// the unmeasured log would be reported as idle on every screen, and
 	// any form of the rule that divides by the rate — how long the ceiling
 	// holds — reads it as a ceiling that holds nothing and fires on every

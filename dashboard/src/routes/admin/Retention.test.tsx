@@ -292,8 +292,8 @@ const domain = (over: Partial<RetentionDomain> = {}): RetentionDomain => ({
 
 // A LOG'S DAILY INTAKE RENDERS ONLY WHERE IT WAS MEASURED. It is the rate
 // `log_ceiling_short` holds the ceiling against, and the server sends it absent
-// for a log nobody could measure — compacted, younger than a day, a node that
-// has not ticked. "0 B a day" is the claim that a log took in nothing, which is
+// for a log nobody could measure — compacted, in its first two days, a node
+// that has not ticked. "0 B a day" is the claim that a log took in nothing, which is
 // the opposite fact, so the absent field must draw nothing rather than a zero.
 test("a log's daily intake renders as measured, and an unmeasured one draws nothing", () => {
   render(<DomainBlock domain={domain({ bytes_per_day: 3 << 20 })} />);

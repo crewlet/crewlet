@@ -172,10 +172,11 @@ type DomainReport struct {
 	// ceiling against.
 	//
 	// ABSENT RATHER THAN ZERO when nothing was measured, which is every
-	// compacted log, every log younger than the day the measurement
-	// spans and every node before its first trim tick: zero is a log that
-	// took in nothing, and rendering "not measured" as that would show an
-	// idle log where nobody knows.
+	// compacted log, every log in its first two days — whose trailing day
+	// would contain the day it was imported into — and every node before
+	// its first trim tick: zero is a log that took in nothing, and
+	// rendering "not measured" as that would show an idle log where nobody
+	// knows.
 	BytesPerDay *uint64 `json:"bytes_per_day,omitempty"`
 
 	// TrimFloor is the floor the fleet has published — what has actually

@@ -38,7 +38,7 @@ import (
 
 // Report assembles this node's answer about the state log's retention.
 func (r *retention) Report(ctx context.Context) statelog.Report {
-	now := time.Now().UTC()
+	now := r.clock()
 	in := statelog.ReportInputs{
 		NodeID:      r.nodeID,
 		At:          now,
@@ -294,9 +294,10 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		}
 	}
 	out.SemanticCoverage = r.semanticCoverage()
-	// THE TICK'S WALK, read back rather than taken, for the same reason as
-	// the rates — and because a binding's age is an interval between walks,
-	// which a walk per poll would make whatever the poll rate is.
+	// THE HEARTBEAT'S OBSERVATION, read back rather than taken, for the same
+	// reason as the rates — and because a binding's age is an interval
+	// between observations, which one per poll would make whatever the poll
+	// rate is.
 	r.bindings.fill(&out)
 	r.space(&out)
 	r.maintenance(ctx, now, &out)

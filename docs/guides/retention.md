@@ -46,8 +46,9 @@ to hold `min_age` of its own intake. A log whose ceiling is smaller fills and
 refuses appends **with every trim term satisfied** — nothing is blocked, so
 `blocked_by` says nothing, and unblocking a term could not help anyway. That is
 the one path to a full log the six terms cannot name, and `log_ceiling_short`
-is the alarm for it: at boot and on every trim tick, each node compares each
-log's `max_bytes` against `min_age` × `bytes_per_day`, and fires when the
+is the alarm for it: each node measures every log's intake at boot and on
+every trim tick, compares each log's `max_bytes` against `min_age` ×
+`bytes_per_day` on every alarm heartbeat (fifteen seconds), and fires when the
 window no longer fits. Its detail says how long the ceiling holds at that rate;
 the remedy is a bigger ceiling (see [Changing a log's
 ceiling](#changing-a-logs-ceiling)) or a shorter `min_age`.
@@ -73,10 +74,12 @@ is not zero:
   every vector in a day while replacing what the log held rather than adding
   to it. Holding its ceiling against a week of that day would page for a log
   that is not growing.
-- **A log younger than a day** — a fresh deployment, or one re-anchored under
-  a running fleet. Its first hours are the ones a company imports into, and a
-  day extrapolated from an import is an alarm for a log that settles an order
-  of magnitude lower.
+- **A log in its first two days** — a fresh deployment, or one re-anchored
+  under a running fleet. Its first day is the one a company imports into, and
+  a day extrapolated from an import is an alarm for a log that settles an
+  order of magnitude lower — so the day measured has to lie wholly after the
+  first one, which a log merely a day old does not give: the day behind it is
+  its first.
 - **A node whose trim has not ticked yet.**
 
 A measured `0` is a log that took in nothing yesterday, which holds any window.

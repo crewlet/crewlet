@@ -146,8 +146,18 @@ type retention struct {
 	// domain. See bindings.go.
 	bindings *bindingWatch
 
+	// now is the clock every evaluation and every report reads. Nil reads
+	// the wall clock; a case sets it to put a log's first days behind it.
+	now func() time.Time
+
+	// beating serialises one alarm evaluation against another: the
+	// heartbeat and the trim tick both evaluate, and two observations of
+	// the bindings interleaved would each fold the other's half-read state
+	// into the clocks.
+	beating sync.Mutex
+
 	stop context.CancelFunc
-	done chan struct{}
+	done sync.WaitGroup
 }
 
 // poolCounters is one store file's cumulative connection-wait counters.
@@ -180,7 +190,6 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		coverage:    e.vectorCoverage,
 		pooled:      map[string]poolCounters{},
 		bindings:    newBindingWatch(e),
-		done:        make(chan struct{}),
 	}
 	// DETACHED from the caller's context, for the reason every other
 	// long-running loop here is: a loop bound to a signal context stops at
@@ -189,17 +198,34 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 	r.stop = stop
 	e.retention = r
-	go r.run(loop)
+	r.done.Add(2)
+	go func() {
+		defer r.done.Done()
+		r.run(loop)
+	}()
+	go func() {
+		defer r.done.Done()
+		r.heartbeat(loop)
+	}()
 }
 
-// stopRetention ends the trim, waiting for an in-flight tick.
+// stopRetention ends the trim and the alarm heartbeat, waiting for an
+// in-flight tick of either.
 func (e *Engine) stopRetention() {
 	if e.retention == nil {
 		return
 	}
 	e.retention.stop()
-	<-e.retention.done
+	e.retention.done.Wait()
 	e.retention = nil
+}
+
+// clock is [retention.now], or the wall clock.
+func (r *retention) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now().UTC()
 }
 
 // RetentionReport answers "is the log being trimmed, and what is stopping it"
@@ -221,7 +247,6 @@ func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
 // fleet that had just started would otherwise answer "no floor published" for
 // fifteen minutes — indistinguishable from a fleet whose duty is not running.
 func (r *retention) run(ctx context.Context) {
-	defer close(r.done)
 	ticker := time.NewTicker(RetentionInterval)
 	defer ticker.Stop()
 	for {
@@ -282,22 +307,55 @@ func (r *retention) tick(ctx context.Context) {
 	}
 }
 
-// evaluate observes this node's alarms and records what one tick can measure
-// about its own hardware, its vector coverage, its logs and its directory.
+// evaluate records what one trim tick can measure about this node's own
+// hardware, its vector coverage and its logs, then evaluates the alarm table
+// against it at once.
 //
 // THE MEASUREMENT COMES FIRST, because the reading the table is evaluated
 // against reads these back: a tick that observed before it measured would
 // evaluate the previous tick's disk against this tick's log. The vector
-// coverage, the logs' intake and the directory's dangling bindings are
-// measured HERE and nowhere else — each is a scan a report assembled per
-// dashboard poll must not repeat, and the binding clock's whole meaning is an
-// age between walks at a regular cadence rather than one a poll decides.
+// coverage and the logs' intake are measured HERE and nowhere else — each is
+// a scan a report assembled per dashboard poll must not repeat, and a
+// quarter-hour is the resolution every one of them is honest at (see
+// [RetentionInterval]). What the table is evaluated on between these ticks is
+// [retention.heartbeat].
 func (r *retention) evaluate(ctx context.Context) {
 	r.capacity(ctx)
 	r.measureCoverage(ctx)
-	now := time.Now().UTC()
-	r.measureRates(ctx, now)
-	r.bindings.observe(ctx, now)
+	r.measureRates(ctx, r.clock())
+	r.beat(ctx)
+}
+
+// heartbeat evaluates the alarm table every [statelog.AlarmInterval], on every
+// node, until the context ends.
+//
+// ITS OWN LOOP, beside the trim's rather than inside it, and it is what makes
+// the table's thresholds true: every alarm there fires at a threshold of a
+// minute or more that ANOTHER decision already made, and an evaluation paced
+// by the trim's quarter-hour silently raised each of them to fifteen minutes.
+// The expensive measurements stay on the trim's tick and are read back here;
+// what a beat reads is what the report reads — one listing of each fleet
+// fact and one state read per log — plus one observation of the bindings,
+// which reads nothing that has not moved (see bindings.go).
+func (r *retention) heartbeat(ctx context.Context) {
+	ticker := time.NewTicker(statelog.AlarmInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		r.beat(ctx)
+	}
+}
+
+// beat is one alarm evaluation: the bindings observed, and the table
+// evaluated against everything the report reads.
+func (r *retention) beat(ctx context.Context) {
+	r.beating.Lock()
+	defer r.beating.Unlock()
+	r.bindings.observe(ctx, r.clock())
 	if r.alarms == nil {
 		return
 	}

@@ -218,7 +218,9 @@ func (r *retention) space(out *statelog.Reading) {
 // an hour stale while every other input beside it was fifteen minutes old.
 //
 // A MEASUREMENT THAT FAILS LEAVES NOTHING rather than the last figure: an
-// unreadable corpus is not an uncovered one, and not a covered one either.
+// unreadable corpus is not an uncovered one, and not a covered one either —
+// and that includes the gauge, which is withdrawn rather than left holding the
+// figure every other surface has stopped showing.
 func (r *retention) measureCoverage(ctx context.Context) {
 	if r.coverage == nil {
 		return
@@ -231,8 +233,12 @@ func (r *retention) measureCoverage(ctx context.Context) {
 	r.mu.Lock()
 	r.coverFraction, r.coverKnown = fraction, known
 	r.mu.Unlock()
-	if r.metrics != nil && known {
+	switch {
+	case r.metrics == nil:
+	case known:
 		r.metrics.Set(metrics.TrackerVectorCoverage, fraction, nil)
+	default:
+		r.metrics.Unset(metrics.TrackerVectorCoverage, nil)
 	}
 }
 

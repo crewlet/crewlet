@@ -44,11 +44,16 @@ import (
 // for a log that is not growing. It measures nothing, which the reading treats
 // as unmeasured.
 //
-// A LOG YOUNGER THAN THE DAY measures nothing either. Its first hours are the
-// ones a company imports into, and a day extrapolated from an import is a
-// ceiling alarm on day one for a log that settles an order of magnitude lower.
-// A company's writing is also diurnal, so a rate taken over its working hours
-// is several times the one a whole day averages to.
+// A LOG IN ITS FIRST TWO DAYS measures nothing either. Its first day is the
+// one a company imports into, and a day extrapolated from an import is a
+// ceiling alarm for a log that settles an order of magnitude lower — so the
+// trailing day that IS measured has to lie wholly AFTER the first one. A log
+// merely older than a day does not give that: the day behind it then is its
+// first day, import included, and the guard that asked only for a day's age
+// moved the false page from day one to day two. A company's writing is also
+// diurnal, so a rate taken over less than a whole day's working hours is
+// several times the one a whole day averages to — which is the other half of
+// why nothing shorter than a whole day is measured at all.
 //
 // # Why the average record size and not the exact bytes
 //
@@ -70,6 +75,11 @@ import (
 // the window is still in the log to be counted.
 const logRateWindow = 24 * time.Hour
 
+// logRateSettled is how old a log must be before its trailing day is
+// measured: two windows, so the window measured never contains the log's
+// first day — the one a company imports into.
+const logRateSettled = 2 * logRateWindow
+
 // rateLog is what measuring a log's intake reads, as narrowly as it reads it.
 type rateLog interface {
 	Stats(ctx context.Context) (jetstream.LogStats, error)
@@ -82,7 +92,7 @@ type rateLog interface {
 //
 // THREE ANSWERS: a measured rate (zero included — an established log that
 // took in nothing yesterday is the most benign reading there is), nil with no
-// error (compacted, or younger than the window), and an error when the broker
+// error (compacted, or in its first two days), and an error when the broker
 // could not be read, which is not a log that took in nothing.
 func measureRate(ctx context.Context, log rateLog, replay statelog.ReplayProtocol,
 	now time.Time) (*uint64, error) {
@@ -107,10 +117,11 @@ func bytesPerDayOf(stats jetstream.LogStats, now time.Time,
 	at func(seq uint64) (time.Time, bool, error)) (*uint64, error) {
 
 	cutoff := now.Add(-logRateWindow)
-	if stats.CreatedAt.IsZero() || stats.CreatedAt.After(cutoff) {
-		// THE STREAM HAS NOT EXISTED FOR THE WHOLE WINDOW — a fresh
-		// deployment, or a log re-anchored under a running fleet — so
-		// the day this would measure is partly a day before it existed.
+	if stats.CreatedAt.IsZero() || stats.CreatedAt.After(now.Add(-logRateSettled)) {
+		// THE STREAM IS IN ITS FIRST TWO DAYS — a fresh deployment, or a
+		// log re-anchored under a running fleet — so the day this would
+		// measure is, or contains, its first: a day before it existed, or
+		// the day somebody imported into it.
 		return nil, nil
 	}
 	if stats.Messages == 0 || stats.FirstSeq > stats.LastSeq {
@@ -137,14 +148,20 @@ func bytesPerDayOf(stats jetstream.LogStats, now time.Time,
 //
 // ON THE TICK AND NEVER ON A REPORT, because the search is a handful of broker
 // round trips per log and a report is assembled on every operator request and
-// every dashboard poll — the same reason the vector coverage is cached. The
-// tick is also "at boot and on every trim tick", which is when the design asks
-// for the comparison: it runs at once when the loop starts.
+// every dashboard poll — the same reason the vector coverage is cached. It runs
+// at once when the loop starts, so a node that has just booted has a rate
+// before its first beat; the COMPARISON is the alarm heartbeat's, which reads
+// this measurement back every [statelog.AlarmInterval]. A daily rate taken
+// four times an hour is already finer than the quantity it measures.
 //
 // A LOG THIS TICK COULD NOT READ KEEPS ITS LAST MEASUREMENT, for the reason the
 // applier's lag does: a figure left standing is a day's rate that was true a
 // tick ago, where dropping it would clear a firing alarm on a broker blip and
-// raise it again a quarter of an hour later.
+// raise it again when the next tick measured. A log that MEASURES NOTHING — one
+// in its first two days, a compacted one — reads as absent everywhere, the
+// gauge included: the gauge is withdrawn rather than left holding the last
+// stream's rate, which the report, the CLI and the screen would all show as
+// not measured.
 func (r *retention) measureRates(ctx context.Context, now time.Time) {
 	if r.state == nil {
 		return
@@ -188,10 +205,15 @@ func (r *retention) recordRates(ctx context.Context, now time.Time, logs []measu
 			continue
 		}
 		rates[l.domain] = rate
-		if rate != nil && r.metrics != nil {
-			r.metrics.Set(metrics.StatelogLogBytesPerDay, float64(*rate),
-				metrics.Attrs{"domain": l.domain})
+		if r.metrics == nil {
+			continue
 		}
+		at := metrics.Attrs{"domain": l.domain}
+		if rate == nil {
+			r.metrics.Unset(metrics.StatelogLogBytesPerDay, at)
+			continue
+		}
+		r.metrics.Set(metrics.StatelogLogBytesPerDay, float64(*rate), at)
 	}
 	r.mu.Lock()
 	r.rates = rates

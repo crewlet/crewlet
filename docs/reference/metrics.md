@@ -61,7 +61,7 @@ A value that goes both ways, sampled at each export.
 | `crewlet.statelog.deferred.oldest_age_seconds` | `s` | `domain` | How long the oldest retained record has been retained, which is what decides whether this node's seats move. |
 | `crewlet.statelog.waiters` | `1` | `domain` | Callers blocked on the applier right now. It is the depth of the queue a slow apply is making. |
 | `crewlet.statelog.log.bytes` | `By` | `domain` | What the log actually holds, against its ceiling below. |
-| `crewlet.statelog.log.bytes_per_day` | `By/d` | `domain` | What the log took in over the trailing day, measured from its own records at each trim tick. The ceiling has to hold `min_age` of this, because the trim never removes a record younger than that — a log whose ceiling is smaller fills with every trim term satisfied, which is what `log_ceiling_short` fires on. Absent for a compacted log and one younger than a day. |
+| `crewlet.statelog.log.bytes_per_day` | `By/d` | `domain` | What the log took in over the trailing day, measured from its own records at each trim tick. The ceiling has to hold `min_age` of this, because the trim never removes a record younger than that — a log whose ceiling is smaller fills with every trim term satisfied, which is what `log_ceiling_short` fires on. Absent for a compacted log and for one in its first two days, whose trailing day would contain the day it was imported into; a log that could not be read keeps its last measurement, as the report does. |
 | `crewlet.statelog.log.max_bytes` | `By` | `domain` | The ceiling, read from the running stream rather than from this node's own configuration — the two differ, and the running one is what refuses the append. |
 | `crewlet.statelog.log.headroom_fraction` | `1` | `domain` | How much of the ceiling is left. A full log refuses every write AND every linearizable read, and the remedy is a fleet-wide maintenance cycle, so this is the one number worth alarming on long before it is small. |
 | `crewlet.statelog.trim.blocked_seconds` | `s` | `domain`, `term` | How long one retention term has held the trim, named. A trim blocked for weeks is a log walking toward its ceiling with a cause an operator can act on. |
@@ -70,7 +70,7 @@ A value that goes both ways, sampled at each export.
 | `crewlet.store.wal.bytes` | `By` | `file` | A write-ahead log a checkpoint cannot pass grows, and this is the only way to see it before the volume fills. |
 | `crewlet.store.bytes` | `By` | `file` | The store's size on disk, which the snapshot's free-space precondition and the provisioning rule are both derived from. |
 | `crewlet.tracker.search.concurrency` | `1` | — | Scans in flight, which is the row of the supported-corpus table this node is actually on. The published figure is a single reader on an idle node. |
-| `crewlet.tracker.vector.coverage` | `1` | — | The fraction of sources carrying a current vector. It is how a stalled embedding backlog is reported, since it never drops a seat. |
+| `crewlet.tracker.vector.coverage` | `1` | — | The fraction of sources carrying a current vector. It is how a stalled embedding backlog is reported, since it never drops a seat. Absent where the company configures no embeddings and while the corpus cannot be measured — an unreadable corpus is neither covered nor uncovered. |
 | `crewlet.alarm.active` | `1` | `kind` | Whether each named alarm is firing right now, 0 or 1. It is the same table the operator record renders and the CLI exits non-zero on, so a collector and a person see one answer. |
 
 ## Counters

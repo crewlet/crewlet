@@ -6,8 +6,11 @@ about it.
 An alarm reaches you two ways, and they are the same table evaluated once: a
 `crewlet.alarm.active{kind}` gauge your collector scrapes, and a named
 `WARN` line when it starts and another when it clears, carrying how long it
-was up. Nothing has to be polled for either — alarms are evaluated on ticks
-the engine already runs.
+was up. Nothing has to be polled for either — every node evaluates the whole
+table every fifteen seconds, and again the moment its quarter-hourly
+measurements (each log's daily intake, the vector coverage, the store's
+connection-pool waits) land, so an alarm with a sixty-second threshold is
+raised within a beat of passing it.
 
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table

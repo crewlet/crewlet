@@ -497,18 +497,25 @@ uses](#validation-is-three-valued-twice) — a binding dangles
 exactly when that table would refuse its person or hold them off for want of
 the seat — and one evaluation feeds every surface that reports it:
 
-- `crewlet iam check` and the Access screen list each one as
-  `binding_dangling`, with the seat and which form it is in. A binding this
-  node's chart **cannot judge** — its applier past the 60-second stall grace —
-  is counted as `bindings_unchecked` rather than reported either way, so a
-  report printed during a chart stall never reads as a clean directory.
+- `crewlet iam check` and [`GET /iam/check`](../reference/api-endpoints.md)
+  list each one as `binding_dangling`, with the seat and which form it is in.
+  A binding this node's chart **cannot judge** — its applier past the
+  60-second stall grace — is counted as `bindings_unchecked` rather than
+  reported either way, so a report printed during a chart stall never reads as
+  a clean directory.
 - The **`iam_binding_dangling`** alarm fires once a residue has persisted past
   the same 60 seconds every other alarm uses. The age is how long this node's
-  own evaluations — on the retention tick, every node, every quarter of an hour
-  and once at boot — have kept finding it, from the first that did to the
-  latest: nothing records when a binding began to dangle, so the alarm never
-  claims a persistence nobody saw. A bind racing a removal, or a hire a node
-  applies a few seconds late, clears before it can fire. See
+  own evaluations — on the alarm heartbeat, every node, every fifteen seconds —
+  have kept finding it, from the first that did to the latest: nothing records
+  when a binding began to dangle, so the alarm never claims a persistence
+  nobody saw. A bind racing a removal, or a hire a node applies a few seconds
+  late, clears before it can fire. A beat that cannot read the directory, or
+  whose chart has stalled, changes nothing: a firing alarm stays up and a
+  residue keeps its first sighting, so an outage neither clears the alarm nor
+  restarts its clock. And a beat re-reads the directory only when the
+  directory's or the chart's applied position has moved since the last, or a
+  binding went unjudged, so a quiet company's heartbeat costs two position
+  reads. See
   [Alarms](../reference/alarms.md).
 
 **A node that cannot read the directory refuses the removal rather than

@@ -3126,7 +3126,8 @@ last trim tick measured it from the log's own records — the rate the
 pointer too, for the opposite reason: `0` is a log that took in nothing, the
 most benign reading there is, and the field is **absent** where nothing was
 measured — a compacted log (whose size follows its subjects, not its age), a
-log younger than a day, and every log on a node whose trim has not ticked yet.
+log in its first two days (whose trailing day would contain the day it was
+imported into), and every log on a node whose trim has not ticked yet.
 See [Retention](../guides/retention.md#the-one-number-to-watch).
 
 `crewlet retention status` renders exactly these bytes.

@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -389,7 +390,14 @@ func bootDirectoryNode(t *testing.T, roles []string) *Engine {
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	b.Node.Roles = roles
-	e, err := New(t.Context(), Options{Bootstrap: &b, Company: directoryConfig(t)})
+	// A RECORDER, as `crewlet run` always hands one: a node booted without
+	// one silently drops every gauge a case might read.
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: directoryConfig(t),
+		Metrics: rec})
 	if err != nil {
 		t.Fatalf("boot a node with roles %v: %v", roles, err)
 	}
