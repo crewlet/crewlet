@@ -63,9 +63,9 @@ type ReanchorRequest struct {
 
 	// Force overrides the rule that only the most caught-up node may
 	// re-anchor, for a fleet whose register cannot say which that is. It
-	// never overrides a hydrated peer — adopting that peer's snapshot is
-	// strictly better than re-anchoring, and the divergence two
-	// independent reanchors produce is silent — see
+	// never overrides a peer that has already re-anchored the stream — the
+	// fleet's history in that generation is that peer's rows, and the
+	// divergence a second, independent reanchor produces is silent — see
 	// [statelog.PermitReanchor].
 	Force bool
 
@@ -75,11 +75,13 @@ type ReanchorRequest struct {
 
 // Reanchor runs one domain's generation transition.
 //
-// # Why it refuses while any peer is hydrated on the live stream
+// # Why it refuses while any peer has already re-anchored the stream
 //
-// A peer that is caught up on the stream this node cannot read has the history
-// this node is about to declare unreachable. Adopting its snapshot recovers
-// that history; re-anchoring discards it. The refusal names the peer.
+// That peer opened the next generation from its own rows, and those rows are
+// the fleet's history in it. A second reanchor from this node's rows would open
+// the same generation number over a different prefix of what was lost, which
+// nothing could ever reconcile; this node adopts the peer's snapshot instead.
+// The refusal names the peer.
 //
 // # The loop is halted around it, and restarted whatever happened before
 //
@@ -141,10 +143,10 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		Now:      time.Now,
 	}, in, statelog.ReanchorGuard{Confirm: req.Confirm, Force: req.Force})
 	if err != nil {
-		if in.PeersHydrated > 0 && running.domain.ClaimsIdentity() {
+		if in.PeersReanchored > 0 && running.domain.ClaimsIdentity() {
 			rows, _ := e.backends.Fleet.Positions(ctx)
-			return statelog.ReanchorPlan{}, fmt.Errorf("%w (hydrated peers: %v)", err,
-				hydratedPeers(rows, name, in.Generation, e.native.nodeID))
+			return statelog.ReanchorPlan{}, fmt.Errorf("%w (re-anchored peers: %v)", err,
+				reanchoredPeers(rows, name, in.Generation, e.native.nodeID))
 		}
 		return statelog.ReanchorPlan{}, err
 	}
@@ -255,18 +257,35 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	in.RegisterReadable = true
 	domain := running.domain.Name()
 	for _, row := range rows {
-		// THE SAME GENERATION ONLY: a sequence at another one is a number
-		// in another space — a peer that has already re-anchored reports
-		// the adopted stream's small sequences, and one behind a reanchor
-		// reports a dead stream's — and compared with this node's own it
-		// says nothing about who went further along the old stream.
+		if row.NodeID == e.native.nodeID {
+			continue
+		}
+		// THE SAME GENERATION AND THE SAME STREAM ONLY: a sequence at
+		// another generation is a number in another space — a peer that has
+		// already re-anchored reports the adopted stream's sequences — and so
+		// is one at this generation on another stream: a node that came up
+		// with no rows after the rebuild counts the NEW stream from 1 at the
+		// same generation number. Neither says anything about who went
+		// further along the stream this node's rows came from.
 		if at, runs := row.Domains[domain]; runs && at.Generation == in.Generation &&
-			at.Seq > in.Highest {
+			sameStream(at.StreamCreatedAt, in.KeyedTo) && at.Seq > in.Highest {
 			in.Highest = at.Seq
 		}
 	}
-	in.PeersHydrated = len(hydratedPeers(rows, domain, in.Generation, e.native.nodeID))
+	in.PeersReanchored = len(reanchoredPeers(rows, domain, in.Generation, e.native.nodeID))
 	return in, nil
+}
+
+// sameStream reports whether a peer's position can be on the stream this node's
+// rows are keyed to.
+//
+// UNKNOWN COUNTS AS THE SAME: a row that names no instant was written by a build
+// that did not publish one, and the comparison it feeds is the refusal that
+// keeps a node that is not the most caught-up from discarding what a peer
+// applied — so a row nothing can place is weighed as though it could be ahead.
+func sameStream(peer, keyed time.Time) bool {
+	return peer.IsZero() || keyed.IsZero() ||
+		statelog.IdentityOf(keyed, peer, true) == statelog.StreamSame
 }
 
 // ErrUnknownStream reports a stream that is not a domain log this node runs —
@@ -379,33 +398,40 @@ func (e *Engine) ReanchorStatus(ctx context.Context, stream string) (ReanchorVie
 	return view, nil
 }
 
-// hydratedPeers names every peer that is caught up on the LIVE stream.
+// reanchoredPeers names every peer that has already re-anchored this domain's
+// stream: every peer at a LATER generation of it than this node's checkpoint.
 //
-// ONE DEFINITION of what "hydrated on the live stream" means, because two
-// places need it and they must agree: the permission check counts them, and
-// the refusal names them. A peer that has applied anything at all at this
-// domain's generation holds history a reanchor would declare unreachable, and
-// its snapshot is strictly the better recovery.
+// ONE DEFINITION, because two places need it and they must agree: the
+// permission check counts them, and the refusal names them.
 //
-// AND A PEER AT A LATER GENERATION IS ONE TOO. A generation moves only by a
-// reanchor, onto the live stream, so a peer ahead of this node's generation is
-// a peer that has already re-anchored the stream this node is about to — and
-// counting only this node's own generation let a second node re-anchor the same
-// stream independently of the first, keeping a different prefix of the old
-// history under the same generation number, which is the silent divergence the
-// refusal exists for.
-func hydratedPeers(rows []coord.NodePositions, domain string, generation uint32,
+// A generation moves only by a reanchor, or by adopting the snapshot of a node
+// that ran one, so a peer ahead of this node's generation holds the rows the
+// fleet's history in that generation is made of — whatever it has applied since,
+// which is why nothing else about its row is asked.
+//
+// # And a peer at this node's OWN generation is not one
+//
+// It was counted here once, as "hydrated on the live stream", on the reasoning
+// that a peer which had applied anything at this generation held history a
+// reanchor would discard. But a generation cannot say which stream a sequence
+// is on, and every peer still on the LOST stream stands at this generation with
+// everything it ever applied — so every one of them read as caught up on the
+// live stream, the reanchor of any node in a fleet of two or more was refused,
+// and the snapshot it sent the operator to was keyed to the lost stream, which
+// no joiner can adopt. Such a peer is weighed by the most-caught-up rule
+// instead, against the stream this node's rows came from
+// ([statelog.ReanchorInputs]).
+func reanchoredPeers(rows []coord.NodePositions, domain string, generation uint32,
 	self string) []string {
 
-	var hydrated []string
+	var reanchored []string
 	for _, row := range rows {
 		if row.NodeID == self {
 			continue
 		}
-		if at, runs := row.Domains[domain]; runs &&
-			at.Generation >= generation && at.AppliedThrough > 0 {
-			hydrated = append(hydrated, row.NodeID)
+		if at, runs := row.Domains[domain]; runs && at.Generation > generation {
+			reanchored = append(reanchored, row.NodeID)
 		}
 	}
-	return hydrated
+	return reanchored
 }

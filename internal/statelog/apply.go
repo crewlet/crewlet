@@ -388,6 +388,25 @@ func (r *Runner) StreamCreatedAt() time.Time {
 	return r.created
 }
 
+// KeyedTo is the creation instant of the stream this runner's CHECKPOINT is
+// keyed to: the one its rows were derived from.
+//
+// It is [Runner.StreamCreatedAt] except while the recreation verdict holds.
+// Then the broker serves another stream and the rows still belong to the one
+// before it — and which of the two a runner carries as its own instant depends
+// on when the rebuild was met: one built at a boot after it carries the live
+// instant, one that was running carries the old one. The verdict holds both,
+// so this answers the rows' own whichever way it came about, which is what a
+// position published to the fleet has to name ([coord.DomainPosition]).
+func (r *Runner) KeyedTo() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.foreign != nil {
+		return r.foreign.keyed
+	}
+	return r.created
+}
+
 // Reanchored re-keys this runner to the stream an operator's reanchor adopted:
 // the checkpoint the reanchor committed, and the creation instant the operator
 // confirmed.

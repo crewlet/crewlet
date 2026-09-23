@@ -36,6 +36,24 @@ type DomainPosition struct {
 	Generation     uint32 `json:"generation"`
 	AppliedThrough uint64 `json:"applied_through"`
 
+	// StreamCreatedAt is the creation instant of the stream this node's
+	// checkpoint is KEYED TO — the one its rows were derived from, which is
+	// not the one the broker serves while this node knows its log was
+	// rebuilt under it.
+	//
+	// THE THIRD COORDINATE OF A POSITION, and the one a generation cannot
+	// stand in for. A stream deleted and remade keeps the generation and
+	// counts from 1 again, so two rows at one generation are comparable
+	// only if they are about one stream — and a reanchor's guards compare
+	// exactly that: whether a peer went further along the stream this
+	// node's rows came from. Without it every peer still on the lost
+	// stream read as one caught up on the live one, and no node of a
+	// fleet could ever re-anchor.
+	//
+	// ZERO IS UNKNOWN, never "no stream": a row written by a build that
+	// did not publish it, which a reader weighs conservatively.
+	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
+
 	// Snapshot is the newest VERIFIED snapshot this node holds, and its
 	// generation travels with it: a snapshot from before a reanchor is not
 	// a donor for a node that needs one after it, and a bare sequence

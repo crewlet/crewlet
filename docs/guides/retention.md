@@ -697,14 +697,18 @@ past the copy, which is on no log any more — so no other node can replay it,
 and each of them has to adopt a snapshot from this node through [the join
 runbook](#the-join-runbook).
 
-For the tracker and the knowledge base it refuses while any peer is hydrated on
-the live stream — at this node's generation, or at a later one, which is a peer
-that has already re-anchored it — naming the peer: adopting that peer's
-snapshot recovers the history a reanchor discards, so it is strictly the better
-recovery, and two nodes re-anchoring the same stream independently would each
-keep a different prefix of the old history. Without a hydrated peer, only the
-most caught-up node on the old stream may re-anchor; `-force` overrides that
-rule for the case where the fleet cannot be asked, and never the first. The
+For the tracker and the knowledge base it refuses while any peer has already
+re-anchored the stream — a peer at a later generation of it — naming the peer:
+that peer's rows are the fleet's history in the new generation, and a second
+reanchor from another node's rows would open the same generation over a
+different prefix of what was lost, which nothing could reconcile. Otherwise only
+the most caught-up node on the stream its rows came from may re-anchor. Every
+node publishes, beside its position, the creation instant of the stream its
+rows are keyed to, so a peer still on the lost stream is compared with this
+node and one that came up on the rebuilt stream with no rows is not: it is
+further along nothing a reanchor discards. `-force` overrides the
+most-caught-up rule for the case where the fleet cannot be asked, and never the
+first. The
 vectors are exempt from both: their coverage legitimately differs node to node,
 so every node re-anchors its own copy.
 

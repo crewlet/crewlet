@@ -116,23 +116,36 @@ type ReanchorInputs struct {
 	FirstSeq uint64
 	LastSeq  uint64
 
-	// PeersHydrated is how many peers are caught up on the LIVE stream —
-	// at this domain's generation or a later one, since a peer that has
-	// already re-anchored this stream is exactly a peer caught up on it.
+	// PeersReanchored is how many peers have already re-anchored THIS
+	// stream: they stand at a later generation of this domain than this
+	// node's checkpoint, and a generation moves only by a reanchor or by
+	// adopting the snapshot of a node that ran one.
 	//
-	// ANY IS A REFUSAL, and the reason is not caution: two nodes that
-	// reanchor independently each keep whatever they applied off the old
-	// stream before it vanished, and if those prefixes differ the identity
-	// claim is silently violated for ever — with no log left to reconcile
-	// them from.
-	PeersHydrated int
+	// ANY IS A REFUSAL, force or no force, and the reason is not caution:
+	// the fleet's history in that generation is the re-anchored peer's
+	// rows, and a second reanchor from this node's would open the same
+	// generation number over a different prefix of the lost history — the
+	// identity claim violated silently and for ever, with no log left to
+	// reconcile the two from.
+	//
+	// A PEER AT THIS NODE'S OWN GENERATION IS NOT ONE. It is on the stream
+	// this node's rows came from, or on one it cannot vouch for, and the
+	// most-caught-up rule below is what weighs it. It used to be counted
+	// here as "hydrated on the live stream" — which every peer still on the
+	// lost stream was, so in a fleet of two or more no node could ever
+	// re-anchor, and the snapshot the refusal sent the operator to was keyed
+	// to the lost stream and adoptable by nobody.
+	PeersReanchored int
 
 	// Position is this node's own committed sequence at the OLD
-	// generation, and Highest is the highest any node published at that
-	// same generation — a sequence at another generation is a number in
-	// another space and says nothing about this one. Only the most
-	// caught-up node may reanchor when nobody is hydrated, because
-	// whatever it did not apply is what the fleet loses.
+	// generation, and Highest is the highest any peer published at that
+	// same generation ON THE SAME STREAM — the one this node's rows are
+	// keyed to, or one a peer's row does not name (a build that did not
+	// publish it, weighed conservatively). A sequence at another generation,
+	// or on another stream at this one, is a number in another space and
+	// says nothing about who went further along this one. Only the most
+	// caught-up node may reanchor, because whatever it did not apply is what
+	// the fleet loses.
 	Position uint64
 	Highest  uint64
 
@@ -253,10 +266,11 @@ func (in ReanchorInputs) Case() (ReanchorCase, uint64, error) {
 //
 // # The two fleet guards belong to a domain that claims identity
 //
-// A hydrated peer refuses, and so does a peer further along the old stream,
-// because two nodes that reanchor independently keep two different prefixes of
-// a history no log holds any more — which violates the claim that two nodes at
-// one checkpoint hold the same rows. A domain that makes no such claim has
+// A peer that has already re-anchored the stream refuses, and so does a peer
+// further along the stream this node's rows came from, because two nodes that
+// reanchor independently keep two different prefixes of a history no log holds
+// any more — which violates the claim that two nodes at one checkpoint hold the
+// same rows. A domain that makes no such claim has
 // nothing for either guard to protect: the vectors' per-node coverage differs
 // by construction, what one node never applied is a gap in that node's own
 // coverage rather than something the fleet loses, and every node re-anchoring
@@ -289,13 +303,14 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error
 	if err != nil {
 		return ReanchorPlan{}, err
 	}
-	if in.ClaimsIdentity && in.PeersHydrated > 0 {
-		return ReanchorPlan{}, fmt.Errorf("%w: %d peer(s) are hydrated on the live stream. "+
-			"Two nodes that reanchor independently each keep whatever they "+
-			"applied off the old stream before it vanished, and if those "+
-			"prefixes differ the identity claim is violated silently and for "+
-			"ever, with no log left to reconcile them from — adopt a hydrated "+
-			"peer's snapshot instead", ErrReanchorRefused, in.PeersHydrated)
+	if in.ClaimsIdentity && in.PeersReanchored > 0 {
+		return ReanchorPlan{}, fmt.Errorf("%w: %d peer(s) have already re-anchored "+
+			"%s — they stand at a later generation of it than this node's %d. A "+
+			"second reanchor from this node's rows would open that generation "+
+			"over a different prefix of the lost history, and the identity claim "+
+			"would be violated silently and for ever, with no log left to "+
+			"reconcile the two from — adopt a re-anchored peer's snapshot instead",
+			ErrReanchorRefused, in.PeersReanchored, in.Stream, in.Generation)
 	}
 	if in.ClaimsIdentity && !guard.Force {
 		if !in.RegisterReadable {
@@ -450,8 +465,9 @@ func (d ReanchorDeps) resolved() ReanchorDeps {
 //     decide the case ([ReanchorCase]): recreated or restored, or neither — a
 //     stream that still holds every record the rows are missing, which is
 //     refused because there is nothing to re-anchor.
-//  2. Refuse while any peer is hydrated on it, and — when none is — require
-//     this to be the most caught-up node. Refuse on a node evicted from the
+//  2. Refuse while any peer has already re-anchored it, and — when none has —
+//     require this to be the most caught-up node on the stream its rows came
+//     from. Refuse on a node evicted from the
 //     domain, whose every record every applier drops.
 //  3. Derive the new generation LOCALLY, from the domain's own checkpoint.
 //  4. Append the domain's generation record on the live stream, at an

@@ -201,6 +201,12 @@ Not one number. Every node publishes both:
 - **`applied_through`** — the prefix it has actually *applied*, which is lower
   whenever a record was retained rather than applied.
 
+Beside them rides **`stream_created_at`**, the creation instant of the stream
+the node's rows are keyed to. A generation cannot say which stream a sequence
+is on — a stream deleted and remade keeps the generation and counts from 1
+again — so this is what lets a [reanchor](retention.md#re-anchoring-a-recreated-or-restored-log)
+tell a peer further along the lost stream from one that came up on the new one.
+
 Folding them into one would make a node that is applying nothing while its
 position advances look identical to one that is fully caught up. `crewlet
 retention status` prints both, per node and per domain.

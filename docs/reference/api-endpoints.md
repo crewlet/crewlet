@@ -2355,8 +2355,8 @@ deliberately separate round trips rather than one route that reads and acts.
 It is compared as an instant at microsecond precision, so the RFC 3339 value the
 `GET` answers is accepted as it came. `force=true` overrides the rule that only
 the most caught-up node may re-anchor, for a fleet whose register cannot say;
-it never overrides a hydrated peer, whose snapshot is strictly the better
-recovery and which the refusal names.
+it never overrides a peer that has already re-anchored the stream, whose rows
+are the fleet's history in the new generation and which the refusal names.
 
 ## Agent Memory
 

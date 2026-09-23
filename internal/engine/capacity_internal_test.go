@@ -623,42 +623,46 @@ func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *t
 	}
 }
 
-// TestOnlyAPeerOnTheLiveStreamHoldsHistoryAReanchorWouldDiscard.
+// TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream.
 //
 // ONE DEFINITION, because the permission check counts these and the refusal
 // names them: if the two disagreed, a reanchor would refuse naming nobody, or
 // permit while naming someone.
-func TestOnlyAPeerOnTheLiveStreamHoldsHistoryAReanchorWouldDiscard(t *testing.T) {
+func TestOnlyAPeerAtALaterGenerationHasReanchoredTheStream(t *testing.T) {
 	rows := []coord.NodePositions{
 		{NodeID: "self", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 4, AppliedThrough: 900},
+		}},
+		// A PEER STILL AT THIS NODE'S GENERATION is on the stream this
+		// node's rows came from — however much it applied there — and is
+		// the most-caught-up rule's to weigh, never a refusal of its own:
+		// counted here, every peer on a lost stream refused every reanchor.
+		{NodeID: "on-the-lost-stream", Domains: map[string]coord.DomainPosition{
 			"tracker": {Generation: 3, AppliedThrough: 900},
 		}},
-		{NodeID: "hydrated", Domains: map[string]coord.DomainPosition{
-			"tracker": {Generation: 3, AppliedThrough: 900},
-		}},
-		{NodeID: "on-the-old-stream", Domains: map[string]coord.DomainPosition{
+		{NodeID: "behind-a-reanchor", Domains: map[string]coord.DomainPosition{
 			"tracker": {Generation: 2, AppliedThrough: 900},
 		}},
-		// A PEER THAT HAS ALREADY RE-ANCHORED this stream is caught up on
-		// it: a generation only moves onto the live stream.
+		// A PEER THAT HAS ALREADY RE-ANCHORED this stream holds the fleet's
+		// history in that generation, whatever it has applied since.
 		{NodeID: "already-reanchored", Domains: map[string]coord.DomainPosition{
 			"tracker": {Generation: 4, AppliedThrough: 12},
 		}},
-		{NodeID: "applied-nothing", Domains: map[string]coord.DomainPosition{
-			"tracker": {Generation: 3, AppliedThrough: 0},
+		{NodeID: "reanchored-onto-an-empty-log", Domains: map[string]coord.DomainPosition{
+			"tracker": {Generation: 4, AppliedThrough: 0},
 		}},
 		{NodeID: "runs-another-domain", Domains: map[string]coord.DomainPosition{
-			"vectors": {Generation: 3, AppliedThrough: 900},
+			"vectors": {Generation: 9, AppliedThrough: 900},
 		}},
 	}
-	got := hydratedPeers(rows, "tracker", 3, "self")
-	if len(got) != 2 || got[0] != "hydrated" || got[1] != "already-reanchored" {
-		t.Fatalf("hydrated peers = %v, want exactly [hydrated already-reanchored]: "+
-			"this node is not its own peer, a peer at an EARLIER generation is on "+
-			"the stream being replaced, one at a LATER generation has already "+
-			"re-anchored the live stream — a second independent reanchor of it "+
-			"would keep a different prefix under the same number — and one that "+
-			"has applied nothing holds no history", got)
+	got := reanchoredPeers(rows, "tracker", 3, "self")
+	want := []string{"already-reanchored", "reanchored-onto-an-empty-log"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("re-anchored peers = %v, want exactly %v: this node is not its own "+
+			"peer, a peer at this node's generation or an earlier one has not "+
+			"re-anchored the stream, and one at a LATER generation has — a second "+
+			"independent reanchor would keep a different prefix under the same "+
+			"number", got, want)
 	}
 }
 

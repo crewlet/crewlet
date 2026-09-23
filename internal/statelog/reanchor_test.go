@@ -35,7 +35,7 @@ func reanchorInputs() statelog.ReanchorInputs {
 		StreamCreatedAt:  reanchorCreated,
 		KeyedTo:          keyedCreated,
 		FirstSeq:         0,
-		PeersHydrated:    0,
+		PeersReanchored:  0,
 		Position:         9_000,
 		Highest:          9_000,
 		RegisterReadable: true,
@@ -83,14 +83,14 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 			guard: statelog.ReanchorGuard{Confirm: "0001-01-01T00:00:00Z"},
 			names: "unknown",
 		},
-		"a peer is hydrated on the live stream": {
+		"a peer has already re-anchored the stream": {
 			in: func() statelog.ReanchorInputs {
 				in := reanchorInputs()
-				in.PeersHydrated = 1
+				in.PeersReanchored = 1
 				return in
 			}(),
 			guard: confirmed(),
-			names: "identity claim is violated",
+			names: "already re-anchored",
 		},
 		"this is not the most caught-up node": {
 			in: func() statelog.ReanchorInputs {
@@ -154,7 +154,7 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 
 	// AND A FORCE OVERRIDES THE POSITION RULE and nothing else: an
 	// operator can know something the register does not say, and cannot
-	// know that two hydrated peers will not diverge.
+	// make a second reanchor of one stream keep the first one's rows.
 	behind := reanchorInputs()
 	behind.Position = 4_000
 	if _, err := statelog.PermitReanchor(behind, statelog.ReanchorGuard{
@@ -162,14 +162,15 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("a forced reanchor was refused: %v", err)
 	}
-	hydrated := reanchorInputs()
-	hydrated.PeersHydrated = 1
-	if _, err := statelog.PermitReanchor(hydrated, statelog.ReanchorGuard{
+	reanchored := reanchorInputs()
+	reanchored.PeersReanchored = 1
+	if _, err := statelog.PermitReanchor(reanchored, statelog.ReanchorGuard{
 		Confirm: confirmed().Confirm, Force: true,
 	}); err == nil {
-		t.Fatal("a forced reanchor ran with a hydrated peer — that is not a " +
-			"judgement an operator can make, because the divergence it produces " +
-			"is silent and there is no log left to reconcile from")
+		t.Fatal("a forced reanchor ran over a peer that already re-anchored the " +
+			"stream — that is not a judgement an operator can make, because the " +
+			"divergence it produces is silent and there is no log left to " +
+			"reconcile from")
 	}
 }
 
@@ -184,7 +185,7 @@ func TestADomainClaimingNoIdentityIsNotHeldToTheFleetGuards(t *testing.T) {
 	t.Parallel()
 	in := reanchorInputs()
 	in.ClaimsIdentity = false
-	in.PeersHydrated = 2
+	in.PeersReanchored = 2
 	in.Position = 10
 	in.RegisterReadable = false
 	plan, err := statelog.PermitReanchor(in, confirmed())
@@ -1175,6 +1176,14 @@ func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 		t.Fatalf("before the reanchor the identity is %v, want the rebuild",
 			h.runner.StreamIdentity())
 	}
+	// THE ROWS ARE STILL THE LOST STREAM'S, whichever way the rebuild was met
+	// and whichever instant the runner carries as its own — and that is the
+	// instant a position published to the fleet has to name, or a peer
+	// compares this node's sequences with the new stream's.
+	if got := h.runner.KeyedTo(); statelog.IdentityOf(born, got, true) != statelog.StreamSame {
+		t.Fatalf("before the reanchor the rows read as keyed to %s, want the lost "+
+			"stream's %s", got, born)
+	}
 
 	// THE REANCHOR, through the real runner.
 	var order []string
@@ -1197,9 +1206,9 @@ func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 		t.Fatalf("the re-anchored runner stands at %s, want generation %d "+
 			"sequence 0", got, gen)
 	}
-	if !h.runner.StreamCreatedAt().Equal(rebuilt) {
-		t.Fatalf("the runner is keyed to %s, want the adopted %s",
-			h.runner.StreamCreatedAt(), rebuilt)
+	if !h.runner.StreamCreatedAt().Equal(rebuilt) || !h.runner.KeyedTo().Equal(rebuilt) {
+		t.Fatalf("the runner is keyed to %s (rows %s), want the adopted %s",
+			h.runner.StreamCreatedAt(), h.runner.KeyedTo(), rebuilt)
 	}
 
 	// A READING OF THE END TAKEN AGAINST THE OLD CHECKPOINT says nothing

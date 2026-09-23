@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -69,21 +70,36 @@ func TestAReanchorsInputsNameTheStreamTheyWereReadFrom(t *testing.T) {
 // another space: a peer that has already re-anchored reports the adopted
 // stream's sequences, a peer behind a reanchor a dead stream's. Compared as
 // though they were this generation's, the first made the most caught-up node
-// look behind and the second hid a node that was genuinely further along.
+// look behind and the second hid a node that was genuinely further along. So
+// is a sequence at this generation on ANOTHER stream, which is what every
+// node that came up on a rebuilt log with no rows reports.
 func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	running := e.native.log.Domain(tracker.Domain{}.Name())
+	// A CHECKPOINT, so this node's rows are keyed to a stream at all.
+	if res, err := e.native.writer.EvictNode(t.Context(), "op-1", "node-x"); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("a write: %+v, %v", res, err)
+	}
 	own := running.runner.Committed()
 	name := running.domain.Name()
 	for _, row := range []struct {
 		node string
 		at   coord.DomainPosition
 	}{
-		// ANOTHER GENERATION, far along its own stream, and hydrated on
-		// nothing — so only the high-water mark could count it.
+		// ANOTHER GENERATION, far along its own stream.
 		{"elsewhere", coord.DomainPosition{Generation: own.Generation + 1, Seq: 99_999}},
-		// THIS GENERATION, further along than this node.
+		// THIS GENERATION ON ANOTHER STREAM: a node that came up with no
+		// rows on a rebuilt log counts it from 1 at the same generation
+		// number, so its sequence says nothing about this node's stream.
+		{"another-stream", coord.DomainPosition{
+			Generation: own.Generation, Seq: own.Seq + 900,
+			StreamCreatedAt: running.runner.KeyedTo().Add(time.Hour),
+		}},
+		// THIS GENERATION, further along than this node, on a row that
+		// names no stream — a build that did not publish one — which is
+		// weighed as though it could be this node's.
 		{"ahead", coord.DomainPosition{Generation: own.Generation, Seq: own.Seq + 50}},
 	} {
 		if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
@@ -98,9 +114,9 @@ func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 		t.Fatalf("reanchorInputs: %v", err)
 	}
 	if in.Highest != own.Seq+50 {
-		t.Fatalf("the high-water mark is %d, want %d — the peer at generation %d "+
-			"reports a sequence in another number space", in.Highest, own.Seq+50,
-			own.Generation+1)
+		t.Fatalf("the high-water mark is %d, want %d — the peer at generation %d, "+
+			"and the one on another stream at this generation, report sequences in "+
+			"another number space", in.Highest, own.Seq+50, own.Generation+1)
 	}
 }
 
@@ -153,6 +169,7 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 		res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write before the rebuild: %+v, %v", res, err)
 	}
+	lost := readCursorRow(t, e, tracker.Domain{}.Name()).created
 	// EVERY OTHER DOMAIN'S CHECKPOINT, as its applier left it.
 	untouched := map[string]cursorRow{}
 	for _, name := range e.native.log.order {
@@ -175,6 +192,24 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 	waitUntil(t, 10*time.Second, "the tracker to stop on its recreated log", func() bool {
 		return errors.Is(running.runner.Stopped(), statelog.ErrStreamRecreated)
 	})
+	// THE POSITION THIS NODE PUBLISHES NAMES THE LOST STREAM, which its rows
+	// came from — not the rebuilt one this runner was built against at boot
+	// — or a peer would compare this node's sequences with the new stream's.
+	e2.native.log.publishPositions(t.Context())
+	published, err := e2.backends.Fleet.Positions(t.Context())
+	if err != nil {
+		t.Fatalf("read the register: %v", err)
+	}
+	for _, row := range published {
+		if row.NodeID != e2.native.nodeID {
+			continue
+		}
+		if got := row.Domains[tracker.Domain{}.Name()].StreamCreatedAt; statelog.IdentityOf(lost, got, true) != statelog.StreamSame {
+			t.Fatalf("after a boot onto the rebuilt log this node publishes its "+
+				"tracker position as keyed to %s, want the lost stream's %s", got, lost)
+		}
+	}
+
 	// A RECORD THE REBUILT LOG ALREADY HOLDS, which the rows have never seen:
 	// the recreated case follows the log from its FIRST record, so this is
 	// applied — where the restored case's end would skip it for good.
@@ -466,6 +501,132 @@ func taskState(t *testing.T, e *Engine, id string) taskFields {
 		t.Fatalf("read task %s: %v", id, err)
 	}
 	return got
+}
+
+// A FLEET'S MOST CAUGHT-UP NODE CAN RE-ANCHOR A LOG EVERY NODE LOST.
+//
+// When a stream is rebuilt under a fleet, every node is left at the same
+// generation on the stream that was lost, each with whatever it had applied.
+// The reanchor used to count every such peer as "hydrated on the live stream" —
+// a generation cannot say which stream a sequence is on — and refused, naming
+// them and pointing at their snapshots, which are keyed to the lost stream and
+// adoptable by nobody. So no node of a fleet of two or more could ever run it.
+//
+// What refuses now is what the identity claim is about: a peer that has already
+// re-anchored the stream (a later generation), and a peer further along the
+// stream THIS node's rows came from. A peer at the same generation on another
+// stream — a node that came up with no rows after the rebuild, counting the new
+// stream from 1 — is further along nothing this node discards.
+func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
+	t.Parallel()
+	e, js := aRunningNode(t)
+	s := e.native.log
+	running := s.Domain(tracker.Domain{}.Name())
+	name := running.domain.Name()
+	stream := running.domain.Stream().Name
+	for i, node := range []string{"node-p", "node-q"} {
+		if res, err := e.native.writer.EvictNode(t.Context(), fmt.Sprintf("op-%d", i), node); err != nil ||
+			res.Outcome != statelog.OutcomeApplied {
+			t.Fatalf("a write before the rebuild: %+v, %v", res, err)
+		}
+	}
+	lost := running.runner.StreamCreatedAt()
+	own := running.runner.Committed()
+
+	rebuildLog(t, js, tracker.Domain{}.Stream())
+	s.publishPositions(t.Context())
+	if err := running.runner.StreamIdentity(); !errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("after the rebuild the tracker's identity is %v, want the rebuild", err)
+	}
+	view, err := e.ReanchorStatus(t.Context(), stream)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v", err)
+	}
+	live := view.CreatedAt
+
+	// THIS NODE'S OWN ROW NAMES THE STREAM ITS ROWS CAME FROM — the lost one,
+	// not the one the broker now serves — which is what lets a peer compare.
+	rows, err := e.backends.Fleet.Positions(t.Context())
+	if err != nil {
+		t.Fatalf("read the register: %v", err)
+	}
+	for _, row := range rows {
+		if row.NodeID != e.native.nodeID {
+			continue
+		}
+		if got := row.Domains[name].StreamCreatedAt; statelog.IdentityOf(lost, got, true) != statelog.StreamSame {
+			t.Fatalf("this node publishes its tracker position as keyed to %s, want "+
+				"the lost stream's %s", got, lost)
+		}
+	}
+
+	put := func(node string, at coord.DomainPosition) {
+		t.Helper()
+		if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
+			NodeID: node, At: time.Now().UTC(),
+			Domains: map[string]coord.DomainPosition{name: at},
+		}); err != nil {
+			t.Fatalf("publish %s's row: %v", node, err)
+		}
+	}
+	forget := func(node string) {
+		t.Helper()
+		if err := e.backends.Fleet.ForgetPositions(t.Context(), node); err != nil {
+			t.Fatalf("forget %s's row: %v", node, err)
+		}
+	}
+	reanchor := func() (statelog.ReanchorPlan, error) {
+		return e.Reanchor(t.Context(), ReanchorRequest{
+			Stream: stream, Confirm: statelog.ConfirmationOf(live), By: "ops-1",
+		})
+	}
+
+	// A PEER THAT HAS ALREADY RE-ANCHORED IT refuses, named.
+	put("reanchored", coord.DomainPosition{
+		Generation: own.Generation + 1, Seq: 3, AppliedThrough: 3, StreamCreatedAt: live,
+	})
+	if _, err := reanchor(); !errors.Is(err, statelog.ErrReanchorRefused) ||
+		!strings.Contains(err.Error(), "re-anchored peers: [reanchored]") {
+		t.Fatalf("a reanchor with a peer at a later generation = %v, want a refusal "+
+			"naming it", err)
+	}
+	forget("reanchored")
+
+	// A PEER FURTHER ALONG THE LOST STREAM refuses: it holds what this
+	// node's reanchor would discard.
+	put("ahead-on-the-lost-stream", coord.DomainPosition{
+		Generation: own.Generation, Seq: own.Seq + 5, AppliedThrough: own.Seq + 5,
+		StreamCreatedAt: lost,
+	})
+	if _, err := reanchor(); !errors.Is(err, statelog.ErrReanchorRefused) ||
+		!strings.Contains(err.Error(), "what the reanchor discards") {
+		t.Fatalf("a reanchor behind a peer on the lost stream = %v, want the "+
+			"most-caught-up refusal", err)
+	}
+	forget("ahead-on-the-lost-stream")
+
+	// AND THE FLEET AS A REBUILD REALLY LEAVES IT: a peer behind this node on
+	// the lost stream, and one that came up after the rebuild with no rows,
+	// far along the NEW stream at the same generation number. Neither holds
+	// anything this node's reanchor discards.
+	put("behind-on-the-lost-stream", coord.DomainPosition{
+		Generation: own.Generation, Seq: own.Seq - 1, AppliedThrough: own.Seq - 1,
+		StreamCreatedAt: lost,
+	})
+	put("fresh-on-the-new-stream", coord.DomainPosition{
+		Generation: own.Generation, Seq: own.Seq + 500, AppliedThrough: own.Seq + 500,
+		StreamCreatedAt: live,
+	})
+	plan, err := reanchor()
+	if err != nil {
+		t.Fatalf("the most caught-up node on the lost stream could not re-anchor it: "+
+			"%v — every peer still on that stream, and one on the new stream, was "+
+			"read as holding history it would discard", err)
+	}
+	waitUntil(t, 10*time.Second, "the tracker to resume", func() bool {
+		return running.runner.StreamIdentity() == nil &&
+			running.runner.Committed().Generation == plan.Generation
+	})
 }
 
 // A LOG REBUILT UNDER A RUNNING NODE IS RE-ANCHORED WITH THE INSTANT ITS

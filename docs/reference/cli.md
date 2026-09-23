@@ -913,11 +913,12 @@ It moves **only the log you name**: that domain's checkpoint goes to the next
 generation on the live stream, every other domain's stays where it is, and the
 domain's applier resumes on the node with no restart.
 
-For the tracker and the knowledge base it refuses while any peer is hydrated on
-the live stream, **naming the peer** — adopting that peer's snapshot recovers
-history a reanchor discards. Otherwise only the most caught-up node may run it;
-`-force` overrides that rule, and an unreadable positions register, and never a
-hydrated peer.
+For the tracker and the knowledge base it refuses while any peer has already
+re-anchored the stream, **naming the peer** — that peer's rows are the fleet's
+history in the new generation, and this node adopts its snapshot instead.
+Otherwise only the most caught-up node on the stream its rows came from may run
+it; `-force` overrides that rule, and an unreadable positions register, and
+never a re-anchored peer.
 
 For a recreated log it does not recover records that were on the old stream
 and were never applied here, and the refusal says so. See

@@ -383,10 +383,11 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 					"it is omitted")
 			force = fs.Bool("force", false,
 				"re-anchor although this node may not be the most caught-up "+
-					"on the old stream, or the positions register cannot be "+
-					"read. It never overrides a peer hydrated on the live "+
-					"stream: adopting that peer's snapshot recovers what a "+
-					"reanchor discards")
+					"on the stream its rows came from, or the positions "+
+					"register cannot be read. It never overrides a peer that "+
+					"has already re-anchored the stream: that peer's rows are "+
+					"the fleet's history in the new generation, and this node "+
+					"adopts its snapshot instead")
 		})
 	if err != nil {
 		return err

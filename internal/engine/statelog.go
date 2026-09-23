@@ -2820,8 +2820,12 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	for _, name := range s.order {
 		running := s.domains[name]
 		at := running.runner.Committed()
+		// THE INSTANT THE ROWS ARE KEYED TO rides beside the generation,
+		// because a generation alone cannot say which stream a sequence is
+		// on — see [coord.DomainPosition.StreamCreatedAt].
 		pos := coord.DomainPosition{
 			Seq: at.Seq, Generation: at.Generation, AppliedThrough: at.Seq,
+			StreamCreatedAt: running.runner.KeyedTo(),
 		}
 		// APPLIED_THROUGH IS LOWER WHEN SOMETHING IS DEFERRED, and the
 		// two numbers are what tell a lagging node from a stalled one:
