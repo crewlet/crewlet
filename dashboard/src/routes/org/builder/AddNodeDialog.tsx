@@ -252,8 +252,9 @@ function AddNodeFields({ form }: { form: AddForm }) {
             onValue={form.setContact}
           />
           <p className="t-caption">
-            A human seat needs one contact identity before the company can be saved. It can be added
-            here or later in the seat's editor.
+            Optional. Without one, no agent can @-mention this person, which is right for somebody
+            who works only through the dashboard. It can be added here or later in the seat's
+            editor.
           </p>
         </>
       )}

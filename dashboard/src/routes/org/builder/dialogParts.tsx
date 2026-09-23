@@ -366,7 +366,14 @@ export function ContactField({
         value={identity}
         onChange={(next) => onIdentity(next as HumanContactKey)}
       />
-      <ConfigField label={label} kind="id" value={value} onChange={onValue} error={error} />
+      <ConfigField
+        label={label}
+        kind="id"
+        value={value}
+        onChange={onValue}
+        required={false}
+        error={error}
+      />
     </div>
   );
 }

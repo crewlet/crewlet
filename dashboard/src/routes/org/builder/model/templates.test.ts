@@ -23,7 +23,7 @@ import { toDocument } from "./document.ts";
 import { isMintedKey } from "./keys.ts";
 import { apply, record } from "./operations.ts";
 import { reportingForest } from "./reporting.ts";
-import { seatsNeedingContact, templateIntent, type TemplateOptions } from "./templates.ts";
+import { seatsWithoutContact, templateIntent, type TemplateOptions } from "./templates.ts";
 import { countingKeys, fixtureDerived, fixtureHandle } from "./testkit.ts";
 
 const FOUNDER = { name: "Alex Rivera", identity: "slack_user_id", value: "U0FOUNDER" } as const;
@@ -211,10 +211,10 @@ describe("templates", () => {
     );
     expect(
       templateIntent(
-        { template: "empty", charter: { name: "Acme" }, founder: { ...FOUNDER, value: " " } },
+        { template: "empty", charter: { name: "Acme" }, founder: { ...FOUNDER, name: " " } },
         keys,
       ),
-    ).toMatchObject({ ok: false, message: expect.stringContaining("contact identity") });
+    ).toMatchObject({ ok: false, message: expect.stringContaining("name for your seat") });
     expect(
       templateIntent({ template: "established_company", charter: { name: "Acme" } }, keys),
     ).toMatchObject({
@@ -223,17 +223,31 @@ describe("templates", () => {
     });
   });
 
-  test("the human seats that still need an identity are listed for the checklist", () => {
+  // THE ENGINE ADMITS A HUMAN SEAT WITH NO CONTACT, so the form must too: a
+  // founder who works only through the dashboard has no chat account to type,
+  // and refusing the seat here would refuse a company the engine accepts.
+  test("your own seat needs no contact identity, and a blank one writes no contact block", () => {
+    const { doc } = build({
+      template: "empty",
+      charter: { name: "Acme" },
+      founder: { ...FOUNDER, value: "  " },
+    });
+    const founder = doc.roles!.find((r) => r.name === FOUNDER.name)!;
+    expect(founder.kind).toBe("human");
+    expect(founder).not.toHaveProperty("contact");
+  });
+
+  test("the human seats with no identity are named for the review", () => {
     const { draft } = build({
       template: "established_company",
       charter: { name: "Acme" },
       leads: "people",
       founder: FOUNDER,
     });
-    const needing = seatsNeedingContact(draft).map(
+    const without = seatsWithoutContact(draft).map(
       (key) => [...allSeats(draft)].find(({ seat }) => seat.key === key)!.seat.data.name,
     );
-    expect(needing).toEqual([
+    expect(without).toEqual([
       "Engineering Lead",
       "Reliability Lead",
       "Product Lead",
@@ -241,7 +255,7 @@ describe("templates", () => {
       "Go to Market Lead",
     ]);
     expect(
-      seatsNeedingContact(build({ template: "new_company", charter: { name: "Acme" } }).draft),
+      seatsWithoutContact(build({ template: "new_company", charter: { name: "Acme" } }).draft),
     ).toEqual([]);
   });
 });

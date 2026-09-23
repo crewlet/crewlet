@@ -14,12 +14,12 @@
  * App key are gone from the document once the change is saved. That is called
  * out on the fields that hold them.
  *
- * WHAT THE SEAT BECOMES. A human seat needs one contact identity, which the
- * dialog collects, because the engine refuses a human seat without one and the
- * refusal would otherwise arrive at the next check with no field to fix. A
- * seat that is the Datadog fallback cannot become human (an alert would wake
- * nobody), so a replacement is chosen here too, and the schedules the change
- * strands are named as they are for a move or a removal.
+ * WHAT THE SEAT BECOMES. The dialog offers one contact identity and does not
+ * require it: the engine admits a human seat with none — a person who works
+ * only through the dashboard has none to give — and the chart check names such
+ * a seat afterwards. A seat that is the Datadog fallback cannot become human
+ * (an alert would wake nobody), so a replacement is chosen here too, and the
+ * schedules the change strands are named as they are for a move or a removal.
  *
  * WHAT IT LEAVES BEHIND. Stripping a field tears nothing down at a vendor:
  * the seat's GitHub App, its chat bots and the accounts it was enrolled for
@@ -126,11 +126,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
   // seat is becoming an agent.
   const working = isWorking(handle, api.agents, api.sandboxes) ? [name] : [];
 
-  const blocked =
-    !preview.ok ||
-    api.readOnly ||
-    (becoming === "human" && contact.trim() === "") ||
-    (isFallback && routeTo === "");
+  const blocked = !preview.ok || api.readOnly || (isFallback && routeTo === "");
 
   function change() {
     if (blocked) return;
@@ -205,7 +201,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
       {becoming === "human" && (
         <EditorSection
           title="Contact identity"
-          hint="A human seat is reached through a person's own identity, and the engine refuses one without it."
+          hint="Optional. How agents @-mention the person; leave it empty for somebody who works only through the dashboard."
         >
           <ContactField
             identity={identity}

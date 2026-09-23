@@ -98,7 +98,7 @@ test("choosing another kind moves an untouched default name along, and a human s
   fireEvent.click(screen.getByRole("radio", { name: "Human seat" }));
   expect(nameBox().value).toBe("New human seat");
   pick(screen.getByLabelText("Contact"), "GitHub login");
-  fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "pat" } });
+  fireEvent.change(screen.getByLabelText(/^GitHub login/), { target: { value: "pat" } });
   fireEvent.click(screen.getByRole("button", { name: "Add human seat" }));
   expect(view.state().log.ops[0]).toMatchObject({
     type: "addSeat",

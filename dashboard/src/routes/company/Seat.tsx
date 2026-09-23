@@ -2194,7 +2194,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     size="compact"
                     icon={<LinkGlyph size={32} />}
                     title="No contact identities"
-                    description="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
+                    description="A human seat with none is reached through the dashboard only: no agent can @-mention them and their activity on other surfaces is not attributed to them. An agent seat's identities are derived from its handle and email."
                   />
                 )}
               </SettingsState>

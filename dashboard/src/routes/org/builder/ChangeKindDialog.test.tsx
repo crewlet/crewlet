@@ -3,9 +3,9 @@
  *
  * What these protect: the fields the change removes are named before it is
  * recorded, with the credential ones called out as unrecoverable; a human seat
- * cannot be made without a contact identity, nor out of the Datadog fallback
- * without a replacement; the consequences say what the seat becomes; and a
- * schedule the change strands is named first.
+ * can be made without a contact identity, as the engine admits one, but not
+ * out of the Datadog fallback without a replacement; the consequences say what
+ * the seat becomes; and a schedule the change strands is named first.
  */
 
 import { cleanup, fireEvent, screen } from "@testing-library/react";
@@ -103,11 +103,31 @@ test("what stays at the vendors and in the secret store is named, and nothing fo
   ).toBeDefined();
 });
 
-test("a human seat is not made without a contact identity, and the change records one operation", () => {
+// THE ENGINE ADMITS A HUMAN SEAT WITH NO CONTACT IDENTITY — a person who works
+// only through the dashboard has none to give — so the dialog must not demand
+// one, and a change made without one writes no contact block at all.
+test("a human seat is made without a contact identity, and writes no contact block", () => {
   const view = open(keyedState(withFields()), "seat:dev");
-  expect(toHuman().disabled).toBe(true);
+  expect(toHuman().disabled).toBe(false);
+  fireEvent.click(toHuman());
+  expect(view.state().log.ops[0]).toMatchObject({
+    type: "changeKind",
+    target: "seat:dev",
+    after: "human",
+  });
+  expect(view.state().log.ops[0]).not.toHaveProperty("contact");
+  const seat = locate(view.state().draft, "seat:dev");
+  expect(seat?.kind === "seat" && seat.node.data).toEqual({
+    name: "Dev",
+    kind: "human",
+    goal: "Build",
+  });
+});
+
+test("a contact identity given to a human seat is recorded in one operation", () => {
+  const view = open(keyedState(withFields()), "seat:dev");
   pick(screen.getByLabelText("Contact"), "GitHub login");
-  fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "dev" } });
+  fireEvent.change(screen.getByLabelText(/^GitHub login/), { target: { value: "dev" } });
   expect(toHuman().disabled).toBe(false);
   fireEvent.click(toHuman());
   expect(view.state().log.ops[0]).toMatchObject({
@@ -129,7 +149,7 @@ test("a human seat is not made without a contact identity, and the change record
 test("the Datadog fallback cannot become a human seat without a replacement", () => {
   const view = open(keyedState(fixtureCompany()), "seat:sre");
   pick(screen.getByLabelText("Contact"), "GitHub login");
-  fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "sre" } });
+  fireEvent.change(screen.getByLabelText(/^GitHub login/), { target: { value: "sre" } });
   expect(toHuman().disabled).toBe(true);
   expect(screen.getByText(/SRE is the Datadog fallback/)).toBeDefined();
   pick(screen.getByLabelText("Datadog fallback"), "Dev");
@@ -147,7 +167,7 @@ test("a seat named by a switched-off Datadog becomes human with no replacement",
   const view = open(keyedState(off), "seat:sre");
   expect(screen.queryByLabelText("Datadog fallback")).toBeNull();
   pick(screen.getByLabelText("Contact"), "GitHub login");
-  fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "sre" } });
+  fireEvent.change(screen.getByLabelText(/^GitHub login/), { target: { value: "sre" } });
   fireEvent.click(toHuman());
   expect(view.state().log.ops[0]).toMatchObject({ type: "changeKind", target: "seat:sre" });
 });
@@ -169,7 +189,7 @@ test("the company's only agent seat is told why it cannot become human, not offe
     ),
   ).toBeDefined();
   pick(screen.getByLabelText("Contact"), "GitHub login");
-  fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "only" } });
+  fireEvent.change(screen.getByLabelText(/^GitHub login/), { target: { value: "only" } });
   expect(toHuman().disabled).toBe(true);
 });
 

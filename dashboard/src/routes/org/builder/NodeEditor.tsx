@@ -983,7 +983,7 @@ function SeatEditor({
       {human ? (
         <EditorSection
           title="Contact"
-          hint="A human seat needs at least one contact identity, which is how the organization reaches the person."
+          hint="Optional: how agents @-mention and reach the person on each surface. A person who works only through the dashboard needs none, and the chart check names the seat until one is added."
         >
           {CONTACT_IDENTITIES.map(({ key: identity, label }) => (
             <ConfigField

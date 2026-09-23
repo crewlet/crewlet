@@ -27,7 +27,7 @@ const isWrite = (r: SentRequest) =>
   r.path === "/config" && r.method === "PUT" && !r.query.has("dry_run");
 
 /** Fills the create form and starts the company from a template. */
-async function startCompany(options: { template?: string; seat?: boolean } = {}) {
+async function startCompany(options: { template?: string; seat?: boolean; contact?: string } = {}) {
   fireEvent.change(await screen.findByLabelText("Company name"), {
     target: { value: "Nimbus" },
   });
@@ -38,7 +38,9 @@ async function startCompany(options: { template?: string; seat?: boolean } = {})
   if (options.seat) {
     fireEvent.click(screen.getByRole("checkbox", { name: "Add a seat for yourself" }));
     fireEvent.change(screen.getByLabelText("Your seat's name"), { target: { value: "Founder" } });
-    fireEvent.change(screen.getByLabelText("Slack member ID"), { target: { value: "U0FOUNDER" } });
+    fireEvent.change(screen.getByLabelText(/^Slack member ID/), {
+      target: { value: options.contact ?? "U0FOUNDER" },
+    });
   }
   fireEvent.click(screen.getByRole("button", { name: "Start the company" }));
 }
@@ -67,6 +69,21 @@ test("the form starts the company from a template, and the check is create-only"
   // And the whole start is one operation: undone, the form is back.
   fireEvent.keyDown(document.body, { key: "z", code: "KeyZ", ctrlKey: true });
   expect(await screen.findByRole("button", { name: "Start the company" })).toBeDefined();
+});
+
+// YOUR OWN SEAT NEEDS NO CONTACT IDENTITY. The engine admits a human seat with
+// none — an operator who works only through the dashboard has no chat account
+// to type — so the form starts the company rather than refusing it, and writes
+// no contact block rather than an empty one.
+test("your own seat starts the company with no contact identity", async () => {
+  const engine = new Engine(null);
+  mountBuilder({ engine });
+  await startCompany({ seat: true, contact: "" });
+
+  await waitFor(() => expect(engine.checks().length).toBeGreaterThan(1));
+  const sent = engine.checks().at(-1)!.body as CompanyDocument;
+  expect(sent.roles?.[0]).toMatchObject({ name: "Founder", kind: "human" });
+  expect(sent.roles?.[0]).not.toHaveProperty("contact");
 });
 
 // NOTHING TO UNDO, CHECK OR SAVE until a template is recorded, so the form

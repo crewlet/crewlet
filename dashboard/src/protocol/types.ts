@@ -603,7 +603,8 @@ export interface ConfigRole {
  * The identities a human seat's `contact` holds, as `org.HumanContact` names
  * them: a Slack member ID, a Mattermost USERNAME (the key says user id, the
  * value is the name a mention renders), an Atlassian account ID, a GitHub
- * login and a GitLab username. The engine refuses a human seat with none.
+ * login and a GitLab username. A human seat may hold none: the engine admits
+ * it, and the chart check reports it as `seat_unreachable`.
  */
 export type HumanContactKey =
   | "slack_user_id"

@@ -64,9 +64,12 @@ yourself.
 
 The Established company template asks whether unit leads are **agents** (seats
 the engine runs) or **people** (human seats). A template never invents a
-contact identity, so human leads are created without one and the review lists
-each seat that still needs one; the only identity written is the one you type
-for your own seat.
+contact identity, so human leads are created without one, and the only identity
+written is the one you type for your own seat — which is optional too: leave it
+empty if you will work only through the dashboard. A human seat with no contact
+identity is legitimate, but no agent can @-mention that person, so the review
+names each one and the [chart check](../reference/api-endpoints.md#the-continuous-report)
+keeps reporting it as `seat_unreachable` until an identity is added.
 
 Everything the template writes is one change: undo takes you back to the form.
 From there the organization is edited like any other, and **Review and save**
@@ -237,9 +240,9 @@ of the company. Seat names are unique, because a lead or a `manages` entry
 names exactly one seat, and so are unit names, because a `manages` entry or a
 unit reference names exactly one unit. The dialog starts with a name nobody
 holds, and when you type a name that is taken it offers the next free one,
-such as "Software Engineer 2". A human seat needs one contact identity before
-the company can be saved; the dialog asks for it, and it can also be added
-later in the seat's editor.
+such as "Software Engineer 2". A human seat's contact identity is optional: the
+dialog offers it, it can be added later in the seat's editor, and without one
+the person is reached through the dashboard only.
 
 ## Editing a node
 
@@ -463,9 +466,9 @@ the change is saved. Removing a field tears nothing down at a vendor, so the
 seat's apps, bots and accounts, and the secret store entries the removed fields
 referenced, are listed as they are for a deleted seat.
 
-Becoming a human seat needs one contact identity, and cannot be done to the
-Datadog fallback (while Datadog is enabled) without choosing the agent seat
-that takes over. Where the
+Becoming a human seat offers a contact identity without requiring one, and
+cannot be done to the Datadog fallback (while Datadog is enabled) without
+choosing the agent seat that takes over. Where the
 seat is the company's only agent seat, the dialog says so and the change waits
 until another agent seat exists or Datadog is disconnected. The
 schedules the change would strand, and a turn the seat is running now, are

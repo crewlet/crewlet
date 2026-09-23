@@ -152,7 +152,7 @@ export function CreateCompany({
             />
             <span className="t-caption">
               {leads === "people"
-                ? "Each unit lead is a human seat. Every one needs a contact identity before the company can be created."
+                ? "Each unit lead is a human seat, created with no contact identity. Add one in a seat's editor for a person agents should be able to @-mention."
                 : "Each unit lead is an agent seat the engine runs."}
             </span>
           </div>
@@ -187,7 +187,9 @@ export function CreateCompany({
               label={CONTACT_IDENTITIES.find((c) => c.key === identity)!.label}
               value={value}
               onChange={setValue}
+              required={false}
               disabled={disabled}
+              help="Optional. Leave it empty if you will work only through the dashboard: agents then hand you work in the tracker rather than mentioning you."
             />
           </div>
         )}

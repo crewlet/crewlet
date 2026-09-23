@@ -20,8 +20,9 @@
  * - NEVER AN INVENTED IDENTITY. A human seat reaches people through the
  *   contact identity it holds, and a made-up one would mention a stranger. The
  *   only identity a template writes is the one the operator typed for their
- *   own seat; a "Leads are people" lead is created without one, and
- *   [seatsNeedingContact] lists it until the operator supplies it.
+ *   own seat, if they typed one; a "Leads are people" lead is created without
+ *   one, and [seatsWithoutContact] names it for the review so the operator
+ *   knows nobody can @-mention that person until they add one.
  * - NEUTRAL TITLES. Seats are named for the role ("Chief Executive"), never a
  *   person, because a seat's name derives its handle and outlives whoever
  *   holds it.
@@ -54,7 +55,10 @@ export type LeadsAre = "people" | "agents";
 /** The operator's own seat, from "Your seat" in the create form. */
 export interface FounderSeat {
   readonly name: string;
-  /** Exactly one identity. */
+  /**
+   * At most one identity: a blank value declares none, which is the operator
+   * who works only through the dashboard.
+   */
   readonly identity: HumanContactKey;
   readonly value: string;
 }
@@ -202,12 +206,6 @@ export function templateIntent(options: TemplateOptions, keys: KeySource): Templ
   if (founder) {
     if (founder.name.trim() === "")
       return { ok: false, message: "Enter a name for your seat, or leave your seat out." };
-    if (founder.value.trim() === "") {
-      return {
-        ok: false,
-        message: "Enter one contact identity for your seat, so agents can reach you.",
-      };
-    }
   }
 
   let shape: Shape;
@@ -263,12 +261,16 @@ export function templateIntent(options: TemplateOptions, keys: KeySource): Templ
 
   const roles: DraftSeat[] = [];
   if (founder && founderName) {
+    // A BLANK IDENTITY WRITES NO CONTACT BLOCK rather than an empty one: the
+    // engine admits a human seat with none, and an empty block would be a
+    // field the editor then shows as set.
+    const identity = founder.value.trim();
     roles.push({
       key: mintKey(keys),
       data: {
         name: founderName,
         kind: "human",
-        contact: { [founder.identity]: founder.value.trim() },
+        ...(identity ? { contact: { [founder.identity]: identity } } : {}),
         ...(shape.top ? { manages: [final(shape.top.name)] } : {}),
       },
     });
@@ -291,11 +293,13 @@ export function templateIntent(options: TemplateOptions, keys: KeySource): Templ
 /**
  * The human seats of a draft that hold no contact identity, in walk order.
  *
- * A checklist for the create flow, not a validator: the engine refuses a human
- * seat with no identity, and this lets the review name each one before the
- * operator finds out from a refused check.
+ * A NOTICE FOR THE REVIEW, NOT A VALIDATOR: the engine admits a human seat
+ * with no identity — a person who works only through the dashboard has none
+ * to give — and names it afterwards as a `seat_unreachable` warning in the
+ * chart check. This says the same thing before the save, so nobody learns
+ * from a silent roster that no agent can @-mention a person.
  */
-export function seatsNeedingContact(draft: Draft): NodeKey[] {
+export function seatsWithoutContact(draft: Draft): NodeKey[] {
   const out: NodeKey[] = [];
   for (const { seat } of allSeats(draft)) {
     if (seat.data.kind !== "human") continue;

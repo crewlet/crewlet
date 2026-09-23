@@ -164,7 +164,7 @@ export function ReviewSaveDialog({
   warnings,
   problemCount,
   documentProblems,
-  needsContact,
+  withoutContact,
   writeId,
   phase,
   onSave,
@@ -179,8 +179,11 @@ export function ReviewSaveDialog({
   warnings: readonly ConfigWarning[];
   problemCount: number;
   documentProblems: readonly PlacedProblem[];
-  /** Human seats holding no contact identity, by name. */
-  needsContact: readonly string[];
+  /**
+   * Human seats holding no contact identity, by name. A notice rather than a
+   * refusal: the engine admits such a seat, and the chart check reports it.
+   */
+  withoutContact: readonly string[];
   writeId: string;
   phase: SavePhase;
   onSave: (summary: string) => void;
@@ -286,11 +289,16 @@ export function ReviewSaveDialog({
         </Callout>
       )}
 
-      {needsContact.length > 0 && (
-        <section className="col gap-1" aria-label="Seats that need a contact identity">
-          <strong>These human seats need a contact identity</strong>
+      {withoutContact.length > 0 && (
+        <section className="col gap-1" aria-label="Human seats with no contact identity">
+          <strong>These human seats have no contact identity</strong>
+          <p className="t-caption">
+            No agent can @-mention them, so agents hand them work in the tracker instead. That is
+            right for a person who works only through the dashboard; the chart check keeps naming
+            each one until an identity is added in the seat's editor.
+          </p>
           <ul className="org-builder-list">
-            {needsContact.map((name) => (
+            {withoutContact.map((name) => (
               <li key={name}>{name}</li>
             ))}
           </ul>
