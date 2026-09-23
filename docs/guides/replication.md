@@ -535,13 +535,20 @@ replication:
 The snapshotter, the donor and the adopter write under the same component. The
 lines the engine writes *around* those loops — `statelog_stream_recreated` and
 `statelog_below_the_floor` among them — carry `component=engine`, because the
-component names the code that wrote a line rather than what it is about. Two of
-them are about a peer's reanchor: `statelog_generation_passed` (`WARN`) is the
-heartbeat finding a log re-anchored past this node's generation, naming both
-(`generation`, `fleet_generation`), from which point the domain refuses; and
+component names the code that wrote a line rather than what it is about. Three
+of them are about a peer's reanchor: `statelog_generation_passed` (`WARN`) is
+the heartbeat finding a log re-anchored past this node's generation, naming
+both (`generation`, `fleet_generation`), from which point the domain refuses;
 `statelog_behind_a_reanchor` (`WARN`) is the join asking the fleet for a
 snapshot at the new generation, naming the domains and the generations it asks
-at. See [a node a peer re-anchored past](retention.md#a-node-a-peer-re-anchored-past).
+at; and `statelog_generations_unread` (`WARN`) is a beat that read the
+positions register but could not establish which generation the fleet is on —
+the trim floors unread, or an eviction record unreadable. Such a beat judges
+neither that nor the truncation below, and leaves both verdicts where they
+were: the peer whose rows hold what a log lost is usually the peer that then
+re-anchors past it, so judging the truncation alone would lift that fence on
+the very beat that could not yet say the passed verdict replaces it. See
+[a node a peer re-anchored past](retention.md#a-node-a-peer-re-anchored-past).
 Two are about a broker restored from an older copy:
 `statelog_log_diverged` (`ERROR`) is the log holding, at this node's
 checkpoint, another record than the one it consumed there — the restored log
@@ -559,7 +566,8 @@ node's writes of that domain refuse `log_truncated` while its reads go on;
 `statelog_log_truncated_cleared` (`WARN`) is that ending, once the peer has
 re-anchored, been rebuilt or been evicted; and `statelog_truncation_unread`
 (`WARN`) is a beat that could not establish it either way, which leaves the
-verdict where it was.
+verdict where it was — as does a `statelog_generations_unread` beat, which does
+not ask.
 
 ## Three things CI cannot prove
 

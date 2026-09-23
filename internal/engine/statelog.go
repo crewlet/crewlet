@@ -3163,12 +3163,27 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	//
 	// THE REGISTER IS READ ONCE for both questions this beat asks of it —
 	// which generation the fleet is on, and whether a peer's rows hold
-	// records a log lost ([stateLog.truncation]) — and unread, neither is
-	// judged.
+	// records a log lost ([stateLog.truncation]) — and the two are judged
+	// from ONE SUCCESSFUL READING OR NOT AT ALL. They are not independent:
+	// the peer whose rows hold what the log lost is very often the peer that
+	// then re-anchored past it, and its row moving to the next generation is
+	// what takes it out of the truncation's comparison. Judged on a beat
+	// whose generations could not be established, that row lifted the write
+	// fence while nothing set the passed verdict that should replace it, and
+	// the node took writes at a generation the fleet had left.
 	rows, rowsErr := s.fleet.Positions(ctx)
 	generations, genErr := map[string]uint32(nil), rowsErr
 	if rowsErr == nil {
 		generations, genErr = s.fleetGenerations(ctx, rows, s.openLogs(), above)
+		if genErr != nil && ctx.Err() == nil {
+			log.WarnContext(ctx, "statelog_generations_unread",
+				"node", s.nodeID, "error", genErr.Error(),
+				"detail", "which generation the fleet is on could not be "+
+					"established this beat, so neither whether a peer re-anchored "+
+					"past this node nor whether a peer's rows hold records a log "+
+					"lost is judged; both verdicts stay where they were until a "+
+					"beat can read them together")
+		}
 	}
 	for _, name := range s.order {
 		running := s.domains[name]
@@ -3273,8 +3288,8 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			}
 			// AND WHETHER A PEER'S ROWS HOLD RECORDS THIS LOG LOST, which
 			// refuses this node's writes of it — against the same end, and
-			// only on a register this beat could read.
-			if rowsErr == nil {
+			// only on the reading the passed verdict above was judged from.
+			if genErr == nil {
 				truncation, truncErr := s.truncation(ctx, running, rows, at, stats.LastSeq)
 				switch {
 				case truncErr == nil:

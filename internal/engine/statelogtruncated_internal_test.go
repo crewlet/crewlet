@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -334,5 +335,111 @@ func TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack(t *testing
 		t.Fatalf("after %d writes this node's row names generation %d, want the "+
 			"reanchored %d — the beat that read the tracker before the reanchor "+
 			"wrote after it", n, last, running.runner.Committed().Generation)
+	}
+}
+
+// floorlessFleet is a coordination store whose trim floors cannot be read
+// while failing is set — the half of a beat's reading that establishes which
+// generation the fleet is on, failing while the register itself answers.
+type floorlessFleet struct {
+	wrappedFleet
+	failing atomic.Bool
+}
+
+func (f *floorlessFleet) Floors(ctx context.Context) ([]coord.TrimFloor, error) {
+	if f.failing.Load() {
+		return nil, errors.New("the trim floors are unreadable")
+	}
+	return f.wrappedFleet.Floors(ctx)
+}
+
+// THE TRUNCATION FENCE DOES NOT LIFT BEFORE THE PASSED VERDICT REPLACES IT.
+//
+// The peer whose rows hold what the log lost is very often the peer that then
+// re-anchors past it, and its row moving to the next generation is what takes
+// it out of the truncation's comparison. A beat that read the register but
+// could not establish the fleet's generations judged the truncation anyway:
+// the fence lifted and nothing set the passed verdict, so the node served
+// writes at a generation the fleet had left. The two are judged from one
+// successful reading or not at all.
+func TestTheTruncationFenceStaysUntilThePassedVerdictReplacesIt(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	back, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	register := back.Fleet
+	fleet := &floorlessFleet{wrappedFleet: register}
+	back.Fleet = fleet
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+
+	s := e.native.Load().log
+	running := s.Domain(tracker.Domain{}.Name())
+	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("a write: %+v, %v", res, err)
+	}
+	stats, err := running.log.Stats(t.Context())
+	if err != nil {
+		t.Fatalf("read the log: %v", err)
+	}
+	at := running.runner.Committed()
+	peerAt := func(gen uint32) {
+		t.Helper()
+		if err := register.PutPositions(t.Context(), coord.NodePositions{
+			NodeID: "node-peer",
+			Domains: map[string]coord.DomainPosition{tracker.Domain{}.Name(): {
+				Seq: stats.LastSeq + 5, Generation: gen,
+				StreamCreatedAt: running.runner.KeyedTo(),
+			}},
+		}); err != nil {
+			t.Fatalf("publish the peer's row: %v", err)
+		}
+	}
+
+	// A PEER'S ROWS HOLD WHAT THE LOG LOST: the fence goes up.
+	peerAt(at.Generation)
+	s.publishPositions(t.Context())
+	if err := running.runner.Truncated(); !errors.Is(err, statelog.ErrLogTruncated) {
+		t.Fatalf("the truncation is %v, want the peer's position past the end", err)
+	}
+
+	// THE PEER RE-ANCHORS PAST THIS NODE, on a beat whose generations cannot
+	// be read.
+	fleet.failing.Store(true)
+	peerAt(at.Generation + 1)
+	s.publishPositions(t.Context())
+	if err := running.runner.Truncated(); !errors.Is(err, statelog.ErrLogTruncated) {
+		t.Fatalf("on a beat whose generations were unread the truncation is %v — "+
+			"the fence lifted with nothing to replace it", err)
+	}
+	if err := running.runner.StreamIdentity(); err != nil {
+		t.Fatalf("the passed verdict was set on a beat that could not read the "+
+			"fleet's generations: %v", err)
+	}
+
+	// ONE READING, BOTH VERDICTS: the passed verdict goes up as the fence
+	// comes down.
+	fleet.failing.Store(false)
+	s.publishPositions(t.Context())
+	if err := running.runner.StreamIdentity(); !errors.Is(err, statelog.ErrGenerationPassed) {
+		t.Fatalf("the reads refuse with %v, want the peer's reanchor past this node", err)
+	}
+	if err := running.runner.Truncated(); err != nil {
+		t.Fatalf("with the peer judged in its own generation the truncation still "+
+			"refuses: %v", err)
 	}
 }
