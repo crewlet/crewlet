@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -143,16 +144,29 @@ func (c *secretsClient) Unset(ctx context.Context, name string) (bool, error) {
 // names a different active key than the node's is an operator rekeying onto a
 // key the fleet will not be sealing with — silent success there would report
 // a completed rotation over rows sealed under something else.
-func (c *secretsClient) Rekey(ctx context.Context, activeKeyID, _ string, _ time.Time) ([]string, error) {
+func (c *secretsClient) Rekey(ctx context.Context, activeKeyID, _ string, _ time.Time) (fleetsecrets.Rekeyed, error) {
 	var body struct {
-		Moved []string `json:"moved"`
+		Moved      []string `json:"moved"`
+		EngineKeys int      `json:"engine_keys_moved"`
 	}
 	err := c.call(ctx, http.MethodPost,
 		"/secrets/rekey?key_id="+url.QueryEscape(activeKeyID), nil, &body)
 	if err != nil {
-		return nil, err
+		return fleetsecrets.Rekeyed{}, err
 	}
-	return body.Moved, nil
+	return fleetsecrets.Rekeyed{Moved: body.Moved, EngineKeys: body.EngineKeys}, nil
+}
+
+// EngineKeys reads the count the node's listing carries beside the operator's
+// names: the engine's own keys, per keyring key, none of them named.
+func (c *secretsClient) EngineKeys(ctx context.Context) (secrets.EngineKeys, error) {
+	var body struct {
+		EngineKeys secrets.EngineKeys `json:"engine_keys"`
+	}
+	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
+		return secrets.EngineKeys{}, err
+	}
+	return body.EngineKeys, nil
 }
 
 // call performs one request and decodes the answer, or explains the refusal.
@@ -239,6 +253,13 @@ func (c *secretsClient) refusal(status int, path string, raw []byte) error {
 		return fmt.Errorf("%s has no /secrets surface: it is running a build "+
 			"from before secrets moved onto the fleet, or it cannot reach the "+
 			"coordination store", c.base)
+	case status == http.StatusForbidden && body.Error == "reserved_name":
+		// THE SENTINEL again, for the same reason: the name is the
+		// engine's own, which no grant changes — a caller that read this
+		// as a missing grant would go and ask for one.
+		return fmt.Errorf("%w: %s", secrets.ErrReservedName,
+			withRefusalDetail(strings.TrimPrefix(
+				strings.SplitN(path, "?", 2)[0], "/secrets/"), "", body.Hint))
 	}
 	if msg, ok := credentialRefusal(status, raw, true); ok {
 		return fmt.Errorf("%s: %s", c.base, msg)

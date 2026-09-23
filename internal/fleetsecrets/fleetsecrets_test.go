@@ -143,28 +143,137 @@ func TestAListingCarriesNoValueAndNeedsNoKey(t *testing.T) {
 	}
 }
 
-// THE NAMES UNDER A PREFIX NEED NO KEYRING EITHER, because what reads them is
-// the duty that finishes a removal: destroying a removed person's key is an
-// Unset, which a node with no keyring can perform, so finding the key must not
-// be the half that needs one. Only the prefix's names come back, in order.
-func TestNamesUnderAPrefixNeedNoKey(t *testing.T) {
+// THE ENGINE'S NAMES UNDER A PREFIX NEED NO KEYRING EITHER, because what reads
+// them is the duty that finishes a removal: destroying a removed person's key
+// is an Unset, which a node with no keyring can perform, so finding the key
+// must not be the half that needs one. Only the prefix's names come back, in
+// order, and only through the engine's own view.
+func TestTheEnginesNamesUnderAPrefixNeedNoKey(t *testing.T) {
 	t.Parallel()
 	s, fleet := fleetStore(t, ring(t, "k1"))
-	mustSet(t, s, "IAM_PERSON_B_DEK", "b")
-	mustSet(t, s, "IAM_PERSON_A_DEK", "a")
+	estate := s.Estate()
+	for name, value := range map[string]string{
+		"iam/person/b/dek": "b", "iam/person/a/dek": "a",
+		"iam/session/l1/refresh": "r",
+	} {
+		if err := estate.Set(t.Context(), name, value, "node-a", "iam", clock); err != nil {
+			t.Fatalf("Set(%s): %v", name, err)
+		}
+	}
 	mustSet(t, s, "GITLAB_TOKEN", "glpat")
 
-	names, err := fleetsecrets.New(fleet, nil).Names(t.Context(), "IAM_PERSON_")
+	keyless := fleetsecrets.New(fleet, nil).Estate()
+	names, err := keyless.Names(t.Context(), "iam/person/")
 	if err != nil {
 		t.Fatalf("a node with no keyring could not find what a removal left: %v", err)
 	}
-	if strings.Join(names, ",") != "IAM_PERSON_A_DEK,IAM_PERSON_B_DEK" {
+	if strings.Join(names, ",") != "iam/person/a/dek,iam/person/b/dek" {
 		t.Fatalf("names = %v, want exactly the prefix's, name-ordered", names)
 	}
-	if removed, err := fleetsecrets.New(fleet, nil).Unset(t.Context(),
-		"IAM_PERSON_A_DEK"); err != nil || !removed {
+	if removed, err := keyless.Unset(t.Context(), "iam/person/a/dek"); err != nil ||
+		!removed {
 		t.Fatalf("a node with no keyring could not destroy a key it found: "+
 			"(%v, %v)", removed, err)
+	}
+	// A PREFIX OUTSIDE THE ENGINE'S NAMESPACE IS REFUSED: the engine's view
+	// never lists the operator's credentials either.
+	if _, err := keyless.Names(t.Context(), "GITLAB"); !errors.Is(err,
+		secrets.ErrInvalidName) {
+		t.Errorf("the engine's view listed an operator prefix (%v)", err)
+	}
+}
+
+// THE OPERATOR'S VIEW DOES NOT REACH THE ENGINE'S KEYS, by any route.
+//
+// A person's key and a session's refresh token used to be ordinary operator
+// secrets: listed, revealable — so a copy taken before a removal defeated the
+// shred the removal is — deletable, so a DELETE shredded somebody with no
+// removal on record, and decrypted into every node's ${VAR} snapshot on every
+// apply. Each of those routes is closed here, and the one gesture that crosses
+// — a rekey, because the keyring is one keyring — moves them and counts them.
+func TestTheOperatorsViewDoesNotReachTheEnginesKeys(t *testing.T) {
+	t.Parallel()
+	old := ring(t, "k1", "k2")
+	s, fleet := fleetStore(t, old)
+	const key = "iam/person/018f3a9c-0000-7000-8000-000000000001/dek"
+	if err := s.Estate().Set(t.Context(), key, "the-person-key", "node-a",
+		"iam", clock); err != nil {
+		t.Fatalf("the engine's view could not write its own key: %v", err)
+	}
+	mustSet(t, s, "GITLAB_TOKEN", "glpat")
+
+	if _, err := s.Get(t.Context(), key); !errors.Is(err, secrets.ErrReservedName) {
+		t.Errorf("a reveal of an engine key answered %v, want ErrReservedName", err)
+	}
+	if _, _, err := s.Describe(t.Context(), key); !errors.Is(err,
+		secrets.ErrReservedName) {
+		t.Errorf("describing an engine key answered %v, want ErrReservedName", err)
+	}
+	if err := s.Set(t.Context(), key, "overwritten", "sam", "cli", clock); !errors.Is(err,
+		secrets.ErrReservedName) {
+		t.Errorf("overwriting an engine key answered %v, want ErrReservedName", err)
+	}
+	if _, err := s.Unset(t.Context(), key); !errors.Is(err, secrets.ErrReservedName) {
+		t.Errorf("deleting an engine key answered %v, want ErrReservedName", err)
+	}
+	if got, err := s.Estate().Get(t.Context(), key); err != nil || got != "the-person-key" {
+		t.Fatalf("after every refused gesture the key reads %q (%v)", got, err)
+	}
+
+	rows, err := s.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Name != "GITLAB_TOKEN" {
+		t.Errorf("the operator's listing is %+v, want the one operator row", rows)
+	}
+	values, err := s.All(t.Context())
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if _, snapped := values[key]; snapped || len(values) != 1 {
+		t.Errorf("the ${VAR} snapshot holds %d values, the engine key among "+
+			"them: %t", len(values), snapped)
+	}
+	engine, err := s.EngineKeys(t.Context())
+	if err != nil || engine.Total != 1 || engine.ByKey["k1"] != 1 {
+		t.Errorf("the engine keys count %+v (%v), want one under k1", engine, err)
+	}
+
+	// A REKEY MOVES IT, and counts rather than names it.
+	rotated := fleetsecrets.New(fleet, ring(t, "k2", "k1"))
+	rekeyed, err := rotated.Rekey(t.Context(), "k2", "sam", clock)
+	if err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+	if strings.Join(rekeyed.Moved, ",") != "GITLAB_TOKEN" || rekeyed.EngineKeys != 1 {
+		t.Errorf("the rekey reported %+v, want the operator row named and the "+
+			"engine key counted", rekeyed)
+	}
+	if engine, err := rotated.EngineKeys(t.Context()); err != nil ||
+		engine.StaleUnder("k2") != 0 {
+		t.Errorf("after the rekey %d engine keys are still under a retired key "+
+			"(%v)", engine.StaleUnder("k2"), err)
+	}
+	if got, err := rotated.Estate().Get(t.Context(), key); err != nil ||
+		got != "the-person-key" {
+		t.Errorf("after the rekey the engine key reads %q (%v)", got, err)
+	}
+}
+
+// THE ENGINE'S VIEW WRITES ONLY ITS OWN GRAMMAR, so no estate caller can reach
+// an operator's credential either — and an id that would leave a segment
+// empty is refused rather than shared.
+func TestTheEnginesViewWritesOnlyItsOwnNames(t *testing.T) {
+	t.Parallel()
+	s, _ := fleetStore(t, ring(t, "k1"))
+	for _, name := range []string{
+		"GITLAB_TOKEN", "iam/person//dek", "iam/Person/x/dek", "iam", "other/x",
+	} {
+		if err := s.Estate().Set(t.Context(), name, "v", "node-a", "iam",
+			clock); !errors.Is(err, secrets.ErrInvalidName) {
+			t.Errorf("the engine's view wrote %q (%v)", name, err)
+		}
 	}
 }
 
@@ -210,13 +319,13 @@ func TestARekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rekey: %v", err)
 	}
-	if strings.Join(moved, ",") != "A,B" {
+	if strings.Join(moved.Moved, ",") != "A,B" || moved.EngineKeys != 0 {
 		t.Fatalf("moved = %v, want both names", moved)
 	}
 	// A SECOND RUN IS A NO-OP, which is what makes this safe in a deploy
 	// script.
 	again, err := rotated.Rekey(t.Context(), "k2", "sam", clock)
-	if err != nil || len(again) != 0 {
+	if err != nil || len(again.Moved) != 0 || again.EngineKeys != 0 {
 		t.Fatalf("a second rekey moved %v (err %v), want nothing", again, err)
 	}
 	values, err := rotated.All(t.Context())

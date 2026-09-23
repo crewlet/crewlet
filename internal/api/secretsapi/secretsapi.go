@@ -27,6 +27,17 @@
 // the grant vocabulary draws, so an automation that reseals keys can hold the
 // write and never the read, meant nothing while no route asked either.
 //
+// # The engine's own key material is not reachable from here at all
+//
+// The same bucket holds a person's data key, each OIDC session's refresh
+// token and the company's blind-index keys, under names in the engine's own
+// namespace ([secrets.Reserved]). Every route that takes a name refuses one of
+// those with `403 reserved_name` before anything else — whatever the caller
+// holds — and the listing counts them per keyring key without naming any. They
+// were once ordinary names here, and that made a reveal a way to copy a
+// person's key before their removal shredded it, and a DELETE a removal nobody
+// recorded.
+//
 // # There is exactly one route that returns a value, and it is break-glass
 //
 // It requires an explicit ?reveal=true — a path that cannot be reached by
@@ -151,17 +162,48 @@ func (s *Service) Routes(mux authz.Mux) error {
 }
 
 // list serves GET /secrets — every name, with no values.
+//
+// THE ENGINE'S OWN KEYS ARE COUNTED AND NEVER NAMED. A person's data key and a
+// session's refresh token are not the operator's to read, write or delete, and
+// a listing of them was the first step to every one of those; what an operator
+// does need is to see a rotation reach them, so `engine_keys` says how many
+// there are under each keyring key and nothing else.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.List(r.Context())
 	if err != nil {
 		s.fail(w, "list the secrets", err)
 		return
 	}
+	engine, err := s.store.EngineKeys(r.Context())
+	if err != nil {
+		s.fail(w, "count the engine's keys", err)
+		return
+	}
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, render(row))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"secrets": out})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"secrets": out, "engine_keys": engine,
+	})
+}
+
+// reserved refuses a name in the engine's own namespace, and says what to do
+// instead. Every route that takes a name asks it FIRST — before the grant a
+// reveal asks and before a body is read — because no caller of this surface,
+// whatever it holds, may address one.
+func reserved(w http.ResponseWriter, name string) bool {
+	if !secrets.Reserved(name) {
+		return false
+	}
+	httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeReservedName, map[string]string{
+		"detail": secrets.ErrReservedName.Error(),
+		"hint": "a person's key and a session's refresh token belong to the " +
+			"identity estate: remove a person with `crewlet iam remove`, end a " +
+			"session with `crewlet iam revoke`; a rekey moves these keys with " +
+			"everything else",
+	})
+	return true
 }
 
 // get serves GET /secrets/{name} — metadata, or the value with ?reveal=true.
@@ -175,6 +217,9 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidName,
 			map[string]string{"detail": "the path names no secret"})
+		return
+	}
+	if reserved(w, name) {
 		return
 	}
 	if r.URL.Query().Get("reveal") != "true" {
@@ -229,11 +274,15 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 // operator and the byte sequence the vendor will check.
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if reserved(w, name) {
+		return
+	}
 	// BEFORE THE BODY, so a name the grammar cannot reference is refused
 	// without moving 64 KiB of credential through the process first. Only
 	// the write checks: an out-of-grammar row that already exists must
 	// stay readable and, above all, removable, so get and delete take the
-	// name as given.
+	// name as given — every name but the engine's own, which no route here
+	// addresses at all.
 	if err := secrets.CheckName(name); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidName, map[string]string{
 			"detail": err.Error(),
@@ -288,6 +337,9 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"detail": "the path names no secret"})
 		return
 	}
+	if reserved(w, name) {
+		return
+	}
 	removed, err := s.store.Unset(r.Context(), name)
 	if err != nil {
 		s.fail(w, "remove the secret", err)
@@ -340,24 +392,41 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	operator := auth.OperatorID(caller)
-	moved, err := s.store.Rekey(r.Context(), s.keyID, operator, s.now())
+	rekeyed, err := s.store.Rekey(r.Context(), s.keyID, operator, s.now())
 	if err != nil {
 		// THE NAMES THAT DID MOVE travel with the refusal. A partial
 		// rekey is a fact an operator has to act on, and a bare 500
 		// would leave them re-running a pass with no idea which rows
 		// are already under the new key.
 		log.ErrorContext(r.Context(), "secret_rekey_failed", "error", err,
-			"moved", moved, "operator", operator)
+			"moved", rekeyed.Moved, "engine_keys_moved", rekeyed.EngineKeys,
+			"operator", operator)
 		httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeRekeyIncomplete, httpjson.Detail{
-			"moved": moved,
+			"moved":             nonNil(rekeyed.Moved),
+			"engine_keys_moved": rekeyed.EngineKeys,
 			"hint": "a row could not be opened with this node's keyring; the " +
 				"key that sealed it is missing from secrets.keys",
 		})
 		return
 	}
-	log.InfoContext(r.Context(), "secrets_rekeyed", "moved", moved,
-		"key_id", s.keyID, "operator", operator)
-	writeJSON(w, http.StatusOK, map[string]any{"key_id": s.keyID, "moved": moved})
+	log.InfoContext(r.Context(), "secrets_rekeyed", "moved", rekeyed.Moved,
+		"engine_keys_moved", rekeyed.EngineKeys, "key_id", s.keyID,
+		"operator", operator)
+	// THE ENGINE'S KEYS AS A COUNT beside the operator's names: the operator
+	// retiring the old key needs to know they moved, and nothing more.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"key_id": s.keyID, "moved": nonNil(rekeyed.Moved),
+		"engine_keys_moved": rekeyed.EngineKeys,
+	})
+}
+
+// nonNil is a list as JSON renders it for a reader that ranges over it: an
+// empty array, never null.
+func nonNil(names []string) []string {
+	if names == nil {
+		return []string{}
+	}
+	return names
 }
 
 // sealed refuses a write on a node with no keyring, and says what to do.

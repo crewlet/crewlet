@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,6 +229,47 @@ func TestTheFleetsSecretBeatsASurvivingLocalRow(t *testing.T) {
 	e.refreshSecrets(t.Context())
 	if got := e.resolver().Value("${GL}"); got != "the-rotated-token" {
 		t.Fatalf("${GL} = %q, want the fleet's value", got)
+	}
+}
+
+// NO ${VAR} REACHES THE ENGINE'S OWN KEYS.
+//
+// A person's key and a session's refresh token share the fleet's bucket with
+// the operator's credentials. While they carried operator names, every apply
+// decrypted all of them into this node's resolver, and `${…}` in an `mcp_env`
+// handed somebody's live credential at their identity provider to a child
+// process. The snapshot now holds the operator's rows alone, and an engine
+// name is not one any reference can spell — so neither the snapshot, a
+// lookup nor an expansion answers with one.
+func TestNoReferenceReachesTheEnginesOwnKeys(t *testing.T) {
+	e, _, fleet := engineWithFleetSecrets(t)
+	const key = "iam/session/018f3a9c-0000-7000-8000-000000000001/refresh"
+	if err := fleet.Estate().Set(t.Context(), key, "a-live-refresh-token",
+		"node-a", "iam", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.Set(t.Context(), "GL", "glpat-x", "sam", "cli",
+		time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	values, err := e.secretSnapshot(t.Context())
+	if err != nil {
+		t.Fatalf("secretSnapshot: %v", err)
+	}
+	if _, held := values[key]; held || values["GL"] != "glpat-x" {
+		t.Fatalf("the snapshot holds %d values, the engine's key among them: %t",
+			len(values), held)
+	}
+	e.refreshSecrets(t.Context())
+	if got, found := e.LookupSecret(key); found || got != "" {
+		t.Errorf("a lookup of the engine's key answered (%q, %t)", got, found)
+	}
+	if got := e.Resolve("${" + key + "}"); strings.Contains(got, "a-live-refresh-token") {
+		t.Errorf("a reference to the engine's key expanded to %q", got)
+	}
+	if got := e.Resolve("${GL}"); got != "glpat-x" {
+		t.Errorf("the operator's own ${GL} = %q, want its value", got)
 	}
 }
 

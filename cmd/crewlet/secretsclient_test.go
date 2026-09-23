@@ -299,7 +299,7 @@ func TestTheNodesHintIsCarriedIntoTheError(t *testing.T) {
 func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
-	node.body = `{"moved":["A","B"]}`
+	node.body = `{"moved":["A","B"],"engine_keys_moved":3}`
 
 	moved, err := node.client(t).Rekey(t.Context(), "key-2", "op", time.Now())
 	if err != nil {
@@ -308,8 +308,53 @@ func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 	if node.last.query != "key_id=key-2" {
 		t.Errorf("query = %q, want the expected key to travel", node.last.query)
 	}
-	if strings.Join(moved, ",") != "A,B" {
+	if strings.Join(moved.Moved, ",") != "A,B" || moved.EngineKeys != 3 {
 		t.Errorf("moved = %v, want what the node reported", moved)
+	}
+}
+
+// THE ENGINE'S OWN KEYS ARE REFUSED BY NAME, on both sides of the wire.
+//
+// The command refuses a reserved name before it opens any store — a stopped
+// node's own table never holds one, and a running node refuses it too — and
+// a node that answers `reserved_name` comes back as the same sentinel rather
+// than as a missing grant, which would send an operator off to ask for one.
+func TestTheEnginesOwnKeysAreRefusedByTheCommand(t *testing.T) {
+	cfg := bootstrapWithKeyring(t, "k1")
+	const key = "iam/session/018f3a9c-0000-7000-8000-000000000001/refresh"
+	for _, args := range [][]string{
+		{"get", key, "-reveal"},
+		{"set", key, "-value", "stolen"},
+		{"unset", key},
+	} {
+		_, _, err := secretsCmd(t, cfg, args...)
+		if !errors.Is(err, secrets.ErrReservedName) {
+			t.Errorf("secrets %s answered %v, want ErrReservedName", args[0], err)
+		}
+	}
+
+	t.Setenv(apiTokenEnv, cliFixtureToken)
+	node := newFakeSecretsNode(t)
+	node.status = http.StatusForbidden
+	node.body = `{"error":"reserved_name","hint":"remove a person with crewlet iam remove"}`
+	if _, err := node.client(t).Get(t.Context(), key); !errors.Is(err,
+		secrets.ErrReservedName) {
+		t.Errorf("the node's reserved_name answered %v, want ErrReservedName", err)
+	}
+}
+
+// A LISTING SAYS HOW MANY OF THE ENGINE'S KEYS A ROTATION HAS TO MOVE, from
+// the count the node carries beside the names — and names none of them.
+func TestAListingCountsTheEnginesKeys(t *testing.T) {
+	t.Setenv(apiTokenEnv, cliFixtureToken)
+	node := newFakeSecretsNode(t)
+	node.body = `{"secrets":[],"engine_keys":{"total":4,"by_key":{"k1":3,"k2":1}}}`
+	keys, err := node.client(t).EngineKeys(t.Context())
+	if err != nil {
+		t.Fatalf("EngineKeys: %v", err)
+	}
+	if keys.Total != 4 || keys.StaleUnder("k2") != 3 {
+		t.Errorf("the count reads %+v, want 4 with 3 under a key other than k2", keys)
 	}
 }
 

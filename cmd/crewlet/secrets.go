@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -119,13 +120,6 @@ func runSecrets(args []string, stdout, stderr io.Writer) error {
 		return generateKey(*keyID, append(nonEmpty(name), fs.Args()...), stdout, stderr)
 	}
 
-	ctx := context.Background()
-	sv, closeStore, err := openSecretStore(ctx, *bootstrapPath, *apiURL)
-	if err != nil {
-		return err
-	}
-	defer closeStore()
-
 	// The trailing form — `secrets get -config path TOKEN` — leaves the
 	// name here instead. Anything beyond one is an error rather than a
 	// silently ignored argument.
@@ -133,6 +127,24 @@ func runSecrets(args []string, stdout, stderr io.Writer) error {
 	if given > 1 {
 		return fmt.Errorf("secrets %s takes one name, got %d", sub, given)
 	}
+	// THE ENGINE'S OWN KEYS ARE REFUSED BEFORE ANYTHING OPENS, whichever
+	// store this would reach: the node refuses them too, and a stopped
+	// node's own table never holds one, so there is no route on which
+	// asking could do anything but fail later and less clearly.
+	if secrets.Reserved(name) {
+		return fmt.Errorf("%w: %s\n\nA person's key and a session's refresh "+
+			"token belong to the identity estate: remove a person with "+
+			"`crewlet iam remove`, end their sessions with `crewlet iam "+
+			"revoke`. `crewlet secrets rekey` moves these keys with everything "+
+			"else and counts them", secrets.ErrReservedName, name)
+	}
+
+	ctx := context.Background()
+	sv, closeStore, err := openSecretStore(ctx, *bootstrapPath, *apiURL)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
 
 	switch sub {
 	case "list":
@@ -181,7 +193,31 @@ type secretBackend interface {
 	Set(ctx context.Context, name, value, by, source string, now time.Time) error
 	Get(ctx context.Context, name string) (string, error)
 	Unset(ctx context.Context, name string) (bool, error)
-	Rekey(ctx context.Context, activeKeyID, by string, now time.Time) ([]string, error)
+	Rekey(ctx context.Context, activeKeyID, by string, now time.Time) (fleetsecrets.Rekeyed, error)
+
+	// EngineKeys counts the engine's own key material the store holds,
+	// per keyring key, naming none of it — which is what a rotation has
+	// to see moved before the old key can go.
+	EngineKeys(ctx context.Context) (secrets.EngineKeys, error)
+}
+
+// localSecrets is this node's own table as a backend.
+//
+// IT HOLDS NO ENGINE KEYS, by construction: the engine keeps its key material
+// on the fleet and the node-local table refuses every name outside the
+// reference grammar at the write. So its count is honestly zero and its rekey
+// moves the operator's rows alone.
+type localSecrets struct{ *store.SecretValues }
+
+func (l localSecrets) Rekey(ctx context.Context, activeKeyID, by string,
+	now time.Time) (fleetsecrets.Rekeyed, error) {
+
+	moved, err := l.SecretValues.Rekey(ctx, activeKeyID, by, now)
+	return fleetsecrets.Rekeyed{Moved: moved}, err
+}
+
+func (localSecrets) EngineKeys(context.Context) (secrets.EngineKeys, error) {
+	return secrets.EngineKeys{}, nil
 }
 
 // secretTarget is the backend plus what to tell the operator about it.
@@ -242,7 +278,7 @@ func openSecretStore(ctx context.Context, bootstrapPath, apiURL string) (*secret
 	sv, closeStore, err := openSecretValues(ctx, boot)
 	if err == nil {
 		return &secretTarget{
-			secretBackend: sv, fleet: false,
+			secretBackend: localSecrets{sv}, fleet: false,
 			where: boot.Store.Path + " — this node's own rows, which no peer " +
 				"can see until the engine migrates them at its next start",
 		}, closeStore, nil
@@ -342,23 +378,39 @@ func listSecrets(ctx context.Context, sv *secretTarget, stdout io.Writer) error 
 	}
 	if len(rows) == 0 {
 		fmt.Fprintf(stdout, "no secrets are stored in %s\n", sv.where)
-		return nil
+	} else {
+		// WHICH STORE, above the table. The two hold different rows, and a
+		// listing that did not say which one it read is one an operator can
+		// misread as "the fleet has nothing" when they are looking at a
+		// stopped node's own empty table.
+		fmt.Fprintf(stdout, "%s\n\n", sv.where)
+		// NO VALUES, ever. This is what an operator reads to answer "is X
+		// set", and a listing that printed plaintext would put a company's
+		// whole credential set on one screen — and into one scrollback
+		// buffer.
+		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tKEY\tUPDATED\tBY\tSOURCE")
+		for _, r := range rows {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.KeyID,
+				r.UpdatedAt.Format(time.RFC3339), r.UpdatedBy, r.Source)
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
 	}
-	// WHICH STORE, above the table. The two hold different rows, and a
-	// listing that did not say which one it read is one an operator can
-	// misread as "the fleet has nothing" when they are looking at a
-	// stopped node's own empty table.
-	fmt.Fprintf(stdout, "%s\n\n", sv.where)
-	// NO VALUES, ever. This is what an operator reads to answer "is X set",
-	// and a listing that printed plaintext would put a company's whole
-	// credential set on one screen — and into one scrollback buffer.
-	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tKEY\tUPDATED\tBY\tSOURCE")
-	for _, r := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.KeyID,
-			r.UpdatedAt.Format(time.RFC3339), r.UpdatedBy, r.Source)
+	engine, err := sv.EngineKeys(ctx)
+	if err != nil {
+		return err
 	}
-	return w.Flush()
+	if engine.Total > 0 {
+		// COUNTED, NEVER NAMED, and said at all because a rotation has to
+		// move them: a listing that stayed silent about them would read
+		// as a store holding nothing else.
+		fmt.Fprintf(stdout, "\nand %d of the engine's own keys (the identity "+
+			"estate's), which no command reads or writes and a rekey moves\n",
+			engine.Total)
+	}
+	return nil
 }
 
 func setSecret(ctx context.Context, sv *secretTarget, name, value string,
@@ -463,6 +515,7 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, bootstrapPath string,
 	if err != nil {
 		return err
 	}
+	active := boot.Secrets.ActiveKeyID
 	if dryRun {
 		// LISTED FROM THE KEY ID COLUMN, which is denormalised out of the
 		// envelope for exactly this: reporting what a rekey would touch
@@ -475,36 +528,50 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, bootstrapPath string,
 		}
 		stale := 0
 		for _, r := range rows {
-			if r.KeyID == boot.Secrets.ActiveKeyID {
+			if r.KeyID == active {
 				continue
 			}
 			stale++
 			fmt.Fprintf(stdout, "  %s (sealed under %s)\n", r.Name, r.KeyID)
 		}
-		if stale == 0 {
-			fmt.Fprintf(stdout, "every secret is already sealed under %s\n",
-				boot.Secrets.ActiveKeyID)
+		// AND THE ENGINE'S OWN, counted: a dry run that said "nothing to
+		// do" while every person's key was still under the old key would
+		// be the reading an operator retires that key on.
+		engine, err := sv.EngineKeys(ctx)
+		if err != nil {
+			return err
+		}
+		engineStale := engine.StaleUnder(active)
+		if engineStale > 0 {
+			fmt.Fprintf(stdout, "  %d of the engine's own keys (sealed under "+
+				"another key)\n", engineStale)
+		}
+		if stale == 0 && engineStale == 0 {
+			fmt.Fprintf(stdout, "every secret is already sealed under %s\n", active)
 			return nil
 		}
-		fmt.Fprintf(stdout, "%d secrets would be re-sealed under %s\n",
-			stale, boot.Secrets.ActiveKeyID)
+		fmt.Fprintf(stdout, "%d secrets and %d engine keys would be re-sealed "+
+			"under %s\n", stale, engineStale, active)
 		return nil
 	}
-	moved, err := sv.Rekey(ctx, boot.Secrets.ActiveKeyID, currentOperator(), time.Now().UTC())
+	rekeyed, err := sv.Rekey(ctx, active, currentOperator(), time.Now().UTC())
 	if err != nil {
 		return err
 	}
-	if len(moved) == 0 {
-		fmt.Fprintf(stdout, "every secret is already sealed under %s\n",
-			boot.Secrets.ActiveKeyID)
+	if len(rekeyed.Moved) == 0 && rekeyed.EngineKeys == 0 {
+		fmt.Fprintf(stdout, "every secret is already sealed under %s\n", active)
 		return nil
 	}
 	// THE NAMES, not a count: a pass that moved 12 of 13 rows raises a
 	// question a number cannot answer, and this is the last chance to see
-	// which rows are now safe to retire the old key over.
-	fmt.Fprintf(stdout, "re-sealed %d secrets under %s:\n", len(moved), boot.Secrets.ActiveKeyID)
-	for _, name := range moved {
+	// which rows are now safe to retire the old key over. The engine's own
+	// keys are the one exception, counted for the listing's reason.
+	fmt.Fprintf(stdout, "re-sealed %d secrets under %s:\n", len(rekeyed.Moved), active)
+	for _, name := range rekeyed.Moved {
 		fmt.Fprintf(stdout, "  %s\n", name)
+	}
+	if rekeyed.EngineKeys > 0 {
+		fmt.Fprintf(stdout, "and %d of the engine's own keys\n", rekeyed.EngineKeys)
 	}
 	return nil
 }

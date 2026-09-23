@@ -70,15 +70,21 @@ type Keys interface {
 // sealed under. Keyed on anything mutable, a rename would orphan every value
 // already written and read as a shredded person.
 //
-// IN THE STORE'S OWN NAME GRAMMAR — `IAM_PERSON_<ID>_DEK`, the id folded to
-// what a variable name may hold — and that is not cosmetic. The company's
-// secret store is keyed by environment-variable name and refuses anything
-// else at the write ([secrets.CheckName]), so the path-shaped
-// `iam/person/<id>/dek` this used to be was refused on every real deployment:
-// no person's key could be minted, and nothing that tested against an
-// in-memory fake could see it.
+// IN THE ENGINE'S OWN NAMESPACE — `iam/person/<id>/dek` — which no operator
+// surface lists, reveals, writes, deletes or resolves ([secrets.Reserved]). It
+// was briefly `IAM_PERSON_<ID>_DEK`, an environment-variable name, so the
+// store would accept it; that made every person's key an ordinary operator
+// secret — revealable, so a copy taken before a removal defeated the shred the
+// removal is, and deletable, so a DELETE shredded somebody with no removal on
+// record. The path shape is also what no `${VAR}` can ever name.
+//
+// THE ID IS KEPT VERBATIM, one segment, which makes the name REVERSIBLE: the
+// key duty reads the id back out of a name to ask whether anybody still owns
+// the key ([idOfPersonKey]). An id that does not fit one segment of the
+// engine's grammar is refused at the mint rather than folded, because a fold
+// is how two ids come to share a key.
 func PersonDEKName(personID string) string {
-	return personKeyPrefix + secretToken(personID) + personKeySuffix
+	return personKeyPrefix + personID + personKeySuffix
 }
 
 // SessionRefreshName is where one session lineage's refresh material lives.
@@ -88,42 +94,53 @@ func PersonDEKName(personID string) string {
 // that session and leaves every other one alone. The person's own revocation
 // epoch is the other lever, and it is the one that ends all of them at once.
 //
-// `IAM_SESSION_<LINEAGE>_REFRESH`, in the store's grammar for
-// [PersonDEKName]'s reason.
+// `iam/session/<lineage>/refresh`, in the engine's own namespace for
+// [PersonDEKName]'s reason — and for a sharper one: this value is a live
+// credential at somebody else's identity provider.
 func SessionRefreshName(lineage string) string {
-	return sessionRefreshPrefix + secretToken(lineage) + sessionRefreshSuffix
+	return sessionRefreshPrefix + lineage + sessionRefreshSuffix
 }
 
 // The fixed halves of the two per-object names, which is also what a duty
-// lists the store by: the DEK duty finds every person key by its prefix, and
+// lists the store by: the key duty finds every person key by its prefix, and
 // the deactivation probe every session's refresh material by its own.
 const (
-	personKeyPrefix      = "IAM_PERSON_"
-	personKeySuffix      = "_DEK"
-	sessionRefreshPrefix = "IAM_SESSION_"
-	sessionRefreshSuffix = "_REFRESH"
+	personKeyPrefix      = "iam/person/"
+	personKeySuffix      = "/dek"
+	sessionRefreshPrefix = "iam/session/"
+	sessionRefreshSuffix = "/refresh"
 )
 
-// secretToken folds an id into what a secret name may hold: upper case, and
-// every character a variable name cannot take as `_`.
-//
-// NOT REVERSIBLE IN GENERAL AND NOT READ BACK: every reader here derives the
-// name from the id it already holds, or carries the id inside the value,
-// rather than parsing one out of a name. For the uuids this estate mints it is
-// injective anyway — the hex digits keep their identity and the hyphens sit
-// at fixed offsets — which is the property that matters: two people never
-// share a key.
-func secretToken(id string) string {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(id) {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
+// idOfPersonKey reads the id back out of a person key's name, or reports that
+// the name is not one [PersonDEKName] writes.
+func idOfPersonKey(name string) (string, bool) {
+	id, ok := strings.CutPrefix(name, personKeyPrefix)
+	if !ok {
+		return "", false
 	}
-	return b.String()
+	id, ok = strings.CutSuffix(id, personKeySuffix)
+	if !ok || checkKeyID(id) != nil {
+		return "", false
+	}
+	return id, true
+}
+
+// checkKeyID refuses an id that cannot be ONE segment of an engine-owned name.
+//
+// ONE SEGMENT, not merely a valid path: an id carrying a `/` would still make
+// a well-formed name, and one that no longer reads back as the id it was
+// written for.
+func checkKeyID(id string) error {
+	if strings.Contains(id, "/") {
+		return fmt.Errorf("iamdomain: %q cannot address a key: an id is one "+
+			"segment of the key's name, and a '/' would make it several", id)
+	}
+	if err := secrets.CheckEstateName(personKeyPrefix + id + personKeySuffix); err != nil {
+		return fmt.Errorf("iamdomain: %q cannot address a key — an id is one "+
+			"segment of the key's name, lower-case letters, digits, '-', '_' "+
+			"and '.': %w", id, err)
+	}
+	return nil
 }
 
 // ErrShredded reports a person whose key has been destroyed.
@@ -319,10 +336,11 @@ func (s *Sealer) cipherFor(ctx context.Context, personID string) (secrets.Cipher
 	return cipher, nil
 }
 
-// check refuses a call that names nobody.
+// check refuses a call that names nobody, or names somebody by an id no key
+// can be addressed under.
 //
 // A PERSON ID IS THE WHOLE ADDRESS of a key and the whole of its associated
-// data, so an empty one would name `IAM_PERSON__DEK` — one key every
+// data, so an empty one would name `iam/person//dek` — one key every
 // unidentified caller would share, with an AAD they would all match.
 func (s *Sealer) check(personID string) error {
 	if s == nil || s.keys == nil {
@@ -333,7 +351,7 @@ func (s *Sealer) check(personID string) error {
 			"belongs to: an empty id names one key every unidentified caller " +
 			"would share, under associated data they would all match")
 	}
-	return nil
+	return checkKeyID(personID)
 }
 
 const (

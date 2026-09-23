@@ -127,6 +127,40 @@ secrets:
       material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
+### The engine's own keys share the bucket, and never the namespace
+
+The same bucket holds key material the **engine** keeps for itself: each
+person's data key (deleting it is what removing somebody does), each provider
+sign-in's refresh token (the deactivation probe's only way to ask the identity
+provider about a session), and the two blind-index keys every stored address is
+matched under. They live here because this is the one store a delete reaches on
+every node at once — and they are **not your secrets**:
+
+| Name | What it is |
+|---|---|
+| `iam/person/<id>/dek` | One person's data key — their name and address are sealed under it |
+| `iam/session/<lineage>/refresh` | One provider session's refresh token |
+| `iam/blind-index-key` | The key an address or a provider subject is blinded under in the identity directory |
+| `chart/blind-index-key` | The key a seat's address is indexed under in the org chart |
+
+A name with a `/` in it is one no `${VAR}` can spell, so none of them can be
+resolved into a provider, an `mcp_env` or a child process by any document.
+And every operator surface refuses them by name, whatever the caller holds:
+`GET`, `PUT` and `DELETE /secrets/{name}` — a reveal included — answer
+`403 reserved_name`, and `crewlet secrets get`, `set` and `unset` refuse before
+they open anything. The listing does not name them; it **counts** them, per
+keyring key, as `engine_keys`, because a rotation has to move them too — and a
+**rekey** does, reporting them as a count (`engine_keys_moved`) beside the
+names of yours. A dry run counts the ones still under an old key, so an
+operator is never told "nothing to move" while every person's key is still
+sealed under the key they are about to retire.
+
+To act on one, use the gesture it belongs to: `crewlet iam remove` destroys a
+person's key, `crewlet iam revoke` ends their sessions and the probe drops each
+refresh token once its session is over. A blind-index key is never minted over
+one that was deleted — it comes back with the coordination store it lived in,
+from the backup that holds it ([Backups § Restoring](../guides/backup.md#restoring)).
+
 ---
 
 ## Using it

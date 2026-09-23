@@ -17,7 +17,7 @@ import (
 type sharedFleet = coord.Fleet
 
 // racedKey is the name the race cases mint.
-const racedKey = "CREWLET_TEST_COMPANY_KEY"
+const racedKey = "iam/test-company-key"
 
 // racingFleet reproduces the interleaving that split a company's key: the
 // FIRST write of the key is held back until a second write has landed (or a
@@ -100,7 +100,7 @@ func mintConcurrently(t *testing.T, nodes []*Engine, fleet coord.Fleet) ([]strin
 			t.Fatalf("node %d: %v", i, err)
 		}
 	}
-	stored, err := fleetsecrets.New(fleet, nodes[0].cipher).Get(ctx, racedKey)
+	stored, err := fleetsecrets.New(fleet, nodes[0].cipher).Estate().Get(ctx, racedKey)
 	if err != nil {
 		t.Fatalf("read the stored key: %v", err)
 	}

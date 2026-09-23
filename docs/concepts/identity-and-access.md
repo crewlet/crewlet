@@ -1484,15 +1484,18 @@ An address is looked up by its **blind**: a keyed hash, so a node holding the
 key can compute it from an address and nobody else can go the other way.
 Signing in opens nothing.
 
-The key is `CREWLET_IAM_BLIND_INDEX_KEY` in the company's secret store, and
-**the first node that needs one mints it** — under a fleet-wide hold, so two
-nodes booting together cannot each mint their own and go on deriving blinds
-the other cannot match. It is never minted over a key that was deleted: every
-blind in the estate was derived under the old one, so a new key would orphan
-every address in the directory and let each be claimed a second time. A node
-that finds the key missing while the estate holds any blinded value refuses
-every address write by name instead, until the key is restored from the backup
-that holds it. Rotating it is a migration, not a setting.
+The key is `iam/blind-index-key` in the company's secret store — in the
+[engine's own namespace](secret-store.md#the-engines-own-keys-share-the-bucket-and-never-the-namespace),
+which no operator surface lists, reveals, writes or deletes and no `${VAR}`
+can name — and **the first node that needs one mints it**, under a fleet-wide
+hold, so two nodes booting together cannot each mint their own and go on
+deriving blinds the other cannot match. It is never minted over a key that was
+deleted: every blind in the estate was derived under the old one, so a new key
+would orphan every address in the directory and let each be claimed a second
+time. A node that finds the key missing while the estate holds any blinded
+value refuses every address write by name instead, until the key comes back
+with the coordination store it lived in, from the backup that holds it.
+Rotating it is a migration, not a setting.
 
 ### The eight tables
 

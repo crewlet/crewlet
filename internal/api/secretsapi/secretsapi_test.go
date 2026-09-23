@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -322,6 +324,68 @@ func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 	}
 	if code, body = call(t, h, http.MethodGet, "/secrets/A", ""); !strings.Contains(body, `"key_id":"k2"`) {
 		t.Fatalf("after the rekey A reads %d %s, want key-2", code, body)
+	}
+}
+
+// THE ENGINE'S OWN KEYS ARE UNREACHABLE HERE, whatever the caller holds.
+//
+// A person's data key and a session's refresh token live in the same bucket
+// as the operator's credentials. When they carried operator names, this
+// surface listed every one, a reveal copied a person's key out before their
+// removal could shred it, and a DELETE shredded somebody with no removal on
+// record. Every route that takes a name now refuses one BY NAME — including a
+// caller carrying every grant — the listing counts them without naming any,
+// and a rekey moves and counts them.
+func TestTheEnginesOwnKeysAreUnreachableHere(t *testing.T) {
+	t.Parallel()
+	fleet := coordmem.NewFleet()
+	const key = "iam/person/018f3a9c-0000-7000-8000-000000000001/dek"
+	if err := fleetsecrets.New(fleet, cipherFor(t, "k1", "k2")).Estate().Set(
+		t.Context(), key, "the-person-key", "node-a", "iam", clock); err != nil {
+		t.Fatalf("seed the engine key: %v", err)
+	}
+	h := mounted(t, secretsapi.Options{
+		Fleet: fleet, Cipher: cipherFor(t, "k1", "k2"), ActiveKeyID: "k1",
+		Now: func() time.Time { return clock },
+	}, iam.AllGrants...)
+	call(t, h, http.MethodPut, "/secrets/GITLAB_TOKEN", "glpat")
+
+	path := "/secrets/" + url.PathEscape(key)
+	for _, tc := range []struct{ name, method, path, body string }{
+		{"a metadata read", http.MethodGet, path, ""},
+		{"a reveal", http.MethodGet, path + "?reveal=true", ""},
+		{"an overwrite", http.MethodPut, path, "overwritten"},
+		{"a delete", http.MethodDelete, path, ""},
+	} {
+		code, body := call(t, h, tc.method, tc.path, tc.body)
+		if code != http.StatusForbidden || !strings.Contains(body, `"reserved_name"`) {
+			t.Errorf("%s of an engine key answered %d %s, want 403 reserved_name",
+				tc.name, code, body)
+		}
+		if strings.Contains(body, "the-person-key") {
+			t.Errorf("%s of an engine key carried its value: %s", tc.name, body)
+		}
+	}
+	if got, err := fleetsecrets.New(fleet, cipherFor(t, "k1", "k2")).Estate().Get(
+		t.Context(), key); err != nil || got != "the-person-key" {
+		t.Fatalf("after every refused gesture the engine key reads %q (%v)", got, err)
+	}
+
+	code, body := call(t, h, http.MethodGet, "/secrets", "")
+	if code != http.StatusOK || strings.Contains(body, "iam/") ||
+		!strings.Contains(body, `"engine_keys":{"total":1,"by_key":{"k1":1}}`) {
+		t.Errorf("the listing = %d %s, want the operator row named and the "+
+			"engine key counted", code, body)
+	}
+
+	rotated := mounted(t, secretsapi.Options{
+		Fleet: fleet, Cipher: cipherFor(t, "k2", "k1"), ActiveKeyID: "k2",
+		Now: func() time.Time { return clock },
+	}, iam.AllGrants...)
+	code, body = call(t, rotated, http.MethodPost, "/secrets/rekey", "")
+	if code != http.StatusOK || !strings.Contains(body, `"engine_keys_moved":1`) ||
+		strings.Contains(body, "iam/") {
+		t.Errorf("rekey = %d %s, want the engine key moved and counted", code, body)
 	}
 }
 

@@ -612,6 +612,8 @@ crewlet secrets list [-config PATH] [-api URL]
 
 Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp, who wrote it, and source. It names the store it read first, because a stopped node's own empty table and a fleet with nothing in it look identical otherwise. **Never** prints a value — the listing drops the envelope on the way out and the route behind it has no value field at all. Works without a keyring on the fleet's store, so an operator locked out of the key can still take inventory.
 
+The engine's own keys — each person's data key, each provider session's refresh token, the two blind-index keys — share the store and are **counted, never named**, on a line after the table. No `crewlet secrets` command reads, writes or removes one: `get`, `set` and `unset` refuse a name in the engine's namespace (`iam/…`, `chart/…`) before they open anything, and the node refuses it again with `403 reserved_name`. Remove a person with `crewlet iam remove`, end their sessions with `crewlet iam revoke`. See [the secret store](../concepts/secret-store.md#the-engines-own-keys-share-the-bucket-and-never-the-namespace).
+
 ### `crewlet secrets unset`
 
 ```
@@ -634,7 +636,7 @@ Prints one decrypted value to stdout, with no trailing newline so it can be pipe
 crewlet secrets rekey [-dry-run] [-config PATH] [-api URL]
 ```
 
-Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey) — run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the denormalised `key_id` instead.
+Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved — and the engine's own keys with them, which it **counts** rather than names. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey) — run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable; for the engine's keys that would be every person's name and address, every provider session's refresh token and both blind-index keys at once. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the denormalised `key_id` instead, and counts the engine's keys still under another key beside your names.
 
 The store is shared, so this is run **once for the fleet**, not once per node. A run through a node's API sends the key id it expects and is **refused with a 409** if that node seals under a different `active_key_id` — a silent success there would report a rotation the fleet did not make. It aborts rather than half-completing if any record cannot be opened with the keyring in hand, because retiring the old key on the strength of a partial pass is what makes a secret unreadable for ever.
 

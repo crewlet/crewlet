@@ -317,10 +317,13 @@ func decodeBlindKey(value string) ([]byte, error) {
 // ChartBlindIndexKey is the secret name the chart's blind-index key lives
 // under.
 //
-// IN THE COMPANY'S OWN STORE, under the reference grammar every other secret
-// follows, so an operator listing their secrets sees it and a rekey moves it
-// with the rest.
-const ChartBlindIndexKey = "CREWLET_CHART_BLIND_INDEX_KEY"
+// IN THE ENGINE'S OWN NAMESPACE of the company's store ([secrets.Reserved]),
+// beside [iamdomain.BlindKeyName] and for its reason: it used to be an
+// operator secret, so a PUT of another value made every stored address index
+// match nothing, and a `${…}` handed the key that makes the index enumerable
+// to a child process. A rekey still moves it with every other row, and
+// counts it rather than naming it.
+const ChartBlindIndexKey = "chart/blind-index-key"
 
 // personSealer is the per-person key store, which seals a person's own values
 // AND is what the identity applier shreds through.
@@ -339,7 +342,7 @@ func (e *Engine) PersonSealer() *iamdomain.Sealer {
 	if e == nil || e.cipher == nil || e.backends.Fleet == nil {
 		return nil
 	}
-	sealer, err := iamdomain.NewSealer(fleetsecrets.New(e.backends.Fleet, e.cipher))
+	sealer, err := iamdomain.NewSealer(fleetsecrets.New(e.backends.Fleet, e.cipher).Estate())
 	if err != nil {
 		return nil
 	}

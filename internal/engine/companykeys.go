@@ -88,7 +88,7 @@ func (e *Engine) companyKey(ctx context.Context, name, source string,
 		return "", fmt.Errorf("engine: this node has no company secret store, "+
 			"so it cannot read %s", name)
 	}
-	store := fleetsecrets.New(e.backends.Fleet, e.cipher)
+	store := fleetsecrets.New(e.backends.Fleet, e.cipher).Estate()
 	if value, err := presentKey(ctx, store, name); value != "" || err != nil {
 		return value, err
 	}
@@ -129,7 +129,7 @@ func (e *Engine) companyKey(ctx context.Context, name, source string,
 }
 
 // mintKey mints a company key under the hold, unless it has appeared since.
-func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Store, name,
+func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Estate, name,
 	source string, may func(context.Context) error) (string, error) {
 
 	// AGAIN UNDER THE HOLD: a peer that held it a moment ago may have
@@ -166,7 +166,7 @@ func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Store, name,
 
 // presentKey reads a company key, answering "" and no error for one nobody has
 // stored — the one absence that is not a failure.
-func presentKey(ctx context.Context, store *fleetsecrets.Store, name string) (
+func presentKey(ctx context.Context, store *fleetsecrets.Estate, name string) (
 	string, error) {
 
 	value, err := store.Get(ctx, name)
@@ -264,9 +264,10 @@ func (e *Engine) mayMintPersonBlindKey(ctx context.Context) error {
 			"while the identity estate holds values derived under it, so it "+
 			"was deleted rather than never minted — a new key would orphan "+
 			"every address in the directory and let each be claimed again. "+
-			"Restore it from the backup that holds it (`crewlet secrets set "+
-			"%s`); the engine will not mint over it", iamdomain.ErrNoBlindKey,
-			iamdomain.BlindKeyName, iamdomain.BlindKeyName)
+			"It is the engine's own key, which no operator command writes: "+
+			"restore the coordination store's secrets from the backup that "+
+			"holds it (docs/guides/backup.md, Restoring); the engine will not "+
+			"mint over it", iamdomain.ErrNoBlindKey, iamdomain.BlindKeyName)
 	}
 	return nil
 }

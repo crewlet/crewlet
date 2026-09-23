@@ -64,11 +64,15 @@ import (
 // somebody plans, not a sweep that runs, so there is no second name for a
 // previous key to live under and no arm here that tries both.
 //
-// IN THE STORE'S NAME GRAMMAR, beside the chart's `CREWLET_CHART_BLIND_INDEX_KEY`:
-// the company's secret store is keyed by environment-variable name and refuses
-// any other at the write, so the path-shaped `iam/blind/index` this used to be
-// could be neither minted by the engine nor set by an operator.
-const BlindKeyName = "CREWLET_IAM_BLIND_INDEX_KEY"
+// IN THE ENGINE'S OWN NAMESPACE of the company's secret store, beside the
+// chart's `chart/blind-index-key` ([secrets.Reserved]). It used to be an
+// environment-variable name, which made it an operator secret: listable,
+// revealable — and a PUT of a different value orphaned every address in the
+// directory and let each be claimed again, while `${…}` in an `mcp_env` handed
+// the key that makes every address enumerable to a child process. No operator
+// surface addresses it now, and a lost key comes back with the coordination
+// store it lived in.
+const BlindKeyName = "iam/blind-index-key"
 
 // blindDomain separates this HMAC's inputs from every other use of the same
 // key, in the shape internal/runtoken established: a key is only ever safe in

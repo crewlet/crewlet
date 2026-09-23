@@ -388,7 +388,7 @@ func TestNoKeyIsCachedAcrossOpens(t *testing.T) {
 
 // A SEALER WITH NO KEY STORE, AND A CALL THAT NAMES NOBODY, ARE BOTH REFUSED.
 //
-// An empty id would name `IAM_PERSON__DEK`: one key every unidentified caller
+// An empty id would name `iam/person//dek`: one key every unidentified caller
 // shares, under associated data they all match.
 func TestASealerRefusesWhatWouldSharOneKeyBetweenEverybody(t *testing.T) {
 	t.Parallel()
@@ -430,18 +430,17 @@ func TestAnEmptySealedValueNeedsNoKeyAtAll(t *testing.T) {
 func TestTheSecretNamesAreKeyedOnWhatNothingRenames(t *testing.T) {
 	t.Parallel()
 	if got, want := iamdomain.PersonDEKName(who),
-		"IAM_PERSON_018F3A9C_0000_7000_8000_000000000001_DEK"; got != want {
+		"iam/person/018f3a9c-0000-7000-8000-000000000001/dek"; got != want {
 		t.Errorf("a person's key lives at %q, want %q", got, want)
 	}
-	if got := iamdomain.SessionRefreshName("lin1"); got != "IAM_SESSION_LIN1_REFRESH" {
+	if got := iamdomain.SessionRefreshName("lin1"); got != "iam/session/lin1/refresh" {
 		t.Errorf("a session's refresh material lives at %q", got)
 	}
-	// TWO PEOPLE NEVER SHARE A KEY: the fold keeps every hex digit and
-	// puts the hyphens at fixed offsets, so two distinct ids stay two
-	// distinct names.
+	// TWO PEOPLE NEVER SHARE A KEY: the id is the name's one segment,
+	// verbatim, so two distinct ids stay two distinct names.
 	other := "018f3a9c-0000-7000-8000-000000000002"
 	if iamdomain.PersonDEKName(who) == iamdomain.PersonDEKName(other) {
-		t.Error("two people fold to one key name — removing either destroys both")
+		t.Error("two people share one key name — removing either destroys both")
 	}
 	// PER LINEAGE, not per person: ending one session must not end the
 	// others, so two lineages must never share a name.
@@ -451,14 +450,15 @@ func TestTheSecretNamesAreKeyedOnWhatNothingRenames(t *testing.T) {
 	}
 }
 
-// EVERY SECRET THIS ESTATE STORES IS NAMED IN THE STORE'S OWN GRAMMAR.
+// EVERY SECRET THIS ESTATE STORES IS IN THE ENGINE'S OWN NAMESPACE.
 //
-// The company's secret store is keyed by environment-variable name and refuses
-// any other at the write, so a name outside that grammar is not a style
-// question: it is a key nothing can mint. The three used to be path-shaped
-// (`iam/person/<id>/dek`), every one was refused on a real deployment, and the
-// fake above — which accepts any name — is why no case noticed.
-func TestEverySecretNameIsOneTheCompanyStoreAccepts(t *testing.T) {
+// Not the operator's: a name in the environment-variable grammar is one
+// `/secrets` lists and reveals, a DELETE removes and a `${VAR}` resolves, and
+// all three used to reach a person's key and a session's refresh token. The
+// engine's namespace is one no operator surface addresses and no reference can
+// name — and it is a grammar the store refuses outside of, so a name here that
+// strayed from it would be a key nothing could mint.
+func TestEverySecretNameIsInTheEnginesOwnNamespace(t *testing.T) {
 	t.Parallel()
 	id := uuid.Must(uuid.NewV7()).String()
 	for _, name := range []string{
@@ -466,9 +466,31 @@ func TestEverySecretNameIsOneTheCompanyStoreAccepts(t *testing.T) {
 		iamdomain.SessionRefreshName(id),
 		iamdomain.BlindKeyName,
 	} {
-		if err := secrets.CheckName(name); err != nil {
-			t.Errorf("%q is refused by the company's secret store: %v", name, err)
+		if err := secrets.CheckEstateName(name); err != nil {
+			t.Errorf("%q is refused by the engine's view of the store: %v", name, err)
 		}
+		if secrets.CheckName(name) == nil {
+			t.Errorf("%q is a name the operator's surfaces and ${VAR} reach", name)
+		}
+	}
+}
+
+// AN ID NO KEY CAN BE ADDRESSED UNDER IS REFUSED, NEVER FOLDED.
+//
+// The id is one segment of the key's name, kept verbatim so the key duty can
+// read it back. An id carrying a character the grammar has no room for would
+// have to be folded, and a fold is how two ids come to share a key — so it is
+// refused at the mint instead, and nothing is written.
+func TestAnIDNoKeyCanBeAddressedUnderIsRefused(t *testing.T) {
+	t.Parallel()
+	sealer, store := newSealer(t)
+	for _, id := range []string{"018F3A9C-UPPER", "a/b", "with space"} {
+		if err := sealer.Mint(t.Context(), id, "operator", time.Now()); err == nil {
+			t.Errorf("a key was minted for %q", id)
+		}
+	}
+	if len(store.values) != 0 {
+		t.Errorf("a refused mint left %d keys behind", len(store.values))
 	}
 }
 
@@ -480,7 +502,7 @@ func TestEverySecretNameIsOneTheCompanyStoreAccepts(t *testing.T) {
 // case the grammar above protects end to end.
 func TestAPersonsKeyLivesAndDiesInTheRealSecretStore(t *testing.T) {
 	t.Parallel()
-	store := fleetsecrets.New(coordmem.NewFleet(), realCipher(t))
+	store := fleetsecrets.New(coordmem.NewFleet(), realCipher(t)).Estate()
 	sealer, err := iamdomain.NewSealer(store)
 	if err != nil {
 		t.Fatalf("NewSealer: %v", err)

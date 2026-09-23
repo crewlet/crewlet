@@ -16,7 +16,7 @@ import (
 
 // identityEngine is a node running the identity domain, with the company's
 // secret store it mints into.
-func identityEngine(t *testing.T) (*engine.Engine, *fleetsecrets.Store) {
+func identityEngine(t *testing.T) (*engine.Engine, *fleetsecrets.Estate) {
 	t.Helper()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
@@ -29,7 +29,7 @@ func identityEngine(t *testing.T) (*engine.Engine, *fleetsecrets.Store) {
 	if e.IAMWriter() == nil {
 		t.Fatal("the node runs no identity domain")
 	}
-	return e, fleetsecrets.New(e.Backends().Fleet, cipher)
+	return e, fleetsecrets.New(e.Backends().Fleet, cipher).Estate()
 }
 
 // enrolAddress enrols one person with an address through the node's own

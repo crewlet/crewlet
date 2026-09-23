@@ -233,7 +233,7 @@ func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
 		// NO KEYRING NEEDED: finding a key and deleting it both work on a
 		// node that cannot decrypt anything, so an off-boarding is never
 		// stuck behind a missing keyring.
-		store := fleetsecrets.New(e.backends.Fleet, e.cipher)
+		store := fleetsecrets.New(e.backends.Fleet, e.cipher).Estate()
 		sealer, err := iamdomain.NewSealer(store)
 		if err != nil {
 			// SAID, because a key duty that is not armed looks exactly
@@ -461,7 +461,7 @@ func (e *Engine) PersonKeyIndex() iamdomain.KeyIndex {
 	if e == nil || e.backends == nil || e.backends.Fleet == nil {
 		return nil
 	}
-	return fleetsecrets.New(e.backends.Fleet, e.cipher)
+	return fleetsecrets.New(e.backends.Fleet, e.cipher).Estate()
 }
 
 // RefreshCustody is where an OIDC session's refresh token is kept, or nil on
@@ -473,7 +473,7 @@ func (e *Engine) RefreshCustody() *iamdomain.Refreshes {
 		return nil
 	}
 	custody, err := iamdomain.NewRefreshes(
-		fleetsecrets.New(e.backends.Fleet, e.cipher), e.native.nodeID)
+		fleetsecrets.New(e.backends.Fleet, e.cipher).Estate(), e.native.nodeID)
 	if err != nil {
 		return nil
 	}

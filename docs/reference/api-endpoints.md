@@ -1038,12 +1038,22 @@ a caller who could not write a credential there cannot write one here either.
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
-| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`. **Never a value** |
+| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`, and `engine_keys` — a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them. **Never a value** |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator |
 | `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`). `400 invalid_name` when the name is not an environment-variable name |
 | `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false}` |
-| `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id`, answering the names it moved. `?key_id=` is refused with `409` when it names a different key |
+| `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id` — the engine's own keys included — answering the names of yours it moved and `engine_keys_moved`, a count of the engine's. `?key_id=` is refused with `409` when it names a different key |
+
+**The engine's own keys are not addressable here.** A person's data key, a
+provider session's refresh token and the two blind-index keys share the bucket
+under path-shaped names (`iam/person/<id>/dek`, `iam/session/<lineage>/refresh`,
+`iam/blind-index-key`, `chart/blind-index-key`). Every route that takes a name
+answers one of those `403 reserved_name` before anything else — a reveal, an
+overwrite and a delete alike, whatever the caller holds — because a reveal
+would copy a person's key out ahead of the removal that shreds it and a delete
+would be a removal nobody recorded. See
+[the secret store](../concepts/secret-store.md#the-engines-own-keys-share-the-bucket-and-never-the-namespace).
 
 **The name is an environment-variable name, and a write that is not one is
 refused.** The store is keyed by the name a `${VAR}` resolves through, so

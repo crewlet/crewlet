@@ -349,6 +349,11 @@ const (
 	// CodeRekeyIncomplete is a rekey that moved some rows and stopped. The
 	// detail names the ones that moved.
 	CodeRekeyIncomplete Code = "rekey_incomplete"
+
+	// CodeReservedName is a name in the ENGINE's own namespace — a person's
+	// key, a session's refresh token — which no caller of `/secrets` may
+	// address, whatever it holds. The detail names the gesture that does.
+	CodeReservedName Code = "reserved_name"
 )
 
 // THE IDENTITY CODES, and why there are so few of them.
@@ -692,6 +697,9 @@ var codes = map[Code]string{
 	CodeRekeyIncomplete: "The rekey stopped part of the way through. The detail " +
 		"names what moved, and running it again is safe once the missing key " +
 		"is back.",
+	CodeReservedName: "That name belongs to the engine's own identity " +
+		"estate, not to the company's credentials, so nothing here can read " +
+		"or change it. The detail names the command that does.",
 }
 
 // Codes is every code in the vocabulary, sorted.

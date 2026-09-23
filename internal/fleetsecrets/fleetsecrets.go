@@ -26,6 +26,18 @@
 // row fails to open rather than silently impersonating a different secret —
 // the same binding [store.SecretValues] uses, and the reason both can read
 // rows the other wrote during a migration.
+//
+// # Two views over one bucket: the operator's, and the engine's own
+//
+// The bucket also holds the ENGINE's key material — a person's data key, an
+// OIDC session's refresh token, the company's blind-index keys — under
+// path-shaped names no `${VAR}` can reach ([secrets.Reserved]). [Store] is the
+// OPERATOR's view: it neither lists, snapshots, reads, writes nor deletes a
+// reserved row, and says so by name ([secrets.ErrReservedName]). [Estate] is
+// the engine's: it addresses reserved rows and nothing else. The one gesture
+// that crosses is a REKEY, which re-seals every row under the active key
+// because the keyring is one keyring — and reports the engine's rows as a count
+// rather than by name ([Rekeyed]).
 package fleetsecrets
 
 import (
@@ -43,7 +55,8 @@ import (
 
 var log = logging.Get("secrets.fleet")
 
-// Store is the fleet's secret values, sealed under one node's keyring.
+// Store is the fleet's secret values, sealed under one node's keyring, as the
+// OPERATOR's surfaces address them.
 type Store struct {
 	fleet  coord.Secrets
 	cipher secrets.Cipher
@@ -62,10 +75,22 @@ func New(fleet coord.Secrets, cipher secrets.Cipher) *Store {
 	return &Store{fleet: fleet, cipher: cipher}
 }
 
+// operatorName refuses a name that is the engine's own before anything reads,
+// writes or deletes it.
+func operatorName(name string) error {
+	if secrets.Reserved(name) {
+		return fmt.Errorf("%w: %s", secrets.ErrReservedName, name)
+	}
+	return nil
+}
+
 // Set seals a value and writes it for the whole fleet.
 func (s *Store) Set(ctx context.Context, name, value, by, source string, now time.Time) error {
 	if s == nil || s.cipher == nil {
 		return secrets.ErrNoKeyring
+	}
+	if err := operatorName(name); err != nil {
+		return err
 	}
 	// THE NAME IS THE KEY SPACE, checked before anything is sealed. See
 	// [secrets.CheckName]: a row nothing can reference is worse than a
@@ -73,6 +98,12 @@ func (s *Store) Set(ctx context.Context, name, value, by, source string, now tim
 	if err := secrets.CheckName(name); err != nil {
 		return err
 	}
+	return s.put(ctx, name, value, by, source, now)
+}
+
+// put seals a value under its own name and writes it, once the caller's view
+// has established the name is one it may write.
+func (s *Store) put(ctx context.Context, name, value, by, source string, now time.Time) error {
 	sealed, err := s.cipher.Encrypt(value, secrets.AADForVar(name))
 	if err != nil {
 		return fmt.Errorf("fleetsecrets: seal %s: %w", name, err)
@@ -96,6 +127,14 @@ func (s *Store) Get(ctx context.Context, name string) (string, error) {
 	if s == nil || s.cipher == nil {
 		return "", secrets.ErrNoKeyring
 	}
+	if err := operatorName(name); err != nil {
+		return "", err
+	}
+	return s.get(ctx, name)
+}
+
+// get opens one row, once the caller's view has established it may.
+func (s *Store) get(ctx context.Context, name string) (string, error) {
 	rec, found, err := s.fleet.Secret(ctx, name)
 	if err != nil {
 		return "", fmt.Errorf("fleetsecrets: read %s: %w", name, err)
@@ -110,11 +149,16 @@ func (s *Store) Get(ctx context.Context, name string) (string, error) {
 	return value, nil
 }
 
-// All unseals every value, for the resolver's boot snapshot.
+// All unseals every OPERATOR value, for the resolver's boot snapshot.
 //
 // ONE ROUND TRIP, because ${VAR} expansion happens per role, per provider,
 // per MCP server — the engine takes a snapshot and resolves from it rather
 // than putting the fleet's store on the path of every config read.
+//
+// THE ENGINE'S ROWS ARE NOT OPENED, and that is the other half of the reserved
+// namespace: no reference can name one, so decrypting every person's key and
+// every session's refresh token into each node's resolver on every apply was
+// all exposure and no use.
 //
 // It FAILS CLOSED on the first row it cannot open, exactly as the local store
 // does. A partial snapshot is the worst outcome available: the names that are
@@ -135,6 +179,9 @@ func (s *Store) All(ctx context.Context) (map[string]string, error) {
 	}
 	out := make(map[string]string, len(rows))
 	for _, row := range rows {
+		if secrets.Reserved(row.Name) {
+			continue
+		}
 		value, err := s.cipher.Decrypt(row.Value, secrets.AADForVar(row.Name))
 		if err != nil {
 			// The NAME, never the envelope: an error that echoed its
@@ -147,11 +194,11 @@ func (s *Store) All(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
-// List reports what is stored, without opening anything.
+// List reports what the operator has stored, without opening anything.
 //
 // NO VALUES, ever — this is what an operator reads to answer "is X set", and
 // it deliberately does not need the keyring, so a node that cannot decrypt can
-// still say what exists.
+// still say what exists. And no engine row: [Store.EngineKeys] counts those.
 func (s *Store) List(ctx context.Context) ([]secrets.Record, error) {
 	if s == nil {
 		return nil, secrets.ErrNoKeyring
@@ -162,46 +209,42 @@ func (s *Store) List(ctx context.Context) ([]secrets.Record, error) {
 	}
 	out := make([]secrets.Record, 0, len(rows))
 	for _, row := range rows {
+		if secrets.Reserved(row.Name) {
+			continue
+		}
 		// The envelope is dropped on the way out rather than left for a
 		// caller to be careful with. A listing is printed, and the one
 		// thing that must never reach a terminal is the ciphertext.
-		out = append(out, secrets.Record{
-			Name: row.Name, KeyID: row.KeyID, UpdatedAt: row.UpdatedAt,
-			UpdatedBy: row.UpdatedBy, Source: row.Source,
-		})
+		out = append(out, record(row))
 	}
 	slices.SortFunc(out, func(a, b secrets.Record) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 
-// Names reports every stored name starting with prefix, sorted, without
-// opening anything.
+// EngineKeys counts the engine's own rows, per keyring key, naming none.
 //
-// NO KEYRING NEEDED, like [Store.List], and for a reason of its own: what reads
-// this is the duty that finishes a removal. Destroying a removed person's key
-// is an [Store.Unset], which needs no cipher either, so a node that cannot
-// decrypt can still complete an off-boarding — and the finding half must not be
-// the one thing that stops it.
-//
-// NAMES ONLY, never the record: a caller that needs a value asks for it by
-// name, and one that needs to know what exists has no business holding
-// envelopes it is not going to open.
-func (s *Store) Names(ctx context.Context, prefix string) ([]string, error) {
+// NO KEYRING NEEDED, like [Store.List]: what it answers is whether a rotation
+// has moved them, and the key id rides beside each envelope for exactly that.
+func (s *Store) EngineKeys(ctx context.Context) (secrets.EngineKeys, error) {
 	if s == nil {
-		return nil, secrets.ErrNoKeyring
+		return secrets.EngineKeys{}, secrets.ErrNoKeyring
 	}
 	rows, err := s.fleet.SecretValues(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fleetsecrets: list the secrets under %q: %w",
-			prefix, err)
+		return secrets.EngineKeys{}, fmt.Errorf("fleetsecrets: count the "+
+			"engine's keys: %w", err)
 	}
-	var out []string
+	var out secrets.EngineKeys
 	for _, row := range rows {
-		if strings.HasPrefix(row.Name, prefix) {
-			out = append(out, row.Name)
+		if !secrets.Reserved(row.Name) {
+			continue
 		}
+		if out.ByKey == nil {
+			out.ByKey = map[string]int{}
+		}
+		out.Total++
+		out.ByKey[row.KeyID]++
 	}
-	slices.Sort(out)
 	return out, nil
 }
 
@@ -215,6 +258,9 @@ func (s *Store) Describe(ctx context.Context, name string) (secrets.Record, bool
 	if s == nil {
 		return secrets.Record{}, false, secrets.ErrNoKeyring
 	}
+	if err := operatorName(name); err != nil {
+		return secrets.Record{}, false, err
+	}
 	rec, found, err := s.fleet.Secret(ctx, name)
 	if err != nil {
 		return secrets.Record{}, false, fmt.Errorf("fleetsecrets: read %s: %w", name, err)
@@ -222,10 +268,7 @@ func (s *Store) Describe(ctx context.Context, name string) (secrets.Record, bool
 	if !found {
 		return secrets.Record{}, false, nil
 	}
-	return secrets.Record{
-		Name: rec.Name, KeyID: rec.KeyID, UpdatedAt: rec.UpdatedAt,
-		UpdatedBy: rec.UpdatedBy, Source: rec.Source,
-	}, true, nil
+	return record(rec), true, nil
 }
 
 // Unset removes a value, reporting whether it was there.
@@ -233,6 +276,14 @@ func (s *Store) Unset(ctx context.Context, name string) (bool, error) {
 	if s == nil {
 		return false, secrets.ErrNoKeyring
 	}
+	if err := operatorName(name); err != nil {
+		return false, err
+	}
+	return s.unset(ctx, name)
+}
+
+// unset deletes one row, once the caller's view has established it may.
+func (s *Store) unset(ctx context.Context, name string) (bool, error) {
 	removed, err := s.fleet.DeleteSecret(ctx, name)
 	if err != nil {
 		return false, fmt.Errorf("fleetsecrets: unset %s: %w", name, err)
@@ -240,20 +291,33 @@ func (s *Store) Unset(ctx context.Context, name string) (bool, error) {
 	return removed, nil
 }
 
-// Rekey re-seals every row this node can open under the active key.
+// Rekeyed is what one rekey moved.
+type Rekeyed struct {
+	// Moved names the OPERATOR's rows re-sealed onto the active key.
+	Moved []string
+
+	// EngineKeys is how many of the engine's own rows were, named by
+	// nobody for [secrets.EngineKeys]' reason.
+	EngineKeys int
+}
+
+// Rekey re-seals every row this node can open under the active key — the
+// operator's AND the engine's, because the keyring is one keyring: an engine
+// row left under a retired key is every person's name, every refresh token and
+// both blind-index keys unreadable the moment that key is dropped.
 //
-// Returns the names it moved. A row already under the active key is left
-// alone, so a second run reports nothing and costs one read — which is what
-// makes this safe to put in a deploy script.
-func (s *Store) Rekey(ctx context.Context, activeKeyID, by string, now time.Time) ([]string, error) {
+// A row already under the active key is left alone, so a second run reports
+// nothing and costs one read — which is what makes this safe to put in a
+// deploy script.
+func (s *Store) Rekey(ctx context.Context, activeKeyID, by string, now time.Time) (Rekeyed, error) {
+	var out Rekeyed
 	if s == nil || s.cipher == nil {
-		return nil, secrets.ErrNoKeyring
+		return out, secrets.ErrNoKeyring
 	}
 	rows, err := s.fleet.SecretValues(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
+		return out, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
 	}
-	var moved []string
 	for _, row := range rows {
 		if row.KeyID == activeKeyID {
 			continue
@@ -266,20 +330,127 @@ func (s *Store) Rekey(ctx context.Context, activeKeyID, by string, now time.Time
 			// report a successful rekey over a secret that is now
 			// unreadable for ever — which is precisely the state the
 			// operator is about to retire the old key on the strength
-			// of.
-			return nil, fmt.Errorf("fleetsecrets: open %s for rekey: %w",
-				row.Name, err)
+			// of. An engine row is NAMED by its owner rather than in
+			// full, for the listing's reason.
+			slices.Sort(out.Moved)
+			return out, fmt.Errorf("fleetsecrets: open %s for rekey: %w",
+				displayName(row.Name), err)
 		}
-		if err := s.Set(ctx, row.Name, value, by, "rekey", now); err != nil {
+		if err := s.put(ctx, row.Name, value, by, "rekey", now); err != nil {
 			// The names moved so far come back WITH the error: a
 			// partial rekey is a fact an operator has to act on, and
 			// discarding the list would leave them re-running a pass
 			// with no idea which rows already moved.
-			slices.Sort(moved)
-			return moved, err
+			slices.Sort(out.Moved)
+			return out, err
 		}
-		moved = append(moved, row.Name)
+		if secrets.Reserved(row.Name) {
+			out.EngineKeys++
+			continue
+		}
+		out.Moved = append(out.Moved, row.Name)
 	}
-	slices.Sort(moved)
-	return moved, nil
+	slices.Sort(out.Moved)
+	return out, nil
+}
+
+// displayName is a row's name as an operator surface may print it: the whole
+// name for the operator's own, and the owner alone for the engine's.
+func displayName(name string) string {
+	if !secrets.Reserved(name) {
+		return name
+	}
+	owner, _, _ := strings.Cut(name, "/")
+	return "one of the engine's own " + owner + " keys"
+}
+
+// record is a row's metadata, with the envelope dropped.
+func record(row coord.SecretRecord) secrets.Record {
+	return secrets.Record{
+		Name: row.Name, KeyID: row.KeyID, UpdatedAt: row.UpdatedAt,
+		UpdatedBy: row.UpdatedBy, Source: row.Source,
+	}
+}
+
+// Estate is the ENGINE's view of the same bucket: its own key material, under
+// names in [secrets.CheckEstateName]'s grammar, and nothing else.
+//
+// It exists so that the one party that may address a reserved row does so
+// through a type no operator surface is handed. Every method refuses a name
+// outside the engine's namespace, so an estate caller cannot reach an
+// operator's credential either.
+type Estate struct{ store *Store }
+
+// Estate is this store's engine view.
+func (s *Store) Estate() *Estate {
+	if s == nil {
+		return nil
+	}
+	return &Estate{store: s}
+}
+
+// Get opens one of the engine's own rows.
+func (e *Estate) Get(ctx context.Context, name string) (string, error) {
+	if e == nil || e.store.cipher == nil {
+		return "", secrets.ErrNoKeyring
+	}
+	if err := secrets.CheckEstateName(name); err != nil {
+		return "", err
+	}
+	return e.store.get(ctx, name)
+}
+
+// Set seals and writes one of the engine's own rows.
+func (e *Estate) Set(ctx context.Context, name, value, by, source string, now time.Time) error {
+	if e == nil || e.store.cipher == nil {
+		return secrets.ErrNoKeyring
+	}
+	if err := secrets.CheckEstateName(name); err != nil {
+		return err
+	}
+	return e.store.put(ctx, name, value, by, source, now)
+}
+
+// Unset destroys one of the engine's own rows, reporting whether it was there.
+//
+// NO KEYRING NEEDED: destroying a removed person's key is what finishes their
+// off-boarding, and a node that cannot decrypt anything must still be able to.
+func (e *Estate) Unset(ctx context.Context, name string) (bool, error) {
+	if e == nil {
+		return false, secrets.ErrNoKeyring
+	}
+	if err := secrets.CheckEstateName(name); err != nil {
+		return false, err
+	}
+	return e.store.unset(ctx, name)
+}
+
+// Names reports every engine row under prefix, sorted, without opening
+// anything.
+//
+// NO KEYRING NEEDED, for [Estate.Unset]'s reason: what reads this is the duty
+// that finishes a removal, and the finding half must not be the one thing a
+// node with no keyring cannot do. NAMES ONLY, never the record: a caller that
+// needs a value asks for it by name.
+func (e *Estate) Names(ctx context.Context, prefix string) ([]string, error) {
+	if e == nil {
+		return nil, secrets.ErrNoKeyring
+	}
+	if !secrets.Reserved(prefix) {
+		return nil, fmt.Errorf("%w: %q is not a prefix in the engine's own "+
+			"namespace", secrets.ErrInvalidName, prefix)
+	}
+	rows, err := e.store.fleet.SecretValues(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fleetsecrets: list the engine's keys under %q: %w",
+			prefix, err)
+	}
+	var out []string
+	for _, row := range rows {
+		if strings.HasPrefix(row.Name, prefix) {
+			out = append(out, row.Name)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
