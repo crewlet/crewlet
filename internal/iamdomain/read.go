@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -353,56 +354,130 @@ func (r *Reader) PersonByEmailBlind(ctx context.Context, blind string) (Sighting
 	return r.sighting(ctx, "email_blind", blind)
 }
 
-// sighting is the one lookup both spellings share.
+// ErrSubjectAmbiguous is an identity provider's subject that more than one
+// person holds a live link to.
 //
-// THE COLUMN IS A LITERAL chosen by this package, never a caller's string:
-// both call sites pass a constant, and the alternative is a surface one
-// parameter away from selecting on something a request named.
+// NEVER RESOLVED TO EITHER OF THEM, because the subject is the whole of what a
+// provider sign-in proves: a password sign-in against a duplicated login still
+// has to verify THAT person's digest, while a subject resolved to the wrong
+// holder is somebody signed in as somebody else with nothing further checked.
+// Nothing the broker arbitrates produces one; a restore can, and the sign-in
+// stays refused until an operator removes one of the links.
+var ErrSubjectAmbiguous = errors.New("iamdomain: more than one person holds " +
+	"a live link to this identity provider subject")
+
+// PersonBySubjectBlind resolves an identity provider's blinded subject to the
+// person holding a LIVE link to it, on [Reader.PersonByLogin]'s three answers.
+//
+// THE CREDENTIAL AND NOT THE PERSON ROW, because a subject belongs to a link
+// rather than to a person: the person row's blind is their ADDRESS, and a
+// subject looked up there matches nobody — which is how every provider sign-in
+// was refused while each piece passed its own tests. A withdrawn or expired
+// link resolves nobody, for [CredentialRow.Revoked]'s rule: the callback checks
+// the person's stage and nothing about the link, so this read is the only
+// place a revoked link is refused.
+func (r *Reader) PersonBySubjectBlind(ctx context.Context, blind string,
+	now time.Time) (Sighting, error) {
+
+	if blind == "" {
+		return Sighting{}, nil
+	}
+	var out Sighting
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT DISTINCT person_id FROM iam_credentials
+			 WHERE subject_blind = ? AND method = ? AND revoked_at = 0
+			   AND (expires_at = 0 OR expires_at > ?)`,
+			blind, string(MethodOIDC), now.UnixMilli())
+		if err != nil {
+			return fmt.Errorf("iamdomain: resolve a provider subject: %w", err)
+		}
+		var holders []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return fmt.Errorf("iamdomain: read a provider subject: %w", err)
+			}
+			holders = append(holders, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iamdomain: read a provider subject: %w", err)
+		}
+		switch len(holders) {
+		case 0:
+			out = Sighting{}
+			return nil
+		case 1:
+			return sightingIn(ctx, tx, "id", holders[0], &out)
+		default:
+			return fmt.Errorf("%w: %s", ErrSubjectAmbiguous,
+				strings.Join(holders, ", "))
+		}
+	})
+	if err != nil {
+		return Sighting{}, err
+	}
+	return out, nil
+}
+
+// sighting is the one lookup every spelling shares.
 func (r *Reader) sighting(ctx context.Context, column, token string) (Sighting, error) {
 	if token == "" {
 		return Sighting{}, nil
 	}
 	var out Sighting
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
-		var (
-			stage, login, seat string
-			chartPosition      int64
-			document           []byte
-		)
-		err := tx.QueryRowContext(ctx, `
-			SELECT id, stage, login, seat_id, chart_position, document
-			  FROM iam_people WHERE `+column+` = ? AND shredded = 0`, token).
-			Scan(&out.ID, &stage, &login, &seat, &chartPosition, &document)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			// NOBODY, and the zero value is the answer. See the doc
-			// on [Reader.PersonByLogin] for why this is not a
-			// sentinel.
-			out = Sighting{}
-			return nil
-		case err != nil:
-			return fmt.Errorf("iamdomain: resolve a person: %w", err)
-		}
-		doc, err := DecodePerson(document)
-		if err != nil {
-			return fmt.Errorf("iamdomain: open person %q: %w", out.ID, err)
-		}
-		out.Kind = doc.Kind
-		// THE COLUMN, for [readPersonRow]'s reason: a sign-in decided
-		// from the document admitted a suspended person.
-		out.Stage = iam.Stage(stage)
-		out.Login = login
-		out.Credentials = doc.Credentials
-		out.Grants = doc.Grants
-		out.Colleague = doc.Colleague
-		out.Seat = seat
-		out.SeatAt = uint64(chartPosition)
-		return nil
+		return sightingIn(ctx, tx, column, token, &out)
 	})
 	if err != nil {
 		return Sighting{}, err
 	}
 	return out, nil
+}
+
+// sightingIn resolves one person row inside a read already open.
+//
+// THE COLUMN IS A LITERAL chosen by this package, never a caller's string:
+// every call site passes a constant, and the alternative is a surface one
+// parameter away from selecting on something a request named.
+func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
+	out *Sighting) error {
+
+	var (
+		stage, login, seat string
+		chartPosition      int64
+		document           []byte
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT id, stage, login, seat_id, chart_position, document
+		  FROM iam_people WHERE `+column+` = ? AND shredded = 0`, token).
+		Scan(&out.ID, &stage, &login, &seat, &chartPosition, &document)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// NOBODY, and the zero value is the answer. See the doc on
+		// [Reader.PersonByLogin] for why this is not a sentinel.
+		*out = Sighting{}
+		return nil
+	case err != nil:
+		return fmt.Errorf("iamdomain: resolve a person: %w", err)
+	}
+	doc, err := DecodePerson(document)
+	if err != nil {
+		return fmt.Errorf("iamdomain: open person %q: %w", out.ID, err)
+	}
+	out.Kind = doc.Kind
+	// THE COLUMN, for [readPersonRow]'s reason: a sign-in decided from the
+	// document admitted a suspended person.
+	out.Stage = iam.Stage(stage)
+	out.Login = login
+	out.Credentials = doc.Credentials
+	out.Grants = doc.Grants
+	out.Colleague = doc.Colleague
+	out.Seat = seat
+	out.SeatAt = uint64(chartPosition)
+	return nil
 }
 
 // AnyPerson reports whether this estate holds anybody at all.

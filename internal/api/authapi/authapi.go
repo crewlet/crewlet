@@ -110,6 +110,12 @@ type Directory interface {
 	// answers.
 	PersonByEmailBlind(ctx context.Context, blind string) (iamdomain.Sighting, error)
 
+	// PersonBySubjectBlind resolves an identity provider's blinded subject
+	// to whoever holds a LIVE link to it, on the same three answers — and
+	// an error for a subject two people hold, which resolves neither.
+	PersonBySubjectBlind(ctx context.Context, blind string, now time.Time) (
+		iamdomain.Sighting, error)
+
 	// AnyPerson reports whether anybody is enrolled at all, which is the
 	// bootstrap decision. One bit, never a listing.
 	AnyPerson(ctx context.Context) (bool, error)

@@ -132,6 +132,11 @@ func (stubDirectory) PersonByEmailBlind(context.Context, string) (iamdomain.Sigh
 	return iamdomain.Sighting{}, nil
 }
 
+func (stubDirectory) PersonBySubjectBlind(context.Context, string, time.Time) (
+	iamdomain.Sighting, error) {
+	return iamdomain.Sighting{}, nil
+}
+
 func (stubDirectory) AnyPerson(context.Context) (bool, error) { return false, nil }
 
 func (stubDirectory) InvitationByID(context.Context, string) (iamdomain.InvitationRow, error) {

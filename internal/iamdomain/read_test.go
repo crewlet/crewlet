@@ -1,7 +1,10 @@
 package iamdomain_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -197,5 +200,104 @@ func TestOneResolveAnswersTheSessionAndThePersonTogether(t *testing.T) {
 	if seen.Generation != 0 {
 		t.Errorf("generation = %d on a fleet that has never invalidated",
 			seen.Generation)
+	}
+}
+
+// A PROVIDER'S SUBJECT RESOLVES THROUGH A LIVE LINK, AND NEVER THROUGH THE
+// ADDRESS COLUMN.
+//
+// The callback used to look the subject's blind up as an ADDRESS blind. The two
+// are different classes inside one MAC by construction, so that matched nobody
+// and every provider sign-in was refused, while the blinder, the reader and the
+// callback each passed their own suite. And the subject is the WHOLE of what a
+// provider sign-in proves, so a withdrawn link must resolve nobody, and a
+// subject two people hold must resolve neither of them. Resolving either one
+// would sign somebody in as somebody else with nothing further checked.
+func TestAProviderSubjectResolvesThroughALiveLinkOnly(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	blinder, err := iamdomain.NewBlinder(testBlindKey)
+	if err != nil {
+		t.Fatalf("blinder: %v", err)
+	}
+	subject := func(sub string) string {
+		t.Helper()
+		blind, err := blinder.Subject("https://idp.example.com", sub)
+		if err != nil {
+			t.Fatalf("blind a subject: %v", err)
+		}
+		return blind
+	}
+	now := brokerAt.Add(time.Hour)
+	enrol := func(login string, link iamdomain.Credential) string {
+		t.Helper()
+		id := uuid.New().String()
+		link.ID = uuid.New().String()
+		link.Method = iamdomain.MethodOIDC
+		if err := rig.enrol(iamdomain.Enrolment{
+			PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
+			Name: login, Email: login + "@example.com", Login: login,
+			OpID: "enrol-" + login, Reason: "a provider link",
+			Credentials: []iamdomain.Credential{link},
+		}); err != nil {
+			t.Fatalf("enrol %s: %v", login, err)
+		}
+		return id
+	}
+
+	linked := enrol("ada.linked", iamdomain.Credential{SubjectBlind: subject("ada")})
+	enrol("rex.revoked", iamdomain.Credential{SubjectBlind: subject("rex"),
+		RevokedAt: brokerAt})
+	enrol("eve.expired", iamdomain.Credential{SubjectBlind: subject("eve"),
+		ExpiresAt: now.Add(-time.Minute)})
+	first := enrol("dan.first", iamdomain.Credential{SubjectBlind: subject("dan")})
+	second := enrol("dan.second", iamdomain.Credential{SubjectBlind: subject("dan")})
+	rig.drain()
+
+	// THE CONTROL: the address column never matches a subject, so the
+	// lookup that shipped refused a person this estate does link.
+	if held, err := reader.PersonByEmailBlind(t.Context(), subject("ada")); err != nil ||
+		held.ID != "" {
+		t.Fatalf("the address column matched a subject (%q, %v): the two "+
+			"blinds are separate classes and must never meet", held.ID, err)
+	}
+
+	held, err := reader.PersonBySubjectBlind(t.Context(), subject("ada"), now)
+	if err != nil {
+		t.Fatalf("resolve a linked subject: %v", err)
+	}
+	if held.ID != linked || held.Login != "ada.linked" {
+		t.Errorf("a linked subject resolved to %q (%q), want %q", held.ID,
+			held.Login, linked)
+	}
+
+	for name, sub := range map[string]string{
+		"a withdrawn link": "rex", "an expired link": "eve",
+		"a subject nobody links": "nobody",
+	} {
+		held, err := reader.PersonBySubjectBlind(t.Context(), subject(sub), now)
+		if err != nil {
+			t.Errorf("%s: %v, want nobody and no error", name, err)
+		}
+		if held.ID != "" {
+			t.Errorf("%s resolved to %q, so a person the company unlinked "+
+				"still signs in through the provider", name, held.ID)
+		}
+	}
+
+	held, err = reader.PersonBySubjectBlind(t.Context(), subject("dan"), now)
+	if !errors.Is(err, iamdomain.ErrSubjectAmbiguous) {
+		t.Fatalf("a subject two people hold answered %v, want "+
+			"ErrSubjectAmbiguous", err)
+	}
+	if held.ID != "" {
+		t.Errorf("an ambiguous subject resolved to %q", held.ID)
+	}
+	for _, id := range []string{first, second} {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("the refusal does not name holder %s, so an operator "+
+				"cannot find the link to remove: %v", id, err)
+		}
 	}
 }

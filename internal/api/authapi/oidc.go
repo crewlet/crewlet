@@ -1,6 +1,7 @@
 package authapi
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -180,7 +181,18 @@ func (s *Service) personForSubject(r *http.Request, claims oidc.Claims) (
 		log.WarnContext(r.Context(), "api_oidc_blind_failed", "error", err)
 		return iamdomain.Sighting{}, err
 	}
-	held, err := s.directory.PersonByEmailBlind(r.Context(), blind)
+	// THE LINK, NEVER THE PERSON ROW'S ADDRESS BLIND: the two are
+	// different namespaces by construction, so a subject looked up as an
+	// address matches nobody and every provider sign-in is refused.
+	held, err := s.directory.PersonBySubjectBlind(r.Context(), blind, s.now())
+	if errors.Is(err, iamdomain.ErrSubjectAmbiguous) {
+		// LOUDER than an outage, because waiting does not clear it: a
+		// restore left one subject linked to two people, and the
+		// sign-in stays refused until an operator removes a link.
+		log.ErrorContext(r.Context(), "api_oidc_subject_ambiguous",
+			"issuer", claims.Issuer, "error", err)
+		return iamdomain.Sighting{}, err
+	}
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_lookup_failed", "error", err)
 		return iamdomain.Sighting{}, err
