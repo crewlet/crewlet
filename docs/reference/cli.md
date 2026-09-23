@@ -786,12 +786,17 @@ crewlet budgets reset -scope agent:<id>    # just one seat
 | Flag | Default | What it does |
 |---|---|---|
 | `-url` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
-| `-token` | `$CREWLET_API_TOKEN` | The bearer token. Every guarded route needs one, reads included. There is no fallback to the config's own `api.auth.tokens`: that list is what the node accepts, and a write authored by whichever entry came first landed under a name nobody chose |
 
-The environment wins over the config so an operator who exported a token
-deliberately gets that one. There is no token *default* on the command line:
-a token typed as an argument is in the shell history, in `ps`, and in any CI
-log that echoes the command.
+**The credential is `CREWLET_API_TOKEN` and nothing else**, here and on every
+command that talks to a running node — `backup`, `retention`, `work`,
+`secrets`, `config`, `chart` and `iam` too. Every guarded route needs one,
+reads included. It is never a flag: a token typed as an argument is in the
+shell history, in `ps`, and in any CI log that echoes the command, so
+`-token` is refused as an unknown flag. And it is never read out of the
+config's own `api.auth.tokens`: that list is what the node *accepts*, and a
+write authored by whichever entry came first landed under a name nobody
+chose. A `401` therefore has one thing to check — the value exported in
+`CREWLET_API_TOKEN`.
 
 The **caps** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process

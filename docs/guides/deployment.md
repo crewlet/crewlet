@@ -1453,9 +1453,9 @@ crewlet budgets reset     # -scope org, or -scope agent:<id>
 ```
 
 Both talk to a node rather than to a file: the counter is the fleet's, and on
-the default topology it lives inside the running engine. `-url` and `-token`
-name another node; without them they are taken from the `api` block of the
-config on the command line.
+the default topology it lives inside the running engine. `-url` names another
+node, and without it the address is taken from the `api` block of the config
+on the command line; the credential is `CREWLET_API_TOKEN`, never a flag.
 
 ### Token Budgets
 

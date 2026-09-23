@@ -71,10 +71,8 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 	configPath := fs.String("config", defaultBootstrapPath,
 		"Tier A config: where this node binds its API")
 	addr := fs.String("url", "",
-		"the running node's base URL; empty takes it from the config's api block")
-	token := fs.String("token", "",
-		"bearer token; empty takes "+apiTokenEnv+" — never the config's own "+
-			"api.auth.tokens, which is what the node accepts")
+		"the running node's base URL; empty takes it from the config's api block. "+
+			"The credential is "+apiTokenEnv+", and never a flag")
 	if extra != nil {
 		extra(fs)
 	}
@@ -90,33 +88,33 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 		bootstrapPath = *configPath
 	}
 
-	base, bearer := *addr, *token
-	if base == "" || bearer == "" {
-		// The config is read for the DEFAULTS only, so an operator who
-		// supplied both flags can act on a node whose config file this
-		// machine does not have.
+	// THE CREDENTIAL IS THE ENVIRONMENT'S, AND ONLY THE ENVIRONMENT'S.
+	//
+	// There was a `-token` flag here, beside a comment on
+	// [nodeTokenOrEmpty] saying the token was never a flag: a token typed
+	// as an argument is in the shell history, in `ps` and in any CI log
+	// that echoes the command, so the flag was the one way to use this CLI
+	// that leaked the credential it carried — and it made the 401 below
+	// name two sources when an operator has one to check.
+	//
+	// THE LENIENT FORM: an absent token is not refused HERE, because a
+	// development principal resolves an unauthenticated request on a
+	// loopback bind of an unreleased binary, and that is a legitimate way
+	// to reach these routes. The 401 from a node that does not is the
+	// honest answer, and it names the variable.
+	base, bearer := *addr, nodeTokenOrEmpty()
+	if base == "" {
+		// The config is read for the ADDRESS only, so an operator who
+		// named one can act on a node whose config file this machine does
+		// not have.
 		boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
 		if err != nil {
-			return nil, fmt.Errorf("%w\n\nPass -url and -token to reach a node "+
-				"whose config this machine does not hold", err)
+			return nil, fmt.Errorf("%w\n\nPass -url to reach a node whose config "+
+				"this machine does not hold", err)
 		}
-		if base == "" {
-			base, err = nodeBaseURL(boot, "", "this node")
-			if err != nil {
-				return nil, err
-			}
-		}
-		if bearer == "" {
-			// THE LENIENT FORM, and what it is lenient about has
-			// changed: `api.auth.disabled` is gone, so an absent token
-			// is no longer a servable posture — it is a call that will
-			// be refused at the far end. It is still not refused HERE,
-			// because a development principal resolves an
-			// unauthenticated request on a loopback bind of an
-			// unreleased binary, and that is a legitimate way to reach
-			// these routes. The 401 from a node that does not is the
-			// honest answer and it names the variable.
-			bearer = nodeTokenOrEmpty()
+		base, err = nodeBaseURL(boot, "", "this node")
+		if err != nil {
+			return nil, err
 		}
 	}
 	return &nodeClient{

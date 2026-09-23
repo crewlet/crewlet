@@ -39,7 +39,7 @@ func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 	switch status {
 	case http.StatusUnauthorized:
 		if !sentToken {
-			return "no token was sent: export " + apiTokenEnv + " (or pass -token) with one of " +
+			return "no token was sent: export " + apiTokenEnv + " with one of " +
 				"the values in the node's api.auth.tokens, or a machine token " +
 				"minted by `crewlet iam token`", true
 		}

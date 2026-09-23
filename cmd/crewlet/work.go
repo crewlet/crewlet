@@ -51,7 +51,7 @@ func runWork(args []string, stdout, stderr io.Writer) error {
 // workPurgeUsage is the one usage line, printed wherever the command is
 // refused for want of an argument.
 const workPurgeUsage = "usage: crewlet work purge <item> -reason TEXT " +
-	"-confirm <item-key> [-op-id ID] [<config.yaml>] [-url] [-token]"
+	"-confirm <item-key> [-op-id ID] [<config.yaml>] [-url]"
 
 // workPurge is `crewlet work purge`.
 //

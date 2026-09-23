@@ -184,7 +184,7 @@ func runBudgets(args []string, stdout, stderr io.Writer) error {
 		return budgetsReset(rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr,
-			"usage: crewlet budgets show|reset [<config.yaml>] [-url] [-token] [-scope]")
+			"usage: crewlet budgets show|reset [<config.yaml>] [-url] [-scope]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown budgets command %q", sub)

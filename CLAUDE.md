@@ -122,10 +122,13 @@ cmd/crewlet/          # The one binary. run / validate / schema / migrate /
                       #   mattermost).
                       #   Every command the switch dispatches must appear in
                       #   usage() — nothing connects them, and a test asserts it.
-                      #   A command that writes through a running node
+                      #   A command that talks to a running node
                       #   authenticates with CREWLET_API_TOKEN and NOTHING
-                      #   ELSE: the Tier A api.auth.tokens list is what a node
-                      #   ACCEPTS, not a wallet the CLI helps itself from, and
+                      #   ELSE — never a flag (a token typed as an argument
+                      #   is in shell history and `ps`, so `-token` is an
+                      #   unknown flag), and never Tier A's own list, which
+                      #   is what a node ACCEPTS, not a wallet the CLI helps
+                      #   itself from, and
                       #   the fallback that took the first entry authored an
                       #   operator's write under a name they had not chosen —
                       #   after reading a resolved ${VAR} out of the config

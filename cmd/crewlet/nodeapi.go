@@ -42,12 +42,15 @@ import (
 // deployment got a clear refusal from one command and a bare 401 from the
 // other. A third copy was one `crewlet config -api` away.
 
-// apiTokenEnv is where every node client reads a bearer token that is not in
-// Tier A.
+// apiTokenEnv is where every node client reads the bearer token it sends, and
+// the ONLY place: not Tier A's `api.auth.tokens` (see [nodeTokenOrEmpty]) and
+// not a flag.
 //
 // An ENV VAR rather than a flag, because a token on a command line is in the
 // shell history, in `ps`, and in any CI log that echoes the command — the same
-// reason `secrets set` reads its value from stdin.
+// reason `secrets set` reads its value from stdin. The node commands carried a
+// `-token` flag anyway, documented, beside this comment; it is gone, and with
+// it the second source a 401 had to send an operator to check.
 const apiTokenEnv = "CREWLET_API_TOKEN"
 
 // nodeBaseURL is the API address of the node a Tier A file describes, or the

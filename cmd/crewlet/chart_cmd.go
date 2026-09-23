@@ -47,7 +47,7 @@ func runChart(args []string, stdout, stderr io.Writer) error {
 	case "", "help":
 		fmt.Fprintln(stderr,
 			"usage: crewlet chart show|check|history|export [<config.yaml>] "+
-				"[-url] [-token] [-out]")
+				"[-url] [-out]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown chart command %q", sub)

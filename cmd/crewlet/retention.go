@@ -70,7 +70,7 @@ func runRetention(args []string, stdout, stderr io.Writer) error {
 	case "", "help":
 		fmt.Fprintln(stderr, "usage: crewlet retention "+
 			"status|snapshots|ack|evict|readmit|reanchor|verify|"+
-			"set-capacity|maintenance [<config.yaml>] [-url] [-token]")
+			"set-capacity|maintenance [<config.yaml>] [-url]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown retention command %q", sub)

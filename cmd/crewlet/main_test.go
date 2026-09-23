@@ -1536,6 +1536,48 @@ func TestUsageNamesBothTierBFlags(t *testing.T) {
 	}
 }
 
+// A COMMAND THAT TALKS TO A NODE AUTHENTICATES WITH CREWLET_API_TOKEN AND
+// NOTHING ELSE — and the help, the flag set and the 401 all say so.
+//
+// The node commands registered a `-token` flag, documented, beside a comment
+// saying the token was never a flag: a token typed as an argument is in the
+// shell history, in `ps` and in any CI log that echoes the command. So the
+// flag was the one way to use this CLI that leaked the credential it carried,
+// and a 401 had two sources to send an operator to. The flag is refused as
+// unknown now, the variable is the token whatever else is on the line, and
+// the help names the variable because nothing else does.
+func TestTheNodeCredentialIsTheEnvironmentAndNeverAFlag(t *testing.T) {
+	t.Setenv(apiTokenEnv, "from-the-environment")
+
+	var help bytes.Buffer
+	usage(&help)
+	if !strings.Contains(help.String(), apiTokenEnv) {
+		t.Errorf("usage never names %s, the one credential a node command "+
+			"sends:\n%s", apiTokenEnv, help.String())
+	}
+
+	var stderr bytes.Buffer
+	if _, err := nodeClientFor([]string{"-url", "http://127.0.0.1:1", "-token", "typed"},
+		"budgets show", &stderr, nil); err == nil {
+		t.Error("-token was accepted: a credential typed on the command line " +
+			"is in the shell history and in ps")
+	}
+	client, err := nodeClientFor([]string{"-url", "http://127.0.0.1:1"},
+		"budgets show", &stderr, nil)
+	if err != nil {
+		t.Fatalf("nodeClientFor: %v", err)
+	}
+	if client.token != "from-the-environment" {
+		t.Errorf("token = %q, want %s's value", client.token, apiTokenEnv)
+	}
+
+	// AND THE 401 NAMES ONE SOURCE, because there is one.
+	msg, ok := credentialRefusal(http.StatusUnauthorized, nil, false)
+	if !ok || !strings.Contains(msg, apiTokenEnv) || strings.Contains(msg, "-token") {
+		t.Errorf("the no-token refusal says %q: want %s named and no flag", msg, apiTokenEnv)
+	}
+}
+
 // A WORKER-ONLY NODE STILL HAS A CONFIG WRITER.
 //
 // The writer was installed inside serveAPI, after its early return for

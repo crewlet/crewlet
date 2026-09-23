@@ -249,7 +249,16 @@ Config:
             The deliberate "this file is the company again" gesture.
             To change a RUNNING fleet with no restart at all, use
             "crewlet config import" — it goes through the node's API.
-`, version.String(), defaultBootstrapPath, defaultCompanyPath)
+
+Environment:
+  %s
+            The credential a command that talks to a RUNNING node sends
+            (budgets, backup, retention, work, secrets, config, chart, iam):
+            one of the node's api.auth.tokens values, or a machine token
+            minted by "crewlet iam token". It is never a flag — a flag is in
+            the shell history and in ps — and never read out of the config
+            file, whose token list is what the node ACCEPTS.
+`, version.String(), defaultBootstrapPath, defaultCompanyPath, apiTokenEnv)
 }
 
 // The two tiers are separate files because they answer to separate people. A
