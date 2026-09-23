@@ -61,7 +61,7 @@ func mounted(t *testing.T, opts secretsapi.Options, grants ...iam.Grant) http.Ha
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), iam.Principal{
 			ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
-			Login: auth.TokenLogin("ops"), Kind: iam.KindMachine,
+			Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
 			Stage: iam.StageActive, Grants: grants,
 		})))
 	})

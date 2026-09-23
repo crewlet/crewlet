@@ -84,11 +84,9 @@ func TestARefusedPersonalQuestionNamesItsReasonAndItsGrants(t *testing.T) {
 		Grants: []iam.Grant{iam.GrantStateRead}})
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
-		BoundSeat: func(login string) string {
-			if login == auth.TokenLogin("colleague") {
-				return "ana"
-			}
-			return ""
+		SeatBindings: auth.SeatBindings{
+			Directory: inboxBindings{iam.TokenLogin("colleague"): "ana"},
+			Chart:     inboxChart{iam.TokenLogin("colleague"): "ana"},
 		},
 		Sources: queries.Sources{Work: stubWorkReader{},
 			Chart: leadOf{lead: "ana", report: "cy"}},

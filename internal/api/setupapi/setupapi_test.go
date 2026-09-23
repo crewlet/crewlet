@@ -313,7 +313,7 @@ func (s *surface) as(req *http.Request) *http.Request {
 		grants = iam.AllGrants
 	}
 	return req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
-		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: auth.TokenLogin("ops"),
+		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: iam.TokenLogin("ops"),
 		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: grants,
 	}))
 }
