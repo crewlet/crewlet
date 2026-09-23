@@ -381,51 +381,60 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 // which is why the Linux job never showed it. writequeue.go is what serves
 // the two in order.
 //
-// # What this case does NOT hold, measured rather than assumed
+// # What it holds: the ORDER, as a count
 //
-// It does not hold the queue, and no assertion here could on this platform.
-// Every quantity the scenario offers was measured with the queue REMOVED, on
-// linux/amd64, and each one overlaps the queued readings:
+// The applier asks while a foreign transaction holds the lock, so a store
+// that serves writers in order starts the applier's body after THAT
+// transaction and no other. What is asserted is how many foreign commits land
+// between the applier's ask and its body — at most [maxCommitsAhead] — and
+// never how long anything took. It is the starvation itself, counted: without
+// the queue the applier polls, the writer beside it re-begins the moment it
+// commits, and the applier waits out commit after commit until a poll happens
+// to land in a gap.
 //
-//   - the OUTCOME. The apply still completed in one attempt every time; it
-//     just waited. Green either way.
-//   - the ELAPSED TIME. 0.6 s to 5.5 s unqueued against about 1.6 s queued —
-//     the wall-clock comparison that failed a loaded macOS runner, and the
-//     reason the case this replaces was flaky.
-//   - HOW MANY FOREIGN COMMITS LAND BEFORE THE APPLY BEGINS, which is the
-//     starvation itself and looked like the answer: exactly 1 on every queued
-//     run, against 5 398, 100, 72, 19, 5, 3, 2 and 1 across eight unqueued
-//     ones. The unqueued population REACHES the queued value whenever the
-//     applier's first poll happens to land in a gap, so a threshold between
-//     them would pass vacuously on a lucky run and be a guess dressed as a
-//     guard.
+// # Staged at darwin's odds, on every platform
 //
-// That the unbounded case is sometimes fast is exactly the hazard: on darwin
-// `PRAGMA fullfsync` makes each commit an F_FULLFSYNC holding the lock for
-// about 4 ms against a gap of microseconds, the lucky poll stops happening,
-// and the applier's busy timeout expires with the writer beside it having
-// committed some 1 300 times. The platform sets the odds; nothing about the
-// hazard is darwin's.
+// The count alone is not enough on a fast disk, and it was measured not to be.
+// With the queue REMOVED on linux/amd64, and each foreign commit a bare insert
+// holding the lock for about a quarter of a millisecond, the applier started
+// behind 5 398, 100, 72, 19, 5, 3, 2 and 1 commits across eight runs: the
+// unqueued population reaches the queued value whenever the applier's first
+// poll happens to land in a gap, and a threshold of two caught seven runs of
+// nine. The hazard is not the platform's, though — only the odds are. On
+// darwin `PRAGMA fullfsync` makes each commit an F_FULLFSYNC holding the lock
+// for about 4 ms against a gap of microseconds, the lucky poll stops
+// happening, and the applier's busy timeout expired with the writer beside it
+// having committed some 1 300 times. So each foreign commit here holds the lock
+// for [foreignHold], darwin's commit, and the case meets the odds the hazard
+// was found at wherever it runs.
 //
-// # What it does hold
+// And the ask is timed. It was made whenever the settle loop returned, which
+// wakes on the writer's commit counter — and that moves in exactly the gap a
+// polling waiter gets in through, so the lucky case was the staged one. It is
+// made now inside a transaction the writer holds for [askHold] and says it is
+// holding. Measured over thirty runs with the queue removed, the applier
+// started behind 103 to 4 355 foreign commits; with it, behind one on every
+// run.
 //
-// The queue's own guarantee is held deterministically, by construction rather
-// than by a threshold, in TestWritersBeginInTheOrderTheyAsked — each writer is
-// observed to be IN LINE before the next is started, and it goes red under a
-// LIFO release, a release without handoff, a queue per handle and a pinned
-// writer that skips the queue.
+// # And what it still is not
 //
-// This is the SCENARIO, end to end, against a real back-to-back writer: the
-// apply's body runs once, the writer beside it is never refused, and it
-// commits again after the apply — because a queue that simply stopped the
-// writer would satisfy the first two. The commit count is LOGGED so a darwin
-// run prints the number this was written for, and asserted by nothing.
+// Not the queue's own guarantee: that is held by construction, with each
+// writer observed IN LINE before the next is started, in
+// TestWritersBeginInTheOrderTheyAsked, which goes red under a LIFO release, a
+// release without handoff, a queue per handle and a pinned writer that skips
+// the queue. This is the SCENARIO, end to end, against a real back-to-back
+// writer: the apply's body runs once, it starts behind the one transaction it
+// asked behind, and the writer beside it commits again afterwards — because a
+// queue that simply stopped the writer would satisfy the rest. That the writer
+// beside the apply is never refused is asserted too, and is not the order: a
+// one-minute busy timeout ([scenarioBusyTimeout]) keeps a refusal from being a
+// slow machine, and an unqueued writer polls inside it just as long.
 func TestAnApplierIsNotStarvedByAWriterCommittingBackToBack(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs a 4 000-row apply against a concurrent writer")
 	}
 	t.Parallel()
-	node, w := benchNodeT(t)
+	node, w := benchNodeQueued(t)
 	ctx := t.Context()
 	replicated := node.Replicated()
 	if err := replicated.Tx(ctx, func(tx *sql.Tx) error {
@@ -436,6 +445,8 @@ func TestAnApplierIsNotStarvedByAWriterCommittingBackToBack(t *testing.T) {
 	}
 
 	stop := make(chan struct{})
+	holding := make(chan struct{}, 1)
+	var holdForAsk atomic.Bool
 	var wg sync.WaitGroup
 	var foreign, refused atomic.Int64
 	wg.Go(func() {
@@ -445,7 +456,11 @@ func TestAnApplierIsNotStarvedByAWriterCommittingBackToBack(t *testing.T) {
 				return
 			default:
 			}
-			if err := commitForeign(ctx, replicated); err == nil {
+			hold, told := foreignHold, chan<- struct{}(nil)
+			if holdForAsk.CompareAndSwap(true, false) {
+				hold, told = askHold, holding
+			}
+			if err := commitForeign(ctx, replicated, hold, told); err == nil {
 				foreign.Add(1)
 			} else {
 				refused.Add(1)
@@ -453,6 +468,20 @@ func TestAnApplierIsNotStarvedByAWriterCommittingBackToBack(t *testing.T) {
 		}
 	})
 	settleForeign(t, &foreign)
+
+	// THE APPLIER ASKS WHILE A FOREIGN TRANSACTION HOLDS THE LOCK — one the
+	// writer holds for [askHold], so the ask lands inside it — and not at
+	// whatever instant the settle loop happened to return: that loop wakes
+	// on the writer's commit counter, which moves in the GAP between one
+	// commit and the next begin, so an ask timed by it was an ask timed to
+	// land in a gap, which is the one moment a store without its queue lets
+	// a polling waiter straight in.
+	holdForAsk.Store(true)
+	select {
+	case <-holding:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the concurrent writer never began the transaction the ask is made behind")
+	}
 
 	var attempts int
 	var waitedBehind int64
@@ -485,6 +514,14 @@ func TestAnApplierIsNotStarvedByAWriterCommittingBackToBack(t *testing.T) {
 			"committing back to back: it should have waited for the commits "+
 			"queued ahead of it, not polled against them", attempts)
 	}
+	if waitedBehind > maxCommitsAhead {
+		t.Errorf("the applier's body started behind %d foreign commits past its "+
+			"ask, want at most %d: a writer that asked while one transaction "+
+			"held the lock goes next, and one that polls instead waits out "+
+			"commit after commit of a writer re-beginning the moment it lets go "+
+			"— the store is not serving its writers in order",
+			waitedBehind, maxCommitsAhead)
+	}
 	if n := refused.Load(); n != 0 {
 		t.Errorf("the writer beside the apply was refused %d time(s): a writer "+
 			"queued behind the apply waits for it rather than failing", n)
@@ -494,13 +531,56 @@ func TestAnApplierIsNotStarvedByAWriterCommittingBackToBack(t *testing.T) {
 		elapsed.Round(time.Millisecond))
 }
 
+// maxCommitsAhead is how many foreign commits may land between the applier's
+// ask and its body when the store serves writers in order.
+//
+// ONE: the transaction holding the lock when the applier asked, which it waits
+// for by design, and no other. The ask is made while that transaction holds
+// the lock, after the counter has taken every commit before it, so the
+// counter's lag — it moves after a commit rather than with it — can only
+// UNDERCOUNT the one commit the applier waited for.
+const maxCommitsAhead = 1
+
+// askHold is how long the foreign transaction the applier asks behind holds
+// the lock.
+//
+// TWO HUNDRED MILLISECONDS, as the margin the ask is made inside of: the test
+// asks microseconds after the writer says it holds the lock, and a queued
+// applier reads a second commit only if its own goroutine stalls past this
+// before it reaches the line — forty of [foreignHold]'s commits, on a runner
+// shared with the rest of the suite. A stall that long is a machine too loaded
+// to tell anything, and the case says so by failing rather than by passing.
+// It costs the case this once, before the apply.
+const askHold = 200 * time.Millisecond
+
+// foreignHold is how long each foreign commit in the back-to-back scenario
+// holds the write lock.
+//
+// FIVE MILLISECONDS, darwin's commit: `PRAGMA fullfsync` makes each one an
+// F_FULLFSYNC of about 4 ms against a gap of microseconds, which is the ratio
+// the starvation was measured at. Held for that long on every platform, a
+// waiter that polls meets a gap on a vanishing share of its polls, so the count
+// [maxCommitsAhead] bounds is one a store without its queue cannot reach by
+// luck — which on a bare insert's quarter of a millisecond it could, twice in
+// nine runs. It costs the queued case one such hold before the apply.
+const foreignHold = 5 * time.Millisecond
+
 // commitForeign is one small commit to the foreign table, the audit log's
-// shape, through the store's own write path.
-func commitForeign(ctx context.Context, db *store.DB) error {
+// shape, through the store's own write path — holding the lock for hold, as a
+// commit on darwin holds it for [foreignHold], and saying on told, when it is
+// given one, that it holds it.
+func commitForeign(ctx context.Context, db *store.DB, hold time.Duration,
+	told chan<- struct{}) error {
 	return db.Tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO bench_foreign (payload) VALUES (?)`, "phase")
-		return err
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO bench_foreign (payload) VALUES (?)`, "phase"); err != nil {
+			return err
+		}
+		if told != nil {
+			told <- struct{}{}
+		}
+		time.Sleep(hold)
+		return nil
 	})
 }
 
@@ -820,12 +900,47 @@ func benchNodeT(t *testing.T) (*store.DB, *store.Writer) {
 	return db, w
 }
 
+// scenarioBusyTimeout is the lock wait the back-to-back scenario runs under,
+// and it is deliberately NOT the production default.
+//
+// That case holds ORDER: a writer queued behind the apply waits for it rather
+// than failing. What bounds the wait — the busy timeout, and the one retry the
+// store gives a writer after it — is a separate contract, certified by the
+// queue's own tests (writequeue_internal_test.go). At the 5 s default it turned
+// the case into a wall-clock assertion in disguise: the writer beside the
+// apply was refused whenever the 4 000-row apply outlasted two 5 s waits, which
+// it did at 12.1 s under the race detector on a runner shared with the rest of
+// the suite, against about 2 s alone. A minute is five times that loaded
+// measurement, so a refusal here is the queue failing to hand the lock on
+// rather than a slow machine. It is not what catches a store that stopped
+// queueing: an unqueued applier polls inside this minute until one of its polls
+// lands in a gap — measured at between 103 and 4 355 foreign commits across
+// thirty runs, inside the minute every time — and it is the COUNT of those
+// commits, [maxCommitsAhead], that reports it.
+const scenarioBusyTimeout = time.Minute
+
+// benchNodeQueued is benchNodeT under scenarioBusyTimeout.
+func benchNodeQueued(t *testing.T) (*store.DB, *store.Writer) {
+	t.Helper()
+	db, w := openApplierStoreWith(t, filepath.Join(t.TempDir(), "drain.db"),
+		store.Options{PinnedWriters: 1, BusyTimeout: scenarioBusyTimeout})
+	t.Cleanup(func() { _ = w.Close() })
+	t.Cleanup(func() { _ = db.Close() })
+	return db, w
+}
+
 // openApplierStore opens a node with one declared pin and the applier-shaped
 // tables in its REPLICATED estate, which is where an applier writes.
 func openApplierStore(tb testing.TB, path string) (*store.DB, *store.Writer) {
 	tb.Helper()
+	return openApplierStoreWith(tb, path, store.Options{PinnedWriters: 1})
+}
+
+// openApplierStoreWith is openApplierStore under the caller's options.
+func openApplierStoreWith(tb testing.TB, path string, opts store.Options) (*store.DB, *store.Writer) {
+	tb.Helper()
 	ctx := tb.Context()
-	db, err := store.Open(ctx, path, store.Options{PinnedWriters: 1})
+	db, err := store.Open(ctx, path, opts)
 	if err != nil {
 		tb.Fatalf("open: %v", err)
 	}
