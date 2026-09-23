@@ -82,6 +82,20 @@
 // the same retry is refused instead. Layer 2 is therefore an optimisation and
 // never a mechanism.
 //
+// Layer 1 is read BEFORE the domain decides — in the snapshot's own
+// transaction ([Snap.Held]) — and not only when a lost acknowledgement is
+// resolved. A retry of an operation that landed takes a snapshot that already
+// holds the first application, and a decision taken there is about the wrong
+// world: a purge finds its task gone and refuses, an update conditioned on a
+// version finds it moved by its own first copy and refuses as stale, a
+// counter moves twice. So an operation this node's ledger records is ANSWERED
+// — applied, at the first copy's position, marked [Result.Collapsed] — and
+// never decided again, however long after the first copy it comes. A
+// duplicate acknowledgement from layer 2 is marked the same way, because its
+// position is equally not one this call's decision produced, and a caller
+// whose answer is computed inside the decision (a minted key) must not report
+// it.
+//
 // # An operation id carries the instant it was minted
 //
 // Layer 1 has a hole the other two cannot fill: the ops table is this node's

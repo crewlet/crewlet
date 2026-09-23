@@ -816,7 +816,9 @@ It answers the same three-valued outcome every write here has. `pending` means
 the record is on the log and each node's rows go as it reaches them; do not run
 it again. `unknown` is the one to retry, and the printed operation id goes back
 in `-op-id` so the retry cannot append a second purge of a task the first one
-may already have destroyed. Pass it back exactly as printed: the id carries the
+may already have destroyed — and when it did, the retry answers `applied`, at
+the first purge's position, rather than finding the task gone and refusing.
+Pass it back exactly as printed: the id carries the
 instant it was minted, which is what a node that has since adopted a snapshot
 judges the retry by — there it answers `unknown` again rather than purging
 twice. An id of your own making carries no instant and is read as older than

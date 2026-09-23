@@ -79,6 +79,21 @@ type Result struct {
 	// Rounds is how many compare-and-set rounds this write took, for the
 	// instrument that says whether an object is contended.
 	Rounds int
+
+	// Collapsed says this call was a RETRY of an operation that had
+	// already landed under the same op id, and THIS call's decision was
+	// never stored: Position is the earlier copy's, found either in this
+	// node's ledger before a decision was taken ([Snap.Held]) or in the
+	// broker's duplicate acknowledgement.
+	//
+	// The outcome is still the operation's own — it did apply — and a
+	// caller that only reports it needs nothing more. A caller whose
+	// ANSWER is computed inside its decision must not build on that
+	// answer: it describes a decision nothing published, or — where the
+	// ledger answered — one that was never taken at all. A counter a
+	// create minted from is the sharp case: the number the earlier copy
+	// took is on the log, and the one this call would have taken is not.
+	Collapsed bool
 }
 
 // Reason says why a write was refused, and each value names a different thing

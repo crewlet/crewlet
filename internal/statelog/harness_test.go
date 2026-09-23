@@ -236,7 +236,15 @@ type fakeRows struct {
 }
 
 func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statelog.ScopeSet,
-	decide func(*sql.Tx, statelog.Position) (statelog.Decision, error)) (statelog.Snap, error) {
+	opID string, decide func(*sql.Tx, statelog.Position) (statelog.Decision, error)) (statelog.Snap, error) {
+	// THE OPERATION FIRST, exactly as the real snapshot reads it: an
+	// operation this node's ledger holds is answered and not decided.
+	if held, ok, _ := r.applier.Op(ctx, opID); ok {
+		r.mu.Lock()
+		r.calls++
+		r.mu.Unlock()
+		return statelog.Snap{Held: held, HeldOK: true}, nil
+	}
 	r.mu.Lock()
 	snap, err := r.snap, r.decideErr
 	staged, override := r.override[subj.String()]

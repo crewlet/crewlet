@@ -57,6 +57,16 @@ retry safe. The broker also collapses a repeated operation id, but only inside
 its two-minute duplicate window, and a turn re-run after a crash or a caller
 repeating an `unknown` routinely comes later than that.
 
+A retry of an operation the ledger records is **answered, not decided again**:
+it comes back `applied`, at the position the first copy landed, however long
+afterwards it arrives. Deciding it again would mean deciding against rows that
+already hold it — a retried purge would find its task gone and refuse, an
+update conditioned on a version would find that version moved by its own first
+copy and refuse as stale. A retried create is the one exception to reporting
+the first copy's answer: its key number was minted by the first copy and is not
+recomputed, so the retry is refused as unavailable naming the operation, and
+the task the first copy created is where it landed.
+
 The ledger is the node's own, so a donated snapshot arrives **without** one: a
 node that [adopted a snapshot](retention.md) holds no row for any operation the
 donor applied. For an operation minted before that adoption, the ledger's

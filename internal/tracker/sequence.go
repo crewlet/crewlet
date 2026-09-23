@@ -414,6 +414,20 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 			"unresolved, so the number it took cannot be built on: %w",
 			project, statelog.ErrUnavailable)
 	}
+	if result.Collapsed {
+		// NOR CAN A MINT THAT WAS ANSWERED RATHER THAN DECIDED. This
+		// operation's counter already moved under an earlier copy of it,
+		// and `base` is what THIS call would have taken — a number the
+		// counter never recorded and the next create is free to take too,
+		// which is two tasks with one key. The number the earlier copy
+		// took is on the log, not here; a caller that gets this retries
+		// the create as a new operation, which leaves the documented
+		// numbering gap rather than a duplicate key.
+		return 0, result, fmt.Errorf("tracker: the key mint for %s already "+
+			"landed under operation %s, and the number it took is the earlier "+
+			"copy's, so it cannot be built on: %w", project, opID,
+			statelog.ErrUnavailable)
+	}
 	return base, result, nil
 }
 

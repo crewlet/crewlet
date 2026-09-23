@@ -64,10 +64,20 @@ func NewRows(db *store.DB, d Domain, guards Guards) (*SnapshotRows, error) {
 // broker matches the expectation, accepts the append, and both callers are
 // told they won.
 func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSet,
-	decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error) {
+	opID string, decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error) {
 
 	var snap Snap
 	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		// THE OPERATION FIRST — see [Snap.Held]. A domain with no ledger
+		// answers false here, which is every write on it.
+		held, ok, err := r.tables.op(ctx, tx, opID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			snap.Held, snap.HeldOK = held, true
+			return nil
+		}
 		// THE CHECKPOINT THESE ROWS ARE AT, from the same transaction:
 		// it commits with the rows, so this is exactly the prefix the
 		// decision sees. The expectation-zero fence compares it rather

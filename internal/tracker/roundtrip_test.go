@@ -528,7 +528,7 @@ func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
 		t.Helper()
 		snap, err := rows.Snapshot(t.Context(), statelog.Subject{
 			Kind: string(tracker.KindTask), ID: "t-1",
-		}, statelog.ScopeSet{Paths: []string{"task:t-1"}},
+		}, statelog.ScopeSet{Paths: []string{"task:t-1"}}, "op-probe",
 			func(*sql.Tx, statelog.Position) (statelog.Decision, error) {
 				return statelog.Decision{Payload: []byte("{}")}, nil
 			})

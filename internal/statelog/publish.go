@@ -540,6 +540,21 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 		if err != nil {
 			return Result{Rounds: round}, err
 		}
+		if snap.HeldOK {
+			// THIS OPERATION ALREADY APPLIED HERE, so this call is its
+			// retry and is answered with the first copy's position
+			// rather than decided again — see [Snap.Held]. Before any
+			// refusal, because a refusal says nothing landed and this
+			// operation did.
+			return Result{
+				Outcome:   OutcomeApplied,
+				Position:  snap.Held,
+				OpID:      req.OpID,
+				Version:   snap.Held.Packed(),
+				Rounds:    round,
+				Collapsed: true,
+			}, nil
+		}
 		if refusal := p.refuseFromSnapshot(req, snap); refusal != nil {
 			return Result{Rounds: round}, refusal
 		}
@@ -564,7 +579,8 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 		// A DECISION THIS NODE'S LEDGER CANNOT VOUCH FOR IS NEVER
 		// PUBLISHED. See [Publisher.vouches]; it is read AFTER the
 		// snapshot, so an adoption that replaced the rows this decision
-		// read is one it sees.
+		// read is one it sees, and the snapshot already said the ledger
+		// holds no row for it.
 		vouched, err := p.vouches(ctx, req)
 		if err != nil {
 			return Result{Rounds: round}, err
@@ -637,7 +653,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 // [Stamp] it must carry: this node's id, and the generation of the checkpoint
 // the same transaction read.
 func (p *Publisher) snapshot(ctx context.Context, req Request) (Snap, error) {
-	return p.rows.Snapshot(ctx, req.Subject, req.Scope,
+	return p.rows.Snapshot(ctx, req.Subject, req.Scope, req.OpID,
 		func(tx *sql.Tx, checkpoint Position) (Decision, error) {
 			return req.Decide(tx, p.stampAt(checkpoint))
 		})
@@ -731,7 +747,7 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 	if err := p.fence0(ctx, req); err != nil {
 		return Result{Rounds: round}, dispDone, err
 	}
-	seq, _, err := p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
+	seq, duplicate, err := p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
 	switch f, detail := classify(err); f {
 	case faultNone:
 		at := Position{Stream: p.stream, Generation: gen, Seq: seq}
@@ -740,6 +756,12 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		}
 		res, err := p.Resolve(ctx, req, at, true)
 		res.Rounds = round
+		// A DUPLICATE ACKNOWLEDGEMENT IS THE BROKER COLLAPSING THIS
+		// APPEND onto an earlier copy of the operation still inside its
+		// window: `at` is that copy's, and this call's decision was never
+		// stored — which a caller computing its answer inside the
+		// decision has to be told. See [Result.Collapsed].
+		res.Collapsed = duplicate && res.Outcome != ""
 		return res, dispDone, err
 
 	case faultFull:

@@ -48,7 +48,13 @@ type Rows interface {
 	// taken from, and it is [Snap.Checkpoint] — the same read, not a
 	// second one — so the generation a record is stamped with is the
 	// generation of the rows it was decided from. See [Stamp].
-	Snapshot(ctx context.Context, subj Subject, s ScopeSet,
+	//
+	// THE WRITE'S OWN OPERATION IS LOOKED UP FIRST, in the same
+	// transaction, and when this node's ledger already records it the
+	// domain is NOT asked to decide: the snapshot answers [Snap.Held]
+	// and nothing else. See [Snap.Held] for why deciding is wrong there
+	// rather than merely wasted.
+	Snapshot(ctx context.Context, subj Subject, s ScopeSet, opID string,
 		decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error)
 
 	// Op answers where an operation was applied on this node.
@@ -111,6 +117,21 @@ type Deferral struct {
 // same transaction as [Snap.Decision], which is the property the publisher
 // rests on and the reason this is one struct rather than five calls.
 type Snap struct {
+	// Held is where this node's ledger records the write's own operation
+	// as already applied, and HeldOK whether it does. When it does, no
+	// other field is read and no decision is taken.
+	//
+	// A RETRY OF AN OPERATION THAT LANDED IS ANSWERED, NOT DECIDED AGAIN.
+	// Its snapshot already holds the first application, so a second
+	// decision is taken on top of it: a comment posted twice, a counter
+	// moved twice, an update conditioned on the version its own first
+	// copy moved refused as stale. The broker does not stop that — the
+	// expectation is current, and its duplicate window is two minutes
+	// while a turn re-run or an operator's retry routinely comes later —
+	// so the ledger has to, before the domain is asked anything.
+	Held   Position
+	HeldOK bool
+
 	// Decision is what the domain decided, from rows inside the
 	// transaction.
 	Decision Decision
