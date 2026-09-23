@@ -251,6 +251,34 @@ type patchBody struct {
 	Reason    string         `json:"reason"`
 }
 
+// refusal is what is wrong with an edit that this surface can judge before
+// publishing anything, or "".
+//
+// THE WHOLE BODY, BEFORE THE FIRST RECORD. An edit is a sequence, and a value
+// refused halfway leaves every record before it landed: a stage this build
+// cannot name used to be refused after the seat and the login had already
+// moved, and a colleague level only inside the last record's decide — as a
+// 500. What needs the estate to judge — a login's grammar against its holder's
+// kind, a seat the chart holds, a name somebody else has — is the domain's,
+// and each of those is decided before its own record publishes.
+func (b patchBody) refusal() string {
+	switch {
+	case b.Login != nil && *b.Login == "":
+		return "a login is never cleared, only changed: every principal " +
+			"holds one — it is the name their changes are recorded under " +
+			"while they hold no seat"
+	case b.Stage != nil && !b.Stage.Valid():
+		return strconv.Quote(string(*b.Stage)) + " is not an enrolment stage"
+	case b.Colleague != nil && !b.Colleague.Valid():
+		return strconv.Quote(string(*b.Colleague)) + " is not a colleague " +
+			"level — want none, read or write"
+	case len(b.Reason) > iamdomain.MaxReason:
+		return "the reason is " + strconv.Itoa(len(b.Reason)) + " bytes and " +
+			"the cap is " + strconv.Itoa(iamdomain.MaxReason)
+	}
+	return ""
+}
+
 // PatchPerson is `PATCH /iam/people/{id}`.
 //
 // # Four different kinds of change, and they are four records
@@ -261,6 +289,18 @@ type patchBody struct {
 // because those are what two writers can race for. So one PATCH is a
 // SEQUENCE, in the order that leaves the most useful residue: the claims
 // first, because they are what can be refused.
+//
+// # Nothing is published until the whole body is known to be acceptable
+//
+// A sequence that meets a bad value halfway leaves the half before it landed.
+// So every value this surface can judge on its own — a stage, a colleague
+// level, a login being cleared — is refused before the first record, and a
+// login or a seat MOVES through the domain's own gesture, which claims the new
+// one before it releases the old. This used to release the old login first
+// and then claim the new: a new login the holder's grammar refused (`ops.bot`
+// for a machine, `Jane.Doe` for anybody) left the row with no login at all,
+// which recorded a person as nobody and silently unbound a Tier A token from
+// the seat its machine row named.
 func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	in, ok := readBody[patchBody](w, r)
 	if !ok {
@@ -269,6 +309,11 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	writer, ok := s.writerFor(r.Context())
 	if !ok {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
+		return
+	}
+	if refusal := in.refusal(); refusal != "" {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": refusal})
 		return
 	}
 	id := r.PathValue("id")
@@ -285,48 +330,32 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	reason := reasonOr(in.Reason, "changed through /iam/people")
 
 	if in.Seat != nil && *in.Seat != held.Seat {
-		if held.Seat != "" {
-			if _, err := writer.Release(r.Context(), iamdomain.KindSeat,
-				held.Seat, id, opID+":unbind", reason); err != nil {
-
-				s.answerWrite(w, r, statelog0(), err, nil)
-				return
-			}
+		var err error
+		switch {
+		case *in.Seat == "":
+			_, err = writer.Release(r.Context(), iamdomain.KindSeat,
+				held.Seat, id, opID+":unbind", reason)
+		case held.Seat == "":
+			_, err = writer.Claim(r.Context(), iamdomain.KindSeat, *in.Seat,
+				id, opID+":bind")
+		default:
+			_, err = writer.Rebind(r.Context(), id, held.Seat, *in.Seat,
+				opID, reason)
 		}
-		if *in.Seat != "" {
-			if _, err := writer.Claim(r.Context(), iamdomain.KindSeat, *in.Seat,
-				id, opID+":bind"); err != nil {
-
-				s.answerWrite(w, r, statelog0(), err, nil)
-				return
-			}
+		if err != nil {
+			s.answerWrite(w, r, statelog0(), err, nil)
+			return
 		}
 	}
 	if in.Login != nil && *in.Login != held.Login {
-		if held.Login != "" {
-			if _, err := writer.Release(r.Context(), iamdomain.KindLogin,
-				held.Login, id, opID+":unlogin", reason); err != nil {
+		if _, err := writer.Rename(r.Context(), id, held.Login, *in.Login,
+			opID, reason); err != nil {
 
-				s.answerWrite(w, r, statelog0(), err, nil)
-				return
-			}
-		}
-		if *in.Login != "" {
-			if _, err := writer.Claim(r.Context(), iamdomain.KindLogin,
-				*in.Login, id, opID+":login"); err != nil {
-
-				s.answerWrite(w, r, statelog0(), err, nil)
-				return
-			}
+			s.answerWrite(w, r, statelog0(), err, nil)
+			return
 		}
 	}
 	if in.Stage != nil {
-		if !in.Stage.Valid() {
-			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-				map[string]string{"detail": strconv.Quote(string(*in.Stage)) +
-					" is not an enrolment stage"})
-			return
-		}
 		if _, err := writer.SetStage(r.Context(), id, *in.Stage,
 			opID+":stage", reason); err != nil {
 
@@ -353,11 +382,6 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 				p.Grants = *in.Grants
 			}
 			if in.Colleague != nil {
-				if !in.Colleague.Valid() {
-					return p, errors.New("iamapi: " +
-						strconv.Quote(string(*in.Colleague)) +
-						" is not a colleague level")
-				}
 				p.Colleague = *in.Colleague
 			}
 			return p, nil

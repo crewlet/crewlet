@@ -92,6 +92,15 @@ type Writer interface {
 		opID string) (statelog.Position, error)
 	Release(ctx context.Context, kind iamdomain.ObjectKind, token, holder,
 		opID, reason string) (statelog.Position, error)
+
+	// Rename and Rebind MOVE a person's login or seat, claiming the new
+	// one before releasing the old — so a refusal changes nothing. A
+	// release followed by a claim, which is what this surface used to
+	// publish, left somebody whose new login was refused with none at all.
+	Rename(ctx context.Context, personID, from, to, opID, reason string) (
+		statelog.Position, error)
+	Rebind(ctx context.Context, personID, from, to, opID, reason string) (
+		statelog.Position, error)
 	Invite(ctx context.Context, in iamdomain.InviteMint) (statelog.Position, error)
 	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Position, error)
 	InvalidateAll(ctx context.Context, opID, reason string) (statelog.Position, error)

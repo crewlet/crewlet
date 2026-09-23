@@ -940,14 +940,10 @@ func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, handle string) (strin
 	case err != nil:
 		return "", fmt.Errorf("iamdomain: read who holds seat %q: %w", handle, err)
 	}
-	if login == "" {
-		// A ROW WITH NO LOGIN is a person mid-enrolment — the claims
-		// land before the content record fills them in — and they hold
-		// the seat as surely as anybody. Naming them by their id would
-		// be worse than naming them not at all, so the refusal says
-		// somebody rather than nobody.
-		return "somebody who is still enrolling", nil
-	}
+	// THE LOGIN IS ALWAYS THERE. The query reads active people only — a
+	// reservation, the half-enrolled row a claim leaves, has no stage and
+	// is not one — and every enrolled principal holds a login, which is
+	// renamed and never released on its own.
 	return login, nil
 }
 

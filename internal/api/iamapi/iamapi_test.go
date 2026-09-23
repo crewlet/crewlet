@@ -255,6 +255,9 @@ type fakeWriter struct {
 	// releasedFrom is the holder each release named.
 	releasedFrom []string
 
+	// moved is every login and seat MOVE the surface asked for.
+	moved []move
+
 	// held is the credential set a SetCredentials call's Apply is run
 	// against, the way the real decide runs it against the snapshot.
 	held []iamdomain.Credential
@@ -324,6 +327,23 @@ func (w *fakeWriter) Release(_ context.Context, kind iamdomain.ObjectKind,
 	w.releasedFrom = append(w.releasedFrom, holder)
 	return w.did("release:" + string(kind))
 }
+
+func (w *fakeWriter) Rename(_ context.Context, person, from, to, _, _ string) (
+	statelog.Position, error) {
+
+	w.moved = append(w.moved, move{"login", person, from, to})
+	return w.did("rename")
+}
+
+func (w *fakeWriter) Rebind(_ context.Context, person, from, to, _, _ string) (
+	statelog.Position, error) {
+
+	w.moved = append(w.moved, move{"seat", person, from, to})
+	return w.did("rebind")
+}
+
+// move is one Rename or Rebind the surface asked for.
+type move struct{ kind, person, from, to string }
 
 func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 	statelog.Position, error) {
@@ -941,16 +961,59 @@ func TestAReleaseNamesThePersonItReleasesFrom(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
-		map[string]any{"seat": "", "login": "alice.a.admin"})
+		map[string]any{"seat": ""})
 	if got.status != http.StatusOK {
 		t.Fatalf("status %d (body %v)", got.status, got.body)
 	}
-	if len(r.writer.releasedFrom) != 2 {
-		t.Fatalf("releases %v, want the seat and the login", r.writer.releasedFrom)
+	if len(r.writer.releasedFrom) != 1 || r.writer.releasedFrom[0] != alice.String() {
+		t.Errorf("releases named %v, want the seat released from %s",
+			r.writer.releasedFrom, alice)
 	}
-	for _, holder := range r.writer.releasedFrom {
-		if holder != alice.String() {
-			t.Errorf("a release named %q as the holder, want %s", holder, alice)
+}
+
+// A LOGIN OR A SEAT IS MOVED, NEVER RELEASED AND RECLAIMED.
+//
+// The edit used to release the old login and then claim the new one, so a new
+// login the domain refused — `ops.bot` for a machine, `Jane.Doe` for anybody
+// — left the row with NO login: a person recorded as nobody, and a machine
+// under `token:<id>` silently unbound from its Tier A token. The surface now
+// asks for the domain's MOVE, which claims the new name first; and what it can
+// judge itself it refuses before publishing anything at all.
+func TestALoginOrASeatIsMovedNeverReleasedAndReclaimed(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
+		map[string]any{"seat": "platform-lead", "login": "alice.a.admin"})
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	want := []move{
+		{"seat", alice.String(), "founder", "platform-lead"},
+		{"login", alice.String(), "alice.admin", "alice.a.admin"},
+	}
+	if !slices.Equal(r.writer.moved, want) {
+		t.Errorf("moves %v, want %v", r.writer.moved, want)
+	}
+	if len(r.writer.releasedFrom) != 0 {
+		t.Errorf("a move published a bare release first: %v", r.writer.releasedFrom)
+	}
+
+	// AND WHAT THE SURFACE CAN JUDGE IS REFUSED BEFORE ANY RECORD: a login
+	// cleared, a stage or a colleague level this build cannot name, each
+	// beside a seat move that would otherwise already have landed.
+	for name, body := range map[string]map[string]any{
+		"a cleared login":         {"seat": "platform-lead", "login": ""},
+		"a stage nobody can name": {"seat": "platform-lead", "stage": "paused"},
+		"a colleague level":       {"seat": "platform-lead", "colleague": "admin"},
+	} {
+		r := newRig(t)
+		got := r.as(administrator(), http.MethodPatch,
+			"/iam/people/"+alice.String(), body)
+		if got.status != http.StatusBadRequest {
+			t.Errorf("%s answered %d, want 400 (body %v)", name, got.status, got.body)
+		}
+		if len(r.writer.calls) != 0 {
+			t.Errorf("%s published %v before it was refused", name, r.writer.calls)
 		}
 	}
 }

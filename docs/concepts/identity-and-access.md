@@ -101,7 +101,11 @@ operator types it at the bootstrap, and an invitation's form arrives with one
 and `jane@example.com` proposes `jane.example`, borrowing the domain's first
 label because a login without a dot is not a login. The person keeps it or
 changes it; nothing is derived silently. A login is never cleared afterwards,
-only renamed.
+only renamed — and a rename **claims the new login before it gives up the old
+one**, so one refused by its holder's grammar or by somebody else holding it
+changes nothing. Moving a person between seats takes the same order. (Releasing
+first used to leave a refused rename with no login at all, which recorded the
+person as nobody and silently unbound a Tier A token from its seat.)
 
 ---
 

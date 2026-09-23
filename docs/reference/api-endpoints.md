@@ -660,6 +660,19 @@ where the node knows it is no good and `503 identity_unavailable` where the node
 cannot tell, including a node that has not yet applied the mint. See [Machine
 tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts).
 
+#### An edit moves a login or a seat, the new one first
+
+`PATCH /iam/people/{id}` is a sequence of records — a login and a seat each
+arbitrate on their own subject, and the person's document and stage on the
+person's — so it is ordered by what a refusal leaves behind. Everything the
+surface can judge alone is refused **before the first record**: a `login` of
+`""` (a login is never cleared, only changed), a `stage` or `colleague` level
+this build cannot name, and a `reason` past 256 bytes. A new `login` or `seat`
+is then **moved**: the new one is claimed first and the old one released after,
+so a login its holder's grammar refuses, a seat the chart does not hold, or
+either one somebody else holds is refused with the person exactly as they were.
+`seat: ""` unbinds.
+
 #### Values that are shown once
 
 `POST /iam/invitations` answers the invitation URL and `POST /iam/credentials`

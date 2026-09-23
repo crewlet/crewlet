@@ -698,8 +698,37 @@ func chartPositionOf(ctx context.Context, tx *sql.Tx) uint64 {
 // person — and the decide refuses when the snapshot disagrees, naming who does
 // hold it. The record names the holder too, so the trail row lands on their
 // history rather than on nobody's.
+//
+// # A login is never released on its own
+//
+// Every principal holds one — it is the name an unbound person's changes are
+// recorded under — so a bare release of a login would leave an enrolled
+// person the rest of the engine cannot name, and a machine enrolled under
+// `token:<id>` silently unbound from its Tier A token. A login is RENAMED
+// instead ([Writer.Rename]), and the release that gesture ends with is its
+// own; a removal gives every claim back in its own record.
 func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
 	opID, reason string) (statelog.Position, error) {
+
+	if kind == KindLogin {
+		return statelog.Position{}, fmt.Errorf("%w: a login is never released "+
+			"on its own — every principal holds one, and it is the name their "+
+			"changes are recorded under. Rename it instead", ErrInvalidLogin)
+	}
+	return w.release(ctx, kind, token, holder, opID, reason, false)
+}
+
+// release is [Writer.Release]'s body, shared with the second half of a
+// replacement.
+//
+// replaced is true only for [Writer.replace], whose claim on the new token has
+// ALREADY moved the column off the old one — so the snapshot this decide
+// reads holds nobody on the old token, and that is the expected state rather
+// than a refusal. What is still refused is somebody else holding it: between
+// the claim and this release another writer may have taken the freed token,
+// and a release publishes a clear of whoever holds the column.
+func (w *Writer) release(ctx context.Context, kind ObjectKind, token, holder,
+	opID, reason string, replaced bool) (statelog.Position, error) {
 
 	if err := w.mayAdminister(OpRelease); err != nil {
 		return statelog.Position{}, err
@@ -728,6 +757,11 @@ func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
 			return err
 		}
 		switch {
+		case !held && replaced:
+			// THE REPLACEMENT'S OWN CLAIM MOVED IT, which is the state
+			// this release exists to record: the record closes the old
+			// subject on the trail, and its apply clears nothing.
+			return nil
 		case !held:
 			return fmt.Errorf("iamdomain: nobody holds the %s claim on %s, so "+
 				"there is nothing to release", kind, token)
@@ -741,6 +775,84 @@ func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
 	}
 	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, decide))
 	return result.Position, err
+}
+
+// Rename moves a person from one login to another: the NEW ONE IS CLAIMED
+// FIRST, and the old one released after.
+//
+// # The order is the whole gesture
+//
+// A rename is two records on two subjects, so it is a sequence, and the order
+// decides what a refusal leaves behind. It used to release first: a new login
+// refused by its holder's grammar (`ops.bot` for a machine, `Jane.Doe` for
+// anybody) or held by somebody else then left the row with NO LOGIN — a person
+// recorded as nobody, and a machine under `token:<id>` silently unbound from
+// its Tier A token. Claimed first, a refusal changes nothing: the claim's
+// decide reads the holder's kind and the token's holder inside its own
+// snapshot and publishes nothing when either refuses.
+//
+// The claim's apply is what moves the column — the token goes on the person's
+// row and comes off every other — so by the time the release runs the old
+// login is already free; the release records that on the old subject, so its
+// trail ends in the release rather than in a claim naming somebody who no
+// longer holds it. A release refused because another writer took the freed
+// login in between is not a failure of the rename, and is not reported as
+// one: the name is no longer this person's either way.
+func (w *Writer) Rename(ctx context.Context, personID, from, to, opID,
+	reason string) (statelog.Position, error) {
+
+	return w.replace(ctx, KindLogin, personID, from, to, opID, reason)
+}
+
+// Rebind moves a person from one seat to another, the new one first, for
+// [Writer.Rename]'s reason: a bind the chart refuses — a seat this node's chart
+// does not hold, a seat somebody else is bound to — used to leave the person
+// bound to nothing, having released the seat they were in.
+//
+// Unbinding is [Writer.Release]; this is only ever a move.
+func (w *Writer) Rebind(ctx context.Context, personID, from, to, opID,
+	reason string) (statelog.Position, error) {
+
+	return w.replace(ctx, KindSeat, personID, from, to, opID, reason)
+}
+
+// replace is the shared body of [Writer.Rename] and [Writer.Rebind].
+func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
+	to, opID, reason string) (statelog.Position, error) {
+
+	if err := w.mayAdminister(OpClaim); err != nil {
+		return statelog.Position{}, err
+	}
+	switch {
+	case personID == "" || opID == "":
+		return statelog.Position{}, fmt.Errorf("iamdomain: moving a %s claim "+
+			"needs the person and an operation id, and has (%q, %q)", kind,
+			personID, opID)
+	case to == "":
+		return statelog.Position{}, fmt.Errorf("%w: moving a %s claim needs "+
+			"the %s to move to — a move to nothing is a release, and a login "+
+			"is never released", ErrInvalid, kind, kind)
+	case to == from:
+		return statelog.Position{}, fmt.Errorf("%w: %s already holds the %s "+
+			"%q, so there is nothing to move", ErrInvalid, personID, kind, to)
+	}
+	at, err := w.claim(ctx, kind, to, personID, "", opID+":"+string(kind), "")
+	if err != nil || from == "" {
+		return at, err
+	}
+	released, err := w.release(ctx, kind, from, personID,
+		opID+":release-"+string(kind), reason, true)
+	var claimed *ErrClaimed
+	switch {
+	case errors.As(err, &claimed):
+		// TAKEN BETWEEN THE TWO — see [Writer.Rename]. The move landed.
+		return at, nil
+	case err != nil:
+		return at, fmt.Errorf("iamdomain: the %s moved to %q and the record "+
+			"closing %q did not land (retry with the same operation id): %w",
+			kind, to, from, err)
+	}
+	return released, nil
 }
 
 // Revoke bumps a person's revocation epoch, ending every session they hold.
