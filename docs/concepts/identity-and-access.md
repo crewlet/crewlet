@@ -751,7 +751,8 @@ because each is a row in a domain that **lags independently**.
 |---|---|
 | The person holds no binding | The seatless arm: the login is the handle, and the chart is never consulted |
 | Seat present in the view, `kind: human`, not tombstoned | The seat's handle is the actor |
-| Seat absent or tombstoned, and this node's chart position covers the binding's | 403 forbidden **naming the seat**; never a fall-through to an empty handle |
+| Seat tombstoned, or present and not `kind: human` | 403 forbidden **naming the seat**, whatever this node's chart position: a tombstone and a seat's kind are conclusive, and no amount of catching up changes either |
+| Seat absent, and this node's chart position covers the binding's | 403 forbidden **naming the seat**; never a fall-through to an empty handle |
 | Seat absent, and this node's chart position is below the binding's, chart applier lag under 60 s | 503 `identity_unavailable` naming the chart |
 | The chart applier stalled past 60 s, or the view is not built | 503 |
 
