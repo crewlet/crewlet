@@ -184,7 +184,7 @@ func TestTheOrgProjectionCarriesNothingGuarded(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read /org: %v", err)
 			}
-			snapshot, err := json.Marshal(a.Stream().Snapshot()["org"])
+			snapshot, err := json.Marshal(a.Stream().Snapshot(everyRead)["org"])
 			if err != nil {
 				t.Fatalf("marshal the snapshot's org: %v", err)
 			}

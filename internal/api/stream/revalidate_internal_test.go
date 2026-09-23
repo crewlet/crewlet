@@ -53,6 +53,12 @@ func TestAnOpenSocketFollowsItsCredential(t *testing.T) {
 			func(r *http.Request) (*http.Request, *auth.Refusal) {
 				return r.WithContext(iam.WithAnonymous(r.Context())), nil
 			}, CloseUnauthenticated},
+		{"a withdrawn state:read closes 4403",
+			func(r *http.Request) (*http.Request, *auth.Refusal) {
+				p := person("ana")
+				p.Grants = []iam.Grant{iam.GrantAuditRead}
+				return r.WithContext(iam.WithPrincipal(r.Context(), p)), nil
+			}, CloseUnauthorized},
 		{"a seat that is gone closes 4403",
 			func(r *http.Request) (*http.Request, *auth.Refusal) {
 				return r.WithContext(iam.WithPrincipal(r.Context(), person("ana"))),
@@ -198,6 +204,15 @@ func openRevalidatedWith(t *testing.T,
 	answer func(*http.Request) (*http.Request, *auth.Refusal), query Query) *revalidated {
 
 	t.Helper()
+	return openRevalidatedAs(t, person("ana"), answer, query)
+}
+
+// openRevalidatedAs is openRevalidatedWith with the handshake decided as
+// opened.
+func openRevalidatedAs(t *testing.T, opened iam.Principal,
+	answer func(*http.Request) (*http.Request, *auth.Refusal), query Query) *revalidated {
+
+	t.Helper()
 	svc, err := NewService(livestate.New(), Options{
 		Health:          func() Health { return Health{Status: "ok"} },
 		Posture:         func(Health) FramePosture { return FrameLive },
@@ -217,7 +232,7 @@ func openRevalidatedWith(t *testing.T,
 		if err != nil {
 			return
 		}
-		who := &asking{principal: person("ana")}
+		who := &asking{principal: opened}
 		check := func(ctx context.Context) (*http.Request, *auth.Refusal) {
 			return answer(r.Clone(ctx))
 		}
@@ -266,4 +281,69 @@ func (f *revalidated) write(t *testing.T, v any) {
 func person(handle string) iam.Principal {
 	return iam.Principal{ID: uuid.New(), Login: handle, Kind: iam.KindPerson,
 		Seat: handle, Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+}
+
+// A NARROWED GRANT REACHES THE PUSHES, not only the questions.
+//
+// The questions follow the last check's principal; the pushes follow its
+// AUDIENCE. A person whose `audit:read` was withdrawn must stop receiving the
+// event feed — every phase's prompt and response — within one interval, and
+// the screen must lose what it was already showing under the old grant, which
+// is what the fresh snapshot built for the new audience does. Widening is the
+// same path the other way.
+func TestAChangedGrantMovesThePushesWithIt(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	grants := []iam.Grant{iam.GrantStateRead, iam.GrantAuditRead}
+	opened := person("ana")
+	opened.Grants = grants
+	f := openRevalidatedAs(t, opened, func(r *http.Request) (*http.Request, *auth.Refusal) {
+		mu.Lock()
+		defer mu.Unlock()
+		p := person("ana")
+		p.Grants = grants
+		return r.WithContext(iam.WithPrincipal(r.Context(), p)), nil
+	}, func(context.Context, string, map[string]any) (any, error) { return nil, nil })
+
+	first := f.read(t)
+	if first.Kind != KindSnapshot || !hasKey(t, first.Data, "events") {
+		t.Fatalf("an audit:read holder's snapshot carries no events: %s %s",
+			first.Kind, first.Data)
+	}
+
+	mu.Lock()
+	grants = []iam.Grant{iam.GrantStateRead}
+	mu.Unlock()
+	narrowed := f.read(t)
+	if narrowed.Kind != KindSnapshot || hasKey(t, narrowed.Data, "events") ||
+		!hasKey(t, narrowed.Data, "agents") {
+		t.Fatalf("a withdrawn audit:read did not resend a snapshot without the "+
+			"event feed: %s %s", narrowed.Kind, narrowed.Data)
+	}
+	// AND THE FEED ITSELF STOPPED. The agents push is the fence: it is sent
+	// after the event, and the one frame read must be it.
+	f.svc.Hub().Broadcast(Push(KindEvent, map[string]any{"type": "x"}, time.Now()))
+	f.svc.Hub().Broadcast(Push(KindAgents, []any{}, time.Now()))
+	if got := f.read(t); got.Kind != KindAgents {
+		t.Fatalf("after audit:read was withdrawn the socket received %q", got.Kind)
+	}
+
+	mu.Lock()
+	grants = []iam.Grant{iam.GrantStateRead, iam.GrantAuditRead}
+	mu.Unlock()
+	widened := f.read(t)
+	if widened.Kind != KindSnapshot || !hasKey(t, widened.Data, "events") {
+		t.Fatalf("a granted audit:read did not resend a snapshot with the event "+
+			"feed: %s %s", widened.Kind, widened.Data)
+	}
+}
+
+func hasKey(t *testing.T, raw json.RawMessage, key string) bool {
+	t.Helper()
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	_, ok := m[key]
+	return ok
 }

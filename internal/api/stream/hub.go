@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -139,6 +140,91 @@ var routes = map[string]Route{
 	KindPong:   RouteDirect,
 }
 
+// needs is the grant a reader must carry to receive each kind that says
+// something about the COMPANY.
+//
+// BESIDE THE ROUTES and total over the kinds together with [answers]: a route
+// says who a frame is addressed to, and this says who may read it at all. The
+// socket used to decide only that its caller was somebody, which was harmless
+// while the only credentials were operator tokens and became a firehose the
+// day a session cookie resolved: a person enrolled with `work:write` alone
+// opened the socket and received every phase's prompt and response, which
+// the `events` question beside it refuses without `audit:read`.
+//
+// EACH KIND TAKES THE GRANT ITS QUESTION TAKES, so no fact is reachable by
+// choosing a channel: an event is the `events` query's row, so `audit:read`;
+// everything else here is what the dashboard's `state:read` questions answer.
+// A kind in neither table is received by NOBODY — see [Audience.Receives].
+var needs = map[string]iam.Grant{
+	KindSnapshot:     iam.GrantStateRead,
+	KindEvent:        iam.GrantAuditRead,
+	KindAgents:       iam.GrantStateRead,
+	KindSeats:        iam.GrantStateRead,
+	KindSandboxes:    iam.GrantStateRead,
+	KindTokens:       iam.GrantStateRead,
+	KindBudget:       iam.GrantStateRead,
+	KindSchedules:    iam.GrantStateRead,
+	KindOrg:          iam.GrantStateRead,
+	KindTools:        iam.GrantStateRead,
+	KindHealth:       iam.GrantStateRead,
+	KindInboxChanged: iam.GrantStateRead,
+}
+
+// answers are the kinds that say nothing about the company, only about this
+// socket's own exchange — which is why no grant stands in front of them. A
+// query's result or refusal was already decided by the grant its question is
+// registered under, and deciding it again here would be a second opinion that
+// could only ever disagree; the identity frame and a pong carry nothing but
+// the socket's own state.
+var answers = map[string]bool{
+	KindIdentity: true,
+	KindResult:   true,
+	KindError:    true,
+	KindPong:     true,
+}
+
+// Audience is what one reader may receive, decided from the grants it
+// carries.
+//
+// ITS ZERO VALUE RECEIVES NO COMPANY FACT AT ALL, which is the closed end and
+// the only safe one: a reader nobody described is not one this node knows may
+// see anything.
+type Audience struct {
+	grants []iam.Grant
+}
+
+// AudienceOf is the audience a principal's grants describe.
+func AudienceOf(grants []iam.Grant) Audience {
+	return Audience{grants: slices.Clone(grants)}
+}
+
+// Receives reports whether this audience may read a frame of kind.
+func (a Audience) Receives(kind string) bool {
+	if answers[kind] {
+		return true
+	}
+	grant, gated := needs[kind]
+	if !gated {
+		return false
+	}
+	return iam.Principal{Grants: a.grants}.Can(grant)
+}
+
+// GrantFor is the grant a reader needs to receive kind, and whether kind is a
+// company fact at all rather than an answer to a socket's own exchange.
+func GrantFor(kind string) (iam.Grant, bool) {
+	grant, gated := needs[kind]
+	return grant, gated
+}
+
+// same reports whether two audiences carry the same grants, in any order.
+func (a Audience) same(b Audience) bool {
+	x, y := slices.Clone(a.grants), slices.Clone(b.grants)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(slices.Compact(x), slices.Compact(y))
+}
+
 // Envelope is one server-to-client frame.
 //
 // ID, What and Error are omitted on a push and present on a query answer, which
@@ -221,6 +307,11 @@ type Client struct {
 	// never the thing that was wrong.
 	identityHeld bool
 
+	// audience is what this client may receive. Set at [NewClient] from
+	// the principal the socket was opened as, and moved by
+	// [Client.SetAudience] when a revalidation finds the grants changed.
+	audience Audience
+
 	// seat is the seat this client asked to be a recipient for, empty
 	// while it has asked for none. The hub's index is the authority on
 	// which bucket the client is in; this is the same fact kept beside the
@@ -229,14 +320,44 @@ type Client struct {
 	seat string
 }
 
-// NewClient builds a client with an empty queue, served LIVE.
+// NewClient builds a client with an empty queue, served LIVE, that may
+// receive what audience allows.
 //
 // Live rather than the zero posture, which is invalid by construction (see
 // [FramePosture]): a client is a tab somebody just opened, and the node it
 // reached is serving it unless something says otherwise. [Hub.Register] then
 // moves it to the hub's current posture, which is the authority.
-func NewClient() *Client {
-	return &Client{out: make(chan *Frame, QueueDepth), posture: FrameLive}
+//
+// THE AUDIENCE IS AN ARGUMENT rather than something set afterwards, so a
+// client cannot exist for one instant on the hub's list with an audience
+// nobody chose.
+func NewClient(audience Audience) *Client {
+	return &Client{out: make(chan *Frame, QueueDepth), posture: FrameLive,
+		audience: audience}
+}
+
+// Receives reports whether this client may read a frame of kind.
+func (c *Client) Receives(kind string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.audience.Receives(kind)
+}
+
+// Audience is what this client may currently receive.
+func (c *Client) Audience() Audience {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.audience
+}
+
+// SetAudience moves this client to a, reporting whether that changed what it
+// carries.
+func (c *Client) SetAudience(a Audience) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	changed := !c.audience.same(a)
+	c.audience = a
+	return changed
 }
 
 // Out is the channel a transport reads frames from. Closed by [Client.Close].
@@ -318,6 +439,16 @@ func (c *Client) Dropped() int {
 // is a different method from the broadcast path rather than a one-client call
 // into it.
 func (c *Client) Reply(env Envelope) {
+	if !c.Receives(env.Kind) {
+		// A WIRING FAULT, never a decision made here: every path that
+		// replies with a company fact builds it for this client's own
+		// audience first. Logged loudly because the alternative to
+		// dropping it is sending it to somebody who may not read it.
+		log.Error("stream_reply_withheld", "kind", env.Kind,
+			"hint", "build the frame from the client's own audience; this "+
+				"client does not carry the grant the kind needs")
+		return
+	}
 	if !c.Posture().Delivers(env.Kind) {
 		return
 	}
@@ -601,6 +732,12 @@ func (h *Hub) Broadcast(env Envelope) {
 	var cache [framePostures]*Frame
 	var encoded [framePostures]bool
 	for _, c := range targets {
+		// WHO MAY READ IT before how it is encoded: a client that does
+		// not carry the kind's grant is not in its audience whatever the
+		// route says. See [needs].
+		if !c.Receives(env.Kind) {
+			continue
+		}
 		posture := c.Posture()
 		slot := posture.index()
 		if slot < 0 || !posture.Delivers(env.Kind) {

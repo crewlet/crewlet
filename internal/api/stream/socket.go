@@ -224,6 +224,19 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
+		if !principal.Can(iam.GrantStateRead) {
+			// A RESOLVED CALLER WHO MAY READ NONE OF IT. Every push
+			// this socket carries is a `state:read` question's answer
+			// or an `audit:read` one's, so a caller holding neither
+			// would be accepted to receive nothing — and one holding
+			// only `audit:read` would receive the event feed without
+			// the roster it names. Refused before the upgrade, where
+			// the status is still visible to the page's HTTP re-ask.
+			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+				map[string]string{"detail": "the live socket needs " +
+					string(iam.GrantStateRead)})
+			return
+		}
 		// THE BUDGET IS THE PRINCIPAL'S, keyed on the login: the same
 		// person across their tabs, and a login is stable across every
 		// request a credential makes where a principal's session id is
@@ -283,7 +296,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	slots, releaseBudget := svc.budgets.acquire(budgetKey)
 	defer releaseBudget()
 
-	client := NewClient()
+	client := NewClient(AudienceOf(who.current().Grants))
 	// REGISTERED BEFORE THE SNAPSHOT. See Hub.Register: the overlap is
 	// deduped by the client, and the gap the other order leaves is not.
 	//
@@ -300,7 +313,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 		writeLoop(ctx, conn, client)
 	})
 
-	client.Reply(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
+	client.Reply(Push(KindSnapshot, svc.Snapshot(client.Audience()), time.Now().UTC()))
 
 	// THE CREDENTIAL IS CHECKED AGAIN FOR AS LONG AS THE SOCKET LIVES. See
 	// revalidate.go for why a handshake decision is not enough and what
@@ -308,7 +321,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	var checking sync.WaitGroup
 	checking.Go(func() {
 		revalidate(ctx, conn, client, check, who, svc.revalidateEvery,
-			svc.now, func() any { return svc.Snapshot() })
+			svc.now, svc.Snapshot)
 	})
 	defer checking.Wait()
 

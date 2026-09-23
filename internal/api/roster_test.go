@@ -6,7 +6,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // The three surfaces the dashboard renders from CONFIGURATION.
@@ -92,7 +94,7 @@ func TestTheSnapshotCarriesTheCompanysSeats(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	got := rows(t, a.Stream().Snapshot()["agents"])
+	got := rows(t, a.Stream().Snapshot(everyRead)["agents"])
 	if len(got) != 2 {
 		t.Fatalf("roster = %v, want the two AGENT seats", got)
 	}
@@ -138,7 +140,7 @@ func TestOnlyHeldSeatsCarryAState(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{state: api.RuntimeState{Seats: []string{"ceo"}}})
 
-	for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {
+	for _, row := range rows(t, a.Stream().Snapshot(everyRead)["agents"]) {
 		handle, _ := row["handle"].(string)
 		state, present := row["state"]
 		switch handle {
@@ -163,7 +165,7 @@ func TestTheSnapshotCarriesTheOrgTree(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	org := object(t, a.Stream().Snapshot()["org"])
+	org := object(t, a.Stream().Snapshot(everyRead)["org"])
 	if org["name"] != "Acme" {
 		t.Errorf("org name = %v, want the company's own", org["name"])
 	}
@@ -201,7 +203,7 @@ func TestTheSnapshotCarriesTheToolCatalogue(t *testing.T) {
 		{Name: "tracker_search", Description: "find work", Source: "tracker"},
 	}})
 
-	got := rows(t, a.Stream().Snapshot()["tools"])
+	got := rows(t, a.Stream().Snapshot(everyRead)["tools"])
 	if len(got) != 2 {
 		t.Fatalf("tools = %v, want both", got)
 	}
@@ -241,7 +243,7 @@ func TestTheCatalogueCarriesWhatEachToolDoes(t *testing.T) {
 		},
 	}})
 
-	got := rows(t, a.Stream().Snapshot()["tools"])
+	got := rows(t, a.Stream().Snapshot(everyRead)["tools"])
 	if len(got) != 2 {
 		t.Fatalf("tools = %v", got)
 	}
@@ -286,10 +288,10 @@ func TestAnEngineWithNoToolsStillServesTheRoster(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	if got := rows(t, a.Stream().Snapshot()["tools"]); len(got) != 0 {
+	if got := rows(t, a.Stream().Snapshot(everyRead)["tools"]); len(got) != 0 {
 		t.Errorf("tools = %v from an engine serving none", got)
 	}
-	if got := rows(t, a.Stream().Snapshot()["agents"]); len(got) != 2 {
+	if got := rows(t, a.Stream().Snapshot(everyRead)["agents"]); len(got) != 2 {
 		t.Errorf("an engine with no tools lost the roster: %v", got)
 	}
 }
@@ -300,7 +302,7 @@ func TestANodeWithNoCompanyAnswersEmptySurfaces(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{})
 
-	snap := a.Stream().Snapshot()
+	snap := a.Stream().Snapshot(everyRead)
 	for _, key := range []string{"agents", "org", "tools"} {
 		if _, present := snap[key]; !present {
 			t.Errorf("snapshot is missing %q; the client reads all three", key)
@@ -330,7 +332,7 @@ func TestTheSnapshotCarriesTheConfiguredSchedules(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	snap := a.Stream().Snapshot()
+	snap := a.Stream().Snapshot(everyRead)
 	if _, present := snap["schedules"]; !present {
 		t.Fatal("the snapshot carries no schedules slice, so the screen " +
 			"cannot tell 'none configured' from 'not loaded yet'")
@@ -360,3 +362,7 @@ func TestTheSchedulesPushCarriesOnlyTheConfiguredHalf(t *testing.T) {
 			"ledger the screen fetched for itself")
 	}
 }
+
+// everyRead is an audience holding both read grants: the snapshot these
+// tests inspect is the whole bundle, not one reader's slice of it.
+var everyRead = stream.AudienceOf([]iam.Grant{iam.GrantStateRead, iam.GrantAuditRead})

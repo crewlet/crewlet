@@ -2633,8 +2633,12 @@ rendered idle from the first phase to the last.
   the credential it was opened with. `4401` means that credential no longer
   resolves to anybody — the session ended or was revoked — so re-dial with the
   cookie the browser holds now and sign in only if the handshake then answers
-  `401`. `4403` means the person resolves and their seat is gone: stop and say
-  so. A re-check that cannot be answered is NOT a close: the tab receives an
+  `401`. `4403` means the person resolves and may not have this surface —
+  their seat is gone, or `state:read` was withdrawn: the socket STOPS (no
+  reconnect, no REST fallback, both of which the same decision would refuse)
+  and the state strip says why, with a *Try again* for after an administrator
+  has acted. A handshake refused `403` is the same state, read through the
+  plain-HTTP re-ask. A re-check that cannot be answered is NOT a close: the tab receives an
   `identity: unverifiable` frame, the state strip says live updates are paused,
   and the engine's next successful check sends `identity: verified` with a
   fresh snapshot. Nothing else closes this socket for a fault.

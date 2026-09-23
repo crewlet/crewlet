@@ -39,6 +39,29 @@ describe("degradationOf", () => {
     expect(got?.variant).toBe("danger");
   });
 
+  test("refused access says why, outranks a dropped connection, and offers a retry", () => {
+    // The socket stopped reconnecting — every dial would be refused by the
+    // same decision — so "reconnecting" would be a lie, and the repair is an
+    // administrator's rather than a token the reader can type.
+    let retried = false;
+    const got = degradationOf({
+      authRejected: false,
+      accessRefused: "grant withdrawn: state:read",
+      connected: false,
+      configured: true,
+      onSetToken: noop,
+      onRetry: () => {
+        retried = true;
+      },
+      onConfig: noop,
+    });
+    expect(got?.variant).toBe("danger");
+    expect(got?.message).toMatch(/grant withdrawn: state:read/);
+    expect(got?.message).toMatch(/administrator/);
+    got?.action?.onClick();
+    expect(retried).toBe(true);
+  });
+
   test("a verified, connected, configured tab has nothing to report", () => {
     expect(
       degradationOf({

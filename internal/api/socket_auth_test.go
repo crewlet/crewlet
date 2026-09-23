@@ -15,7 +15,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/stream"
-	"github.com/crewlet/crewlet/internal/config"
 )
 
 // A CLOSED POSTURE OPENS THE SOCKET ON ITS QUERY TOKEN, through the whole
@@ -29,8 +28,7 @@ import (
 // through api.App the way a browser does.
 func TestTheSocketOpensOnItsQueryToken(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	b := closedPosture()
 	a := newApp(t, api.Options{Bootstrap: &b, QueueBackend: "jetstream"})
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)

@@ -108,6 +108,15 @@ export interface StoreState {
    * and releases the hold with a fresh snapshot.
    */
   identityUnverifiable: boolean;
+  /**
+   * Why the engine KNOWS who this browser is and will not serve it this
+   * surface, or null. Set by a `4403` close (the seat is gone from the chart,
+   * or the grant the socket needs was withdrawn) and by a `403` handshake;
+   * cleared when a socket opens. Distinct from `authRejected`, whose repair is
+   * a credential: signing in again reaches the same person with the same
+   * access, so the only repair is an administrator's.
+   */
+  accessRefused: string | null;
 }
 
 export type Slice = keyof StoreState;
@@ -142,6 +151,7 @@ function emptyState(): StoreState {
     connected: false,
     authRejected: false,
     identityUnverifiable: false,
+    accessRefused: null,
   };
 }
 
@@ -313,6 +323,13 @@ export class Store {
     const next = state?.state === "unverifiable";
     if (this.state.identityUnverifiable === next) return;
     this.state.identityUnverifiable = next;
+    this.emit("health");
+  }
+
+  setAccessRefused(reason: string | null): void {
+    const next = reason === null ? null : reason || "refused";
+    if (this.state.accessRefused === next) return;
+    this.state.accessRefused = next;
     this.emit("health");
   }
 

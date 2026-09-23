@@ -300,8 +300,11 @@ func (s *Service) Ingest(env livestate.Envelope) {
 // connect. That is the whole reason the projection exists: a dashboard that
 // rebuilt agent history from the store on every reconnect would take a
 // thirty-day scan per tab, and would lose any call mid-flight while it did.
-func (s *Service) Snapshot() map[string]any {
-	return map[string]any{
+//
+// It is the snapshot FOR ONE AUDIENCE, and carries only the keys whose push
+// that audience may receive (see [needs]).
+func (s *Service) Snapshot(audience Audience) map[string]any {
+	full := map[string]any{
 		"health": s.currentHealth(),
 		// THE STATIC ROSTER FIRST, with the live overlay merged onto it.
 		// MergeAgents walks what it is GIVEN, so passing nil here — which
@@ -320,6 +323,36 @@ func (s *Service) Snapshot() map[string]any {
 		"tokens":    s.TokenRollup(),
 		"budget":    s.state.Budget(),
 	}
+	// EACH KEY IS WHAT ITS PUSH WOULD CARRY, so a reader receives in the
+	// handshake exactly what it would receive afterwards: an audience
+	// without `audit:read` gets no `events` key rather than an empty one,
+	// which the client reads as "nothing here yet" rather than as "the
+	// company has done nothing".
+	out := make(map[string]any, len(full))
+	for key, value := range full {
+		if audience.Receives(snapshotKinds[key]) {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+// snapshotKinds is the push kind each snapshot key stands in for.
+//
+// Total over the keys [Service.Snapshot] builds, which
+// TestEverySnapshotKeyIsAPushKind holds: a key with no kind here is received
+// by nobody, which is the closed end, and would read as a screen that never
+// loads.
+var snapshotKinds = map[string]string{
+	"health":    KindHealth,
+	"agents":    KindAgents,
+	"org":       KindOrg,
+	"tools":     KindTools,
+	"schedules": KindSchedules,
+	"events":    KindEvent,
+	"sandboxes": KindSandboxes,
+	"tokens":    KindTokens,
+	"budget":    KindBudget,
 }
 
 // Roster is the company's seat list as the `seats` push carries it.

@@ -15,7 +15,7 @@ import (
 func newService(t *testing.T, opts stream.Options) (*stream.Service, *stream.Client) {
 	t.Helper()
 	s := buildService(t, opts)
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	s.Hub().Register(c)
 	return s, c
 }
@@ -278,7 +278,7 @@ func TestASnapshotIsBuiltFromMemoryAlone(t *testing.T) {
 	s, _ := newService(t, stream.Options{})
 	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
 
-	snap := s.Snapshot()
+	snap := s.Snapshot(reader)
 	for _, key := range []string{"health", "agents", "events", "sandboxes", "tokens", "budget"} {
 		if _, present := snap[key]; !present {
 			t.Errorf("snapshot is missing %q", key)
@@ -301,7 +301,7 @@ func TestTheHealthTickIsSharedAndKeepsTicking(t *testing.T) {
 		Health: func() stream.Health { return stream.Health{Status: "ok", InFlight: 3} },
 	})
 
-	a, b := stream.NewClient(), stream.NewClient()
+	a, b := stream.NewClient(reader), stream.NewClient(reader)
 	s.Hub().Register(a)
 	s.Hub().Register(b)
 	s.StartHealthTicks(t.Context())
@@ -335,7 +335,7 @@ func TestTheSnapshotCarriesTheEnginesOwnHealth(t *testing.T) {
 			return stream.Health{Status: "shutting_down", InFlight: 2, ShuttingDown: true}
 		},
 	})
-	health, _ := s.Snapshot()["health"].(stream.Health)
+	health, _ := s.Snapshot(reader)["health"].(stream.Health)
 	if health.Status != "shutting_down" || health.InFlight != 2 || !health.ShuttingDown {
 		t.Errorf("health = %#v, want the engine's own answer", health)
 	}
@@ -348,7 +348,7 @@ func TestStartingTheTickTwiceStartsOneTimer(t *testing.T) {
 	// only the later one is the one Stop knows about.
 	const interval = 20 * time.Millisecond
 	s := buildService(t, stream.Options{HealthInterval: interval})
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	s.Hub().Register(c)
 
 	s.StartHealthTicks(t.Context())
@@ -373,7 +373,7 @@ func TestStartingTheTickTwiceStartsOneTimer(t *testing.T) {
 func TestStoppingEndsTheTickAndTheClients(t *testing.T) {
 	t.Parallel()
 	s := buildService(t, stream.Options{})
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	s.Hub().Register(c)
 	s.StartHealthTicks(t.Context())
 	s.Stop()

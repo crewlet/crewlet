@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,7 @@ func TestThePostureMatrix(t *testing.T) {
 	const (
 		wide   = "a-token-that-carries-every-grant"
 		narrow = "a-token-that-carries-only-state-read"
+		blind  = "a-token-that-carries-only-config-read"
 	)
 	b := config.DefaultBootstrap()
 	b.API.Host = "127.0.0.1"
@@ -44,6 +46,7 @@ func TestThePostureMatrix(t *testing.T) {
 	b.API.Auth.Tokens = []config.APIToken{
 		{ID: "ops", Token: wide, Grants: iam.AllGrants},
 		{ID: "viewer", Token: narrow, Grants: []iam.Grant{iam.GrantStateRead}},
+		{ID: "auditor", Token: blind, Grants: []iam.Grant{iam.GrantConfigRead}},
 	}
 	dev, err := auth.NewDevPrincipal("laptop", &b)
 	if err != nil {
@@ -83,6 +86,10 @@ func TestThePostureMatrix(t *testing.T) {
 		{"an agent's transcripts", "/query/events"},
 		{"the map of what is not configured", "/query/integrations"},
 		{"the deployment's own shape", "/query/fleet"},
+		// THE SNAPSHOT'S REST MIRRORS, decided by the grant their push
+		// kind takes on the socket rather than by being resolved at all.
+		{"the roster mirror", "/agents"},
+		{"the whole snapshot", "/stream/snapshot"},
 	}
 
 	// The credential shapes. A session and a personal access token are
@@ -104,7 +111,7 @@ func TestThePostureMatrix(t *testing.T) {
 			want: map[string]int{
 				"/health": ok, "/dashboard": ok,
 				"/query/stream": unath, "/query/events": unath,
-				"/query/integrations": unath, "/query/fleet": unath,
+				"/query/integrations": unath, "/query/fleet": unath, "/agents": unath, "/stream/snapshot": unath,
 			},
 		},
 		{
@@ -117,7 +124,7 @@ func TestThePostureMatrix(t *testing.T) {
 			want: map[string]int{
 				"/health": ok, "/dashboard": ok,
 				"/query/stream": unath, "/query/events": unath,
-				"/query/integrations": unath, "/query/fleet": unath,
+				"/query/integrations": unath, "/query/fleet": unath, "/agents": unath, "/stream/snapshot": unath,
 			},
 		},
 		{
@@ -129,7 +136,20 @@ func TestThePostureMatrix(t *testing.T) {
 			want: map[string]int{
 				"/health": ok, "/dashboard": ok,
 				"/query/stream": ok, "/query/events": forbd,
-				"/query/integrations": forbd, "/query/fleet": forbd,
+				"/query/integrations": forbd, "/query/fleet": forbd, "/agents": ok, "/stream/snapshot": ok,
+			},
+		},
+		{
+			// RESOLVED AND ABLE TO READ NONE OF THE COMPANY'S STATE:
+			// the mirrors refuse it exactly as the question does, where
+			// they used to serve any resolved caller at all.
+			shape: "a Tier A token carrying config:read alone", app: plain,
+			header: "Bearer " + blind,
+			want: map[string]int{
+				"/health": ok, "/dashboard": ok,
+				"/query/stream": forbd, "/query/events": forbd,
+				"/query/integrations": ok, "/query/fleet": forbd,
+				"/agents": forbd, "/stream/snapshot": forbd,
 			},
 		},
 		{
@@ -138,7 +158,7 @@ func TestThePostureMatrix(t *testing.T) {
 			want: map[string]int{
 				"/health": ok, "/dashboard": ok,
 				"/query/stream": ok, "/query/events": ok,
-				"/query/integrations": ok, "/query/fleet": ok,
+				"/query/integrations": ok, "/query/fleet": ok, "/agents": ok, "/stream/snapshot": ok,
 			},
 		},
 		{
@@ -151,7 +171,7 @@ func TestThePostureMatrix(t *testing.T) {
 			want: map[string]int{
 				"/health": ok, "/dashboard": ok,
 				"/query/stream": ok, "/query/events": ok,
-				"/query/integrations": ok, "/query/fleet": ok,
+				"/query/integrations": ok, "/query/fleet": ok, "/agents": ok, "/stream/snapshot": ok,
 			},
 		},
 		{
@@ -164,7 +184,7 @@ func TestThePostureMatrix(t *testing.T) {
 			want: map[string]int{
 				"/health": ok, "/dashboard": ok,
 				"/query/stream": unath, "/query/events": unath,
-				"/query/integrations": unath, "/query/fleet": unath,
+				"/query/integrations": unath, "/query/fleet": unath, "/agents": unath, "/stream/snapshot": unath,
 			},
 		},
 	} {
@@ -224,5 +244,47 @@ func TestThePostureMatrixIsNotAllOneAnswer(t *testing.T) {
 	if len(seen) < 2 {
 		t.Fatalf("every probe answered the same status (%v); the matrix is "+
 			"asserting one answer repeated rather than a decision", seen)
+	}
+}
+
+// THE SNAPSHOT MIRROR IS THE CALLER'S AUDIENCE, key by key.
+//
+// A reader holding `state:read` alone receives the roster and not the event
+// feed — every phase's prompt and response, which the `events` question
+// refuses without `audit:read` — so neither channel is a way round the other.
+func TestTheSnapshotMirrorIsTheCallersAudience(t *testing.T) {
+	t.Parallel()
+	const (
+		wide   = "a-token-that-carries-every-grant"
+		narrow = "a-token-that-carries-only-state-read"
+	)
+	b := config.DefaultBootstrap()
+	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Tokens = []config.APIToken{
+		{ID: "ops", Token: wide, Grants: iam.AllGrants},
+		{ID: "viewer", Token: narrow, Grants: []iam.Grant{iam.GrantStateRead}},
+	}
+	a := newApp(t, api.Options{Bootstrap: &b})
+	keys := func(token string) map[string]json.RawMessage {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/stream/snapshot", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /stream/snapshot = %d: %s", rec.Code, rec.Body.String())
+		}
+		var out map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return out
+	}
+	if got := keys(narrow); got["events"] != nil || got["agents"] == nil {
+		t.Errorf("a state:read-only snapshot: events present = %v, agents present = %v",
+			got["events"] != nil, got["agents"] != nil)
+	}
+	if got := keys(wide); got["events"] == nil {
+		t.Error("an audit:read holder's snapshot carries no event feed")
 	}
 }

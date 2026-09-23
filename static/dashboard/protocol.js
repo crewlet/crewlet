@@ -35,7 +35,8 @@ function emptyState() {
 		schedules: null,
 		connected: false,
 		authRejected: false,
-		identityUnverifiable: false
+		identityUnverifiable: false,
+		accessRefused: null
 	};
 }
 var Store = class {
@@ -169,6 +170,12 @@ var Store = class {
 		const next = state?.state === "unverifiable";
 		if (this.state.identityUnverifiable === next) return;
 		this.state.identityUnverifiable = next;
+		this.emit("health");
+	}
+	setAccessRefused(reason) {
+		const next = reason === null ? null : reason || "refused";
+		if (this.state.accessRefused === next) return;
+		this.state.accessRefused = next;
 		this.emit("health");
 	}
 	setAuthRejected(value) {
@@ -347,14 +354,21 @@ async snapshot() {
 */
 var PATH = "/ws/stream";
 /**
-* `policy violation` — a refusal delivered as a close FRAME, which is only
-* reachable once a connection has opened. The engine does not currently refuse
-* anyone that late (it answers 401 to the handshake instead, see
-* `probeRefusal`), so nothing here fires today; it is honoured because a close
-* code meaning "your credential stopped being good" is the one a long-lived
-* socket would use.
+* The credential this socket was opened with names nobody any more — the
+* session ended, expired or was revoked. The engine re-checks an open socket
+* every minute and closes it with this when that happens. NOT a refusal on its
+* own: the browser may hold a newer cookie than the one this socket was opened
+* with, so the ordinary reconnect is the repair, and only a handshake that is
+* then refused (see `probeRefusal`) asks the reader for anything.
 */
-var CLOSE_UNAUTHORIZED = 1008;
+var CLOSE_UNAUTHENTICATED = 4401;
+/**
+* The credential still names somebody who may not have this surface: their
+* seat is gone from the chart, or the grant the socket needs was withdrawn.
+* Reconnecting reaches the same person with the same access, so the socket
+* STOPS and the page says why.
+*/
+var CLOSE_FORBIDDEN = 4403;
 /**
 * Reconnect backoff ceiling. Long enough that a dashboard left open against a
 * stopped engine is not hammering it, short enough that bringing the engine
@@ -414,6 +428,13 @@ var LiveSocket = class {
 	pingTimer = 0;
 	fallbackTimer = 0;
 	isClosed = false;
+	/**
+	* Whether the engine refused this browser the surface (see `accessRefused`).
+	* A latch rather than a cancelled timer, because the refusal can arrive from
+	* an async probe while a reconnect is already in flight, whose own close
+	* would otherwise schedule the next one.
+	*/
+	refused = false;
 	nextQueryId = 1;
 	inflight = /* @__PURE__ */ new Map();
 	token = "";
@@ -439,6 +460,7 @@ var LiveSocket = class {
 	* re-sent and the only true repair is a fresh handshake snapshot.
 	*/
 	reconnect() {
+		this.refused = false;
 		if (this.sock) this.sock.close();
 		else this.connect();
 	}
@@ -523,6 +545,7 @@ var LiveSocket = class {
 			handshakeCompleted = true;
 			this.attempt = 0;
 			this.store.setAuthRejected(false);
+			this.store.setAccessRefused(null);
 			this.store.setConnected(true);
 			clearTimeout(this.reconnectTimer);
 			this.stopFallback();
@@ -538,10 +561,13 @@ var LiveSocket = class {
 				entry.timer = 0;
 			}
 			this.store.setConnected(false);
+			if (e && e.code === CLOSE_FORBIDDEN) {
+				this.accessRefused(e.reason);
+				return;
+			}
 			this.scheduleReconnect();
 			this.startFallback();
-			if (e && e.code === CLOSE_UNAUTHORIZED) this.authRejected();
-			else if (!handshakeCompleted) this.probeRefusal();
+			if (!handshakeCompleted && (!e || e.code !== CLOSE_UNAUTHENTICATED)) this.probeRefusal();
 		};
 		sock.onerror = () => {
 			this.store.setConnected(false);
@@ -577,10 +603,15 @@ var LiveSocket = class {
 		if (this.isClosed) return;
 		const token = this.token || apiToken();
 		try {
-			if ((await fetch(PATH, {
+			const res = await fetch(PATH, {
 				headers: token ? { Authorization: "Bearer " + token } : {},
 				cache: "no-store"
-			})).status === 401) this.authRejected();
+			});
+			if (res.status === 401) this.authRejected();
+			else if (res.status === 403) {
+				const body = await res.json().catch(() => null);
+				this.accessRefused(body?.detail ?? "");
+			}
 		} catch {}
 	}
 	/**
@@ -598,6 +629,22 @@ var LiveSocket = class {
 	* shell, and a transport that reaches into the DOM to draw one is a transport
 	* that cannot be tested without a browser.
 	*/
+	/**
+	* The engine knows who this browser is and will not serve it this surface.
+	*
+	* The reconnect loop and the REST fallback both STOP: each would be refused
+	* by the same decision every thirty seconds for as long as the tab stayed
+	* open, and a page that says "reconnecting" to somebody whose access was
+	* withdrawn is telling them to wait for something that will not happen.
+	* `reconnect()` is the way back, once an administrator has restored it.
+	*/
+	accessRefused(reason) {
+		this.refused = true;
+		clearTimeout(this.reconnectTimer);
+		this.reconnectTimer = 0;
+		this.stopFallback();
+		this.store.setAccessRefused(reason);
+	}
 	authRejected() {
 		this.store.setAuthRejected(true);
 		if (this.askedForToken || !this.authRejectedHandler) return;
@@ -685,7 +732,7 @@ var LiveSocket = class {
 		this.inflight.clear();
 	}
 	scheduleReconnect() {
-		if (this.isClosed) return;
+		if (this.isClosed || this.refused) return;
 		clearTimeout(this.reconnectTimer);
 		const delay = Math.min(1e3 * 2 ** Math.min(this.attempt, 10), MAX_BACKOFF_MS);
 		this.attempt++;
@@ -704,7 +751,7 @@ var LiveSocket = class {
 		this.pingTimer = 0;
 	}
 	startFallback() {
-		if (this.isClosed || this.fallbackTimer) return;
+		if (this.isClosed || this.refused || this.fallbackTimer) return;
 		this.fallbackFetch();
 		this.fallbackTimer = setInterval(() => void this.fallbackFetch(), FALLBACK_MS);
 	}

@@ -237,6 +237,20 @@ describe("connection state", () => {
     store.setConnected(false);
     expect(store.state.identityUnverifiable).toBe(false);
   });
+
+  test("refused access is a reason, and survives the disconnect it caused", () => {
+    // Unlike an identity hold, a refusal is not a fact about the socket that
+    // reported it: the socket stops because of it, so a disconnect clearing it
+    // would leave a page saying "reconnecting" that never will.
+    const store = new Store();
+    store.setAccessRefused("grant withdrawn: state:read");
+    store.setConnected(false);
+    expect(store.state.accessRefused).toBe("grant withdrawn: state:read");
+    store.setAccessRefused("");
+    expect(store.state.accessRefused).toBe("refused");
+    store.setAccessRefused(null);
+    expect(store.state.accessRefused).toBeNull();
+  });
 });
 
 describe("subscriptions", () => {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 var clock = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
@@ -57,7 +58,7 @@ func dataOf(t *testing.T, frame *stream.Frame) map[string]any {
 func TestABroadcastReachesEveryClient(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	a, b := stream.NewClient(), stream.NewClient()
+	a, b := stream.NewClient(reader), stream.NewClient(reader)
 	h.Register(a)
 	h.Register(b)
 	if got := h.Clients(); got != 2 {
@@ -77,7 +78,7 @@ func TestABroadcastReachesEveryClient(t *testing.T) {
 func TestAnUnregisteredClientStopsReceiving(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 	h.Unregister(c)
 
@@ -97,7 +98,7 @@ func TestASlowClientLosesItsOldestEnvelope(t *testing.T) {
 	// makes the screen right — dropping it to keep an older one would
 	// leave the tab further behind than doing nothing.
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 
 	const overflow = stream.QueueDepth + 100
@@ -130,7 +131,7 @@ func TestOneSlowClientDoesNotStallAnother(t *testing.T) {
 	// is shared by every client, so one tab that stopped reading would
 	// otherwise stop the fan-out for all of them.
 	h := stream.NewHub()
-	slow, fast := stream.NewClient(), stream.NewClient()
+	slow, fast := stream.NewClient(reader), stream.NewClient(reader)
 	h.Register(slow)
 	h.Register(fast)
 
@@ -169,7 +170,7 @@ func TestUnregisteringReleasesTheClientsWriter(t *testing.T) {
 	// closing it leaves that goroutine parked for the life of the process,
 	// one per tab that ever connected.
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 
 	writerDone := make(chan struct{})
@@ -192,7 +193,7 @@ func TestClosingAClientTwiceIsSafe(t *testing.T) {
 	// Both ends reach it: the transport closes when the socket dies, and
 	// the hub closes when it is shutting down.
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 	h.Unregister(c)
 	h.Unregister(c)
@@ -203,7 +204,7 @@ func TestABroadcastAfterCloseDoesNotPanic(t *testing.T) {
 	t.Parallel()
 	// A send on a closed channel panics, and the closing end is not the
 	// broadcasting one — so the race is real rather than theoretical.
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h := stream.NewHub()
 	h.Register(c)
 	c.Close()
@@ -213,7 +214,7 @@ func TestABroadcastAfterCloseDoesNotPanic(t *testing.T) {
 func TestClosingTheHubDisconnectsEveryone(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	a, b := stream.NewClient(), stream.NewClient()
+	a, b := stream.NewClient(reader), stream.NewClient(reader)
 	h.Register(a)
 	h.Register(b)
 	h.Close()
@@ -239,7 +240,7 @@ func TestTheHubIsSafeUnderConcurrentUse(t *testing.T) {
 	for range 4 {
 		wg.Go(func() {
 			for range 100 {
-				c := stream.NewClient()
+				c := stream.NewClient(reader)
 				h.Register(c)
 				go drain(c)
 				h.Unregister(c)
@@ -328,3 +329,7 @@ func TestAnErrorCarriesACodeNotProse(t *testing.T) {
 		}
 	}
 }
+
+// reader is an audience holding both read grants, so it receives every kind
+// the fan-out tests exercise. A test about WHO receives what builds its own.
+var reader = stream.AudienceOf([]iam.Grant{iam.GrantStateRead, iam.GrantAuditRead})

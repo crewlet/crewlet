@@ -47,6 +47,19 @@ func newSocketWith(t *testing.T, authOpts func(*config.APIAuth), query stream.Qu
 	if authOpts != nil {
 		authOpts(&b.API.Auth)
 	}
+	// AND EVERY FIXTURE CREDENTIAL CAN READ what the socket carries, for
+	// the same reason: the socket refuses a caller without `state:read`,
+	// and the grant ceiling is intersected on every request. A case about
+	// what a NARROWER credential receives states its own grants.
+	if b.API.Auth.MaxGrants == nil {
+		b.API.Auth.MaxGrants = iam.AllGrants
+	}
+	for i := range b.API.Auth.Tokens {
+		if b.API.Auth.Tokens[i].Grants == nil {
+			b.API.Auth.Tokens[i].Grants = []iam.Grant{iam.GrantStateRead,
+				iam.GrantAuditRead}
+		}
+	}
 	guard := auth.New(&b)
 	svc := buildService(t, opts)
 
@@ -768,4 +781,44 @@ func TestADisconnectedClientLeavesTheHub(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Errorf("clients = %d after a disconnect, want 0", f.svc.Hub().Clients())
+}
+
+// A RESOLVED CALLER WHO MAY READ NONE OF WHAT THE SOCKET CARRIES IS REFUSED
+// BEFORE THE UPGRADE, and the page's plain-HTTP re-ask sees why.
+//
+// Every push is a `state:read` question's answer or an `audit:read` one's, so
+// the socket used to accept anybody resolved and hand them the whole company's
+// state. 403 rather than 401: the credential is fine, and signing in again
+// reaches the same grants.
+func TestASocketWithoutStateReadIsRefusedBeforeTheUpgrade(t *testing.T) {
+	t.Parallel()
+	const auditOnly = "a-token-carrying-audit-read-alone"
+	f := newSocket(t, func(a *config.APIAuth) {
+		a.Tokens = []config.APIToken{
+			{ID: "founder", Token: fixtureToken},
+			{ID: "auditor", Token: auditOnly, Grants: []iam.Grant{iam.GrantAuditRead}},
+		}
+	}, nil)
+	conn, res, err := f.dial(t, auditOnly)
+	if err == nil {
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+		t.Fatal("a caller without state:read opened the socket")
+	}
+	if res == nil || res.StatusCode != http.StatusForbidden {
+		t.Fatalf("the handshake answered %v, want 403: %v", res, err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		f.server.URL+"/ws/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+auditOnly)
+	plain, err := f.server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plain.Body.Close()
+	if plain.StatusCode != http.StatusForbidden {
+		t.Fatalf("the plain re-ask answered %d, want 403", plain.StatusCode)
+	}
 }

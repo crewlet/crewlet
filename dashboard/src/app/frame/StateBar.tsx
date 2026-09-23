@@ -51,18 +51,24 @@ export interface Degradation {
  */
 export function degradationOf({
   authRejected,
+  accessRefused = null,
   connected,
   identityUnverifiable = false,
   configured,
   onSetToken,
+  onRetry,
   onConfig,
 }: {
   authRejected: boolean;
+  /** Why the engine will not serve this surface to a browser it knows, or null. */
+  accessRefused?: string | null;
   connected: boolean;
   /** The engine could not verify this socket's credential at its last check. */
   identityUnverifiable?: boolean;
   configured: boolean | undefined;
   onSetToken: () => void;
+  /** Re-dial after a refusal an administrator has since repaired. */
+  onRetry?: () => void;
   onConfig: () => void;
 }): Degradation | null {
   if (authRejected) {
@@ -71,6 +77,17 @@ export function degradationOf({
       icon: <KeyGlyph size="md" />,
       message: "The engine refused this browser's API token.",
       action: { label: "Set token", onClick: onSetToken },
+    };
+  }
+  if (accessRefused !== null) {
+    // SECOND, beside the refused token: neither repairs itself. Unlike the
+    // token, signing in again reaches the same person with the same access,
+    // so the affordance is a retry for after an administrator has acted.
+    return {
+      variant: "danger",
+      icon: <KeyGlyph size="md" />,
+      message: `The engine knows who you are but will not serve this dashboard to you (${accessRefused}). An administrator can restore your access.`,
+      ...(onRetry ? { action: { label: "Try again", onClick: onRetry } } : {}),
     };
   }
   if (!connected) {

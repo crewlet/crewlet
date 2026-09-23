@@ -40,7 +40,7 @@ func TestAFrameIsEncodedOncePerPosture(t *testing.T) {
 	const clients = 16
 	live := make([]*stream.Client, 0, clients)
 	for range clients {
-		c := stream.NewClient()
+		c := stream.NewClient(reader)
 		h.Register(c)
 		live = append(live, c)
 	}
@@ -62,7 +62,7 @@ func TestAFrameIsEncodedOncePerPosture(t *testing.T) {
 	// THE CONTROL that makes the count above able to fail: a second posture
 	// is a second set of bytes, so it costs a second encode. If the count
 	// were measuring nothing, this would read 1 as well.
-	degraded := stream.NewClient()
+	degraded := stream.NewClient(reader)
 	h.Register(degraded)
 	if !degraded.SetPosture(stream.FrameDegraded) {
 		t.Fatal("the degraded posture was refused")
@@ -82,7 +82,7 @@ func TestAFrameIsEncodedOncePerPosture(t *testing.T) {
 func TestTwoClientsInOnePostureShareTheExactBytes(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	a, b := stream.NewClient(), stream.NewClient()
+	a, b := stream.NewClient(reader), stream.NewClient(reader)
 	h.Register(a)
 	h.Register(b)
 
@@ -103,7 +103,7 @@ func TestTwoClientsInOnePostureShareTheExactBytes(t *testing.T) {
 func TestADegradedClientLosesThePushesAndKeepsTheHealthFrame(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	live, degraded := stream.NewClient(), stream.NewClient()
+	live, degraded := stream.NewClient(reader), stream.NewClient(reader)
 	h.Register(live)
 	h.Register(degraded)
 	degraded.SetPosture(stream.FrameDegraded)
@@ -128,11 +128,11 @@ func TestADegradedClientLosesThePushesAndKeepsTheHealthFrame(t *testing.T) {
 func TestTheHubPostureReachesEveryClient(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	before := stream.NewClient()
+	before := stream.NewClient(reader)
 	h.Register(before)
 
 	h.SetPosture(stream.FrameDegraded)
-	after := stream.NewClient()
+	after := stream.NewClient(reader)
 	h.Register(after)
 
 	for name, c := range map[string]*stream.Client{"already open": before, "new": after} {
@@ -256,7 +256,7 @@ func declaredKinds(t *testing.T) []string {
 func TestASeatFrameReachesOnlyThatSeatsWatchers(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	watching, other, idle := stream.NewClient(), stream.NewClient(), stream.NewClient()
+	watching, other, idle := stream.NewClient(reader), stream.NewClient(reader), stream.NewClient(reader)
 	for _, c := range []*stream.Client{watching, other, idle} {
 		h.Register(c)
 	}
@@ -296,7 +296,7 @@ func TestASeatFrameReachesOnlyThatSeatsWatchers(t *testing.T) {
 func TestASeatFrameWithNoSeatIsDroppedRatherThanFannedOut(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 	h.Watch(c, "lead")
 
@@ -317,7 +317,7 @@ func TestASeatFrameWithNoSeatIsDroppedRatherThanFannedOut(t *testing.T) {
 func TestAnAnswerIsNeverBroadcast(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 
 	for _, kind := range []string{stream.KindResult, stream.KindError, stream.KindPong, "from_the_future"} {
@@ -340,7 +340,7 @@ func TestAnAnswerIsNeverBroadcast(t *testing.T) {
 func TestUnregisteringLeavesTheSeatIndex(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()
-	c := stream.NewClient()
+	c := stream.NewClient(reader)
 	h.Register(c)
 	h.Watch(c, "lead")
 	if got := h.Watchers("lead"); got != 1 {
@@ -352,7 +352,7 @@ func TestUnregisteringLeavesTheSeatIndex(t *testing.T) {
 		t.Errorf("watchers = %d after an unregister, want 0", got)
 	}
 	// A client that was never registered is never indexed either.
-	stray := stream.NewClient()
+	stray := stream.NewClient(reader)
 	h.Watch(stray, "lead")
 	if got := h.Watchers("lead"); got != 0 {
 		t.Errorf("an unregistered client entered the index (%d watchers)", got)

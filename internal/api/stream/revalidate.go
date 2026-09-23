@@ -27,10 +27,12 @@ import (
 //
 //   - RESOLVED: the socket carries on, and the principal every later query is
 //     asked as is the one just resolved — a narrowed grant takes effect here
-//     within one interval rather than at the next reconnect.
-//   - A SEAT REFUSAL (the person's seat is gone from the chart): closed
-//     [CloseUnauthorized], because the credential is fine and what it acts as
-//     is not.
+//     within one interval rather than at the next reconnect. The pushes
+//     follow too: the client's [Audience] is the new grants, and a changed
+//     one is sent a fresh snapshot built for it.
+//   - A SEAT REFUSAL (the person's seat is gone from the chart), or a
+//     principal that no longer holds `state:read`: closed [CloseUnauthorized],
+//     because the credential is fine and what it may do is not.
 //   - ANONYMOUS (the session ended, expired or was revoked; the token is no
 //     longer one this node accepts): closed [CloseUnauthenticated], because the
 //     remedy is to become somebody again.
@@ -120,6 +122,13 @@ func (a *asking) set(p iam.Principal) {
 	a.principal = p
 }
 
+// current is the principal later questions are asked as.
+func (a *asking) current() iam.Principal {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.principal
+}
+
 // context is ctx carrying the current principal.
 func (a *asking) context(ctx context.Context) context.Context {
 	a.mu.Lock()
@@ -133,9 +142,13 @@ func (a *asking) context(ctx context.Context) context.Context {
 // resync is what a released hold sends: the snapshot, because every push the
 // hold swallowed is gone and a tab that resumed from where it stopped would
 // show a company that moved without it — the same thing a reconnect fetches.
+// It is sent too when the check finds the grants CHANGED, built for the new
+// audience: a narrowed grant stops the pushes it no longer covers from the
+// next one on, and the screen has to lose what it was already showing under
+// the old grant rather than keep it until a reload.
 func revalidate(ctx context.Context, conn *websocket.Conn, client *Client,
 	check checkFunc, who *asking, every time.Duration, now func() time.Time,
-	resync func() any) {
+	resync func(Audience) map[string]any) {
 
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
@@ -172,12 +185,27 @@ func revalidate(ctx context.Context, conn *websocket.Conn, client *Client,
 			log.InfoContext(ctx, "stream_closed_credential_ended")
 			_ = conn.Close(CloseUnauthenticated, "credential no longer accepted")
 			return
+		case !principal.Can(iam.GrantStateRead):
+			// RESOLVED, AND MAY NO LONGER READ what this socket
+			// carries: the grant the handshake required was withdrawn.
+			// 4403 rather than 4401, because signing in again reaches
+			// the same person with the same grants.
+			log.InfoContext(ctx, "stream_closed_grant_withdrawn",
+				"login", principal.Login, "grant", string(iam.GrantStateRead))
+			_ = conn.Close(CloseUnauthorized, "grant withdrawn: "+
+				string(iam.GrantStateRead))
+			return
 		default:
 			who.set(principal)
+			audience := AudienceOf(principal.Grants)
+			changed := client.SetAudience(audience)
 			if client.ReleaseIdentity() {
 				client.Reply(Push(KindIdentity,
 					identityState{State: identityVerified}, now()))
-				client.Reply(Push(KindSnapshot, resync(), now()))
+				changed = true
+			}
+			if changed {
+				client.Reply(Push(KindSnapshot, resync(audience), now()))
 			}
 		}
 	}

@@ -194,7 +194,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const peek = usePeek();
   const nav = useNavigator();
   const { socket } = useClient();
-  const { connected, authRejected, identityUnverifiable, health } = useConnection();
+  const { connected, authRejected, accessRefused, identityUnverifiable, health } = useConnection();
   const agents = useAgents();
   const viewer = useViewer();
   const [theme, setTheme] = useTheme();
@@ -358,10 +358,12 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const degraded = degradationOf({
     authRejected,
+    accessRefused,
     connected,
     identityUnverifiable,
     configured: engine?.configured,
     onSetToken: () => setTokenOpen(true),
+    onRetry: () => socket.reconnect(),
     onConfig: () => nav.to(["admin", "config"]),
   });
 

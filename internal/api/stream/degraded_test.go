@@ -73,8 +73,16 @@ func TestTheDegradedEnvelopeHoldsTheSocketOpen(t *testing.T) {
 	// THE SNAPSHOT STILL ARRIVES. It is a direct frame — the answer to
 	// this client's own connect — and it carries the node's health, so the
 	// one frame a degraded client is handed is the one that says so.
-	if got := next(t, conn); got["kind"] != stream.KindSnapshot {
-		t.Fatalf("first frame = %v, want a snapshot", got["kind"])
+	//
+	// NOT NECESSARILY FIRST: the client is registered before its snapshot
+	// is queued, deliberately (see Hub.Register), and this node ticks its
+	// health every ten milliseconds, so on a loaded runner a keepalive can
+	// land in between. That keepalive is the only thing that may.
+	_, before := readUntil(t, conn, stream.KindSnapshot)
+	for _, kind := range before {
+		if kind != stream.KindHealth {
+			t.Fatalf("a degraded socket received %q before its snapshot", kind)
+		}
 	}
 
 	// THE PUSHES STOP. An ingested event would broadcast `event` and
@@ -87,7 +95,7 @@ func TestTheDegradedEnvelopeHoldsTheSocketOpen(t *testing.T) {
 	// THE KEEPALIVES CONTINUE: the ping is answered, and nothing derived
 	// from the projection arrived ahead of the pong.
 	write(t, conn, map[string]any{"kind": "ping"})
-	_, before := readUntil(t, conn, stream.KindPong)
+	_, before = readUntil(t, conn, stream.KindPong)
 	for _, kind := range before {
 		if kind != stream.KindHealth {
 			t.Errorf("a degraded socket received %q; only the health "+

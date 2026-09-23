@@ -21,14 +21,22 @@ import type { Frame, QueryErrorCode, QueryMap, QueryName } from "./types.ts";
 const PATH = "/ws/stream";
 
 /**
- * `policy violation` — a refusal delivered as a close FRAME, which is only
- * reachable once a connection has opened. The engine does not currently refuse
- * anyone that late (it answers 401 to the handshake instead, see
- * `probeRefusal`), so nothing here fires today; it is honoured because a close
- * code meaning "your credential stopped being good" is the one a long-lived
- * socket would use.
+ * The credential this socket was opened with names nobody any more — the
+ * session ended, expired or was revoked. The engine re-checks an open socket
+ * every minute and closes it with this when that happens. NOT a refusal on its
+ * own: the browser may hold a newer cookie than the one this socket was opened
+ * with, so the ordinary reconnect is the repair, and only a handshake that is
+ * then refused (see `probeRefusal`) asks the reader for anything.
  */
-const CLOSE_UNAUTHORIZED = 1008;
+const CLOSE_UNAUTHENTICATED = 4401;
+
+/**
+ * The credential still names somebody who may not have this surface: their
+ * seat is gone from the chart, or the grant the socket needs was withdrawn.
+ * Reconnecting reaches the same person with the same access, so the socket
+ * STOPS and the page says why.
+ */
+const CLOSE_FORBIDDEN = 4403;
 
 /**
  * Reconnect backoff ceiling. Long enough that a dashboard left open against a
@@ -104,6 +112,13 @@ export class LiveSocket {
   private pingTimer: ReturnType<typeof setInterval> | 0 = 0;
   private fallbackTimer: ReturnType<typeof setInterval> | 0 = 0;
   private isClosed = false;
+  /**
+   * Whether the engine refused this browser the surface (see `accessRefused`).
+   * A latch rather than a cancelled timer, because the refusal can arrive from
+   * an async probe while a reconnect is already in flight, whose own close
+   * would otherwise schedule the next one.
+   */
+  private refused = false;
   private nextQueryId = 1;
   private inflight = new Map<number, Inflight>();
   private token = "";
@@ -138,6 +153,7 @@ export class LiveSocket {
    * re-sent and the only true repair is a fresh handshake snapshot.
    */
   reconnect(): void {
+    this.refused = false;
     if (this.sock) this.sock.close();
     else this.connect();
   }
@@ -245,6 +261,7 @@ export class LiveSocket {
       handshakeCompleted = true;
       this.attempt = 0;
       this.store.setAuthRejected(false);
+      this.store.setAccessRefused(null);
       this.store.setConnected(true);
       clearTimeout(this.reconnectTimer);
       this.stopFallback();
@@ -266,13 +283,20 @@ export class LiveSocket {
         entry.timer = 0;
       }
       this.store.setConnected(false);
+      if (e && e.code === CLOSE_FORBIDDEN) {
+        // No reconnect and no REST fallback: both would be answered 403 by
+        // the same decision, for as long as the tab stayed open.
+        this.accessRefused(e.reason);
+        return;
+      }
       this.scheduleReconnect();
       this.startFallback();
-      // Last, and deliberately: the shell's response to this is to ask for a
-      // token and re-dial on an answer. Running it before the teardown above
-      // would have that re-dial race the cleanup still finishing around it.
-      if (e && e.code === CLOSE_UNAUTHORIZED) this.authRejected();
-      else if (!handshakeCompleted) void this.probeRefusal();
+      // A 4401 needs nothing beyond the reconnect above — see
+      // CLOSE_UNAUTHENTICATED. A dial that never opened may be a refusal, and
+      // only a plain HTTP re-ask can say which (see `probeRefusal`).
+      if (!handshakeCompleted && (!e || e.code !== CLOSE_UNAUTHENTICATED)) {
+        void this.probeRefusal();
+      }
     };
     sock.onerror = () => {
       // `onclose` runs next and owns the recovery; just surface the
@@ -319,6 +343,10 @@ export class LiveSocket {
       // is the network or a proxy, neither of which the reader fixes by typing
       // a token.
       if (res.status === 401) this.authRejected();
+      else if (res.status === 403) {
+        const body = (await res.json().catch(() => null)) as { detail?: string } | null;
+        this.accessRefused(body?.detail ?? "");
+      }
     } catch {
       // Offline, or a proxy that refuses the request outright. The reconnect
       // loop already covers it.
@@ -340,6 +368,23 @@ export class LiveSocket {
    * shell, and a transport that reaches into the DOM to draw one is a transport
    * that cannot be tested without a browser.
    */
+  /**
+   * The engine knows who this browser is and will not serve it this surface.
+   *
+   * The reconnect loop and the REST fallback both STOP: each would be refused
+   * by the same decision every thirty seconds for as long as the tab stayed
+   * open, and a page that says "reconnecting" to somebody whose access was
+   * withdrawn is telling them to wait for something that will not happen.
+   * `reconnect()` is the way back, once an administrator has restored it.
+   */
+  private accessRefused(reason: string): void {
+    this.refused = true;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = 0;
+    this.stopFallback();
+    this.store.setAccessRefused(reason);
+  }
+
   private authRejected(): void {
     this.store.setAuthRejected(true);
     if (this.askedForToken || !this.authRejectedHandler) return;
@@ -438,7 +483,7 @@ export class LiveSocket {
   }
 
   private scheduleReconnect(): void {
-    if (this.isClosed) return;
+    if (this.isClosed || this.refused) return;
     clearTimeout(this.reconnectTimer);
     const delay = Math.min(1000 * 2 ** Math.min(this.attempt, 10), MAX_BACKOFF_MS);
     this.attempt++;
@@ -471,7 +516,7 @@ export class LiveSocket {
     // without it a stopped client left a 5-second fetch loop hammering the
     // engine for the life of the tab, with no socket and nothing to render
     // into.
-    if (this.isClosed || this.fallbackTimer) return;
+    if (this.isClosed || this.refused || this.fallbackTimer) return;
     void this.fallbackFetch();
     this.fallbackTimer = setInterval(() => void this.fallbackFetch(), FALLBACK_MS);
   }

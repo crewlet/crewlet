@@ -172,7 +172,7 @@ func TestASeatIsAddressableByTheIdentifierTheClientHolds(t *testing.T) {
 		t.Errorf("asking by role = %d %v, want the seat", code, body)
 	}
 	// And the roster hands out exactly that identifier.
-	for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {
+	for _, row := range rows(t, a.Stream().Snapshot(everyRead)["agents"]) {
 		if row["id"] != row["handle"] {
 			t.Errorf("roster row %v: id must be the identifier every screen "+
 				"sends back, which is the handle", row)

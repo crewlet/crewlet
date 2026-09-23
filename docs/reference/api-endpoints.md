@@ -312,7 +312,7 @@ as the first, which tells them to go and get a new credential.
 | Grant | What it reaches |
 |---|---|
 | `state:read` | The company's working state: `/agents`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, `/work/*`, `/pages/*`, `/containers`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
-| `audit:read` | The record of what happened: `/events*`, `/agents/{id}/memory`, the turn, phase, trace, A2A-channel and conversation questions on the socket, and `/iam/audit`. Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
+| `audit:read` | The record of what happened: `/events*`, the socket's `event` push and the snapshot's `events` section, `/agents/{id}/memory`, the turn, phase, trace, A2A-channel and conversation questions on the socket, and `/iam/audit`. Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
 | `config:read` | `/config*`, `/company/export`, `/integrations`, and the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials, its sandbox cell and its `mcp_env` |
 | `secrets:read` | `/secrets*`. The listing carries no values and still says which credentials a company holds and when each last changed |
 | `people:manage` | `/iam/*` — inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them. **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
@@ -1799,6 +1799,13 @@ Assembled entirely from the in-memory projection — no database
 round-trip on the hot path.  Used as a fallback when the browser cannot
 upgrade to a WebSocket (corporate proxies, etc.).
 
+**Each section is the caller's**, decided by the grant its push kind takes on
+the socket: the whole bundle needs `state:read` (`403 unauthorized` without
+it), and the `events` section is present only for a caller who also holds
+`audit:read` — absent rather than empty, because an empty feed reads as a
+company that has done nothing. `GET /agents`, `GET /org` and `GET /tools` are
+the same sections served alone, under the same `state:read`.
+
 **Response**
 
 ```json
@@ -2042,6 +2049,16 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 > protocol are checked against each other rather than each against its own
 > idea of the other.
 
+**Who may open it, and what each reader receives.** The handshake needs
+`state:read` — a caller without it is answered `403 unauthorized` before the
+upgrade, naming the grant — and every push kind is received only by a socket
+whose caller holds the grant that kind's question takes: `event` needs
+`audit:read` (it is an `events` row, carrying every phase's prompt and
+response), and every other company kind `state:read`. The snapshot is built for
+the same audience. A re-check that finds the grants changed sends a fresh
+snapshot for the new audience, and one that finds `state:read` gone closes the
+socket `4403` — see [Close codes](#close-codes).
+
 **Server → client kinds**
 
 | `kind` | When | `data` |
@@ -2270,7 +2287,8 @@ does one thing:
 | Answer | Code | What a client does |
 |---|---|---|
 | The session ended, expired or was revoked; the token is no longer accepted | `4401` | Re-dial with the credential the browser holds now; if the handshake answers `401`, sign in. |
-| The person resolves but their seat is gone from the chart | `4403` | Stop reconnecting and show why: the credential is fine, what it acts as is not. |
+| The person resolves but their seat is gone from the chart, or they no longer hold `state:read` | `4403` | Stop reconnecting and show why: the credential is fine, what it may do is not. |
+| Resolved with different grants | *(no close)* | Nothing — the socket's pushes follow the new grants, and a fresh `snapshot` built for them replaces what the screen was showing. |
 | This node cannot read its identity estate, or is behind it | *(no close)* | The socket is **degraded** and told so on an `identity` frame: pushes stop, questions answer `unavailable`, and the next check that can answer sends `identity: verified` and a fresh `snapshot`. |
 | Resolved | *(no close)* | Nothing — and later questions are asked as the principal just resolved, so a narrowed grant takes effect within one interval. |
 

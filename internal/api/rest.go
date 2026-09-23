@@ -3,7 +3,10 @@ package api
 import (
 	"net/http"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 )
 
 // The named read routes — the public REST API.
@@ -117,10 +120,19 @@ func (a *App) mountReads(mux *http.ServeMux) {
 	// They are the CONFIG-DERIVED surfaces plus the whole bundle, and the
 	// socket builds them from these same functions for its handshake —
 	// so a browser that cannot upgrade sees what one that could sees.
-	mux.Handle("GET /agents", a.serveFrom(func() any { return a.stream.Roster() }))
-	mux.Handle("GET /org", a.serveFrom(func() any { return a.stream.Org() }))
-	mux.Handle("GET /tools", a.serveFrom(func() any { return a.stream.Tools() }))
-	mux.Handle("GET /stream/snapshot", a.serveFrom(func() any { return a.stream.Snapshot() }))
+	//
+	// EACH ONE IS DECIDED BY ITS PUSH KIND'S GRANT, the same table the
+	// socket reads (stream's [stream.Audience]), so a fact is not reachable
+	// over REST by a caller the socket would refuse it to — they used to be
+	// served to any resolved caller at all.
+	mux.Handle("GET /agents", a.serveFrom(stream.KindAgents,
+		func(stream.Audience) any { return a.stream.Roster() }))
+	mux.Handle("GET /org", a.serveFrom(stream.KindOrg,
+		func(stream.Audience) any { return a.stream.Org() }))
+	mux.Handle("GET /tools", a.serveFrom(stream.KindTools,
+		func(stream.Audience) any { return a.stream.Tools() }))
+	mux.Handle("GET /stream/snapshot", a.serveFrom(stream.KindSnapshot,
+		func(audience stream.Audience) any { return a.stream.Snapshot(audience) }))
 }
 
 // serveNamed answers one registry question from a named route.
@@ -136,14 +148,28 @@ func (a *App) serveNamed(what string, path map[string]string) http.HandlerFunc {
 	}
 }
 
-// serveFrom renders a value the stream service already knows how to build.
+// serveFrom renders a value the stream service already knows how to build,
+// for a caller whose grants let them receive a push of kind.
 //
 // No registry entry, because there is no question to ask: these are the
 // sections of the handshake snapshot, and the socket reads the same functions
-// to assemble it. Guarded like every other read — the mux is wrapped whole.
-func (a *App) serveFrom(build func() any) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, build())
+// to assemble it. So they are decided by the same table the socket decides its
+// pushes by — see [stream.Audience] — and build is handed the caller's
+// audience, so the whole bundle carries only what that caller may read.
+func (a *App) serveFrom(kind string, build func(stream.Audience) any) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.Caller(w, r)
+		if !ok {
+			return
+		}
+		audience := stream.AudienceOf(principal.Grants)
+		if !audience.Receives(kind) {
+			grant, _ := stream.GrantFor(kind)
+			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+				map[string]string{"detail": "this needs " + string(grant)})
+			return
+		}
+		writeJSON(w, http.StatusOK, build(audience))
 	}
 }
 

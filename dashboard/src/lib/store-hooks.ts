@@ -139,14 +139,17 @@ export function useOrgBudget() {
 /**
  * Connection posture.
  *
- * Three states, not two, because the repair differs and a reader cannot guess
+ * Four states, not two, because the repair differs and a reader cannot guess
  * which one they are looking at: connected, unreachable (comes back on its
- * own), and refused (never does).
+ * own), a refused credential (the reader supplies another), and access
+ * refused to a credential the engine accepts (only an administrator repairs
+ * it).
  */
 export function useConnection() {
   return useSlice(["health"], (s) => ({
     connected: s.connected,
     authRejected: s.authRejected,
+    accessRefused: s.accessRefused,
     identityUnverifiable: s.identityUnverifiable,
     health: s.health,
   }));

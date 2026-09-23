@@ -44,7 +44,7 @@ func BenchmarkHubBroadcast(b *testing.B) {
 				h := stream.NewHub()
 				done := make(chan struct{})
 				for i := range clients {
-					c := stream.NewClient()
+					c := stream.NewClient(reader)
 					h.Register(c)
 					if postures == 2 && i%2 == 1 {
 						c.SetPosture(stream.FrameDegraded)
