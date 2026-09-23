@@ -555,6 +555,42 @@ a wait or a restore ([the full set](../reference/api-endpoints.md#the-three-rete
 — beside a sentence that names no flag, and the command prints each action as
 the flags it has. The dashboard renders the same actions as its own controls.
 
+### From the dashboard
+
+The Fleet screen offers **Evict…** and **Readmit…** on every node row, and the
+dialog behind them is the same gesture as the command, answered the same way:
+one row per log with its outcome and position — no position for `unknown` —
+or the reason it was not written and what to do.
+
+- The dialog **mints the operation id in the browser before its first
+  request**, in the engine's grammar and on the browser's clock, and keeps it
+  for the whole gesture. So a request that timed out or dropped — the dialog
+  waits seventy-five seconds, past the minute the node allows a gesture — still
+  holds the id, and the dialog offers **Finish this gesture**, which sends the
+  same request under the same id and reads every log's answer.
+- Where a log answers that the same gesture can finish it (`unknown`, a lost
+  race, a node catching up), **Finish** sends it again under the same id, with
+  force carried over if the gesture used it.
+- Where a log needs something done first, **Finish** stays, for once it is
+  done: a full log (`log_full`) needs a larger ceiling and a rebuilt one
+  (`wrong_stream`) a re-anchor — neither has a control here, so each names its
+  command — and a node that is itself evicted (`evicted`) cannot write, so the
+  gesture is finished from the dashboard on a node the fleet still counts,
+  under the same id (**Finish a gesture started elsewhere** takes it). The
+  gesture's own id is what finishes each of them; a fresh one would write every
+  log that already holds the record again and re-date each eviction.
+- Only an operation no request can finish — `superseded`, `op_reused` — offers
+  **Start a new gesture** instead of Finish.
+- Closing the dialog does not lose the gesture: reopening it for the same node
+  and the same sign offers **Finish** rather than starting afresh, and a node
+  whose last eviction did not reach every log reads **Finish eviction…** on its
+  row.
+- A node still holding a live presence lease is marked **live** beside its
+  **Evict…**, and its eviction is refused. The refusal — and the one for a
+  lease listing this node cannot read — offers **Force eviction**, behind a
+  second typed confirmation, which sends `force=true` and carries it into every
+  Finish of that gesture.
+
 It prints the watermark before and after, and the instant the eviction takes
 effect. **The evicted node stays counted for about a minute** on each log after
 that log's record lands, so a live node is certain to have read its own

@@ -1325,18 +1325,54 @@ export interface RetentionAlarm {
   remedy: string;
 }
 
-/** What a retention gate answered. The outcome is three-valued (D134). */
+/**
+ * What a retention gate answered once the gesture was past its judgement: ONE
+ * GESTURE over every identity-claiming log, answered per log.
+ *
+ * The shape is `api.GateAnswer`, and the fixtures this dashboard's suite
+ * renders it from are the engine's own rendering
+ * (`internal/api/testdata/gate_answer.json`) — the dialog read a top-level
+ * `outcome` for as long as the route had stopped writing one, on fixtures it
+ * had typed itself, and rendered every gesture as "no acknowledgement".
+ */
 export interface RetentionGateResult {
   node: string;
   evicted: boolean;
+  /** The GESTURE's operation id — what finishes it, sent back unchanged. */
+  op_id: string;
+  /** Whether every log holds the record durably (`applied` or `pending`). */
+  complete: boolean;
+  domains: RetentionGateDomain[];
+}
+
+/** One log's answer to a gate gesture. */
+export interface RetentionGateDomain {
+  domain: string;
+  stream: string;
+  /** This log's own operation, derived from the gesture's. */
+  op_id: string;
   /**
-   * `applied` is durable AND in this node's rows; `pending` is durable at the
-   * position and unapplied HERE, so what it produced is unresolved rather
-   * than failed; `unknown` is the only one where retrying is correct.
+   * The write's three-valued outcome (D134), ABSENT when `error` is set: a
+   * refusal is not one of the three. `applied` is durable AND in this node's
+   * rows; `pending` is durable at the position and unapplied HERE; `unknown`
+   * may or may not be on the log.
    */
-  outcome: "applied" | "pending" | "unknown";
-  position?: { stream?: string; generation?: number; seq?: number };
-  op_id?: string;
+  outcome?: "applied" | "pending" | "unknown";
+  /** Where the record is durable — ABSENT for `unknown`, which has none: a
+   *  zero position would read as a record at the log's origin. */
+  position?: { stream: string; generation: number; seq: number };
+  /** Why the log gave no outcome, and the refusal's name (`log_full`,
+   *  `evicted`, …) where it was a refusal. */
+  error?: string;
+  reason?: string;
+  /**
+   * What to do about a log the gesture did not finish — values of
+   * [GATE_ACTIONS], kept as strings so an action a newer node sends is shown
+   * rather than dropped — and the sentence saying why, naming no surface's
+   * controls. Both absent on a finished log.
+   */
+  actions?: string[];
+  hint?: string;
 }
 
 export interface FleetSeatLease {

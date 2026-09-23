@@ -65,6 +65,44 @@ test("a request that never answers is abandoned rather than awaited", async () =
   vi.useRealTimers();
 });
 
+// A CALL WITH A LONGER PATH SAYS SO, AND ITS REFUSAL NAMES ITS OWN DEADLINE.
+//
+// The node gate is allowed a minute from its first record to its last answer,
+// and the fixed thirty seconds gave up on a gesture the node went on to finish.
+// A per-call deadline replaces the default for that call only — it is not
+// abandoned at the default, it IS abandoned at its own, and the sentence says
+// which deadline ran out rather than the default's.
+test("a per-call deadline replaces the default for that call", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    ),
+  );
+
+  let done = false;
+  const settled = rest
+    .request("POST", "/work/retention/evict/node-4", { body: {}, timeoutMs: 75_000 })
+    .catch((err: unknown) => err)
+    .finally(() => {
+      done = true;
+    });
+  await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+  expect(done).toBe(false);
+
+  await vi.advanceTimersByTimeAsync(75_000 - REQUEST_TIMEOUT_MS);
+  const err = await settled;
+  expect(err).toBeInstanceOf(RestError);
+  expect((err as RestError).status).toBe(0);
+  expect((err as RestError).detail).toContain("within 75 seconds");
+});
+
 describe("the whole answer", () => {
   // THE TAG IS THE WRITE'S PRECONDITION. The config surface stamps a document
   // with its revision as an entity-tag, and a transport that returned only

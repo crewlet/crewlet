@@ -68,7 +68,8 @@ import type {
   RetentionSnapshot,
   RetentionTerm,
 } from "~/protocol/index.ts";
-import { GateDialog } from "./GateDialog.tsx";
+import { finishable, GateDialog } from "./GateDialog.tsx";
+import type { GateGesture } from "./GateDialog.tsx";
 
 /** Sixty seconds: this document is assembled from coordination and three
  *  loops, and none of them moves faster than a tick. */
@@ -90,6 +91,18 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
     enabled: operator,
   });
   const [gate, setGate] = useState<{ node: string; evict: boolean } | null>(null);
+  // THE GESTURES STILL TO BE FINISHED, keyed by node and sign, held HERE
+  // rather than in the dialog: the dialog is unmounted when it closes, and a
+  // partial eviction reopened as a fresh one is a second gesture — every log
+  // the first one reached is written again and its eviction re-dated.
+  const [gestures, setGestures] = useState<Record<string, GateGesture>>({});
+  const holdGesture = (node: string, evict: boolean, g: GateGesture | null) =>
+    setGestures((all) => {
+      const next = { ...all };
+      if (g) next[gestureKey(node, evict)] = g;
+      else delete next[gestureKey(node, evict)];
+      return next;
+    });
 
   if (!operator) return null;
 
@@ -260,15 +273,31 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               header: "",
               label: "Eviction",
               shrink: true,
-              cell: (n) => (
-                <Button
-                  variant="tertiary"
-                  size="small"
-                  onClick={() => setGate({ node: n.node_id, evict: !n.evicted })}
-                >
-                  {n.evicted ? "Readmit…" : "Evict…"}
-                </Button>
-              ),
+              cell: (n) => {
+                const action = gateAction(n, gestures);
+                return (
+                  <span className="row gap-1">
+                    {/* A LIVE NODE'S EVICTION IS REFUSED unless forced, and
+                        the button alone read as though it would simply
+                        work. */}
+                    {action.evict && n.live && (
+                      <Tag
+                        variant="neutral"
+                        title="it holds a presence lease, so an eviction is refused unless you force it"
+                      >
+                        live
+                      </Tag>
+                    )}
+                    <Button
+                      variant="tertiary"
+                      size="small"
+                      onClick={() => setGate({ node: n.node_id, evict: action.evict })}
+                    >
+                      {action.label}
+                    </Button>
+                  </span>
+                );
+              },
             },
           ]}
         />
@@ -385,7 +414,15 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         </Card>
       )}
 
-      {gate && <GateDialog node={gate.node} evict={gate.evict} onClose={() => setGate(null)} />}
+      {gate && (
+        <GateDialog
+          node={gate.node}
+          evict={gate.evict}
+          held={gestures[gestureKey(gate.node, gate.evict)]}
+          onHeld={(g) => holdGesture(gate.node, gate.evict, g)}
+          onClose={() => setGate(null)}
+        />
+      )}
     </>
   );
 }
@@ -464,6 +501,31 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
       </span>
     </Callout>
   );
+}
+
+/** The key a held gesture is filed under: one node, one sign. */
+function gestureKey(node: string, evict: boolean): string {
+  return `${node}:${evict ? "evict" : "readmit"}`;
+}
+
+/**
+ * What a node row's gate button does.
+ *
+ * A GESTURE STILL TO BE FINISHED COMES FIRST. The report marks a node evicted
+ * only once EVERY log holds its tombstone, so after a partial eviction the row
+ * would offer "Evict…" again — a fresh gesture over the logs the first one
+ * reached — and after a partial readmission it would offer the eviction. The
+ * held gesture is what says which sign is in flight.
+ */
+export function gateAction(
+  n: RetentionNode,
+  gestures: Record<string, GateGesture>,
+): { evict: boolean; label: string } {
+  const readmit = gestures[gestureKey(n.node_id, false)];
+  if (readmit && finishable(readmit)) return { evict: false, label: "Finish readmission…" };
+  const evict = gestures[gestureKey(n.node_id, true)];
+  if (evict && finishable(evict)) return { evict: true, label: "Finish eviction…" };
+  return n.evicted ? { evict: false, label: "Readmit…" } : { evict: true, label: "Evict…" };
 }
 
 /** firstDomain is any one of a node's domains, for a sort key. */

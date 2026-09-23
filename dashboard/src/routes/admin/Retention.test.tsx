@@ -6,17 +6,16 @@
  * a log does not: an operator acts on what the tile says, and a zero where the
  * answer is "nobody has said" is a lie they will believe.
  *
- * The write-outcome cases are step 16's: `pending` is durable-but-unapplied,
- * and rendering it as success is the browser half of the lie the
- * durable-versus-applied split exists to prevent.
+ * The gate dialog's own cases — the write outcome, the operation id it mints
+ * and finishes under, force — are in GateDialog.test.tsx.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, test } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import { GateDialog, GateOutcome } from "./GateDialog.tsx";
 import {
   DomainSize,
+  gateAction,
   MaintenanceBanner,
   NodePositions,
   ServedLevelBanner,
@@ -148,54 +147,6 @@ test("a log's gate reserve is drawn beside its headroom, and only where it keeps
   expect(screen.queryByText(/kept for evictions/)).toBeNull();
 });
 
-// --- the write outcome, which is step 16's clause -------------------------
-
-// `applied` IS THE ONLY ONE THAT MEANS IT LANDED HERE.
-test("an applied gate renders as the confirmation", () => {
-  render(
-    <GateOutcome
-      result={{ node: "node-a", evicted: true, outcome: "applied", position: { seq: 41 } }}
-      evict
-    />,
-  );
-  // THE TONE CLASS IS UILET'S NOW — `crewlet-callout--success` where our own
-  // banner spelled it `positive`. The invariant is unchanged: this outcome and
-  // the pending one must not draw the same colour.
-  expect(screen.getByRole("status").className).toContain("success");
-});
-
-// `pending` IS DURABLE AND UNRESOLVED, and it must be visually distinct from
-// the confirmed state: a chip that reads as a tick is precisely the lie.
-test("a pending gate is not rendered as success and not as a failure", () => {
-  render(
-    <GateOutcome
-      result={{ node: "node-a", evicted: true, outcome: "pending", position: { seq: 41 } }}
-      evict
-    />,
-  );
-  const banner = screen.getByRole("status");
-  expect(banner.className).not.toContain("success");
-  expect(banner.className).toContain("warning");
-  // AND IT SAYS NOT TO RETRY, because the record is already on the log and a
-  // second gesture appends a second one.
-  expect(screen.getByText(/Retrying would append a second record/)).toBeTruthy();
-  expect(screen.getByText(/at sequence 41/)).toBeTruthy();
-});
-
-// `unknown` IS THE ONE WHERE RETRYING IS CORRECT, so it is the one that
-// renders as a failure — and it carries the op id, because retrying with the
-// same one is what makes the retry idempotent.
-test("an unknown gate renders as the failure and names the op id", () => {
-  render(
-    <GateOutcome
-      result={{ node: "node-a", evicted: true, outcome: "unknown", op_id: "op-7" }}
-      evict
-    />,
-  );
-  expect(screen.getByRole("alert").className).toContain("danger");
-  expect(screen.getByText("op-7")).toBeTruthy();
-});
-
 // --- maintenance, which was visible on no screen at all -------------------
 
 // MAINTENANCE STOPS EVERY PUBLISHER ON EVERY NODE, and an operator watching a
@@ -244,74 +195,6 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
   expect(screen.queryByText(/Waiting on/)).toBeNull();
 });
 
-// THE TYPED CONFIRMATION HAS TO REACH THE SERVER.
-//
-// The server refuses an eviction unless `?confirm=` repeats the node id — the
-// same shape the destructive CLI gestures use. Checking it only in the browser
-// made the gesture unreachable from this dashboard for every node: the request
-// it sent carried no query at all, so every press was a 400 and the dialog
-// rendered the error banner.
-test("the evict gesture repeats the node id in the query the server checks", async () => {
-  const sent: string[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const url = new URL(String(input), "http://engine.test");
-      sent.push(url.pathname + url.search);
-      return new Response(JSON.stringify({ node_id: "node-2", outcome: "applied" }), {
-        status: 200,
-      });
-    }),
-  );
-  localStorage.setItem("crewlet_api_token", "t");
-
-  render(<GateDialog node="node-2" evict={true} onClose={() => {}} />);
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "node-2" } });
-  fireEvent.click(screen.getByRole("button", { name: "Evict" }));
-  await waitFor(() => expect(sent.length).toBe(1));
-
-  expect(sent[0]).toBe("/work/retention/evict/node-2?confirm=node-2");
-
-  vi.unstubAllGlobals();
-  localStorage.clear();
-});
-
-// A REFUSED READMISSION SAYS WHAT TO DO, NOT ONLY WHY.
-//
-// The route answers `409 readmission_refused` with the reason in `detail` and
-// the remedy in `hint` — start the node, let it catch up, readmit once it has.
-// A dialog that rendered only the reason left the operator knowing the node was
-// behind and nothing about what to do next, and a refusal must never render as
-// the success outcome: nothing was written.
-test("a refused readmission renders its reason and its remedy, and no outcome", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            error: "readmission_refused",
-            detail: "statelog: node-2 may not be readmitted: its last position in tracker is 1200",
-            hint: "start node-2 if it is not running: it catches up on its own",
-          }),
-          { status: 409, headers: { "Content-Type": "application/json" } },
-        ),
-    ),
-  );
-  localStorage.setItem("crewlet_api_token", "t");
-
-  render(<GateDialog node="node-2" evict={false} onClose={() => {}} />);
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "node-2" } });
-  fireEvent.click(screen.getByRole("button", { name: "Readmit" }));
-
-  await waitFor(() => expect(screen.getByText(/may not be readmitted/)).toBeTruthy());
-  expect(screen.getByText(/start node-2 if it is not running/)).toBeTruthy();
-  expect(screen.queryByText(/is readmitted/)).toBeNull();
-
-  vi.unstubAllGlobals();
-  localStorage.clear();
-});
-
 // A DOCUMENT THAT CANNOT CLAIM AN AGE SAYS SO, and one that can says nothing.
 //
 // The retention answer is the one a person opens DURING the outage it
@@ -338,4 +221,33 @@ test("an answer served at stale renders no banner at all", () => {
   // field must not paint this screen red.
   const missing = render(<ServedLevelBanner />);
   expect(missing.container.textContent).toBe("");
+});
+
+// A GESTURE STILL TO BE FINISHED OWNS THE ROW'S BUTTON.
+//
+// The report marks a node evicted only once EVERY log holds its tombstone, so
+// after a partial eviction the row offered "Evict…" again — and that press was
+// a fresh gesture, writing every log the first one reached a second time and
+// re-dating its eviction. A held gesture is what says which sign is in flight.
+test("a node with an unfinished gesture offers to finish it rather than start afresh", () => {
+  const held = {
+    opId: "01a0c450-6c00-7011-a233-445566778899.evict-node-a",
+    force: false,
+    unanswered: "the engine did not answer within 75 seconds",
+  };
+  expect(gateAction(node(), { "node-a:evict": held })).toEqual({
+    evict: true,
+    label: "Finish eviction…",
+  });
+  // A PARTIAL READMISSION LEAVES THE NODE NOT EVICTED EVERYWHERE, and the
+  // row would otherwise offer the eviction.
+  expect(gateAction(node(), { "node-a:readmit": held })).toEqual({
+    evict: false,
+    label: "Finish readmission…",
+  });
+  // THE CONTROL: nothing held is the ordinary gesture for the node's state.
+  expect(gateAction(node(), {})).toEqual({ evict: true, label: "Evict…" });
+  expect(
+    gateAction(node({ evicted: { by: "o", at: "", effective_at: "", effective: true } }), {}),
+  ).toEqual({ evict: false, label: "Readmit…" });
 });
