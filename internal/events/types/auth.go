@@ -457,6 +457,20 @@ func (e IAMLoginFailures) Summary() string {
 // that one, ENDED before the new one opened, so a reader can join the two. No
 // separate session-ended row is written for it: this row is the record of
 // why it ended.
+//
+// # No surface, because nothing a node can check says which one
+//
+// The identity design names a `surface` here — which privileged surface the
+// confirmation was for — and this build carries none, deliberately. A step-up
+// proves the SESSION, not a gesture: the replacement's proof instant makes
+// every route fresh until its `reauth_at`, so there is no one surface it is
+// for. And the request that asked for it is a different request, refused
+// before the person confirmed, which `POST /auth/step-up` never sees; the only
+// place a surface could come from is the client's own word. A field in this
+// trail that no node checked would read exactly like the ones it did check,
+// and the one an investigation leaned on would be the one a client wrote.
+// What a confirmation was used for is the row that gesture writes, under the
+// same person, after this one.
 type IAMStepUpCompleted struct {
 	Person       string       `json:"person"`
 	Login        string       `json:"login"`
