@@ -200,6 +200,60 @@ func Clear(externalURL string) *http.Cookie {
 	return out
 }
 
+// CookieNames are the two names a browser can be holding a bearer under, in
+// the order a request's are read.
+//
+// BOTH, AND IN ONE PLACE. The scheme of `api.external_url` decides which name
+// a node ISSUES, but a browser keeps whatever it was issued: a deployment that
+// corrected its URL from http to https has every signed-in browser still
+// presenting the bare name. Everything that READS a bearer therefore reads
+// both, and everything that ENDS one clears both — and the sign-out read only
+// the configured name and cleared only it, so after such a correction a
+// person who signed out stayed signed in, their session never closed. The
+// prefixed name first, because it is the one this deployment issues when it
+// can and the only one a sibling host cannot plant.
+var CookieNames = []string{HostCookieName, CookieBaseName}
+
+// Presented is the bearer a request carries under either name, or empty.
+//
+// It reads nothing else and decides nothing: a value under either name still
+// has to verify, so reading both discloses nothing and costs a map lookup.
+func Presented(r *http.Request) string {
+	for _, name := range CookieNames {
+		if c, err := r.Cookie(name); err == nil && c.Value != "" {
+			return c.Value
+		}
+	}
+	return ""
+}
+
+// Clears are the cookies that end a session in a browser under EVERY name one
+// can be held under — [Clear] for the name this deployment issues, and a
+// deletion for the other.
+//
+// A DELETION MATCHES ON NAME, PATH AND DOMAIN, never on the security flags,
+// so the second only has to agree with [Cookie] on those three — which it
+// does, carrying Path `/` and no Domain. It is Secure exactly when its name
+// requires it: a `__Host-` Set-Cookie without Secure is refused outright, so
+// the prefixed deletion always carries it (and a plain-http deployment,
+// which can hold no prefixed cookie, merely has it ignored), while the bare
+// deletion is plain, which a secure page may set and an insecure one must.
+func Clears(externalURL string) []*http.Cookie {
+	issued := Clear(externalURL)
+	out := []*http.Cookie{issued}
+	for _, name := range CookieNames {
+		if name == issued.Name {
+			continue
+		}
+		out = append(out, &http.Cookie{
+			Name: name, Value: "", Path: "/", Expires: time.Unix(0, 0).UTC(),
+			MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+			Secure: name == HostCookieName,
+		})
+	}
+	return out
+}
+
 // ErrNoKeyring reports a deployment whose Tier A keyring cannot sign for the
 // fleet.
 //

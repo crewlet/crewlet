@@ -154,7 +154,7 @@ func (c *CSRF) cookieAuthenticated(r *http.Request) bool {
 	// deployment carries the bare name. Checking one would leave the other
 	// half of the deployments unprotected, and it is the http one — the
 	// half with no TLS under it — that would be missed.
-	for _, name := range []string{session.HostCookieName, session.CookieBaseName} {
+	for _, name := range session.CookieNames {
 		if _, err := r.Cookie(name); err == nil {
 			return true
 		}

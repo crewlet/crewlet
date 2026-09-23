@@ -580,6 +580,13 @@ sign-in would appear to succeed and then not stick. The scheme comes from the
 *configured* url rather than from the request, because the engine sits behind a
 TLS-terminating proxy and reads no `r.TLS`.
 
+A node **issues** one name and **accepts** either: a deployment that corrects
+its url from http to https has every signed-in browser still holding the bare
+one, and refusing those would sign everybody out. Signing out follows the same
+rule — it ends the session behind whichever name the browser presented and
+clears **both** — so a browser can never be accepted under a name the sign-out
+does not reach.
+
 Every field is there because a node has to answer with it and has no other way
 to know it:
 

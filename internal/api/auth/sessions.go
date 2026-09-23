@@ -237,16 +237,9 @@ func (g *Guard) WithSessions(s *Sessions) *Guard {
 // BOTH NAMES ARE READ, because a deployment's scheme decides which one a
 // browser holds and a node whose `api.external_url` was just corrected from
 // http to https would otherwise refuse every cookie already in every jar
-// until each person signed in again. Reading both costs one map lookup and
-// discloses nothing: a value under either name still has to verify.
-func cookieOf(r *http.Request) string {
-	for _, name := range []string{session.HostCookieName, session.CookieBaseName} {
-		if c, err := r.Cookie(name); err == nil && c.Value != "" {
-			return c.Value
-		}
-	}
-	return ""
-}
+// until each person signed in again. The rule is [session.Presented]'s, so the
+// sign-out that ends a bearer reads exactly the ones this resolves.
+func cookieOf(r *http.Request) string { return session.Presented(r) }
 
 // needOf is which column of the session table this request reads.
 //
@@ -296,7 +289,9 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// existed tells an attacker holding it the same.
 		log.InfoContext(r.Context(), "api_session_refused",
 			"row", string(v.Row), "detail", v.Detail)
-		http.SetCookie(w, session.Clear(s.external))
+		for _, clear := range session.Clears(s.external) {
+			http.SetCookie(w, clear)
+		}
 		return iam.Principal{}, iam.Anonymous, nil, true
 	}
 
