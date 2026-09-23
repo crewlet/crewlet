@@ -356,14 +356,18 @@ func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 func TestTheEnginesOwnKeysAreRefusedByTheCommand(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	const key = "iam/session/018f3a9c-0000-7000-8000-000000000001/refresh"
-	for _, args := range [][]string{
-		{"get", key, "-reveal"},
-		{"set", key, "-value", "stolen"},
-		{"unset", key},
-	} {
-		_, _, err := secretsCmd(t, cfg, args...)
-		if !errors.Is(err, secrets.ErrReservedName) {
-			t.Errorf("secrets %s answered %v, want ErrReservedName", args[0], err)
+	for _, name := range []string{key,
+		"chart/seat/018f3a9c-0000-7000-8000-000000000002/dek"} {
+		for _, args := range [][]string{
+			{"get", name, "-reveal"},
+			{"set", name, "-value", "stolen"},
+			{"unset", name},
+		} {
+			_, _, err := secretsCmd(t, cfg, args...)
+			if !errors.Is(err, secrets.ErrReservedName) {
+				t.Errorf("secrets %s %s answered %v, want ErrReservedName",
+					args[0], name, err)
+			}
 		}
 	}
 

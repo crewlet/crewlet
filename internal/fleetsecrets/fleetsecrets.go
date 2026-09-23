@@ -30,10 +30,11 @@
 // # Two views over one bucket: the operator's, and the engine's own
 //
 // The bucket also holds the ENGINE's key material — a person's data key, an
-// OIDC session's refresh token, the identity estate's blind-index key — under
-// path-shaped names no `${VAR}` can reach ([secrets.Reserved]). [Store] is the
-// OPERATOR's view: it neither lists, snapshots, reads, writes nor deletes a
-// reserved row, and says so by name ([secrets.ErrReservedName]). [Estate] is
+// OIDC session's refresh token, the identity estate's blind-index key, and the
+// org chart's own under `chart/` — under path-shaped names no `${VAR}` can
+// reach ([secrets.Reserved]). [Store] is the OPERATOR's view: it neither
+// lists, snapshots, reads, writes nor deletes a reserved row, and says so by
+// name ([secrets.ErrReservedName]). [Estate] is
 // the engine's: it addresses reserved rows and nothing else. The one gesture
 // that crosses is a REKEY, which re-seals every row under the active key
 // because the keyring is one keyring — and reports the engine's rows as a count

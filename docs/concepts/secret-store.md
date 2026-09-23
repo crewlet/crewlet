@@ -155,8 +155,12 @@ secrets**:
 | `iam/session/<lineage>/refresh` | One provider session's refresh token |
 | `iam/blind-index-key` | The key an address or a provider subject is blinded under in the identity directory |
 
-A name with a `/` in it is one no `${VAR}` can spell, so none of them can be
-resolved into a provider, an `mcp_env` or a child process by any document.
+The namespace has two owners, each under its own first segment: the identity
+directory (`iam/`) and the [org chart](chart-domain.md) (`chart/`). An owner is
+reserved before it writes its first key, so no engine key is ever briefly an
+ordinary operator row. A name with a `/` in it is one no `${VAR}` can spell, so
+none of them can be resolved into a provider, an `mcp_env` or a child process
+by any document.
 And every operator surface refuses them by name, whatever the caller holds:
 `GET`, `PUT` and `DELETE /secrets/{name}` — a reveal included — answer
 `403 reserved_name`, and `crewlet secrets get`, `set` and `unset` refuse before

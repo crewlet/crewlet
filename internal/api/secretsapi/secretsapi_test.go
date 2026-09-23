@@ -345,11 +345,25 @@ func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 // removal could shred it, and a DELETE shredded somebody with no removal on
 // record. Every route that takes a name now refuses one BY NAME — including a
 // caller carrying every grant — the listing counts them without naming any,
-// and a rekey moves and counts them.
+// and a rekey moves and counts them. For EVERY owner: a human seat's key in the
+// org chart's namespace is the same kind of thing as a person's.
 func TestTheEnginesOwnKeysAreUnreachableHere(t *testing.T) {
 	t.Parallel()
+	for _, key := range []string{
+		"iam/person/018f3a9c-0000-7000-8000-000000000001/dek",
+		"chart/seat/018f3a9c-0000-7000-8000-000000000002/dek",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			engineKeyUnreachable(t, key)
+		})
+	}
+}
+
+// engineKeyUnreachable is [TestTheEnginesOwnKeysAreUnreachableHere] over one key.
+func engineKeyUnreachable(t *testing.T, key string) {
+	t.Helper()
 	fleet := coordmem.NewFleet()
-	const key = "iam/person/018f3a9c-0000-7000-8000-000000000001/dek"
 	if err := fleetsecrets.New(fleet, cipherFor(t, "k1", "k2")).Estate().Set(
 		t.Context(), key, "the-person-key", secrets.Author{Name: "node-a",
 			Kind: string(iam.ActorSystem)}, "iam", clock); err != nil {
@@ -383,7 +397,7 @@ func TestTheEnginesOwnKeysAreUnreachableHere(t *testing.T) {
 	}
 
 	code, body := call(t, h, http.MethodGet, "/secrets", "")
-	if code != http.StatusOK || strings.Contains(body, "iam/") ||
+	if code != http.StatusOK || strings.Contains(body, key) ||
 		!strings.Contains(body, `"engine_keys":{"total":1,"by_key":{"k1":1}}`) {
 		t.Errorf("the listing = %d %s, want the operator row named and the "+
 			"engine key counted", code, body)
@@ -395,7 +409,7 @@ func TestTheEnginesOwnKeysAreUnreachableHere(t *testing.T) {
 	}, iam.AllGrants...)
 	code, body = call(t, rotated, http.MethodPost, "/secrets/rekey", "")
 	if code != http.StatusOK || !strings.Contains(body, `"engine_keys_moved":1`) ||
-		strings.Contains(body, "iam/") {
+		strings.Contains(body, key) {
 		t.Errorf("rekey = %d %s, want the engine key moved and counted", code, body)
 	}
 }

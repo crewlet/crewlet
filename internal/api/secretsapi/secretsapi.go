@@ -200,9 +200,11 @@ func reserved(w http.ResponseWriter, name string) bool {
 	httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeReservedName, map[string]string{
 		"detail": secrets.ErrReservedName.Error(),
 		"hint": "a person's key and a session's refresh token belong to the " +
-			"identity estate: remove a person with `crewlet iam remove`, end a " +
-			"session with `crewlet iam revoke`; a rekey moves these keys with " +
-			"everything else",
+			"identity estate, and a human seat's key and the chart's own keys to " +
+			"the org chart: remove a person with `crewlet iam remove`, a seat " +
+			"through the chart's removal (`POST /chart/batch`), end a session " +
+			"with `crewlet iam revoke`; a rekey moves these keys with everything " +
+			"else",
 	})
 	return true
 }

@@ -218,11 +218,31 @@ func TestTheEnginesKeysUnderAPrefixNeedNoKeyring(t *testing.T) {
 // removal on record, and decrypted into every node's ${VAR} snapshot on every
 // apply. Each of those routes is closed here, and the one gesture that crosses
 // — a rekey, because the keyring is one keyring — moves them and counts them.
+//
+// FOR EVERY OWNER: the identity estate's person key and the org chart's seat
+// key are one kind of thing, and a namespace that closed one and not the other
+// would leave a human seat's name one reveal away from outliving the removal
+// that shreds it.
 func TestTheOperatorsViewDoesNotReachTheEnginesKeys(t *testing.T) {
 	t.Parallel()
+	for _, key := range []string{
+		"iam/person/018f3a9c-0000-7000-8000-000000000001/dek",
+		"chart/seat/018f3a9c-0000-7000-8000-000000000002/dek",
+		"chart/blind-index-key",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			operatorViewMissesEngineKey(t, key)
+		})
+	}
+}
+
+// operatorViewMissesEngineKey is [TestTheOperatorsViewDoesNotReachTheEnginesKeys]
+// over one engine key.
+func operatorViewMissesEngineKey(t *testing.T, key string) {
+	t.Helper()
 	old := ring(t, "k1", "k2")
 	s, fleet := fleetStore(t, old)
-	const key = "iam/person/018f3a9c-0000-7000-8000-000000000001/dek"
 	if err := s.Estate().Set(t.Context(), key, "the-person-key", nodeA,
 		"iam", clock); err != nil {
 		t.Fatalf("the engine's view could not write its own key: %v", err)
