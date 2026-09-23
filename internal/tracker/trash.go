@@ -48,6 +48,13 @@ import (
 // removed has already seen its parent go: a partially applied gesture must
 // never leave a tree in a shape no single write could have made.
 //
+// EACH DESCENDANT'S STEP IS NAMED FOR THE DESCENDANT, never for its place in
+// the walk, because a re-run's walk is not the first one's: a descendant
+// purged in between drops out of it, and every one after it moves up a place.
+// Keyed on the place, the operation ledger answered the re-run's step for one
+// task with the first run's row for another — reported as done, and left live
+// under a removed parent.
+//
 // The ROOT's own tombstone carries no `RemovedWith`, and every descendant's
 // names the root. A restore reads that to decide what comes back with what.
 func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
@@ -94,7 +101,7 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 		// happened, and a subtree of forty would otherwise send forty
 		// notifications for it — the root's is the one that says what
 		// was done.
-		if _, err := w.tombstone(ctx, stepID(opID, fmt.Sprintf("d%d", i)),
+		if _, err := w.tombstone(ctx, stepID(opID, "d/"+descendant.ID),
 			descendant.ID, descendant.Project, child, nil); err != nil {
 			return result, fmt.Errorf("tracker: the root of %s is in the trash "+
 				"and %d of %d descendants followed it; re-run the removal to "+
@@ -112,6 +119,13 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 // root was removed by that gesture and is restored by its inverse, while one
 // that was already in the trash for its own reasons stays there. That is what
 // `RemovedWith` is for, and it is why a restore can be a single argument.
+//
+// EACH DESCENDANT'S STEP IS NAMED FOR THE DESCENDANT, for [Writer.RemoveTask]'s
+// reason and more sharply: the list a restore walks is what is STILL in the
+// trash, so every descendant a first run restored drops out of a re-run's list
+// and every one after it moves up a place. Keyed on the place, a re-run of a
+// restore that half-finished answered its remaining steps from the first
+// run's ledger rows and left those tasks in the trash, reporting success.
 func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 	notify *Notify) (WriteResult, error) {
 
@@ -135,7 +149,7 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 		return result, err
 	}
 	for i, descendant := range removedWith {
-		if _, err := w.clearTombstone(ctx, stepID(opID, fmt.Sprintf("d%d", i)),
+		if _, err := w.clearTombstone(ctx, stepID(opID, "d/"+descendant.ID),
 			descendant.ID, descendant.Project, nil); err != nil {
 			return result, fmt.Errorf("tracker: %s is out of the trash and %d "+
 				"of %d tasks removed with it followed; re-run the restore to "+
@@ -170,8 +184,8 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 			}
 			// THE PROJECT FIRST, before the no-op below: who may remove
 			// this task was decided on the project the caller read it
-			// in, and a task that has moved since is another project's
-			// to remove.
+			// in, and a write naming another one is refused — see
+			// [filedUnder].
 			if wrong := filedUnder(current, project); wrong != nil {
 				return statelog.Decision{}, wrong
 			}
