@@ -85,6 +85,13 @@ type noRoutes struct{}
 
 func (noRoutes) Routes(authz.Mux) error { return nil }
 
+// nobodyHolds is an identity directory in which nobody holds any login.
+type nobodyHolds struct{}
+
+func (nobodyHolds) HolderRecord(_ context.Context, login string) (string, error) {
+	return "", fmt.Errorf("%w: %s", iam.ErrNoHolder, login)
+}
+
 // noAppFlow is a GitHub App completer that completes nothing.
 type noAppFlow struct{}
 
@@ -146,6 +153,11 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 		// quietly answer "leads nobody", which is a policy rather than
 		// an absence.
 		opts.Sources.Chart = authz.NoChart{}
+	}
+	if opts.Sources.Holders == nil {
+		// A DIRECTORY THAT HOLDS NOBODY, and says so: a case about whose
+		// record a login names states its own.
+		opts.Sources.Holders = nobodyHolds{}
 	}
 	if opts.Sources.Events == nil {
 		opts.Sources.Events = sharedEvents
@@ -235,6 +247,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	}
 	for _, field := range []string{
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID", "Sources.Chart",
+		"Sources.Holders",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Budgets", "Retention", "Capacity", "Backup",
 		"AuthEvents", "Inbox",

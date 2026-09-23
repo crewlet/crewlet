@@ -2543,11 +2543,23 @@ one of them takes a `handle`, and the rule for whose is the same, in one place:
 2. **Your own handle** is the same thing said explicitly — and on the three
    person questions either of your names is: a bound person's login names the
    same record their seat does.
-3. **Anybody else's handle** is decided by the authority table, each question
-   asking its own verb. The first three are somebody's QUEUE, and take the
-   owner-or-lead rule: whoever leads that person, or a caller holding
-   `fleet:operate`. A node that cannot read the chart to tell answers `503`,
-   never a refusal — a lead told they lead nobody goes looking for an
+3. **Somebody else's login** names **their** record, looked up in the identity
+   directory: the seat it binds them to — followed through a rename — or the
+   login itself for somebody bound to none. `ana.diaz`, bound to the seat
+   `ana`, reads `ana`'s inbox, which is where everything addressed to her is
+   kept; it used to be read literally, as an empty record under the login. A
+   login is never matched against the chart's seats. A login nobody holds, or
+   one whose holder is bound to a seat the chart no longer has, names no
+   record (`404`) — but only to a caller the question would have admitted on
+   the name as typed, which nobody leads, so everybody else is refused as
+   below and learns nothing about which logins exist. A node that cannot read
+   the directory answers `503`.
+4. **Anybody else's handle** is decided by the authority table on the record
+   it resolved to, each question asking its own verb. The first three are
+   somebody's QUEUE, and take the owner-or-lead rule: whoever leads that
+   person — so a lead may name their report by seat or by login — or a caller
+   holding `fleet:operate`. A node that cannot read the chart to tell answers
+   `503`, never a refusal — a lead told they lead nobody goes looking for an
    authority they already hold. `conversations` is a seat's TRAIL — what it
    said on a surface the engine does not own — and takes `audit:read`, the
    grant `/events` and `/agents/{id}/memory` already take for every seat at
@@ -3026,11 +3038,13 @@ as an outage.
 ### The routes, and the authority each takes
 
 The authority is the [authority table's](#which-grant-a-route-needs), decided
-ONCE. Where the object is in the path — a project, a person — the route
-decides the verb itself. Where it needs a stored row — which project an item is
-filed under, which space a page is in, who wrote a comment — the route admits a
-reader and the verb is decided once the row is read, by the tool's own ask or,
-for a verb with no tool, by the route.
+ONCE. Where the object is in the path — a project — the route decides the verb
+itself. Where it needs a stored row — which project an item is filed under,
+which space a page is in, who wrote a comment, whose record a person's name is
+(a login is its holder's, which only the identity directory can say) — the
+route admits on the weakest honest precondition and the verb is decided once
+the row is read, by the tool's own ask or, for a verb with no tool, by the
+route.
 
 | Method | Path | Does | Decided by |
 |---|---|---|---|
@@ -3135,26 +3149,32 @@ destroyed. `crewlet work purge` is the same route from a shell.
 
 `mark_inbox` and `set_pins` write the **caller's own** record and take no
 handle — a model that could name whose inbox to mark could mark anybody's. So
-`PUT /work/people/{handle}/inbox` naming yourself — by either of your names, a
-bound person's login included — goes through the tool exactly as your
-assistant's call would, and writes your [own
-record](#whose-record-a-personal-question-answers-for). With **somebody
-else's** — which only an administrator is admitted to, to unstick a departed
-person's queue — it goes through the same parsing and the same writer, with
-the table's answer as its authority, and writes **exactly the record the path
-names**: never looked up. The route decided on that name, and resolving it
-afterwards wrote into whichever seat it resembled. So `{handle}` is a record's
-own name — a seat's exact handle, or the login of somebody the directory binds
-to no seat — and a name no record could be kept under (`Jane Doe`, a seat the
-chart lacks) is refused rather than guessed at.
+`PUT /work/people/{handle}/inbox` goes through the same parsing and the same
+writer as the tool, and `{handle}` resolves exactly as [a personal
+question's](#whose-record-a-personal-question-answers-for) does: either of your
+own names is your own record; somebody else's **login** is their record,
+looked up in the identity directory — the seat it binds them to, or the login
+for somebody bound to none; and any other name must be a seat the chart has
+**exactly** — never looked up by resemblance, so a name no record could be kept
+under (`Jane Doe`, a seat the chart lacks) is refused rather than guessed at.
+The verb is decided **on the record the name resolved to** — yours, or the
+admin grant, to unstick a departed person's queue — because deciding on the
+spelling admitted an administrator to a record under a bound person's login,
+and that is where the write then landed, read by nothing of theirs. A login
+nobody holds is `404` to a caller who may write anybody's record and `403` to
+everybody else, and a node that cannot read the directory is `503`.
 
 `set_priorities` (`PUT /work/people/{handle}/priorities`) is the one person
-verb that DOES take a name for somebody else, because a lead sets a report's
-queue — and a model types what it remembers. So a name for somebody else is
-resolved against the chart before the lead relation is asked about the seat it
-resolves to; your own queue, named by omission or by either of your names, is
-never looked up. A name nothing answers to is refused, and the refusal lists
-the seats only to a caller who may read the roster (`state:read`).
+verb that DOES take words for somebody else, because a lead sets a report's
+queue — and a model types what it remembers. Your own queue, named by omission
+or by either of your names, is never looked up; somebody else's **login** is
+the identity directory's to resolve, exactly as above, and is **never** a seat
+— matched against the chart, `jane.doe` replaced the queue of the seat `jane`
+("Jane Doe"); only a name that is neither — a handle, a role, a display name,
+an address — is resolved against the chart. The lead relation is then asked
+about the seat it all resolved to, so a lead may name their report either way.
+A name nothing answers to is refused, and the refusal lists the seats only to a
+caller who may read the roster (`state:read`).
 
 ## The native tracker and knowledge base
 

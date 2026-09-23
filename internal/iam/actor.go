@@ -1,6 +1,11 @@
 package iam
 
-import "slices"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+)
 
 // ActorKind is who wrote something, in the vocabulary three durable stores
 // already hold: the tracker's `author_kind` column, the knowledge base's, and
@@ -181,6 +186,105 @@ func NamesSelf(p Principal, name string) bool {
 		return false
 	}
 	return name == owner || name == p.Login
+}
+
+// NamesLogin reports whether a name has a LOGIN's shape — a person's dotted
+// login or a machine's coloned handle — which no seat handle can ever have.
+//
+// It is the question a surface asks before it lets a name anywhere near the
+// chart: the colleague resolver matches what a model types against seats'
+// handles, names and addresses, and `jane.doe` resembles the seat `jane`
+// ("Jane Doe") closely enough to land on it. A login is never a seat, so it is
+// never resolved against the chart — it is looked up in the identity
+// directory, or it names nothing.
+func NamesLogin(name string) bool { return ValidLogin(name) || ValidMachineHandle(name) }
+
+// Holders is the one read [OwnerOf] needs that this package cannot make: whose
+// record somebody else's login names.
+//
+// DECLARED HERE, by its one caller, and implemented over the identity
+// directory and the chart by internal/engine — this package holds values and
+// reads nothing, which is why the read is a seam rather than a query.
+type Holders interface {
+	// HolderRecord answers the name the record of whoever holds login is
+	// kept under: [RecordOwner] of the principal they act as — their seat,
+	// as the chart knows it NOW, when the identity directory binds them to
+	// one, and the login itself when it binds them to none.
+	//
+	// THREE-VALUED. [ErrNoHolder] is a login nobody holds;
+	// [ErrHolderUnseated] is a holder bound to a seat the chart no longer
+	// holds; ANY OTHER ERROR IS UNKNOWN — this node could not say — and a
+	// caller answers it as 503, never as either of the first two, because
+	// "nobody" read off a directory that could not be read is a guess about
+	// whose record to write.
+	HolderRecord(ctx context.Context, login string) (string, error)
+}
+
+// ErrNoHolder is a login nobody holds — no person, no machine, or only the
+// reservation an unfinished enrolment leaves — so no record is kept under it.
+var ErrNoHolder = errors.New("iam: nobody holds that login")
+
+// ErrHolderUnseated is a login whose holder the identity directory binds to a
+// seat the chart no longer holds: their record was kept under that seat, and
+// the seat is gone, so there is no name this node can say it is under now.
+//
+// NOT [ErrNoHolder], and not the login's own record: somebody holds it, and
+// their record is not under the login — answering the login would write a
+// second record nobody reads, which is the defect [OwnerOf] exists to close.
+var ErrHolderUnseated = errors.New("iam: that login's holder is bound to a " +
+	"seat the chart no longer holds")
+
+// errNoHolders is what [OwnerOf] answers for a login it was given no way to
+// look up. UNKNOWN, like every error but the two sentinels: a surface wired
+// without the directory cannot say whose record a login names, and reading the
+// login literally is the answer that wrote a bound person's inbox marks where
+// nothing of theirs reads them.
+var errNoHolders = errors.New("iam: no identity directory is wired to say " +
+	"whose record a login names")
+
+// OwnerOf is the record a name addresses when THIS caller names it — the name
+// a surface reads a personal record under and writes one under, from a tool's
+// argument, a question's parameter or a route's path alike.
+//
+// # One function for every name, and for the read and the write
+//
+// [RecordOwner] made a caller's OWN record one name for the read and the
+// write, and [NamesSelf] made either of their names reach it. Somebody ELSE's
+// was still read and written under whatever was typed: an administrator's
+// `jane.doe` for a person the directory binds to the seat `jane` read an empty
+// inbox and wrote pins and inbox marks into a record under the login that no
+// screen of hers reads, and `set_priorities` sent the login through the fuzzy
+// colleague resolver, which set the priorities of whichever seat it resembled.
+// So:
+//
+//   - NO NAME, or either of the caller's own, is the caller's own record —
+//     [RecordOwner], which may be empty for a principal with none.
+//   - A LOGIN is looked up: its holder's record, through [Holders] —
+//     [ErrNoHolder], [ErrHolderUnseated] or an unknown error otherwise. A
+//     login is never a seat, and never read literally.
+//   - ANYTHING ELSE is returned UNCHANGED and UNSETTLED: a seat's handle, or
+//     words a model typed. That is the chart's to resolve, and this package
+//     holds no chart — a surface resolves it exactly, or against the
+//     colleague lookup, as its verb calls for.
+//
+// SETTLED says which: true when the answer is a record owner this function
+// established, false when it is the name handed back for the chart.
+func OwnerOf(ctx context.Context, p Principal, name string, holders Holders) (
+	owner string, settled bool, err error) {
+
+	switch {
+	case name == "", NamesSelf(p, name):
+		return RecordOwner(p), true, nil
+	case !NamesLogin(name):
+		return name, false, nil
+	case holders == nil:
+		return "", false, fmt.Errorf("%w: %q", errNoHolders, name)
+	}
+	owner, err = holders.HolderRecord(ctx, name)
+	if err != nil {
+		return "", false, err
+	}
+	return owner, true, nil
 }
 
 // nameOr is the degradation rule's one half: a name, or the name for nobody.

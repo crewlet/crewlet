@@ -668,7 +668,11 @@ rather than nobody's. The questions that are *about*
 one person — their record, their day, their inbox — do take a handle, and
 naming somebody else's is decided as reading their record is: that person,
 whoever leads them, or `fleet:operate`, with a `503` rather than a refusal
-from a node that cannot read its chart.
+from a node that cannot read its chart. A handle that is somebody's **login**
+names their record — the seat the directory binds them to, or the login for
+somebody bound to none — so a lead may name a report either way, and a login
+is never mistaken for the seat it resembles. The tools that take a handle
+(`get_person`, `work_inbox`, `set_priorities`) resolve it the same way.
 
 ## Who may do what
 

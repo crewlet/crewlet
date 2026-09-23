@@ -181,23 +181,26 @@ var subjectOf = map[string]subject{
 	// company grant rather than a relation.
 	"write_project": {kind: authz.KindProject, container: "project"},
 
-	// THE PERSONAL ONES name whose record it is, and three of them name
-	// nobody at all: `my_work`, `mark_inbox` and `set_pins` take no
-	// handle, because a model that could name whose day to read could
-	// read anybody's. An unnamed owner is the CALLER — see
-	// [subject.objectFor].
-	"get_person": {kind: authz.KindPerson, owner: "handle"},
-	"work_inbox": {kind: authz.KindPerson, owner: "handle"},
+	// THE PERSONAL ONES THAT TAKE NO NAME are about the caller: `my_work`,
+	// `mark_inbox` and `set_pins` take no handle, because a model that
+	// could name whose day to read could read anybody's. An unnamed owner
+	// is the CALLER — see [subject.objectFor].
 	"my_work":    {kind: authz.KindPerson},
 	"mark_inbox": {kind: authz.KindPerson},
 	"set_pins":   {kind: authz.KindPerson},
 
-	// SETTING SOMEBODY'S PRIORITIES IS DECIDED ON WHO THEY ARE, NOT ON WHAT
-	// WAS TYPED: the tool resolves its `handle` against the chart — a model
-	// types a name, a role or an email — and asks the lead relation of the
-	// seat that resolves to. Decided here on the raw argument, a lead who
-	// named their report by role was refused as leading nobody called
-	// that, before the tool ever resolved it.
+	// AND THE ONES THAT DO ARE DECIDED ON WHOSE RECORD THE NAME IS, NOT ON
+	// WHAT WAS TYPED. Each tool resolves its `handle` first
+	// ([WorkDeps.personRecord]): the caller's own names are their own
+	// record, somebody else's login is their holder's — a bound person's
+	// SEAT — and `set_priorities` resolves anything else against the chart,
+	// because a model types a name, a role or an email. Decided here on
+	// the raw argument, a lead who named their report by role or by login
+	// was refused as leading nobody called that, before the tool ever
+	// resolved it — and an administrator's decision on a login was a
+	// decision about a record nothing of that person's is under.
+	"get_person":     {kind: authz.KindPerson, inTool: true},
+	"work_inbox":     {kind: authz.KindPerson, inTool: true},
 	"set_priorities": {kind: authz.KindPerson, inTool: true},
 
 	// A SAVED VIEW IS EITHER, and its own class reads whichever it
@@ -253,12 +256,13 @@ type subject struct {
 
 	// inTool marks a verb whose object its arguments do not STATE — a
 	// stored row (which project a task is filed under), or a name the tool
-	// resolves against the chart (whose priorities a typed `handle`
-	// means). The gate does not decide it, and the tool asks the same
-	// action through [WorkDeps.mayWrite] once it knows the object. A tool
-	// marked so and asking nothing would be ungated — which is why
-	// [TestARowDecidedToolAsksAfterItReads] and
-	// [TestALeadNamesAReportTheWayAModelTypesThem] call each one as a
+	// resolves to a record (whose inbox a login means, whose priorities a
+	// typed `handle` means). The gate does not decide it, and the tool asks
+	// the same action through [WorkDeps.mayWrite] once it knows the object.
+	// A tool marked so and asking nothing would be ungated — which is why
+	// [TestARowDecidedToolAsksAfterItReads],
+	// [TestALeadNamesAReportTheWayAModelTypesThem] and
+	// [TestSomebodyElsesLoginNamesTheirHoldersRecord] call each one as a
 	// caller the table refuses and require the refusal.
 	inTool bool
 }

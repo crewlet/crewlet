@@ -5,6 +5,7 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -349,6 +350,128 @@ func TestACallersOwnRecordIsReadUnderTheNameItIsWrittenUnder(t *testing.T) {
 					t.Errorf("%s read %q's record, want %q — the name its "+
 						"own writes are made under", question, read, c.want)
 				}
+			}
+		})
+	}
+}
+
+// loginDirectory is the identity directory as a personal question reads it:
+// `ana.diaz` holds the seat `ana`, `bo.smith` holds no seat, `dev.person` holds
+// `dev`, and nobody else holds anything. err makes every lookup unknown.
+type loginDirectory struct{ err error }
+
+func (d loginDirectory) HolderRecord(_ context.Context, login string) (string, error) {
+	if d.err != nil {
+		return "", d.err
+	}
+	switch login {
+	case "ana.diaz":
+		return "ana", nil
+	case "bo.smith":
+		return "bo.smith", nil
+	case "dev.person":
+		return "dev", nil
+	}
+	return "", fmt.Errorf("%w: %s", iam.ErrNoHolder, login)
+}
+
+// SOMEBODY ELSE'S LOGIN IS READ UNDER THEIR HOLDER'S RECORD, and decided on it.
+//
+// A question naming another person's login read the LITERAL login: an
+// administrator asking for `ana.diaz`, whom the directory binds to the seat
+// `ana`, read an empty inbox under the login while every notice of hers is
+// kept under `ana` — and a lead asking by login was refused as leading nobody,
+// because the lead relation is a fact about a seat. The name resolves through
+// the one owner function the tools write through, and is decided on what it
+// resolved to.
+func TestSomebodyElsesLoginIsReadUnderTheirHoldersRecord(t *testing.T) {
+	t.Parallel()
+	admin := iam.Principal{ID: uuid.New(), Kind: iam.KindMachine, Login: "token:ops",
+		Stage:  iam.StageActive,
+		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}}
+	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+	for _, c := range []struct {
+		name   string
+		caller iam.Principal
+		asked  string
+		want   string
+	}{
+		{"an admin asking for a bound person by login", admin, "ana.diaz", "ana"},
+		{"an admin asking for an unbound person by login", admin, "bo.smith", "bo.smith"},
+		{"a lead asking for their report by login", lead, "dev.person", "dev"},
+	} {
+		for _, question := range []string{"work_my_work", "work_inbox", "work_person"} {
+			t.Run(c.name+"/"+question, func(t *testing.T) {
+				t.Parallel()
+				work := &stubWork{}
+				s := viewerSources(t, work)
+				s.Holders = loginDirectory{}
+				s.Chart = leadsChart{lead: "lead", report: "dev"}
+				r := queries.NewRegistry()
+				queries.Register(r, s)
+				if _, err := r.Answer(iam.WithPrincipal(t.Context(), c.caller),
+					question, map[string]any{"handle": c.asked}); err != nil {
+					t.Fatalf("%s for %q: %v", question, c.asked, err)
+				}
+				read := map[string]string{
+					"work_my_work": work.myWorkQuery.Handle,
+					"work_inbox":   work.inboxQuery.Handle,
+					"work_person":  work.personQuery.Handle,
+				}[question]
+				if read != c.want {
+					t.Errorf("%s for %q read %q's record, want %q", question,
+						c.asked, read, c.want)
+				}
+			})
+		}
+	}
+}
+
+// A LOGIN THAT NAMES NOBODY IS NOT A ROSTER, and a directory that cannot say
+// is 503 rather than "nobody".
+//
+// "Not found" before "you may not" would tell a caller with no authority over
+// anybody which logins exist, so a login nobody holds is decided on the name
+// as typed first — which nobody leads — and only the admin grant learns that
+// it names no record.
+func TestALoginThatNamesNobodyIsNotARosterForAQuestion(t *testing.T) {
+	t.Parallel()
+	admin := iam.Principal{ID: uuid.New(), Kind: iam.KindMachine, Login: "token:ops",
+		Stage:  iam.StageActive,
+		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}}
+	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+	for _, c := range []struct {
+		name   string
+		caller iam.Principal
+		dir    loginDirectory
+		want   error
+	}{
+		{"an admin", admin, loginDirectory{}, queries.ErrNotFound},
+		{"a caller with no authority over anybody", lead, loginDirectory{},
+			queries.ErrUnauthorized},
+		{"a directory this node cannot read", admin,
+			loginDirectory{err: errors.New("the identity applier is behind")},
+			queries.ErrUnavailable},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			work := &stubWork{}
+			s := viewerSources(t, work)
+			s.Holders = c.dir
+			r := queries.NewRegistry()
+			queries.Register(r, s)
+			_, err := r.Answer(iam.WithPrincipal(t.Context(), c.caller), "work_inbox",
+				map[string]any{"handle": "ghost.person"})
+			if !errors.Is(err, c.want) {
+				t.Fatalf("work_inbox for a login nobody holds = %v, want %v", err, c.want)
+			}
+			if c.want == queries.ErrUnauthorized && errors.Is(err, queries.ErrNotFound) {
+				t.Error("a refused caller was told the login names nobody")
+			}
+			if work.inboxQuery.Handle != "" {
+				t.Errorf("the inbox was read under %q", work.inboxQuery.Handle)
 			}
 		})
 	}

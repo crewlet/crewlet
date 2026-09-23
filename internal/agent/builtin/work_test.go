@@ -184,8 +184,10 @@ func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracke
 	return tracker.CatalogueAnswer{}, nil
 }
 
-func (f *fakeTracker) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
-	return tracker.PersonState{}, nil
+// Person answers an empty record under the handle it was ASKED for, so a case
+// can assert whose record a name resolved to rather than only that it read one.
+func (f *fakeTracker) Person(_ context.Context, q tracker.PersonQuery, _ time.Time) (tracker.PersonState, error) {
+	return tracker.PersonState{Handle: q.Handle}, nil
 }
 
 // Thread answers what the fake was TOLD to answer, and records the query.

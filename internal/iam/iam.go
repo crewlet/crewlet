@@ -12,7 +12,12 @@
 // holds VALUES ONLY: named string types, one struct, pure functions over them
 // and one context key. Nothing here opens a file, dials anything or hashes
 // anything, and leaf_test.go walks the imports and fails the build on the day somebody
-// reaches for a store handle to "just look the principal up here".
+// reaches for a store handle to "just look the principal up here". The one
+// function that needs a read it cannot make — [OwnerOf], whose record
+// somebody else's login names — is HANDED it, as a seam ([Holders]) the engine
+// implements over the identity directory; the rule stays here because the
+// tools, the questions and the routes all have to answer it the same way, and
+// this is the one package all three already import.
 //
 // # Three namespaces that can never collide
 //
@@ -46,6 +51,17 @@
 // A gate asks [Principal.Can]; a route or a query declares an [Access]; a
 // store writes what [ActorFor] returns. What a request actually presented, and
 // whether the answer could be reached at all, is [From]'s three-valued job.
+//
+// # Whose record a name is, and why it is one function
+//
+// A person's inbox, pins, priorities and personal views are kept under ONE
+// name — [RecordOwner]'s, the name their writes are attributed to — and every
+// surface that reads or writes somebody's record resolves the name it was
+// given through [OwnerOf]: the caller's own names are their own record,
+// somebody else's LOGIN is their holder's record (a bound person's seat), and
+// anything else is the chart's. A login is never a seat — [NamesLogin] — so it
+// is never matched against the chart's roster, where `jane.doe` resembles the
+// seat `jane` closely enough to land on it.
 package iam
 
 import (

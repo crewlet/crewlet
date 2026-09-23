@@ -311,6 +311,20 @@ func TestSomebodyElsesInboxIsTheAdministratorsAlone(t *testing.T) {
 			http.StatusOK, false, "ana"},
 		{"a colleague's", colleague("ana"), "bo", http.StatusForbidden, false, ""},
 		{"an administrator on somebody's", admin("ana"), "bo", http.StatusOK, false, "bo"},
+		// A LOGIN IS ITS HOLDER'S RECORD: `bo.person` holds the seat
+		// `bo`, and a write decided and made under the login landed where
+		// no screen of bo's reads it.
+		{"an administrator naming a bound person's login", admin("ana"),
+			"bo.person", http.StatusOK, false, "bo"},
+		{"an administrator naming an unbound person's login", admin("ana"),
+			"jane.doe", http.StatusOK, false, "jane.doe"},
+		// AND ONE NOBODY HOLDS IS NOT A ROSTER: refused on authority to a
+		// caller who may not write it anyway, and "not found" only to one
+		// who may.
+		{"a colleague naming a login nobody holds", colleague("ana"),
+			"ghost.person", http.StatusForbidden, false, ""},
+		{"an administrator naming a login nobody holds", admin("ana"),
+			"ghost.person", http.StatusNotFound, false, ""},
 	} {
 		for _, route := range []string{"inbox", "pins"} {
 			t.Run(c.name+"/"+route, func(t *testing.T) {
@@ -336,6 +350,62 @@ func TestSomebodyElsesInboxIsTheAdministratorsAlone(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A LOGIN IS NEVER A SEAT, on the one person route that resolves words.
+//
+// `PUT /work/people/jane.doe/priorities` by an administrator was admitted on
+// the login and then sent through the colleague resolver, which matched the
+// seat whose display name the login resembled and replaced THAT seat's queue.
+// A login is the identity directory's to resolve, so the queue set is the
+// login's holder's — and a directory this node cannot read is a 503 rather
+// than a guess about whose queue to replace.
+func TestAPriorityRouteNeverTurnsALoginIntoASeat(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		who     iam.Principal
+		dir     directory
+		handle  string
+		want    int
+		written string
+	}{
+		{"an unbound person's login", admin("ana"), directory{}, "jane.doe",
+			http.StatusOK, "jane.doe"},
+		{"a bound person's login", admin("ana"), directory{}, "bo.person",
+			http.StatusOK, "bo"},
+		// THE LEAD RELATION IS A FACT ABOUT A SEAT: `cto` leads `bo`, and
+		// decided at the route on the login, the lead was refused as
+		// leading nobody called `bo.person`.
+		{"a lead naming their report by login", colleague("cto"), directory{},
+			"bo.person", http.StatusOK, "bo"},
+		{"a colleague naming somebody they do not lead", colleague("ana"),
+			directory{}, "bo.person", http.StatusForbidden, ""},
+		{"a directory this node cannot read", admin("ana"),
+			directory{err: errors.New("the identity applier is behind")},
+			"bo.person", http.StatusServiceUnavailable, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRigWith(t, chart{}, c.dir)
+			got := r.do(as(c.who), http.MethodPut,
+				"/work/people/"+c.handle+"/priorities",
+				map[string]any{"items": []any{"ENG-1"}})
+			if got.status != c.want {
+				t.Fatalf("answered %d, want %d: %v", got.status, c.want, got.body)
+			}
+			if c.written == "" {
+				if len(r.writes.prios) != 0 {
+					t.Errorf("a queue was written: %v", r.writes.prios)
+				}
+				return
+			}
+			if len(r.writes.prios) != 1 || r.writes.prios[0] != c.written {
+				t.Errorf("replaced the queue of %v, want %q's", r.writes.prios,
+					c.written)
+			}
+		})
 	}
 }
 

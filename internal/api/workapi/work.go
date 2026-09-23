@@ -24,12 +24,25 @@ func (s *Service) workRoutes(mount mounter) {
 				Container: tracker.ProjectKey(r.PathValue("key"))}
 		}}
 	}
-	// SO IS A PERSON, and the record is keyed on the SEAT handle — which is
-	// what the own-record classes compare the caller's seat against.
+	// A PERSON IS NAMED BY THE PATH AND IS NOT THE PATH. `{handle}` is a
+	// name — a seat's handle, a person's or a machine's login — and the
+	// record it addresses is only known once the identity directory has
+	// said whose a login is: a bound person's login names their SEAT's
+	// record. Decided here on the spelling, a lead naming their report by
+	// login was refused as leading nobody, and an administrator was
+	// admitted to a record under the login that nothing of that person's
+	// reads — which is where the write then landed.
+	//
+	// So the route admits on the weakest honest precondition — the verb
+	// on the CALLER's own record, which every principal that has one and
+	// may act at all is admitted to — and the verb is decided once the
+	// name has resolved, by the same function a tool and the query surface
+	// resolve it through (builtin's person verbs, over [iam.OwnerOf]).
 	person := func(a authz.Action) authz.Policy {
 		return authz.Policy{Action: a, Object: func(r *http.Request) authz.Object {
+			principal, _ := iam.From(r.Context())
 			return authz.Object{Kind: authz.KindPerson,
-				Owner: strings.TrimSpace(r.PathValue("handle"))}
+				Owner: iam.RecordOwner(principal)}
 		}}
 	}
 
@@ -188,54 +201,38 @@ func (s *Service) putPriorities(w http.ResponseWriter, r *http.Request) {
 
 // putInbox and putPins write one person's inbox or pins.
 //
-// # Yours through the tool, somebody else's through the same writer
+// # Through the tools' own parsing and writer, never widening the tools
 //
 // `mark_inbox` and `set_pins` write the CALLER's record and take no handle,
-// deliberately — see [builtin.MarkInboxFor]. So a request about the caller's
-// own record goes through the tool exactly as their assistant's would, and a
-// request about SOMEBODY ELSE's — which the route has already decided on the
-// record its path names, and which only the owner-or-admin class admits —
-// goes through the same parsing and the same writer with the table's answer
-// as its authority. The tools are not widened: no seat, and no assistant,
-// gains a way to name another person's record.
+// deliberately — see [builtin.MarkInboxFor]. So these routes reach the same
+// parsing and the same writer through [builtin.MarkInboxFor] and
+// [builtin.SetPinsFor], which resolve the path's name to the record it
+// addresses and decide the verb on THAT — the caller's own by either of their
+// names, somebody else's for the owner or the admin grant — and the tracker's
+// own rule sits on top: a SEAT never writes a colleague's record. The tools
+// are not widened: no seat, and no assistant, gains a way to name another
+// person's record.
 func (s *Service) putInbox(w http.ResponseWriter, r *http.Request) {
-	s.personRecord(w, r, tracker.MarkInboxTool, builtin.MarkInboxFor)
+	s.personRecord(w, r, builtin.MarkInboxFor)
 }
 
 func (s *Service) putPins(w http.ResponseWriter, r *http.Request) {
-	s.personRecord(w, r, tracker.SetPinsTool, builtin.SetPinsFor)
+	s.personRecord(w, r, builtin.SetPinsFor)
 }
 
 // personRecord is the one body both person routes share.
-func (s *Service) personRecord(w http.ResponseWriter, r *http.Request, verb string,
-	forOther func(ctx context.Context, deps builtin.WorkDeps, handle string,
-		args map[string]any, authority tracker.PersonAuthority) tools.Result) {
+func (s *Service) personRecord(w http.ResponseWriter, r *http.Request,
+	write func(ctx context.Context, deps builtin.WorkDeps, name string,
+		args map[string]any) tools.Result) {
 
 	args, ok := readArgs(w, r)
 	if !ok {
 		return
 	}
-	handle := strings.TrimSpace(r.PathValue("handle"))
-	principal, _ := iam.From(r.Context())
-	// EITHER OF THE CALLER'S OWN NAMES IS THEIR OWN RECORD, which the tool
-	// writes under the one name it is kept under ([iam.RecordOwner]). A
-	// bound person naming their LOGIN here was sent down the other path and
-	// wrote a record under that login — decided as theirs, and read back by
-	// nothing they look at.
-	if iam.NamesSelf(principal, handle) {
-		s.call(w, r, verb, args)
-		return
-	}
 	key := operationKey(r)
 	work, _ := s.deps(key)
-	// THE TABLE'S ANSWER, which the route took on this record before the
-	// handler ran — the owner, or the admin path — and the tracker's own
-	// rule on top of it: a SEAT never writes a colleague's record, whatever
-	// the table said, so an agent's authority is marked as such.
-	authority := tracker.PersonAuthority{
-		Authorized: true, Agent: principal.Kind == iam.KindSeat,
-	}
-	answerTool(w, key, forOther(r.Context(), work, handle, args, authority))
+	answerTool(w, key, write(r.Context(), work,
+		strings.TrimSpace(r.PathValue("handle")), args))
 }
 
 // ---- the gestures no tool makes ---------------------------------------- //

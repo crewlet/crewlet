@@ -2,6 +2,9 @@ package builtin_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -195,38 +198,278 @@ func TestAPersonalViewIsTheCallersOwnRecord(t *testing.T) {
 	}
 }
 
-// SOMEBODY ELSE'S RECORD IS WRITTEN EXACTLY AS IT WAS DECIDED.
-//
-// [builtin.MarkInboxFor] and [builtin.SetPinsFor] are handed a record the HTTP
-// route has ALREADY decided on — the owner, or the admin path — and both sent
-// it through the fuzzy colleague resolver afterwards, so an administrator
-// unsticking the unbound `jane.doe`'s queue wrote into the seat `jane`'s: a
-// write into a record nobody decided on. What they refuse instead is a name no
-// record could be kept under.
-func TestSomebodyElsesRecordIsWrittenExactlyAsDecided(t *testing.T) {
-	t.Parallel()
-	company := ownRecordCompany()
-	deps := builtin.WorkDeps{
-		Seats: func() []colleague.Seat { return builtin.Corpus(company, nil) },
-		Actor: builtin.PrincipalActor,
+// directory is the identity directory as a person verb reads it, over
+// [ownRecordCompany]: `jane.doe` holds no seat — the finding's own case, a
+// login that RESEMBLES the seat `jane` ("Jane Doe") — `j.bound` holds the seat
+// `jane`, `dev.person` holds `dev`, and `leaver.person` is bound to a seat the
+// chart has since removed. err makes every lookup unknown.
+type directory struct {
+	err   error
+	asked []string
+}
+
+func (d *directory) HolderRecord(_ context.Context, login string) (string, error) {
+	d.asked = append(d.asked, login)
+	if d.err != nil {
+		return "", d.err
 	}
+	switch login {
+	case "jane.doe":
+		return "jane.doe", nil
+	case "j.bound":
+		return "jane", nil
+	case "dev.person":
+		return "dev", nil
+	case "leaver.person":
+		return "", fmt.Errorf("%w: %s", iam.ErrHolderUnseated, login)
+	}
+	return "", fmt.Errorf("%w: %s", iam.ErrNoHolder, login)
+}
+
+// personVerb is one of the five verbs that name whose record they act on, as
+// the surface a caller reaches it through: the three tools, and the two HTTP
+// writes that reach the tools' writers.
+type personVerb struct {
+	name  string
+	write bool
+	// ownerOnly marks the two the table gives the record's owner alone —
+	// marking somebody's inbox and pinning their views are gestures nobody
+	// asked a lead to make.
+	ownerOnly bool
+	call      func(ctx context.Context, deps builtin.WorkDeps, name string) tools.Result
+}
+
+// personVerbs are the five.
+func personVerbs() []personVerb {
+	tool := func(verb string, args func(string) map[string]any) func(
+		context.Context, builtin.WorkDeps, string) tools.Result {
+
+		return func(ctx context.Context, deps builtin.WorkDeps, name string) tools.Result {
+			for _, t := range builtin.OperatorTools(builtin.OperatorDeps{
+				Work: deps, Authorize: deps.Authorize,
+			}) {
+				if t.Name() == verb {
+					got, err := t.Call(ctx, args(name))
+					if err != nil {
+						panic(err)
+					}
+					return got
+				}
+			}
+			panic(verb + " is not served")
+		}
+	}
+	return []personVerb{
+		{name: tracker.GetPersonTool, call: tool(tracker.GetPersonTool,
+			func(n string) map[string]any { return map[string]any{"handle": n} })},
+		{name: tracker.WorkInboxTool, call: tool(tracker.WorkInboxTool,
+			func(n string) map[string]any { return map[string]any{"handle": n} })},
+		{name: tracker.SetPrioritiesTool, write: true, call: tool(tracker.SetPrioritiesTool,
+			func(n string) map[string]any {
+				return map[string]any{"handle": n, "items": []any{"ENG-1"}}
+			})},
+		{name: "MarkInboxFor", write: true, ownerOnly: true,
+			call: func(ctx context.Context, deps builtin.WorkDeps, n string) tools.Result {
+				return builtin.MarkInboxFor(ctx, deps, n, map[string]any{})
+			}},
+		{name: "SetPinsFor", write: true, ownerOnly: true,
+			call: func(ctx context.Context, deps builtin.WorkDeps, n string) tools.Result {
+				return builtin.SetPinsFor(ctx, deps, n, map[string]any{})
+			}},
+	}
+}
+
+// personDeps is the operator surface's deps over [ownRecordCompany], the
+// directory above and a person spy, decided by the real table over a chart
+// where `lead` leads `dev`.
+func personDeps(person *personSpy, dir *directory) builtin.WorkDeps {
+	trk := newFakeTracker()
+	company := ownRecordCompany()
+	return builtin.WorkDeps{
+		Reader: trk, Writer: trk.as, Inbox: trk,
+		PersonWriter: func(builtin.Actor) builtin.PersonWriter { return person },
+		Seats:        func() []colleague.Seat { return builtin.Corpus(company, nil) },
+		Actor:        builtin.PrincipalActor,
+		Holders:      dir,
+		Authorize:    builtin.Decide(handleChart{}),
+	}
+}
+
+// whose is the record one call reached: the writer's handle for a write, and
+// the handle the read answered under for a read.
+func whose(t *testing.T, verb personVerb, person *personSpy, got tools.Result) string {
+	t.Helper()
+	if got.Failed {
+		return ""
+	}
+	if verb.write {
+		return person.handle
+	}
+	var answer map[string]any
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("%s answered %q: %v", verb.name, got.Output, err)
+	}
+	handle, _ := answer["handle"].(string)
+	return handle
+}
+
+// SOMEBODY ELSE'S LOGIN NAMES THEIR HOLDER'S RECORD, and a login is never a
+// seat — on every verb that names whose record it acts on.
+//
+// Two defects, one cause: the name was never resolved to a record. An
+// administrator naming the unbound `jane.doe` through `set_priorities`, or
+// `PUT /work/people/jane.doe/priorities`, had the login sent through the fuzzy
+// colleague resolver, which set the priorities of the seat `jane` ("Jane
+// Doe"); and every other verb read or wrote a login LITERALLY, so a person the
+// directory binds to a seat — `j.bound`, who holds `jane` — was read an empty
+// inbox and written marks under the login, where nothing of hers reads them.
+// And a login that is somebody's resolves before the table is asked, so a lead
+// naming their report by login is admitted as the lead they are.
+func TestSomebodyElsesLoginNamesTheirHoldersRecord(t *testing.T) {
+	t.Parallel()
+	admin := iam.Principal{Kind: iam.KindMachine, Login: "token:admin"}
+	lead := iam.Principal{Kind: iam.KindPerson, Login: "lead.person", Seat: "lead"}
+	for _, verb := range personVerbs() {
+		for _, c := range []struct {
+			name   string
+			caller context.Context
+			typed  string
+			want   string // "" — refused
+			// asLead marks a case admitted as the LEAD, which the
+			// owner-only verbs refuse whatever the name resolves to.
+			asLead bool
+		}{
+			{"an admin naming an unbound login", as(admin, iam.GrantFleetOperate,
+				iam.GrantWorkWrite, iam.GrantStateRead), "jane.doe", "jane.doe", false},
+			{"an admin naming a bound person's login", as(admin, iam.GrantFleetOperate,
+				iam.GrantWorkWrite, iam.GrantStateRead), "j.bound", "jane", false},
+			{"a lead naming their report's login", as(lead, iam.GrantWorkWrite,
+				iam.GrantStateRead), "dev.person", "dev", true},
+			{"a lead naming somebody they do not lead", as(lead, iam.GrantWorkWrite,
+				iam.GrantStateRead), "j.bound", "", false},
+		} {
+			t.Run(verb.name+"/"+c.name, func(t *testing.T) {
+				t.Parallel()
+				person := &personSpy{}
+				got := verb.call(c.caller, personDeps(person, &directory{}), c.typed)
+				want := c.want
+				if verb.ownerOnly && c.asLead {
+					want = ""
+				}
+				if reached := whose(t, verb, person, got); reached != want {
+					t.Errorf("%s naming %q reached %q's record, want %q: %s",
+						verb.name, c.typed, reached, want, got.Output)
+				}
+				if want == "" && !errors.Is(got.Cause, builtin.ErrRefused) {
+					t.Errorf("the refusal carries %v, not the authority's own "+
+						"answer: %s", got.Cause, got.Output)
+				}
+			})
+		}
+	}
+}
+
+// A BOUND PERSON NAMING THEMSELVES BY LOGIN REACHES THEIR OWN RECORD, and the
+// directory is never asked about the caller's own names.
+func TestYourOwnLoginIsYourOwnRecordOnEveryVerb(t *testing.T) {
+	t.Parallel()
+	me := iam.Principal{Kind: iam.KindPerson, Login: "j.bound", Seat: "jane"}
+	for _, verb := range personVerbs() {
+		for _, typed := range []string{"j.bound", "jane"} {
+			t.Run(verb.name+"/"+typed, func(t *testing.T) {
+				t.Parallel()
+				person, dir := &personSpy{}, &directory{}
+				got := verb.call(as(me, iam.GrantWorkWrite, iam.GrantStateRead),
+					personDeps(person, dir), typed)
+				if reached := whose(t, verb, person, got); reached != "jane" {
+					t.Errorf("%s naming %q reached %q, want the caller's own "+
+						"record `jane`: %s", verb.name, typed, reached, got.Output)
+				}
+				if len(dir.asked) != 0 {
+					t.Errorf("%s asked the directory about the caller's own "+
+						"name: %v", verb.name, dir.asked)
+				}
+			})
+		}
+	}
+}
+
+// A LOGIN THAT NAMES NOBODY IS NOT A ROSTER, and a directory that cannot say
+// is not "nobody".
+//
+// A login nobody holds is decided on the name as typed FIRST — which nobody
+// leads, so only the admin grant passes — and only then refused as naming no
+// record: "nobody holds that" before "you may not" would tell a caller with no
+// authority over anybody which logins exist. A directory this node cannot read
+// is the undecidable arm, never a guess in either direction.
+func TestALoginThatNamesNobodyIsNotARoster(t *testing.T) {
+	t.Parallel()
+	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
+		iam.GrantFleetOperate, iam.GrantWorkWrite, iam.GrantStateRead)
+	colleague := as(iam.Principal{Kind: iam.KindPerson, Login: "lead.person",
+		Seat: "lead"}, iam.GrantWorkWrite, iam.GrantStateRead)
+	for _, verb := range personVerbs() {
+		for _, c := range []struct {
+			name   string
+			caller context.Context
+			typed  string
+			dir    *directory
+			cause  error
+		}{
+			{"an admin naming a login nobody holds", admin, "ghost.person",
+				&directory{}, iam.ErrNoHolder},
+			{"an admin naming a holder whose seat is gone", admin, "leaver.person",
+				&directory{}, iam.ErrHolderUnseated},
+			{"a colleague naming a login nobody holds", colleague, "ghost.person",
+				&directory{}, builtin.ErrRefused},
+			{"a colleague naming a holder whose seat is gone", colleague,
+				"leaver.person", &directory{}, builtin.ErrRefused},
+			{"a directory this node cannot read", admin, "j.bound",
+				&directory{err: errors.New("the identity applier is behind")},
+				builtin.ErrUndecidable},
+		} {
+			t.Run(verb.name+"/"+c.name, func(t *testing.T) {
+				t.Parallel()
+				person := &personSpy{}
+				got := verb.call(c.caller, personDeps(person, c.dir), c.typed)
+				if !got.Failed || person.handle != "" {
+					t.Fatalf("%s naming %q reached a record: %s", verb.name,
+						c.typed, got.Output)
+				}
+				if !errors.Is(got.Cause, c.cause) {
+					t.Errorf("%s naming %q failed with %v, want %v: %s",
+						verb.name, c.typed, got.Cause, c.cause, got.Output)
+				}
+				if errors.Is(got.Cause, builtin.ErrRefused) &&
+					(errors.Is(got.Cause, iam.ErrNoHolder) ||
+						errors.Is(got.Cause, iam.ErrHolderUnseated)) {
+
+					t.Errorf("a refused caller was told whether %q is held", c.typed)
+				}
+			})
+		}
+	}
+}
+
+// SOMEBODY ELSE'S RECORD NAMED BY A SEAT IS WRITTEN EXACTLY, never looked up.
+//
+// [builtin.MarkInboxFor] and [builtin.SetPinsFor] are an HTTP route's writes,
+// and the route's path is a record's name — so a name that is neither the
+// caller's nor a login must be a seat the chart has EXACTLY. The fuzzy
+// colleague resolver turned it into whichever seat it resembled; what they
+// refuse instead is a name no record could be kept under.
+func TestSomebodyElsesSeatIsWrittenExactly(t *testing.T) {
+	t.Parallel()
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
 		iam.GrantFleetOperate)
-	authority := tracker.PersonAuthority{Authorized: true}
-	for _, write := range []struct {
-		name string
-		fn   func(context.Context, builtin.WorkDeps, string, map[string]any,
-			tracker.PersonAuthority) tools.Result
-	}{
-		{"an inbox mark", builtin.MarkInboxFor},
-		{"a pin set", builtin.SetPinsFor},
-	} {
+	for _, verb := range personVerbs() {
+		if !verb.ownerOnly {
+			continue
+		}
 		for _, c := range []struct {
 			handle  string
 			written string
 		}{
-			{"jane.doe", "jane.doe"},
-			{"token:ci", "token:ci"},
 			{"dev", "dev"},
 			// A NAME NO RECORD IS KEPT UNDER is refused rather than
 			// resolved: prose, and a seat-shaped name the chart lacks.
@@ -234,18 +477,16 @@ func TestSomebodyElsesRecordIsWrittenExactlyAsDecided(t *testing.T) {
 			{"nobody", ""},
 		} {
 			person := &personSpy{}
-			deps.PersonWriter = func(builtin.Actor) builtin.PersonWriter { return person }
-			got := write.fn(admin, deps, c.handle, map[string]any{}, authority)
+			got := verb.call(admin, personDeps(person, &directory{}), c.handle)
 			switch {
 			case c.written == "" && (!got.Failed || person.handle != ""):
-				t.Errorf("%s decided on %q wrote %q's record: %s", write.name,
+				t.Errorf("%s naming %q wrote %q's record: %s", verb.name,
 					c.handle, person.handle, got.Output)
 			case c.written != "" && got.Failed:
-				t.Errorf("%s decided on %q was refused: %s", write.name,
-					c.handle, got.Output)
+				t.Errorf("%s naming %q was refused: %s", verb.name, c.handle, got.Output)
 			case person.handle != c.written:
-				t.Errorf("%s decided on %q wrote %q's record, want exactly "+
-					"the one decided on", write.name, c.handle, person.handle)
+				t.Errorf("%s naming %q wrote %q's record, want exactly the one "+
+					"named", verb.name, c.handle, person.handle)
 			}
 		}
 	}

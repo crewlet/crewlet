@@ -1,6 +1,8 @@
 package iam
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -201,6 +203,140 @@ func TestEitherOfAPersonsNamesIsThem(t *testing.T) {
 	} {
 		if got := NamesSelf(c.p, c.name); got != c.self {
 			t.Errorf("NamesSelf(%+v, %q) = %v, want %v", c.p, c.name, got, c.self)
+		}
+	}
+}
+
+// holdersSpy is a directory that answers from a map and counts what it was
+// asked, so a case can show which names never reached it.
+type holdersSpy struct {
+	records map[string]string
+	unseat  map[string]bool
+	err     error
+	asked   []string
+}
+
+func (h *holdersSpy) HolderRecord(_ context.Context, login string) (string, error) {
+	h.asked = append(h.asked, login)
+	switch {
+	case h.err != nil:
+		return "", h.err
+	case h.unseat[login]:
+		return "", ErrHolderUnseated
+	}
+	owner, held := h.records[login]
+	if !held {
+		return "", ErrNoHolder
+	}
+	return owner, nil
+}
+
+// A NAME ADDRESSES ONE RECORD, WHOEVER NAMES IT, AND A LOGIN IS NEVER A SEAT.
+//
+// [RecordOwner] made the caller's own record one name for the read and the
+// write; somebody else's was read and written under whatever was typed. An
+// administrator's `jane.doe`, for a person the directory binds to the seat
+// `jane`, read an empty inbox and wrote pins under the login that no screen of
+// hers reads — and `set_priorities` sent it through the colleague resolver,
+// which set the priorities of whichever seat it resembled. A login is looked
+// up, and a name that is not one is handed back for the chart, UNSETTLED.
+func TestANameAddressesTheRecordItsHolderKeeps(t *testing.T) {
+	t.Parallel()
+	jane := Principal{Kind: KindPerson, Login: "jane.doe", Seat: "jane"}
+	admin := Principal{Kind: KindMachine, Login: "token:admin"}
+	directory := func() *holdersSpy {
+		return &holdersSpy{
+			records: map[string]string{
+				"jane.doe": "jane", "bo.smith": "bo.smith",
+				"token:ci": "ops", "token:admin": "token:admin",
+			},
+			unseat: map[string]bool{"leaver.person": true},
+		}
+	}
+	for _, c := range []struct {
+		name    string
+		caller  Principal
+		typed   string
+		owner   string
+		settled bool
+		err     error
+		lookup  bool
+	}{
+		{"nothing typed is your own", jane, "", "jane", true, nil, false},
+		{"your own login is your own record", jane, "jane.doe", "jane", true, nil, false},
+		{"your own seat is your own record", jane, "jane", "jane", true, nil, false},
+		{"a bound person's login is their seat's record", admin, "jane.doe",
+			"jane", true, nil, true},
+		{"an unbound person's login is their own", admin, "bo.smith",
+			"bo.smith", true, nil, true},
+		{"a bound token's login is its seat's record", admin, "token:ci",
+			"ops", true, nil, true},
+		{"a login nobody holds names no record", admin, "ghost.person",
+			"", false, ErrNoHolder, true},
+		{"a holder whose seat is gone names none either", admin, "leaver.person",
+			"", false, ErrHolderUnseated, true},
+		{"a seat's handle is the chart's to resolve", admin, "dev",
+			"dev", false, nil, false},
+		{"so are words", admin, "Jane Doe", "Jane Doe", false, nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			holders := directory()
+			owner, settled, err := OwnerOf(context.Background(), c.caller, c.typed, holders)
+			switch {
+			case c.err != nil && !errors.Is(err, c.err):
+				t.Fatalf("OwnerOf(%q) = %v, want %v", c.typed, err, c.err)
+			case c.err == nil && err != nil:
+				t.Fatalf("OwnerOf(%q) = %v", c.typed, err)
+			}
+			if owner != c.owner || settled != c.settled {
+				t.Errorf("OwnerOf(%q) = %q settled=%v, want %q settled=%v",
+					c.typed, owner, settled, c.owner, c.settled)
+			}
+			if asked := len(holders.asked) > 0; asked != c.lookup {
+				t.Errorf("OwnerOf(%q) asked the directory = %v, want %v — "+
+					"your own names and a seat's handle are not its to answer",
+					c.typed, asked, c.lookup)
+			}
+		})
+	}
+}
+
+// A DIRECTORY THAT CANNOT SAY IS NEVER READ AS NOBODY, and a surface wired
+// without one reads no login literally.
+//
+// Both are the UNKNOWN arm: "nobody holds it" answered off a directory that
+// could not be read is a guess about whose record to write, and a missing
+// directory answering the login itself is the defect this function replaced.
+func TestADirectoryThatCannotSayIsNeverReadAsNobody(t *testing.T) {
+	t.Parallel()
+	admin := Principal{Kind: KindMachine, Login: "token:admin"}
+	for name, holders := range map[string]Holders{
+		"a directory that could not be read": &holdersSpy{err: errors.New("store blip")},
+		"no directory at all":                nil,
+	} {
+		owner, settled, err := OwnerOf(context.Background(), admin, "jane.doe", holders)
+		if err == nil || errors.Is(err, ErrNoHolder) || errors.Is(err, ErrHolderUnseated) {
+			t.Errorf("%s: OwnerOf = %q, %v, %v — want the unknown arm", name,
+				owner, settled, err)
+		}
+		if owner != "" || settled {
+			t.Errorf("%s: OwnerOf answered %q settled=%v beside an error", name,
+				owner, settled)
+		}
+	}
+}
+
+// A LOGIN'S SHAPE IS NEVER A SEAT'S, in either grammar.
+func TestALoginShapedNameIsNeverASeat(t *testing.T) {
+	t.Parallel()
+	for name, login := range map[string]bool{
+		"jane.doe": true, "token:ops": true, "ci:release": true,
+		"jane": false, "Jane Doe": false, "jane@example.com": false, "": false,
+		"Jane.Doe": false,
+	} {
+		if got := NamesLogin(name); got != login {
+			t.Errorf("NamesLogin(%q) = %v, want %v", name, got, login)
 		}
 	}
 }

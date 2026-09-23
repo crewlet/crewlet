@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -220,6 +221,24 @@ type WorkDeps struct {
 	// would validate against an org that has since moved — refusing a
 	// colleague who joined this morning and admitting one who left.
 	Seats func() []colleague.Seat
+
+	// Holders says whose record somebody else's LOGIN names — the identity
+	// directory's half of [iam.OwnerOf], which every person verb resolves
+	// its name through before it decides or reads or writes anything.
+	//
+	// A login is never a seat: sent through [WorkDeps.Seats] it landed on
+	// whichever seat it resembled (`jane.doe` on the seat `jane`, "Jane
+	// Doe"), and read literally it named a record under the login that a
+	// person the directory binds to a seat never reads. So a login goes
+	// here and nowhere else.
+	//
+	// NIL CANNOT SAY, and a login somebody else holds is then refused as
+	// undecidable rather than read literally — the opposite of Seats' nil,
+	// deliberately: an unchecked handle is stored where its holder will
+	// find it, and an unresolved login is stored where they never will.
+	// Every surface that serves a person verb — the operator's assistant
+	// and the HTTP write surface — wires the engine.
+	Holders iam.Holders
 
 	// UnitOfSeat is the team a seat belongs to, read PER CALL against the
 	// epoch current when the tool runs — for the reason the default

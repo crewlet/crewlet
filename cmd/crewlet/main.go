@@ -1761,7 +1761,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// writes the same record. Left out, every one of those
 			// decisions was UNKNOWN for ever: a lead reading a report's
 			// inbox was answered 503 on every retry, on every node.
-			Chart:    engine.ChartAuthorityOf(e),
+			Chart: engine.ChartAuthorityOf(e),
+			// AND WHOSE RECORD SOMEBODY ELSE'S LOGIN NAMES, through the
+			// same directory and chart view a request of theirs resolves
+			// through — so a lead reading a report's inbox by login reads
+			// the record the report's own screen reads, and not an empty
+			// one under the login.
+			Holders:  e,
 			Coord:    e.Backends().Coord,
 			Plane:    e.Backends().Fleet,
 			Runs:     sqlledger.New(e.Backends().Store.SQL()),
@@ -2802,6 +2808,11 @@ func nativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 				return writer.As(actor.Handle, actor.Kind,
 					tracker.Provenance{OperatorID: actor.OperatorID})
 			},
+			// WHOSE RECORD A LOGIN NAMES, which every person verb
+			// resolves its name through: a login is never a seat, and
+			// read literally a bound person's named a record nothing of
+			// theirs is kept under.
+			Holders: e,
 			// THE ROSTER, so an operator's assistant is refused a
 			// handle nobody has rather than silently filing work for
 			// one — the same check every seat's tools make.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,12 +24,14 @@ import (
 
 // ---- the chart ---------------------------------------------------------- //
 
-// chart is who leads what: `cto` leads the ENG project and the ENG space,
-// and nobody leads anything else. err makes every relation unanswerable,
-// which is a node behind the chart log.
+// chart is who leads what: `cto` leads the ENG project, the ENG space and the
+// person in the seat `bo`, and nobody leads anything else. err makes every
+// relation unanswerable, which is a node behind the chart log.
 type chart struct{ err error }
 
-func (c chart) Leads(context.Context, string, string) (bool, error) { return false, c.err }
+func (c chart) Leads(_ context.Context, actor, subject string) (bool, error) {
+	return actor == "cto" && subject == "bo", c.err
+}
 
 func (c chart) LeadsProject(_ context.Context, actor, project string) (bool, error) {
 	return actor == "cto" && project == "ENG", c.err
@@ -134,6 +137,7 @@ type writes struct {
 	edited  []string
 	inbox   []string
 	pins    []string
+	prios   []string
 	views   []tracker.View
 	authz   []tracker.PersonAuthority
 
@@ -249,12 +253,34 @@ func (b *bound) WritePins(_ context.Context, opID, handle string, _ []string,
 	return b.w.answer(opID)
 }
 
-func (b *bound) WritePriorities(_ context.Context, opID, _ string, _ []string,
-	_ tracker.PersonAuthority) (tracker.WriteResult, error) {
+func (b *bound) WritePriorities(_ context.Context, opID, handle string, _ []string,
+	authority tracker.PersonAuthority) (tracker.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
+	b.w.prios = append(b.w.prios, handle)
+	b.w.authz = append(b.w.authz, authority)
 	return b.w.answer(opID)
+}
+
+// ---- the identity directory -------------------------------------------- //
+
+// directory is whose record a login names: `bo.person` holds the seat `bo`,
+// `jane.doe` holds none, and nobody else holds anything. err makes every
+// lookup one this node cannot answer.
+type directory struct{ err error }
+
+func (d directory) HolderRecord(_ context.Context, login string) (string, error) {
+	if d.err != nil {
+		return "", d.err
+	}
+	switch login {
+	case "bo.person":
+		return "bo", nil
+	case "jane.doe":
+		return "jane.doe", nil
+	}
+	return "", fmt.Errorf("%w: %s", iam.ErrNoHolder, login)
 }
 
 func (b *bound) ViewPrior(context.Context, string) (tracker.ViewPrior, error) {
@@ -367,12 +393,19 @@ type rig struct {
 	reader *reader
 	writes *writes
 	kb     *kb
+	dir    directory
 }
 
 func newRig(t *testing.T, c authz.Chart) *rig {
 	t.Helper()
+	return newRigWith(t, c, directory{})
+}
+
+// newRigWith is [newRig] over an identity directory a case states.
+func newRigWith(t *testing.T, c authz.Chart, dir directory) *rig {
+	t.Helper()
 	r := &rig{t: t, mux: http.NewServeMux(), reader: newReader(),
-		writes: &writes{}, kb: newKB()}
+		writes: &writes{}, kb: newKB(), dir: dir}
 	svc, err := workapi.New(r.options(c))
 	if err != nil || svc == nil {
 		t.Fatalf("New: %v (%v)", err, svc)
@@ -398,6 +431,7 @@ func (r *rig) options(c authz.Chart) workapi.Options {
 			ViewWriter: func(a builtin.Actor) builtin.ViewWriter {
 				return r.writes.as(a)
 			},
+			Holders: r.dir,
 		},
 		Pages: builtin.PageDeps{Reader: r.kb, Writer: r.kb},
 		Tracker: func(a builtin.Actor) workapi.TrackerWriter {

@@ -185,7 +185,9 @@ What the binding buys:
   that routed each one, and what is waiting on a decision; `#/me` is your own
   work. Both ask the engine who is looking, and your own record is kept under
   the seat the directory binds you to — which is where an assignment, a
-  mention and a lead's priority list are addressed.
+  mention and a lead's priority list are addressed. Your login names that
+  same record, to you and to anybody else: a lead reading your inbox by your
+  login reads your seat's.
 - **Your seat's lead relations are yours.** Every authority rule that asks "do
   you lead this" is asked about the bound seat — so the person holding a unit's
   lead seat may re-route that unit's project's work, declare its fields and set

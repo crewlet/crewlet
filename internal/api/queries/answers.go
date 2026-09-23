@@ -95,6 +95,19 @@ type Sources struct {
 	// decides by the same seam.
 	Chart authz.Chart
 
+	// Holders says whose record somebody else's LOGIN names — the identity
+	// directory's half of [iam.OwnerOf], through which every personal
+	// question resolves the `handle` it was asked about before it decides
+	// or reads anything. See [Sources.recordHandle].
+	//
+	// internal/api REQUIRES it, for Chart's reason: a node serving the API
+	// always runs the identity domain, and a nil here answers "this node
+	// cannot say" to every question naming a login, for the life of the
+	// process. Read literally instead — which is what these questions did
+	// — a bound person's login named an empty record under the login,
+	// while everything of theirs is kept under their seat.
+	Holders iam.Holders
+
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.
 	Coord coord.Backend

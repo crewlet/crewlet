@@ -35,12 +35,13 @@
 // # Authority is decided ONCE, and read identically everywhere
 //
 // Every route is mounted through [authz.Router] with a policy. Where the
-// object is knowable from the PATH — the project in /work/projects/{key}, the
-// person in /work/people/{handle} — the route decides the verb itself. Where
-// it needs a STORED ROW — which project a work item is filed under, which
-// container a page is in, who wrote a comment — the route admits on the
-// weakest honest precondition and the verb is decided once the row is read:
-// by the tool's own ask, or by this package for a verb that has no tool.
+// object is knowable from the PATH — the project in /work/projects/{key} —
+// the route decides the verb itself. Where it needs a STORED ROW — which
+// project a work item is filed under, which container a page is in, who wrote
+// a comment, whose record the name in /work/people/{handle} is (a login is its
+// holder's, which only the identity directory can say) — the route admits on
+// the weakest honest precondition and the verb is decided once the row is
+// read: by the tool's own ask, or by this package for a verb that has no tool.
 //
 // A refusal is WORDED by [builtin.Refusal] from the error [builtin.DecisionError]
 // makes of the decision — the same two functions the tools' own gate uses — so
@@ -604,7 +605,12 @@ func fail(w http.ResponseWriter, cause error, text, key string) {
 		httpjson.FailWith(w, http.StatusInternalServerError,
 			httpjson.CodeInternalError, detail)
 	case errors.Is(cause, tracker.ErrNoTask), errors.Is(cause, tracker.ErrNoComment),
-		errors.Is(cause, tracker.ErrNoProject), errors.Is(cause, pages.ErrNotFound):
+		errors.Is(cause, tracker.ErrNoProject), errors.Is(cause, pages.ErrNotFound),
+		// A LOGIN NOBODY HOLDS, and a holder whose seat the chart no
+		// longer has, name no record — which the caller only learns
+		// once the table admitted them on the name as typed, so this is
+		// never a roster (see builtin's person verbs).
+		errors.Is(cause, iam.ErrNoHolder), errors.Is(cause, iam.ErrHolderUnseated):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, detail)
 	case errors.Is(cause, tracker.ErrStaleVersion), errors.Is(cause, pages.ErrStaleVersion),
 		errors.Is(cause, pages.ErrConflict), errors.Is(cause, pages.ErrTitleTaken),

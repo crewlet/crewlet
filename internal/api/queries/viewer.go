@@ -4,6 +4,7 @@ package queries
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/authz"
@@ -115,17 +116,25 @@ func (s Sources) seatOf(p iam.Principal) *org.Role {
 }
 
 // recordHandle is the handle a question about somebody's PERSONAL RECORD —
-// their inbox, their day, their person record — answers for when the caller
-// named none, and the authority check when they named one.
+// their inbox, their day, their person record — answers for, and the
+// authority check when it is somebody else's.
 //
-// THE CALLER'S OWN IS [iam.RecordOwner]'s, the one name every tool writes
-// their record under. It was the principal's SEAT, which is that name for a
-// bound person and nothing at all for everybody else — so an unbound person
-// and every token had their pins, their inbox marks and their priorities
-// written under their login by their assistant and read back under no name,
-// refused as "not bound to a seat". And a caller naming either of their own
-// names ([iam.NamesSelf]) is answered their own record, rather than decided as
-// if they had named a colleague.
+// THE NAME IS RESOLVED BY [iam.OwnerOf], the one function every tool reads and
+// writes a person's record through, so a record an assistant wrote is the
+// record a screen reads. The caller's own — no name, or either of their own
+// ([iam.NamesSelf]) — is [iam.RecordOwner]'s; somebody else's LOGIN is their
+// holder's record, looked up in the identity directory ([Sources.Holders]); and
+// anything else is read as named. It used to be the principal's SEAT for the
+// caller, which was nothing at all for an unbound person, and the literal
+// login for somebody else, which for a person the directory binds to a seat
+// is an empty record under a name nothing of theirs is kept under.
+//
+// DECIDED ON WHAT THE NAME RESOLVED TO, because the lead relation is a fact
+// about a seat: asked about a login, a lead was refused the report they lead.
+// A login that names nobody is decided on the name as typed first — which
+// nobody leads, so only the admin grant passes — and only then answered as
+// naming no record, so a caller with no authority learns nothing from the
+// directory: "not found" before "you may not" would make it a roster.
 //
 // THE SCOPE RULE IS THE AUTHORITY TABLE'S, asked with the question's OWN verb:
 // `work_inbox` asks [authz.ActionInboxRead], `work_my_work`
@@ -146,17 +155,25 @@ func (s Sources) recordHandle(ctx context.Context, action authz.Action,
 	if how == iam.Unknown {
 		return "", unresolved(ctx, "viewer")
 	}
-	own := iam.RecordOwner(principal)
+	owner, _, err := iam.OwnerOf(ctx, principal, asked, s.Holders)
 	switch {
-	case asked == "" && own == "":
+	case errors.Is(err, iam.ErrNoHolder), errors.Is(err, iam.ErrHolderUnseated):
+		if refusal := s.mayRead(ctx, principal, action, asked); refusal != nil {
+			return "", refusal
+		}
+		return "", fmt.Errorf("%w: %w", ErrNotFound, err)
+	case err != nil:
+		return "", fmt.Errorf("%w: this node cannot say whose record %q is: %w",
+			ErrUnavailable, asked, err)
+	case owner == "":
 		return "", errNoRecord
 	case asked == "", iam.NamesSelf(principal, asked):
-		return own, nil
+		return owner, nil
 	}
-	if err := s.mayRead(ctx, principal, action, asked); err != nil {
+	if err := s.mayRead(ctx, principal, action, owner); err != nil {
 		return "", err
 	}
-	return asked, nil
+	return owner, nil
 }
 
 // seatHandle is [Sources.recordHandle] for a question about a SEAT's own
