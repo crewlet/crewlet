@@ -328,3 +328,25 @@ func TestTheWindowedCountersProtocolIsNotAheadOfThisBuild(t *testing.T) {
 			coord.WindowedCountersProtocol, coord.ProtocolVersion)
 	}
 }
+
+// OUTLASTS IS THE ONE TIE-BREAK, exported for a caller choosing across scopes:
+// the window that ends later, and at an end both share, the longer period —
+// never whichever of the two was handed in first.
+func TestOutlastsIsTheRefusalsTieBreak(t *testing.T) {
+	t.Parallel()
+	mid := windowsOn(2026, time.March, 14)
+	day, month := mid[0], mid[2]
+	if !coord.Outlasts(month, day) || coord.Outlasts(day, month) {
+		t.Fatal("a month did not outlast a day it ends after")
+	}
+	sunday := windowsOn(2026, time.May, 31)
+	for _, shorter := range []period.Window{sunday[0], sunday[1]} {
+		if !coord.Outlasts(sunday[2], shorter) || coord.Outlasts(shorter, sunday[2]) {
+			t.Fatalf("the month 2026-05 did not outlast the %s ending at the same midnight",
+				shorter.Period)
+		}
+	}
+	if coord.Outlasts(day, day) {
+		t.Fatal("a window outlasted itself")
+	}
+}

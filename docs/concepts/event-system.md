@@ -256,7 +256,10 @@ compaction_requested, compaction_completed
 # system: the engine talking about itself
 agent_turn_completed       # full LLM reasoning cycle with tokens and tools
 agent_phase_started, agent_phase_completed
-budget_exhausted
+budget_exhausted           # a charge the token budget refused ended a turn;
+                           # names the scope and the refusing window —
+                           # period, window label, resets_at — with its
+                           # spend and ceiling. Drives `afk` too
 turn.guard_breach          # runtime invariant fired (stall, max_iter,
                            # depth_cap, scheduled_timeout). Drives the
                            # dashboard `afk` state

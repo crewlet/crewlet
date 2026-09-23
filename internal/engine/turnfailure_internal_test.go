@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -172,6 +173,8 @@ func TestARefusedChargeIsABudgetEventNotAProviderOne(t *testing.T) {
 	e.publishFailure(context.Background(), tel, turn.Result{Decision: phase.Failed},
 		fmt.Errorf("execute: %w", &toolloop.BudgetError{
 			Scope: string(types.BudgetScopeOrg), Used: 1_000_000, Limit: 900_000,
+			Period: period.Month, Window: "2026-09",
+			ResetsAt: time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC),
 		}))
 
 	got := only[*types.BudgetExhausted](t, p, "budget_exhausted")
@@ -181,6 +184,13 @@ func TestARefusedChargeIsABudgetEventNotAProviderOne(t *testing.T) {
 	}
 	if got.UsedTokens != 1_000_000 || got.MaxTokens != 900_000 {
 		t.Errorf("used/max = %d/%d, want 1000000/900000", got.UsedTokens, got.MaxTokens)
+	}
+	// AND THE WINDOW, which is what says when the seat can run again: a
+	// month that resets on the 1st is a different decision about raising a
+	// ceiling from a day that resets tonight.
+	if got.Period != "month" || got.Window != "2026-09" || got.ResetsAt != "2026-10-01T00:00:00Z" {
+		t.Errorf("window = %q %q resets %q, want the month 2026-09 resetting 2026-10-01T00:00:00Z",
+			got.Period, got.Window, got.ResetsAt)
 	}
 	// A refused charge never reaches a provider, so calling it unavailable
 	// would blame a chain that was never walked.

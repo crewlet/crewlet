@@ -331,6 +331,11 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 		if next.Models != nil {
 			e.releaseModelHolds(ctx)
 		}
+		// AND A SEAT PARKED ON ITS BUDGET whose ceilings this revision
+		// changed, for the same reason and in the same place: the first
+		// thing a released inbox does is judge a delivery against the
+		// counters, and it must do so under the ceilings now current.
+		e.reconcileBudgetParks(ctx, next)
 		applied = append(applied, "mailboxes")
 	}
 	// THE BACKGROUND PASSES follow the revision too, and after the swap:

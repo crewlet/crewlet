@@ -283,7 +283,7 @@ var wireTags = map[string][]string{
 	"a2a_channel_opened":              {"channel_id", "participants", "requester", "target", "turn_id", "work_key"},
 	"a2a_message_sent":                {"channel_id", "content", "message_id", "recipient", "sender", "sender_role", "turn_id", "work_key"},
 	"a2a_channel_closed":              {"channel_id", "closed_by", "duration_ms", "message_count", "participants", "turn_id", "work_key"},
-	"budget_exhausted":                {"agent_id", "budget_type", "max_tokens", "role", "turn_id", "used_tokens", "work_key"},
+	"budget_exhausted":                {"agent_id", "budget_type", "max_tokens", "period", "resets_at", "role", "turn_id", "used_tokens", "window", "work_key"},
 	"budget_reported":                 {"agents", "meter_id", "org_max_tokens", "org_refused_at", "org_used_tokens", "seq"},
 	"llm_unavailable":                 {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id", "work_key"},
 	"provider_fallback":               {"agent_id", "error_kind", "from_provider_key", "iteration", "phase", "role", "to_provider_key", "turn_id", "work_key"},

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -82,6 +84,7 @@ func (m *meter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, err
 	if m.refuseAt > 0 && m.spent+tokens > m.refuseAt {
 		return toolloop.SpendOutcome{
 			Scope: "role", Used: m.spent, Limit: m.refuseAt,
+			Period: period.Week, Window: "2026-W39", ResetsAt: weekTurnsOver,
 		}, nil
 	}
 	m.spent += tokens
@@ -518,7 +521,21 @@ func TestARefusedSpendNamesItsScopeAndStopsTheLoop(t *testing.T) {
 	if be.Scope != "role" {
 		t.Errorf("scope = %q, want role — the refusal did not name itself", be.Scope)
 	}
+	// AND THE WINDOW IT REFUSED IN, carried from the counter's answer
+	// unchanged: a ceiling is per calendar window, so a refusal that does
+	// not say which one — and when it turns over — cannot tell a seat that
+	// is out until tonight from one that is out until next month.
+	if be.Period != period.Week || be.Window != "2026-W39" || !be.ResetsAt.Equal(weekTurnsOver) {
+		t.Errorf("window = %s %q resets %v, want the week 2026-W39 resetting %v",
+			be.Period, be.Window, be.ResetsAt, weekTurnsOver)
+	}
+	if !strings.Contains(err.Error(), "2026-W39") || !strings.Contains(err.Error(), "2026-09-28T00:00:00Z") {
+		t.Errorf("error %q does not name the window and when it resets", err)
+	}
 }
+
+// weekTurnsOver is when the refusing week of the budget cases ends.
+var weekTurnsOver = time.Date(2026, time.September, 28, 0, 0, 0, 0, time.UTC)
 
 func TestARefusedRoundDoesNotRunItsTools(t *testing.T) {
 	t.Parallel()

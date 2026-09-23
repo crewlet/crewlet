@@ -49,7 +49,7 @@ stateDiagram-v2
 - **Offline**: no node this API can see is serving the seat. The roster marks a seat idle only when this node holds its lease, so on a fleet a seat a peer is running reads as offline here; the fleet view answers who holds what.
 - **Idle**: the seat is held, its mailbox is attached, and no turn is running.
 - **Working**: a phase has started and the turn has not completed.
-- **Afk**: an engine-detected failure stopped the turn (no model answered, a turn guard fired, or the token budget ran out). The cause is kept until the seat does real work again.
+- **Afk**: an engine-detected failure stopped the turn (no model answered, a turn guard fired, or the token budget ran out). The cause is kept until the seat does real work again. A seat whose budget ran out is also [parked](#the-budget-park): its mail waits for the window to turn over.
 
 The dashboard adds one state of its own: a seat whose detached [sandbox run](code-sandbox.md) is still in flight reads as busy even though the turn that started the run has completed.
 
@@ -248,6 +248,73 @@ single biggest behavioural difference from the engine's first
 implementation: anything shared between turns is guarded rather than
 safe-by-construction, and the whole suite runs under the race detector for
 exactly that reason.
+
+### The budget park
+
+A [token ceiling](../getting-started/configuration.md#token-budgets) is per
+calendar window — the day, the ISO week and the month on the company's clock —
+so a seat that has run out of room has not run out for good: it has room again
+when the window turns over, or as soon as somebody raises the ceiling. The
+dispatcher acts on that **before a delivery is claimed**: before the completion
+ledger reads it, before it is offered to a parked coding run as an answer
+(resuming one charges tokens exactly as a turn does), and before any model is
+asked anything.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Asked: delivery reaches the seat
+    Asked --> Runs: every capped window has room
+    Asked --> Parked: a capped window is refusing
+    Runs --> Parked: a round is refused, nothing written outside yet
+    Runs --> Recorded: a round is refused after an outside write
+    Parked --> Asked: the window turns over
+    Parked --> Asked: an apply changes the ceilings or the clock
+```
+
+- **Asked.** The node reads the seat's counters and the company's, in the
+  current windows. A window is refusing when the gate has refused a charge in it
+  (its refusal stamp, cleared only by an admitted charge or the window turning
+  over) or when it has no room left for a single token. A counter that cannot be
+  read parks nothing: the turn runs and its own meter, which fails closed, is
+  the gate.
+- **Parked.** The seat's inbox takes a pause hold (`budget_window`), the
+  delivery is **deferred** — handed back unacked, for one of its deliveries,
+  with a reason naming the window: `budget: day window 2026-09-23 resets
+  2026-09-24T07:00:00Z` — and an alarm is set for the end of the refusing
+  window, the one that ends **last** where several refuse, since nothing can run
+  before it. `seat_budget_parked` is logged with the scope, the window, its
+  figures and the reset.
+- **Released.** At the reset, or at once when an apply changes the ceilings of
+  either scope or the company's clock (which moves every window's end), the hold
+  is lifted, `seat_budget_park_released` is logged, and the held mail is
+  delivered again in order and asked again. A revision that lowers a ceiling
+  parks it again at the cost of one delivery.
+- **Refused mid-flight.** A window that had room when the delivery was claimed
+  can run out during the turn. That turn stops with `budget_exhausted`, and the
+  seat is parked exactly as above — unless the turn had already written outside
+  the engine (an MCP write, a colleague ask, a coding run), in which case the
+  trigger is recorded and acked, because running it again after the reset would
+  repeat those writes.
+
+**Why a park and not a retry.** Before the park, a wake reaching a spent seat
+ran a turn that was refused on its first charge, and a refusal proves nothing
+left the engine, so the delivery was NAKed and redelivered — and refused again,
+twenty-five times over about ten minutes, until the broker dead-lettered a
+perfectly healthy message. A seat that ran out at ten in the morning lost every
+message it was sent for the rest of the day.
+
+**Two stops with two owners.** The deferral quiesces the attachment, and that
+quiesce is the seat host's: it is resumed on the next lease renew, as every
+deferral is. The pause hold is the park's, and it is what keeps the resumed
+attachment from being handed anything until the release. So a park costs one
+delivery per message, not one per renew, and the release never resumes a
+consumer the seat host stopped because it could not prove it owns the seat.
+
+**This node alone agrees on it.** A park is a hold in this process's queue
+client and an alarm in its memory, derived from the fleet's shared counters on
+every delivery. A restart, or the seat moving to a peer, simply asks the
+counters again on the first delivery. It is not an [alarm](../reference/alarms.md):
+nothing is wrong with the node when a ceiling does its job.
 
 ### Graceful shutdown
 

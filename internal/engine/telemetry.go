@@ -356,6 +356,9 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			BudgetType: types.BudgetScope(budget.Scope),
 			UsedTokens: budget.Used,
 			MaxTokens:  budget.Limit,
+			Period:     string(budget.Period),
+			Window:     budget.Window,
+			ResetsAt:   rfc3339(budget.ResetsAt),
 		}, t.trace), t.role)
 		return
 	}

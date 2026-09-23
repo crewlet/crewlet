@@ -50,10 +50,10 @@ func (m meteredModels) Head(role *org.Role, ph phase.Phase) (chain.Member, error
 	}
 	charge := m.charge(role)
 	if charge == nil {
-		// No ceiling anywhere in the epoch, or no coordination store. The
-		// unwrapped member, so an unlimited company pays no round trip per
-		// auxiliary call to be told "yes" — the same reason meterFor
-		// returns nil rather than an always-allow meter.
+		// No counter to charge: no coordination store, or a role the epoch
+		// does not name as an agent seat. A seat with no ceiling IS
+		// charged — meterFor counts every seat, so an auxiliary pass is on
+		// the window a ceiling set later will judge.
 		return member, nil
 	}
 	member.Provider = meteredProvider{inner: member.Provider, meter: charge}
@@ -143,7 +143,7 @@ func seatHandle(seat *org.Role) string {
 }
 
 // meteredModelsFor is the seat-model seam every learning worker resolves
-// through, with charging attached when the epoch has a ceiling to enforce.
+// through, with charging attached wherever there is a fleet to count on.
 func (e *Engine) meteredModelsFor(c *Company) learningModels {
 	if c == nil || c.Models == nil {
 		return nil

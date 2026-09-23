@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // Enforcing the token budget.
@@ -28,6 +29,11 @@ import (
 // are cut at the moment it is charged, on the clock of the epoch the turn is
 // pinned to, so a turn that runs across midnight charges its later rounds to
 // the new day (ADR-0019).
+//
+// EVERY SEAT IS COUNTED, a seat nothing caps included ([Engine.meterFor]), so a
+// ceiling set mid-window judges the spend the window already holds. And a seat
+// whose capped window refuses is not handed work it cannot run: it is PARKED
+// on its inbox until the window turns over (budgetpark.go).
 
 // budgetCounter is the slice of the fleet's counters a meter calls.
 //
@@ -109,6 +115,8 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 	if !got.OK {
 		return toolloop.SpendOutcome{
 			Scope: got.RefusedScope, Used: got.RefusedUsed, Limit: got.RefusedLimit,
+			Period: got.RefusedPeriod, Window: got.RefusedWindow.Label,
+			ResetsAt: got.RefusedWindow.End,
 		}, nil
 	}
 	return toolloop.SpendOutcome{OK: true}, nil
@@ -125,10 +133,13 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 //
 // The TIGHTEST window of both scopes, because a charge is admitted only while
 // every capped window of both has room: a seat with a week to spare under its
-// own cap but nothing left in the company's day has no room. A meter is only
-// built over a basis that caps something ([Engine.meterFor]), so a zero here
-// with a nil error is an exhausted window; an uncapped basis reads no counter
-// and answers the same "no ceiling" a company that set no budget has.
+// own cap but nothing left in the company's day has no room.
+//
+// A meter over a basis that caps nothing answers 0 with no counter read, which
+// is the "no ceiling" [runner.Remaining]'s readers take a zero for — but they
+// never ask it: [Engine.remainingFor] hands them no reader at all for such a
+// seat, so a zero with a nil error from a reader they ARE handed always means
+// an exhausted window.
 func (m *meter) Remaining(ctx context.Context) (int, error) {
 	windows := m.windows()
 	headroom, capped := 0, false
@@ -161,18 +172,85 @@ func (m *meter) Remaining(ctx context.Context) (int, error) {
 	return headroom, nil
 }
 
+// refusal is the capped window a scope is waiting out, as [Engine.budgetPark]
+// parks a seat on it.
+type refusal struct {
+	// Scope is the counter that refuses, coord.OrgScope or the seat's own.
+	Scope string
+
+	// Window is the refusing window, cut on the pinned clock. Its End is
+	// when the scope next has room without a ceiling being raised.
+	Window period.Window
+	Used   int
+	Limit  int
+}
+
+// refusing reports the capped window of either scope that turns the seat's
+// next charge away, if any.
+//
+// A window REFUSES when the gate has said so — its refusal stamp is set, and
+// only an admitted charge or the window turning over clears one — or when it
+// has no room left for a single token, which the gate would refuse on the next
+// charge whatever its size. Where several windows refuse it is the one that
+// ENDS LAST, across every capped window of both scopes, by [coord.Outlasts] —
+// the tie-break the counter's own refusal names its window by: the seat can run
+// nothing until that one turns over, and naming an earlier one would wake it
+// into a refusal. Every window rather than each scope's binding one, because
+// [coord.Usage.Binding] puts a stamped window before a full one that ends
+// later — a month a collected coding run post-charged past its ceiling carries
+// no stamp until a charge is refused against it.
+//
+// THREE-VALUED. An unreachable counter is an error, never "not refusing" and
+// never "refusing": the caller decides what an unknown answer is worth, and
+// for the park the answer is to let the turn run, because its own meter is the
+// gate and fails closed.
+func (m *meter) refusing(ctx context.Context) (refusal, bool, error) {
+	windows := m.windows()
+	var out refusal
+	found := false
+	for _, scope := range []struct {
+		key  string
+		caps coord.Caps
+	}{
+		{coord.OrgScope, m.basis.org},
+		{m.agentScope, m.basis.seat},
+	} {
+		if len(scope.caps) == 0 {
+			continue
+		}
+		usage, err := m.budgets.Used(ctx, scope.key, windows)
+		if err != nil {
+			return refusal{}, false, fmt.Errorf("engine: budget windows of %s: %w", scope.key, err)
+		}
+		for p, ceiling := range scope.caps {
+			slot := usage.In(p)
+			if slot.RefusedAt.IsZero() && slot.Used < ceiling {
+				continue
+			}
+			if !found || coord.Outlasts(slot.Window, out.Window) {
+				out = refusal{Scope: scope.key, Window: slot.Window, Used: slot.Used, Limit: ceiling}
+				found = true
+			}
+		}
+	}
+	return out, found, nil
+}
+
 // remainingFor is the seat's headroom reader, or nil.
 //
-// Nil where meterFor is nil and for the same reason: with no ceiling anywhere
-// there is nothing to read, and the spawner treats that as uncapped — which is
-// exactly what the seat itself is.
+// Nil where the seat has no ceiling in any window of either scope, and where
+// there is no meter at all: with no ceiling there is no headroom to read, and
+// the spawner and the sandbox's floor treat nil as uncapped — which is exactly
+// what the seat is. The meter itself still COUNTS such a seat ([Engine.meterFor]);
+// what it has no answer for is how much room is left under a ceiling nobody
+// set.
 //
 // A NIL INTERFACE, never an interface holding a nil *meter: the spawner and
 // the sandbox's floor both test the reader against nil to mean "uncapped", and
 // a typed nil passes that test and panics on its first read.
 func (e *Engine) remainingFor(c *Company, handle string) runner.Remaining {
 	m, ok := e.meterFor(c, handle).(*meter)
-	if !ok || m == nil {
+	if !ok || m == nil || !m.basis.capped() {
 		return nil
 	}
 	return m
@@ -180,10 +258,23 @@ func (e *Engine) remainingFor(c *Company, handle string) runner.Remaining {
 
 // meterFor builds the meter for one seat's turn, or nil.
 //
-// Nil when there is nothing to enforce — no coordination store, or no ceiling
-// anywhere in the epoch. A meter over an unlimited budget would put a network
-// round trip on every LLM round to answer "yes" every time, which is the cost
-// of a check with no question behind it.
+// EVERY SEAT IS COUNTED, capped or not, wherever there is a fleet to count on.
+// Nil only with no coordination store, or for a handle the epoch does not name
+// as an agent seat — there is then no shared counter or no scope to charge.
+//
+// It used to be nil for a company with no ceiling too, on the argument that a
+// meter answering "yes" to every round is a round trip with no question behind
+// it. The question was the COUNT. A ceiling added mid-window then started from
+// zero, because nothing had counted the window before it existed, so a company
+// that capped its day at noon was handed the whole day again on top of what
+// the morning had already spent; and every reader of the counters — the budgets
+// answer, the live meter, `crewlet budgets` — showed an uncapped company as
+// having spent nothing at all. A charge with no caps is admitted by the counter
+// without a refusal to decide, and the round trip is the price of a figure that
+// is true when somebody sets a ceiling on it.
+//
+// The basis — the company's ceilings, the seat's own and the clock the windows
+// are cut on — is the epoch's c, which is the one the turn was PINNED to.
 func (e *Engine) meterFor(c *Company, handle string) toolloop.BudgetMeter {
 	if e.backends == nil || e.backends.Fleet == nil || c == nil || c.Org == nil {
 		return nil
@@ -196,12 +287,18 @@ func (e *Engine) meterFor(c *Company, handle string) toolloop.BudgetMeter {
 	if !ok {
 		return nil
 	}
-	basis := basisOf(c, seat)
-	if !basis.capped() {
-		return nil
-	}
 	return &meter{
 		budgets: e.backends.Fleet, agentScope: coord.AgentScope(agentID.String()),
-		basis: basis, now: time.Now,
+		basis: basisOf(c, seat), now: time.Now,
 	}
+}
+
+// rfc3339 is an instant as RFC 3339 in UTC, the wire's spelling of one, and
+// "" for the zero time — a refusal with no calendar window, a sub-agent's own
+// slice, has no reset to name.
+func rfc3339(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }

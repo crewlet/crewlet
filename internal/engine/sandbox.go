@@ -1522,6 +1522,10 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// with them, so nothing here can serve a turn through a dead client.
 	// stopSeatServers drops the registry with the bridge, in one step.
 	e.stopSeatServers(ctx, handle)
+	// A budget park's alarm dies with the seat too. The detach that
+	// released the inbox already dropped the hold; the alarm would only
+	// fire into a seat a peer now serves.
+	e.forgetBudgetPark(handle)
 
 	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
 	// exists: a seat that went away with no signal leaves its last state

@@ -40,3 +40,10 @@ An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
 decides something — the grace that sheds a node, the grace that moves its
 seats, the budget a caller was promised.
+
+A seat whose token window is spent is NOT an alarm, because nothing is wrong
+with the node: the ceiling is doing what it was set to do. Its mail is parked
+on its inbox until the window turns over or a revision raises the ceiling —
+the `seat_budget_parked` line names the window and when it resets, and
+the budgets surfaces show the refusing window. See the budget park in
+docs/concepts/agent-runtime.md.

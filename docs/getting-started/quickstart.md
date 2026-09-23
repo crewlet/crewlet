@@ -284,7 +284,9 @@ Monday, a month the calendar month, and each window opens again on its own
 when it turns over. Leave a key out for no ceiling on that window — `0` is
 refused rather than read as unlimited. When a round would take a window past
 its ceiling, the agent's turn stops immediately and a `budget_exhausted` event
-is emitted.
+is emitted, naming the window and when it resets. Until then the agent's new
+messages wait on its inbox rather than being lost, and they are delivered when
+the window turns over — or at once, if you raise the ceiling.
 
 Usage is **durable** — it lives in the fleet's
 [coordination store](../concepts/coordination.md), so it survives restarts and

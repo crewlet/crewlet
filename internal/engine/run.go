@@ -126,6 +126,11 @@ type Engine struct {
 	// nomodels.go.
 	modelHolds modelHolds
 
+	// budgetParks is every seat inbox this node holds because a capped
+	// token window is refusing, each with the alarm that releases it when
+	// the window turns over. See budgetpark.go.
+	budgetParks budgetParks
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
@@ -994,6 +999,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Pause == nil {
 		d.Pause = e.pause
 	}
+	if d.Budget == nil {
+		d.Budget = e.budgetPark
+	}
 	if d.Answer == nil && e.sandboxCoordinator != nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
 		// exported and tested since the clarification path was written, and
@@ -1239,6 +1247,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopMaintenance()
 	e.stopRetention()
 	e.stopBudgetReports()
+	// Before the node's stop detaches the inboxes: an alarm firing into a
+	// client that is closing would log a release it could not make.
+	e.stopBudgetParks()
 	e.stopEmbedding()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing

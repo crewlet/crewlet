@@ -1333,8 +1333,9 @@ Every model round is charged against both before it runs, in every window at
 once — the day, the week and the month it falls in on the company's clock —
 and it is admitted only while every capped window of both has room. A charge
 that does not fit is refused: the turn stops and the engine publishes a
-`budget_exhausted` event naming the scope that refused and its figures,
-beside the turn's own `agent_turn_completed`. The
+`budget_exhausted` event naming the scope that refused, the window
+(`period`, `window`, `resets_at`) and its figures, beside the turn's own
+`agent_turn_completed`. The
 check is atomic: if the agent's budget refuses, the org-level consumption it
 had already charged is rolled back. In a fleet the counters live in the
 coordination slot, so an org cap of 500 k is 500 k across every node rather
@@ -1346,6 +1347,24 @@ boundary, so nothing has to run for it and no node has to be up at midnight.
 There is no reset: room before a window turns over is made by raising its
 ceiling, which takes effect on the next turn. See
 [Coordination § Token budgets are windows](../concepts/coordination.md#token-budgets-are-windows).
+
+**A seat out of room waits; its mail is not lost.** Before a delivery is
+handed to a seat, the node asks whether one of that seat's capped windows —
+its own or the company's — is refusing. If one is, the seat is **parked**:
+its inbox is held, the delivery goes back to the broker for one of its
+deliveries, and it is delivered again when the window turns over (the one
+that ends last, where several refuse) or at once when an applied revision
+changes the ceilings. The node logs `seat_budget_parked` with the window and
+when it resets, and `seat_budget_park_released` when the mail flows again. A
+turn refused part-way through is parked the same way, unless it had already
+written outside the engine, in which case it is recorded and not run again.
+See [Agent Runtime § The budget park](../concepts/agent-runtime.md#the-budget-park).
+
+**Every seat is counted, capped or not.** A company that sets no ceiling
+still has its spend on the counters, in every window, so a ceiling added
+part-way through a day judges what the day has already spent rather than
+starting from zero, and `GET /budgets` shows an uncapped company's spend
+rather than nothing.
 
 A refusal is also recorded beside the counter, as when that window last
 refused a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)

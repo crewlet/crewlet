@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
@@ -60,6 +61,15 @@ type Dispatcher struct {
 	// Pause stops delivery on a seat's inbox before a park, so the requeued
 	// copies buffer on the queue rather than looping straight back.
 	Pause func(ctx context.Context, handle, reason string) error
+
+	// Budget parks the seat when one of its capped token windows is
+	// refusing, and reports the deferral reason naming the window — see
+	// budgetpark.go. An error is a park that could not be taken, which
+	// NAKs the delivery rather than running a turn the counter refuses.
+	//
+	// Nil parks nothing, which is a dispatcher with no counters: every
+	// turn then runs, and its own meter, if it has one, is the gate.
+	Budget func(ctx context.Context, handle string) (reason string, parked bool, err error)
 
 	// Answer offers a delivery to a parked coding run as the reply to the
 	// question it asked, and reports what to DO with the delivery — see
@@ -366,6 +376,21 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		return d.park(ctx, handle, screening.Events, held)
 	}
 
+	// THE BUDGET, BEFORE THE DELIVERY IS CLAIMED: before the completion
+	// ledger reads it, before a parked coding run is offered it as an
+	// answer — resuming one charges tokens exactly as a turn does — and
+	// before any model is asked anything. A seat whose capped window is
+	// refusing cannot run a round, and a turn started anyway is refused on
+	// its first charge and NAKed, again and again, until the broker
+	// dead-letters a healthy message. Parked instead, it waits on its inbox
+	// for the window to turn over. See budgetpark.go.
+	//
+	// AFTER THE SCREENING, whose every non-proceeding outcome already hands
+	// the delivery on without running anything, so it costs those no read.
+	if result, parked := d.parkOnBudget(ctx, handle); parked {
+		return result
+	}
+
 	surviving := d.dropWorked(ctx, handle, screening.Events)
 	// WHAT THE LEDGER DROPPED, on the record.
 	//
@@ -594,6 +619,22 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 					"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
 				return queue.Defer("the seat moved to another node mid-turn")
 			}
+			// AND THE BUDGET STAGE'S CONDITION, found a phase later: a
+			// window that had room when the delivery was claimed and
+			// none by this turn's round. Answered the way that stage
+			// answers it — the seat is parked until the window turns
+			// over — rather than by the NAK below, whose redelivery is
+			// refused the same way until the budget of deliveries runs
+			// out. Below [turn.Abandon] for the reason the seat-moved
+			// branch is: a turn that proved an outward write is
+			// recorded, not run again when the window resets.
+			if errors.Is(err, toolloop.ErrBudgetExhausted) {
+				if result, parked := d.parkOnBudget(ctx, handle); parked {
+					log.InfoContext(ctx, "turn_budget_parked", "seat", handle,
+						"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
+					return result
+				}
+			}
 			// Nothing this turn did can be proven to have left the
 			// engine, and nothing about the failure says it will recur,
 			// so a redelivery really does run it cleanly.
@@ -603,6 +644,30 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	}
 	d.recordWorked(ctx, handle, req, result)
 	return queue.Ack()
+}
+
+// parkOnBudget runs the budget stage, reporting the disposition when it parked
+// the seat or could not take the park it decided on.
+//
+// A PARK IS A DEFERRAL, and noted as one, so the seat host resumes the
+// attachment the deferral quiesces on its next renew — the park's own hold is
+// what keeps the resumed attachment from being handed anything until the
+// window turns over. See budgetpark.go for why the two stops have two owners.
+func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string) (queue.Result, bool) {
+	if d.Budget == nil {
+		return queue.Result{}, false
+	}
+	reason, parked, err := d.Budget(ctx, handle)
+	if err != nil {
+		return queue.Nak(err), true
+	}
+	if !parked {
+		return queue.Result{}, false
+	}
+	if d.NoteDeferred != nil {
+		d.NoteDeferred(handle)
+	}
+	return queue.Defer(reason), true
 }
 
 // abandon stops redelivering a trigger whose turn must not run again.
@@ -626,7 +691,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 // that could not be built, a refused budget) proves nothing and keeps its
 // retry. A seat handed to another node mid-turn keeps its retry too, but as a
 // DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
-// what detects it.
+// what detects it. So does a refused budget, whose seat is parked until the
+// refusing window turns over rather than NAKed into the same refusal: see
+// [Dispatcher.parkOnBudget].
 //
 // It is not silent. A turn that ran has already published its own completion
 // marked failed (see [Engine.publishTurnCompleted], which fires on the error
