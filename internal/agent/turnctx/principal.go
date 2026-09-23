@@ -94,9 +94,18 @@ func unitOf(t *Turn, seat *org.Role) string {
 //
 // THE OUTER ANSWER WINS, which is what makes this safe to call on every tool
 // invocation: a surface reached through a credential that resolved to
-// somebody — the MCP bridge's per-run token, an operator's own session — has
-// a principal already, and overwriting it with the seat would attribute their
-// gesture to the agent.
+// somebody — an operator's own session or token — has a principal already,
+// and overwriting it with the seat would attribute their gesture to the agent.
+//
+// ANY answer, and that includes [iam.Anonymous]: a context a resolver checked
+// and found nobody on is a finding this function must not overrule, or every
+// request that presented nothing would be decided as whichever turn it
+// happened to carry. It is also why the sandbox bridge does NOT rely on this:
+// its route is exempt from the credential guard, so the guard answers
+// anonymous for every box, and the bridge replaces that answer with the run's
+// seat itself — see internal/api/mcpbridge's Session.actingAs. A surface whose
+// credential IS the run states the seat outright; this function only fills a
+// context nobody has answered for.
 func WithPrincipal(ctx context.Context, t *Turn) context.Context {
 	if _, how := iam.From(ctx); how != iam.Unknown {
 		return ctx

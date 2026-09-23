@@ -67,6 +67,16 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 			"api.port on this node and point %s at that listener as a sandbox "+
 			"reaches it", mcpbridge.BaseURLVar, mcpbridge.BaseURLVar)
 	}
+	// A SURFACE BOUND TO NO SEAT IS REFUSED BY NAME, before Open, for the
+	// reason the two refusals above are: Open refuses it too — every bridged
+	// call acts as the surface's seat, so a surface with none could decide
+	// nothing — and its empty answer would otherwise be reported below as a
+	// missing bridge URL, sending an operator to a variable that is set.
+	if req.Surface == nil || req.Surface.Turn().Handle() == "" {
+		return fmt.Errorf("the agent-mode executor's tool surface is bound to no " +
+			"seat, so a bridged call would have nobody to act as; this is an " +
+			"assembly fault in the runner, not a setting")
+	}
 	endpoint := e.bridge.Open(&mcpbridge.Session{
 		RunID:   l.turn.RunID,
 		Handle:  l.turn.Handle(),

@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -55,9 +57,14 @@ func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 	// The app first: mounting the route is what lets the bridge open a
 	// session at all.
 	a := newApp(t, api.Options{Bridge: bridge})
+	// BOUND TO A SEAT'S TURN, as every executor surface is: the bridge acts
+	// as that seat on every call and opens no session for a surface that
+	// names none.
+	seat := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
 	url := bridge.Open(&mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Dev",
-		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat}),
 	})
 	if url == "" {
 		t.Fatal("no endpoint was minted")

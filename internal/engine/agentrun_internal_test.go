@@ -454,7 +454,8 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	}
 	err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1,
-		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+			ForTurn(launcher.turn),
 	})
 	if err == nil {
 		t.Fatal("an agent-mode run launched on a node whose bridge no listener serves")
@@ -467,6 +468,37 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	}
 	if _, found, getErr := e.sandboxPending.Get(t.Context(), "t1"); getErr != nil || found {
 		t.Errorf("a run row exists for a launch that was refused (found %v, err %v)", found, getErr)
+	}
+}
+
+// A SURFACE BOUND TO NO SEAT IS REFUSED BY NAME, and not as a missing bridge.
+//
+// Every bridged call acts as the surface's seat, so the bridge refuses to open
+// a session for a surface with none — and the launcher used to read that empty
+// answer as "no bridge URL", sending an operator to a variable that was set on
+// a node whose bridge was mounted and serving. The runner always binds its
+// phase surface, so this is an assembly fault, and the refusal says so.
+func TestAnAgentModeRunOnASurfaceWithNoSeatIsRefusedAsAnAssemblyFault(t *testing.T) {
+	t.Parallel()
+	c, seat := splitLoginCompany(t, "api", "codex")
+	e := launchReadyEngine(t, c)
+	launcher := &agentLauncher{
+		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
+		codingAgent: "claude-code", placement: sandbox.E2B,
+	}
+	err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+		Brief: "fix the failing test", Round: 1,
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+	})
+	if err == nil {
+		t.Fatal("an agent-mode run launched over a surface bound to no seat")
+	}
+	if strings.Contains(err.Error(), mcpbridge.BaseURLVar) ||
+		!strings.Contains(err.Error(), "bound to no seat") {
+		t.Errorf("the refusal does not say what is wrong: %v", err)
+	}
+	if e.bridge.Live() != 0 {
+		t.Errorf("%d bridge sessions live for a run that was refused", e.bridge.Live())
 	}
 }
 
@@ -520,10 +552,14 @@ func splitLoginCompany(t *testing.T, executor, coder string) (*Company, *org.Rol
 // launcher hands it.
 func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	t.Parallel()
-	request := func() runner.AgentRunRequest {
+	// BOUND TO THE LAUNCHER'S OWN TURN, as the runner binds every phase
+	// surface: the bridge acts as that turn's seat on every call and
+	// refuses a surface that names none.
+	request := func(l *agentLauncher) runner.AgentRunRequest {
 		return runner.AgentRunRequest{
 			Brief: "fix the failing test", Round: 1,
-			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+				ForTurn(l.turn),
 		}
 	}
 	launcherFor := func(e *Engine, seat *org.Role) *agentLauncher {
@@ -537,7 +573,8 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	// session opened for the run is closed with the refusal.
 	c, seat := splitLoginCompany(t, "codex", "api")
 	e := launchReadyEngine(t, c)
-	err := launcherFor(e, seat).LaunchExecutor(t.Context(), request())
+	launcher := launcherFor(e, seat)
+	err := launcher.LaunchExecutor(t.Context(), request(launcher))
 	var credErr *SandboxCredentialError
 	if !errors.As(err, &credErr) {
 		t.Fatalf("an agent-mode run on a login that cannot follow it was launched "+
@@ -550,7 +587,8 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	// And the mirror image, or a launcher that always refused would pass.
 	c, seat = splitLoginCompany(t, "api", "codex")
 	e = launchReadyEngine(t, c)
-	if err := launcherFor(e, seat).LaunchExecutor(t.Context(), request()); err != nil {
+	launcher = launcherFor(e, seat)
+	if err := launcher.LaunchExecutor(t.Context(), request(launcher)); err != nil {
 		t.Fatalf("an agent-mode run on an API-key executor was refused: %v", err)
 	}
 }

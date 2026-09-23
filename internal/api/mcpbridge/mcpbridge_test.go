@@ -13,9 +13,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -164,7 +166,7 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 	if len(offer) == 0 {
 		offer = []string{"read_page", "post_message"}
 	}
-	f.surface = tools.NewSurface("execute", reg.Snapshot(), offer)
+	f.surface = tools.NewSurface("execute", reg.Snapshot(), offer).ForTurn(seatTurn())
 	f.bridge = mcpbridge.New(mcpbridge.Options{Material: runtoken.OneKey("k", "test-key")})
 	f.session = &mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Engineer",
@@ -767,6 +769,11 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	}{
 		{"no run id", &mcpbridge.Session{Handle: "dev", Surface: emptySurface()}},
 		{"no surface", &mcpbridge.Session{RunID: "run-1", Handle: "dev"}},
+		// A SURFACE NO TURN WAS BOUND TO names no seat, and every bridged
+		// call acts as the run's seat — so it would answer the handshake
+		// and then decide nothing it was asked.
+		{"no seat", &mcpbridge.Session{RunID: "run-1", Handle: "dev",
+			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)}},
 		{"nothing at all", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -813,7 +820,18 @@ func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
 }
 
 func emptySurface() *tools.Surface {
-	return tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)
+	return tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+		ForTurn(seatTurn())
+}
+
+// seatTurn is the turn every fixture surface is bound to: a bridged run is one
+// seat's executor, and the bridge acts as that seat on every call.
+func seatTurn() *turnctx.Turn {
+	seat := &org.Role{Name: "Engineer", DeclaredHandle: "dev"}
+	return &turnctx.Turn{
+		RunID: "run-1", Seat: seat,
+		Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{seat}},
+	}
 }
 
 // A TOKEN THIS FLEET SIGNED THAT NAMES NO SESSION HERE IS DIAGNOSABLE.
