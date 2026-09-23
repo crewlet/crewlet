@@ -600,6 +600,17 @@ the points above where this node takes its own down — a run that parked or was
 settled, a seat handed to a peer, and shutdown. A process that is killed
 outright leaves the last one to lapse.
 
+Taking an indicator down stops its heartbeat **between** posts rather than in
+the middle of one: a request already sent is finished, and only then is the
+clear sent. Abandoning it instead would not withdraw it — the chat server
+still holds it, and could apply it after the clear, leaving "is thinking…" over
+a turn that had ended (or, on Mattermost, a typing indicator shown after the
+reply). Each request — the raise, a re-assertion, the clear — has five seconds,
+so a teardown waits at most one of each however many indicators it takes down,
+and the clear goes out even when the turn, the drain or the shutdown that asked
+for it has already been cancelled. A request that runs out of time is the one
+case left that can land late, and the backend's own expiry then takes it down.
+
 Whether it appears at all is the org-wide `typing_status` setting on the chat
 block that triggered the turn (`always` by default, and the only other value is
 `addressed` — there is no `off`, because a reader who sees nothing cannot tell

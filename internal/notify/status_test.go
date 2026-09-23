@@ -459,7 +459,6 @@ func TestRaisingNeverWaitsOnTheBackend(t *testing.T) {
 	g := &gatedPoster{
 		poster:  poster{backend: "chat", text: true, refresh: time.Hour},
 		entered: make(chan struct{}), release: make(chan struct{}),
-		armed: true,
 	}
 	d := notify.NewStatusDriver(notify.StatusOptions{Poster: g, Mode: notify.StatusAlways})
 	// LIFO: the blocked post is released first, so the driver's own Stop —
@@ -554,152 +553,32 @@ func TestTheHeartbeatKeepsTheIndicatorAlive(t *testing.T) {
 	}
 }
 
-// A poster declaring no interval gets NO heartbeat rather than a spin: its
-// indicator lapses, which is cosmetic, where a zero-interval ticker is a hot
-// loop against a third-party app's rate limiter.
-// gatedPoster blocks inside SetStatus so a heartbeat post is provably in
-// flight when a test calls End, and records the ORDER of what the backend
-// was asked to do.
+// gatedPoster blocks inside its first SetStatus until the test releases it,
+// so a raise is provably still unanswered while the caller that asked for it
+// carries on.
 type gatedPoster struct {
 	poster
 	entered chan struct{}
 	release chan struct{}
-	armed   bool
-
-	omu sync.Mutex
-	ops []string
+	once    sync.Once
 }
 
 func (g *gatedPoster) SetStatus(ctx context.Context, h, c, th, status string) bool {
-	g.omu.Lock()
-	armed := g.armed
-	g.omu.Unlock()
-	if armed {
-		g.omu.Lock()
-		g.armed = false
-		g.omu.Unlock()
+	g.once.Do(func() {
 		close(g.entered)
 		<-g.release
-	}
-	g.record("set")
+	})
 	return g.poster.SetStatus(ctx, h, c, th, status)
 }
 
-func (g *gatedPoster) ClearStatus(ctx context.Context, h, c, th string) bool {
-	g.record("clear")
-	return g.poster.ClearStatus(ctx, h, c, th)
-}
+// The ORDER a teardown keeps — the post in flight finished before the clear,
+// on every teardown and every kind of backend — is status_order_test.go's,
+// driven on a fake network where it can be reproduced exactly rather than
+// timed.
 
-func (g *gatedPoster) record(op string) {
-	g.omu.Lock()
-	defer g.omu.Unlock()
-	g.ops = append(g.ops, op)
-}
-
-func (g *gatedPoster) trace() []string {
-	g.omu.Lock()
-	defer g.omu.Unlock()
-	return append([]string(nil), g.ops...)
-}
-
-// THE ORDERING INVARIANT the heartbeat rests on: End cancels and WAITS for
-// the heartbeat to exit before it clears, so the clear is the last thing the
-// backend hears. Clearing first leaves the in-flight re-assertion to land
-// after it — an indicator up for ever with no session left to take it down.
-func TestTheClearIsTheLastThingTheBackendHears(t *testing.T) {
-	g := &gatedPoster{
-		poster:  poster{backend: "chat", text: true, refresh: 5 * time.Millisecond},
-		entered: make(chan struct{}), release: make(chan struct{}),
-	}
-	d := notify.NewStatusDriver(notify.StatusOptions{Poster: g, Mode: notify.StatusAlways})
-	defer d.Stop(context.Background())
-
-	s := d.Begin(t.Context(), "swe", "turn-1", "plan", chatMeta(nil))
-	if s == nil {
-		t.Fatal("no session")
-	}
-	// Arm AFTER the opening post has landed, so it is a HEARTBEAT that
-	// blocks — the raise is made by the session's own goroutine, so waiting
-	// for it is what makes "after" mean anything.
-	g.shownAtLeast(t, 1)
-	g.omu.Lock()
-	g.armed = true
-	g.omu.Unlock()
-
-	select {
-	case <-g.entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no heartbeat arrived to block")
-	}
-
-	ended := make(chan struct{})
-	go func() { s.End(t.Context(), false); close(ended) }()
-
-	// End must be BLOCKED on the in-flight post rather than racing past
-	// it to clear.
-	select {
-	case <-ended:
-		t.Fatal("End returned while a re-assertion was still in flight")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	close(g.release)
-	select {
-	case <-ended:
-	case <-time.After(2 * time.Second):
-		t.Fatal("End never returned")
-	}
-
-	ops := g.trace()
-	if len(ops) == 0 || ops[len(ops)-1] != "clear" {
-		t.Fatalf("the backend last heard %v, want the clear", ops)
-	}
-}
-
-// Stop takes the same care, for the same reason: a node shutting down must
-// not leave an indicator up because a re-assertion landed after its clear.
-func TestStopAlsoClearsLast(t *testing.T) {
-	g := &gatedPoster{
-		poster:  poster{backend: "chat", text: true, refresh: 5 * time.Millisecond},
-		entered: make(chan struct{}), release: make(chan struct{}),
-	}
-	d := notify.NewStatusDriver(notify.StatusOptions{Poster: g, Mode: notify.StatusAlways})
-
-	if s := d.Begin(t.Context(), "swe", "turn-1", "plan", chatMeta(nil)); s == nil {
-		t.Fatal("no session")
-	}
-	g.shownAtLeast(t, 1)
-	g.omu.Lock()
-	g.armed = true
-	g.omu.Unlock()
-
-	select {
-	case <-g.entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no heartbeat arrived to block")
-	}
-
-	stopped := make(chan struct{})
-	go func() { d.Stop(context.Background()); close(stopped) }()
-	select {
-	case <-stopped:
-		t.Fatal("Stop returned while a re-assertion was still in flight")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	close(g.release)
-	select {
-	case <-stopped:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Stop never returned")
-	}
-
-	ops := g.trace()
-	if len(ops) == 0 || ops[len(ops)-1] != "clear" {
-		t.Fatalf("the backend last heard %v, want the clear", ops)
-	}
-}
-
+// A poster declaring no interval gets NO heartbeat rather than a spin: its
+// indicator lapses, which is cosmetic, where a zero-interval ticker is a hot
+// loop against a third-party app's rate limiter.
 func TestAPosterWithNoRefreshDoesNotSpin(t *testing.T) {
 	p := newPoster()
 	p.refresh = 0

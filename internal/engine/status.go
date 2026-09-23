@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
@@ -27,36 +26,14 @@ import (
 // backend name anywhere in this package's status path, and a company that runs
 // two chat surfaces needs no second wiring. What the engine contributes is the
 // three facts only it holds: WHICH turn, WHAT woke it, and WHEN it ended.
-
-// statusClearTimeout bounds taking a released seat's indicators down.
 //
-// Five seconds, the same value and the same arithmetic as [memoryFlushTimeout]
-// beside it on the same path: long enough for a chat instance under load to
-// answer, short enough that a drain of a dozen seats against one that has
-// stopped answering finishes in seconds rather than waiting out a client
-// timeout per seat. What expires with it is one indicator left standing until
-// the backend's own expiry lapses it — about two minutes on the surface that
-// renders text, seconds on the one that does not.
-const statusClearTimeout = 5 * time.Second
-
-// statusTeardown is the context every clear is made on.
-//
-// DETACHED, because the ending being reported is often the cancellation itself
-// — a shed seat, a drained node, a turn that ran out of time — and a clear on
-// a dead context does nothing at all, which leaves an indicator claiming the
-// agent is still working.
-//
-// AND BOUNDED, because detaching takes the caller's DEADLINE with its cancel.
-// Every clear is a chat request made synchronously by something that is
-// holding a resource while it waits: a turn holding this node's turn slot, a
-// drain working through a seat at a time, a sandbox completion's handler. With
-// no deadline of its own the only bound left is the vendor client's own
-// timeout, on the one surface whose every failure is swallowed as cosmetic.
-// One helper rather than three copies of the same two calls: the three
-// teardown sites differ in what they are tearing down, not in this.
-func statusTeardown(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), statusClearTimeout)
-}
+// Nor how a teardown's requests are made. Every teardown here hands the
+// driver the caller's OWN context, a cancelled one included: the driver
+// detaches and bounds each clear itself and waits out the post in flight
+// before it, because it is the only frame that knows a request is in flight
+// at all (see [notify.StatusSession.End]). A copy of that rule at each call
+// site here was a second answer to one question, and it bounded the wrong
+// span.
 
 // chatMetadataOf is the metadata of the chat message that woke a turn, or nil.
 //
@@ -120,12 +97,10 @@ func (e *Engine) beginWorkingStatus(ctx context.Context, handle, turnID string,
 // process: the turn never came back, and nothing but a seat handoff or a
 // shutdown would have taken it down.
 //
-// The context is the shared teardown one — detached from the turn's and
-// bounded. See [statusTeardown].
+// ctx is the turn's own, cancelled or not: the driver detaches and bounds the
+// clear itself.
 func endWorkingStatus(ctx context.Context, s *notify.StatusSession, keepAlive bool) {
-	clearCtx, stop := statusTeardown(ctx)
-	defer stop()
-	s.End(clearCtx, keepAlive)
+	s.End(ctx, keepAlive)
 }
 
 // stillWorking reads [Engine.persistSuspension]'s answer as the one question
@@ -179,9 +154,7 @@ func stillWorking(resumable bool, err error) bool {
 // It is one turn's HOLD, not the seat's indicators: a second turn in the same
 // thread keeps its own. See [notify.Statuses.Release].
 func (e *Engine) releaseWorkingStatus(ctx context.Context, handle, turnID string) {
-	clearCtx, stop := statusTeardown(ctx)
-	defer stop()
-	e.Status().Release(clearCtx, handle, turnID)
+	e.Status().Release(ctx, handle, turnID)
 }
 
 // resumeWorkingStatus is the indicator a RESUMED turn shows, and which of the

@@ -1676,13 +1676,12 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// handed the seat on would otherwise go on saying "is thinking…" every
 	// refresh interval, for a turn it is not running, until the process died.
 	//
-	// DETACHED AND BOUNDED, the same shape the memory flush below takes: the
-	// clear has to go out even when the release is a cancelled drain, and a
-	// chat instance that has stopped answering must cost the drain seconds
-	// rather than a client timeout per seat. See [statusTeardown].
-	clearCtx, stopClear := statusTeardown(ctx)
-	e.Status().ClearFor(clearCtx, handle)
-	stopClear()
+	// The clear has to go out even when the release is a cancelled drain,
+	// and a chat instance that has stopped answering must cost the drain
+	// seconds rather than a client timeout per seat — both of which the
+	// driver sees to itself, detaching and bounding each request it makes
+	// (see [notify.StatusDriver.ClearFor]).
+	e.Status().ClearFor(ctx, handle)
 
 	// A LAST PUBLISH, then forget the seat. The publish is what makes a
 	// graceful handoff lossless: whatever this node learned since its last
