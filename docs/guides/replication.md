@@ -125,10 +125,10 @@ This is the sentence the backup schedule hangs on.
 **Above the trim floor**, the log holds every record on R replicas and every
 node holds the applied rows. Losing a node loses nothing.
 
-**Below the trim floor the log holds nothing, and each node's own database file
-is the only copy of that history** — N of them, independent, none replicated.
-Losing history below the floor takes all N disks, and it is covered **only** by
-the backup gate.
+**Below the trim floor the log may already hold nothing — the trim has licensed
+deleting it — and each node's own database file is the only copy of that
+history** — N of them, independent, none replicated. Losing history below the
+floor takes all N disks, and it is covered **only** by the backup gate.
 
 That is why the trim refuses to advance past a floor no backup has reached.
 The backup schedule is a **correctness input**, not hygiene. See

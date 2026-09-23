@@ -854,12 +854,14 @@ func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainL
 // stream covers what this number cannot see — a floor published at another
 // generation, which [floorFor] reads as zero.
 //
-// The two readers that ask whether a replay is POSSIBLE — the join's behind
-// test and the heartbeat's rejoin request — take the stream's first sequence
-// alone, because only what IS gone makes a replay impossible: a node between
-// the stream's first sequence and this floor can still read every record it
-// lacks, and sending it to adopt a snapshot would halt its appliers to fetch
-// what it could simply replay.
+// The readers that ask whether a replay is POSSIBLE — the join's behind test,
+// the heartbeat's rejoin request, and readiness when it decides which refusal
+// a node below the floor gives — take the stream's first sequence alone,
+// because only what IS gone makes a replay impossible: a node between the
+// stream's first sequence and this floor can still read every record it
+// lacks, so it refuses as `behind` while it replays them
+// ([statelog.FloorReplaying]), and sending it to adopt a snapshot would halt
+// its appliers to fetch what it could simply replay.
 //
 // An unreadable register is UNKNOWN and refuses; an absent record is a trim
 // that has never run and therefore licensed nothing.
@@ -1094,10 +1096,12 @@ func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog
 //     halted it and every later object is missing its consequences;
 //   - the node is EVICTED, so its peers drop every record it publishes and
 //     its rows have already stopped being the fleet's;
-//   - the node is BELOW THE TRIM FLOOR, so records it never applied have been
-//     deleted and its rows have a hole nothing will fill — and a floor NOBODY
-//     COULD READ for four heartbeats takes the same branch, because an unread
-//     floor is not a floor that is satisfied;
+//   - the node is BELOW THE LOG, so records it never applied have been
+//     deleted and its rows have a hole nothing will fill — a node that is
+//     only below the published trim floor, whose missing records the log
+//     still holds, is replaying them and is behind rather than wrong — and a
+//     floor NOBODY COULD READ for four heartbeats takes the same branch as
+//     below, because an unread floor is not a floor that is satisfied;
 //   - its checkpoint names A STREAM THAT IS NOT THIS ONE, a log deleted and
 //     rebuilt under it, so its rows are keyed to a history that is gone;
 //   - the applied prefix is STALLED, so the node owes progress it has not
@@ -1235,7 +1239,7 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 		return health, err
 	}
 	health.TrimFloor = &floor
-	// THE THREE-VALUED FLOOR, stamped with the instant it was read. Both
+	// THE FOUR-VALUED FLOOR, stamped with the instant it was read. Both
 	// halves are load-bearing and the field carries them together for the
 	// reason its own doc gives: a state whose age nobody carries ages
 	// silently into an assertion, and this one decides whether a node is
@@ -1246,21 +1250,33 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	// the truth, so trusting it downward is how a node below the real
 	// floor keeps serving.
 	health.Floor = statelog.Floor{State: statelog.FloorOK, ReadAt: now}
-	// BELOW MEANS THE NEXT RECORD THIS NODE NEEDS IS GONE: the one at
-	// checkpoint+1. A checkpoint one below the first surviving sequence
-	// has applied everything that was ever removed.
+	// BELOW MEANS THE NEXT RECORD THIS NODE NEEDS MAY BE GONE: the one at
+	// checkpoint+1. A checkpoint one below the higher of the floor and the
+	// first surviving sequence has applied everything that was, or may yet
+	// be, removed.
+	//
+	// And WHICH below is asked of `first` alone, because the floor is
+	// written before the purge it licenses and a purge can fail after it,
+	// or a later tick can conclude less and purge nothing: under a floor
+	// above the log's first record, a node whose next record is still
+	// there is REPLAYING — it reads what it lacks and the state clears on
+	// its own, which is `behind` to a reader and to its seats what any
+	// other lag is — and only one whose next record is gone from the log
+	// is BELOW, with a hole it adopts a snapshot to fill. The same split is the one the
+	// join and the heartbeat make, which is what keeps a node this calls
+	// replaying from being one they send to adopt.
 	//
 	// THE BOUNDARY CANNOT DISAGREE WITH ANY OTHER READER'S, by
 	// construction rather than by agreement: [statelog.Replayable] is the
 	// one predicate [statelog.Health.Established], the join, the
 	// heartbeat, a backup and the write fences all call. What each site
-	// still chooses is the BOUND it asks of — here, like Established, the
-	// write fences and the re-check after a transfer, the higher of the
-	// floor and the stream's first sequence; the join's behind test and the
-	// heartbeat ask of `first` alone, for the reason [stateLog.trimFloor]
-	// gives.
-	if !statelog.Replayable(at.Seq, max(floor, first)) {
+	// still chooses is the BOUND it asks of, for the reason
+	// [stateLog.trimFloor] gives.
+	switch {
+	case !statelog.Replayable(at.Seq, first):
 		health.Floor.State = statelog.FloorBelow
+	case !statelog.Replayable(at.Seq, max(floor, first)):
+		health.Floor.State = statelog.FloorReplaying
 	}
 	return health, nil
 }

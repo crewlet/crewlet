@@ -266,8 +266,10 @@ func (e *ReadmissionRefusal) Remedy() string {
 // Nothing about the fleet's data rests on this refusal. A readmitted node below
 // the floor is refused every write at an expectation of zero by its own fence,
 // verified within the call (the floor theorem's clause (ii)); its readiness
-// reports `below_floor`; and the trim, counting it again, never purges above
-// it. So the two inputs that are stale by construction — a register row that is
+// refuses every read — `behind` while the log still holds what it lacks and it
+// is replaying it ([FloorReplaying]), `below_floor` once those records are gone
+// from the log ([FloorBelow]); and the trim, counting it again, never purges
+// above it. So the two inputs that are stale by construction — a register row that is
 // a heartbeat old, a floor that may move between this check and the record
 // landing — can at worst admit a state those mechanisms already hold safe, and
 // there is no read-then-write race here worth a lock. What the refusal buys is

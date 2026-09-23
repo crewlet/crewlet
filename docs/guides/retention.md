@@ -154,14 +154,19 @@ stops being configuration and becomes durable evidence.
 `crewlet retention status` prints a **trim floor** per domain. Everything below
 it may already have been deleted from the log, so a node that has applied
 every record up to the one just before it holds everything that may be
-missing, and a node further behind may have to adopt a snapshot. Two
-properties make it something the fleet can rely on:
+missing. A node further behind replays what the log still holds, and adopts a
+snapshot only when what it lacks is gone from the log itself. Two properties
+make the floor something the fleet can rely on:
 
 - **It is published before the purge it licenses.** The trim writes its
   conclusion to the fleet first and deletes second. A tick whose floor could
-  not be published deletes nothing; a tick that published and then failed to
-  delete leaves the floor ahead of the log for a moment, which costs nothing —
-  the next tick deletes again.
+  not be published deletes nothing. A tick that published and then failed to
+  delete leaves the floor ahead of the log until a later tick licenses
+  deleting at least that far — and a tick that is blocked, or whose lowest
+  counted node is lower, deletes less or nothing, so that can be a while. It
+  is the safe direction: the records between the log's first record and the
+  floor are still there, so a node below the floor and above the log reports
+  `behind` while it replays them and needs no snapshot.
 - **It never moves down within a generation.** A tick that is blocked, or whose
   lowest counted node is lower than last time — a readmitted node, one
   restored from an old backup, one that came up on its own history because no
@@ -177,12 +182,15 @@ The floor is load-bearing for **writes**, not only for recovery. A write to an
 object whose last record has been deleted from the log cannot compare against
 that record any more, so it is retried as "this object's history on the log is
 empty" — which is only true on a node that has applied everything that may be
-gone. So every such write first checks, freshly, that the node has applied
-every record up to the one just before the **higher of the floor and the log's
-own first record**, and a node that has not is refused `unavailable` rather
-than allowed to overwrite a change it never saw. The same comparison is what
-reports `below_floor`, and a node whose missing records are gone from the log
-itself [adopts a snapshot](#the-join-runbook).
+gone. So every such write first checks, freshly, that the rows it decided
+from — as they stood when it decided, not wherever the node has got to since —
+hold every record up to the one just before the **higher of the floor and the
+log's own first record**, and a write that does not is refused `unavailable`
+rather than allowed to overwrite a change it never saw. Reads make the same
+comparison: a node below the floor whose missing records the log still holds
+refuses them as `behind` while it replays them, and a node whose missing
+records are gone from the log itself refuses them as `below_floor` and
+[adopts a snapshot](#the-join-runbook).
 
 ## The cross-field rule
 
@@ -195,9 +203,11 @@ With the shipped defaults that is 24 h × 2 = 48 h against 7 days. Comfortable.
 
 ## Snapshots
 
-A node below the trim floor cannot replay its way back: the records it is
-missing are gone. What it does instead is fetch a peer's snapshot of the
-replicated estate, verify it, and adopt it wholesale.
+A node below the log — whose next record has been deleted — cannot replay its
+way back: the records it is missing are gone. What it does instead is fetch a
+peer's snapshot of the replicated estate, verify it, and adopt it wholesale. (A
+node that is only below the published trim floor, while the log still holds
+what it lacks, replays it instead and needs none of this.)
 
 ```
 crewlet retention snapshots
@@ -260,11 +270,14 @@ because a fleet whose snapshot loop is skipping has no next rotation to name.
 
 ## The join runbook
 
-When a node reports `below_floor`:
+A node that reports `below_floor` has lost its next record from the log. (One
+below the published floor whose missing records the log still holds reports
+`behind` instead, replays them, and needs none of this.) When a node reports
+`below_floor`:
 
 1. **`crewlet retention snapshots`** — does any peer hold one, and how old?
 2. If one does, the node fetches it on its own — at boot, or the moment its
-   own heartbeat finds it below the floor while running: it pauses its
+   own heartbeat finds it below the log while running: it pauses its
    appliers, adopts, moves its consumers to the artefact's position and
    resumes, with no restart. It takes a **hold** on every domain's log first,
    which pins the trim for the duration of the transfer — so a join cannot

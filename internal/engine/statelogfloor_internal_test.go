@@ -61,7 +61,8 @@ func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 	}
 }
 
-// A PUBLISHED FLOOR AHEAD OF THIS NODE REFUSES IT.
+// A PUBLISHED FLOOR AHEAD OF THIS NODE REFUSES IT, and says which of two
+// things it is.
 //
 // # The vacuous comparand this replaces
 //
@@ -72,6 +73,16 @@ func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 // fleet's floor kept serving, kept admitting seats, and kept publishing at an
 // expectation of zero over records the trim had removed. This publishes a
 // floor the way the trim does and requires the node to notice.
+//
+// # And the two states below it
+//
+// The trim publishes its floor BEFORE the purge it licenses, so until that
+// purge lands — and for good, if it fails and no later tick licenses as much
+// again — the log still holds what a node below the floor lacks. That node is
+// replaying: its reads are told to come back, it admits no seats until it has
+// caught up, and nothing sends it to adopt a snapshot of records it can read.
+// Only once the purge lands is its next record gone, and only then is it below
+// the log, refused as `below_floor`, shed, and sent to adopt.
 func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
@@ -104,55 +115,116 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	// in-flight tick — so the floor under test is the only one there is.
 	e.stopRetention()
 
-	// THE TRIM CONCLUDES the fleet may remove everything below a point this
-	// node has not reached — which is what happens to a node that was away
-	// while its peers moved on and were counted without it.
+	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a rejoin it requests is
+	// counted and does nothing, so what is read below is the heartbeat's
+	// own conclusion rather than an adoption racing the next assertion.
+	var rejoins atomic.Int64
+	s.rejoinMu.Lock()
+	s.rejoin = func(context.Context) error { rejoins.Add(1); return nil }
+	s.rejoinMu.Unlock()
+	rejoinRequested := func() bool {
+		s.rejoinMu.Lock()
+		defer s.rejoinMu.Unlock()
+		return s.rejoining || rejoins.Load() > 0
+	}
 	at := running.runner.Committed()
-	if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
-		Domain: tracker.Domain{}.Name(), Generation: at.Generation,
-		TrimTo: at.Seq + 5, Floor: at.Seq + 5, At: time.Now().UTC(), By: "peer",
-	}); err != nil {
-		t.Fatalf("publish a floor: %v", err)
+	publish := func(floor uint64) {
+		t.Helper()
+		if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
+			Domain: tracker.Domain{}.Name(), Generation: at.Generation,
+			TrimTo: floor, Floor: floor, At: time.Now().UTC(), By: "peer",
+		}); err != nil {
+			t.Fatalf("publish a floor: %v", err)
+		}
 	}
-	health, err := s.health(t.Context(), running)
-	if err != nil {
-		t.Fatalf("health: %v", err)
+	health := func() statelog.Health {
+		t.Helper()
+		h, err := s.health(t.Context(), running)
+		if err != nil {
+			t.Fatalf("health: %v", err)
+		}
+		return h
 	}
+
+	// A FLOOR EXACTLY AT THE NEXT RECORD IS NOT BELOW: the node has
+	// consumed everything the trim may have removed.
+	publish(at.Seq + 1)
+	if got := health().Floor.State; got != statelog.FloorOK {
+		t.Fatalf("health reads the floor as %s with a published floor at the next "+
+			"record, want ok", got)
+	}
+
+	// THE TRIM LICENSES REMOVING RECORDS THIS NODE HAS NOT APPLIED — which
+	// is what a node that was away finds when its peers were counted
+	// without it — and publishes that before it purges them.
+	s.haltAppliers()
+	for range 5 {
+		barrierOn(t, running)
+	}
+	publish(at.Seq + 5)
+	replaying := health()
 	var carried uint64
-	if health.TrimFloor != nil {
-		carried = *health.TrimFloor
+	if replaying.TrimFloor != nil {
+		carried = *replaying.TrimFloor
 	}
-	if health.TrimFloor == nil || carried != at.Seq+5 {
+	if replaying.TrimFloor == nil || carried != at.Seq+5 {
 		t.Fatalf("health carries a floor of %d (known=%v), want the published %d — "+
 			"the positions minimum this replaces could never exceed this node's own row",
-			carried, health.TrimFloor != nil, at.Seq+5)
+			carried, replaying.TrimFloor != nil, at.Seq+5)
 	}
-	if health.Floor.State != statelog.FloorBelow {
+	if replaying.Floor.State != statelog.FloorReplaying {
 		t.Fatalf("health reads the floor as %s with a published floor 5 past the "+
-			"checkpoint, want below", health.Floor.State)
+			"checkpoint and every record it licenses still on the log, want replaying",
+			replaying.Floor.State)
+	}
+	if got := replaying.Refusal(time.Now()); got != statelog.RefuseBehind {
+		t.Fatalf("a node replaying up to the floor refuses reads as %q, want %q — "+
+			"the records are on the log and it clears on its own", got, statelog.RefuseBehind)
 	}
 	if e.NativeHydrated() {
 		t.Fatal("the node admits seats while below the published floor")
 	}
-	if ok, _ := e.SeatsServiceable(); ok {
-		t.Fatal("the node keeps its seats while below the published floor")
+	// AND IT KEEPS THE SEATS IT HOLDS. Being behind is admission's concern
+	// alone: every record this node lacks is on the log and it is reading
+	// them, so moving its seats would drop work in hand for a state that
+	// clears on its own. A replaying node is necessarily one with records
+	// pending — the floor is at most one past the log's end — so this is
+	// also the case a lag-derived term would get wrong.
+	if ok, domain := e.SeatsServiceable(); !ok {
+		t.Fatalf("a node replaying records the log still holds shed its seats "+
+			"(domain %q) — that is being behind, not being wrong", domain)
+	}
+	s.publishPositions(t.Context())
+	if rejoinRequested() {
+		t.Fatal("the heartbeat asked the fleet for a snapshot for a node whose " +
+			"missing records are all still on the log — it halts its appliers to " +
+			"fetch what it could simply replay")
 	}
 
-	// AND A FLOOR EXACTLY AT THE NEXT RECORD IS NOT BELOW: the node has
-	// consumed everything the trim may have removed.
-	if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
-		Domain: tracker.Domain{}.Name(), Generation: at.Generation,
-		TrimTo: at.Seq + 1, Floor: at.Seq + 1, At: time.Now().UTC(), By: "peer",
-	}); err != nil {
-		t.Fatalf("publish a floor: %v", err)
+	// AND THE PURGE IT LICENSED LANDS: the next record this node needs is
+	// gone, and only a snapshot can bring it back.
+	if err := running.log.Purge(t.Context(), at.Seq+2); err != nil {
+		t.Fatalf("purge: %v", err)
 	}
-	health, err = s.health(t.Context(), running)
-	if err != nil {
-		t.Fatalf("health: %v", err)
+	below := health()
+	if below.Floor.State != statelog.FloorBelow {
+		t.Fatalf("health reads the floor as %s with record %d purged and never "+
+			"applied, want below", below.Floor.State, at.Seq+1)
 	}
-	if health.Floor.State != statelog.FloorOK {
-		t.Fatalf("health reads the floor as %s with a published floor at the next "+
-			"record, want ok", health.Floor.State)
+	if got := below.Refusal(time.Now()); got != statelog.RefuseBelowFloor {
+		t.Fatalf("a node below the log refuses reads as %q, want %q", got,
+			statelog.RefuseBelowFloor)
+	}
+	if e.NativeHydrated() {
+		t.Fatal("the node admits seats while below the log")
+	}
+	if ok, _ := e.SeatsServiceable(); ok {
+		t.Fatal("the node keeps its seats while below the log")
+	}
+	s.publishPositions(t.Context())
+	if !rejoinRequested() {
+		t.Fatalf("the heartbeat did not ask for a snapshot for a node whose next "+
+			"record %d is gone", at.Seq+1)
 	}
 }
 

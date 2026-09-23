@@ -1222,7 +1222,7 @@ export interface RetentionDomain {
   max_bytes?: number;
   /** ABSENT when the broker could not be asked — which is not zero headroom. */
   headroom_fraction?: number;
-  /** Everything below it may already be gone; it never moves down. */
+  /** Everything below it may already be gone; it never moves down within a generation. */
   trim_floor: number;
   /** What the last tick concluded may be removed — zero while blocked. */
   trim_to: number;

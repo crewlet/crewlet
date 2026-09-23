@@ -6,26 +6,49 @@ import (
 )
 
 // FloorState is what this node knows about the published trim floor, and
-// there are THREE answers rather than two.
+// there are FOUR answers rather than two.
 //
 // A boolean here hid the one that matters. "This node is at or above the
 // floor", "this node is below it" and "the floor could not be read" lead to
 // different code, and collapsing the third into the first keeps a node serving
 // reads over a hole it cannot see. The rule is the same one the trim itself
 // uses: a term that cannot be read blocks.
+//
+// And "below it" is two states, because the floor is published BEFORE the
+// purge it licenses: a purge that failed, and that no later tick carries out
+// because each concluded less, leaves the floor above the log's first
+// surviving record. A node between the two lacks records the trim may remove
+// and the log still holds, so it replays them; a node below the log's first
+// record lacks records no replay can supply. They send a caller and an
+// operator to opposite places — come back here soon, or go elsewhere while
+// this node adopts a snapshot — so they are different values.
 type FloorState int
 
 const (
 	// FloorOK is at or above the published floor: every record this node
-	// has not applied is still on the log.
+	// has not applied is still on the log, and none of them is one the
+	// trim has licensed removing.
 	FloorOK FloorState = iota
 
-	// FloorBelow is below it: records this node never applied have been
-	// trimmed, so its rows are missing state no later replay can supply.
-	// Reads and writes both refuse, and the node adopts a snapshot.
+	// FloorReplaying is below the published floor and not below the log:
+	// the trim has licensed removing records this node has not applied,
+	// and the log's first surviving record says they are all still there.
+	// It is replaying them and the state clears on its own; reads refuse
+	// at every level meanwhile — as [RefuseBehind], or as [RefuseStalled]
+	// once the replay stops moving — because the floor is what every node
+	// must hold before it answers, and a write at an expectation of zero
+	// is refused by the fence until it holds it. It moves none of its
+	// seats: a copy that is BEHIND catches up on its own, and
+	// [Health.Healthy] sheds on no lag of any size, this one included.
+	FloorReplaying
+
+	// FloorBelow is below the log itself: the next record this node needs
+	// has been removed, so its rows are missing state no replay can
+	// supply. Reads and writes both refuse, its seats move, and the node
+	// adopts a peer's snapshot.
 	FloorBelow
 
-	// FloorUnknown is the third value, and it takes the SAME branch as
+	// FloorUnknown is the fourth value, and it takes the SAME branch as
 	// FloorBelow rather than the optimistic one. A floor that cannot be
 	// read is not a floor that is satisfied, and the cost of guessing
 	// wrong is a node serving answers with a hole in them.
@@ -37,6 +60,8 @@ func (f FloorState) String() string {
 	switch f {
 	case FloorOK:
 		return "ok"
+	case FloorReplaying:
+		return "replaying"
 	case FloorBelow:
 		return "below"
 	case FloorUnknown:
@@ -75,9 +100,6 @@ func (f Floor) Effective(now time.Time) FloorState {
 	return f.State
 }
 
-// Serves reports whether this floor permits serving as of now.
-func (f Floor) Serves(now time.Time) bool { return f.Effective(now) == FloorOK }
-
 // Age is how long ago the floor was read, for the refusal that names it.
 func (f Floor) Age(now time.Time) time.Duration {
 	if f.ReadAt.IsZero() {
@@ -88,8 +110,9 @@ func (f Floor) Age(now time.Time) time.Duration {
 
 // Replayable reports whether a node whose checkpoint is `checkpoint` can still
 // replay forward on a log whose lowest record is `first` — whether the next
-// record it needs, checkpoint+1, is still there. False is the state
-// [FloorBelow] names.
+// record it needs, checkpoint+1, is still there. False against the stream's
+// own first sequence is the state [FloorBelow] names; false only against a
+// published floor above it is [FloorReplaying].
 //
 // ONE PREDICATE, because the question is asked in more places than any one of
 // them can see: [Health.Established], the health read that stamps FloorBelow,
@@ -235,7 +258,7 @@ type Health struct {
 	// reads as a colleague editing the same object.
 	Stalled bool
 
-	// Floor is the three-valued floor state and when it was last read.
+	// Floor is the four-valued floor state and when it was last read.
 	// ONE FIELD, because a state whose age nobody carries ages silently
 	// into an assertion.
 	Floor Floor
@@ -265,6 +288,23 @@ type Health struct {
 	// stream info from the same possibly-non-authoritative member, and a
 	// stale one is LOWER than the truth — so a maximum that trusts it
 	// under-fires and a node below the real floor keeps serving.
+	//
+	// BELOW THE PUBLISHED FLOOR IT CHOOSES BETWEEN TWO STATES, neither of
+	// which serves a read at any level: [FloorBelow], the node's next
+	// record gone from the log, or [FloorReplaying], the log still holding
+	// it. The choice picks the refusal — `below_floor`, which sends a
+	// caller elsewhere and the node to adopt, or the retryable `behind` —
+	// and whether the floor term alone sheds the node's seats, which
+	// [Health.Healthy] does for the first and not the second. So a
+	// stale-low value reports a node as replaying records that are already
+	// gone. What bounds that is where a stale value comes from: only a
+	// replica of a group with no leader answers the stream info, and every
+	// health read and every heartbeat asks afresh rather than from a cache.
+	// The heartbeat, asking of this value alone, is what requests the
+	// rejoin once a reading shows the record gone — a LATER reading of the
+	// same stream info, not an independent source — and meanwhile a strict
+	// applier the broker clamped past the hole faults when its reorder
+	// buffer overflows, which refuses and sheds as `stalled`.
 	FirstSeq *uint64
 
 	// TrimFloor is the register's published floor for this domain as last
@@ -325,15 +365,12 @@ type DeferredSince struct {
 	Held  bool
 }
 
-// Serving reports whether this domain may answer a read at all.
-//
-// The order is the cheap local refusals first, so a doomed read never reaches
-// the broker: eviction, then the floor, then a stall.
-func (h Health) Serving(now time.Time) bool {
-	return h.Refusal(now) == ""
-}
-
 // Refusal is why this domain is not serving as of now, or empty when it is.
+//
+// A NODE REPLAYING UP TO THE FLOOR IS REFUSED LAST, and as [RefuseBehind]:
+// it clears on its own only while its applier is moving and its log is the
+// one its rows are keyed to, so a stall or a wrong stream is the truer answer
+// whenever either holds.
 func (h Health) Refusal(now time.Time) ReadRefusal {
 	switch {
 	case h.Evicted:
@@ -346,6 +383,8 @@ func (h Health) Refusal(now time.Time) ReadRefusal {
 		return RefuseWrongStream
 	case h.Err != "" || h.Stalled:
 		return RefuseStalled
+	case h.Floor.Effective(now) == FloorReplaying:
+		return RefuseBehind
 	}
 	return ""
 }
@@ -384,6 +423,11 @@ func (h Health) AheadOfLog() bool {
 // interrupted by somebody filing a work item. A prefix that stops MOVING is a
 // different fact and it is [Health.Stalled], which is below.
 //
+// Nor does replaying up to the published floor ([FloorReplaying]), which is
+// one more way of being behind: the records are on the log and the node is
+// reading them. Only a node below THE LOG itself ([FloorBelow]), or under a
+// floor nobody could read ([FloorUnknown]), has a hole in its rows.
+//
 // Holding records this build cannot decode does not either, on its own.
 // Folding that into "stalled" sheds a company's seats fleet-wide on a routine
 // rolling upgrade — one upgraded writer taking every un-upgraded node out of
@@ -402,7 +446,8 @@ func (h Health) AheadOfLog() bool {
 // A compacted domain's coverage does not make it false either: a derived row's
 // gaps are the compaction policy working.
 func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
-	if h.Err != "" || h.Evicted || !h.Floor.Serves(now) ||
+	floor := h.Floor.Effective(now)
+	if h.Err != "" || h.Evicted || floor == FloorBelow || floor == FloorUnknown ||
 		h.AheadOfLog() || h.StreamRecreated {
 		return false
 	}
@@ -456,7 +501,29 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 		floor = *h.FirstSeq
 	}
 	if !Replayable(h.Position.Seq, floor) {
-		return false, RefuseBelowFloor
+		// BELOW THE FLOOR, and the stream's first sequence says which
+		// side of the log: the floor is published before the purge it
+		// licenses, so the log may still hold what this node lacks. An
+		// unreadable first sequence cannot show that it does, and the
+		// broker that did not answer is the honest reason.
+		//
+		// IN [Health.Refusal]'S ORDER, with the one retryable answer
+		// LAST: a replay clears on its own only on the log the rows are
+		// keyed to, so a checkpoint past the end or a rebuilt stream is
+		// the truer answer whenever either holds. A stream deleted and
+		// rebuilt under the same name keeps whatever floor the old one
+		// had published — only a reanchor touches it — so a node below
+		// that stale floor on the rebuilt log is not replaying anything
+		// that clears; it needs an operator.
+		switch {
+		case h.FirstSeq == nil:
+			return false, RefuseBrokerUnreachable
+		case !Replayable(h.Position.Seq, *h.FirstSeq):
+			return false, RefuseBelowFloor
+		case h.AheadOfLog() || h.StreamRecreated:
+			return false, RefuseWrongStream
+		}
+		return false, RefuseBehind
 	}
 	if h.Lag == nil || h.LastSeq == nil {
 		// The stream's own end could not be read, so the upper half of

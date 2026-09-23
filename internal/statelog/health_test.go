@@ -10,24 +10,37 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE FLOOR IS THREE-VALUED, and the third value takes the SAME branch as the
-// bad one rather than the optimistic one.
+// AN UNREADABLE FLOOR TAKES THE SAME BRANCH AS THE BAD ONE rather than the
+// optimistic one, in both decisions that read it.
 //
 // A boolean here hid the answer that matters. A floor that could not be read
 // is not a floor that is satisfied, and guessing keeps a node serving over a
 // hole it cannot see — which is the one failure a replicated log has no way to
-// notice later.
-func TestAnUnreadableFloorDoesNotServe(t *testing.T) {
+// notice later. A node replaying up to the floor serves no read either — the
+// floor is what every node must hold before it answers — but it keeps its
+// seats, being behind rather than wrong. So this is asserted through the two
+// decisions, [statelog.Health.Refusal] and [statelog.Health.Healthy], rather
+// than through one "does it serve" predicate: that predicate had no caller
+// left, and a caller reaching for it to decide the seats would have shed a
+// node that is only replaying.
+func TestAnUnreadableFloorTakesTheBadBranch(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	for state, serves := range map[statelog.FloorState]bool{
-		statelog.FloorOK:      true,
-		statelog.FloorBelow:   false,
-		statelog.FloorUnknown: false,
+	for state, want := range map[statelog.FloorState]struct {
+		refusal statelog.ReadRefusal
+		healthy bool
+	}{
+		statelog.FloorOK:        {refusal: "", healthy: true},
+		statelog.FloorReplaying: {refusal: statelog.RefuseBehind, healthy: true},
+		statelog.FloorBelow:     {refusal: statelog.RefuseBelowFloor, healthy: false},
+		statelog.FloorUnknown:   {refusal: statelog.RefuseFloorUnknown, healthy: false},
 	} {
-		floor := statelog.Floor{State: state, ReadAt: now}
-		if got := floor.Serves(now); got != serves {
-			t.Errorf("%s.Serves() = %v, want %v", state, got, serves)
+		h := statelog.Health{Floor: statelog.Floor{State: state, ReadAt: now}}
+		if got := h.Refusal(now); got != want.refusal {
+			t.Errorf("a %s floor refuses reads with %q, want %q", state, got, want.refusal)
+		}
+		if got := h.Healthy(now, statelog.DeferredSince{}); got != want.healthy {
+			t.Errorf("a %s floor keeps the seats: %v, want %v", state, got, want.healthy)
 		}
 		if state.String() == "" || strings.HasPrefix(state.String(), "FloorState(") {
 			t.Errorf("%v has no name an operator could read", int(state))
@@ -140,10 +153,12 @@ func TestADeferralShedsSeatsOnlyPastTheGrace(t *testing.T) {
 // ESTABLISHED IS A TWO-SIDED INEQUALITY, and each side fails for its own
 // reason.
 //
-// Below the floor, records this node never applied have been trimmed. Above
-// the stream's end, a consumer created there waits for a sequence that never
-// arrives, reports nothing pending, and looks perfectly caught up while
-// applying nothing — for ever.
+// Below the log, records this node never applied have been trimmed. Below the
+// published floor and above the log, the records are still there and the node
+// is replaying them — which clears on its own, so it is `behind` rather than a
+// refusal that sends a caller elsewhere. Above the stream's end, a consumer
+// created there waits for a sequence that never arrives, reports nothing
+// pending, and looks perfectly caught up while applying nothing — for ever.
 func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 	t.Parallel()
 	at := func(seq uint64) statelog.Position {
@@ -164,12 +179,39 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 			},
 			strict: true, ok: true,
 		},
-		"below the floor": {
+		"below the log": {
 			health: statelog.Health{
 				Position: at(10), TrimFloor: ptr(500), FirstSeq: ptr(500), Lag: ptr(0),
 				LastSeq: ptr(900),
 			},
 			want: statelog.RefuseBelowFloor,
+		},
+		// THE FLOOR IS PUBLISHED BEFORE THE PURGE IT LICENSES, so a purge
+		// that failed, or one no later tick licenses again, leaves the
+		// floor above the log's first record. What this node lacks is
+		// still there; it is replaying it, on either kind of readiness.
+		"below the published floor and above the log": {
+			health: statelog.Health{
+				Position: at(10), TrimFloor: ptr(500), FirstSeq: ptr(1), Lag: ptr(890),
+				LastSeq: ptr(900),
+			},
+			want: statelog.RefuseBehind,
+		},
+		"below the published floor and above the log, strictly": {
+			health: statelog.Health{
+				Position: at(10), TrimFloor: ptr(500), FirstSeq: ptr(1), Lag: ptr(890),
+				LastSeq: ptr(900),
+			},
+			strict: true, want: statelog.RefuseBehind,
+		},
+		// AND WITH NO FIRST SEQUENCE THERE IS NO SAYING WHICH: the
+		// broker that did not answer is the reason, not a hole nobody
+		// saw.
+		"below the published floor with the log's bounds unread": {
+			health: statelog.Health{
+				Position: at(10), TrimFloor: ptr(500), Lag: ptr(0), LastSeq: ptr(900),
+			},
+			want: statelog.RefuseBrokerUnreachable,
 		},
 		// THE BOUNDARY ITSELF, in the state a purge leaves: the log
 		// holds nothing below 50 and its last record was 49, so a node
@@ -227,12 +269,13 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 		// arrives from a possibly-non-authoritative member, and a stale
 		// one is LOWER than the truth — so a maximum that trusts it
 		// under-fires and a node below the real floor keeps serving.
+		// Below the floor it picks the refusal, and never clears one.
 		"a stale first sequence cannot lower the published floor": {
 			health: statelog.Health{
 				Position: at(10), TrimFloor: ptr(500), FirstSeq: ptr(1), Lag: ptr(0),
 				LastSeq: ptr(900), Drained: true,
 			},
-			strict: true, want: statelog.RefuseBelowFloor,
+			strict: true, want: statelog.RefuseBehind,
 		},
 		"and a first sequence above it does raise it": {
 			health: statelog.Health{
@@ -240,6 +283,41 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 				LastSeq: ptr(900), Drained: true,
 			},
 			strict: true, want: statelog.RefuseBelowFloor,
+		},
+		// A REBUILT STREAM UNDER A STALE FLOOR IS NOT A REPLAY. A stream
+		// deleted and rebuilt under the same name keeps the floor the old
+		// one published — only a reanchor touches it — so a node below that
+		// floor on the rebuilt log is replaying nothing that clears, and the
+		// retryable `behind` would send a caller back to it for ever.
+		"a rebuilt stream below a stale floor": {
+			health: statelog.Health{
+				Position: at(5), TrimFloor: ptr(10), FirstSeq: ptr(1), Lag: ptr(15),
+				LastSeq: ptr(20), StreamRecreated: true,
+			},
+			want: statelog.RefuseWrongStream,
+		},
+		"a rebuilt stream below a stale floor, strictly": {
+			health: statelog.Health{
+				Position: at(5), TrimFloor: ptr(10), FirstSeq: ptr(1), Lag: ptr(15),
+				LastSeq: ptr(20), StreamRecreated: true,
+			},
+			strict: true, want: statelog.RefuseWrongStream,
+		},
+		// AND AN EMPTY ONE, whose end is below the checkpoint: the floor
+		// split must not mask the end either.
+		"an empty rebuilt stream below a stale floor": {
+			health: statelog.Health{
+				Position: at(5), TrimFloor: ptr(10), FirstSeq: ptr(0), Lag: ptr(0),
+				LastSeq: ptr(0),
+			},
+			want: statelog.RefuseWrongStream,
+		},
+		"an empty rebuilt stream below a stale floor, strictly": {
+			health: statelog.Health{
+				Position: at(5), TrimFloor: ptr(10), FirstSeq: ptr(0), Lag: ptr(0),
+				LastSeq: ptr(0),
+			},
+			strict: true, want: statelog.RefuseWrongStream,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -352,6 +430,36 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 			t.Errorf("%s set: still Healthy, so a node in this state keeps its seats",
 				tc.field)
 		}
+	}
+
+	// REPLAYING UP TO THE FLOOR IS A REFUSAL AND NOT A SHED. The records
+	// are on the log and the node is reading them, so a read is told to
+	// come back and the node's seats stay: a copy that is behind catches
+	// up, and no distance behind is a shed, this one included.
+	//
+	// WITH RECORDS PENDING, which is the only way the engine produces the
+	// state: a published floor is at most one past the log's end, so a node
+	// below it has records left to apply, and a case built level would
+	// certify a combination no node ever reports.
+	replaying := serving()
+	replaying.Floor.State = statelog.FloorReplaying
+	pending := uint64(5)
+	replaying.Lag = &pending
+	if got := replaying.Refusal(now); got != statelog.RefuseBehind {
+		t.Errorf("a node replaying up to the floor refuses %q, want %q — the "+
+			"state clears on its own, and a code no caller retries sends them "+
+			"away from a node that is only catching up", got, statelog.RefuseBehind)
+	}
+	if !replaying.Healthy(now, statelog.DeferredSince{}) {
+		t.Error("a node replaying up to the floor gave up its seats, which moves " +
+			"a company's work off a copy that is behind rather than wrong")
+	}
+	// AND IT IS THE LAST REFUSAL, because it clears on its own only while
+	// the applier moves: a stalled node replaying nothing is stalled.
+	replaying.Stalled = true
+	if got := replaying.Refusal(now); got != statelog.RefuseStalled {
+		t.Errorf("a stalled node below the floor refuses %q, want %q — it is "+
+			"not replaying anything", got, statelog.RefuseStalled)
 	}
 
 	// The deferral shed is the one condition that needs a SERIES, so it is

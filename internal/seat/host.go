@@ -167,9 +167,10 @@ type Config struct {
 	// and dropping work in hand would be pure loss. This one is about work
 	// already in hand, and it fires only where that work would be WRONG —
 	// an applier halted at a record it cannot decode, an eviction whose
-	// peers are dropping everything this node writes, rows below a trim
-	// floor with a hole nothing will fill. A seat left running on any of
-	// those answers its own tools out of a copy the fleet has abandoned.
+	// peers are dropping everything this node writes, rows below the log's
+	// first surviving record with a hole nothing will fill. A seat left
+	// running on any of those answers its own tools out of a copy the fleet
+	// has abandoned.
 	//
 	// VOLUNTARY, not fenced: the lease is still held and still renewed, so
 	// the in-flight turn finishes and the seat leaves when it goes idle.

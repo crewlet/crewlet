@@ -114,10 +114,12 @@ far along they are:
 - the applier has **stopped** at a record it cannot apply;
 - the node has been **evicted** from the fleet, so its peers drop everything it
   writes;
-- its rows are **below the trim floor** — records it never applied have been
+- its rows are **below the log** — records it never applied have been
   deleted, and the hole will never fill. A floor that has been *unreadable* for
   four heartbeats counts here too: an unread floor is not a floor that is
-  satisfied;
+  satisfied. A node that is only below the published trim floor, while the log
+  still holds every record it lacks, is not here: it is replaying them, which
+  is *behind*;
 - its checkpoint names **a stream that is not this one**, which is a log
   deleted and rebuilt underneath it (`crewlet retention reanchor` is the
   repair);

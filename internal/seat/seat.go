@@ -275,8 +275,9 @@ const (
 
 	// ReasonUnserviceable is this node's copy of the company's records
 	// being WRONG rather than behind — a halted applier, an eviction, a
-	// position below the trim floor, or a record it has been unable to
-	// decode past the deferral grace. See [Config.Serviceable].
+	// position below the log's first surviving record, or a record it has
+	// been unable to decode past the deferral grace. See
+	// [Config.Serviceable].
 	//
 	// VOLUNTARY, unlike ReasonPosture, and the difference is what is
 	// actually lost. A shedding posture means this node may be running a

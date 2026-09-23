@@ -453,12 +453,12 @@ func (e *Engine) NativeHydrated() bool {
 // catches up, so withholding claims is the whole remedy and dropping work in
 // hand would be pure loss. This is about a copy that is WRONG — an applier
 // halted at a record it cannot decode, an eviction whose peers are dropping
-// everything this node writes, rows below a trim floor (or a floor nobody
-// could read) with a hole nothing will fill, a checkpoint naming a stream
-// that is not this one, an applied prefix frozen past [statelog.StallGrace],
-// or a record held past [statelog.DeferralGrace]. A seat left running on any
-// of those answers its own tools out of a copy the fleet has already
-// abandoned, and D122 is the rule that says it must not.
+// everything this node writes, rows below the log with a hole nothing will
+// fill (or a trim floor nobody could read), a checkpoint naming a stream that
+// is not this one, an applied prefix frozen past [statelog.StallGrace], or a
+// record held past [statelog.DeferralGrace]. A seat left running on any of
+// those answers its own tools out of a copy the fleet has already abandoned,
+// and D122 is the rule that says it must not.
 //
 // A LAG IS NEVER ONE OF THEM, which is what the log line below means by
 // "wrong rather than behind" — and for as long as the health underneath

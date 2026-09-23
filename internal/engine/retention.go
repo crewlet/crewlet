@@ -405,7 +405,12 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 // as possibly gone, which refuses only a node below what this tick licensed; no
 // node the tick counted is, because the applied term put it at or under every
 // counted position, and one it did not count catches up by replay, since the
-// records are still there. The next tick purges again.
+// records are still there. Meanwhile a node between the log's first record and
+// the floor refuses reads as `behind` while it replays them
+// ([statelog.FloorReplaying]) and is never sent to adopt a snapshot. The gap
+// closes only when a later tick licenses removing at least that far, and that
+// can be a while: a blocked tick purges nothing, and one whose lowest counted
+// node is lower purges less.
 func (r *retention) apply(ctx context.Context, stream *jetstream.DomainLog, name string,
 	generation uint32, decision statelog.TrimDecision, first uint64, shared fleetInputs) error {
 
