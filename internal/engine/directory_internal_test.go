@@ -386,10 +386,23 @@ func directoryCompany(t *testing.T, e *Engine) *Company {
 // the directory company, under the roles given (nil for all three).
 func bootDirectoryNode(t *testing.T, roles []string) *Engine {
 	t.Helper()
+	return bootDirectoryNodeWith(t, roles, nil)
+}
+
+// bootDirectoryNodeWith is [bootDirectoryNode] with the node's Tier A amended
+// before it boots, for a case about what a node reads from its own
+// configuration.
+func bootDirectoryNodeWith(t *testing.T, roles []string,
+	amend func(*config.Bootstrap)) *Engine {
+
+	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	b.Node.Roles = roles
+	if amend != nil {
+		amend(&b)
+	}
 	// A RECORDER, as `crewlet run` always hands one: a node booted without
 	// one silently drops every gauge a case might read.
 	rec, err := metrics.New()

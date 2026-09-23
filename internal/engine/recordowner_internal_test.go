@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -59,15 +60,17 @@ func TestALoginNamesTheRecordItsHolderActsUnder(t *testing.T) {
 		// somebody who is away is what writing another's record is for.
 		{"a suspended person's record is still their seat's", "away.gone", "platform-lead"},
 		{"a bound Tier A token acts as its seat", "token:ops", "platform-lead"},
-		// A TIER A TOKEN IS A PRINCIPAL WITH NO ROW, so no row is its
-		// own record rather than nobody's — and an inactive binding is
-		// dropped exactly as the request path drops it.
+		// A TIER A TOKEN IS HELD BY ITS ENTRY AND NOT BY A ROW, so a
+		// token this node declares with no row is its own record rather
+		// than nobody's — and an inactive binding is dropped exactly as
+		// the request path drops it.
 		{"a Tier A token nobody enrolled is its own record", "token:new", "token:new"},
 		{"a suspended token's binding binds nothing", "token:off", "token:off"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := holderRecordOf(t.Context(), dir, chart, c.login)
+			got, err := holderRecordOf(t.Context(), dir, chart,
+				declares("ops", "new", "off"), c.login)
 			if err != nil {
 				t.Fatalf("holderRecordOf(%q) = %v", c.login, err)
 			}
@@ -78,13 +81,26 @@ func TestALoginNamesTheRecordItsHolderActsUnder(t *testing.T) {
 	}
 }
 
+// declares is a Tier A token list holding exactly ids.
+func declares(ids ...string) func(string) bool {
+	return func(id string) bool {
+		for _, held := range ids {
+			if held == id {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // NOBODY, AND A HOLDER WHOSE SEAT IS GONE, ARE TWO ANSWERS — and neither is
 // what a node that cannot say gives.
 //
-// A login nobody holds, and the reservation an unfinished enrolment leaves,
-// name no record. A holder bound to a seat the chart has removed, or to an
-// agent's seat, names none this node can say either: their record is not
-// under the login, and writing it there is the second record nobody reads.
+// A login nobody holds, the reservation an unfinished enrolment leaves, and a
+// token login this node's Tier A declares no entry for, name no record. A
+// holder bound to a seat the chart has removed, or to an agent's seat, names
+// none this node can say either: their record is not under the login, and
+// writing it there is the second record nobody reads.
 // Every other failure is UNKNOWN — a 503 — because "nobody" read off a
 // directory or a chart this node could not read is a guess about whose record
 // to write.
@@ -129,10 +145,20 @@ func TestNobodyAndAGoneSeatAreAnswersAndABlindNodeIsNot(t *testing.T) {
 			companyChart(), "ghost.person", nil},
 		{"a chart this node cannot read", fakeBindings{rows: rows},
 			seatTable{posErr: errors.New("no chart view")}, "jane.doe", nil},
+		// A TOKEN LOGIN IS HELD BY ITS TIER A ENTRY. A typo is nobody's —
+		// and so is a login whose entry is gone although the directory
+		// still binds it, since no credential can act as it here.
+		{"a token login no entry declares", fakeBindings{rows: rows},
+			companyChart(), "token:opps", iam.ErrNoHolder},
+		{"a bound token login no entry declares any more",
+			fakeBindings{rows: map[string]iamdomain.Sighting{
+				"token:ops": boundMachine()}},
+			companyChart(), "token:ops", iam.ErrNoHolder},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := holderRecordOf(t.Context(), c.dir, c.chart, c.login)
+			got, err := holderRecordOf(t.Context(), c.dir, c.chart,
+				declares("new"), c.login)
 			if got != "" || err == nil {
 				t.Fatalf("holderRecordOf(%q) = %q, %v — want no record", c.login, got, err)
 			}
@@ -156,5 +182,32 @@ func TestANodeWithNoIdentityDomainCannotSayWhoseRecord(t *testing.T) {
 	var e *Engine
 	if _, err := e.HolderRecord(t.Context(), "jane.doe"); !errors.Is(err, errNoIdentityDomain) {
 		t.Errorf("HolderRecord on a nil engine = %v, want %v", err, errNoIdentityDomain)
+	}
+}
+
+// A TOKEN LOGIN IS HELD BY THE ENTRY THIS NODE BOOTED WITH, read from its own
+// Tier A — the wiring half of [holderRecordOf]'s rule, on a real node.
+//
+// The rule is tested over an injected list above; what that cannot see is a
+// node that never hands its configuration over, which answers ErrNoHolder for
+// every token — so an administrator could not reach a real token's own record
+// either, and nothing failed. The typo beside it is the defect itself: an
+// entry nobody declares named its own record, so `set_priorities` wrote a
+// queue under a credential that does not exist.
+func TestATokenLoginIsHeldByTheEntryThisNodeBootedWith(t *testing.T) {
+	t.Parallel()
+	e := bootDirectoryNodeWith(t, nil, func(b *config.Bootstrap) {
+		b.API.Auth.Tokens = []config.APIToken{{
+			ID: "ops", Token: "a-token-value-nobody-reads-here",
+			Grants: []iam.Grant{iam.GrantStateRead},
+		}}
+	})
+	if got, err := e.HolderRecord(t.Context(), "token:ops"); err != nil || got != "token:ops" {
+		t.Errorf("HolderRecord(token:ops) = %q, %v — want the token's own "+
+			"record, since this node declares it and nothing binds it", got, err)
+	}
+	if got, err := e.HolderRecord(t.Context(), "token:opps"); !errors.Is(err, iam.ErrNoHolder) {
+		t.Errorf("HolderRecord(token:opps) = %q, %v — want %v, since no entry "+
+			"on this node has that id", got, err, iam.ErrNoHolder)
 	}
 }

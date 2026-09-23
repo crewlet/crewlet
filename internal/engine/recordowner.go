@@ -27,13 +27,22 @@ import (
 // bound person's record was looked for, and written, where nothing of theirs
 // is kept.
 //
-// # A Tier A token is a principal with no row
+// # A Tier A token is held by the configuration, not by a row
 //
 // `token:<id>` acts from the configuration alone; the directory only BINDS it,
 // through [boundRowOf]'s rule — an active machine bound to a seat — which is
 // the rule the request path applies to it. So a token login with no row names
 // the token's own record rather than nobody: its absence from the directory is
 // the ordinary state of a break-glass credential, not the absence of one.
+//
+// BUT ONLY A TOKEN THIS NODE'S `api.auth.tokens` DECLARES. The holder of a
+// token login is its Tier A entry, and a login no entry declares is held by
+// nobody — whatever the directory says, since no credential can act as it.
+// Answered as its own record, a mistyped `token:opps` was somebody's record:
+// an administrator's `set_priorities` wrote and woke a priority queue under a
+// name no credential has, and the inbox and pins routes wrote the same
+// phantom. The colleague resolver it replaced had refused that name, which is
+// the typo guard `set_priorities` exists to keep.
 
 // HolderRecord answers whose record a login names — see [iam.Holders].
 //
@@ -50,16 +59,32 @@ func (e *Engine) HolderRecord(ctx context.Context, login string) (string, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestReadBudget)
 	defer cancel()
-	return holderRecordOf(ctx, reader, SeatViewOf(e), login)
+	return holderRecordOf(ctx, reader, SeatViewOf(e), e.declaresToken, login)
+}
+
+// declaresToken reports whether this node's Tier A declares a token by id.
+//
+// THIS NODE'S, because it is this node's guard that authenticates the token:
+// a fleet mid-rollout may legally disagree about the list, and a login the
+// node answering cannot authenticate is one nobody acts as here.
+func (e *Engine) declaresToken(id string) bool {
+	_, held := e.tierATokens[id]
+	return held
 }
 
 var _ iam.Holders = (*Engine)(nil)
 
 // holderRecordOf is [Engine.HolderRecord] over its two seams.
 func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Chart,
-	login string) (string, error) {
+	declared func(id string) bool, login string) (string, error) {
 
-	if strings.HasPrefix(login, iam.TokenLoginPrefix) {
+	if id, isToken := strings.CutPrefix(login, iam.TokenLoginPrefix); isToken {
+		// THE CONFIGURATION FIRST, and it needs no read: a login no
+		// entry declares is nobody's, bound row or not.
+		if declared == nil || !declared(id) {
+			return "", fmt.Errorf("%w: %s — no api.auth.tokens entry on this "+
+				"node has the id %q", iam.ErrNoHolder, login, id)
+		}
 		// THE TOKEN'S OWN TABLE, which already refuses a row it cannot
 		// vouch for in the direction that widens.
 		row, err := boundRowOf(ctx, dir, login)

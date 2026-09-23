@@ -2612,7 +2612,14 @@ one of them takes a `handle`, and the rule for whose is the same, in one place:
    login itself for somebody bound to none. `ana.diaz`, bound to the seat
    `ana`, reads `ana`'s inbox, which is where everything addressed to her is
    kept; it used to be read literally, as an empty record under the login. A
-   login is never matched against the chart's seats. A login nobody holds, or
+   login is never matched against the chart's seats. A **`token:<id>` login**
+   is held by the Tier A entry of that id in the answering node's
+   `api.auth.tokens`, not by a directory row: it names that token's record —
+   the seat an active directory row binds it to, or the login itself — and a
+   `token:` login no entry declares is held by nobody, whatever the directory
+   says, because no credential can act as it. So a mistyped `token:opps`
+   names no record rather than a queue kept for a credential that does not
+   exist. A login nobody holds, or
    one whose holder is bound to a seat the chart no longer has, names no
    record (`404`) — but only to a caller the question would have admitted on
    the name as typed, which nobody leads, so everybody else is refused as

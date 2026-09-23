@@ -97,6 +97,12 @@ type Engine struct {
 	// meaningless. See [coord.NodeStatus.GrantCeilingHash].
 	grantCeilingHash string
 
+	// tierATokens are the ids this node's `api.auth.tokens` declares — the
+	// holders of every `token:<id>` login this node can authenticate — for
+	// [Engine.HolderRecord], which answers a login no entry declares as
+	// nobody's. Tier A, so read once at boot like the ceiling beside it.
+	tierATokens map[string]struct{}
+
 	// identityProvider is the company's OIDC provider as Tier A names it,
 	// or nil on a deployment that signs in some other way. ONE INSTANCE
 	// for the process, shared by the sign-in surface and the deactivation
@@ -893,6 +899,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// a peer's presence row back through.
 	e.externalBase = opts.Bootstrap.API.ExternalBase()
 	e.grantCeilingHash = opts.Bootstrap.API.Auth.CeilingHash()
+	e.tierATokens = make(map[string]struct{}, len(opts.Bootstrap.API.Auth.Tokens))
+	for _, token := range opts.Bootstrap.API.Auth.Tokens {
+		e.tierATokens[token.ID] = struct{}{}
+	}
 	e.identityProvider = identityProvider(opts.Bootstrap)
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
 	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)

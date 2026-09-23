@@ -375,6 +375,12 @@ func TestAPriorityRouteNeverTurnsALoginIntoASeat(t *testing.T) {
 			http.StatusOK, "jane.doe"},
 		{"a bound person's login", admin("ana"), directory{}, "bo.person",
 			http.StatusOK, "bo"},
+		// A MISTYPED TOKEN LOGIN IS NOBODY'S: no Tier A entry declares
+		// `token:opps`, so no credential acts as it and no queue is kept
+		// under it — the engine answers it as held by nobody, and the
+		// route writes nothing rather than a queue for a phantom.
+		{"a token login no entry declares", admin("ana"), directory{},
+			"token:opps", http.StatusNotFound, ""},
 		// THE LEAD RELATION IS A FACT ABOUT A SEAT: `cto` leads `bo`, and
 		// decided at the route on the login, the lead was refused as
 		// leading nobody called `bo.person`.
