@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 )
 
 // MACHINE TOKENS, through the real writer, applier and reader.
@@ -274,26 +275,85 @@ func TestARevokedTokenIsRefusedAndItsRowStays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	revokeToken(t, rig, owner, token.ID)
+	if got := checked(t, rig, token); got.Answer != credential.TokenRefused {
+		t.Errorf("a revoked token answered %q (%s)", got.Answer, got.Detail)
+	}
+}
+
+// revokeToken withdraws one token through the whole path and applies it.
+func revokeToken(t *testing.T, rig *writeRig, owner, id string) {
+	t.Helper()
 	if err := rig.draining(func() error {
 		_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 			PersonID: owner,
 			Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
 				for i := range held {
-					if held[i].ID == token.ID {
+					if held[i].ID == id {
 						held[i].RevokedAt = brokerAt.Add(-time.Second)
 					}
 				}
 				return held
 			},
-			OpID: "op-revoke-token", Reason: "leaked",
+			OpID: "op-revoke-" + id, Reason: "leaked",
 		})
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	rig.drain()
-	if got := checked(t, rig, token); got.Answer != credential.TokenRefused {
-		t.Errorf("a revoked token answered %q (%s)", got.Answer, got.Detail)
+}
+
+// A TOKEN'S DEFERRAL IS READ BEFORE ITS ROWS, as a session's is.
+//
+// The node holds a record it cannot decode about the owner — a newer peer's
+// revocation — and reprocesses it while a request is being checked. Simulated
+// here by a deferral whose first reading IS that reprocessing: the revocation
+// applies and the deferral clears at that instant. Read before the rows, the
+// rows then carry the revocation. Read after them, rows from BEFORE the
+// revocation were paired with "nothing deferred" and the token was served — a
+// verdict that held at no instant, since while the rows were read the answer
+// was unknown and once the record applied it was refused. Mutation: take the
+// reading after the transaction, and the token answers valid.
+func TestATokensDeferralIsReadBeforeItsRows(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	owner := tokenOwner(t, rig, "jane.doe")
+	_, token, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{PersonID: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, err := statelogtest.LocalReaderOver(
+		iamdomain.Domain{}, rig.db.Replicated(), rig.waiter)
+	if err != nil {
+		t.Fatalf("build the read authority: %v", err)
+	}
+	reprocessed := false
+	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
+		DB: rig.db, Log: log, Committed: rig.waiter.Committed,
+		Deferred: func() (statelog.Deferral, bool) {
+			if !reprocessed {
+				reprocessed = true
+				revokeToken(t, rig, owner, token.ID)
+			}
+			return statelog.Deferral{}, false
+		},
+	})
+	if err != nil {
+		t.Fatalf("build the reader: %v", err)
+	}
+	row, err := reader.MachineToken(t.Context(), token.ID)
+	if err != nil {
+		t.Fatalf("read the token: %v", err)
+	}
+	if !reprocessed {
+		t.Fatal("the reader never asked whether it held a deferred record")
+	}
+	got := credential.CheckToken(token, row, brokerAt, statelog.StallGrace)
+	if got.Answer == credential.TokenValid {
+		t.Errorf("a token whose revocation was deferred while it was read " +
+			"answered valid — rows from before the revocation, paired with a " +
+			"deferral read after it cleared")
 	}
 }
 

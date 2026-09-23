@@ -171,10 +171,38 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 // An EMPTY person is covered by every deferral, because nothing can say which
 // bucket a record it could not decode is about.
 func (r *Reader) Staleness(person string) (lag time.Duration, deferred bool) {
-	if held, ok := r.deferred(); ok {
-		deferred = coversPerson(held, person)
-	}
-	return r.lag(), deferred
+	return r.coverage().of(person)
+}
+
+// coverage is one reading of how far this node can vouch, taken BEFORE the rows
+// it is about are read.
+//
+// A VALUE, for the one reader that cannot name its person up front: a machine
+// token's row is what says whose token it is, so its deferral has to be taken
+// before the owner is known and filtered by the owner's bucket once the row has
+// named them. Asked afterwards instead, a deferral reprocessed between the row
+// read and the question left rows from before a revocation paired with "nothing
+// deferred", which is a verdict that held at no instant — while the rows were
+// read the answer was unknown, and once the record applied it was refused.
+type coverage struct {
+	lag       time.Duration
+	held      statelog.Deferral
+	deferring bool
+}
+
+// coverage reads the deferral and the lag, in that order: the deferral is what
+// makes a caught-up node's rows incomplete, so it is the half that must predate
+// the read.
+func (r *Reader) coverage() coverage {
+	held, deferring := r.deferred()
+	return coverage{lag: r.lag(), held: held, deferring: deferring}
+}
+
+// of is the reading scoped to one person's bucket — every deferral, for an
+// empty person, because nothing can say which bucket an undecodable record is
+// about.
+func (c coverage) of(person string) (lag time.Duration, deferred bool) {
+	return c.lag, c.deferring && coversPerson(c.held, person)
 }
 
 // coversPerson reports whether a deferred record's scope covers this person's
@@ -354,6 +382,10 @@ func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) err
 // credential is broken for the length of an upgrade.
 func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenRow, error) {
 	out := credential.TokenRow{Applied: uint64(r.committed().Packed())}
+	// THE DEFERRAL IS TAKEN FIRST, as [Reader.Resolve] takes it — before
+	// the rows, and scoped once they have named the owner. See [coverage]
+	// for the verdict the other order produced.
+	vouch := r.coverage()
 	var owner string
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		var (
@@ -399,7 +431,7 @@ func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenR
 	// THE OWNER'S BUCKET, once the row has named them — and every
 	// deferral when it has not, because nothing can say which bucket a
 	// record this node could not decode is about.
-	out.Lag, out.Deferred = r.Staleness(owner)
+	out.Lag, out.Deferred = vouch.of(owner)
 	return out, nil
 }
 
