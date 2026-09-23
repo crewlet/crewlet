@@ -143,6 +143,31 @@ func TestAListingCarriesNoValueAndNeedsNoKey(t *testing.T) {
 	}
 }
 
+// THE NAMES UNDER A PREFIX NEED NO KEYRING EITHER, because what reads them is
+// the duty that finishes a removal: destroying a removed person's key is an
+// Unset, which a node with no keyring can perform, so finding the key must not
+// be the half that needs one. Only the prefix's names come back, in order.
+func TestNamesUnderAPrefixNeedNoKey(t *testing.T) {
+	t.Parallel()
+	s, fleet := fleetStore(t, ring(t, "k1"))
+	mustSet(t, s, "IAM_PERSON_B_DEK", "b")
+	mustSet(t, s, "IAM_PERSON_A_DEK", "a")
+	mustSet(t, s, "GITLAB_TOKEN", "glpat")
+
+	names, err := fleetsecrets.New(fleet, nil).Names(t.Context(), "IAM_PERSON_")
+	if err != nil {
+		t.Fatalf("a node with no keyring could not find what a removal left: %v", err)
+	}
+	if strings.Join(names, ",") != "IAM_PERSON_A_DEK,IAM_PERSON_B_DEK" {
+		t.Fatalf("names = %v, want exactly the prefix's, name-ordered", names)
+	}
+	if removed, err := fleetsecrets.New(fleet, nil).Unset(t.Context(),
+		"IAM_PERSON_A_DEK"); err != nil || !removed {
+		t.Fatalf("a node with no keyring could not destroy a key it found: "+
+			"(%v, %v)", removed, err)
+	}
+}
+
 // A MISSING NAME IS ITS OWN SENTINEL, distinct from a keyring that no longer
 // opens what it wrote. Collapsing them would make a dropped key look exactly
 // like a variable nobody set.

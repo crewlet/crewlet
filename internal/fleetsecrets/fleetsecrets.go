@@ -33,6 +33,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -170,6 +171,37 @@ func (s *Store) List(ctx context.Context) ([]secrets.Record, error) {
 		})
 	}
 	slices.SortFunc(out, func(a, b secrets.Record) int { return cmp.Compare(a.Name, b.Name) })
+	return out, nil
+}
+
+// Names reports every stored name starting with prefix, sorted, without
+// opening anything.
+//
+// NO KEYRING NEEDED, like [Store.List], and for a reason of its own: what reads
+// this is the duty that finishes a removal. Destroying a removed person's key
+// is an [Store.Unset], which needs no cipher either, so a node that cannot
+// decrypt can still complete an off-boarding — and the finding half must not be
+// the one thing that stops it.
+//
+// NAMES ONLY, never the record: a caller that needs a value asks for it by
+// name, and one that needs to know what exists has no business holding
+// envelopes it is not going to open.
+func (s *Store) Names(ctx context.Context, prefix string) ([]string, error) {
+	if s == nil {
+		return nil, secrets.ErrNoKeyring
+	}
+	rows, err := s.fleet.SecretValues(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fleetsecrets: list the secrets under %q: %w",
+			prefix, err)
+	}
+	var out []string
+	for _, row := range rows {
+		if strings.HasPrefix(row.Name, prefix) {
+			out = append(out, row.Name)
+		}
+	}
+	slices.Sort(out)
 	return out, nil
 }
 
