@@ -67,7 +67,29 @@ describe("who the dashboard thinks you are", () => {
     const { result } = renderHook(() => useViewer());
     await waitFor(() => expect(result.current.anonymous).toBe(true));
     expect(result.current.unbound).toBe(false);
-    expect(result.current.managesPeople).toBe(false);
+    expect(result.current.operatesFleet).toBe(false);
+  });
+
+  // THE ADMIN PATH OVER SOMEBODY'S WORK RECORD IS fleet:operate, AND ONLY IT.
+  //
+  // The field read `people:manage`, which is authority over person ROWS in the
+  // identity directory and opens nobody's queue: the engine refuses a
+  // colleague's inbox to a caller holding it alone and answers a caller
+  // holding `fleet:operate`. A screen gating on the wrong one asked for what
+  // it would be refused and hid what it would be given. Each grant is held
+  // ALONE, so neither case passes on the other's back.
+  test("people:manage alone does not open somebody's work record", async () => {
+    answering({ login: "hr-1", grants: ["people:manage"], handle: "", name: "", kind: "" });
+    const { result } = renderHook(() => useViewer());
+    await waitFor(() => expect(result.current.login).toBe("hr-1"));
+    expect(result.current.operatesFleet).toBe(false);
+  });
+
+  test("fleet:operate alone does", async () => {
+    answering({ login: "sre-1", grants: ["fleet:operate"], handle: "", name: "", kind: "" });
+    const { result } = renderHook(() => useViewer());
+    await waitFor(() => expect(result.current.login).toBe("sre-1"));
+    expect(result.current.operatesFleet).toBe(true);
   });
 
   // A FAILED READ IS NOT AN ANSWER, and anonymity is the worst of the three

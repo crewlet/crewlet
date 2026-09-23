@@ -39,12 +39,20 @@ export interface ViewerState {
   /** The capabilities this caller carries, as the engine reports them. */
   grants: string[];
   /**
-   * Whether this caller holds `people:manage` — the one grant that reads and
-   * changes ANYBODY's person record. A lead reads their reports' too, which
-   * this screen cannot know; the engine decides, and a screen that asks on a
-   * lead's behalf renders the refusal it gets.
+   * Whether this caller holds `fleet:operate` — the deployment's own grant,
+   * and the ADMIN PATH of the engine's owner-or-lead rule: it reads anybody's
+   * work record (their queue, their inbox, their day) where otherwise only
+   * the owner and whoever leads them may. A lead reads their reports' too,
+   * which this screen cannot know; the engine decides, and a screen that asks
+   * on a lead's behalf renders the refusal it gets.
+   *
+   * NOT `people:manage`, which is what this read. That grant is authority over
+   * PERSON ROWS in the identity directory — who is enrolled and what they
+   * carry — and opens nobody's work record: a screen gating on it asked for a
+   * colleague's queue on behalf of an administrator the engine refused, and
+   * hid it from the operator the engine would have answered.
    */
-  managesPeople: boolean;
+  operatesFleet: boolean;
   /** The seat the directory binds this caller to, or "" — see the note above. */
   handle: string;
   /** That seat's display name, or "". */
@@ -82,7 +90,7 @@ export function useViewer(): ViewerState {
   return {
     login,
     grants,
-    managesPeople: grants.includes("people:manage"),
+    operatesFleet: grants.includes("fleet:operate"),
     handle,
     name: data?.name ?? "",
     kind: (data?.kind as ViewerState["kind"]) ?? "",

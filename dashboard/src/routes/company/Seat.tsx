@@ -565,10 +565,11 @@ export function SeatScreen({ handle }: { handle: string }) {
   // is what stops it replying twice in one chat thread, and it has been
   // written since the runtime landed with nothing on any screen reading it.
   //
-  // SCOPED, so a seat's threads are readable by that seat's own person and by
-  // an operator — the same rule every other per-seat question follows. The
-  // handle is sent explicitly because this screen is about somebody else's
-  // seat as often as the reader's own.
+  // A SEAT'S TRAIL, so the engine answers it on `audit:read` whoever's seat
+  // it is — the grant `/events` and the memory tab already take — and not by
+  // the owner-or-lead rule a person's queue takes. The handle is sent
+  // explicitly because this screen is about somebody else's seat as often as
+  // the reader's own.
   const threads = useQuery(
     "conversations",
     { handle, ...(thread ? { conversation: thread } : {}) },
@@ -579,13 +580,13 @@ export function SeatScreen({ handle }: { handle: string }) {
   // on a person's record describes one, so this is read only for a human.
   // AND ONLY WHERE THE READER MAY HAVE IT. A person record is somebody's
   // unread notices, the order they mean to work in and who set it — the
-  // engine answers it to its owner, whoever leads them, and `people:manage`.
-  // The lead relation is the chart's and not this screen's to compute, so a
-  // lead's read is asked for the owner and the grant alone; asking for every
-  // colleague would put a refusal on the screen where the honest answer is
-  // that this is somebody else's.
+  // engine answers it to its owner, whoever leads them, and `fleet:operate`,
+  // the admin path of that rule. The lead relation is the chart's and not
+  // this screen's to compute, so a lead's read is asked for the owner and the
+  // grant alone; asking for every colleague would put a refusal on the screen
+  // where the honest answer is that this is somebody else's.
   const viewer = useViewer();
-  const mayReadPerson = viewer.managesPeople || (viewer.handle !== "" && viewer.handle === handle);
+  const mayReadPerson = viewer.operatesFleet || (viewer.handle !== "" && viewer.handle === handle);
   const person = useQuery(
     "work_person",
     { handle },
