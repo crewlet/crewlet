@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
 
 // Policy is what one route requires, declared where the route is mounted.
@@ -73,14 +75,14 @@ type Router struct {
 
 // NewRouter wraps a mux so every route mounted through it is guarded.
 func NewRouter(mux Mux, guard Guard) *Router {
-	return &Router{mux: mux, guard: guard, refuse: plainRefusal,
+	return &Router{mux: mux, guard: guard, refuse: EnvelopeRefusal,
 		policies: map[string]Policy{}}
 }
 
 // Refusing replaces how a refusal is RENDERED, and nothing about whether one
 // is made. Set before the first mount; see [Refusal].
 //
-// A NIL REFUSAL KEEPS THE PLAIN ONE rather than writing nothing, because a
+// A NIL REFUSAL KEEPS [EnvelopeRefusal] rather than writing nothing, because a
 // wrapper that stopped a request and wrote no status would answer 200 with an
 // empty body — a refusal that reads, to every client, as the write landing.
 func (t *Router) Refusing(render Refusal) *Router {
@@ -90,19 +92,41 @@ func (t *Router) Refusing(render Refusal) *Router {
 	return t
 }
 
-// plainRefusal is the rendering every surface that states no wording of its
-// own gets.
-func plainRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decision) {
+// RetryUndecidedSeconds is the `Retry-After` on a request this node could not
+// decide, in seconds.
+//
+// TWO, the value the identity surface and the work surface give their own
+// 503s and for their reason: what the caller waits for is this node's chart
+// view catching up by one apply, or its identity read coming back — the scale
+// of one batch, not of an outage. Longer leaves a person staring at a screen
+// that could already answer; shorter turns a lagging node's every open tab
+// into a retry storm against the node least able to take it.
+const RetryUndecidedSeconds = 2
+
+// EnvelopeRefusal is the rendering every surface that states no wording of its
+// own gets: the engine's refusal envelope, the same one every other JSON
+// surface answers with.
+//
+// NOT [net/http.Error], which is what it was. That writes `text/plain` and
+// `nosniff` — the pairing that stops a strict client parsing the answer at
+// all — and a sentence rather than a code, so the /iam and /chart surfaces
+// refused a request in a shape no client of the rest of this API could read:
+// no `error` to branch on, no grant to name, and a 503 with no `Retry-After`,
+// which a client cannot tell from a node that is down for good.
+//
+//   - UNKNOWN IS NOT A REFUSAL. This node could not decide — it is behind, or
+//     it holds no company yet — so it is `503 unavailable` with a
+//     `Retry-After`, never a 403 that sends somebody to ask for an authority
+//     they already hold. See the package doc.
+//   - A REFUSAL is `403 unauthorized`, carrying the rule's reason and the
+//     grants that would have admitted the caller ([RefusalDetail]).
+func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decision) {
 	if d.Unknown() {
-		// UNKNOWN IS NOT A REFUSAL. This node could not decide — it is
-		// behind, or it holds no company yet — and 403 would send
-		// somebody to ask for an authority they already hold. See the
-		// package doc.
-		http.Error(w, "this node cannot decide authority for this "+
-			"request yet; try again", http.StatusServiceUnavailable)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, RetryUndecidedSeconds)
 		return
 	}
-	http.Error(w, "forbidden: "+string(d.Reason), http.StatusForbidden)
+	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+		RefusalDetail(d.Reason, d.Grants))
 }
 
 // Handle mounts one guarded route.
@@ -187,11 +211,19 @@ func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 // decision still unmade and a reader of the access log sees the clean path
 // alone. A surface that means to be strict about what it matched has to stop
 // the first one.
+//
+// BOTH SPELLINGS OF THE PATH ARE CHECKED. The escaped one catches
+// `/work/items/../config` as it was sent; the decoded one catches
+// `/work/items/%2e%2e/config`, whose escaped form is already clean and which
+// ServeMux decodes, cleans and redirects exactly as it does the first.
+//
+// IN THE ENVELOPE, like every other refusal on this API, rather than
+// [net/http.Error]'s `text/plain`.
 func CanonicalPath(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if raw := r.URL.EscapedPath(); raw != cleanPath(raw) {
-			http.Error(w, "the request path is not in canonical form",
-				http.StatusBadRequest)
+		raw, decoded := r.URL.EscapedPath(), r.URL.Path
+		if raw != cleanPath(raw) || decoded != cleanPath(decoded) {
+			httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeNonCanonicalPath)
 			return
 		}
 		next.ServeHTTP(w, r)

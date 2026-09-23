@@ -1,12 +1,15 @@
 package authz_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -210,6 +213,9 @@ func TestACleanedPathDifferingFromTheRawOneIsRefused(t *testing.T) {
 		{"/work/items/../work/items", http.StatusBadRequest},
 		{"/work//items", http.StatusBadRequest},
 		{"/./work/items", http.StatusBadRequest},
+		// ENCODED, so the escaped path is already clean and only the
+		// decoded one — which ServeMux cleans and redirects — is not.
+		{"/work/items/%2e%2e/work/items", http.StatusBadRequest},
 	} {
 		t.Run(c.path, func(t *testing.T) {
 			t.Parallel()
@@ -218,6 +224,13 @@ func TestACleanedPathDifferingFromTheRawOneIsRefused(t *testing.T) {
 			guarded.ServeHTTP(rec, req)
 			if rec.Code != c.want {
 				t.Errorf("%s answered %d, want %d", c.path, rec.Code, c.want)
+			}
+			if c.want == http.StatusBadRequest {
+				body := envelope(t, rec)
+				if body["error"] != string(httpjson.CodeNonCanonicalPath) {
+					t.Errorf("%s refused as %v, want the envelope's own code",
+						c.path, body["error"])
+				}
 			}
 		})
 	}
@@ -257,6 +270,85 @@ func TestAnUndecidableRequestIsNotAForbiddenOne(t *testing.T) {
 			}
 		})
 	}
+}
+
+// THE ROUTER'S OWN REFUSAL IS THE ENGINE'S ENVELOPE, not net/http's plain text.
+//
+// The /iam and /chart surfaces state no wording of their own, so every
+// refusal they make is this one — and it was `http.Error`: `text/plain` with
+// `nosniff`, a sentence rather than a code, and a 503 with no Retry-After.
+// A client of the rest of this API could not branch on it, could not name the
+// grant it lacked, and could not tell "try again" from "this node is gone".
+// So both halves are asserted on the WIRE: the content type, the code, the
+// sentence, the reason and grants on a refusal, and the Retry-After on the
+// undecidable arm.
+func TestTheRoutersOwnRefusalIsTheEnvelope(t *testing.T) {
+	t.Parallel()
+	refused := authz.Decide(t.Context(), grantedOnly(iam.GrantStateRead),
+		authz.ActionConfigWrite, authz.Object{Kind: authz.KindCompany}, authz.NoChart{})
+	if refused.Allowed || refused.Unknown() {
+		t.Fatalf("the fixture decision was %+v, want a plain refusal", refused)
+	}
+	for _, c := range []struct {
+		name   string
+		d      authz.Decision
+		status int
+		code   httpjson.Code
+	}{
+		{"refused", refused, http.StatusForbidden, httpjson.CodeUnauthorized},
+		{"undecidable", authz.Decision{Err: authz.ErrNoChart},
+			http.StatusServiceUnavailable, httpjson.CodeUnavailable},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			mux := http.NewServeMux()
+			guard := func(*http.Request, authz.Policy) authz.Decision { return c.d }
+			if err := authz.NewRouter(mux, guard).Handle("PATCH /config",
+				authz.Policy{Action: authz.ActionConfigWrite}, ok200()); err != nil {
+				t.Fatalf("mount: %v", err)
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "http://x/config", nil))
+			if rec.Code != c.status {
+				t.Fatalf("answered %d, want %d", rec.Code, c.status)
+			}
+			body := envelope(t, rec)
+			if body["error"] != string(c.code) || body["message"] != c.code.Message() {
+				t.Errorf("answered %v, want %s with its sentence", body, c.code)
+			}
+			if c.status == http.StatusServiceUnavailable {
+				if rec.Header().Get("Retry-After") !=
+					strconv.Itoa(authz.RetryUndecidedSeconds) {
+					t.Errorf("Retry-After = %q, want %d: a 503 without one reads "+
+						"as a node that is down for good",
+						rec.Header().Get("Retry-After"), authz.RetryUndecidedSeconds)
+				}
+				return
+			}
+			if body[authz.DetailReason] != string(authz.ReasonNoGrant) {
+				t.Errorf("reason = %v, want the rule's own", body[authz.DetailReason])
+			}
+			grants, _ := body[authz.DetailGrants].([]any)
+			if len(grants) != 1 || grants[0] != string(iam.GrantConfigWrite) {
+				t.Errorf("grants = %v, want the grant the rule consulted",
+					body[authz.DetailGrants])
+			}
+		})
+	}
+}
+
+// envelope reads a refusal and insists it is the engine's JSON envelope rather
+// than text some other writer produced.
+func envelope(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json:\n%s", got, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("the refusal is not JSON: %v\n%s", err, rec.Body.String())
+	}
+	return body
 }
 
 // A SURFACE'S OWN REFUSAL RENDERS WHAT THE ROUTER DECIDED, and nothing else.

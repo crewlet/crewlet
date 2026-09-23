@@ -53,9 +53,8 @@ one JSON object, and it always has the same three parts in the same places:
   more to say says it in the detail rather than rewording the sentence.
   Never match on it: the wording is copy and can be improved at any time. A few
   refusals still build their body themselves and answer with the code alone —
-  several under `/config` and `/setup`, and the `/query/*` REST twin of the
-  socket's query errors — so a client renders `message` where it is present and
-  its own line for the code where it is not.
+  several under `/config` and `/setup` — so a client renders `message` where it
+  is present and its own line for the code where it is not.
 - **Everything else is the detail** — the machine-readable facts about *this*
   refusal, as typed JSON beside the two reserved keys rather than nested under
   one: `config_path` and `hint` above, `fields` on an integration that is
@@ -311,6 +310,32 @@ request.
 this grant*. A narrow reader meets the second the moment they open a screen
 outside their grants, which is the ordinary case — so it must not be reported
 as the first, which tells them to go and get a new credential.
+
+**A `403` says which rule refused, and what would have admitted you.** Beside
+`"error": "unauthorized"` it carries two detail fields wherever the authority
+table made the refusal — every question, the policy every `/chart/*` and
+`/iam/*` route is mounted with, and the snapshot mirrors alike:
+
+```json
+{
+  "error": "unauthorized",
+  "message": "…",
+  "reason": "not_self",
+  "grants": ["fleet:operate"]
+}
+```
+
+`reason` is the authority table's own word for the rule that decided —
+`no_grant`, `not_self`, `not_lead`, `not_author`, `stage`, `seat_refused`,
+`unnamed` — and `grants` are the capabilities any **one** of which would have
+admitted this caller for this object. An empty `grants` is an answer rather
+than an omission: no capability would, and what is missing is a relation the
+chart does not hold. The [human write surface](#the-human-write-surface)
+answers its own refusals `403 forbidden` in its tools' wording instead.
+
+A request the node **cannot decide** — it is behind its chart log, or holds no
+company yet — is `503 unavailable` with a `Retry-After`, never a `403`: a lead
+told they lead nobody goes looking for an authority they already hold.
 
 | Grant | What it reaches |
 |---|---|

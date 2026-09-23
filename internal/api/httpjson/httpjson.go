@@ -86,6 +86,12 @@ const (
 	// body may be perfectly good, and a client told the body is wrong
 	// changes the one thing that was right.
 	CodeInvalidQuery Code = "invalid_query"
+	// CodeNonCanonicalPath is a request path carrying a `.` or `..` segment
+	// or an empty one. Refused rather than redirected to where it resolves,
+	// because a path that reads one way to a person and matches another
+	// way at the router is exactly what an authority gate must not be
+	// asked to agree with — see internal/authz's CanonicalPath.
+	CodeNonCanonicalPath Code = "non_canonical_path"
 
 	// CodeInternalError is the deliberately opaque answer to a failure the
 	// caller can do nothing about. The detail goes to the log.
@@ -336,6 +342,8 @@ var codes = map[Code]string{
 	CodeUnreadableBody: "The request body did not arrive in full. Send it again.",
 	CodeInvalidBody:    "The request body is not in the shape this endpoint accepts.",
 	CodeInvalidQuery:   "One of the query parameters is not a value this endpoint accepts.",
+	CodeNonCanonicalPath: "The request path has a dot segment or an empty " +
+		"segment in it. Send the path it resolves to instead.",
 	CodeInternalError: "Something went wrong inside the engine. The reason is " +
 		"in this node's log.",
 	CodeDraining: "This node is shutting down and is not taking new work. " +

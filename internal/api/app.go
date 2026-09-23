@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -995,17 +994,24 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 // SHARED by the generic /query/{what} form and every named route, because a
 // caller must not learn that a seat does not exist from one path and that the
 // server broke from the other.
+//
+// EVERY ARM IS THE ENVELOPE — `error`, and the `message` a person reads — as
+// every other refusal on this API is. They were bare `{"error": code}`
+// objects, so the one family of routes a dashboard reads most often was the
+// one whose refusals carried no sentence, and the code a client branched on
+// was the only thing it had to show.
 func writeQueryError(w http.ResponseWriter, what string, err error) {
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeUnknownQuery})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeUnknownQuery)
 	case errors.Is(err, queries.ErrUnauthenticated):
-		// 401: nobody is asking, so the remedy IS to present something.
+		// 401: nobody is asking, so the remedy IS to present something —
+		// and the code is the one the guard gives the same caller, so a
+		// client never sees one absence of a credential two ways.
 		// Unreachable through the wired guard, which answers this a layer
 		// up — stated because the mapping is this function's to get right
 		// whatever happens to run in front of it.
-		writeJSON(w, http.StatusUnauthorized,
-			map[string]string{"error": stream.CodeUnauthorized})
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 	case errors.Is(err, queries.ErrUnauthorized):
 		// 403 AND NOT 401, because the caller has already been
 		// identified. This refusal is a GRANT one — the guard in front
@@ -1037,9 +1043,9 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a
 		// request the caller has to change.
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeBadParams})
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeBadParams)
 	case errors.Is(err, queries.ErrNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeNotFound})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 	case errors.Is(err, queries.ErrUnavailable):
 		// 503 AND RETRY-AFTER, because this is the one failure here that
 		// is expected to pass: this node is behind the log and is
@@ -1061,16 +1067,13 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		if hint := queries.RetryAfter(err); hint > 0 {
 			after = max(1, int(hint.Round(time.Second)/time.Second))
 		}
-		w.Header().Set("Retry-After", strconv.Itoa(after))
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": stream.CodeUnavailable})
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, after)
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
-		// database path or a driver's own message, and these routes are
-		// reachable under the anonymous read posture.
+		// database path or a driver's own message, and nothing about
+		// holding a grant makes a caller somebody that path is for.
 		log.Warn("api_query_failed", "what", what, "error", err)
-		writeJSON(w, http.StatusInternalServerError,
-			map[string]string{"error": stream.CodeQueryFailed})
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeQueryFailed)
 	}
 }
 

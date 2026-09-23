@@ -258,7 +258,8 @@ func TestStructuredFieldsKeepTheirShapeAndNeverDisplaceTheErrorCode(t *testing.T
 var declared = []httpjson.Code{
 	httpjson.CodeEncodeFailed, httpjson.CodeBodyTooLarge,
 	httpjson.CodeUnreadableBody, httpjson.CodeInvalidBody,
-	httpjson.CodeInvalidQuery, httpjson.CodeInternalError,
+	httpjson.CodeInvalidQuery, httpjson.CodeNonCanonicalPath,
+	httpjson.CodeInternalError,
 	httpjson.CodeDraining, httpjson.CodeInvalidToken,
 
 	httpjson.CodeUnknownQuery, httpjson.CodeUnauthorized,

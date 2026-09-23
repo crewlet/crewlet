@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -202,6 +203,12 @@ func TestAnUnknownQuestionIsRefusedOnBothTransports(t *testing.T) {
 	if got := body.(map[string]any)["error"]; got != "unknown_query" {
 		t.Errorf("REST error = %v", got)
 	}
+	// THE ENVELOPE, sentence and all. The query surface answered its
+	// refusals as a bare `{"error": code}`, so the family of routes a
+	// dashboard reads most was the one whose refusals had nothing to show.
+	if got := body.(map[string]any)["message"]; got != httpjson.CodeUnknownQuery.Message() {
+		t.Errorf("REST message = %v, want the code's own sentence", got)
+	}
 
 	socket := overSocket(t, a, "nonsense", nil)
 	if socket["kind"] != "error" || socket["error"] != "unknown_query" {
@@ -222,6 +229,9 @@ func TestABadParameterIsRefusedRatherThanGuessedAt(t *testing.T) {
 		t.Errorf("REST error = %v, want bad_params — `query_failed` names a "+
 			"fault of this node for a request the caller has to change", got)
 	}
+	if got := body.(map[string]any)["message"]; got != httpjson.CodeBadParams.Message() {
+		t.Errorf("REST message = %v, want the code's own sentence", got)
+	}
 
 	// AND THE SOCKET SAYS THE SAME THING. It said `query_failed` — the
 	// code a client retries — so a screen polling a question it was
@@ -236,8 +246,8 @@ func TestABadParameterIsRefusedRatherThanGuessedAt(t *testing.T) {
 func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 	t.Parallel()
 	// The reason reaches the LOG, not the caller: it can carry a database
-	// path or a driver's own message, and this route is reachable under
-	// the anonymous read posture.
+	// path or a driver's own message, and holding the grant a question
+	// needs does not make a caller somebody that path is meant for.
 	a := seededApp(t, nil)
 	a.Queries().Register("boom", iam.GrantStateRead, func(context.Context, queries.Params) (any, error) {
 		return nil, errors.New("open /var/lib/crewlet/crewlet.db: permission denied")
