@@ -484,12 +484,14 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 	}, nil
 }
 
-// Trash moves a page out of every reader's way, reversibly.
+// Trash puts a page in the trash, reversibly — see [StatusTrashed] for what
+// that takes it out of and what it does not.
 func (s *Store) Trash(ctx context.Context, actor Actor, pageID string) (Written, error) {
 	return s.status(ctx, actor, pageID, OpTombstone, ChangeRemoved, "")
 }
 
-// Restore takes a trashed page back.
+// Restore takes a trashed page back as published, whatever its status was
+// before it was trashed.
 func (s *Store) Restore(ctx context.Context, actor Actor, pageID string) (Written, error) {
 	return s.status(ctx, actor, pageID, OpRestore, ChangeStatus, "")
 }

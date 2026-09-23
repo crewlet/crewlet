@@ -10,9 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the version this build writes every record at but one —
-// [RankOrderRecordVersion] — and the version of every record encoded without
-// one.
+// RecordVersion is the version this build writes every record at but two —
+// [RankOrderRecordVersion] and [PurgeRecordVersion] — and the version of every
+// record encoded without one.
 //
 // A record at a version higher than [ReadableRecordVersion] leaves the envelope
 // decoded and everything else opaque, and is RETAINED at its position rather
@@ -43,14 +43,66 @@ const RecordVersion = 1
 // with every later record its scope covers, and applies them after its upgrade.
 const RankOrderRecordVersion = 2
 
+// PurgeRecordVersion is the version a purge is written at.
+//
+// A purge at it does everything one at [RecordVersion] does — the task's rows
+// deleted with every row naming it, the deletion marker written, its children
+// moved onto its own parent — and five things more, each of which a purge at
+// [RecordVersion] does not do and still does not do ([Applier.purgeTask]):
+//
+//   - it empties the CONTENT of the task's history and inbox rows
+//     ([scrubPurgedContent]);
+//   - it deletes the dependency mirror rows naming the task;
+//   - it writes its own line onto its history row when no lead was notified,
+//     so what the feed renders is what `q=` searches ([Applier.purgeLine]);
+//   - it rewrites each moved child's DOCUMENT as well as its row, so the
+//     child's next commit does not write the purged parent back;
+//   - and its marker records the version it was written at and where its
+//     children went, which is what later records naming the purged task
+//     read ([withoutPurged], [placedParent]).
+//
+// # Why the change is a version and not an edit
+//
+// For [RankOrderRecordVersion]'s reason: a node that replays the log applies
+// every purge again, and a node on an older build applies the ones it reads by
+// its own rule, so an edit in place would leave two copies of one log holding
+// different rows for the same record. Every record's apply is fixed by the
+// version it carries, and every later record that consults a purge's marker
+// consults the version THAT purge carried — never this build's.
+//
+// # And what an older build does with one
+//
+// NOT what it does with a rank order. A purge installs a gate
+// ([Domain.InstallsGate]), so a build that reads below this version does not
+// retain the record for later: its applier STOPS at it, which is the
+// framework's rule for every gate it cannot read ([internal/statelog]'s package
+// doc says what a stop costs) — and the reason this is a version at all, since
+// the alternative is that build applying the purge by the rule this one
+// replaced.
+//
+// Purges written at [RecordVersion] keep their rows, content included, on
+// every node that replays them, and nothing re-scrubs them: a migration would
+// empty only the rows a node held when it ran, and a node that replays the log
+// after it would hold them whole. No released build wrote one — the one tag,
+// v0.1.0, carries no Go source at all.
+const PurgeRecordVersion = 3
+
 // ReadableRecordVersion is the highest record version this build decodes —
 // what [Domain.RecordVersion] declares to the framework.
-const ReadableRecordVersion = RankOrderRecordVersion
+const ReadableRecordVersion = PurgeRecordVersion
 
-// recordVersionOf is the version a record on this subject is written at.
-func recordVersionOf(subject Subject) int {
-	if subject.Kind == KindRankOrder {
+// recordVersionOf is the version a record on this subject, doing this, is
+// written at.
+//
+// THE LOWEST VERSION WHOSE APPLY IS THE ONE THIS BUILD MEANS, and nothing
+// higher: a record stamped above what an older build reads is retained by
+// every such node — or, for a gate, stops it — for no change in what it does.
+func recordVersionOf(subject Subject, op OpKind) int {
+	switch {
+	case subject.Kind == KindRankOrder:
 		return RankOrderRecordVersion
+	case op == OpPurge:
+		return PurgeRecordVersion
 	}
 	return RecordVersion
 }

@@ -308,9 +308,16 @@ A **view** is a saved query with a shape. Five shapes:
   `group=<value>`, which answers that one column — its count, its first
   `group_limit` rows, and a `next_cursor` that pages the rest of it to the end
   — and narrows everything else in the query with it, totals included.
-  `group=` with `subgroup=` names one swimlane the same way. A board of several
-  columns has no single order to resume after, so it takes no `cursor`, and
-  one is refused rather than ignored.
+  `group=` with `subgroup=` names one swimlane the same way. The column of
+  tasks with **no value** on the axis — *(unassigned)*, *(untagged)*, *(no due
+  date)* and the like — comes back with an empty `key`, and is named as
+  `group=(none)` (or `subgroup=(none)` for a lane): an empty `group=` means no
+  column at all. The one value `(none)` cannot name is a real one spelled
+  exactly that, which only a unit's name, a text field or an option id a
+  catalogue declared can be; reach that with the axis's own filter
+  (`unit=(none)`, `f.<slug>=(none)`). A board of several columns has no single
+  order to resume after, so it takes no `cursor`, and one is refused rather
+  than ignored.
 - **`calendar`** — by date, which is what you want when the question is "what
   is due". Its axis IS the `due` key, so the grid's own window spends the one
   key the grammar has for it: the fetch is bounded to the days on screen, the
@@ -527,7 +534,7 @@ CHANGE rather than about state:
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
-| `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. A merge interrupted part-way is finished by the engine's own sweep — unless the item it was folding into has been purged meanwhile, when the duplicate is left open with its subtasks and a `tracker_merge_target_purged` warning says why |
+| `merge_work_item` | fold a duplicate into the item that survives: the duplicate is linked to it, its **subtasks are re-parented onto it** (`move_subtasks`, true unless you say otherwise), and the duplicate is closed as `cancelled`. Nothing is destroyed and both histories stay readable. A subtask in the **trash** is not moved — it stays in the trash under the duplicate, and comes back there if restored — and one somebody moves elsewhere while the merge runs stays where they put it. Closing a duplicate by hand instead leaves its subtasks under a closed parent, where nobody finds them. Every step of a merge checks that the item it folds into is still there, so a merge into an item that has been **purged** is refused before anything is written, and one whose target is purged while it runs is **given up** at its next step: the duplicate is left open with no merge marker, keeping the subtasks that had not moved yet, and the tool says the target was purged. **One merge of an item runs at a time**: a second merge of the same item, from any seat on any node, is refused while the first is running. A merge interrupted part-way — its node went away, or one of its steps failed — is finished by the engine's own sweep once nothing is running it, and the sweep gives it up the same way, with a `tracker_merge_target_purged` warning, when its target has been purged meanwhile |
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much open work each holds and who leads it |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
@@ -1077,7 +1084,13 @@ crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
 
 Its **children move rather than being destroyed**: each direct child
 re-parents onto the purged task's own parent, or becomes a root when the purged
-task was one. Destroying the subtree would destroy work nobody confirmed.
+task was one. Destroying the subtree would destroy work nobody confirmed. A
+subtask that **crossed** the purge — filed under the task, or moved onto it, by
+a write decided on a node that had not applied the purge yet — lands in the same
+place, whichever of the two writes reached the log first. Once a node has
+applied the purge, a write from it that would file something under the purged
+task, move something onto it or merge something into it is refused before it
+reaches the log.
 
 **The project's lead is told**, and nobody else. There is no assignee left to
 tell and no watcher list worth carrying — a notification naming them would be
@@ -1119,7 +1132,10 @@ the **log** keeps every record about the task — its title and body among them
 keeps its copy until the next one replaces it, and a **backup** for as long as
 the backup is kept; and a node that holds a record it cannot read yet, because
 a newer build wrote it, keeps that record until a build that can read it
-arrives. See [Retention](retention.md#removal-deletion-and-what-a-purge-does-not-reach).
+arrives. A purge itself is never held that way: a node whose build cannot read
+a purge stops applying the log at it — its health reports false and its seats
+move to a node that can — rather than apply the purge by an older build's rule.
+See [Retention](retention.md#removal-deletion-and-what-a-purge-does-not-reach).
 
 The purge report gives no time guarantee, and that is honest rather than
 evasive: an offline or evicted disk keeps its copy until it replays, adopts a

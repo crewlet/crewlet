@@ -929,11 +929,11 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		// predicate and carry no join, so an axis expressed only as one
 		// would leave a header adding up the whole board while the rows
 		// showed a single column of it.
-		axis, err := compileGroup(q.GroupBy, fields)
+		axis, err := compileGroup(q.GroupBy, fields, columnAxisAlias)
 		if err != nil {
 			return "", nil, err
 		}
-		clause, values := axis.filter(q.Group)
+		clause, values := axis.filter(groupKey(q.Group))
 		add(clause, values...)
 	}
 	// AND A LANE FILTER IS ONE TOO, for the same reason and in the same
@@ -941,11 +941,11 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	// sits in — its count, its rows, the hint and the totals — has to be
 	// that lane's, or a header would add up lanes the answer does not show.
 	if q.Subgroup != "" && !branch {
-		axis, err := compileGroup(q.GroupBy2, fields)
+		axis, err := compileGroup(q.GroupBy2, fields, laneAxisAlias)
 		if err != nil {
 			return "", nil, err
 		}
-		clause, values := axis.filter(q.Subgroup)
+		clause, values := axis.filter(groupKey(q.Subgroup))
 		add(clause, values...)
 	}
 

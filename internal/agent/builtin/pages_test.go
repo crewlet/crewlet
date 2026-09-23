@@ -2,7 +2,9 @@ package builtin_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -41,7 +43,8 @@ type fakeKB struct {
 
 	// levels is every read level these tools asked for, so a tool that
 	// stopped naming one — or named the wrong one — is visible. A seat
-	// reads at `session` because it must see its own writes.
+	// reads at its surface's default, `linearizable`, because it must see
+	// its own writes.
 	levels []statelog.ReadLevel
 }
 
@@ -315,18 +318,144 @@ func TestListingReturnsOnlyPublishedPages(t *testing.T) {
 	}
 }
 
-type listRecorder struct{ filters []pages.Filter }
+// listRecorder records every filter a listing was asked for and answers with
+// the listing and the error a case set.
+type listRecorder struct {
+	filters []pages.Filter
+	answer  pages.Listing
+	err     error
+}
 
 func (l *listRecorder) List(_ context.Context, f pages.Filter,
 	_ statelog.Freshness) (pages.Listing, error) {
 	l.filters = append(l.filters, f)
-	return pages.Listing{}, nil
+	return l.answer, l.err
 }
 
 func (l *listRecorder) Get(context.Context, string,
 	statelog.Freshness,
 ) (pages.Detail, error) {
 	return pages.Detail{}, pages.ErrNotFound
+}
+
+// A FULL LISTING HANDS THE MODEL THE CURSOR TO THE REST, AND `after` TAKES IT
+// BACK.
+//
+// A `truncated` answer with nothing that reaches the rest is a pointer at
+// nothing, and an offset reaches it by counting rows: a page that leaves the
+// part already read between two calls moves every later page up by one, and
+// the next call skips one with nothing on either answer to say so. The cursor
+// names the last page returned, so it is what the answer carries and what the
+// next call hands the reader, unchanged.
+func TestAFullListingCarriesTheCursorAndAfterTakesItBack(t *testing.T) {
+	t.Parallel()
+	const cursor = "RU5H.QWxwaGE.cDE"
+	kb := &listRecorder{answer: pages.Listing{
+		Pages:     []pages.Summary{{ID: "p1", Title: "Alpha"}},
+		Truncated: true, NextCursor: cursor, Complete: true,
+	}}
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: newFakeKB()})
+
+	first := callWork(t, reg, builtin.ListPagesTool,
+		map[string]any{"container": "ENG", "limit": 1})
+	if first.Failed {
+		t.Fatalf("list_pages: %s", first.Output)
+	}
+	var answer struct {
+		Truncated  bool   `json:"truncated"`
+		NextCursor string `json:"next_cursor"`
+	}
+	if err := json.Unmarshal([]byte(first.Output), &answer); err != nil {
+		t.Fatalf("the answer is not JSON: %v\n%s", err, first.Output)
+	}
+	if !answer.Truncated || answer.NextCursor != cursor {
+		t.Fatalf("a full listing answered truncated=%v next_cursor=%q, want "+
+			"true and %q", answer.Truncated, answer.NextCursor, cursor)
+	}
+
+	if next := callWork(t, reg, builtin.ListPagesTool, map[string]any{
+		"container": "ENG", "limit": 1, "after": answer.NextCursor,
+	}); next.Failed {
+		t.Fatalf("list_pages after the cursor: %s", next.Output)
+	}
+	if got := kb.filters[len(kb.filters)-1].After; got != cursor {
+		t.Errorf("`after` reached the reader as %q, want the cursor %q", got, cursor)
+	}
+
+	// AND THE TOOL OFFERS NO WALK BY OFFSET, which is the one that skips.
+	entry, _ := reg.Lookup(builtin.ListPagesTool)
+	props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
+	if _, offered := props["offset"]; offered {
+		t.Error("list_pages offers `offset`, which walks a listing by counting rows")
+	}
+	if _, offered := props["after"]; !offered {
+		t.Error("list_pages does not offer `after`, so its cursor reaches nothing")
+	}
+
+	// THE CONTROL: a listing that did not fill carries no cursor, or the
+	// assertion above would pass on a tool that always renders one.
+	whole := &listRecorder{answer: pages.Listing{
+		Pages: []pages.Summary{{ID: "p1", Title: "Alpha"}}, Complete: true,
+	}}
+	regWhole := kbRegistry(t, builtin.PageDeps{Reader: whole, Writer: newFakeKB()})
+	if got := callWork(t, regWhole, builtin.ListPagesTool,
+		map[string]any{"container": "ENG"}); strings.Contains(got.Output, "next_cursor") {
+		t.Errorf("a listing that did not fill carries a cursor:\n%s", got.Output)
+	}
+}
+
+// A CURSOR THE READER REFUSES IS A REFUSAL, NOT A READ TO RETRY.
+//
+// The reader refuses an `after` that does not decode as a cursor, naming it.
+// Reported as a failed read, the model is told to try again, and it sends the
+// same value.
+func TestACursorTheReaderRefusesIsNotAReadToRetry(t *testing.T) {
+	t.Parallel()
+	kb := &listRecorder{err: fmt.Errorf("%w: after: %q is not a cursor a page "+
+		"listing returned", pages.ErrInvalid, "page two")}
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: newFakeKB()})
+
+	got := callWork(t, reg, builtin.ListPagesTool, map[string]any{"after": "page two"})
+	if !got.Failed {
+		t.Fatalf("a refused cursor answered as a listing:\n%s", got.Output)
+	}
+	if !strings.Contains(got.Output, "refused") || !strings.Contains(got.Output, "after") {
+		t.Errorf("the refusal does not say it refused `after`: %s", got.Output)
+	}
+	if strings.Contains(got.Output, "Try again") {
+		t.Errorf("a refused cursor tells the model to try again, which sends "+
+			"the same cursor back: %s", got.Output)
+	}
+}
+
+// AN EMPTY LISTING THAT COULD NOT ACCOUNT FOR EVERYTHING IS NOT "NOTHING
+// MATCHES".
+//
+// A listing served over a deferred scope may be missing pages, and when every
+// page it could have held is among them it is empty. Told "no pages match",
+// the model concludes the page it came for does not exist and writes it.
+func TestAnEmptyIncompleteListingIsNotReportedAsNothing(t *testing.T) {
+	t.Parallel()
+	kb := &listRecorder{answer: pages.Listing{Complete: false}}
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: newFakeKB()})
+
+	got := callWork(t, reg, builtin.ListPagesTool, map[string]any{"container": "ENG"})
+	if got.Failed {
+		t.Fatalf("list_pages: %s", got.Output)
+	}
+	if strings.Contains(got.Output, "No pages match") ||
+		!strings.Contains(got.Output, `"complete": false`) {
+		t.Errorf("an empty listing that could not account for everything "+
+			"answered:\n%s", got.Output)
+	}
+
+	// THE CONTROL: empty and complete is the plain answer.
+	whole := &listRecorder{answer: pages.Listing{Complete: true}}
+	regWhole := kbRegistry(t, builtin.PageDeps{Reader: whole, Writer: newFakeKB()})
+	if got := callWork(t, regWhole, builtin.ListPagesTool,
+		map[string]any{"container": "ENG"}); got.Output != "No pages match that filter." {
+		t.Errorf("an empty complete listing answered %q", got.Output)
+	}
 }
 
 // A COMPANY RUNNING CONFLUENCE GETS NO NATIVE PAGE TOOLS.

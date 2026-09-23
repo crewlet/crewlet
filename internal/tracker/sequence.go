@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -27,9 +28,10 @@ import (
 // project's counter and lands on a task.
 //
 // So each states FOUR things and this file implements exactly them: the
-// ORDER of its appends, the DURABLE CLAIM that stops two nodes running it at
-// once, the CRASH RESIDUE the order was chosen to leave, and the REPAIRER
-// that clears it — or the argument for why none is needed.
+// ORDER of its appends, the CLAIM that stops two walks of it running at once
+// — the fleet's durable lease between nodes, and [localClaims] between two
+// goroutines on one — the CRASH RESIDUE the order was chosen to leave, and the
+// REPAIRER that clears it — or the argument for why none is needed.
 //
 // The order is never arbitrary. A create mints its number first and its task
 // second, so a crash leaves a numbering GAP rather than two tasks sharing a
@@ -335,6 +337,15 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 			if present > 0 {
 				return statelog.Decision{}, statelog.ErrExists
 			}
+			// THE PARENT IS READ HERE AGAIN, in the snapshot this record
+			// is decided from, because the key mint before it is a
+			// separate append: a purge landing between the two is one
+			// only this read can see. See [refusePurged].
+			if task.Parent != nil && *task.Parent != "" {
+				if err := refusePurged(ctx, tx, *task.Parent, "parent"); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
 			return w.decide(subject, OpCreate, ChangeCreated, scope, opID,
 				task, notify, at)
 		},
@@ -442,6 +453,15 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 	case project.Archived:
 		return nil, nil, fmt.Errorf("tracker: project %s is archived, so it "+
 			"takes no new work; unarchive it first", task.Project)
+	}
+	// A PURGED PARENT IS REFUSED BEFORE THE MINT, so a create that can
+	// never land takes no key number with it. The task's own append reads
+	// it again ([Writer.writeTask]), which is what covers a purge landing
+	// between the two.
+	if task.Parent != nil && *task.Parent != "" {
+		if err := refusePurged(ctx, tx, *task.Parent, "parent"); err != nil {
+			return nil, nil, err
+		}
 	}
 	if err := declaredType(ctx, tx, task); err != nil {
 		return nil, nil, err
@@ -607,6 +627,12 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	var parent Task
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), subtask.Project, 1,
 		func(tx *sql.Tx) error {
+			// PURGED IS ASKED BEFORE ABSENT, because a purged parent is
+			// absent too and the two call for different things: one is
+			// never coming back, the other is a node still catching up.
+			if err := refusePurged(ctx, tx, parentID, "parent"); err != nil {
+				return err
+			}
 			current, held, err := readTask(ctx, tx, parentID)
 			switch {
 			case err != nil:
@@ -708,9 +734,54 @@ func markPromoted(parent Task, itemID, subtaskID string) []Checklist {
 	return lists
 }
 
-// held is one durable claim, heartbeated for as long as a walk runs.
+// localClaims is this node's half of every claim a sequence takes: the
+// resources a goroutine on this node holds right now.
+//
+// # Why the lease is not enough on its own
+//
+// The lease is taken for the NODE ([Writer.nodeID] is its owner), and
+// [Claims.TryAcquire] doubles as a renew for an owner that already holds one —
+// so two goroutines here asking for the same resource are both told yes. Two
+// seats on one node merging one duplicate into two different items would then
+// walk its subtasks at once, each moving what the other had not, and a node's
+// every bulk edit would be admitted whatever else it was applying. The lease
+// stops two nodes; this stops two goroutines on one. A claim is both or
+// nothing.
+//
+// One per node, because everything on a node writes through the writer the node
+// built or a clone of it ([Writer.As]), and a clone shares this by pointer.
+type localClaims struct {
+	mu   sync.Mutex
+	held map[string]bool
+}
+
+func newLocalClaims() *localClaims {
+	return &localClaims{held: map[string]bool{}}
+}
+
+// take reports whether this goroutine now holds resource on this node — a
+// bool, because "a walk here already holds it" is knowledge rather than a
+// failure to look.
+func (c *localClaims) take(resource string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.held[resource] {
+		return false
+	}
+	c.held[resource] = true
+	return true
+}
+
+func (c *localClaims) give(resource string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.held, resource)
+}
+
+// held is one claim, heartbeated for as long as a walk runs.
 type held struct {
 	claims   Claims
+	local    *localClaims
 	resource string
 	owner    string
 	epoch    int64
@@ -718,36 +789,62 @@ type held struct {
 	done     chan struct{}
 }
 
-// hold takes a claim and keeps it alive.
+// claim takes a walk's claim — this node's and the fleet's — and keeps it
+// alive, answering in [Claims]' three values: the claim; nil when a walk
+// already holds it, on this node or another; and an error when the
+// coordination store could not say.
+//
+// THIS NODE'S HALF FIRST, so that only the goroutine holding it ever touches
+// the lease. The lease is keyed on the node, so a second goroutine here that
+// took it would renew the first one's lease as its own, and one that released
+// it would release the first one's.
 //
 // THE HEARTBEAT IS A GOROUTINE WITH AN OWNER, per this tree's rule: it is
 // started here, stopped by [held.release], and cannot outlive the sequence
 // that took it. A heartbeat nobody stops is a claim nobody else can ever take.
-func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
+func (w *Writer) claim(ctx context.Context, resource string) (*held, error) {
 	if w.claims == nil {
 		return nil, fmt.Errorf("tracker: this writer has no coordination, so "+
 			"it cannot take %s — a walking sequence without a claim is two "+
 			"nodes rewriting one subtree", resource)
+	}
+	if !w.local.take(resource) {
+		return nil, nil
 	}
 	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: w.nodeID, TTL: ClaimTTL,
 	})
 	switch {
 	case err != nil:
+		w.local.give(resource)
+		return nil, fmt.Errorf("tracker: take %s: %w", resource, err)
+	case lease == nil:
+		w.local.give(resource)
+		return nil, nil
+	}
+	h := &held{
+		claims: w.claims, local: w.local, resource: resource, owner: w.nodeID,
+		epoch: lease.Epoch, stop: make(chan struct{}), done: make(chan struct{}),
+	}
+	go h.beat(context.WithoutCancel(ctx))
+	return h, nil
+}
+
+// hold is [Writer.claim] for a sequence that cannot run without it: a walk
+// already holding the claim is refused as unavailable.
+func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
+	h, err := w.claim(ctx, resource)
+	switch {
+	case err != nil:
 		// UNKNOWN, AND THIS ONE FAILS CLOSED. A cross-project move
 		// rewrites a whole subtree's keys; two of them interleaved
 		// produce a subtree keyed into two projects, which no duty can
 		// tell from an abandoned walk.
-		return nil, fmt.Errorf("tracker: take %s: %w", resource, err)
-	case lease == nil:
-		return nil, fmt.Errorf("tracker: %s is held by another node, so this "+
-			"walk is already running: %w", resource, statelog.ErrUnavailable)
+		return nil, err
+	case h == nil:
+		return nil, fmt.Errorf("tracker: %s is held, so this walk is already "+
+			"running on this node or another: %w", resource, statelog.ErrUnavailable)
 	}
-	h := &held{
-		claims: w.claims, resource: resource, owner: w.nodeID,
-		epoch: lease.Epoch, stop: make(chan struct{}), done: make(chan struct{}),
-	}
-	go h.beat(context.WithoutCancel(ctx))
 	return h, nil
 }
 
@@ -770,16 +867,22 @@ func (h *held) beat(ctx context.Context) {
 	}
 }
 
-// release stops the heartbeat and gives the claim up.
+// release stops the heartbeat and gives the claim up — the lease, then this
+// node's half.
 //
 // [context.WithoutCancel], because the failure being undone is often the
 // cancellation itself and a release that inherited a dead context would leave
 // the claim to expire — sixty seconds during which nobody else may run this
 // walk and the duty has not yet decided it was abandoned.
+//
+// THIS NODE'S HALF LAST, for [Writer.claim]'s reason: given back first, a
+// goroutine here could take it and renew the lease this release is about to
+// give up, and then walk under a lease that is no longer held.
 func (h *held) release(ctx context.Context) {
 	close(h.stop)
 	<-h.done
 	_, _ = h.claims.Release(context.WithoutCancel(ctx), h.resource, h.owner, h.epoch)
+	h.local.give(h.resource)
 }
 
 // MoveTaskToProject re-homes a task and everything beneath it. SEQUENCE 7.
@@ -1056,6 +1159,23 @@ func mergeTags(set TagSet, incoming []Tag) (TagSet, bool) {
 // THE MARKER IS CLEARED LAST. While it stands, the duplicate is visibly
 // mid-merge rather than silently half-merged, which is the difference between
 // a state somebody can wait out and one they have to reconstruct.
+//
+// # The target is read by every append that depends on it, and by no read
+// before them
+//
+// A read before the first append answers for a moment none of the appends is
+// decided in, and a purge of the target landing after it would see subtasks
+// re-parented onto a task no row holds and the duplicate cancelled as merged
+// into nothing. So the mark and the close read the target in their own decide
+// snapshots ([Writer.mergingInto]), and every re-parent reads it as the
+// parent it is about to write ([refusePurged]). A purge the mark sees refuses
+// the merge before anything is written; one a later step sees gives it up
+// ([Writer.abandonMerge]); both return [ErrPurged].
+//
+// The same holds for everything else those reads found ([mergeStep]): a
+// subtask moved elsewhere or put in the trash after the walk read it is passed
+// over rather than moved back, and a close or a give-up that finds the merge
+// already ended writes nothing.
 func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into string,
 	reparent bool, notify *Notify) (WriteResult, error) {
 
@@ -1079,6 +1199,9 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the children a merge re-parents")
 	}
+	// THE DUPLICATE'S OWN PROJECT is what this read is for, which every
+	// append below names — and a removed duplicate is refused here, whole,
+	// rather than leaving a marker with nothing to finish it.
 	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		current, held, err := readTask(ctx, tx, duplicate)
@@ -1094,12 +1217,6 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 				current.Removed.By, current.Removed.At.Format(time.RFC3339))
 		}
 		task = current
-		if _, held, err := readTask(ctx, tx, into); err != nil {
-			return err
-		} else if !held {
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				into, statelog.ErrUnavailable)
-		}
 		return nil
 	}); err != nil {
 		return WriteResult{}, err
@@ -1117,7 +1234,8 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	// way to know: a merge that declined to move the subtree and one that
 	// crashed before moving its first child leave identical rows.
 	merging := true
-	marked, err := w.UpdateTask(ctx, stepID(opID, "mark"), duplicate, task.Project, NoIfMatch,
+	marked, err := w.mergingInto(into).UpdateTask(ctx, stepID(opID, "mark"),
+		duplicate, task.Project, NoIfMatch,
 		TaskPatch{Relate: &RelationIntent{Add: []Relation{{
 			Kind: RelationDuplicates, Other: into,
 		}}}, Merging: &merging, MergeReparent: &reparent},
@@ -1125,22 +1243,138 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	if err != nil {
 		return WriteResult{}, err
 	}
+	end, err := w.finishMerge(ctx, opID, duplicate, task.Project, into, reparent,
+		marked.Position, notify)
+	switch {
+	case errors.Is(err, errMergeOver):
+		return WriteResult{}, fmt.Errorf("tracker: the merge of %s into %s had "+
+			"been ended by another writer when this call came to close it: %w",
+			duplicate, into, err)
+	case err != nil:
+		return WriteResult{}, err
+	case end.Purged != nil:
+		return WriteResult{}, fmt.Errorf("tracker: the merge of %s into %s was "+
+			"given up after it began: %w — %s is left open with no merge "+
+			"marker, and a subtask already moved onto %s went where that "+
+			"purge moved its children", duplicate, into, end.Purged,
+			duplicate, into)
+	}
+	return end.Result, nil
+}
 
+// mergeEnd is how everything a merge does after its mark came out.
+type mergeEnd struct {
+	// Result is the close's own, or the marker's clear when the merge was
+	// given up.
+	Result WriteResult
+
+	// Moved is how many subtasks this run re-parented onto the target.
+	Moved int
+
+	// Purged is the refusal that gave the merge up — the target was
+	// purged after the mark — and nil when the merge closed.
+	Purged error
+}
+
+// finishMerge is everything a merge does after its mark: the subtasks moved
+// onto the target if the merge said to, then the close — or, when a step finds
+// the target purged, the merge given up ([Writer.abandonMerge]).
+//
+// SHARED BY THE SEQUENCE AND THE DUTY, so the repair of a merge whose holder
+// died is a re-run of the steps the holder did not reach rather than a second
+// account of what a merge is. marked is the mark's own position, which the
+// close has to see; the duty passes zero, because the mark it finishes was
+// applied before its scan could read it.
+//
+// A merge found already ended — its marker cleared by a close or a give-up
+// that landed first — is returned as [errMergeOver], with nothing written.
+func (w *Writer) finishMerge(ctx context.Context, opID, duplicate, project, into string,
+	reparent bool, marked statelog.Position, notify *Notify) (mergeEnd, error) {
+
+	var end mergeEnd
 	if reparent {
-		if _, err := w.reparentOnto(ctx, opID, duplicate, into); err != nil {
-			return WriteResult{}, err
+		moved, err := w.reparentOnto(ctx, opID, duplicate, into)
+		end.Moved = moved
+		switch {
+		case errors.Is(err, ErrPurged):
+			return w.abandonMerge(ctx, opID, duplicate, project, marked, end, err)
+		case err != nil:
+			return end, err
 		}
 	}
-
 	cancelled := StatusCancelled
 	done := false
 	// THE CLOSE LANDS ON THE SUBJECT THE MARK ALREADY MOVED, and the
 	// re-parented children in between are on subjects of their own — so
 	// the mark's position is what this last append has to see, whatever
 	// the loop above published. See [Writer.After].
-	return w.After(marked.Position).UpdateTask(ctx, stepID(opID, "close"),
-		duplicate, task.Project, NoIfMatch,
+	//
+	// AND IT IS ONE APPEND: the cancelled status and the marker's clear
+	// together, on the duplicate's own subject. Split in two it would leave
+	// a cancelled task still marked mid-merge, which the duty would pick up
+	// again on every tick for ever.
+	closed, err := w.After(marked).mergingInto(into).whileMerging().UpdateTask(ctx,
+		stepID(opID, "close"), duplicate, project, NoIfMatch,
 		TaskPatch{Status: &cancelled, Merging: &done}, ChangeStatus, notify)
+	switch {
+	case errors.Is(err, ErrPurged):
+		return w.abandonMerge(ctx, opID, duplicate, project, marked, end, err)
+	case err != nil:
+		return end, err
+	}
+	end.Result = closed
+	return end, nil
+}
+
+// abandonMerge gives up a merge whose target was purged after its mark: the
+// marker is cleared and the duplicate left open, with whatever subtasks it
+// still has.
+//
+// # Why not finish it, and why not leave it
+//
+// Finishing it would cancel the duplicate as merged into a task that no longer
+// exists, which closes an item nobody merged. Leaving the marker would hand the
+// duty a merge whose every step meets the same refusal on every tick. So the
+// merge did not happen and now cannot, and the marker goes — the same repair
+// the duty makes for a marker naming no target at all.
+//
+// A subtask the walk moved before a step saw the purge is not moved back: it
+// is where that purge puts the target's children — the ones it found
+// ([Applier.purgeTask]) and the ones that arrived after it ([placedParent]).
+func (w *Writer) abandonMerge(ctx context.Context, opID, duplicate, project string,
+	marked statelog.Position, end mergeEnd, cause error) (mergeEnd, error) {
+
+	done := false
+	cleared, err := w.After(marked).whileMerging().UpdateTask(ctx,
+		stepID(opID, "abandon"), duplicate, project, NoIfMatch,
+		TaskPatch{Merging: &done}, ChangeFields, nil)
+	if err != nil {
+		// THE CAUSE AS TEXT AND NOT WRAPPED: what failed here is the clear,
+		// and a caller asking whether this error is the purge would be told
+		// yes about a merge whose marker may still stand.
+		return end, fmt.Errorf("tracker: give up the merge of %s, whose "+
+			"target was purged (%s): %w", duplicate, cause.Error(), err)
+	}
+	end.Result, end.Purged = cleared, cause
+	return end, nil
+}
+
+// mergeTargetHeld refuses a merge step whose target has been purged or is not
+// on this node — [Writer.mergingInto], read inside the step's own decide.
+func mergeTargetHeld(ctx context.Context, tx *sql.Tx, duplicate, into string) error {
+	if err := refusePurged(ctx, tx, into, "merge target"); err != nil {
+		return err
+	}
+	var present int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tracker_tasks WHERE id = ?`, into).Scan(&present); err != nil {
+		return fmt.Errorf("tracker: read the merge target %s: %w", into, err)
+	}
+	if present == 0 {
+		return fmt.Errorf("tracker: task %s, which %s is being merged into, is "+
+			"not on this node: %w", into, duplicate, statelog.ErrUnavailable)
+	}
+	return nil
 }
 
 // reparentOnto moves whatever is left of a duplicate's subtasks onto the
@@ -1164,6 +1398,12 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 // gone from the selection, so an index would give a different child the same
 // operation id and the ledger would answer one move's question with another's
 // row.
+//
+// EACH MOVE ASKS WHETHER ITS SUBTASK IS STILL ONE ([Writer.movingOutOf]),
+// because the batch was read before it: a subtask re-parented elsewhere since
+// then would otherwise be moved back over somebody's decision, and one in the
+// trash — read here like any other child — would be refused on every attempt.
+// Either is passed over, and does not count as moved.
 func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string) (int, error) {
 	var moved int
 	var after string
@@ -1181,9 +1421,21 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 		}
 		for _, child := range batch {
 			after = child.ID
-			if _, err := w.UpdateTask(ctx, stepID(opID, "c/"+child.ID),
-				child.ID, child.Project, NoIfMatch, TaskPatch{Parent: &into},
-				ChangeReparented, nil); err != nil {
+			_, err := w.movingOutOf(duplicate).UpdateTask(ctx,
+				stepID(opID, "c/"+child.ID), child.ID, child.Project, NoIfMatch,
+				TaskPatch{Parent: &into}, ChangeReparented, nil)
+			switch {
+			case errors.Is(err, errLeftTheMerge):
+				// NOT THIS MERGE'S TO MOVE ANY MORE — re-parented
+				// elsewhere or put in the trash since the batch was read
+				// — so it is passed over rather than moved back.
+				continue
+			case errors.Is(err, ErrPurged):
+				// THE TARGET IS GONE, and that is the one refusal no
+				// repair completes: it is returned as it is, for the
+				// caller to give the merge up.
+				return moved, err
+			case err != nil:
 				return moved, fmt.Errorf("tracker: %d subtask(s) re-parented "+
 					"onto %s and %s still has more; the tracker duty completes "+
 					"the rest idempotently: %w", moved, into, duplicate, err)
@@ -1290,12 +1542,19 @@ func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
 	return result, nil
 }
 
-// admit takes the fleet-wide bulk lease, or reports why it did not.
+// admit takes the bulk claim — this node's half and the fleet's lease — or
+// reports why it did not.
 //
 // THREE ANSWERS AND THREE BEHAVIOURS, which is why [Claims] is not a bool: a
 // held lease runs, a peer's lease refuses with the holder's remaining time as
 // the caller's hint, and a coordination store that cannot be reached ADMITS —
 // see the sequence's own doc for why those last two must differ.
+//
+// A BULK ALREADY APPLYING ON THIS NODE is refused as a peer's is, and before
+// the lease is asked for: the lease is this node's, so asking again would renew
+// it rather than refuse ([localClaims]). That holds with the store unreachable
+// too, because a bulk running here is something this node knows rather than
+// something the store has to say.
 func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	if w.claims == nil {
 		return func() {}, nil
@@ -1307,15 +1566,12 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 	// drain, which is the same divisor every retry hint in this design is
 	// computed from.
 	projected := float64(rows) / w.drainRows()
-	if w.metrics != nil {
-		// THE PROJECTION IS WHAT IS SUMMED, not the wall clock: it is the
-		// applier occupancy this call is about to impose on EVERY node,
-		// and the wall clock here would measure only this one.
-		w.metrics.AddValue(metrics.TrackerBulkApplySeconds, projected, nil)
-	}
 	ttl := 2 * time.Duration(projected*float64(time.Second))
 	if ttl < ClaimHeartbeat {
 		ttl = ClaimHeartbeat
+	}
+	if !w.local.take(resource) {
+		return nil, w.bulkInFlight(ctx, resource)
 	}
 	lease, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
 		Owner: w.nodeID, TTL: ttl,
@@ -1325,21 +1581,44 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), error) {
 		// FAIL OPEN. See the doc above: the log is correct with two
 		// bulks in flight and merely slow, and refusing here on an
 		// unknown is a seat told a colleague is editing when nobody is.
+		w.occupy(projected)
 		//nolint:nilerr // Deliberate fail-open: see the paragraph above.
-		return func() {}, nil
+		return func() { w.local.give(resource) }, nil
 	case lease == nil:
-		remaining := time.Duration(0)
-		if held, err := w.claims.Get(ctx, resource); err == nil && held != nil {
-			remaining = time.Until(held.ExpiresAt)
-		}
-		return nil, fmt.Errorf("%w; retry in about %d seconds: %w",
-			ErrBulkInFlight, int(max(remaining.Seconds(), 1)),
-			statelog.ErrUnavailable)
+		w.local.give(resource)
+		return nil, w.bulkInFlight(ctx, resource)
 	}
+	w.occupy(projected)
 	epoch := lease.Epoch
 	return func() {
+		// THE LEASE FIRST, for [held.release]'s reason.
 		_, _ = w.claims.Release(context.WithoutCancel(ctx), resource, w.nodeID, epoch)
+		w.local.give(resource)
 	}, nil
+}
+
+// occupy records the applier occupancy an ADMITTED bulk is about to impose.
+//
+// THE PROJECTION IS WHAT IS SUMMED, not the wall clock: it is the occupancy
+// this call is about to impose on EVERY node, and the wall clock here would
+// measure only this one. And only an admitted call's, because the counter is
+// the fleet's read-degradation budget and a refused bulk applies nothing.
+func (w *Writer) occupy(projected float64) {
+	if w.metrics != nil {
+		w.metrics.AddValue(metrics.TrackerBulkApplySeconds, projected, nil)
+	}
+}
+
+// bulkInFlight refuses a bulk while another applies, with the time left on the
+// holder's lease as the caller's hint.
+func (w *Writer) bulkInFlight(ctx context.Context, resource string) error {
+	remaining := time.Duration(0)
+	if holder, err := w.claims.Get(ctx, resource); err == nil && holder != nil {
+		remaining = time.Until(holder.ExpiresAt)
+	}
+	return fmt.Errorf("%w; retry in about %d seconds: %w",
+		ErrBulkInFlight, int(max(remaining.Seconds(), 1)),
+		statelog.ErrUnavailable)
 }
 
 // drainRows is the applier's measured rows a second, and the divisor of every

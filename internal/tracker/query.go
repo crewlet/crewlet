@@ -365,8 +365,8 @@ type Params interface {
 	Int(key string, def int) int
 	Bool(key string, def bool) bool
 
-	// Has distinguishes them, which is what makes `open=false` and no
-	// `open` at all two different questions.
+	// Has distinguishes them, which is what makes `blocked=false` and no
+	// `blocked` at all two different questions.
 	Has(key string) bool
 
 	// Keys is every parameter named, so an unknown one is REFUSED rather
@@ -958,8 +958,9 @@ func (q *Query) parseGrouping(p Params) error {
 	if q.GroupBy != "" && !q.Pinned() && q.Cursor != "" {
 		return fmt.Errorf("tracker: group_by=%s answers a board of several "+
 			"columns, and across a set of columns there is no single order to "+
-			"resume after — page one column with group=<its key> and the "+
-			"next_cursor that answer carries", q.GroupBy)
+			"resume after — page one column with group=<its key> (%s for the "+
+			"column with no value) and the next_cursor that answer carries",
+			q.GroupBy, GroupNone)
 	}
 	return nil
 }
@@ -976,8 +977,8 @@ func (q *Query) parseGrouping(p Params) error {
 // query's own — so its answer is still that one cell, shaped like any other
 // column, and [Answer.NextCursor] resumes its rows after the last one it
 // carries. That is where the rows past a column's slice are reached, for
-// every axis, and each page is bounded by the same `group_limit` as the
-// board it came from.
+// every axis and every column — the one with no value as [GroupNone] — and
+// each page is bounded by the same `group_limit` as the board it came from.
 //
 // `group=` beside a SECOND axis and no `subgroup=` is still a board: the
 // lanes inside that one column.
@@ -1265,9 +1266,9 @@ func (m MapParams) Bool(key string, def bool) bool {
 
 // Has reports whether a key was NAMED, however it was spelled.
 //
-// Separate from [MapParams.String] because "set to empty" and "not set" are
-// different requests: `assignee=` asks for the unassigned work and an absent
-// `assignee` asks for all of it.
+// Separate from [MapParams.String] because "named" and "not named" are
+// different requests: `blocked=false` asks for the work nothing blocks and an
+// absent `blocked` asks for all of it.
 func (m MapParams) Has(key string) bool {
 	_, held := m[key]
 	return held

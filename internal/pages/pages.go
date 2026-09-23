@@ -164,8 +164,13 @@ type Status string
 
 // The statuses. Three, and each is a different answer to "should a reader see
 // this": published is the page, draft is somebody's unfinished thought, and
-// trashed is deleted as far as any reader is concerned while still being
-// recoverable for thirty days.
+// trashed is a page somebody put in the trash.
+//
+// WHAT THE TRASH TAKES A PAGE OUT OF is search, `list_pages`, the children a
+// detail read carries, its container's count and the tool-skill registry —
+// and not the rest: a trashed page is still read by its id or its address,
+// and still listed wherever a listing names no status. Nothing expires it.
+// [Store.Restore] publishes it again, and only [Store.Purge] removes it.
 const (
 	StatusPublished Status = "published"
 	StatusDraft     Status = "draft"
@@ -177,14 +182,6 @@ func Statuses() []Status { return []Status{StatusPublished, StatusDraft, StatusT
 
 // Valid reports whether s is a status this build serves.
 func (s Status) Valid() bool { return slices.Contains(Statuses(), s) }
-
-// Readable reports whether a page in this status is one a search may return.
-//
-// PUBLISHED ONLY. A draft is unfinished and a trashed page is deleted, and
-// surfacing either puts content in front of an agent that no person considers
-// current — which is worse than returning nothing, because the agent acts on
-// it.
-func (s Status) Readable() bool { return s == StatusPublished }
 
 // AuthorKind is who wrote something, on the same three values the tracker
 // uses and for the same reasons.

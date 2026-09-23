@@ -99,11 +99,13 @@ type InboxNotice struct {
 
 	Excerpt string `json:"excerpt,omitempty"`
 
-	// ContentPurged marks a notice about a task that was later PURGED: the
-	// purge emptied its excerpt, so an empty one here says nothing about
-	// what the change was. The kind, the reason and who made it are what is
-	// left. The project lead's notice of the purge itself is not marked —
-	// its excerpt is the purge's line, kept whole.
+	// ContentPurged marks a notice about a task that was later PURGED and
+	// whose purge emptied its excerpt, so an empty one here says nothing
+	// about what the change was. The kind, the reason and who made it are
+	// what is left. The project lead's notice of the purge itself is not
+	// marked — its excerpt is the purge's line, kept whole — and neither is
+	// a notice whose purge was written before purges emptied anything
+	// ([PurgeRecordVersion]), which still says what it said.
 	ContentPurged bool `json:"content_purged,omitempty"`
 
 	// Actor is who made the change, joined from the history row. A notice
@@ -369,7 +371,7 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		       COALESCE(h.actor, ''), COALESCE(h.actor_kind, ''),
 		       EXISTS (SELECT 1 FROM tracker_deletions d
 		               WHERE d.task_id = n.subject_id
-		                 AND d.purge_record_id <> n.record_id)
+		                 AND d.purge_record_id <> n.record_id`+scrubbingPurges.predicate()+`)
 		  FROM tracker_notifications n
 		  LEFT JOIN tracker_history h ON h.id = n.record_id
 		 WHERE `+strings.Join(where, " AND ")+`

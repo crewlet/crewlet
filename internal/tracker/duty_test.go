@@ -1189,3 +1189,374 @@ func TestAnAbandonedMergeIntoAPurgedTaskIsClearedNotCompleted(t *testing.T) {
 		})
 	}
 }
+
+// A PURGE THAT LANDS WHILE THE DUTY FINISHES A MERGE IS SEEN BY ITS NEXT STEP.
+//
+// The sweep reads which merges were abandoned and what each was folding into,
+// and then makes the rest of each one's appends. Whether the target is still
+// there is read by those appends, each in its own snapshot, and not by the
+// sweep's read, which is older than all of them — so a purge landing after the
+// first subtask moved stops the second: it stays under the duplicate, nothing
+// hangs from the purged target, and the duplicate is left open with its marker
+// cleared.
+func TestAPurgeDuringTheDutysMergeIsSeenByItsNextStep(t *testing.T) {
+	t.Parallel()
+	r, hooked := newHookedRoundTrip(t)
+	for _, id := range []string{"keep", "dup"} {
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, newTask(id), nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	parent := "dup"
+	for _, id := range []string{"kid-1", "kid-2"} {
+		kid := newTask(id)
+		kid.Parent, kid.Depth = &parent, 1
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, kid, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	merging, reparent := true, true
+	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{
+			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+				Kind: tracker.RelationDuplicates, Other: "keep",
+			}}},
+			Merging: &merging, MergeReparent: &reparent,
+		}, tracker.ChangeRelations, nil); err != nil {
+		t.Fatalf("UpdateTask mark: %v", err)
+	}
+	r.drain()
+	// THE FIRST SUBTASK'S MOVE IS WHERE IT LANDS: the sweep has read the
+	// merge and moved one child, and the second is still to come.
+	hooked.arm(func(subject, _ string) bool {
+		return strings.HasSuffix(subject, ".task.kid-1")
+	}, func() { purgeNow(t, r, "keep") })
+
+	log := &capturedLog{}
+	holdTheAppliersPin(t, r)
+	r.applyWhileWriting()
+	if _, err := trackerWorkerLogging(t, r, slog.New(log)).Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	r.drain()
+	if !hooked.didFire() {
+		t.Fatal("the purge never landed during the sweep, so this case is not " +
+			"the shape it names")
+	}
+	if line := log.only(t, "tracker_merge_target_purged"); line.attrs["target"] != "keep" {
+		t.Fatalf("the warning names target %v, want keep", line.attrs["target"])
+	}
+	dup := r.task(t, "dup")
+	if dup.Task.Merging || dup.Task.Status == tracker.StatusCancelled {
+		t.Errorf("the duplicate reads merging=%v and status %q, want the marker "+
+			"cleared and the task left open", dup.Task.Merging, dup.Task.Status)
+	}
+	if got := parentOf(r.task(t, "kid-2")); got != "dup" {
+		t.Errorf("the second subtask's parent is %q, want it left under dup — "+
+			"its move was decided after the target was gone", got)
+	}
+	if named := r.strings(`SELECT id FROM tracker_tasks WHERE parent_id = 'keep'`); len(named) != 0 {
+		t.Errorf("%v hang from the purged target", named)
+	}
+}
+
+// THE SWEEP PASSES OVER A MERGE THAT IS STILL WALKING.
+//
+// The marker stands for the whole of every merge, a live one included, so the
+// row alone cannot tell a walk whose holder died from one still running — the
+// merge's claim can. A sweep landing in the middle of a merge on this node
+// leaves it, and the merge finishes as if alone. Run beside it instead, the
+// sweep re-read the subtasks the walk had not moved yet and published a second
+// close of the duplicate.
+func TestTheSweepPassesOverAMergeThatIsStillWalking(t *testing.T) {
+	t.Parallel()
+	r, hooked := newHookedRoundTrip(t)
+	r.applyWhileWriting()
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	parent := "dup"
+	kid := newTask("kid")
+	kid.Parent, kid.Depth = &parent, 1
+	if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+		t.Fatalf("CreateTask kid: %v", err)
+	}
+	r.drain()
+	var swept map[string]int64
+	var tickErr error
+	hooked.arm(func(_, opID string) bool { return opID == "op-merge.mark" },
+		func() {
+			// THE MARK APPLIED FIRST, so the sweep's own gate and scan see
+			// the duplicate mid-merge exactly as a peer's would.
+			r.drain()
+			swept, tickErr = trackerWorker(t, r).Tick(t.Context())
+		})
+
+	if _, err := r.writer.MergeDuplicates(t.Context(), "op-merge", "dup", "keep",
+		true, nil); err != nil {
+		t.Fatalf("MergeDuplicates: %v", err)
+	}
+	if !hooked.didFire() {
+		t.Fatal("the sweep never ran inside the merge, so this case is not the " +
+			"shape it names")
+	}
+	if tickErr != nil {
+		t.Fatalf("Tick: %v", tickErr)
+	}
+	if n := swept["tracker_abandoned_merges"]; n != 0 {
+		t.Errorf("the sweep finished %d merge(s) while the merge was still "+
+			"walking", n)
+	}
+	r.drain()
+	if closes := r.strings(`SELECT id FROM tracker_history
+		WHERE subject_id = 'dup' AND kind = 'status'`); len(closes) != 1 {
+		t.Errorf("the duplicate was closed %d times, want once", len(closes))
+	}
+	dup := r.task(t, "dup")
+	if dup.Task.Status != tracker.StatusCancelled || dup.Task.Merging {
+		t.Errorf("the duplicate reads status %q and merging=%v after its merge "+
+			"finished", dup.Task.Status, dup.Task.Merging)
+	}
+	if got := parentOf(r.task(t, "kid")); got != "keep" {
+		t.Errorf("the subtask's parent is %q, want keep", got)
+	}
+}
+
+// AND THE SWEEP GIVES A MERGE'S CLAIM BACK.
+//
+// It takes the claim to finish a merge, and a claim it kept would read, to
+// every later sweep and to every merge of that item on this node, as a walk
+// still running — so a merge abandoned a second time would be passed over for
+// ever.
+func TestTheSweepGivesAMergesClaimBack(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	for round := 1; round <= 2; round++ {
+		merging, reparent := true, false
+		if _, err := r.writer.UpdateTask(t.Context(), fmt.Sprintf("op-mark-%d", round),
+			"dup", "ENG", tracker.NoIfMatch, tracker.TaskPatch{
+				Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+					Kind: tracker.RelationDuplicates, Other: "keep",
+				}}},
+				Merging: &merging, MergeReparent: &reparent,
+			}, tracker.ChangeRelations, nil); err != nil {
+			t.Fatalf("round %d: UpdateTask mark: %v", round, err)
+		}
+		r.drain()
+		swept, err := trackerWorker(t, r).Tick(t.Context())
+		if err != nil {
+			t.Fatalf("round %d: Tick: %v", round, err)
+		}
+		if n := swept["tracker_abandoned_merges"]; n != 1 {
+			t.Fatalf("round %d: the sweep finished %d merge(s), want the one "+
+				"abandoned", round, n)
+		}
+		r.drain()
+	}
+}
+
+// A MERGE ANOTHER NODE IS WALKING IS PASSED OVER TOO, AND LEFT CLAIMABLE HERE.
+//
+// Across nodes it is the lease that says the walk is live, and the sweep asks
+// for this node's half of the claim before it asks for the lease. So a lease a
+// peer holds has to hand that half back — kept, it would read on this node as
+// a walk still running long after the peer's merge was done, and a merge of
+// the item abandoned later would be passed over for ever.
+func TestTheSweepPassesOverAMergeAnotherNodeIsWalking(t *testing.T) {
+	t.Parallel()
+	r, hooked := newHookedRoundTrip(t)
+	r.applyWhileWriting()
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	var swept map[string]int64
+	var tickErr error
+	hooked.arm(func(_, opID string) bool { return opID == "op-merge.mark" },
+		func() {
+			r.drain()
+			swept, tickErr = trackerWorker(t, r).Tick(t.Context())
+		})
+	if _, err := r.peer("node-b").MergeDuplicates(t.Context(), "op-merge", "dup",
+		"keep", true, nil); err != nil {
+		t.Fatalf("node-b's MergeDuplicates: %v", err)
+	}
+	if !hooked.didFire() {
+		t.Fatal("the sweep never ran inside node-b's merge, so this case is not " +
+			"the shape it names")
+	}
+	if tickErr != nil {
+		t.Fatalf("Tick: %v", tickErr)
+	}
+	if n := swept["tracker_abandoned_merges"]; n != 0 {
+		t.Fatalf("the sweep finished %d merge(s) while node-b was walking one", n)
+	}
+	r.drain()
+
+	// AND ABANDONED LATER, the same item's merge is this node's to finish.
+	merging, reparent := true, false
+	if _, err := r.writer.UpdateTask(t.Context(), "op-mark-again", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{
+			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+				Kind: tracker.RelationDuplicates, Other: "keep",
+			}}},
+			Merging: &merging, MergeReparent: &reparent,
+		}, tracker.ChangeRelations, nil); err != nil {
+		t.Fatalf("UpdateTask mark: %v", err)
+	}
+	r.drain()
+	swept, err := trackerWorker(t, r).Tick(t.Context())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if n := swept["tracker_abandoned_merges"]; n != 1 {
+		t.Errorf("the sweep finished %d merge(s), want the one abandoned — this "+
+			"node's half of the claim was kept when node-b's lease refused it", n)
+	}
+}
+
+// A MERGE CLOSED ON THE LOG BUT NOT YET HERE IS NOT CLOSED AGAIN.
+//
+// A walk that closes on another node gives its claim back before this node
+// applies the close, so the sweep can take the claim of a merge its own rows
+// still show mid-merge. The close it would make reads the merge again in its
+// own decide; decided from rows older than the log it is refused by the broker
+// and decided again from rows that have the close, and a merge that has ended
+// writes nothing and is not counted.
+func TestTheSweepDoesNotCloseAMergeThatAlreadyClosed(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	merging, reparent := true, false
+	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{
+			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+				Kind: tracker.RelationDuplicates, Other: "keep",
+			}}},
+			Merging: &merging, MergeReparent: &reparent,
+		}, tracker.ChangeRelations, nil); err != nil {
+		t.Fatalf("UpdateTask mark: %v", err)
+	}
+	r.drain()
+	// THE CLOSE ON THE LOG AND NOT IN THIS NODE'S ROWS: published, and not
+	// applied until something here waits for it.
+	cancelled, done := tracker.StatusCancelled, false
+	if _, err := r.writer.UpdateTask(t.Context(), "op-close", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Status: &cancelled, Merging: &done},
+		tracker.ChangeStatus, nil); err != nil {
+		t.Fatalf("UpdateTask close: %v", err)
+	}
+	if !r.task(t, "dup").Task.Merging {
+		t.Fatal("the close was applied before the sweep ran, so this case is " +
+			"not the shape it names")
+	}
+
+	r.applyWhileWriting()
+	swept, err := trackerWorker(t, r).Tick(t.Context())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if n := swept["tracker_abandoned_merges"]; n != 0 {
+		t.Errorf("the sweep finished %d merge(s), and the one it read had "+
+			"already closed", n)
+	}
+	r.drain()
+	if closes := r.strings(`SELECT id FROM tracker_history
+		WHERE subject_id = 'dup' AND kind = 'status'`); len(closes) != 1 {
+		t.Errorf("the duplicate was closed %d times, want once", len(closes))
+	}
+}
+
+// AND A MERGE GIVEN UP ON THE LOG BUT NOT YET HERE IS NOT GIVEN UP AGAIN.
+//
+// The give-up is the close's twin for a merge whose target was purged, and it
+// is read the same way: it clears the marker only while the merge is still
+// running, in its own decide, so a give-up another node already published is
+// not published a second time from rows that predate it.
+func TestTheSweepDoesNotGiveUpAMergeAlreadyGivenUp(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	merging, reparent := true, false
+	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{
+			Relate: &tracker.RelationIntent{Add: []tracker.Relation{{
+				Kind: tracker.RelationDuplicates, Other: "keep",
+			}}},
+			Merging: &merging, MergeReparent: &reparent,
+		}, tracker.ChangeRelations, nil); err != nil {
+		t.Fatalf("UpdateTask mark: %v", err)
+	}
+	r.drain()
+	purgeNow(t, r, "keep")
+	// THE GIVE-UP ON THE LOG AND NOT IN THIS NODE'S ROWS.
+	done := false
+	if _, err := r.writer.UpdateTask(t.Context(), "op-give-up", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Merging: &done},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("UpdateTask give-up: %v", err)
+	}
+	if !r.task(t, "dup").Task.Merging {
+		t.Fatal("the give-up was applied before the sweep ran, so this case is " +
+			"not the shape it names")
+	}
+
+	log := &capturedLog{}
+	r.applyWhileWriting()
+	swept, err := trackerWorkerLogging(t, r, slog.New(log)).Tick(t.Context())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if n := swept["tracker_abandoned_merges"]; n != 0 {
+		t.Errorf("the sweep finished %d merge(s), and the one it read had "+
+			"already been given up", n)
+	}
+	r.drain()
+	if clears := r.strings(`SELECT id FROM tracker_history
+		WHERE subject_id = 'dup' AND kind = 'fields'`); len(clears) != 1 {
+		t.Errorf("the marker was cleared %d times, want once", len(clears))
+	}
+}
+
+// AND A MARKER WITH NO TARGET, CLEARED ON THE LOG BUT NOT YET HERE, IS NOT
+// CLEARED AGAIN — the third of the repair's appends, read the same way.
+func TestTheSweepDoesNotClearAMarkerAlreadyCleared(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "dup")
+	merging, done := true, false
+	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Merging: &merging},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("UpdateTask mark: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.UpdateTask(t.Context(), "op-clear", "dup", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Merging: &done},
+		tracker.ChangeFields, nil); err != nil {
+		t.Fatalf("UpdateTask clear: %v", err)
+	}
+	if !r.task(t, "dup").Task.Merging {
+		t.Fatal("the clear was applied before the sweep ran, so this case is " +
+			"not the shape it names")
+	}
+
+	r.applyWhileWriting()
+	swept, err := trackerWorker(t, r).Tick(t.Context())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if n := swept["tracker_abandoned_merges"]; n != 0 {
+		t.Errorf("the sweep cleared %d marker(s), and the one it read had "+
+			"already been cleared", n)
+	}
+	r.drain()
+	if writes := r.strings(`SELECT id FROM tracker_history
+		WHERE subject_id = 'dup' AND kind = 'fields'`); len(writes) != 2 {
+		t.Errorf("the task carries %d marker writes, want the mark and one clear",
+			len(writes))
+	}
+}

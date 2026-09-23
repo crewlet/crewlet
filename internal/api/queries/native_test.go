@@ -164,6 +164,10 @@ type stubPages struct {
 	list   []pages.Summary
 	err    error
 
+	// next is the cursor a listing answers with. Set, the listing filled
+	// its page and reports itself truncated, as the reader does.
+	next string
+
 	// level is what the surface asked for, so a route that stopped naming
 	// one is visible: an unset level is what made every page read on this
 	// surface a label rather than a guarantee.
@@ -188,7 +192,10 @@ func (s *stubPages) List(_ context.Context, f pages.Filter,
 	fresh statelog.Freshness,
 ) (pages.Listing, error) {
 	s.filter, s.level, s.fresh = f, fresh.Level, fresh
-	return pages.Listing{Pages: s.list, Level: fresh.Level, Complete: true}, s.err
+	return pages.Listing{
+		Pages: s.list, Level: fresh.Level, Complete: true,
+		Truncated: s.next != "", NextCursor: s.next,
+	}, s.err
 }
 
 func (s *stubPages) Get(_ context.Context, _ string,
@@ -427,6 +434,65 @@ func TestSkillsIsThreeStated(t *testing.T) {
 	}
 	if p.filter.Skills == nil || *p.filter.Skills {
 		t.Error("skills=false reached the reader as absent or true")
+	}
+}
+
+// A PAGE LISTING IS WALKED BY ITS CURSOR.
+//
+// The answer carries `next_cursor` when its page filled, and `after` hands it
+// back to the reader unchanged. An offset reaches the rest by counting rows,
+// so a page that leaves the part already read between two reads moves every
+// later page up by one, and the next read skips one with nothing on either
+// answer to say so.
+func TestAPageListingIsWalkedByItsCursor(t *testing.T) {
+	t.Parallel()
+	const cursor = "RU5H.QWxwaGE.cDE"
+	p := &stubPages{list: []pages.Summary{{ID: "p1", Title: "Alpha"}}, next: cursor}
+	got, err := askNative(t, queries.Sources{Pages: p}, "pages",
+		map[string]any{"container": "ENG", "limit": 1})
+	if err != nil {
+		t.Fatalf("pages: %v", err)
+	}
+	payload, _ := got.(map[string]any)
+	if payload["truncated"] != true || payload["next_cursor"] != cursor {
+		t.Fatalf("a full page answered truncated=%v next_cursor=%v, want true and %q",
+			payload["truncated"], payload["next_cursor"], cursor)
+	}
+
+	if _, err := askNative(t, queries.Sources{Pages: p}, "pages", map[string]any{
+		"container": "ENG", "limit": 1, "after": cursor,
+	}); err != nil {
+		t.Fatalf("pages after the cursor: %v", err)
+	}
+	if p.filter.After != cursor {
+		t.Errorf("`after` reached the reader as %q, want the cursor %q", p.filter.After, cursor)
+	}
+
+	// THE CONTROL: a page that did not fill carries no cursor, or the
+	// assertion above would pass on a surface that always renders one.
+	whole := &stubPages{list: []pages.Summary{{ID: "p1", Title: "Alpha"}}}
+	got, err = askNative(t, queries.Sources{Pages: whole}, "pages", nil)
+	if err != nil {
+		t.Fatalf("pages: %v", err)
+	}
+	if cursor, held := got.(map[string]any)["next_cursor"]; held {
+		t.Errorf("a listing that did not fill carries next_cursor=%v", cursor)
+	}
+}
+
+// A CURSOR THE READER REFUSES IS A BAD PARAMETER, NOT A FAILED READ.
+//
+// The reader refuses an `after` that does not decode as a cursor, naming it.
+// Reported as a failure, a client is told the server broke over a request it
+// has to change.
+func TestACursorTheReaderRefusesIsABadParameter(t *testing.T) {
+	t.Parallel()
+	p := &stubPages{err: fmt.Errorf("%w: after: %q is not a cursor a page "+
+		"listing returned", pages.ErrInvalid, "page two")}
+	_, err := askNative(t, queries.Sources{Pages: p}, "pages",
+		map[string]any{"after": "page two"})
+	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "after") {
+		t.Errorf("a refused cursor answered %v, want a bad-parameter refusal naming after", err)
 	}
 }
 

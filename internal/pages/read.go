@@ -121,7 +121,9 @@ type Filter struct {
 	// listing is After's job, not its: an offset counts rows rather than
 	// naming one, so a page that leaves the rows it skips between two reads
 	// (trashed out of a status filter, renamed past them, purged) moves
-	// every later page up by one, and a walk by offset misses one.
+	// every later page up by one, and a walk by offset misses one — and a
+	// page that enters them moves every later page down, and a walk repeats
+	// one.
 	Offset int
 }
 
@@ -489,10 +491,10 @@ type Detail struct {
 	History  []RevisionSummary `json:"history,omitempty"`
 
 	// Children are this page's PUBLISHED children, the first [DefaultLimit]
-	// of them in a listing's order. Published only for the reason
-	// [Status.Readable] gives: a trashed page is deleted as far as any
-	// reader is concerned and a draft is somebody's unfinished thought, and
-	// a detail read is served to seats as well as to people.
+	// of them in a listing's order. Published only, as a seat's own
+	// `list_pages` is, because a detail read is served to seats as well as
+	// to people: a draft is somebody's unfinished thought and a trashed page
+	// one somebody put in the trash, and a seat would act on either.
 	Children []Summary `json:"children,omitempty"`
 
 	// ChildrenTruncated says this page has more published children than the
@@ -775,7 +777,8 @@ func (c *parentChains) above(ctx context.Context, pageID, parentID string) (
 type ContainerListing struct {
 	Container
 
-	// Pages is how many pages this container holds, live ones only.
+	// Pages is how many pages this container holds, trashed ones excluded —
+	// see [Reader.pageCounts].
 	//
 	// Counted in the SAME TRANSACTION as the containers, so a browser's
 	// rail cannot show a count from one instant beside a list from
@@ -818,12 +821,12 @@ func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
 // would otherwise take forty round trips to draw one rail, and every one of
 // them inside the read transaction the containers were listed in.
 //
-// TRASHED PAGES ARE NOT COUNTED: a trashed page is deleted as far as any
-// reader is concerned (see [Status]), and this is how many pages a container
-// holds. The predicate restates the status rather than reading `trashed_at`
-// because the container index is on `(container, status, title)`: the query
-// plan for this one is a scan of that index alone, where `trashed_at IS NULL`
-// plans as a scan of another index that reads every row back from the table.
+// TRASHED PAGES ARE NOT COUNTED, so the figure is a container's published
+// pages and drafts. The predicate restates the status rather than reading
+// `trashed_at` because the container index is on `(container, status,
+// title)`: the query plan for this one is a scan of that index alone, where
+// `trashed_at IS NULL` plans as a scan of another index that reads every row
+// back from the table.
 func (r *Reader) pageCounts(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT container, COUNT(*) FROM pages_heads

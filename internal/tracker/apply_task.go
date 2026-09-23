@@ -53,6 +53,12 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 	next.Version = uint64(c.packed)
+	// A PARENT A PURGE AT [PurgeRecordVersion] DESTROYED IS NOT WRITTEN,
+	// into the row or the document: the task goes where that purge moved
+	// the children it found — see [placedParent].
+	if next.Parent, err = placedParent(ctx, tx, next.Parent); err != nil {
+		return 0, err
+	}
 
 	// THE FINISH STAMPS ARE THE APPLIER'S, derived from the group the
 	// task has just entered rather than carried by the record.
@@ -89,7 +95,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	// ITS ROWS NAME NO PURGED TASK, whatever its document still lists —
 	// see [withoutPurged]. The document itself is written as the record
 	// left it, above.
-	live, err := withoutPurged(ctx, tx, next, c.maxVariables)
+	live, err := withoutPurged(ctx, tx, next, c.maxVariables, scrubbingPurges)
 	if err != nil {
 		return 0, err
 	}
@@ -718,11 +724,26 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 // same function ([Writer.UpdateTask]), so the record it publishes carries the
 // collection clean and the document heals.
 //
+// # Which purges count is the caller's question, and there are two
+//
+// The APPLIER counts [scrubbingPurges] alone. The drop is a rule
+// [PurgeRecordVersion] brought, and a commit past a purge at [RecordVersion]
+// writes its rows by that purge's rule — the edge written back — on every node
+// that replays it, rather than by a rule its purge never had. No build that
+// reads below [PurgeRecordVersion] applies a record past a purge at it (its
+// applier stops there), so for those markers the drop is every node's rule.
+//
+// The WRITER counts [everyPurge]: whether a task still exists is the question
+// a gesture's cap and its record are decided on, and the record carries the
+// answer — so it is fixed on the log, whichever build replays it.
+//
 // ONLY A TASK WITH EDGES PAYS FOR IT, and most tasks have none. Its ids are
 // bound in chunks of the estate's own parameter limit — one statement for any
 // task the relation caps allow — and one at a time when no limit was probed
 // ([applyContext.maxVariables]).
-func withoutPurged(ctx context.Context, tx *sql.Tx, task Task, maxVariables int) (Task, error) {
+func withoutPurged(ctx context.Context, tx *sql.Tx, task Task, maxVariables int,
+	counted purgeClass) (Task, error) {
+
 	ids := make([]string, 0, len(task.Relations)+len(task.Dependents))
 	for _, relation := range task.Relations {
 		ids = append(ids, relation.Other)
@@ -735,15 +756,16 @@ func withoutPurged(ctx context.Context, tx *sql.Tx, task Task, maxVariables int)
 	purged := map[string]bool{}
 	for from := 0; from < len(ids); from += chunk {
 		part := ids[from:min(from+chunk, len(ids))]
-		rows, err := tx.QueryContext(ctx, `SELECT task_id FROM tracker_deletions
-			WHERE task_id IN (`+placeholders(len(part))+`)`, anyOf(part)...)
+		rows, err := tx.QueryContext(ctx, `SELECT d.task_id FROM tracker_deletions d
+			WHERE d.task_id IN (`+placeholders(len(part))+`)`+counted.predicate(),
+			anyOf(part)...)
 		if err != nil {
 			return Task{}, fmt.Errorf("tracker: read which of %s's edges name a "+
 				"purged task: %w", task.ID, err)
 		}
 		for rows.Next() {
 			var id string
-			if err := rows.Scan(&id); err != nil {
+			if err = rows.Scan(&id); err != nil {
 				_ = rows.Close()
 				return Task{}, err
 			}
@@ -763,6 +785,83 @@ func withoutPurged(ctx context.Context, tx *sql.Tx, task Task, maxVariables int)
 	task.Dependents = slices.DeleteFunc(slices.Clone(task.Dependents),
 		func(id string) bool { return purged[id] })
 	return task, nil
+}
+
+// purgeClass is which deletion markers a reader counts — see [withoutPurged]
+// for why there are two answers.
+type purgeClass int
+
+const (
+	// everyPurge is every task a purge destroyed, whatever version the
+	// purge was written at: the question "does this task still exist".
+	everyPurge purgeClass = iota
+
+	// scrubbingPurges is a task destroyed by a purge at
+	// [PurgeRecordVersion] or above: the question "did the purge that
+	// destroyed it apply the rules that version brought".
+	scrubbingPurges
+)
+
+// predicate is the class as a clause over a marker aliased `d`, to be ANDed
+// onto a WHERE — empty for every purge.
+func (p purgeClass) predicate() string {
+	if p == scrubbingPurges {
+		return " AND " + scrubbingMarker
+	}
+	return ""
+}
+
+// placedParent is the parent a task commit's rows and document are written
+// with: the one the record names, unless a purge at [PurgeRecordVersion]
+// destroyed it — then where that purge moved the children it found, which its
+// marker records ([deletionMarker.Parent]).
+//
+// # Why the applier and not only the writer
+//
+// The writer refuses a parent it can SEE was purged ([refusePurged]), inside
+// the decide's own snapshot. It cannot refuse one it cannot see yet: a child
+// is written on its own subject and a purge on its parent's, so the broker
+// arbitrates neither against the other, and a create or a move decided before
+// the purge reached its writer lands after the purge on the log. Written as
+// the record says, that child's parent would be a row no node holds — the
+// orphan the purge's own re-parent exists to prevent, arriving by the other
+// order. Placed here, both orders converge: a child that was under the task
+// when it was purged, and one that arrived under it afterwards, end on the same
+// parent.
+//
+// A CHAIN, because the parent a marker records may itself have been purged
+// since — and each marker was written at a later position than the one before
+// it, so the walk only ever moves forward through the log. The visited set is
+// what guarantees it ends whatever the rows say.
+//
+// ONLY [scrubbingPurges]' markers, for [withoutPurged]'s reason: a commit past
+// a purge at [RecordVersion] writes the parent it names, dangling or not, by
+// that purge's rule, on every node that replays it.
+//
+// It costs a commit of a task with a parent one primary-key read of the
+// markers, and a decode only when that parent was purged.
+func placedParent(ctx context.Context, tx *sql.Tx, parent *string) (*string, error) {
+	visited := map[string]bool{}
+	for parent != nil && *parent != "" && !visited[*parent] {
+		visited[*parent] = true
+		var document []byte
+		err := tx.QueryRowContext(ctx, `SELECT d.document FROM tracker_deletions d
+			WHERE d.task_id = ?`+scrubbingPurges.predicate(), *parent).Scan(&document)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return parent, nil
+		case err != nil:
+			return nil, fmt.Errorf("tracker: read whether parent %s was purged: %w",
+				*parent, err)
+		}
+		var marker deletionMarker
+		if err := json.Unmarshal(document, &marker); err != nil {
+			return nil, fmt.Errorf("tracker: decode the deletion marker of %s: %w",
+				*parent, err)
+		}
+		parent = marker.Parent
+	}
+	return parent, nil
 }
 
 // maintainDeps derives the dependency edges from the task's own relations.
@@ -1024,10 +1123,18 @@ func bucketOf(task Task) string {
 // with the alias rows that made the key resolvable at all — because a
 // reference to a key nothing resolves is a dangling link a reader cannot tell
 // from a typo. All in one transaction, and the marker it writes is what stops
-// a redelivery months later resurrecting any of it. The same marker is what
-// stops the tasks on the other end of an edge writing it back: they still
-// carry the edge in their own documents, and [withoutPurged] drops it from the
-// rows each of their commits writes.
+// a redelivery months later resurrecting any of it. From
+// [PurgeRecordVersion], the same marker is what stops the tasks on the other
+// end of an edge writing it back: they still carry the edge in their own
+// documents, and [withoutPurged] drops it from the rows each of their commits
+// writes.
+//
+// # What it does is the record's VERSION's, not this build's
+//
+// A purge at [RecordVersion] applies exactly as it was first applied — rows
+// deleted, marker written, children's rows moved — and one at
+// [PurgeRecordVersion] also does everything below marked as its own. The
+// constant's doc says why that split is a version and never an edit.
 //
 // # Its HISTORY is scrubbed rather than deleted
 //
@@ -1041,7 +1148,8 @@ func bucketOf(task Task) string {
 // and an excerpt of every comment readable in the feed, which is the thing it
 // was asked to destroy. So the content columns are emptied and the skeleton
 // is kept — see [scrubPurgedContent] for exactly which is which — and the
-// inbox rows about the task lose their excerpt the same way.
+// inbox rows about the task lose their excerpt the same way. A purge at
+// [RecordVersion] leaves both whole.
 //
 // # Its CHILDREN are re-parented, not destroyed and not orphaned
 //
@@ -1056,15 +1164,24 @@ func bucketOf(task Task) string {
 // So each direct child is moved onto the purged task's OWN parent — the
 // grandparent, or the root when the purged task was one — and its subtree's
 // ancestry is rebuilt. Depth can only fall, so no cap is crossed by the move.
+// From [PurgeRecordVersion] the child's DOCUMENT moves with its row, because
+// every commit rewrites the row from the document ([upsertTask]) and the
+// child's next one would otherwise write the purged parent straight back.
 //
 // AND IT IS DONE IN THE APPLIER RATHER THAN REFUSED AT THE WRITER, because a
 // refusal cannot close the race: a child is created by a write to the CHILD's
 // subject, which does not contend with a write to this one, so a purge decided
 // against a childless snapshot can still land after a child arrives. The
 // applier sees the rows as they are at this position, and every node sees the
-// same ones.
+// same ones. The same race runs the other way — a child filed under the task,
+// or moved onto it, by a write decided before this purge reached its writer —
+// and [placedParent] is where such a child lands: where this purge put the
+// children it found, which is recorded on the marker for that reason.
 func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	id := c.subject().ID
+	// THE RULE THE RECORD WAS WRITTEN FOR, by its version — see
+	// [PurgeRecordVersion] for why an older record keeps its own.
+	scrubs := c.record.V >= PurgeRecordVersion
 	// The row is read BEFORE it is deleted, because the marker records
 	// what the task WAS: a deletion whose key and project are empty is a
 	// marker nobody can resolve back to anything.
@@ -1079,28 +1196,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 	written := 0
-	for _, statement := range []struct {
-		sql  string
-		args []any
-	}{
-		{`DELETE FROM tracker_references WHERE from_task = ? OR to_task = ?`, []any{id, id}},
-		{`DELETE FROM tracker_task_keys WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_watchers WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_collaborators WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_task_tags WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_relations WHERE task_id = ? OR other_id = ?`, []any{id, id}},
-		{`DELETE FROM tracker_task_deps WHERE task_id = ? OR blocker_id = ?`, []any{id, id}},
-		// THE MIRROR OF A DEPENDENCY, in both directions, beside the edge
-		// it mirrors: the rows the purged task wrote as a blocker, and the
-		// rows naming it as somebody's dependent.
-		{`DELETE FROM tracker_task_dependents WHERE task_id = ? OR dependent_id = ?`, []any{id, id}},
-		{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
-		{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_tasks WHERE id = ?`, []any{id}},
-	} {
+	for _, statement := range purgeDeletes(id, scrubs) {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, statement.sql, statement.args...)
 		if err != nil {
@@ -1112,6 +1208,10 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		}
 		written += n
 	}
+	document, err := markerDocument(c, task, scrubs)
+	if err != nil {
+		return 0, err
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_deletions
 			(task_id, task_key, project_key, purge_record_id, by, by_kind,
@@ -1121,7 +1221,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		id, task.Key, task.Project, c.record.OpID, c.record.Actor,
 		string(c.record.ActorKind), purgeReason(c), c.packed,
 		c.position.Stream, c.position.Generation,
-		store.EncodeTime(c.brokerAt), []byte(c.record.Mutation))
+		store.EncodeTime(c.brokerAt), document)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: mark %s purged at %s: %w", id, c.position, err)
 	}
@@ -1129,13 +1229,15 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	moved, err := a.reparent(ctx, tx, children, task.Parent)
+	moved, err := a.reparent(ctx, tx, children, task.Parent, c, scrubs)
 	if err != nil {
 		return 0, err
 	}
-	scrubbed, err := scrubPurgedContent(ctx, tx, id, historyID(c))
-	if err != nil {
-		return 0, fmt.Errorf("tracker: scrub %s's history at %s: %w", id, c.position, err)
+	scrubbed := 0
+	if scrubs {
+		if scrubbed, err = scrubPurgedContent(ctx, tx, id, historyID(c)); err != nil {
+			return 0, fmt.Errorf("tracker: scrub %s's history at %s: %w", id, c.position, err)
+		}
 	}
 	// A PURGE MOVES NO FIELD — the row is gone, and a delta naming what
 	// it used to hold would be the content the purge exists to destroy.
@@ -1144,7 +1246,136 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	return written + marker + moved + scrubbed + history, nil
+	line := 0
+	if scrubs {
+		if line, err = a.purgeLine(ctx, tx, c, task); err != nil {
+			return 0, err
+		}
+	}
+	return written + marker + moved + scrubbed + history + line, nil
+}
+
+// purgeDeletes is every row a purge removes, as the statements that remove
+// them.
+//
+// ONE LIST FOR BOTH VERSIONS, with the one difference in it: the mirror of a
+// dependency is deleted by a purge at [PurgeRecordVersion] and left by one at
+// [RecordVersion], which never deleted it.
+func purgeDeletes(id string, scrubs bool) []struct {
+	sql  string
+	args []any
+} {
+	statements := []struct {
+		sql  string
+		args []any
+	}{
+		{`DELETE FROM tracker_references WHERE from_task = ? OR to_task = ?`, []any{id, id}},
+		{`DELETE FROM tracker_task_keys WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_watchers WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_collaborators WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_task_tags WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_relations WHERE task_id = ? OR other_id = ?`, []any{id, id}},
+		{`DELETE FROM tracker_task_deps WHERE task_id = ? OR blocker_id = ?`, []any{id, id}},
+	}
+	if scrubs {
+		// THE MIRROR OF A DEPENDENCY, in both directions, beside the edge
+		// it mirrors: the rows the purged task wrote as a blocker, and the
+		// rows naming it as somebody's dependent.
+		statements = append(statements, struct {
+			sql  string
+			args []any
+		}{`DELETE FROM tracker_task_dependents WHERE task_id = ? OR dependent_id = ?`, []any{id, id}})
+	}
+	return append(statements, []struct {
+		sql  string
+		args []any
+	}{
+		{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
+		{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},
+		{`DELETE FROM tracker_tasks WHERE id = ?`, []any{id}},
+	}...)
+}
+
+// deletionMarker is the document a purge at [PurgeRecordVersion] writes on its
+// deletion marker, and what a later record reads off it.
+//
+// A purge at [RecordVersion] wrote its own payload there instead, which carries
+// the same `v` and `reason` and no `parent` — so both decode into this, and the
+// version says which rule the marker's purge applied.
+type deletionMarker struct {
+	V      int    `json:"v"`
+	Reason string `json:"reason,omitempty"`
+
+	// Parent is where the purge moved the task's children: the purged
+	// task's own parent at the purge's position, nil when it was a root.
+	// It is what [placedParent] moves a later child onto.
+	Parent *string `json:"parent,omitempty"`
+}
+
+// markerDocument is what a purge writes into its marker's `document`.
+//
+// A PURGE AT [RecordVersion] WRITES ITS PAYLOAD, byte for byte, which is its
+// version's rule, so a node replaying it holds the bytes a node that first
+// applied it holds. One at [PurgeRecordVersion] writes a [deletionMarker],
+// because the marker is then something later records READ, and the one fact
+// they need — where the children went — is on the row this purge deletes and
+// on no record.
+func markerDocument(c applyContext, task Task, scrubs bool) ([]byte, error) {
+	if !scrubs {
+		return []byte(c.record.Mutation), nil
+	}
+	document, err := json.Marshal(deletionMarker{
+		V: c.record.V, Reason: purgeReason(c), Parent: task.Parent,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tracker: encode the deletion marker at %s: %w",
+			c.position, err)
+	}
+	return document, nil
+}
+
+// scrubbingMarker is true of a deletion marker, aliased `d`, that a purge at
+// [PurgeRecordVersion] or above wrote — the purges whose rules [withoutPurged],
+// [placedParent] and the `content_purged` flags of the feed and the inbox key
+// on.
+//
+// FROM THE MARKER'S OWN DOCUMENT, which states the version its purge carried
+// ([deletionMarker]). A marker stating none is read as the first version: none
+// of the rules keyed on this is one that purge applied.
+var scrubbingMarker = fmt.Sprintf(
+	`COALESCE(json_extract(CAST(d.document AS TEXT), '$.v'), %d) >= %d`,
+	RecordVersion, PurgeRecordVersion)
+
+// purgeLine writes the purge's own line onto its history row when the record
+// carried no notification to bring it. [PurgeRecordVersion]'s.
+//
+// A HISTORY ROW TAKES ITS EXCERPT FROM THE NOTIFICATION, and a purge carries
+// one only when its project has a lead to tell ([purgeWake]). Without one the
+// row would say nothing — not the key, not who, not the reason — while the
+// feed's `q=` searches that column and nothing else. So the line lives in the column
+// either way, and what the feed renders is what it searches: the same line
+// [purgeExcerpt] builds for the lead, from the record's own actor and reason
+// and the task row read before it was deleted — inputs every node holds
+// identically at this position, so every node writes the same text.
+//
+// ONLY ONTO AN EMPTY EXCERPT, which is what makes a redelivery a no-op: by then
+// the task row is gone, and the line it would build names no key.
+func (a *Applier) purgeLine(ctx context.Context, tx *sql.Tx, c applyContext,
+	task Task) (int, error) {
+
+	if c.record.Notify != nil {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx,
+		`UPDATE tracker_history SET excerpt = ? WHERE id = ? AND excerpt = ''`,
+		purgeExcerpt(task, purgeReason(c), c.record.Actor), historyID(c))
+	if err != nil {
+		return 0, fmt.Errorf("tracker: write the purge's line at %s: %w", c.position, err)
+	}
+	return affected(res)
 }
 
 // scrubPurgedContent empties the content a purged task's history and inbox
@@ -1222,12 +1453,25 @@ const (
 // AFTER THE DELETES, deliberately: [Applier.maintainClosure] walks the parent
 // chain, and run before them it would walk through the row this purge is
 // removing and write an ancestry naming it.
+//
+// A purge at [RecordVersion] moved the `parent_id` column alone, and still
+// does. One at [PurgeRecordVersion] moves the child's DOCUMENT too, through the
+// decode and encode a task commit uses, because the columns beside a document
+// are extracted from it on every commit — so a column-only move was undone by
+// the child's next commit of any kind, which wrote the purged task back as its
+// parent and a subtree hanging from a row no node holds. It stamps
+// `scoped_through` rather than the version, as [placeTask] does and for its
+// reason: this record is on the purged task's subject, not the child's.
 func (a *Applier) reparent(ctx context.Context, tx *sql.Tx, children []string,
-	parent *string) (int, error) {
+	parent *string, c applyContext, scrubs bool) (int, error) {
 
 	written := 0
 	for _, child := range children {
-		if _, err := tx.ExecContext(ctx,
+		if scrubs {
+			if err := moveChildDocument(ctx, tx, child, parent, c); err != nil {
+				return 0, err
+			}
+		} else if _, err := tx.ExecContext(ctx,
 			`UPDATE tracker_tasks SET parent_id = ? WHERE id = ?`,
 			parent, child); err != nil {
 			return 0, fmt.Errorf("tracker: re-parent %s: %w", child, err)
@@ -1240,6 +1484,37 @@ func (a *Applier) reparent(ctx context.Context, tx *sql.Tx, children []string,
 		written += n
 	}
 	return written, nil
+}
+
+// moveChildDocument writes one child's new parent into its document and its
+// row together — [Applier.reparent] for a purge at [PurgeRecordVersion].
+func moveChildDocument(ctx context.Context, tx *sql.Tx, child string,
+	parent *string, c applyContext) error {
+
+	task, held, err := readTask(ctx, tx, child)
+	switch {
+	case err != nil:
+		return err
+	case !held:
+		// [childrenOf] read it in this same transaction a moment ago, so
+		// an absent row here is this function's caller being wrong about
+		// what it passed — not a race.
+		return fmt.Errorf("tracker: purge at %s moves child %s, which this "+
+			"node does not hold", c.position, child)
+	}
+	task.Parent = parent
+	task.ScopedThrough = max(task.ScopedThrough, uint64(c.packed))
+	document, err := json.Marshal(task)
+	if err != nil {
+		return fmt.Errorf("tracker: encode child %s at %s: %w", child, c.position, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE tracker_tasks SET parent_id = ?, scoped_through = ?, document = ?
+		WHERE id = ?`,
+		nullableStringPtr(parent), int64(task.ScopedThrough), document, child); err != nil {
+		return fmt.Errorf("tracker: re-parent %s at %s: %w", child, c.position, err)
+	}
+	return nil
 }
 
 // childrenOf reads a task's DIRECT children.

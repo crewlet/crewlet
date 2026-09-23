@@ -32,8 +32,9 @@ import (
 // groups there is no single order to be after. What a board actually does is
 // load ONE column further, and that has a spelling already: `group=<value>`
 // narrows the query to that group — `group=` and `subgroup=` together name one
-// lane the same way — and a single cell has exactly one order, so its answer
-// pages with an ordinary cursor ([Query.Pinned]). A board of several cells
+// lane the same way, and [GroupNone] names the column with no value — and a
+// single cell has exactly one order, so its answer pages with an ordinary
+// cursor ([Query.Pinned]). A board of several cells
 // mints no cursor, refuses one, and says how many rows each group holds —
 // [Group.Count] beside the rows it carries — rather than pretending to page.
 //
@@ -54,8 +55,8 @@ import (
 // left out — [Answer.GroupsTruncated], a flag and not a count, for the reason
 // that field gives — rather than dropping them in silence. The columns past it
 // are reached by narrowing the query until they fit, or one at a time with
-// `group=<key>`, which answers that column alone and pages it
-// ([Query.Pinned]).
+// `group=<key>` — [GroupNone] for the column with no value — which answers
+// that column alone and pages it ([Query.Pinned]).
 const MaxGroups = 64
 
 // MaxGroupsWithSubgroups and MaxSubgroups bound a SWIMLANE board, which costs
@@ -97,17 +98,54 @@ const (
 // A larger `group_limit` is lowered to the ceiling rather than refused, as a
 // larger `limit` is to [PageMax]. Nothing past it is out of reach: every column
 // carries its [Group.Count] beside its rows, and a single cell's answer carries
-// the cursor that pages the rest of it ([Query.Pinned]).
+// the cursor that pages the rest of it ([Query.Pinned]) — the column with no
+// value included, which `group=` names as [GroupNone].
 const (
 	GroupRowsDefault = 20
 	GroupRowsMax     = 100
 )
+
+// GroupNone is how `group=` and `subgroup=` name the column of tasks with NO
+// value on their axis — the one a board labels (unassigned), (untagged), (no
+// due date) and the like, and an answer reports with an empty [Group.Key].
+//
+// # Why a word, and not the empty key it stands for
+//
+// Because an empty `group=` is how a caller says no column at all, and because
+// every surface that drops an empty parameter could not send one: the key is
+// the one spelling that cannot name this column. Without a word for it, the
+// rows past this column's slice would be the one part of a board no request
+// can reach.
+//
+// # And why this word
+//
+// Parentheses are in no slug, handle, project key or date this grammar groups
+// on, and in no id the engine mints, so on the axes whose values are those no
+// real column is spelled this way. What a person typed is different — a unit's
+// name, a custom field's text, an option id a catalogue declared — and a value
+// there that is literally `(none)` is reached with that axis's own filter
+// (`unit=(none)`, `routing_unit=(none)`, `f.<slug>=(none)`) rather than by
+// `group=`.
+const GroupNone = "(none)"
+
+// groupKey is the key a `group=` or `subgroup=` value names — [GroupNone] is
+// the empty one.
+func groupKey(value string) string {
+	if value == GroupNone {
+		return ""
+	}
+	return value
+}
 
 // Group is one column of a grouped answer.
 type Group struct {
 	// Key is the stored value the rows share — a status slug, a handle, an
 	// option id — and Label what a person reads, which differ exactly
 	// where the store keeps an id and a person knows a word.
+	//
+	// EMPTY for the column of tasks with no value on the axis, which
+	// carries the axis's own label for that — and which `group=` names as
+	// [GroupNone] rather than as its key.
 	Key   string `json:"key"`
 	Label string `json:"label,omitempty"`
 
@@ -145,11 +183,11 @@ type groupAxis struct {
 	Join string
 	Args []any
 
-	// Multi marks an axis on which one task appears in SEVERAL groups —
-	// only a tag today. It is not an error: a task with three labels is on
-	// three columns, which is what a label board IS. What it changes is
-	// that the counts do not sum to the answer's own total, and the
-	// answer says so rather than leaving a reader to wonder.
+	// Multi marks an axis on which one task appears in SEVERAL groups — a
+	// tag, or a multi-valued custom field. It is not an error: a task with
+	// three labels is on three columns, which is what a label board IS.
+	// What it changes is that the counts do not sum to the answer's own
+	// total, and the answer says so rather than leaving a reader to wonder.
 	Multi bool
 
 	// Unset is the label for a row whose value is absent, because "nobody
@@ -184,18 +222,32 @@ func (a groupAxis) filter(key string) (string, []any) {
 	return a.Expr + " = ?", []any{key}
 }
 
-// compileGroup turns a grouping key into its axis.
-func compileGroup(key string, fields map[string]resolvedField) (groupAxis, error) {
+// The join alias each grouping axis is compiled under, ONE PER AXIS.
+//
+// A swimlane board's statements carry the column axis's join and the lane
+// axis's join together ([readSubgroups]), and two joins under one alias are
+// refused by the store as an ambiguous column — which is every board whose
+// two axes both join, two custom fields or a field and a tag. Numbered by the
+// axis rather than chosen per kind, so no pair of kinds can collide.
+const (
+	columnAxisAlias = "g1"
+	laneAxisAlias   = "g2"
+)
+
+// compileGroup turns a grouping key into its axis, joined under alias.
+func compileGroup(key string, fields map[string]resolvedField,
+	alias string) (groupAxis, error) {
+
 	if ref, ok := strings.CutPrefix(key, FieldKeyPrefix); ok && ref != "" {
 		field, held := fields[ref]
 		if !held {
 			return groupAxis{}, fmt.Errorf("tracker: group_by names f.%s and "+
 				"no field resolved to it", ref)
 		}
-		// ONE ALIAS, and `seq = 0` for the reason a field SORT pins it:
-		// a multi-valued field joined whole would put one task on every
-		// column it holds a value for, which is a labels board — and
-		// this axis is the field's own first value.
+		// `seq = 0` for the reason a field SORT pins it: a multi-valued
+		// field joined whole would put one task on every column it holds
+		// a value for, which is a labels board — and this axis is the
+		// field's own first value.
 		column := FieldValueColumn(field.Type)
 		// A MULTI-VALUED FIELD IS A LABEL BOARD, exactly as `tag` is: the
 		// join is unpinned so a task with three values is on three
@@ -204,15 +256,15 @@ func compileGroup(key string, fields map[string]resolvedField) (groupAxis, error
 		// on one of these would show every task under its FIRST value
 		// and say nothing — which is a board that is quietly wrong
 		// rather than one that is differently shaped.
-		pin := " AND gv.seq = 0"
+		pin := " AND " + alias + ".seq = 0"
 		if field.Multi {
 			pin = ""
 		}
 		return groupAxis{
-			Expr: "gv." + column,
-			Join: " LEFT JOIN tracker_field_values gv ON gv.task_id = t.id" +
-				" AND gv.field_id = ? AND " +
-				strings.ReplaceAll(liveFieldValue, "v.", "gv.") + pin,
+			Expr: alias + "." + column,
+			Join: " LEFT JOIN tracker_field_values " + alias + " ON " + alias +
+				".task_id = t.id AND " + alias + ".field_id = ? AND " +
+				strings.ReplaceAll(liveFieldValue, "v.", alias+".") + pin,
 			Args:  []any{field.ID},
 			Multi: field.Multi,
 			Unset: "(not set)",
@@ -258,8 +310,8 @@ func compileGroup(key string, fields map[string]resolvedField) (groupAxis, error
 		// task with three labels is on three columns, which is what a
 		// label board is for.
 		return groupAxis{
-			Expr:  "gt.slug",
-			Join:  " LEFT JOIN tracker_task_tags gt ON gt.task_id = t.id",
+			Expr:  alias + ".slug",
+			Join:  " LEFT JOIN tracker_task_tags " + alias + " ON " + alias + ".task_id = t.id",
 			Multi: true, Unset: "(untagged)",
 			Exists: func(key string) (string, []any) {
 				inner := "SELECT 1 FROM tracker_task_tags g " +
@@ -522,7 +574,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if err := checkGroupBreadth(ctx, tx, q, where, args); err != nil {
 		return grouped{}, err
 	}
-	axis, err := compileGroup(q.GroupBy, fields)
+	axis, err := compileGroup(q.GroupBy, fields, columnAxisAlias)
 	if err != nil {
 		return grouped{}, err
 	}
@@ -552,7 +604,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	// joined value drew a column for every other label those tasks carry.
 	counted, countArgs := where, args
 	if q.Group != "" {
-		clause, values := axis.joinedFilter(q.Group)
+		clause, values := axis.joinedFilter(groupKey(q.Group))
 		counted = "(" + where + ") AND " + clause
 		countArgs = append(append([]any{}, args...), values...)
 	}
@@ -605,7 +657,7 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	where string, args []any, rowWhere string, rowArgs []any,
 	terms []sortTerm, rowsPer int) ([]Group, bool, error) {
 
-	inner, err := compileGroup(q.GroupBy2, fields)
+	inner, err := compileGroup(q.GroupBy2, fields, laneAxisAlias)
 	if err != nil {
 		return nil, false, err
 	}
@@ -629,7 +681,7 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 		scoped := "(" + where + ") AND " + outerClause
 		bound := append(append([]any{}, args...), outerArgs...)
 		if q.Subgroup != "" {
-			innerClause, innerArgs := inner.joinedFilter(q.Subgroup)
+			innerClause, innerArgs := inner.joinedFilter(groupKey(q.Subgroup))
 			scoped += " AND " + innerClause
 			bound = append(bound, innerArgs...)
 		}

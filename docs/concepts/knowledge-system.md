@@ -385,8 +385,8 @@ An empty `backend` **derives** rather than defaulting blindly: a company that de
 
 What differs from the vendor path, and is visible:
 
-- **Every seat reads every page.** There is no per-seat credential, so `CanSearch` reduces to "is there an index at all" — the credential-less case below does not arise.
-- **An index that is still building says so.** It is a different fact from an empty company, and a seat is told which: "the knowledge base is not searchable from this node yet — ask a colleague rather than concluding nothing has been written down". A seat that read an empty result would act on it, by writing a page that already exists. The gate is this node's FIRST BUILD — one lap over every corpus — and not "nothing is waiting to be indexed": a page saved a moment ago is ordinary staleness, and reading the gate off a pending count made every empty search on a company with people in it answer "still building" instead. After the first lap a search is a true answer over slightly older rows, which is what a search always is.
+- **Every seat reads every page.** There is no per-seat credential, and the native searcher is never built without its index, so `CanSearch` is always true — the credential-less case below does not arise.
+- **An index that is still building says so.** It is a different fact from an empty company, and a seat is told which: "the knowledge base is not searchable from this node yet — it is still indexing", and to ask a colleague rather than conclude nothing has been written down. A seat that read an empty result would act on it, by writing a page that already exists. The gate is this node's FIRST BUILD of the pages — one lap over them — and not "nothing is waiting to be indexed": a page saved a moment ago is ordinary staleness, and reading the gate off a pending count made every empty search on a company with people in it answer "still building" instead. The same index holds the work items, which finish their own first lap separately, and a knowledge search does not wait for theirs. After the first lap a search is a true answer over slightly older rows, which is what a search always is.
 - **A CONTAINER IS A DOCUMENT**, and the engine writes one for every `space:`
   the org chart names — a unit's, a seat's own — plus the two reserved ones,
   on every config apply and every boot. It is idempotent: a container whose
@@ -405,17 +405,24 @@ What differs from the vendor path, and is visible:
   `pages` query return 50 pages when no limit is named and at most 500, in
   container-then-title order. When more match, the answer carries
   `truncated: true` — so the number of rows is the page, never the count of
-  what matched — and `offset` reaches the rest. An offset counts rows, so a
-  page ahead of it that leaves the listing between two reads — trashed out of
-  `list_pages`, renamed past it, purged — moves every later page up by one,
-  and the next read skips one.
+  what matched — and a `next_cursor`. Passed back unchanged as `after`, with
+  the same filters, it answers the pages after the last one returned. A cursor
+  names that page rather than counting to it, so a page that leaves the part
+  already read between two reads — trashed out of `list_pages`, renamed past
+  it, purged — moves nothing else: every page that matched both times and did
+  not move is returned exactly once. A value that does not decode as a cursor
+  is refused as a bad parameter rather than read as some position in the
+  listing. The `pages` query also takes `offset`, a window at a numbered
+  position; it counts rows, so a walk by it skips a page whenever one ahead of
+  it leaves the listing, and repeats one whenever one enters ahead of it.
 - **A PAGE'S DETAIL CARRIES ITS PUBLISHED CHILDREN**, the first 50 in
-  container-then-title order, with `children_truncated` when it has more. A
-  draft or trashed child is not among them, because a detail is read by seats
-  as well as people. `list_pages` with `parent` set to that page lists the same
-  children in the same order, so `offset: 50` continues where the detail
-  stopped; the `pages` query with `parent` lists every child whatever its
-  status.
+  container-then-title order, with `children_truncated` and a
+  `children_cursor` when it has more. A draft or trashed child is not among
+  them, because a detail is read by seats as well as people. `list_pages` with
+  `parent` set to that page and `after` set to `children_cursor` continues
+  where the detail stopped, and so does the `pages` query with `parent`,
+  `status=published` and the same `after`. The `pages` query with `parent` and
+  no `status` lists every child whatever its status.
 - **A PAGE'S PARENT IS A PAGE, AND NEVER ONE BENEATH IT.** A create or a save
   naming a parent this node has no page for, the page itself, or a page
   below it is refused naming `parent_id`. A parent in another container is
@@ -465,7 +472,7 @@ What differs from the vendor path, and is visible:
 
 The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
 
-`Query.ExcludeAncestors` applies here too. The native searcher reads each hit's parent chain from this node's own page rows, as titles outermost first — the same chain a page's breadcrumb shows — and drops a hit whose chain carries an excluded title at any depth, compared without regard to case. So with the default, a page anywhere under a page titled `Auto-Drafted Skills` is not returned. A hit with no chain to judge by, a page at the top of its container, is dropped when its title carries the `[Auto-draft] ` prefix and `Auto-Drafted Skills` is among the exclusions. A chain that cannot be read makes the whole search answer empty rather than answer without the exclusion.
+`Query.ExcludeAncestors` applies here too. The native searcher reads each hit's parent chain from this node's own page rows, as titles outermost first — the same chain a page's breadcrumb shows — and drops a hit whose chain carries an excluded title at any depth, compared without regard to case. So with the default, a page anywhere under a page titled `Auto-Drafted Skills` is not returned. A page at the top of its container has an empty chain, which the search seam cannot tell from a chain that did not come back, so it is dropped when its title carries the `[Auto-draft] ` prefix and `Auto-Drafted Skills` is among the exclusions: a draft moved out from under `Auto-Drafted Skills` to the top of its container stays out of search until the prefix comes off its title, while one moved under a page outside it is returned. A chain that cannot be read makes the whole search answer empty rather than answer without the exclusion.
 
 ### Confluence backend — the Confluence searcher
 

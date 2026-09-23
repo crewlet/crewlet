@@ -522,7 +522,8 @@ each direct child re-parents onto the purged task's own parent, or becomes a
 root when the purged task was one, and the subtree's depths and ancestry are
 rebuilt with it. Destroying the subtree would destroy work nobody confirmed,
 and leaving it alone would leave every child pointing at an id that resolves to
-nothing.
+nothing. A subtask filed under the purged task, or moved onto it, by a write
+that crossed the purge lands in the same place.
 
 A purge **empties the task's history rather than deleting it**: every change
 it had stays in the activity feed as who, when, what kind of change and in
@@ -538,7 +539,9 @@ page describes, not by the purge. A node's [snapshot](#snapshots) taken before
 the purge keeps its copy until the next one replaces it, and a **backup** for
 as long as the backup is kept. And a node holding a record it cannot read yet,
 because a newer build wrote it, keeps that record until a build that can read
-it arrives.
+it arrives — except a purge, which it never holds: a node whose build cannot
+read a purge stops applying the log there, and its seats move to a node that
+can, rather than apply the purge by an older build's rule.
 
 The report deliberately gives **no time guarantee**. An offline or evicted
 disk retains its copy until replay, adoption, replacement or destruction, and

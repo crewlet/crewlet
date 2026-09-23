@@ -84,11 +84,14 @@ type ActivityRecord struct {
 	Excerpt string           `json:"excerpt,omitempty"`
 	Fields  map[string]Delta `json:"fields,omitempty"`
 
-	// ContentPurged marks a row about a task that was later PURGED: the
+	// ContentPurged marks a row about a task that was later PURGED and whose
 	// purge emptied its excerpt and fields, so their absence says nothing
 	// about the change itself. Who, when and what kind of change are what
 	// is left, and no read surface returns the rest. The purge's own row is
-	// not marked — it carries the purge's line whole.
+	// not marked — it carries the purge's line whole — and neither is a row
+	// whose purge was written before purges emptied anything
+	// ([PurgeRecordVersion]): that row still holds its content, and the flag
+	// would say it does not.
 	ContentPurged bool `json:"content_purged,omitempty"`
 
 	CommentID string `json:"comment_id,omitempty"`
@@ -185,6 +188,11 @@ type ActivityQuery struct {
 
 	// Q is an escaped LIKE over the excerpt, and is GATED — see
 	// [ActivityQuerySpanDays].
+	//
+	// OVER THE STORED EXCERPT, which is also exactly what a row renders:
+	// nothing is added to a row after it is read, so a line the feed shows
+	// is a line this finds. That is why a purge writes its own line into its
+	// row rather than leaving the feed to build one ([Applier.purgeLine]).
 	Q string
 
 	// Notified narrows to what was or was not ANNOUNCED — see
@@ -370,17 +378,11 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		            WHERE h.subject_kind = ? AND d.task_id = h.subject_id)),
 		       EXISTS (SELECT 1 FROM tracker_deletions d
 		               WHERE h.subject_kind = ? AND d.task_id = h.subject_id
-		                 AND d.purge_record_id <> h.id),
-		       (SELECT d.by FROM tracker_deletions d
-		        WHERE h.subject_kind = ? AND d.task_id = h.subject_id
-		          AND d.purge_record_id = h.id),
-		       (SELECT d.reason FROM tracker_deletions d
-		        WHERE h.subject_kind = ? AND d.task_id = h.subject_id
-		          AND d.purge_record_id = h.id)
+		                 AND d.purge_record_id <> h.id`+scrubbingPurges.predicate()+`)
 		FROM tracker_history h`+clause+`
 		ORDER BY h.log_seq DESC
-		LIMIT ?`, append(append([]any{string(KindTask), string(KindTask),
-		string(KindTask), string(KindTask)}, args...), limit+1)...)
+		LIMIT ?`, append(append([]any{string(KindTask), string(KindTask)},
+		args...), limit+1)...)
 	if err != nil {
 		return nil, "", fmt.Errorf("tracker: read the activity feed: %w", err)
 	}
@@ -401,14 +403,13 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		var authored, effective int64
 		var kind, actorKind, subjectKind string
 		var fields string
-		var batch, key, purgedBy, purgeReason sql.NullString
+		var batch, key sql.NullString
 		var notified, late, purged int
 		if err := rows.Scan(&record.ID, &packed, &record.LogStream,
 			&record.LogGeneration, &authored, &effective, &kind, &record.Actor,
 			&actorKind, &record.OperatorID, &subjectKind, &record.SubjectID,
 			&record.Project, &record.Excerpt, &fields, &record.CommentID,
-			&batch, &record.TurnID, &notified, &late, &key, &purged,
-			&purgedBy, &purgeReason); err != nil {
+			&batch, &record.TurnID, &notified, &late, &key, &purged); err != nil {
 			return nil, "", fmt.Errorf("tracker: scan an activity row: %w", err)
 		}
 		record.LogSeq = uint64(packed) % statelog.GenerationStride
@@ -421,16 +422,6 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		record.SubjectKey = key.String
 		record.Notified, record.Late = notified != 0, late != 0
 		record.ContentPurged = purged != 0
-		// THE PURGE'S OWN ROW SAYS WHAT THE PURGE WAS, lead or no lead. A
-		// history row's excerpt is its notification's, and a purge
-		// notifies only a project lead ([purgeWake]) — so without one the
-		// row stores no excerpt at all. The line is the lead's line, built
-		// by the same function from the deletion marker this row's own
-		// purge wrote: the key, who purged it and the reason they gave.
-		if record.Excerpt == "" && purgedBy.Valid {
-			record.Excerpt = purgeExcerpt(Task{Key: key.String},
-				purgeReason.String, purgedBy.String)
-		}
 		if fields != "" && fields != "{}" {
 			if err := json.Unmarshal([]byte(fields), &record.Fields); err != nil {
 				// A ROW WHOSE DELTAS DO NOT DECODE IS STILL A ROW. The

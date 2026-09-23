@@ -112,6 +112,35 @@ func TestAPhaseRecordTooLargeForOneEventIsFitNotDropped(t *testing.T) {
 	}
 }
 
+// ONE TEXT PAST THE CEILING IS FIT TOO, AND THE NOTE SAYING SO FITS WITH IT.
+//
+// A single tool result larger than one event — one file read, one page body —
+// is the plainest way a record gets too large, and the one where the fit lands
+// closest to the ceiling: one text cut to the highest level that sheds the
+// excess leaves the record a few dozen bytes under it. The note that says the
+// record was cut is part of the record, so a note written after the level was
+// chosen pushed it back over, and the record the fit had saved was refused.
+func TestOneTextPastTheCeilingIsFitWithTheNoteSayingSo(t *testing.T) {
+	t.Parallel()
+	whole := strings.Repeat("x", queue.MaxPayloadBytes+1<<20)
+	res := toolloop.Result{RoundsUsed: 1, Executions: []toolloop.Execution{
+		{Round: 1, Name: "read_file", Args: map[string]any{"path": "dump.log"}, Output: whole},
+	}}
+	got := publishedPhases(t, phaseRecord{Phase: phase.Execute, Iteration: 1, Result: res})
+	if len(got) != 1 {
+		t.Fatalf("%d phase records were published, want the one, fit", len(got))
+	}
+	row := got[0].ToolExecutions[0]
+	result, _ := row["result"].(string)
+	if !strings.HasSuffix(result, "…") || row["result_bytes"] != len(whole) {
+		t.Errorf("the result is not marked as cut: …%q, result_bytes = %v",
+			result[max(0, len(result)-9):], row["result_bytes"])
+	}
+	if !strings.Contains(got[0].Notes, "record cut to fit one event") {
+		t.Errorf("notes = %q, want the record to say it was fit", got[0].Notes)
+	}
+}
+
 // A RECORD THAT FITS IS PUBLISHED EXACTLY AS IT WAS: the fit runs only when
 // the transport refuses the whole.
 func TestAPhaseRecordThatFitsIsNotTouched(t *testing.T) {
@@ -170,18 +199,34 @@ func TestTheWaterLevelCutsOnlyTheLongest(t *testing.T) {
 	}
 }
 
-// refusingPublisher refuses every event as too large, the way a NATS server
-// configured below the contract's ceiling refuses an event within it.
-type refusingPublisher struct {
+// cappedPublisher refuses as too large every event whose encoding is longer
+// than limit — what a NATS server whose max_payload is set below the
+// contract's ceiling does to an event within it — and counts every attempt.
+type cappedPublisher struct {
+	limit int
+
 	mu       sync.Mutex
 	attempts int
 }
 
-func (p *refusingPublisher) Publish(context.Context, string, *events.Event) error {
+func (p *cappedPublisher) Publish(_ context.Context, _ string, ev *events.Event) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.attempts++
-	return fmt.Errorf("publish: the server accepts less than this: %w", queue.ErrTooLarge)
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	if len(raw) > p.limit {
+		return fmt.Errorf("publish: %d bytes, and the server accepts %d: %w", len(raw), p.limit, queue.ErrTooLarge)
+	}
+	return nil
+}
+
+// cappedEmitter is an emitter publishing through pub.
+func cappedEmitter(pub *cappedPublisher) emitter {
+	return emitter{pub: pub, turn: Turn{RunID: "tn-1", AgentID: "agent-1"}, role: "Lead",
+		tally: &Spend{}, mu: &sync.Mutex{}}
 }
 
 // A RECORD REFUSED WITHIN THE CEILING IS NOT "FIT".
@@ -193,15 +238,41 @@ func (p *refusingPublisher) Publish(context.Context, string, *events.Event) erro
 // one account of the loss that points nowhere near its cause.
 func TestARecordRefusedWithinTheCeilingIsNotSentAgainAsFit(t *testing.T) {
 	t.Parallel()
-	pub := &refusingPublisher{}
-	var emu sync.Mutex
-	e := emitter{pub: pub, turn: Turn{RunID: "tn-1", AgentID: "agent-1"}, role: "Lead",
-		tally: &Spend{}, mu: &emu}
-	e.completed(t.Context(), phaseRecord{Phase: phase.Execute, Iteration: 1, Result: toolloop.Result{
-		RoundsUsed: 1, Executions: []toolloop.Execution{{Round: 1, Name: "read_page", Output: "a page"}},
-	}})
+	pub := &cappedPublisher{limit: 0}
+	got := cappedEmitter(pub).publishPhase(t.Context(), types.AgentPhaseCompleted{
+		Phase: types.PhaseExecute, Iteration: 1,
+		ToolExecutions: []types.ToolExecution{{"name": "read_page", "result": "a page"}},
+	})
 	if pub.attempts != 1 {
 		t.Errorf("the record was published %d times, want once: a record within the ceiling has "+
 			"nothing a fit can cut", pub.attempts)
+	}
+	if got != phaseRefusedWithinCeiling {
+		t.Errorf("the refusal was reported as %q, want %q", got, phaseRefusedWithinCeiling)
+	}
+}
+
+// A RECORD FIT TO THE CEILING AND REFUSED ANYWAY IS THE SAME REFUSAL.
+//
+// A record past the ceiling is fit to it and published again, and a server
+// that accepts less than the ceiling refuses the fitted record too. That is
+// the refusal of a record within the ceiling, met one step later, and it is
+// reported as one — the account that names the server's setting — rather than
+// as a publish that failed, which names nothing an operator can change.
+func TestAFitRecordRefusedAnywayIsReportedAsRefusedWithinTheCeiling(t *testing.T) {
+	t.Parallel()
+	pub := &cappedPublisher{limit: 1 << 20}
+	got := cappedEmitter(pub).publishPhase(t.Context(), types.AgentPhaseCompleted{
+		Phase: types.PhaseExecute, Iteration: 1,
+		ToolExecutions: []types.ToolExecution{
+			{"name": "read_file", "result": strings.Repeat("x", queue.MaxPayloadBytes+1<<20)},
+		},
+	})
+	if pub.attempts != 2 {
+		t.Errorf("the record was published %d times, want twice: whole, then fit", pub.attempts)
+	}
+	if got != phaseRefusedWithinCeiling {
+		t.Errorf("the fitted record's refusal was reported as %q, want %q",
+			got, phaseRefusedWithinCeiling)
 	}
 }
