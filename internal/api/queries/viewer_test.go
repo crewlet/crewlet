@@ -120,8 +120,8 @@ func TestTheViewerIsThePrincipalsOwnSeat(t *testing.T) {
 }
 
 // AN UNBOUND CREDENTIAL IS AN ORDINARY STATE, not an error. The remedy is a
-// binding in the org chart, and a screen that renders an error cannot say so —
-// which is why the login is answered even when no seat holds it.
+// binding in the identity directory, and a screen that renders an error cannot
+// say so — which is why the login is answered even when no seat holds it.
 func TestAnUnboundCredentialAnswersItsLoginAndNoSeat(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
@@ -234,7 +234,9 @@ func (c leadsChart) Leads(_ context.Context, actor, subject string) (bool, error
 // A CALLER NOBODY IS BOUND TO IS REFUSED FOR PARAMETERS, NOT FOR AUTHORITY.
 // Nobody was denied anything: there is no person to answer about, and telling
 // somebody to present a different credential is the wrong remedy for a company
-// that has not bound theirs.
+// that has not bound theirs. And the refusal NAMES THAT REMEDY WHERE IT LIVES —
+// a row in the identity directory, bound with `crewlet iam bind` — because the
+// org chart it used to point at has no field that binds a credential any more.
 func TestAnUnbindableCallerIsRefusedForWantOfAHandle(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
@@ -245,6 +247,11 @@ func TestAnUnbindableCallerIsRefusedForWantOfAHandle(t *testing.T) {
 	}
 	if errors.Is(err, queries.ErrUnauthorized) {
 		t.Error("refused as unauthorized; the remedy is a binding, not a credential")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "crewlet iam bind") ||
+		strings.Contains(msg, "org chart") {
+		t.Errorf("refusal = %q, want it to name `crewlet iam bind` and not the "+
+			"org chart, which no longer binds a credential", msg)
 	}
 }
 

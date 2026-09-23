@@ -12,10 +12,16 @@ import (
 )
 
 // The two refusals a personal question makes, told apart because the remedies
-// are different: one is a line of company configuration, the other authority.
+// are different: one is a row in the identity directory, the other authority.
+//
+// THE BINDING IS NAMED WHERE IT LIVES. It used to say "in the org chart", which
+// was true while a seat's contact block carried the credential it was held by;
+// the directory holds that now, and a remedy pointing at the chart sends
+// somebody to edit a document that has no field for it.
 var (
 	errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind "+
-		"the person to one in the org chart, or name a handle", ErrBadParams)
+		"its row in the identity directory to one (`crewlet iam bind`), or "+
+		"name a handle", ErrBadParams)
 	errNotYours = fmt.Errorf("%w: reading another seat's record needs the "+
 		"lead relation or fleet:operate", ErrUnauthorized)
 )
@@ -111,7 +117,7 @@ func (s Sources) viewerHandle(ctx context.Context, asked string) (string, error)
 		if own == "" {
 			// NOT AN AUTHORIZATION FAILURE. Nobody was refused: there is
 			// no person to answer about, and the remedy is a binding in
-			// the org chart rather than a different credential.
+			// the identity directory rather than a different credential.
 			return "", errNoSeat
 		}
 		return own, nil
