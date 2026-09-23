@@ -213,20 +213,15 @@ func (e ErrUnknownVersion) Error() string {
 
 // ---- encoding --------------------------------------------------------- //
 
-// The known field names per record. Explicit rather than reflective, for the
-// reason [work] gives: a name missing here is decoded into the struct AND
-// carried as unknown, so the next encode writes the stale carried copy back
-// over what the caller set. A test asserts every declared name is covered.
+// The known field names per record, read off each struct's own tags — see
+// [jsoncarry.Names] for what a hand-kept list of the omitempty ones cost.
 var (
-	containerFields = jsoncarry.Names(Container{}, "name", "purpose")
-	pageFields      = jsoncarry.Names(Page{}, "parent_id", "body", "labels", "watchers",
-		"muted", "author", "trashed_at", "last_change")
-	revisionFields = jsoncarry.Names(Revision{}, "message", "author")
-	commentFields  = jsoncarry.Names(Comment{}, "mentions", "reply_to", "last_change")
-	claimFields    = jsoncarry.Names(TitleClaim{})
-	changeFields   = jsoncarry.Names(Change{}, "actor", "actor_kind", "operator_id",
-		"fields", "comment_id", "excerpt", "mentions", "turn_id", "chain",
-		"quiet", "head_revision")
+	containerFields = jsoncarry.Names(Container{})
+	pageFields      = jsoncarry.Names(Page{})
+	revisionFields  = jsoncarry.Names(Revision{})
+	commentFields   = jsoncarry.Names(Comment{})
+	claimFields     = jsoncarry.Names(TitleClaim{})
+	changeFields    = jsoncarry.Names(Change{})
 )
 
 // EncodeContainer renders a container.

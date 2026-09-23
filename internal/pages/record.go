@@ -342,6 +342,4 @@ func Encode(rec MutationRecord) ([]byte, error) {
 // them, and a name missing here is decoded into the struct AND carried as
 // unknown — so the next encode writes the stale carried copy back over what
 // the caller set.
-var recordFields = jsoncarry.Names(MutationRecord{}, "op_id", "created_at", "gen",
-	"writer", "expect", "mutation", "actor", "actor_kind", "operator_id",
-	"turn_id", "chain", "notify")
+var recordFields = jsoncarry.Names(MutationRecord{})

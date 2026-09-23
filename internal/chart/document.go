@@ -398,19 +398,12 @@ func checkList(field string, values []string) error {
 
 // ---- encoding --------------------------------------------------------- //
 
-// The known field names per record. Explicit rather than reflective, for the
-// reason the tracker gives: a name missing here is decoded into the struct AND
-// carried as unknown, so the next encode writes the stale carried copy back
-// over what the caller set. A test asserts every declared name is covered.
+// The known field names per record, read off each struct's own tags — see
+// [jsoncarry.Names] for what a hand-kept list of the omitempty ones cost.
 var (
-	unitFields = jsoncarry.Names(Unit{}, "former_keys", "name", "type", "purpose",
-		"goals", "channel", "project", "space", "knowledge_refs", "parent_key",
-		"lead", "runtime", "last_change")
-	seatFields = jsoncarry.Names(Seat{}, "former_handles", "name", "email", "backstory",
-		"goal", "responsibilities", "behavioral_guidelines", "project", "space",
-		"unit_key", "runtime", "last_change")
-	changeFields = jsoncarry.Names(Change{}, "actor", "actor_kind", "operator_id",
-		"revision", "fields", "summary", "turn_id", "quiet")
+	unitFields   = jsoncarry.Names(Unit{})
+	seatFields   = jsoncarry.Names(Seat{})
+	changeFields = jsoncarry.Names(Change{})
 )
 
 // EncodeUnit renders a unit.

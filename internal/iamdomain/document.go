@@ -745,30 +745,20 @@ func checkVersion(got int) error {
 	return nil
 }
 
-// The field sets, DERIVED from each struct rather than typed again. The
-// omitempty names have to be listed because a zero value does not marshal
-// them, and a name missing here is decoded into the struct AND carried as
-// unknown — so the next encode writes the stale carried copy back over what
-// the caller set.
+// The field sets, DERIVED from each struct's own tags rather than typed
+// again — see [jsoncarry.Names] for the four names hand-kept lists missed.
 var (
-	personFields = jsoncarry.Names(Person{}, "name_sealed", "email_sealed",
-		"credentials", "grants")
-	claimFields = jsoncarry.Names(Claim{}, "person", "sealed",
-		"chart_position")
-	invitationFields = jsoncarry.Names(Invitation{}, "sealed", "invited_by",
-		"grants", "expires_at", "person")
-	sessionFields = jsoncarry.Names(Session{}, "absolute_expires_at",
-		"ended_reason")
-	revocationFields = jsoncarry.Names(Revocation{})
-	statusFields     = jsoncarry.Names(StatusChange{})
-	removalFields    = jsoncarry.Names(Removal{}, "released")
-	bootstrapFields  = jsoncarry.Names(Bootstrap{}, "verifier", "minted_by",
-		"expires_at", "person", "withdrawn")
-	sweepFields        = jsoncarry.Names(Sweep{}, "changes", "sessions", "expired")
-	invalidationFields = jsoncarry.Names(Invalidation{}, "by")
-	evictionFields     = jsoncarry.Names(Eviction{}, "readmitted", "by")
-	generationFields   = jsoncarry.Names(Generation{}, "prev_last_seq_seen",
-		"new_stream_created_at", "by")
-	credentialFields = jsoncarry.Names(Credential{}, "verifier",
-		"subject_blind", "expires_at", "revoked_at", "label")
+	personFields       = jsoncarry.Names(Person{})
+	claimFields        = jsoncarry.Names(Claim{})
+	invitationFields   = jsoncarry.Names(Invitation{})
+	sessionFields      = jsoncarry.Names(Session{})
+	revocationFields   = jsoncarry.Names(Revocation{})
+	statusFields       = jsoncarry.Names(StatusChange{})
+	removalFields      = jsoncarry.Names(Removal{})
+	bootstrapFields    = jsoncarry.Names(Bootstrap{})
+	sweepFields        = jsoncarry.Names(Sweep{})
+	invalidationFields = jsoncarry.Names(Invalidation{})
+	evictionFields     = jsoncarry.Names(Eviction{})
+	generationFields   = jsoncarry.Names(Generation{})
+	credentialFields   = jsoncarry.Names(Credential{})
 )

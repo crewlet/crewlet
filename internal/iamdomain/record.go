@@ -477,9 +477,7 @@ func Encode(rec MutationRecord) ([]byte, error) {
 // marshal them, and a name missing here is decoded into the struct AND carried
 // as unknown — so the next encode writes the stale carried copy back over what
 // the caller set.
-var recordFields = jsoncarry.Names(MutationRecord{}, "op_id", "created_at",
-	"gen", "writer", "expect", "mutation", "person", "actor", "actor_kind",
-	"reason")
+var recordFields = jsoncarry.Names(MutationRecord{})
 
 // EncodeBarrier renders the framework's barrier append as one of this domain's
 // own records.

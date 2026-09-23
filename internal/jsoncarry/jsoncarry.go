@@ -23,13 +23,15 @@
 // written down in two places stopped being one rule. A fifth state-log domain
 // would have made three copies of a precedence rule nothing compares.
 //
-// It is a LEAF and imports only encoding/json: every state-log domain is above
+// It is a LEAF over the standard library alone: every state-log domain is above
 // it and nothing here may reach back into one.
 package jsoncarry
 
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strings"
 )
 
 // Fields is the set of JSON names a record type defines.
@@ -91,34 +93,70 @@ func Decode(data []byte, out any, known Fields) (map[string]json.RawMessage, err
 	return extra, nil
 }
 
-// Names is the JSON names a record type defines: the ones a zero value
-// marshals, plus the omitempty names given explicitly.
+// Names is the JSON names a record type defines: every field encoding/json
+// would marshal, read off the TYPE rather than off a marshalled zero value.
 //
-// THE OMITEMPTY NAMES HAVE TO BE LISTED, and that is the trap this function
-// cannot close: a zero value does not marshal them, so a name missing from the
-// list is decoded into the struct AND carried as unknown — and the next encode
-// writes the stale carried copy back over what the caller set. Each domain's
-// own declaration is where the list lives, beside the struct it describes.
+// # Why the type, and never a marshalled value
+//
+// It used to marshal a zero value and ask each caller to LIST the omitempty
+// names beside it, because a zero value does not marshal those. That was the
+// trap the package doc warns about, left for every domain to fall into by
+// hand: a name missing from the list is decoded into the struct AND carried as
+// unknown, so the next encode writes the stale carried copy back over what the
+// caller set — and it had been fallen into four times, silently (a person's
+// and an invitation's `colleague`, a unit's `origin_key`, a seat's
+// `origin_handle`), each one a field that could never be cleared back to its
+// zero value. The tags already say every name; reading them is the only list
+// nobody has to remember to update.
+//
+// THE RULES ARE encoding/json's OWN: an unexported field is skipped, a field
+// tagged `-` is skipped, an embedded struct with no name of its own has its
+// fields promoted, and an untagged field is named by its Go name.
 //
 // IT PANICS rather than returning an error, because the only caller shape is a
-// package-level var over a type literal: a record type that does not marshal
-// to a JSON object is a build that cannot encode any record at all, and
-// discovering that at the first publish rather than at init is strictly worse.
-func Names(v any, omitted ...string) Fields {
-	data, err := json.Marshal(v)
-	if err != nil {
-		panic(fmt.Sprintf("jsoncarry: %T does not marshal: %v", v, err))
+// package-level var over a type literal: a record type that is not a struct
+// is a build that cannot encode any record at all, and discovering that at the
+// first publish rather than at init is strictly worse.
+func Names(v any) Fields {
+	t := reflect.TypeOf(v)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
 	}
-	var named map[string]json.RawMessage
-	if err := json.Unmarshal(data, &named); err != nil {
-		panic(fmt.Sprintf("jsoncarry: %T does not marshal to an object: %v", v, err))
+	if t == nil || t.Kind() != reflect.Struct {
+		panic(fmt.Sprintf("jsoncarry: %T is not a struct, so it does not "+
+			"marshal to a JSON object a field could be carried through", v))
 	}
-	out := make(Fields, len(named)+len(omitted))
-	for name := range named {
-		out[name] = true
-	}
-	for _, name := range omitted {
-		out[name] = true
-	}
+	out := Fields{}
+	collect(t, out)
 	return out
+}
+
+// collect adds the JSON names one struct type defines, promoting an embedded
+// struct's the way encoding/json does.
+func collect(t reflect.Type, out Fields) {
+	for i := range t.NumField() {
+		field := t.Field(i)
+		tag := field.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if field.Anonymous && name == "" {
+			embedded := field.Type
+			if embedded.Kind() == reflect.Pointer {
+				embedded = embedded.Elem()
+			}
+			if embedded.Kind() == reflect.Struct {
+				collect(embedded, out)
+				continue
+			}
+		}
+		if !field.IsExported() {
+			continue
+		}
+		if name == "" {
+			name = field.Name
+		}
+		out[name] = true
+	}
 }

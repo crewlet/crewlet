@@ -14,7 +14,7 @@ type record struct {
 	Name string `json:"name,omitempty"`
 }
 
-var fields = jsoncarry.Names(record{}, "name")
+var fields = jsoncarry.Names(record{})
 
 // A FIELD THIS BUILD DOES NOT KNOW SURVIVES A DECODE AND AN ENCODE.
 //
@@ -84,34 +84,28 @@ func TestACarriedFieldNeverOverwritesOneThisBuildSet(t *testing.T) {
 	}
 }
 
-// AN OMITEMPTY NAME MUST BE LISTED, and what it costs when it is not is the
-// previous case's failure arriving by a different route.
+// AN OMITEMPTY FIELD IS KNOWN WITHOUT ANYBODY LISTING IT, so clearing it to
+// its zero value is not undone by the copy the decode carried.
 //
-// A zero value does not marshal an omitempty field, so [jsoncarry.Names]
-// cannot see it: the name is decoded into the struct AND carried as unknown,
-// and the next encode writes the stale carried copy back over what the caller
-// set. This case is the DEMONSTRATION, so the rule in the doc has a measured
-// failure behind it rather than an assertion.
-func TestAnOmittedNameNobodyListedIsCarriedAsWellAsDecoded(t *testing.T) {
+// A zero value does not marshal an omitempty field, so a name set derived from
+// a marshalled zero value cannot see it — and every domain had to list those
+// names by hand beside the struct. Four had been missed (a person's and an
+// invitation's `colleague`, a unit's `origin_key`, a seat's `origin_handle`),
+// and each missed name was decoded into the struct AND carried as unknown, so
+// a caller clearing it re-encoded the carried copy straight back. Mutation:
+// derive the names from a marshalled zero value again and this reverts.
+func TestAnOmitemptyFieldIsKnownWithoutBeingListed(t *testing.T) {
 	t.Parallel()
-	short := jsoncarry.Names(record{}) // "name" deliberately not listed
-
 	var got record
-	extra, err := jsoncarry.Decode([]byte(`{"v":1,"name":"jane"}`), &got, short)
+	extra, err := jsoncarry.Decode([]byte(`{"v":1,"name":"jane"}`), &got,
+		jsoncarry.Names(record{}))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got.Name != "jane" {
-		t.Fatalf("the field decoded as %q", got.Name)
+	if _, carried := extra["name"]; carried {
+		t.Fatal("an omitempty field this build owns was carried as unknown")
 	}
-	if _, carried := extra["name"]; !carried {
-		t.Fatal("an unlisted omitempty name was not carried, so the hazard the " +
-			"doc describes no longer exists and the paragraph is stale")
-	}
-	// And now the caller's own edit is the one that is lost — through the
-	// precedence rule working exactly as specified, on a field it was
-	// never told this build owns.
-	got.Name = "the new name"
+	got.Name = "" // cleared back to its zero value, which omitempty drops
 	out, err := jsoncarry.Encode(got, extra)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -120,17 +114,32 @@ func TestAnOmittedNameNobodyListedIsCarriedAsWellAsDecoded(t *testing.T) {
 	if err := json.Unmarshal(out, &back); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if back.Name != "the new name" {
-		t.Logf("the unlisted field reverted to %q, which is the hazard "+
-			"jsoncarry.Names documents", back.Name)
+	if back.Name != "" {
+		t.Errorf("the cleared field came back as %q — the carried copy of a "+
+			"field this build owns overwrote the caller's own write", back.Name)
 	}
 }
 
-// NAMES SEES WHAT A ZERO VALUE MARSHALS, PLUS WHAT IT IS TOLD.
-func TestNamesIsTheMarshalledSetPlusTheOmittedOnes(t *testing.T) {
+// NAMES FOLLOWS encoding/json's OWN RULES for which fields exist and what
+// they are called.
+func TestNamesReadsTheNamesEncodingJSONWouldWrite(t *testing.T) {
 	t.Parallel()
-	got := jsoncarry.Names(record{}, "name")
-	want := jsoncarry.Fields{"v": true, "name": true}
+	type envelope struct {
+		Kind string `json:"kind"`
+		When int    `json:"when,omitempty"`
+	}
+	type shaped struct {
+		envelope                   // promoted, as encoding/json does
+		Named    string            `json:"named,omitzero"`
+		Untagged string            // named by its Go name
+		Skipped  string            `json:"-"`
+		Extra    map[string]string `json:"-"`
+		hidden   string
+	}
+	_ = shaped{hidden: ""}
+	got := jsoncarry.Names(shaped{})
+	want := jsoncarry.Fields{"kind": true, "when": true, "named": true,
+		"Untagged": true}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Names answered %v, want %v", got, want)
 	}
