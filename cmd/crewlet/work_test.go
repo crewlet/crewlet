@@ -6,15 +6,29 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fakePurgeNode answers the purge route, recording what it was asked.
+//
+// ITS FIELDS ARE READ BEHIND A LOCK, because a request it hangs up on gives the
+// command nothing to synchronise with: the handler's writes and the test's
+// reads are otherwise ordered only by a closed socket, which the race detector
+// cannot see.
 type fakePurgeNode struct {
-	server  *httptest.Server
+	server *httptest.Server
+
+	mu      sync.Mutex
 	query   url.Values
 	task    string
 	outcome string
+	// hangUp drops the connection without an answer, after recording the
+	// request — a node that did the work and whose answer never arrived.
+	hangUp bool
 }
 
 func newFakePurgeNode(t *testing.T) *fakePurgeNode {
@@ -22,20 +36,41 @@ func newFakePurgeNode(t *testing.T) *fakePurgeNode {
 	n := &fakePurgeNode{outcome: "applied"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /work/{id}/purge", func(w http.ResponseWriter, r *http.Request) {
+		n.mu.Lock()
 		n.task, n.query = r.PathValue("id"), r.URL.Query()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		outcome, hangUp := n.outcome, n.hangUp
+		n.mu.Unlock()
+		if hangUp {
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		answer := map[string]any{
 			"task": r.PathValue("id"), "key": r.URL.Query().Get("confirm"),
-			"project": r.URL.Query().Get("project"), "outcome": n.outcome,
-			"position": map[string]any{
+			"project": r.URL.Query().Get("project"), "outcome": outcome,
+			"op_id": r.URL.Query().Get("op_id"),
+		}
+		// THE ROUTE'S OWN RULE: no position for an unknown outcome.
+		if outcome != "unknown" {
+			answer["position"] = map[string]any{
 				"stream": "CREWLET_TRACKER_LOG", "seq": 918280009,
-			},
-			"op_id": "op-abc",
-		})
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(answer)
 	})
 	n.server = httptest.NewServer(mux)
 	t.Cleanup(n.server.Close)
 	return n
+}
+
+// asked is the task and query the node last received.
+func (n *fakePurgeNode) asked() (string, url.Values) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.task, n.query
 }
 
 // THE ONE OPERATION NOTHING UNDOES HAD NO CALLER AT ALL.
@@ -53,15 +88,23 @@ func TestWorkPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("work purge: %v\n%s", err, stderr)
 	}
-	if node.task != "t-1" {
-		t.Errorf("the route was asked to purge %q", node.task)
+	task, query := node.asked()
+	if task != "t-1" {
+		t.Errorf("the route was asked to purge %q", task)
 	}
 	for key, want := range map[string]string{
 		"confirm": "ENG-42", "project": "ENG", "reason": "an erasure request",
 	} {
-		if got := node.query.Get(key); got != want {
+		if got := query.Get(key); got != want {
 			t.Errorf("?%s= is %q, want %q", key, got, want)
 		}
+	}
+	// AN OPERATION ID ON EVERY PURGE, minted here when the operator brought
+	// none, so the command holds the handle on what it asked for whether or
+	// not an answer comes back.
+	if _, minted := statelog.OpMintedAt(query.Get("op_id")); !minted {
+		t.Errorf("?op_id= is %q, want an id the command minted as a node "+
+			"would, carrying the instant a retry is judged by", query.Get("op_id"))
 	}
 	// WHAT A PURGE DOES NOT REACH, printed where the gesture is run. An
 	// operator acting on an erasure request needs to know that an offline
@@ -85,8 +128,8 @@ func TestAPurgeWithoutTheTasksKeyIsRefused(t *testing.T) {
 			t.Errorf("%v ran without a confirmation", args)
 		}
 	}
-	if node.task != "" {
-		t.Errorf("a refused purge still reached the node as %q", node.task)
+	if task, _ := node.asked(); task != "" {
+		t.Errorf("a refused purge still reached the node as %q", task)
 	}
 }
 
@@ -99,8 +142,8 @@ func TestAPurgeWithNoReasonIsRefusedBeforeItIsSent(t *testing.T) {
 		"-confirm", "ENG-42", bootstrapForURL(t, node.server.URL)); err == nil {
 		t.Fatal("a purge with no reason ran")
 	}
-	if node.task != "" {
-		t.Errorf("a purge with no reason still reached the node as %q", node.task)
+	if task, _ := node.asked(); task != "" {
+		t.Errorf("a purge with no reason still reached the node as %q", task)
 	}
 }
 
@@ -116,20 +159,28 @@ func TestAnUnknownPurgeNamesTheIdToRetryWith(t *testing.T) {
 	if err != nil {
 		t.Fatalf("work purge: %v", err)
 	}
-	if !strings.Contains(stdout, "op-abc") {
-		t.Errorf("an unknown outcome never named the operation id:\n%s", stdout)
+	_, query := node.asked()
+	if sent := query.Get("op_id"); sent == "" || !strings.Contains(stdout, "-op-id "+sent) {
+		t.Errorf("an unknown outcome never named the operation id %q:\n%s", sent, stdout)
+	}
+	// NO POSITION, which is the whole content of unknown: "at 0" read as a
+	// record landed at the log's origin.
+	if !strings.Contains(stdout, "unknown — the record may or may not be on the log") ||
+		strings.Contains(stdout, "unknown at") {
+		t.Errorf("an unknown outcome was printed with a position:\n%s", stdout)
 	}
 
 	// AND THE FLAG REACHES THE ROUTE, or the advice above is a sentence
 	// pointing at a flag that does nothing.
+	printed := statelog.NewOpID(time.Now().Add(-time.Minute), "purge-t-1")
 	if _, _, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
-		"-reason", "why", "-confirm", "ENG-42", "-op-id", "op-abc",
+		"-reason", "why", "-confirm", "ENG-42", "-op-id", printed,
 		bootstrapForURL(t, node.server.URL)); err != nil {
 		t.Fatalf("retrying with the printed id failed: %v", err)
 	}
-	if got := node.query.Get("op_id"); got != "op-abc" {
+	if _, query := node.asked(); query.Get("op_id") != printed {
 		t.Errorf("?op_id= is %q — a retry with a fresh id appends a second "+
-			"purge of a task the first one may already have destroyed", got)
+			"purge of a task the first one may already have destroyed", query.Get("op_id"))
 	}
 }
 
@@ -146,5 +197,36 @@ func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Do not run this again") {
 		t.Errorf("a pending purge read as something to retry:\n%s", stdout)
+	}
+}
+
+// A PURGE THE NODE NEVER ANSWERED NAMES THE OPERATION THAT FINISHES IT.
+//
+// The id was the node's to mint, so a request that timed out or dropped — which
+// may well have landed — left the operator nothing to retry under but a fresh
+// id, and a second purge. The command mints it before it asks and prints it,
+// with the flag, when no answer comes back. And it waits past the write path's
+// own waits rather than the ten seconds every other verb gives a network round
+// trip.
+func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
+	node := newFakePurgeNode(t)
+	node.hangUp = true
+	_, stderr, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
+		"-reason", "why", "-confirm", "ENG-42",
+		bootstrapForURL(t, node.server.URL))
+	if err == nil {
+		t.Fatal("a purge the node never answered reported success")
+	}
+	_, query := node.asked()
+	sent := query.Get("op_id")
+	if sent == "" || !strings.Contains(stderr, "-op-id "+sent) {
+		t.Fatalf("the unanswered purge sent op_id %q and printed:\n%s\nwant the "+
+			"retry that names it", sent, stderr)
+	}
+	if purgeRequestTimeout <= 3*statelog.DefaultResolveBudget ||
+		purgeRequestTimeout <= nodeRequestTimeout {
+		t.Errorf("work purge waits %s, not past the three %s waits a purge can "+
+			"make and the %s a round trip gets", purgeRequestTimeout,
+			statelog.DefaultResolveBudget, nodeRequestTimeout)
 	}
 }

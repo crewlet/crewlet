@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // `crewlet work` — the gestures on the company's own work items that belong to
@@ -102,19 +106,47 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 		} `json:"position"`
 		OpID string `json:"op_id"`
 	}
-	path := fmt.Sprintf("/work/%s/purge?confirm=%s&project=%s&reason=%s",
+	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, when the operator
+	// brought none — the gate verbs' rule, for their reason. A purge whose
+	// request timed out or dropped may well have landed, and the id the node
+	// would have answered with is the only handle on it: minted by the node,
+	// it was lost with the answer, and the only way on was a second purge
+	// under a fresh id. It is minted as the node would mint it
+	// ([statelog.NewOpID]), carrying the instant a node judges the retry by,
+	// and one the operator brought is sent as given: the node refuses an id it
+	// did not mint or one altered on the way back, and trimming it here would
+	// be a second copy of that rule.
+	operation := *opID
+	if operation == "" {
+		operation = statelog.NewOpID(time.Now(), "purge-"+id)
+	}
+	path := fmt.Sprintf("/work/%s/purge?confirm=%s&project=%s&reason=%s&op_id=%s",
 		url.PathEscape(id), url.QueryEscape(strings.TrimSpace(*confirm)),
 		url.QueryEscape(strings.TrimSpace(*project)),
-		url.QueryEscape(strings.TrimSpace(*reason)))
-	if given := strings.TrimSpace(*opID); given != "" {
-		path += "&op_id=" + url.QueryEscape(given)
-	}
-	if err := client.post(context.Background(), path, &answer); err != nil {
+		url.QueryEscape(strings.TrimSpace(*reason)), url.QueryEscape(operation))
+	// PATIENTLY, for the reason [nodeClient.patiently] names: a purge waits on
+	// the write path's own waits, not on the network.
+	if err := client.patiently(purgeRequestTimeout).post(context.Background(), path,
+		&answer); err != nil {
+		var lost noAnswer
+		if errors.As(err, &lost) {
+			fmt.Fprintf(stderr, "The node did not answer, so whether the purge "+
+				"landed is unknown. Run the same command again with -op-id %s — "+
+				"if the record landed, the retry answers from it rather than "+
+				"appending a second purge.\n", operation)
+		}
 		return err
 	}
 
-	fmt.Fprintf(stdout, "purge %s (%s): %s at %s %d\n", answer.Key, id,
-		answer.Outcome, answer.Position.Stream, answer.Position.Seq)
+	if answer.Outcome == string(statelog.OutcomeUnknown) {
+		// NO POSITION, which is the whole content of unknown: printed as
+		// "at 0" it read as a record landed at the log's origin.
+		fmt.Fprintf(stdout, "purge %s (%s): unknown — the record may or may not "+
+			"be on the log\n", answer.Key, id)
+	} else {
+		fmt.Fprintf(stdout, "purge %s (%s): %s at %s %d\n", answer.Key, id,
+			answer.Outcome, answer.Position.Stream, answer.Position.Seq)
+	}
 	switch answer.Outcome {
 	case "pending":
 		// THE THREE-VALUED OUTCOME, said plainly and NOT as a failure.
@@ -139,3 +171,16 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 		"`crewlet retention status` names which nodes those are.")
 	return nil
 }
+
+// purgeRequestTimeout is how long `work purge` waits for the node's answer.
+//
+// SIX RESOLVE BUDGETS. A purge is one record, and what it can legitimately
+// wait on is the write path's own: the wait for this node to reach the
+// caller's previous write, the wait for it to reach a peer's record on the
+// same task, and the resolution of its own append — each bounded at
+// [statelog.DefaultResolveBudget]. Three of those back to back is fifteen
+// seconds, past the ten every other verb waits, which is where a working purge
+// was abandoned and reported with no operation id to retry it under; twice
+// that leaves room for the arbitration rounds between them and the request
+// around them.
+const purgeRequestTimeout = 6 * statelog.DefaultResolveBudget

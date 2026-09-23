@@ -646,9 +646,12 @@ durable and this node has not applied it yet — **do not run it again**, becaus
 a second gesture appends a second purge. `unknown` is the one to retry, and the
 operation id it prints goes back in `-op-id` so the retry cannot append a
 second record. A retry whose first purge did land answers `applied`, at the
-position that purge landed at, rather than finding the task already gone. Pass
-the id exactly as printed: it carries the instant it was minted, and a node
-whose operation ledger may have lost the first purge's row since — to the
+position that purge landed at, rather than finding the task already gone. The
+command mints that id **before** it asks and waits thirty seconds — past the
+three five-second waits a write can make — so a purge the node never answered,
+which may well have landed, still prints the `-op-id` to run it again with.
+Pass the id exactly as printed: it carries the instant it was minted, and a
+node whose operation ledger may have lost the first purge's row since — to the
 ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older
 build — judges the retry by it, answering `unknown` again rather than purging
 twice. An id the engine did not print is refused (`op_id_invalid`), and so is
