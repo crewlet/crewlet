@@ -176,7 +176,12 @@ func (s *Service) personForSubject(r *http.Request, claims oidc.Claims) (
 	// a subject can never collide with an address — they are different
 	// namespaces and a shared derivation would let one resolve as the
 	// other.
-	blind, err := s.blinder.Subject(claims.Issuer, claims.Subject)
+	blinder, err := s.blinder.Blinder(r.Context())
+	if err != nil {
+		log.WarnContext(r.Context(), "api_oidc_blind_failed", "error", err)
+		return iamdomain.Sighting{}, err
+	}
+	blind, err := blinder.Subject(claims.Issuer, claims.Subject)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_blind_failed", "error", err)
 		return iamdomain.Sighting{}, err

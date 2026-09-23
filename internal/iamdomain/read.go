@@ -502,6 +502,32 @@ func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
 	return held, err
 }
 
+// HoldsBlinds reports whether any row this node holds carries a value derived
+// from the company's blind-index key — a person's address, an invitation's, or
+// a provider link's subject.
+//
+// WHAT IT IS FOR is the one decision a missing key forces: mint one, or refuse.
+// On an estate that never held a blind a fresh key is simply the first one; on
+// one that did, the old key was DELETED, and a new one would orphan every
+// address the estate holds and let a second person claim each of them, since
+// the claim arbitrates on the blind and the new blind is a new subject.
+func (r *Reader) HoldsBlinds(ctx context.Context) (bool, error) {
+	var held bool
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		var count int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS(SELECT 1 FROM iam_people WHERE email_blind != '')
+			    OR EXISTS(SELECT 1 FROM iam_invites)
+			    OR EXISTS(SELECT 1 FROM iam_credentials WHERE subject_blind != '')`).
+			Scan(&count); err != nil {
+			return fmt.Errorf("iamdomain: look for a blinded row: %w", err)
+		}
+		held = count != 0
+		return nil
+	})
+	return held, err
+}
+
 // withTx runs one read in one transaction, which is what makes a multi-row
 // answer a snapshot rather than a sequence.
 //

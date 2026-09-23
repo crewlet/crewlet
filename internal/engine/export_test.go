@@ -19,6 +19,19 @@ func RefreshChartForTest(ctx context.Context, e *Engine) (org.ViewPosition, erro
 	return e.refreshChart(ctx)
 }
 
+// ForgetPersonBlinderForTest drops this node's resolved blinder, so the next
+// use resolves the company's key again.
+//
+// EXPORTED FOR A TEST ONLY: in production the cache is right for the life of
+// the process, because the key never changes while a company runs. What a
+// test needs is the state a restarted node is in after somebody deleted the
+// key — and an engine cannot be restarted over the same store in one process.
+func ForgetPersonBlinderForTest(e *Engine) {
+	e.personBlinds.mu.Lock()
+	defer e.personBlinds.mu.Unlock()
+	e.personBlinds.held = nil
+}
+
 // ViewPosition is the chart position the published company was derived from,
 // and whether this engine has read a chart at all.
 //

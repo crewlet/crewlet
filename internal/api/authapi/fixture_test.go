@@ -2,6 +2,7 @@ package authapi_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,7 +103,7 @@ func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
 		Signer:    signer,
 		Hasher:    credential.NewHasher(credential.Default(), 1),
 		Throttle:  throttle,
-		Blinder:   stubBlinder{},
+		Blinder:   fixtureBlinder(t),
 		Opener:    stubOpener{},
 		Sessions:  stubSessions{},
 		Clients:   auth.NewClients(&b),
@@ -191,12 +192,16 @@ func (stubWriter) SpendInvitation(context.Context, iamdomain.InvitationSpend) (s
 	return statelog.Position{}, nil
 }
 
-type stubBlinder struct{}
-
-func (stubBlinder) Email(address string) (string, error) { return "email:" + address, nil }
-
-func (stubBlinder) Subject(issuer, subject string) (string, error) {
-	return "subject:" + issuer + "|" + subject, nil
+// fixtureBlinder is a real blinder over a fixture key: the surface resolves one
+// per request, and a blinder already in hand is its own source.
+func fixtureBlinder(t *testing.T) *iamdomain.Blinder {
+	t.Helper()
+	blinder, err := iamdomain.NewBlinder([]byte(strings.Repeat("k",
+		iamdomain.MinBlindKeyBytes)))
+	if err != nil {
+		t.Fatalf("blinder: %v", err)
+	}
+	return blinder
 }
 
 type stubOpener struct{}

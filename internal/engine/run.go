@@ -148,6 +148,12 @@ type Engine struct {
 	// can give each one back. See [Engine.releaseDuties].
 	duties claimedDuties
 
+	// keyMint keeps two goroutines of this process from minting one company
+	// key at once, and personBlinds is the identity estate's blinder once
+	// resolved. See companykeys.go.
+	keyMint      mintGate
+	personBlinds personBlinds
+
 	// startedAt is when THIS engine was built, which is when the node
 	// started: the API this process serves runs inside it and reports this
 	// same instant. Carried on the presence heartbeat so a peer can tell a

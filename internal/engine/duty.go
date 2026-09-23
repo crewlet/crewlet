@@ -83,12 +83,17 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 // while a hold wraps one piece of work and is released when that work ends —
 // keeping it afterwards is indistinguishable from an outage to every other
 // caller. See [schedule.HoldNamedDuty].
+//
+// UNDER THIS PROCESS'S INCARNATION rather than the node's lease owner, because
+// a hold is taken before the node exists: the chart's seed runs at boot and
+// mints the company's blind-index key, and a hold that needed the node there
+// answered nil — the single-node answer — on every member of a fleet booting
+// at once, which is precisely when two of them mint.
 func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
-	if e.backends == nil || e.node == nil {
+	if e.backends == nil {
 		return nil
 	}
-	return schedule.HoldNamedDuty(e.backends.Coord, name,
-		e.node.Owner(), e.node.ID(), ttl)
+	return schedule.HoldNamedDuty(e.backends.Coord, name, e.incarnation, e.id, ttl)
 }
 
 // refuseDuty is the answer for a node whose roles exclude worker duties.

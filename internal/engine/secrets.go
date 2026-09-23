@@ -246,6 +246,9 @@ func (e *Engine) chartSealer() chart.Sealer {
 		store: fleetsecrets.New(e.backends.Fleet, e.cipher),
 		node:  node,
 		now:   time.Now,
+		key: func(ctx context.Context) (string, error) {
+			return e.companyKey(ctx, ChartBlindIndexKey, "chart", nil)
+		},
 	}
 }
 
@@ -254,6 +257,10 @@ type chartSealer struct {
 	store *fleetsecrets.Store
 	node  string
 	now   func() time.Time
+
+	// key reads the blind-index key, minting it under the fleet's hold
+	// when no node ever has. See companykeys.go.
+	key func(ctx context.Context) (string, error)
 }
 
 // Seal stores one value under the name the chart derived.
@@ -282,40 +289,18 @@ func (c *chartSealer) Seal(ctx context.Context, name, value string) error {
 // rotation is a migration rather than a setting — which is why nothing here
 // takes one.
 func (c *chartSealer) BlindKey(ctx context.Context) ([]byte, error) {
-	value, err := c.store.Get(ctx, ChartBlindIndexKey)
-	switch {
-	case err == nil && value != "":
-		return decodeBlindKey(value)
-	case err != nil && !errors.Is(err, secrets.ErrNotFound):
-		return nil, fmt.Errorf("engine: read the chart's blind-index key: %w", err)
-	}
-	// MINTED ONCE, and a racing node's write wins harmlessly: both mint a
-	// key, one lands, and the read below takes whichever did. What must not
-	// happen is a node computing under a key it invented and did not store,
-	// which would index every address to a value no peer can match.
-	minted, err := secrets.GenerateKey()
+	// MINTED ONCE, UNDER THE FLEET'S HOLD. The read-back this used to rely on
+	// did not make a race harmless: two nodes that both found the key absent
+	// each read their OWN write back when the other's had not landed yet, and
+	// went on indexing under different keys — see companykeys.go.
+	value, err := c.key(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("engine: mint the chart's blind-index key: %w", err)
+		return nil, fmt.Errorf("engine: the chart's blind-index key: %w", err)
 	}
-	if err := c.store.Set(ctx, ChartBlindIndexKey, secrets.EncodeKey(minted),
-		c.node, "chart", c.now()); err != nil {
-		return nil, fmt.Errorf("engine: store the chart's blind-index key: %w", err)
-	}
-	stored, err := c.store.Get(ctx, ChartBlindIndexKey)
-	if err != nil {
-		return nil, fmt.Errorf("engine: read back the chart's blind-index "+
-			"key: %w", err)
-	}
-	return decodeBlindKey(stored)
+	return decodeBlindKey(value)
 }
 
 // decodeBlindKey reads the stored key back out of the form it was written in.
-//
-// THE READ-BACK IS WHAT MAKES THE RACE HARMLESS: two nodes that both mint one
-// each store theirs, one lands, and both then read the same value. A node that
-// used the key it minted without reading back would index every address to a
-// value no peer can match — and nothing would report it, because the index is
-// opaque by construction.
 func decodeBlindKey(value string) ([]byte, error) {
 	key, err := base64.StdEncoding.DecodeString(value)
 	if err != nil {
@@ -375,26 +360,21 @@ func (e *Engine) personKeys() iamdomain.Shredder {
 	return sealer
 }
 
-// personBlinder derives the company's address blind, or nil.
+// PersonBlinder is where this node gets the company's address blind, or nil.
+//
+// A SOURCE, RESOLVED AT EACH USE, and the key it reads is MINTED by the first
+// node that needs one. This used to read the key once at boot and answer nil
+// when it was absent — and nothing anywhere minted it, so on every deployment
+// every enrolment with an address, every invitation and every sign-in by
+// address was refused for a key that did not exist.
 //
 // NIL IS A DOCUMENTED POSTURE rather than a failure: a node with no company
 // secret store cannot read the blind key, and the writes that need one are
-// refused BY NAME at the call. A node that refused to boot would take a fleet
-// down over a company setting — and a blinder built over an EMPTY key would be
-// worse than either, because an empty HMAC key produces stable, plausible
-// blinds that look exactly like working ones.
-func (e *Engine) PersonBlinder() *iamdomain.Blinder {
-	if e == nil || e.backends.Fleet == nil || e.cipher == nil {
+// refused BY NAME at the call. Returned as the interface with an explicit nil,
+// never a typed one, so a caller's nil check means what it says.
+func (e *Engine) PersonBlinder() iamdomain.Blinds {
+	if e == nil || e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
 		return nil
 	}
-	store := fleetsecrets.New(e.backends.Fleet, e.cipher)
-	value, err := store.Get(context.Background(), iamdomain.BlindKeyName)
-	if err != nil || value == "" {
-		return nil
-	}
-	blinder, err := iamdomain.NewBlinder([]byte(value))
-	if err != nil {
-		return nil
-	}
-	return blinder
+	return personBlindSource{e: e}
 }

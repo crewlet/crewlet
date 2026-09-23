@@ -13,6 +13,7 @@ import (
 
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -520,4 +521,50 @@ func realCipher(t *testing.T) secrets.Cipher {
 		t.Fatalf("NewCipher: %v", err)
 	}
 	return cipher
+}
+
+// A BLIND THAT CANNOT BE ESTABLISHED REFUSES THE ENROLMENT BEFORE ANYTHING IS
+// WRITTEN — the person's own key included.
+//
+// The blinder is resolved at the write now, from a key some node mints on
+// first use, so resolving it can fail: a store that could not be read, a node
+// that has not caught up, a key somebody deleted. Resolved after the person's
+// key was minted, each of those would leave a key behind for somebody who
+// never existed — a secret nothing names, that no removal will ever shred.
+func TestAnUnresolvableBlindLeavesNoKeyBehind(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	sealer, err := iamdomain.NewSealer(rig.keys)
+	if err != nil {
+		t.Fatalf("sealer: %v", err)
+	}
+	writer, err := iamdomain.NewWriter(iamdomain.WriterDeps{
+		Publisher: rig.publisher, DB: rig.db, Sealer: sealer,
+		Blinds: unresolvable{}, Actor: "ana.admin", ActorKind: iam.KindPerson,
+		Grants: []iam.Grant{iam.GrantPeopleManage},
+		Now:    func() time.Time { return brokerAt },
+	})
+	if err != nil {
+		t.Fatalf("writer: %v", err)
+	}
+	id := uuid.New().String()
+	_, err = writer.Enrol(t.Context(), iamdomain.Enrolment{
+		PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Sarah Chen", Email: "sarah.chen@example.com", Login: "sarah.chen",
+		OpID: "enrol-unresolvable", Reason: "the joiner",
+	})
+	if !errors.Is(err, iamdomain.ErrNoBlindKey) {
+		t.Fatalf("an enrolment whose blind cannot be derived answered %v, want "+
+			"the refusal naming the key", err)
+	}
+	if key := rig.keys.value(iamdomain.PersonDEKName(id)); key != "" {
+		t.Error("a refused enrolment left the person's key behind")
+	}
+}
+
+// unresolvable is a blind source whose key cannot be established.
+type unresolvable struct{}
+
+func (unresolvable) Blinder(context.Context) (*iamdomain.Blinder, error) {
+	return nil, fmt.Errorf("%w: the store could not be read", iamdomain.ErrNoBlindKey)
 }

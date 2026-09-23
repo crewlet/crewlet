@@ -210,7 +210,12 @@ func (s *Service) resolve(ctx context.Context, typed string) (iamdomain.Sighting
 	// chart derives its own index, or one address would reach a seat and a
 	// different person.
 	if looksLikeAddress(typed) {
-		blind, err := s.blinder.Email(typed)
+		blinder, err := s.blinder.Blinder(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "api_sign_in_blind_failed", "error", err)
+			return iamdomain.Sighting{}, "address"
+		}
+		blind, err := blinder.Email(typed)
 		if err != nil {
 			log.WarnContext(ctx, "api_sign_in_blind_failed", "error", err)
 			return iamdomain.Sighting{}, "address"

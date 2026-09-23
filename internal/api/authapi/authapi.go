@@ -198,22 +198,22 @@ type Opener interface {
 	Open(ctx context.Context, owner string, field iamdomain.Field, sealed string) (string, error)
 }
 
-// Blinder derives the keyed blind an address is matched on.
+// Blinds is where the keyed blind an address or a provider subject is matched
+// on comes from.
 //
 // THE BLIND AND NEVER THE ADDRESS, because a sign-in runs before anybody is
 // authenticated and the lookup must not carry personal data. It must agree
 // with what the chart derives its own index from, or one address would reach a
 // seat and a different person.
-type Blinder interface {
-	// Email is the blind an ADDRESS is matched on, and Subject the one a
-	// provider's subject claim is.
-	//
-	// TWO METHODS AND NOT ONE TAKING A CLASS, because the class is what
-	// keeps them apart: an address blinded under the subject class would
-	// match nothing and look exactly like an address nobody holds. The
-	// separation is in the signature so no caller can get it wrong.
-	Email(address string) (string, error)
-	Subject(issuer, subject string) (string, error)
+//
+// RESOLVED PER REQUEST rather than held from construction, for
+// [iamdomain.Blinds]' reason: the company's key is minted by the first node
+// that needs it, after this surface was built. The blinder that comes back
+// keeps the two classes apart in its own signature — [iamdomain.Blinder.Email]
+// and [iamdomain.Blinder.Subject] — so no caller can blind an address under
+// the subject class and read the miss as nobody holding it.
+type Blinds interface {
+	Blinder(ctx context.Context) (*iamdomain.Blinder, error)
 }
 
 // Audit is where this surface's authentication facts go.
@@ -266,8 +266,8 @@ type Options struct {
 	// surface is an oracle with a stopwatch.
 	Throttle *credential.Throttle
 
-	// Blinder derives the address blind. REQUIRED.
-	Blinder Blinder
+	// Blinder is where the address and subject blinds come from. REQUIRED.
+	Blinder Blinds
 
 	// Cipher seals the OIDC login-in-progress. REQUIRED when a provider
 	// is configured and unused otherwise, but taken unconditionally: a
@@ -340,7 +340,7 @@ type Service struct {
 	signer    *session.Signer
 	hasher    *credential.Hasher
 	throttle  *credential.Throttle
-	blinder   Blinder
+	blinder   Blinds
 	sessions  session.Directory
 	opener    Opener
 	cipher    secrets.Cipher

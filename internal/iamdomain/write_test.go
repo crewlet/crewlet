@@ -49,6 +49,10 @@ type writeRig struct {
 	// held so a case can reach inside it — a person's key, a store blip.
 	keys *keyStore
 
+	// publisher is the rig's one, for a case that needs a second writer
+	// over the same log with a different seam.
+	publisher *statelog.Publisher
+
 	drainMu sync.Mutex
 }
 
@@ -122,7 +126,7 @@ func newWriteRig(t *testing.T) *writeRig {
 	}
 	announced := &writerEvents{}
 	writer, err := iamdomain.NewWriter(iamdomain.WriterDeps{
-		Publisher: publisher, DB: db, Blinder: blinder, Sealer: sealer,
+		Publisher: publisher, DB: db, Blinds: blinder, Sealer: sealer,
 		Events: announced, Actor: "ana.admin", ActorKind: iam.KindPerson,
 		// THE RIG'S PARTY AUTHORS EVERYTHING, so every case here is
 		// about the rule it names rather than about the grant gate.
@@ -136,7 +140,7 @@ func newWriteRig(t *testing.T) *writeRig {
 		t: t, db: db, log: log, writer: writer, waiter: waiter,
 		events:   announced,
 		verifier: testVerifier(t),
-		keys:     keys,
+		keys:     keys, publisher: publisher,
 	}
 	// THE DIRECTORY SIGNAL IS COUNTED, so a case can say which records
 	// told this node its seats' standing may have moved.

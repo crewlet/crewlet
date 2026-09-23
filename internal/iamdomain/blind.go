@@ -1,6 +1,7 @@
 package iamdomain
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -112,6 +113,34 @@ func NewBlinder(key []byte) (*Blinder, error) {
 			len(key), MinBlindKeyBytes)
 	}
 	return &Blinder{key: append([]byte(nil), key...)}, nil
+}
+
+// Blinds is where a writer or a sign-in gets the company's blinder, at the
+// moment it needs one.
+//
+// # A source rather than a value, because the key is minted on first use
+//
+// The key does not exist until some node mints it, and the node that mints it
+// is whichever first needs a blind — which is after every node has booted and
+// built its writer. A blinder fixed at construction was therefore nil on every
+// node of every fresh deployment, and every enrolment with an address, every
+// invitation and every sign-in by address was refused for a key nothing ever
+// wrote. An error here is the third value, as everywhere in this estate: the
+// key could not be established, which is neither "nobody holds this address"
+// nor a blind.
+type Blinds interface {
+	Blinder(ctx context.Context) (*Blinder, error)
+}
+
+// Blinder makes a blinder its own source: a key already in hand needs no
+// resolution. A nil one answers [ErrNoBlindKey] rather than a nil blinder, so a
+// typed nil in the interface is a refusal and never a panic.
+func (b *Blinder) Blinder(context.Context) (*Blinder, error) {
+	if b == nil {
+		return nil, fmt.Errorf("%w: the company's %s is unset", ErrNoBlindKey,
+			BlindKeyName)
+	}
+	return b, nil
 }
 
 // MinBlindKeyBytes is the floor under the blind-index key.

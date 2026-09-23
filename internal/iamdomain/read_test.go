@@ -301,3 +301,52 @@ func TestAProviderSubjectResolvesThroughALiveLinkOnly(t *testing.T) {
 		}
 	}
 }
+
+// THE ESTATE SAYS WHETHER IT EVER USED THE BLIND KEY, which is what decides
+// whether a missing key may be minted or was deleted.
+//
+// A machine enrolled with no address derives no blind, so an estate holding
+// only machines is one a fresh key is simply the first key for — and refusing
+// there would strand a company whose first identities were service accounts.
+// One address is enough to make a fresh key an orphaning.
+func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	holds := func() bool {
+		t.Helper()
+		held, err := reader.HoldsBlinds(t.Context())
+		if err != nil {
+			t.Fatalf("HoldsBlinds: %v", err)
+		}
+		return held
+	}
+	if holds() {
+		t.Fatal("a fresh estate reports a blinded row")
+	}
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: uuid.New().String(), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Name: "Release pipeline", Login: "ci:release",
+		OpID: "enrol-machine", Reason: "a service account",
+	}); err != nil {
+		t.Fatalf("enrol a machine: %v", err)
+	}
+	rig.drain()
+	if holds() {
+		t.Error("a machine with no address counts as a blind, so a company " +
+			"whose first identity was a service account could never mint a key")
+	}
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: uuid.New().String(), Kind: iam.KindPerson,
+		Stage: iam.StageActive, Name: "Sarah Chen",
+		Email: "sarah.chen@example.com", Login: "sarah.chen",
+		OpID: "enrol-person", Reason: "the joiner",
+	}); err != nil {
+		t.Fatalf("enrol a person: %v", err)
+	}
+	rig.drain()
+	if !holds() {
+		t.Error("an estate holding an address reports none, so a deleted key " +
+			"would be minted over and every address orphaned")
+	}
+}

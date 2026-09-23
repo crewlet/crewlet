@@ -63,12 +63,26 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	if err := in.validate(); err != nil {
 		return statelog.Position{}, err
 	}
-	if w.blinder == nil || w.sealer == nil {
+	if w.sealer == nil || (in.Email != "" && w.blinds == nil) {
 		return statelog.Position{}, fmt.Errorf("iamdomain: this node cannot "+
 			"enrol anybody: it has %s. An enrolment has to derive the subject "+
 			"the address claim arbitrates on and seal the values that belong "+
 			"to the person, and a node that guessed at either would put two "+
 			"people on one address", w.missingKeys())
+	}
+	// THE BLINDER BEFORE THE KEY. One that cannot be established refuses
+	// the enrolment before anything is written; resolved after the
+	// person's key was minted, the refusal would leave a key behind for
+	// somebody who never existed.
+	var blinder *Blinder
+	if in.Email != "" {
+		resolved, err := w.blinds.Blinder(ctx)
+		if err != nil {
+			return statelog.Position{}, fmt.Errorf("iamdomain: this node "+
+				"cannot derive the subject an address claim arbitrates on: %w",
+				err)
+		}
+		blinder = resolved
 	}
 
 	if err := w.sealer.Mint(ctx, in.PersonID, w.Actor, w.Now()); err != nil {
@@ -85,7 +99,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	// to shred `Release pipeline, raised by Dana` as surely as a person.
 	var sealedEmail string
 	if in.Email != "" {
-		blind, err := w.blinder.Email(in.Email)
+		blind, err := blinder.Email(in.Email)
 		if err != nil {
 			return statelog.Position{}, err
 		}
@@ -792,9 +806,9 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 // a refusal somebody can act on.
 func (w *Writer) missingKeys() string {
 	switch {
-	case w.blinder == nil && w.sealer == nil:
+	case w.blinds == nil && w.sealer == nil:
 		return "neither a blind-index key nor a key store"
-	case w.blinder == nil:
+	case w.blinds == nil:
 		return "no blind-index key"
 	default:
 		return "no key store"
@@ -1203,11 +1217,16 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 			"an expiry; one read as `never` is a superuser claim that stays " +
 			"live in somebody's mailbox for the life of the company")
 	}
-	if w.blinder == nil || w.sealer == nil {
+	if w.blinds == nil || w.sealer == nil {
 		return statelog.Position{}, fmt.Errorf("iamdomain: this node cannot "+
 			"mint an invitation: %s", w.missingKeys())
 	}
-	blind, err := w.blinder.Email(in.Email)
+	blinder, err := w.blinds.Blinder(ctx)
+	if err != nil {
+		return statelog.Position{}, fmt.Errorf("iamdomain: this node cannot "+
+			"derive the subject an invitation's address arbitrates on: %w", err)
+	}
+	blind, err := blinder.Email(in.Email)
 	if err != nil {
 		return statelog.Position{}, fmt.Errorf("iamdomain: blind an "+
 			"invitation's address: %w", err)

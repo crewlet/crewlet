@@ -690,9 +690,11 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// with no company secret store cannot derive a blind or seal a
 		// name, and the writes that need one are refused BY NAME at the
 		// call rather than at boot. A node that refused to start would
-		// take down a fleet over a company setting.
-		Blinder: e.PersonBlinder(),
-		Sealer:  e.PersonSealer(),
+		// take down a fleet over a company setting. The blinder is a
+		// SOURCE, resolved at the write that needs it, because the key
+		// behind it is minted by whichever node needs one first.
+		Blinds: e.PersonBlinder(),
+		Sealer: e.PersonSealer(),
 		// WHAT A LANDED RECORD DECIDED — a grant delta, a session
 		// generation — goes on the node's audit feed from here, since
 		// only the decide holds it. Every surface's [Writer.As] keeps it.

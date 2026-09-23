@@ -57,15 +57,18 @@ type Writer struct {
 	// decided against it is paired with an expectation.
 	db *store.DB
 
-	// blinder derives the subject a claim on an address arbitrates on, and
+	// blinds derives the subject a claim on an address arbitrates on, and
 	// sealer seals the values that belong to one person.
 	//
 	// A WRITER WITH NEITHER CAN STILL DO MOST OF THIS. Ending a session,
 	// bumping an epoch, suspending somebody and removing them need no key
 	// at all — which is what lets a node with no keyring still revoke
 	// access, the one operation an outage must never block.
-	blinder *Blinder
-	sealer  *Sealer
+	//
+	// THE BLINDER IS RESOLVED PER WRITE and never held from construction:
+	// see [Blinds] for what holding it cost.
+	blinds Blinds
+	sealer *Sealer
 
 	// Actor and ActorKind are who this writer acts as.
 	Actor     string
@@ -124,10 +127,10 @@ type WriterDeps struct {
 	Publisher *statelog.Publisher
 	DB        *store.DB
 
-	// Blinder derives claim subjects, and Sealer seals a person's own
-	// values. Both optional: see [Writer.blinder].
-	Blinder *Blinder
-	Sealer  *Sealer
+	// Blinds derives claim subjects, and Sealer seals a person's own
+	// values. Both optional: see [Writer.blinds].
+	Blinds Blinds
+	Sealer *Sealer
 
 	Actor     string
 	ActorKind iam.Kind
@@ -169,7 +172,7 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: deps.Publisher, db: deps.DB,
-		blinder: deps.Blinder, sealer: deps.Sealer,
+		blinds: deps.Blinds, sealer: deps.Sealer,
 		Actor: deps.Actor, ActorKind: deps.ActorKind,
 		Grants: deps.Grants, Now: now, events: deps.Events,
 	}, nil

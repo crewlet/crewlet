@@ -48,6 +48,7 @@ var dutyTTLs = map[string]struct {
 	// operator setting, a day, still takes a lease of three hours.
 	"identityDutyTTL(interval)": {identityDutyTTL(config.DeactivationProbeCeiling), true},
 	"setup.LeaseTTL":            {setup.LeaseTTL, true},
+	"companyKeyHoldTTL":         {companyKeyHoldTTL, true},
 	"schedule.DutyTTL(tick)":    {schedule.DutyTTL(schedule.MaxTick), true},
 	"waiterDutyTTL(interval)":   {waiterDutyTTL(coord.MaxDutyTTL / dutyTTLTicks), false},
 }
