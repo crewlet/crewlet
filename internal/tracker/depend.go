@@ -154,7 +154,9 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		if adding {
 			notify = found.wakeFor(other, nil, leads)
 		}
-		authored, err := w.UpdateTask(ctx, stepID(opID, fmt.Sprintf("b%d", i)),
+		// NAMED BY THE TASK IT WRITES, never by its place in the list —
+		// see [authoredStep].
+		authored, err := w.UpdateTask(ctx, stepID(opID, authoredStep(adding, id)),
 			id, other.Project, NoIfMatch, TaskPatch{Relate: intent},
 			ChangeRelations, notify)
 		if err = resolved(fmt.Sprintf("task %s's edge to %s", id,
@@ -184,6 +186,33 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 	}
 	return out, nil
 }
+
+// authoredStep and mirrorStep name one append of a dependency change BY THE
+// TASK IT WRITES, never by its place in the list.
+//
+// A retry answers each step from the ledger by its step's id
+// ([statelog.Snap.Held]), so the id has to name the same write on every run of
+// the gesture — and the lists do not keep their places. A caller recomputes a whole-set change
+// against what the first run already landed: the retry of `waiting_on: [X]`
+// plus `blocking: [Z]` finds X's edge written and authors none, so its mirror
+// list loses X and this task's own mirror moves from second to first. Named
+// by position, that mirror was answered with X's ledger row — refused as an
+// operation that landed on another object, or before that check existed,
+// answered as landed — and this task never learned of its new dependent.
+// [Writer.UpdateTasks] learned the same thing the same way.
+//
+// THE SIGN IS PART OF AN AUTHORED STEP'S NAME, because one call may add an
+// edge on a task and remove another's, and a task listed on both sides must
+// not share one step. A mirror needs none: one commit per task carries both.
+func authoredStep(adding bool, task string) string {
+	if adding {
+		return "b+/" + task
+	}
+	return "b-/" + task
+}
+
+// mirrorStep names the mirror commit on one task — see [authoredStep].
+func mirrorStep(task string) string { return "m/" + task }
 
 // edgesOn is the `waiting_on` gesture for one task, or nil when this call does
 // not touch that task's own edges.
@@ -260,7 +289,7 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 		e.remove = append(e.remove, change.BlockingRemove...)
 	}
 
-	for i, id := range order {
+	for _, id := range order {
 		subject, held := found.byID[id]
 		if id == change.Task {
 			subject, held = found.self, true
@@ -284,7 +313,7 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 		if id == change.Task {
 			writer = w.After(authored)
 		}
-		result, err := writer.UpdateTask(ctx, stepID(opID, fmt.Sprintf("m%d", i)),
+		result, err := writer.UpdateTask(ctx, stepID(opID, mirrorStep(id)),
 			id, subject.Project, NoIfMatch, TaskPatch{Depend: intent},
 			ChangeRelations, notify)
 		// AN UNKNOWN MIRROR IS REPORTED ONE-SIDED, not mirrored: it may not
