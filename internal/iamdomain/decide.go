@@ -522,19 +522,12 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 		return statelog.Position{}, err
 	}
 	decide := func(tx *sql.Tx) error {
-		var current int64
-		err := tx.QueryRowContext(ctx,
-			`SELECT epoch FROM iam_revocation_epochs WHERE person_id = ?`,
-			personID).Scan(&current)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			current = 0
-		case err != nil:
-			return fmt.Errorf("iamdomain: read person %s's epoch: %w",
-				personID, err)
+		current, err := epochOf(ctx, tx, personID)
+		if err != nil {
+			return err
 		}
 		rec.Mutation, err = EncodeRevocation(Revocation{
-			V: DocumentVersion, Epoch: uint64(current) + 1,
+			V: DocumentVersion, Epoch: current + 1,
 		})
 		return err
 	}
@@ -582,21 +575,13 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 	}
 	var generation uint64
 	decide := func(tx *sql.Tx) error {
-		var current int64
-		err := tx.QueryRowContext(ctx,
-			`SELECT generation FROM iam_session_generation WHERE singleton = 0`).
-			Scan(&current)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			// NEVER BUMPED IS ZERO, which is what a bearer minted
-			// before anybody ever invalidated anything carries. The
-			// first bump therefore lands at 1 and ends exactly the
-			// cookies that predate it.
-			current = 0
-		case err != nil:
-			return fmt.Errorf("iamdomain: read the session generation: %w", err)
+		// NEVER BUMPED IS ZERO, so the first bump lands at 1 and ends
+		// exactly the cookies that predate it.
+		current, err := generationOf(ctx, tx)
+		if err != nil {
+			return err
 		}
-		generation = uint64(current) + 1
+		generation = current + 1
 		rec.Mutation, err = EncodeInvalidation(Invalidation{
 			V: GateRecordVersion, Generation: generation,
 			By: w.Actor,
@@ -693,44 +678,126 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 	return result.Position, err
 }
 
-// OpenSession records one session beginning.
+// OpenSession records one session beginning, and answers the two counters the
+// bearer minted for it has to carry.
 //
 // NO GRANT, for Revoke's reason turned round: signing IN is what a person does
 // before they hold anything, and a capability check here would be asking
 // somebody to prove authority they acquire by signing in.
+//
+// # The epoch and the generation are READ HERE, never stated by the caller
+//
+// A bearer is over the moment the person's revocation epoch or the fleet's
+// session generation moves past the value it carries, so a session has to be
+// OPENED AT the current ones. They used to be a caller's field that no caller
+// filled in, so every bearer carried zero for both: the first "sign out
+// everywhere" left that person unable to sign in again — each new session
+// validated as already ended — and the first `invalidate-all` did the same to
+// the whole company, for good. Read in the snapshot the record is formed in,
+// they are the values this node holds at the instant the session began, which
+// is the write authority's own rule: take ONE snapshot, decide inside it, never
+// guess. A caller stating them would be stating a read from another
+// transaction.
 func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
-	statelog.Position, error) {
+	SessionOpened, error) {
 
 	if in.Lineage == "" || in.Person == "" || in.OpID == "" {
-		return statelog.Position{}, errors.New("iamdomain: opening a session " +
+		return SessionOpened{}, errors.New("iamdomain: opening a session " +
 			"needs a lineage, a person and an operation id")
 	}
-	mutation, err := EncodeSession(Session{
-		V: DocumentVersion, Person: in.Person, Epoch: in.Epoch,
-		AbsoluteExpiresAt: in.AbsoluteExpiresAt,
-	})
-	if err != nil {
-		return statelog.Position{}, err
-	}
 	rec, err := w.record(SessionSubject(in.Lineage), OpOpen, in.Person,
-		PeopleScope(in.Person), mutation, "")
+		PeopleScope(in.Person), nil, "")
 	if err != nil {
-		return statelog.Position{}, err
+		return SessionOpened{}, err
 	}
-	req := w.request(&rec, in.OpID, statelog.PatternCreate, nil)
+	// THE LAST RUN'S COUNTERS, which is what the landed record carries: a
+	// decide may run again against a fresh snapshot.
+	var opened SessionOpened
+	decide := func(tx *sql.Tx) error {
+		epoch, err := epochOf(ctx, tx, in.Person)
+		if err != nil {
+			return err
+		}
+		generation, err := generationOf(ctx, tx)
+		if err != nil {
+			return err
+		}
+		opened = SessionOpened{Epoch: epoch, Generation: generation}
+		rec.Mutation, err = EncodeSession(Session{
+			V: DocumentVersion, Person: in.Person, Epoch: epoch,
+			AbsoluteExpiresAt: in.AbsoluteExpiresAt,
+		})
+		return err
+	}
+	req := w.request(&rec, in.OpID, statelog.PatternCreate, decide)
 	// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT FOR ITS OWN ROW, and
 	// only because nothing in the answer reads it. See
 	// [SessionStart.NoWait].
 	req.NoWait = in.NoWait
 	result, err := w.publish(ctx, req)
-	return result.Position, err
+	opened.Position = result.Position
+	return opened, err
+}
+
+// SessionOpened is what a bearer for a session that has just begun carries
+// beside its lineage.
+type SessionOpened struct {
+	// Position is where the start record landed, which the bearer carries
+	// so a node below it can tell "not seen yet" from "ended".
+	Position statelog.Position
+
+	// Epoch is the person's revocation epoch and Generation the fleet's
+	// session generation, both as the snapshot the record was formed in
+	// held them. A bearer carrying anything below either is over.
+	Epoch      uint64
+	Generation uint64
+}
+
+// epochOf is one person's current revocation epoch, read inside a decide.
+//
+// NO ROW IS ZERO, which is a real value rather than a missing one: nobody has
+// revoked anything for this person, and it is the value [Writer.Revoke]
+// increments from.
+func epochOf(ctx context.Context, tx *sql.Tx, personID string) (uint64, error) {
+	var epoch int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT epoch FROM iam_revocation_epochs WHERE person_id = ?`,
+		personID).Scan(&epoch)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("iamdomain: read person %s's epoch: %w",
+			personID, err)
+	}
+	return uint64(epoch), nil
+}
+
+// generationOf is the fleet's session generation, read inside a decide.
+//
+// NEVER BUMPED IS ZERO, which is what a bearer minted before anybody ever
+// invalidated anything carries.
+func generationOf(ctx context.Context, tx *sql.Tx) (uint64, error) {
+	var generation int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT generation FROM iam_session_generation WHERE singleton = 0`).
+		Scan(&generation)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("iamdomain: read the session generation: %w", err)
+	}
+	return uint64(generation), nil
 }
 
 // SessionStart is what opening a session needs.
+//
+// NO EPOCH AND NO GENERATION: both are read inside the decide — see
+// [Writer.OpenSession] for what stating them here cost.
 type SessionStart struct {
 	Lineage           string
 	Person            string
-	Epoch             uint64
 	AbsoluteExpiresAt time.Time
 	OpID              string
 

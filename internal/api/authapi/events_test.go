@@ -65,6 +65,10 @@ type estate struct {
 	// reads, ahead of the surface's own Apply — the other writer that
 	// landed first in a race.
 	before func([]iamdomain.Credential) []iamdomain.Credential
+
+	// counters are the revocation epoch and session generation a session
+	// is opened at, which the writer reads in its own snapshot.
+	counters iamdomain.SessionOpened
 }
 
 func (e *estate) PersonByLogin(_ context.Context, login string) (iamdomain.Sighting, error) {
@@ -80,8 +84,12 @@ func (e *estate) PersonByLogin(_ context.Context, login string) (iamdomain.Sight
 
 func (e *estate) AnyPerson(context.Context) (bool, error) { return true, nil }
 
-func (e *estate) OpenSession(context.Context, iamdomain.SessionStart) (statelog.Position, error) {
-	return statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 9}, nil
+func (e *estate) OpenSession(context.Context, iamdomain.SessionStart) (iamdomain.SessionOpened, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	opened := e.counters
+	opened.Position = statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 9}
+	return opened, nil
 }
 
 func (e *estate) SetCredentials(_ context.Context, in iamdomain.CredentialSet) (
@@ -147,6 +155,12 @@ func newSignInRig(t *testing.T) *signInRig {
 // login posts one sign-in and answers the status.
 func (r *signInRig) login(t *testing.T, login, pass, code string) int {
 	t.Helper()
+	return r.signIn(t, login, pass, code).Code
+}
+
+// signIn posts one sign-in and answers the whole response.
+func (r *signInRig) signIn(t *testing.T, login, pass, code string) *httptest.ResponseRecorder {
+	t.Helper()
 	body, _ := json.Marshal(map[string]string{
 		"login": login, "password": pass, "code": code,
 	})
@@ -156,7 +170,7 @@ func (r *signInRig) login(t *testing.T, login, pass, code string) int {
 	mux := http.NewServeMux()
 	r.svc.Routes(mux)
 	mux.ServeHTTP(rec, req)
-	return rec.Code
+	return rec
 }
 
 func appCode(t *testing.T, at time.Time) string {

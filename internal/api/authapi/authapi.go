@@ -143,9 +143,11 @@ type Directory interface {
 // Writer is what this surface writes, defined here for Directory's reason.
 type Writer interface {
 	// OpenSession records a session beginning and returns where the record
-	// landed. The position travels into the bearer, which is what lets a
-	// node below it serve on the signature alone.
-	OpenSession(ctx context.Context, in iamdomain.SessionStart) (statelog.Position, error)
+	// landed and the two counters it was opened at. All three travel into
+	// the bearer: the position is what lets a node below it serve on the
+	// signature alone, and the epoch and generation are what a later
+	// revocation or invalidation is compared against.
+	OpenSession(ctx context.Context, in iamdomain.SessionStart) (iamdomain.SessionOpened, error)
 
 	// CloseSession ends one, keeping its row until the sweep collects it.
 	// The person is the session's own, and the record is filed under

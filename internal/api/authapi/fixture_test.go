@@ -75,16 +75,7 @@ func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
 	replace func(*authapi.Options)) *authapi.Service {
 
 	t.Helper()
-	signer, err := session.New(session.Options{
-		Material: runtoken.Material{
-			ActiveID: "k1",
-			Keys:     []runtoken.KeyMaterial{{ID: "k1", Material: "a-fixture-signing-key"}},
-		},
-		Now: func() time.Time { return clock },
-	})
-	if err != nil {
-		t.Fatalf("session.New: %v", err)
-	}
+	signer := fixtureSigner(t)
 	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
 		Now: func() time.Time { return clock },
 		// NO PAD IN A TEST, because the pad is a wall-clock sleep: the
@@ -123,6 +114,23 @@ func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
 	return svc
 }
 
+// fixtureSigner is the signer every surface here is built with, so a case can
+// read back a cookie the surface minted.
+func fixtureSigner(t *testing.T) *session.Signer {
+	t.Helper()
+	signer, err := session.New(session.Options{
+		Material: runtoken.Material{
+			ActiveID: "k1",
+			Keys:     []runtoken.KeyMaterial{{ID: "k1", Material: "a-fixture-signing-key"}},
+		},
+		Now: func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	return signer
+}
+
 type stubDirectory struct{}
 
 func (stubDirectory) PersonByLogin(context.Context, string) (iamdomain.Sighting, error) {
@@ -154,8 +162,8 @@ func (stubDirectory) OutstandingBootstrapCodes(context.Context, time.Time) (
 
 type stubWriter struct{}
 
-func (stubWriter) OpenSession(context.Context, iamdomain.SessionStart) (statelog.Position, error) {
-	return statelog.Position{}, nil
+func (stubWriter) OpenSession(context.Context, iamdomain.SessionStart) (iamdomain.SessionOpened, error) {
+	return iamdomain.SessionOpened{}, nil
 }
 
 func (stubWriter) CloseSession(context.Context, string, string, string, string) (statelog.Position, error) {

@@ -515,7 +515,7 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	expires := s.now().Add(s.boot.API.Auth.Session.Absolute())
-	at, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
+	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: held.ID,
 		AbsoluteExpiresAt: expires,
 		OpID:              "session:" + lineage.String(),
@@ -529,13 +529,19 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
 		return
 	}
+	at := opened.Position
 	if how.refresh != "" && !s.keep(r, lineage.String(), held.ID, how.refresh, at) {
 		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
 		return
 	}
 
+	// THE EPOCH AND THE GENERATION THE SESSION WAS OPENED AT, as the
+	// domain read them in the snapshot it formed the record in. A bearer
+	// carrying zero for either is one the first revocation or the first
+	// fleet-wide invalidation ends — and every sign-in after it too.
 	bearer, err := s.signer.Mint(session.Mint{
 		Lineage: lineage, Person: held.ID,
+		Epoch: opened.Epoch, Generation: opened.Generation,
 		StartPosition:     uint64(at.Packed()),
 		AbsoluteExpiresAt: expires,
 	})

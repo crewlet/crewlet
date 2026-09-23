@@ -1325,6 +1325,14 @@ Both are stated on the record rather than incremented by the applier. An
 applier that did `+ 1` would fold over an arrival order, and two nodes at one
 checkpoint have seen the same set of records in a different order.
 
+And a session is **opened at** both. The writer reads the person's current
+epoch and the fleet's current generation in the same snapshot it forms the
+session's start record in, stamps the epoch on the record and hands both to the
+sign-in that mints the bearer. A session opened after somebody signed out
+everywhere therefore carries the epoch that sign-out moved to, and one opened
+after an `invalidate-all` carries the new generation — so each counter ends
+exactly the sessions that predate it, never the ones that follow it.
+
 ### Two retention horizons, and one
 
 `iam_history` is the only table here with **two** horizons, separated by a

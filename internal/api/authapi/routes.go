@@ -135,7 +135,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expires := s.now().Add(tokenLifetime)
-	at, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
+	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: principal.ID.String(),
 		AbsoluteExpiresAt: expires,
 		OpID:              "session:" + lineage.String(),
@@ -146,8 +146,10 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
 		return
 	}
+	at := opened.Position
 	bearer, err := s.signer.Mint(session.Mint{
 		Lineage: lineage, Person: principal.ID.String(),
+		Epoch: opened.Epoch, Generation: opened.Generation,
 		StartPosition:     uint64(at.Packed()),
 		AbsoluteExpiresAt: expires,
 	})
