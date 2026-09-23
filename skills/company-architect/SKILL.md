@@ -91,7 +91,11 @@ config — rungs 2 and 3 especially:
 - **Every `manages` entry names a real role or unit.** Same class of
   silent miss.
 - **Timezones are real IANA names** (`Europe/Amsterdam`, not `CET` or
-  `Mars/Olympus`).
+  `Mars/Olympus`) — the company's `timezone` and any schedule's own —
+  and never `Local` or `localtime`, which the validator refuses because
+  each is whatever zone the host reading it happens to be set to. There
+  is ONE company clock, the top-level `timezone`: no block under
+  `tracker:` or `scheduling:` takes a zone of its own.
 - **Cron expressions are semantically valid.** The schema only checks
   there are five fields — `99 * * * *` has the right shape and is still
   nonsense.
@@ -104,8 +108,14 @@ Do not open with a YAML dump. Ask, in this order, and stop as soon as
 you have enough for a first running company — the config is
 live-editable, so the first version does not need to be the last.
 
-1. **What does the company do?** One line of mission. This becomes
-   `name` / `mission` / `vision` and lands in every agent's prompt.
+1. **What does the company do, and where?** One line of mission. This
+   becomes `name` / `mission` / `vision` and lands in every agent's
+   prompt. *Where* is the company's `timezone` — its ONE clock, an IANA
+   name like `Europe/Berlin` at the top of the document (UTC when
+   absent). Every "today", "this week" and overdue mark is cut on it, and
+   so is the hour of every schedule that does not name a zone of its
+   own, so a 09:00 standup is 09:00 there. Ask; a company whose people
+   are not on UTC wants it set.
 2. **Who is on it?** Walk the org chart aloud: what teams, what seats,
    who leads what, who reports to whom. Names, one-line goals, and a
    sentence of backstory each. This is 90% of the config.

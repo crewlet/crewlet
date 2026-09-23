@@ -5,6 +5,12 @@ import "time"
 // Scheduling configures the role/unit scheduler: recurring work a seat or a
 // unit owns, fired on a cron expression.
 //
+// Which CLOCK a schedule fires on is not here: a schedule that names no zone
+// of its own fires on the company's `timezone`, which is the clock every other
+// calendar edge the engine cuts is on too (ADR-0018). A default zone held by
+// the scheduler alone was a second company clock, and the standup it fired at
+// 09:00 disagreed with the tracker about which day that 09:00 was on.
+//
 // The scheduler starts only when it is enabled, a store exists (it needs
 // the at-most-once ledger), and at least one seat or unit declares a
 // schedule. A company with no schedules never spins up the tick loop — and
@@ -18,11 +24,6 @@ type Scheduling struct {
 	// so anything under 60 s reliably catches every fire; the default is
 	// well under that so a fire is late by seconds, not by a minute.
 	TickSeconds int `yaml:"tick_seconds,omitempty" json:"tick_seconds,omitempty" js:"min=1" desc:"Scheduler poll interval; under 60s catches every cron minute."`
-
-	// DefaultTimezone is the zone a schedule that names none is evaluated
-	// in. Standups are local-time events, so a company that works in one
-	// place sets this.
-	DefaultTimezone string `yaml:"default_timezone,omitempty" json:"default_timezone,omitempty" desc:"IANA zone for schedules that name none."`
 
 	// JitterSeconds spreads schedules that share a popular cron minute
 	// (0 9 * * *). 0 fires exactly on the minute; the concurrency
@@ -44,8 +45,7 @@ type Scheduling struct {
 // DefaultScheduling is the scheduler's shipped defaults.
 func DefaultScheduling() Scheduling {
 	return Scheduling{
-		TickSeconds:     10,
-		DefaultTimezone: "UTC",
+		TickSeconds: 10,
 		// Two minutes to two hours. The floor keeps a restart from
 		// re-firing something that just ran; the ceiling is what stops a
 		// morning restart from replaying the whole night.
@@ -95,12 +95,6 @@ func (s *Scheduling) validate(path Path) error {
 		p.add(at(path, "catchup_max_seconds"), ErrOutOfRange,
 			"must be at least catchup_min_seconds (%d), got %d",
 			s.CatchupMinSeconds, s.CatchupMaxSeconds)
-	}
-	if s.DefaultTimezone != "" {
-		if _, err := time.LoadLocation(s.DefaultTimezone); err != nil {
-			p.add(at(path, "default_timezone"), ErrUnknownValue,
-				"%q is not an IANA timezone", s.DefaultTimezone)
-		}
 	}
 	return p.err()
 }

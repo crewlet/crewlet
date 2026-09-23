@@ -327,8 +327,8 @@ func (stubWorkReader) Project(context.Context, tracker.ProjectDetailQuery) (
 	return tracker.ProjectDetail{}, nil
 }
 
-func (stubWorkReader) Workload(_ context.Context, q tracker.WorkloadQuery, _ time.Time) (
-	tracker.WorkloadAnswer, error) {
+func (stubWorkReader) Workload(_ context.Context, q tracker.WorkloadQuery, _ time.Time,
+	_ *time.Location) (tracker.WorkloadAnswer, error) {
 	return tracker.WorkloadAnswer{
 		Rows: []tracker.WorkloadRow{{Handle: q.Unit, Open: 1}},
 	}, nil
@@ -339,8 +339,8 @@ func (stubWorkReader) Activity(context.Context, tracker.ActivityQuery, time.Time
 	return tracker.ActivityAnswer{}, nil
 }
 
-func (stubWorkReader) MyWork(context.Context, tracker.MyWorkQuery, time.Time) (
-	tracker.MyWork, error) {
+func (stubWorkReader) MyWork(context.Context, tracker.MyWorkQuery, time.Time,
+	*time.Location) (tracker.MyWork, error) {
 	return tracker.MyWork{}, nil
 }
 

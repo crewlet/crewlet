@@ -68,8 +68,8 @@ func (s Sources) ConfiguredSchedules() []schedule.Row {
 		return []schedule.Row{}
 	}
 	rows := schedule.Describe(organization, schedule.DescribeOptions{
-		DefaultTimezone: company.Scheduling.DefaultTimezone,
-		Now:             s.clock(),
+		Zone: company.Location(),
+		Now:  s.clock(),
 	})
 	if rows == nil {
 		return []schedule.Row{}

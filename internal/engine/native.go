@@ -1203,7 +1203,12 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// that has since moved.
 		Leads: liveLeads{engine: e},
 		Now:   func() time.Time { return time.Now().UTC() },
-		Zone:  c.Config.Tracker.Native.Location(),
+		// THE COMPANY'S CLOCK AS THIS EPOCH SETS IT (ADR-0018), and
+		// deliberately not read per call like the chart seams above: a
+		// turn pins its epoch, and a turn that resolved "due friday" on
+		// one clock and cut its overdue marks on the next would be
+		// running a company that never existed.
+		Zone:  c.Config.Location,
 		Await: e.WaitCommitted,
 	}
 }
@@ -1428,6 +1433,22 @@ func LiveLeads(e *Engine) tracker.Leads { return liveLeads{engine: e} }
 
 // LiveUnits is the tracker's unit seam over the engine's current chart.
 func LiveUnits(e *Engine) tracker.Units { return liveUnits{engine: e} }
+
+// Zone is the company's clock (ADR-0018) as the CURRENT epoch sets it, or UTC
+// before any epoch is running.
+//
+// For the surfaces that OUTLIVE an epoch — the scheduler's loop and the
+// operator's MCP surface, each built once and never rebuilt by an apply — so
+// that an apply moving the clock moves them with it on their next read. A
+// seat's own tools take the clock of the epoch their turn pinned instead; see
+// [Engine.workDeps].
+func (e *Engine) Zone() *time.Location {
+	c := e.Company()
+	if c == nil {
+		return time.UTC
+	}
+	return c.Config.Location()
+}
 
 // LiveMentions resolves @-mentions against the chart CURRENT when the comment
 // is written, rather than the one that built the caller.

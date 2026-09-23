@@ -342,6 +342,13 @@ func (f *filler) company() *config.Company {
 		switch field.Name {
 		case "Name", "Mission", "Vision", "Policies":
 			f.public(v.Field(i))
+		case "Timezone":
+			// PUBLIC, and filled with a zone that LOADS rather than with
+			// prose: the projection carries the clock the engine resolved,
+			// so a value that does not load would surface as UTC and this
+			// could not tell a dropped field from a defaulted one.
+			v.Field(i).SetString("Pacific/Chatham")
+			f.publicValues = append(f.publicValues, "Pacific/Chatham")
 		case "Roles", "Units":
 			// Filled below, through the classification tables.
 		default:
@@ -509,5 +516,52 @@ func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
 
 	if !reflect.DeepEqual(company, fresh()) {
 		t.Errorf("writing into the projection changed the applied company:\n%+v", company)
+	}
+}
+
+// THE COMPANY'S CLOCK IS ON THE ANONYMOUS PROJECTION, AS THE ENGINE RESOLVED IT
+// (ADR-0018).
+//
+// Every date a dashboard reader is shown is cut on it, so a screen without it
+// cuts "today" on the browser's own zone and disagrees with the engine's own
+// due bands beside it. And an unwritten clock arrives as `UTC` rather than
+// empty, because a client defaulting an empty string defaults it to ITS OWN
+// zone — the very disagreement the field exists to end. A node with no company
+// still answers `{}`.
+func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		company *config.Company
+		want    string
+	}{
+		{"a written clock", &config.Company{Name: "Acme", Timezone: "America/Los_Angeles"}, "America/Los_Angeles"},
+		{"no clock written", &config.Company{Name: "Acme"}, "UTC"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := newApp(t, api.Options{
+				Sources: queries.Sources{Company: func() *config.Company { return tc.company }},
+			})
+			projection, ok := a.Stream().Org().(api.OrgProjection)
+			if !ok {
+				t.Fatalf("the org surface answers %T, want api.OrgProjection", a.Stream().Org())
+			}
+			if projection.Timezone != tc.want {
+				t.Errorf("the projection's clock is %q, want %q", projection.Timezone, tc.want)
+			}
+		})
+	}
+
+	a := newApp(t, api.Options{
+		Sources: queries.Sources{Company: func() *config.Company { return nil }},
+	})
+	body, err := json.Marshal(a.Stream().Org())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "{}" {
+		t.Errorf("a node with no company answers %s, want {} — the shape the "+
+			"dashboard reads as nothing loaded", body)
 	}
 }

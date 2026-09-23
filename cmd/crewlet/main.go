@@ -2603,7 +2603,14 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			// watchers and never her — while the tool's own description,
 			// which their assistant reads, promised it would.
 			Mentions: engine.LiveMentions(e),
-			Await:    e.WaitCommitted,
+			// AND THE COMPANY'S CLOCK, which this surface went without
+			// entirely: every `due=friday`, `due=overdue` and relative date
+			// an operator's assistant wrote resolved on UTC while a seat's
+			// own resolved on the company's zone. Read per call, because
+			// this surface is built once and an apply can move the clock
+			// (ADR-0018).
+			Zone:  e.Zone,
+			Await: e.WaitCommitted,
 		}
 	}
 	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {

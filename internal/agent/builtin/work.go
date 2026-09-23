@@ -263,12 +263,18 @@ type WorkDeps struct {
 	// reaches the people already on the task and nobody else.
 	Leads tracker.Leads
 
-	// Now is the clock a query's relative dates resolve against, and the
-	// zone they resolve in. Injected because "due this week" is a calendar
-	// boundary, and a boundary read from a wall clock in the wrong zone
-	// names a different week.
+	// Now is the clock a query's relative dates resolve against, and Zone
+	// the company's clock they resolve in (ADR-0018). Injected because
+	// "due this week" is a calendar boundary, and a boundary read from a
+	// wall clock in the wrong zone names a different week.
+	//
+	// Zone is READ PER CALL, for the reason the chart seams are: the
+	// operator surface is built once at startup and never rebuilt, so a
+	// zone captured there answered every assistant's "due friday" on the
+	// clock the company booted with — and before that, on UTC, since that
+	// surface was given none at all. Nil is UTC.
 	Now  func() time.Time
-	Zone *time.Location
+	Zone func() *time.Location
 
 	// Await blocks until this node's applier has consumed a write.
 	//
@@ -2423,7 +2429,10 @@ func (d WorkDeps) zone() *time.Location {
 	if d.Zone == nil {
 		return time.UTC
 	}
-	return d.Zone
+	if loc := d.Zone(); loc != nil {
+		return loc
+	}
+	return time.UTC
 }
 
 func statusList() string   { return joinValues(tracker.Statuses) }

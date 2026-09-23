@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -13,7 +14,7 @@ func (r *roundTrip) workload(q tracker.WorkloadQuery) tracker.WorkloadAnswer {
 	if q.Level == "" {
 		q.Level = statelog.ReadStale
 	}
-	answer, err := r.reader.Workload(r.t.Context(), q, wednesday)
+	answer, err := r.reader.Workload(r.t.Context(), q, wednesday, time.UTC)
 	if err != nil {
 		r.t.Fatalf("Workload: %v", err)
 	}

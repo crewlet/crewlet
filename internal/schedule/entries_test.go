@@ -48,9 +48,13 @@ func rowsByName(t *testing.T, rows []schedule.Row) map[string]schedule.Row {
 
 func TestDescribeShapeAndDefaults(t *testing.T) {
 	t.Parallel()
+	amsterdam, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		t.Fatal(err)
+	}
 	rows := schedule.Describe(describeOrg(), schedule.DescribeOptions{
-		DefaultTimezone: "Europe/Amsterdam",
-		Now:             time.Date(2026, time.June, 8, 0, 0, 0, 0, time.UTC),
+		Zone: amsterdam,
+		Now:  time.Date(2026, time.June, 8, 0, 0, 0, 0, time.UTC),
 	})
 	byName := rowsByName(t, rows)
 
@@ -68,7 +72,12 @@ func TestDescribeShapeAndDefaults(t *testing.T) {
 		t.Errorf("nightly runners = %v, want [ops]", nightly.Runners)
 	}
 	if nightly.Timezone != "Europe/Amsterdam" {
-		t.Errorf("nightly timezone = %q, want the applied default", nightly.Timezone)
+		t.Errorf("nightly timezone = %q, want the company's clock", nightly.Timezone)
+	}
+	// And it is the zone the next run is worked out in, not only the label
+	// beside it: 02:00 Amsterdam (CEST) is 00:00 UTC in June.
+	if want := time.Date(2026, time.June, 8, 0, 0, 0, 0, time.UTC).Add(24 * time.Hour); !nightly.NextRun.Equal(want) {
+		t.Errorf("nightly next run = %v, want %v — 02:00 on the company's clock", nightly.NextRun, want)
 	}
 	if nightly.TimeoutSeconds != 180 {
 		t.Errorf("nightly timeout = %d, want the 180s default", nightly.TimeoutSeconds)
@@ -107,7 +116,7 @@ func TestDescribePreservesAnExplicitTimezone(t *testing.T) {
 			Name: "x", Cron: "0 9 * * *", Task: "t", Timezone: "America/New_York",
 		}},
 	}}}
-	rows := schedule.Describe(o, schedule.DescribeOptions{DefaultTimezone: "UTC"})
+	rows := schedule.Describe(o, schedule.DescribeOptions{Zone: time.UTC})
 	if rows[0].Timezone != "America/New_York" {
 		t.Fatalf("timezone = %q, want the schedule's own", rows[0].Timezone)
 	}
@@ -145,6 +154,10 @@ func TestDescribeSaysWhyARowHasNoNextRun(t *testing.T) {
 		Schedules: []org.Schedule{
 			{Name: "bad-cron", Cron: "nonsense here now please", Task: "t"},
 			{Name: "bad-zone", Cron: "0 9 * * *", Task: "t", Timezone: "Mars/Olympus"},
+			// A host's own clock loads, and is still no zone to fire on:
+			// the tick refuses it, so the row has to say so rather than
+			// promise a next run that never comes.
+			{Name: "host-clock", Cron: "0 9 * * *", Task: "t", Timezone: "Local"},
 			{Name: "impossible", Cron: "0 0 30 2 *", Task: "t"},
 			{Name: "off", Cron: "0 9 * * *", Task: "t", Enabled: org.Off()},
 			{Name: "fine", Cron: "0 9 * * *", Task: "t"},
@@ -154,7 +167,7 @@ func TestDescribeSaysWhyARowHasNoNextRun(t *testing.T) {
 		Now: time.Date(2026, time.June, 8, 0, 0, 0, 0, time.UTC),
 	}))
 
-	for _, name := range []string{"bad-cron", "bad-zone", "impossible"} {
+	for _, name := range []string{"bad-cron", "bad-zone", "host-clock", "impossible"} {
 		row := byName[name]
 		if !row.NextRun.IsZero() {
 			t.Errorf("%s next run = %v, want none", name, row.NextRun)

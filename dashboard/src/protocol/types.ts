@@ -842,6 +842,15 @@ export interface OrgProjection {
   mission?: string;
   vision?: string;
   policies?: string[];
+  /**
+   * The company's ONE clock (ADR-0018), as the ENGINE resolved it: the IANA
+   * zone the document writes, or `UTC` where it writes none — never empty on
+   * a running company, so a reader has nothing to default. Every day the
+   * engine cuts ("today", a due band, an overdue mark) is cut on it, so a
+   * screen deciding which DAY something falls on cuts on this rather than on
+   * the browser's own zone. Absent only on `{}`, a node running no company.
+   */
+  timezone?: string;
   roles?: OrgSeat[];
   units?: OrgUnit[];
   derived?: Derived;
@@ -989,6 +998,9 @@ export interface ScheduleRow {
   scope_id: string;
   name: string;
   cron: string;
+  /** The zone this schedule FIRES in, resolved by the engine: its own
+   *  `timezone`, or the company's clock (ADR-0018) where it names none — so
+   *  it is never empty, and a reader defaults nothing. */
   timezone: string;
   task: string;
   /** Empty for a role schedule, where a target is meaningless rather than

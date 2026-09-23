@@ -490,12 +490,15 @@ And **This week** ends where the week does, Monday-anchored, which is the same
 week `due=range:sow..eow` means: on a Sunday it holds nothing, rather than
 rolling seven days forward into next week.
 
-The day these are cut on is **the company's own midnight, in the company's own
-timezone** — the same instant a row's overdue mark is derived from and the same
-one every `due=` filter is resolved against. That is the whole reason the bands
-are the engine's rather than each screen's: cut in a browser they were cut on
-*that reader's* midnight and *that reader's* week, so for anybody whose local
-day differs from the company's, a task sat under Earlier on a row the same
+The day these are cut on is **the company's own midnight, on the company's
+[clock](../getting-started/configuration.md#the-companys-clock)** — the
+top-level `timezone`, UTC when absent — the same instant a row's overdue mark is
+derived from, the same one every `due=` filter is resolved against, and the same
+one a person's own day and the workload's overdue counts are cut on, whether a
+seat, an operator's assistant or the dashboard asked. That is the whole reason
+the bands are the engine's rather than each screen's: cut in a browser they were
+cut on *that reader's* midnight and *that reader's* week, so for anybody whose
+local day differs from the company's, a task sat under Earlier on a row the same
 answer marked as due today and not overdue.
 
 "Midnight" means the first moment of the company's date, and in a few zones

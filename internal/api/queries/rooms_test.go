@@ -152,8 +152,8 @@ func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery) (
 	return tracker.ProjectDetail{}, nil
 }
 
-func (emptyWork) Workload(context.Context, tracker.WorkloadQuery, time.Time) (
-	tracker.WorkloadAnswer, error) {
+func (emptyWork) Workload(context.Context, tracker.WorkloadQuery, time.Time,
+	*time.Location) (tracker.WorkloadAnswer, error) {
 
 	return tracker.WorkloadAnswer{}, nil
 }
@@ -164,8 +164,8 @@ func (emptyWork) Activity(context.Context, tracker.ActivityQuery, time.Time) (
 	return tracker.ActivityAnswer{}, nil
 }
 
-func (emptyWork) MyWork(context.Context, tracker.MyWorkQuery, time.Time) (
-	tracker.MyWork, error) {
+func (emptyWork) MyWork(context.Context, tracker.MyWorkQuery, time.Time,
+	*time.Location) (tracker.MyWork, error) {
 
 	return tracker.MyWork{}, nil
 }

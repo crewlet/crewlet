@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // ScheduleTarget is who runs a UNIT schedule.
@@ -64,9 +66,12 @@ type Schedule struct {
 	// Task is the prompt handed to the runner when the schedule fires.
 	Task string `yaml:"task" json:"task"`
 
-	// Timezone is the IANA zone Cron is evaluated in. Empty falls back to
-	// the system-wide default. Standups are local-time events, so a company
-	// that works in one place sets this.
+	// Timezone is the IANA zone Cron is evaluated in. Empty is the
+	// company's own clock, its top-level `timezone` — which is what a
+	// company that works in one place wants, so this is for the schedule
+	// that is somewhere else: the Tokyo team's standup at 09:30 Tokyo time.
+	// It is this one schedule's wall clock, never a second company clock:
+	// nothing else is cut on it.
 	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 
 	// Target selects the runner of a UNIT schedule. Ignored on a role
@@ -138,10 +143,13 @@ func (s Schedule) faults(owner string) []fieldError {
 			owner, name, ErrInvalidSchedule, s.Cron, cronFields))
 	}
 	if s.Timezone != "" {
-		if _, err := time.LoadLocation(s.Timezone); err != nil {
-			add("timezone", fmt.Errorf(
-				"%s: schedule %q: %w: unknown timezone %q",
-				owner, name, ErrInvalidSchedule, s.Timezone))
+		// THROUGH THE ONE READER the scheduler fires through, so a name
+		// admitted here is a name a tick can load — and a host's own
+		// clock (`Local`), which would fire this schedule at a different
+		// instant on each node the duty moved to, is refused here too.
+		if _, err := period.LoadZone(s.Timezone); err != nil {
+			add("timezone", fmt.Errorf("%s: schedule %q: %w: timezone %w",
+				owner, name, ErrInvalidSchedule, err))
 		}
 	}
 	if s.TimeoutSeconds < 0 {

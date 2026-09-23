@@ -29,6 +29,8 @@ This page documents the **Tier B** fields below.  For Tier A see [Configuration 
 name: "Acme AI Corp"                    # required — company name
 mission: "Build intelligent products"   # optional — company mission
 vision: "Lead the AI industry"          # optional — company vision
+timezone: Europe/Berlin                 # optional — the company's ONE clock, an IANA zone
+                                        #   (default UTC). See "The company's clock" below.
 token_budget: 1000000                   # optional — org-wide token limit (0 = unlimited)
 notification_rate_limit: 10             # optional — inbound notifications one seat may be woken by
                                         #   per second. 0 (the DEFAULT) is unlimited, so the valve is
@@ -197,6 +199,22 @@ section for details.
 
 See the [Turn Engine](../concepts/turn-engine.md) and [Agent Learning](../concepts/agent-learning.md) docs for what each field controls.
 
+### The company's clock
+
+```yaml
+timezone: America/Los_Angeles            # an IANA zone name; absent is UTC
+```
+
+`timezone` is the company's **one clock**, and every calendar edge the engine cuts is cut on it:
+
+- where **today**, **this week** and **this month** begin — for a `due=` filter, the due bands on a board, the overdue mark on every row, a person's own day (`my_work`) and the workload's overdue counts;
+- what a relative date (`tomorrow`, `eow`, `+7d`) or an all-day due date resolves to, whether a seat, an operator's assistant or the dashboard wrote it;
+- the wall clock a [schedule](#schedules) that names no `timezone` of its own fires on — so `cron: "0 9 * * 1-5"` is 09:00 in this zone.
+
+It is a clock for **authored instants and calendar boundaries only**. No duration — a lease, a timeout, a retention horizon — is measured against it, because a duration measured on a wall clock changes length twice a year. And there is only one: the tracker and the scheduler take no zone of their own, because a company whose board, whose people's days and whose standups each kept a clock had one "today" per subsystem. A schedule's own `timezone` is that one piece of work's wall clock — the Tokyo team's 09:30 standup — and nothing else is cut on it.
+
+The value must be a real IANA name (`Europe/Berlin`, `America/New_York`, `UTC`), and `Local` and `localtime` are refused: each is whatever zone the host reading it is set to, so two nodes would cut two different days from it. The anonymous [`org` projection](../reference/api-endpoints.md) carries the resolved clock — `UTC` where none is written — so the dashboard cuts its days where the engine does. An apply that changes it moves the next answer, the next scheduler tick and the next tool call; a turn already running keeps the clock of the epoch it started on.
+
 ### Scheduling
 
 System-level knobs for the [Scheduler](../concepts/scheduling.md) — the
@@ -208,12 +226,13 @@ org declares at least one schedule.
 scheduling:                              # optional — role/unit scheduled work
   enabled: true                          # master switch
   tick_seconds: 10                       # scheduler poll interval
-  default_timezone: UTC                  # used by any Schedule without its own timezone
   jitter_seconds: 0                      # max per-schedule spread to smooth a shared cron minute
   catchup_min_seconds: 120               # lower clamp on the missed-tick catchup window
   catchup_max_seconds: 7200              # upper clamp on the missed-tick catchup window
 ```
 
+A schedule that names no `timezone` of its own fires on the company's
+[clock](#the-companys-clock); there is no scheduler-wide default zone.
 See the [Scheduling](../concepts/scheduling.md) concept doc for delivery
 modes (`each` / `lead`), at-most-once semantics, catchup, and the
 per-task wall-clock timeout.
@@ -940,7 +959,7 @@ units:
       # unit schedule, target defaults to `each` → every direct member runs it
       - name: daily-standup
         cron: "30 9 * * 1-5"            # 5-field cron, evaluated in `timezone`
-        timezone: Europe/Amsterdam      # IANA tz; defaults to scheduling.default_timezone
+        timezone: Europe/Amsterdam      # IANA tz; defaults to the company's `timezone`
         task: "Post your standup: shipped yesterday / on today / blockers."
       - name: weekly-report
         cron: "0 16 * * 5"
@@ -959,7 +978,7 @@ units:
 | `name` | string | yes | Unique within the role/unit; part of the idempotency key |
 | `cron` | string | yes | Standard 5-field cron (`min hour dom month dow`), evaluated in `timezone` |
 | `task` | string | yes | Task prompt handed to the runner agent |
-| `timezone` | string | no | IANA timezone (default: `scheduling.default_timezone`) |
+| `timezone` | string | no | IANA timezone this one schedule fires in (default: the company's [`timezone`](#the-companys-clock)). Not `Local` or `localtime` |
 | `target` | string | no | **Unit schedules only**: `each` (default — every direct member) or `lead` (the effective unit lead). Ignored for role schedules; for a per-person task, use a role schedule |
 | `enabled` | bool | no | `false` keeps the schedule in config without firing (default `true`) |
 | `timeout_seconds` | int | no | Hard wall-clock cap on the scheduled turn (default `180`) |
@@ -1079,17 +1098,9 @@ The two axes are **separate** on purpose. A company running a native tracker aga
 ```yaml
 tracker:
   backend: native
-  native:                                # ONLY on a native company — a block of
-                                         #   working days on a company running Jira
+  native:                                # ONLY on a native company — an inbox
+                                         #   horizon on a company running Jira
                                          #   describes nothing, and is refused
-    timezone: Europe/Berlin              # the company's ONE clock, IANA name
-                                         #   (default UTC). It resolves "next
-                                         #   Friday" and places an all-day date at
-                                         #   midnight. It is a clock for AUTHORED
-                                         #   instants and calendar boundaries only —
-                                         #   no duration is measured against it,
-                                         #   because a duration measured against a
-                                         #   wall clock changes length twice a year
     inbox_retention_days: 365            # how long a person's inbox keeps a row
                                          #   (default 365, 30..3650). THE HISTORY IT
                                          #   POINTS AT IS UNTOUCHED — this is a
@@ -1098,7 +1109,7 @@ tracker:
                                          #   answered by the history either way
 ```
 
-Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), or a decision the engine makes once for everybody.
+Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), a fact about the whole **company** — the clock its dates mean is the top-level [`timezone`](#the-companys-clock) — or a decision the engine makes once for everybody.
 
 **A native tracker or knowledge base needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Either backend starts the log: a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way. Only a company whose tracker and knowledge base are both a vendor's (or `none`) starts no log at all and is unaffected, which is why the rule needs both files to see.
 

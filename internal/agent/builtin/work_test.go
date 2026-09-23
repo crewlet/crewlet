@@ -101,6 +101,10 @@ type fakeTracker struct {
 	myWorkQuery   tracker.MyWorkQuery
 	myWork        tracker.MyWork
 
+	// myWorkZone is the clock the last day was cut on, which is the half
+	// of that read a tool decides rather than the tracker.
+	myWorkZone *time.Location
+
 	// viewer is who the last list was expanded FOR, which is the half of a
 	// personal filter — `preset=my_queue`, `assignee=me` — that decides
 	// whether a founder's assistant is answered about them or about the
@@ -266,9 +270,10 @@ func (f *fakeTracker) Activity(_ context.Context, q tracker.ActivityQuery,
 }
 
 func (f *fakeTracker) MyWork(_ context.Context, q tracker.MyWorkQuery,
-	_ time.Time) (tracker.MyWork, error) {
+	_ time.Time, loc *time.Location) (tracker.MyWork, error) {
 
 	f.myWorkQuery = q
+	f.myWorkZone = loc
 	return f.myWork, f.readErr
 }
 

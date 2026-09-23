@@ -9,9 +9,11 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
 | **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
-| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, the company's one clock (`timezone`), providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
+
+The company's clock is Tier B for that reason: *where* a company keeps its hours is a fact about the company, not about the hosts running it, and every node must cut the same day from it. So it is one top-level `timezone` in the company document rather than a host's own clock — `Local` is refused — and rather than a zone per subsystem: the tracker's "today", a person's day and the hour a schedule fires on are one calendar. See [The company's clock](../getting-started/configuration.md#the-companys-clock).
 
 ### Tier A example (`crewlet.yaml`)
 
