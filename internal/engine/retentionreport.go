@@ -57,11 +57,13 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			in.Live = live
 		}
 	}
+	// AN UNREADABLE FLOOR REGISTER IS NOT AN EMPTY ONE: every domain then
+	// reports its trim as unreadable rather than as a trim that has
+	// concluded nothing, which is a different thing to go and look at.
 	floors := map[string]coord.TrimFloor{}
-	if rows, err := r.fleet.Floors(ctx); err == nil {
-		for _, row := range rows {
-			floors[row.Domain] = row
-		}
+	rows, floorsErr := r.fleet.Floors(ctx)
+	for _, row := range rows {
+		floors[row.Domain] = row
 	}
 	backups, _ := r.fleet.BackupPoints(ctx)
 	newest, haveBackup := coord.NewestBackup(backups)
@@ -69,6 +71,11 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// perLog is each identity-claiming log's own tombstones, which the node
 	// block folds into one answer per node below.
 	var perLog [][]statelog.Tombstone
+	// healths is each domain's readiness, read ONCE here and handed to the
+	// alarm reading below rather than read again there: both are one
+	// node's answer about the same instant, and two reads a broker round
+	// trip apart could disagree about it.
+	healths := make(map[string]domainHealth, len(r.state.order))
 	for _, name := range r.state.order {
 		running := r.state.domains[name]
 		if running == nil {
@@ -85,6 +92,10 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			d.FirstSeq, d.LastSeq = stats.FirstSeq, stats.LastSeq
 			d.Bytes, d.MaxBytes = stats.Bytes, stats.MaxBytes
 			d.StreamReadable = true
+		}
+		d.FloorState = statelog.TrimFloorNoneAtGeneration
+		if floorsErr != nil {
+			d.FloorState = statelog.TrimFloorUnreadable
 		}
 		if floor, published := floors[name]; published && floor.Generation == d.Generation {
 			// THE FLOOR AND THE CONCLUSION ARE TWO FIELDS OF THE ROW,
@@ -109,6 +120,26 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			d.TrimFloor = floor.Floor
 			d.BlockedSince = floor.BlockedSince
 			d.Decision = decisionOf(floor)
+			d.FloorState = statelog.TrimFloorPublished
+		}
+		// THIS NODE'S OWN REFUSAL OF THE DOMAIN, from the readiness its
+		// probe reads — so the not-ready state the guides send an operator
+		// here to find is a line this report prints, naming the finding.
+		health, healthErr := r.state.health(ctx, running)
+		healths[name] = domainHealth{health: health, err: healthErr}
+		if healthErr != nil {
+			// THE PROBE'S OWN ANSWER to a health nobody could read.
+			d.NotReady = &statelog.DomainRefusal{
+				Code:   string(statelog.RefuseBrokerUnreachable),
+				Detail: healthErr.Error(),
+			}
+		} else {
+			d.NotReady = health.NotReady(now, d.Stream, running.runner.StreamIdentity())
+		}
+		if truncated := running.runner.Truncated(); truncated != nil {
+			d.WritesRefused = &statelog.DomainRefusal{
+				Code: string(statelog.ReasonLogTruncated), Detail: truncated.Error(),
+			}
 		}
 		// THE EVICTIONS ARE NOT GATED ON A PUBLISHED FLOOR. They are
 		// applied rows, present whether or not the trim has ever run,
@@ -125,7 +156,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	}
 	in.Tombstones = fleetTombstones(perLog)
 
-	in.Reading = r.reading(ctx, now, newest, haveBackup)
+	in.Reading = r.reading(ctx, now, newest, haveBackup, healths)
 	in.Maintenance = r.openMaintenance(ctx)
 	return statelog.NewReport(in)
 }
@@ -313,7 +344,8 @@ func (r *retention) replica() statelog.ReplicaReport {
 // backend and no maintenance in flight evaluate the same table as one with all
 // three.
 func (r *retention) reading(ctx context.Context, now time.Time,
-	newest coord.BackupPoint, haveBackup bool) statelog.Reading {
+	newest coord.BackupPoint, haveBackup bool,
+	healths map[string]domainHealth) statelog.Reading {
 
 	out := statelog.Reading{BackupMaxAge: r.cfg.BackupMaxAge()}
 	if haveBackup {
@@ -333,10 +365,14 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		if running == nil {
 			continue
 		}
-		health, err := r.state.health(ctx, running)
-		if err != nil {
+		read, ok := healths[name]
+		if !ok {
+			read.health, read.err = r.state.health(ctx, running)
+		}
+		if read.err != nil {
 			continue
 		}
+		health := read.health
 		// THE WORST OF THE DOMAINS, because the reading describes one
 		// NODE: a two-domain node whose second applier is wedged is a
 		// node that is behind, and averaging would hide it.
@@ -353,6 +389,13 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)
 	return out
+}
+
+// domainHealth is one domain's readiness as the report read it, or why it
+// could not be read.
+type domainHealth struct {
+	health statelog.Health
+	err    error
 }
 
 // maintenance is the oldest open capacity operation on any of this node's

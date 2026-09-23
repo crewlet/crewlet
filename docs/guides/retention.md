@@ -182,9 +182,14 @@ two differ.
 **A floor belongs to one generation of its log.** Right after a
 [reanchor](#re-anchoring-a-recreated-or-restored-log) the published floor, its terms and
 its blocking term describe the stream that was left, so the status shows that
-domain with no floor, no terms and not blocked until the trim's first tick on
-the adopted stream — exactly as the write fence and readiness read it. The
-other domains' rows are unaffected.
+domain with **no conclusion yet** until the trim's first tick on the adopted
+stream — exactly as the write fence and readiness read it. `crewlet retention
+status` prints `-` for its `TRIM FLOOR` and says, under its watermarks, that
+the trim has concluded nothing about that generation yet; the dashboard tags it
+*no conclusion yet* rather than *advancing*; and the retention answer carries
+`trim_floor_state: none_at_generation` with an empty `terms` list. A floor
+register nobody could read is shown as that (`unreadable`), never as an empty
+one. The other domains' rows are unaffected.
 
 The floor is load-bearing for **writes**, not only for recovery. A write to an
 object whose last record has been deleted from the log cannot compare against
@@ -631,10 +636,14 @@ once it has applied every record up to the one just before that bound: in
 `crewlet retention status`, its `SEQ` for each of those domains has reached one
 less than the higher of the domain's `TRIM FLOOR` and `FIRST`. The refusal's
 own `floor`, `first_seq` and `generation` are the numbers it compared — right
-after a [re-anchor](#re-anchoring-a-recreated-or-restored-log) the domain shows no
-`TRIM FLOOR` until the trim's first tick on the adopted stream, and the bound
+after a [re-anchor](#re-anchoring-a-recreated-or-restored-log) the domain shows `-`
+in `TRIM FLOOR` until the trim's first tick on the adopted stream, and the bound
 is `FIRST` alone — and running the readmission again is always safe, since a
-refusal writes nothing. A readmission that reaches one log and not the other is finished the
+refusal writes nothing. The node's `GEN` column says whether its position is
+at the log's current generation at all: a position from one the log has left
+prints `left gen N` in place of a lag, because its sequence is in a number
+space that no longer exists and a readmission is refused on it whatever it
+reads. A readmission that reaches one log and not the other is finished the
 way an eviction is, with `-op-id`.
 
 The refusal is not what keeps the fleet's data safe, and being refused is not
@@ -839,8 +848,9 @@ broker reports and every applier compares at boot against the instant its
 checkpoint was committed under. On a difference the applier **stops** rather
 than resuming — the log line names both instants and this verb — the node's
 reads and writes refuse `wrong_stream` with that reason, its seats move to a
-peer, and `crewlet retention status` shows the domain as not ready, naming the
-recreation. A checkpoint past the log's end is caught as `wrong_stream` too,
+peer, and `crewlet retention status` leads with `NOT READY <domain>:
+wrong_stream (recreated) — …` carrying the same sentence, both instants
+included (the dashboard shows the same refusal above the domain's block). A checkpoint past the log's end is caught as `wrong_stream` too,
 because a position the log has never reached is a position on another stream.
 
 **A broker restored from an older copy is the case the instant cannot see.**
@@ -850,7 +860,8 @@ it had, creation instant and all, so every identity check passes. What differs
 is where the log **ends**: below the checkpoint of a node whose own database is
 newer. Such a node refuses every read and every write of that domain with
 `wrong_stream` from the moment it boots, logs `statelog_ahead_of_log` with both
-numbers, and shows as not ready in `crewlet retention status`. Its writes have
+numbers, and `crewlet retention status` on that node leads with `NOT READY
+<domain>: wrong_stream (ahead_of_log) — …` naming both. Its writes have
 to refuse, not only its reads: whatever it appended would land at the log's
 next sequence, which is one its own applier has already passed and will never
 apply.
@@ -868,7 +879,10 @@ this node's rows — by a node whose own database was not ahead of the copy — 
 the log continues a history these rows are not. The node then logs
 `statelog_log_diverged`, applies nothing past its checkpoint, refuses every
 read and every write of that domain as `wrong_stream`, donates no snapshot of
-it (`log_diverged`), and says so on its position row (`log_diverged`). That
+it (`log_diverged`), and says so on its position row (`log_diverged`) —
+which is what every other node's `crewlet retention status` marks as `LOG
+DIVERGED` on that node's line, and its own leads with `NOT READY <domain>:
+wrong_stream (log_diverged)`. That
 refusal does **not** lift on its own: a member that has not caught up answers
 that it holds no record at a sequence, never with another one. The node finds
 it the same way when it **boots** on a log already written past its rows — its

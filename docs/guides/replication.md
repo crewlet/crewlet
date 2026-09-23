@@ -326,7 +326,12 @@ whose history is the log's from one holding history the log lost.
 
 Folding them into one would make a node that is applying nothing while its
 position advances look identical to one that is fully caught up. `crewlet
-retention status` prints both, per node and per domain.
+retention status` prints `seq` and `applied_through` per node and per domain,
+beside the generation the position is in (`GEN`) — a position from a
+generation the log has left prints `left gen N` in place of a lag, since its
+sequence compares with nothing the log holds — and marks a node that reported
+`log_diverged`. The two instants are on the retention answer's JSON
+(`stream_created_at`, `checkpoint_stored_at`) rather than in the table.
 
 **Lag does not move a node's seats, at any size.** A node that is behind keeps
 every seat it holds and claims no new ones until it is level — see [a copy

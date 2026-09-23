@@ -180,12 +180,38 @@ type DomainReport struct {
 	// the floor whenever the lowest counted node is. Two numbers because
 	// they answer different questions: the first is where a joining node's
 	// replay can start, the second is whether the gate is moving at all.
+	//
+	// BOTH ARE MEANINGFUL ONLY WHERE TrimFloorState IS published. A zero
+	// here is otherwise not a floor of zero: it is the trim having
+	// concluded nothing about this generation of the log yet, or a floor
+	// register nobody could read.
 	TrimFloor uint64 `json:"trim_floor"`
 	TrimTo    uint64 `json:"trim_to"`
 
+	// TrimFloorState says whether TrimFloor, TrimTo, Terms and BlockedBy
+	// are a conclusion at all — see [TrimFloorState]. Always written: its
+	// zero value is not one of the three, and a reader has to be able to
+	// tell "advancing" from "nothing concluded yet" from "unreadable".
+	TrimFloorState TrimFloorState `json:"trim_floor_state"`
+
+	// Terms is the last tick's six terms, and an EMPTY LIST — never null —
+	// where the trim has concluded nothing about this generation: a null
+	// here crashed both retention screens the moment after every reanchor,
+	// which is when they are read.
 	Terms        []TermReport `json:"terms"`
 	BlockedBy    TermName     `json:"blocked_by,omitempty"`
 	BlockedSince time.Time    `json:"blocked_since,omitzero"`
+
+	// NotReady is why THIS node refuses every read of this domain right
+	// now — the same [Health.Refusal] its readiness reads — and nil while
+	// it serves them. WritesRefused is why it refuses this domain's WRITES
+	// while serving its reads: a peer's rows hold records the log lost
+	// ([ErrLogTruncated]). Both are this node's facts, like the replica
+	// block, and both carry the sentence the refusal carries everywhere
+	// else, so the guide's "status shows the domain as not ready, naming
+	// the recreation" is a line the status actually prints.
+	NotReady      *DomainRefusal `json:"not_ready,omitempty"`
+	WritesRefused *DomainRefusal `json:"writes_refused,omitempty"`
 
 	// Prose is the sentence a blocked trim leads with, because it is the
 	// answer to the only question anybody runs this command for.
@@ -199,6 +225,162 @@ type DomainReport struct {
 	// problems with two different remedies, and the second one is silent
 	// until a node tries to join.
 	SnapshotBlockedBy SkipReason `json:"snapshot_blocked_by,omitempty"`
+}
+
+// TrimFloorState says what a domain's trim floor, conclusion and terms are.
+//
+// # Why a state and not a zero
+//
+// The report fills a domain's floor only from a published row AT THE DOMAIN'S
+// OWN GENERATION, so right after every reanchor — until the trim's first tick
+// on the adopted stream, up to a retention interval later — there is nothing
+// to fill it from. Read as values, that row said floor 0, conclusion 0, no
+// blocking term: "advancing", about a trim that had concluded nothing about the
+// stream it now runs. And a floor register nobody could read said exactly the
+// same thing, where the file's own rule is that a failed read is reported as
+// unreadable rather than as empty.
+type TrimFloorState string
+
+const (
+	// TrimFloorPublished — the fleet has published a floor at this
+	// domain's generation, and the floor, the conclusion, the terms and
+	// the blocking term are that tick's.
+	TrimFloorPublished TrimFloorState = "published"
+
+	// TrimFloorNoneAtGeneration — the trim has concluded nothing about
+	// this generation of the log yet: a fresh fleet before its first tick,
+	// or any fleet just after a reanchor. Not blocked and not advancing.
+	TrimFloorNoneAtGeneration TrimFloorState = "none_at_generation"
+
+	// TrimFloorUnreadable — the floor register could not be read, so
+	// nothing is known about the trim here.
+	TrimFloorUnreadable TrimFloorState = "unreadable"
+)
+
+// TrimFloorStates is every [TrimFloorState] this build names.
+func TrimFloorStates() []TrimFloorState {
+	return []TrimFloorState{TrimFloorPublished, TrimFloorNoneAtGeneration, TrimFloorUnreadable}
+}
+
+// Valid reports whether s is a state this build names.
+func (s TrimFloorState) Valid() bool { return slices.Contains(TrimFloorStates(), s) }
+
+// IdentityCause names which finding put a domain's log out of step with this
+// node's rows, behind one `wrong_stream`.
+//
+// THE REFUSAL IS ONE WORD FOR FOUR FACTS, deliberately — every one of them
+// refuses exactly the same reads and writes — but each has its own cause and
+// its own remedy, and the guide sends an operator to the status to find out
+// which: a stream rebuilt under this node, a broker restored from a copy older
+// than its rows, the same restore written past them, or a peer re-anchoring
+// past them (whose remedy is this node's own adoption, not a reanchor).
+type IdentityCause string
+
+const (
+	// CauseRecreated — the live stream is not the one this node's rows are
+	// keyed to: deleted and rebuilt under the same name ([ErrStreamRecreated]).
+	CauseRecreated IdentityCause = "recreated"
+
+	// CauseAheadOfLog — this node's checkpoint is past the log's end: the
+	// broker was restored from a copy older than its rows ([ErrAheadOfLog]).
+	CauseAheadOfLog IdentityCause = "ahead_of_log"
+
+	// CauseLogDiverged — the log holds another record at this node's
+	// checkpoint: the same restore, since written past its rows
+	// ([ErrLogDiverged]).
+	CauseLogDiverged IdentityCause = "log_diverged"
+
+	// CauseGenerationPassed — a peer re-anchored the log past this node's
+	// generation ([ErrGenerationPassed]).
+	CauseGenerationPassed IdentityCause = "generation_passed"
+)
+
+// IdentityCauses is every [IdentityCause] this build names.
+func IdentityCauses() []IdentityCause {
+	return []IdentityCause{CauseRecreated, CauseAheadOfLog, CauseLogDiverged,
+		CauseGenerationPassed}
+}
+
+// Valid reports whether c is a cause this build names.
+func (c IdentityCause) Valid() bool { return slices.Contains(IdentityCauses(), c) }
+
+// DomainRefusal is why this node is refusing a domain right now.
+type DomainRefusal struct {
+	// Code is the refusal's word: a [ReadRefusal] on a report's NotReady,
+	// and a [Reason] on its WritesRefused (`log_truncated`, today).
+	Code string `json:"code"`
+
+	// Causes names each identity finding that holds behind a
+	// `wrong_stream` — more than one can at once — and is empty for every
+	// other code.
+	Causes []IdentityCause `json:"causes,omitempty"`
+
+	// Detail is the sentence the refusal carries wherever else it is met —
+	// the applier's stop, a read's refusal, a write's — naming the
+	// instants, the sequences and the peer it is about.
+	Detail string `json:"detail"`
+}
+
+// NotReady is this domain's read refusal as a report renders it, or nil while
+// it serves reads.
+//
+// identity is the applier's own answer about the log's identity
+// ([Runner.StreamIdentity]), whose sentence names both creation instants, the
+// peer or the record — so a `wrong_stream` reads the same here as where the
+// read or the write that met it did. A checkpoint past the end that the
+// applier has not observed yet is decided from this health's own end, as
+// [Health.Refusal] decides it.
+func (h Health) NotReady(now time.Time, stream string, identity error) *DomainRefusal {
+	code := h.Refusal(now)
+	if code == "" {
+		return nil
+	}
+	out := &DomainRefusal{Code: string(code)}
+	switch code {
+	case RefuseEvicted:
+		out.Detail = "this node is evicted: every record it publishes is dropped on " +
+			"every node, and it serves nothing until it is readmitted"
+	case RefuseFloorUnknown:
+		out.Detail = "the published trim floor or the log's own ends could not be " +
+			"read, and a floor nobody could read is not one these rows are known to " +
+			"be above; it clears once coordination and the broker answer"
+	case RefuseBelowFloor:
+		out.Detail = fmt.Sprintf("the record this node's applier needs next is gone "+
+			"from %s (its checkpoint is %d): it adopts a peer's snapshot, and another "+
+			"node serves meanwhile", stream, h.Position.Seq)
+	case RefuseWrongStream:
+		if h.StreamRecreated {
+			out.Causes = append(out.Causes, CauseRecreated)
+		}
+		if h.AheadOfLog() {
+			out.Causes = append(out.Causes, CauseAheadOfLog)
+		}
+		if h.LogDiverged {
+			out.Causes = append(out.Causes, CauseLogDiverged)
+		}
+		if h.GenerationPassed {
+			out.Causes = append(out.Causes, CauseGenerationPassed)
+		}
+		switch {
+		case identity != nil:
+			out.Detail = identity.Error()
+		case h.AheadOfLog():
+			out.Detail = aheadOfLog{at: h.Position, last: *h.LastSeq}.err(stream).Error()
+		default:
+			out.Detail = "the log under this domain's name is not the one this " +
+				"node's rows were derived from"
+		}
+	case RefuseStalled:
+		out.Detail = h.Err
+		if out.Detail == "" {
+			out.Detail = fmt.Sprintf("its applied prefix has not moved for %s", StallGrace)
+		}
+	case RefuseBehind:
+		out.Detail = fmt.Sprintf("it is replaying up to the published trim floor "+
+			"from its checkpoint %d — the log still holds what it lacks, and this "+
+			"clears on its own", h.Position.Seq)
+	}
+	return out
 }
 
 // TermState is a term's third value made explicit.
@@ -288,14 +470,78 @@ type NodeDomainReport struct {
 	Seq            uint64 `json:"seq"`
 	AppliedThrough uint64 `json:"applied_through"`
 
+	// GenerationState is this position's generation against the domain's
+	// own — see [GenerationState]. Seq and AppliedThrough compare with the
+	// domain's sequences only where it is `current`.
+	GenerationState GenerationState `json:"generation_state"`
+
 	// Lag is this node's distance from the stream's last sequence, and
 	// NIL when the stream could not be read — the same pointer rule
 	// [Health] uses, for the same reason: an unknown lag rendered as zero
-	// is a node reported as caught up.
+	// is a node reported as caught up. NIL TOO for a position from another
+	// generation, whose sequence is in another number space: subtracted,
+	// a node still on the old generation read lag 0 whenever its old
+	// sequence was higher than the adopted stream's last.
 	Lag *uint64 `json:"lag,omitempty"`
 
 	Deferred int `json:"deferred,omitempty"`
+
+	// LogDiverged is the node's own report that the log holds, at its
+	// checkpoint, another record than the one it consumed there — the one
+	// such node nothing else on its row shows, since its position is at or
+	// below the log's end where a lagging node's is. Every other node on
+	// the log refuses its writes while this is set.
+	LogDiverged bool `json:"log_diverged,omitempty"`
+
+	// StreamCreatedAt is the creation instant of the stream the node's rows
+	// are keyed to, and CheckpointStoredAt the broker's instant for the
+	// record its checkpoint stands on — what a reanchor weighs to tell a
+	// peer on the lost stream from one on the live one, and a peer whose
+	// history is the log's from one holding history the log lost. ABSENT
+	// where the node did not publish them.
+	StreamCreatedAt    time.Time `json:"stream_created_at,omitzero"`
+	CheckpointStoredAt time.Time `json:"checkpoint_stored_at,omitzero"`
 }
+
+// GenerationState is a node's position generation against its domain's.
+//
+// A NAMED STATE rather than a number the reader compares, because the reader
+// did not: every surface subtracted the node's sequence from the log's last
+// whatever generation each was at, and a node on a sequence space the log had
+// left read as caught up. The readmission refusal then told an operator to
+// check a SEQ "at the log's current generation" on a surface that showed no
+// generation at all.
+type GenerationState string
+
+const (
+	// GenerationCurrent — the node's position is at the domain's
+	// generation, so its sequences compare with the log's.
+	GenerationCurrent GenerationState = "current"
+
+	// GenerationLeft — the node's position is from a generation the log
+	// has since left: a sequence space that no longer exists, nothing it
+	// holds compares with anything the log still has, and a readmission is
+	// refused on it.
+	GenerationLeft GenerationState = "left"
+
+	// GenerationAhead — the node's position is from a generation above the
+	// one this node runs the domain at: the fleet has re-anchored past the
+	// node answering, whose own row is the stale one.
+	GenerationAhead GenerationState = "ahead"
+
+	// GenerationUnknown — the domain is not one the answering node runs,
+	// so there is no generation to compare against.
+	GenerationUnknown GenerationState = "unknown"
+)
+
+// GenerationStates is every [GenerationState] this build names.
+func GenerationStates() []GenerationState {
+	return []GenerationState{GenerationCurrent, GenerationLeft, GenerationAhead,
+		GenerationUnknown}
+}
+
+// Valid reports whether s is a state this build names.
+func (s GenerationState) Valid() bool { return slices.Contains(GenerationStates(), s) }
 
 // EvictionReport is a tombstone as the operator surface renders it.
 type EvictionReport struct {
@@ -371,9 +617,16 @@ type DomainInputs struct {
 	Reserved bool
 
 	// TrimFloor is the published floor, and Decision is what this tick
-	// concluded from the six terms.
-	TrimFloor uint64
-	Decision  TrimDecision
+	// concluded from the six terms — both meaningful only where FloorState
+	// is [TrimFloorPublished].
+	TrimFloor  uint64
+	Decision   TrimDecision
+	FloorState TrimFloorState
+
+	// NotReady and WritesRefused are this node's own refusals of the
+	// domain — see [DomainReport.NotReady].
+	NotReady      *DomainRefusal
+	WritesRefused *DomainRefusal
 
 	// BlockedSince is when this domain's trim last advanced, and is zero
 	// when it is not blocked.
@@ -506,8 +759,21 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 		Bytes:             d.Bytes,
 		TrimFloor:         d.TrimFloor,
 		TrimTo:            d.Decision.To,
+		TrimFloorState:    d.FloorState,
 		BlockedBy:         d.Decision.BlockedBy,
 		SnapshotBlockedBy: d.SnapshotSkip,
+		NotReady:          d.NotReady,
+		WritesRefused:     d.WritesRefused,
+		// AN EMPTY LIST, NEVER NULL: a domain the trim has concluded
+		// nothing about has no terms, and `"terms": null` is what
+		// crashed both retention screens after every reanchor.
+		Terms: make([]TermReport, 0, len(d.Decision.Terms)),
+	}
+	if !out.TrimFloorState.Valid() {
+		// A CALLER THAT SAID NOTHING HAS NO CONCLUSION TO SHOW. Read as
+		// published, its zeros would be a floor of zero and an advancing
+		// trim — the claim this field exists to stop.
+		out.TrimFloorState = TrimFloorNoneAtGeneration
 	}
 	if d.StreamReadable && d.MaxBytes > 0 {
 		out.MaxBytes = d.MaxBytes
@@ -668,8 +934,10 @@ func (in ReportInputs) nodes() []NodeReport {
 
 	lastSeq := make(map[string]uint64, len(in.Domains))
 	readable := make(map[string]bool, len(in.Domains))
+	generation := make(map[string]uint32, len(in.Domains))
 	for _, d := range in.Domains {
 		lastSeq[d.Domain], readable[d.Domain] = d.LastSeq, d.StreamReadable
+		generation[d.Domain] = d.Generation
 	}
 
 	out := make([]NodeReport, 0, len(ids))
@@ -679,16 +947,34 @@ func (in ReportInputs) nodes() []NodeReport {
 			row.At = r.At.UTC()
 			for name, d := range r.Domains {
 				nd := NodeDomainReport{
-					Generation:     d.Generation,
-					Seq:            d.Seq,
-					AppliedThrough: d.AppliedThrough,
-					Deferred:       d.Deferred,
+					Generation:         d.Generation,
+					Seq:                d.Seq,
+					AppliedThrough:     d.AppliedThrough,
+					Deferred:           d.Deferred,
+					LogDiverged:        d.LogDiverged,
+					StreamCreatedAt:    d.StreamCreatedAt.UTC(),
+					CheckpointStoredAt: d.CheckpointStoredAt.UTC(),
+				}
+				// THE GENERATION FIRST, because it decides whether the
+				// sequence compares with the log's at all.
+				current, runs := generation[name]
+				switch {
+				case !runs:
+					nd.GenerationState = GenerationUnknown
+				case d.Generation < current:
+					nd.GenerationState = GenerationLeft
+				case d.Generation > current:
+					nd.GenerationState = GenerationAhead
+				default:
+					nd.GenerationState = GenerationCurrent
 				}
 				// LAG IS COMPUTED, NEVER REPORTED BY THE NODE
 				// ITSELF: a lagging node's own idea of the
 				// stream's end is exactly the number it is
-				// behind on.
-				if readable[name] {
+				// behind on. And ONLY WITHIN ONE GENERATION: a
+				// sequence from another is a number in another
+				// space, and the difference is not a distance.
+				if readable[name] && nd.GenerationState == GenerationCurrent {
 					var lag uint64
 					if last := lastSeq[name]; last > d.Seq {
 						lag = last - d.Seq

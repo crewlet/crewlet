@@ -42,8 +42,15 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { DomainBlock, DomainSize, Terms } from "./Retention.tsx";
-import type { RetentionNode } from "~/protocol/index.ts";
+import {
+  DomainBlock,
+  DomainRefusals,
+  DomainSize,
+  FloorFact,
+  Terms,
+  TrimStatus,
+} from "./Retention.tsx";
+import type { RetentionGenerationState, RetentionNode } from "~/protocol/index.ts";
 
 /** How often the retention document is re-read, matching the fleet's own. */
 const POLL_MS = 30_000;
@@ -57,6 +64,9 @@ interface Position {
   applied_through: number;
   lag?: number;
   generation: number;
+  /** Whether `seq` compares with this domain's sequences at all. */
+  generation_state?: RetentionGenerationState;
+  log_diverged?: boolean;
 }
 
 export function DomainScreen({ name }: { name: string }) {
@@ -98,6 +108,8 @@ export function DomainScreen({ name }: { name: string }) {
         applied_through: at.applied_through,
         lag: at.lag,
         generation: at.generation,
+        generation_state: at.generation_state,
+        log_diverged: at.log_diverged,
       });
     }
     return out;
@@ -118,17 +130,14 @@ export function DomainScreen({ name }: { name: string }) {
         {
           label: "Floor",
           // THE FLOOR AND WHAT THIS TICK CONCLUDED, which are two facts: the
-          // floor is what the six terms permit and the conclusion is where the
-          // trim actually got to. They are equal on a healthy domain and the
-          // gap between them is the whole story on a stuck one.
-          value: (
-            <span className="t-num">
-              {domain.trim_floor}
-              {domain.trim_to !== domain.trim_floor && (
-                <span className="muted"> · concluded {domain.trim_to}</span>
-              )}
-            </span>
-          ),
+          // floor is the fleet's published bound — everything below it may
+          // already be gone, and it never moves down within a generation —
+          // and the conclusion is what this tick's six terms permitted, zero
+          // while the trim is blocked. They are equal on a healthy domain, a
+          // blocked one reads "blocked" rather than "concluded 0", and
+          // neither is a number where nothing is published. ONE RENDERING
+          // with the fleet card's, which is how the two cannot disagree.
+          value: <FloorFact domain={domain} />,
         },
         {
           label: "Size",
@@ -158,15 +167,11 @@ export function DomainScreen({ name }: { name: string }) {
                 kind="Domain"
                 icon="layers"
                 title={domain.domain}
-                status={
-                  domain.blocked_by ? (
-                    <Tag variant="warning">{domain.blocked_by}</Tag>
-                  ) : (
-                    <Tag variant="success">advancing</Tag>
-                  )
-                }
+                status={<TrimStatus domain={domain} />}
                 facts={facts}
               />
+
+              <DomainRefusals domain={domain} />
 
               <Card>
                 <Card.Header icon={<LayersGlyph size="sm" />}>
@@ -176,7 +181,17 @@ export function DomainScreen({ name }: { name: string }) {
                     remedy — the same block the fleet card draws, so the card
                     and the page can never disagree about whether this log is
                     advancing. */}
-                <Terms terms={domain.terms} snapshotBlocked={domain.snapshot_blocked_by} />
+                <Terms
+                  terms={domain.terms}
+                  snapshotBlocked={domain.snapshot_blocked_by}
+                  empty={
+                    domain.trim_floor_state === "published"
+                      ? undefined
+                      : domain.trim_floor_state === "unreadable"
+                        ? `The trim floor register could not be read, so nothing is known here about the trim of generation ${domain.generation}.`
+                        : `The trim has concluded nothing about generation ${domain.generation} yet — its first tick on this stream is pending.`
+                  }
+                />
               </Card>
 
               <Card padding="none">
@@ -219,12 +234,33 @@ export function DomainScreen({ name }: { name: string }) {
                         ),
                     },
                     {
+                      key: "generation",
+                      header: "Generation",
+                      shrink: true,
+                      sortValue: (p) => p.generation,
+                      // THE GENERATION ITS POSITION IS IN, because a sequence
+                      // is a number in one generation's space and the
+                      // readmission refusal asks for a position "at the log's
+                      // current generation".
+                      cell: (p) =>
+                        p.seq < 0 ? (
+                          <EmptyValue label="This node has published no position for this domain" />
+                        ) : (
+                          <span className="t-num">{p.generation}</span>
+                        ),
+                    },
+                    {
                       key: "behind",
                       header: "Behind",
                       shrink: true,
                       sortValue: (p) => p.lag ?? 0,
                       cell: (p) =>
-                        p.lag == null ? (
+                        // A POSITION FROM ANOTHER GENERATION IS NOT A
+                        // DISTANCE: its sequence compares with nothing the
+                        // log holds now, and subtracted it read 0.
+                        p.generation_state === "left" || p.generation_state === "ahead" ? (
+                          <Tag variant="warning">stale generation</Tag>
+                        ) : p.lag == null ? (
                           <EmptyValue label="Not reported" />
                         ) : (
                           <span className="t-num">{p.lag}</span>
@@ -243,6 +279,7 @@ export function DomainScreen({ name }: { name: string }) {
                               is one inside its eviction fence window. */}
                           {p.counted && <Tag appearance="outline">counted</Tag>}
                           {p.live && <Tag variant="success">live</Tag>}
+                          {p.log_diverged && <Tag variant="danger">log diverged</Tag>}
                         </span>
                       ),
                     },

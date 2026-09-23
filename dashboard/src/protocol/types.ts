@@ -1228,19 +1228,66 @@ export interface RetentionDomain {
    *  `reserve_bytes`. ABSENT when the broker could not be asked — which is not
    *  zero headroom. */
   headroom_fraction?: number;
-  /** Everything below it may already be gone; it never moves down within a generation. */
+  /** Everything below it may already be gone; it never moves down within a
+   *  generation. Meaningful only where `trim_floor_state` is `published`. */
   trim_floor: number;
-  /** What the last tick concluded may be removed — zero while blocked. */
+  /** What the last tick concluded may be removed — zero while blocked.
+   *  Meaningful only where `trim_floor_state` is `published`. */
   trim_to: number;
+  /**
+   * Whether the floor, the conclusion, the terms and the blocking term are a
+   * conclusion at all. After every reanchor the trim has concluded nothing
+   * about the adopted stream until its first tick on it, and that row read
+   * as "floor 0 · advancing" — about a trim that had looked at nothing.
+   */
+  trim_floor_state: RetentionTrimFloorState;
+  /** An EMPTY LIST where nothing is concluded — never null. */
   terms: RetentionTerm[];
   blocked_by?: string;
   blocked_since?: string;
+  /** Why the answering node refuses every read of this domain right now, and
+   *  which finding is behind a `wrong_stream`. ABSENT while it serves them. */
+  not_ready?: RetentionRefusal;
+  /** Why it refuses this domain's WRITES while serving its reads — a peer's
+   *  rows hold records the log lost (`log_truncated`). */
+  writes_refused?: RetentionRefusal;
   /** The sentence a blocked trim leads with. */
   prose?: string;
   /** The snapshot loop's OWN skip reason — a different problem from a blocked
    *  trim, with a different remedy, which is why it is its own field. */
   snapshot_blocked_by?: string;
 }
+
+/**
+ * What a domain's floor is — `statelog.TrimFloorStates`, held to the engine's
+ * by a gate in `internal/statelog`.
+ */
+export type RetentionTrimFloorState = "published" | "none_at_generation" | "unreadable";
+
+/**
+ * Which finding is behind a `wrong_stream` — `statelog.IdentityCauses`. One
+ * word refuses for four facts, each with its own remedy.
+ */
+export type RetentionIdentityCause =
+  "recreated" | "ahead_of_log" | "log_diverged" | "generation_passed";
+
+/** Why the answering node refuses a domain. */
+export interface RetentionRefusal {
+  /** A read refusal (`wrong_stream`, `stalled`, …) or a write refusal (`log_truncated`). */
+  code: string;
+  /** Kept as strings, so a cause a newer node names is shown rather than dropped. */
+  causes?: string[];
+  /** The sentence the refusal carries everywhere else it is met. */
+  detail: string;
+}
+
+/**
+ * A node's position generation against its domain's —
+ * `statelog.GenerationStates`. Only `current` compares with the log's
+ * sequences: a position from a generation the log has left is a number in a
+ * space that no longer exists.
+ */
+export type RetentionGenerationState = "current" | "left" | "ahead" | "unknown";
 
 /**
  * A term's value made explicit: read, unreadable, not applicable, or read and
@@ -1287,9 +1334,19 @@ export interface RetentionNodeDomain {
   /** BESIDE seq, never instead of it: a node applying nothing while its
    *  position advances looks identical to a caught-up one from either alone. */
   applied_through: number;
-  /** ABSENT rather than zero when the stream could not be read. */
+  /** Whether `seq` compares with the log's at all. */
+  generation_state: RetentionGenerationState;
+  /** ABSENT rather than zero when the stream could not be read — and for a
+   *  position from another generation, whose sequence is in another space. */
   lag?: number;
   deferred?: number;
+  /** The node's own report that the log holds another record at its
+   *  checkpoint than the one it consumed there. */
+  log_diverged?: boolean;
+  /** The stream its rows are keyed to, and the record its checkpoint stands
+   *  on — what a reanchor weighs. ABSENT where the node did not publish them. */
+  stream_created_at?: string;
+  checkpoint_stored_at?: string;
 }
 
 export interface RetentionEviction {

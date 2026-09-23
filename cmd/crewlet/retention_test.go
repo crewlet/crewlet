@@ -167,6 +167,7 @@ func blockedReport() *statelog.Report {
 			Bytes: 67108864, MaxBytes: 4294967296, ReserveBytes: 268435456,
 			HeadroomFraction: &headroom,
 			TrimFloor:        918100000,
+			TrimFloorState:   statelog.TrimFloorPublished,
 			BlockedBy:        statelog.TermBackupFloor,
 			BlockedSince:     stamp("2031-03-30T02:00:00Z"),
 			Prose: "Nothing is being trimmed on tracker: the newest complete " +
@@ -246,6 +247,96 @@ func TestRetentionStatusLeadsWithTheBlockingTermInProse(t *testing.T) {
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the report never mentions %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// A DOMAIN THE TRIM HAS CONCLUDED NOTHING ABOUT PRINTS NO FLOOR, AND SAYS SO.
+//
+// After every reanchor the report fills nothing from the old generation's
+// floor row until the trim's first tick on the adopted stream. The command
+// printed TRIM FLOOR 0 — indistinguishable from a published floor of zero —
+// and an empty WATERMARKS block with no blocking term, which reads as a trim
+// nothing is holding.
+func TestAReanchoredDomainPrintsNoFloorAndSaysWhy(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	d := &report.Domains[0]
+	d.Generation, d.TrimFloor, d.TrimTo = 1, 0, 0
+	d.TrimFloorState = statelog.TrimFloorNoneAtGeneration
+	d.BlockedBy, d.BlockedSince, d.Prose, d.Terms = "", time.Time{}, "", []statelog.TermReport{}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	if !strings.Contains(stdout, "the trim has concluded nothing about generation 1 yet") {
+		t.Errorf("the reanchored domain's watermarks never say nothing is concluded:\n%s",
+			stdout)
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == "tracker" && fields[len(fields)-1] != "-" {
+			t.Errorf("the domain row's TRIM FLOOR is %q, want - for no conclusion: %q",
+				fields[len(fields)-1], line)
+		}
+	}
+
+	// AND AN UNREADABLE REGISTER SAYS SO RATHER THAN NOTHING.
+	d.TrimFloorState = statelog.TrimFloorUnreadable
+	stdout, _, err = cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	if !strings.Contains(stdout, "could not be read") {
+		t.Errorf("an unreadable floor register is not said:\n%s", stdout)
+	}
+}
+
+// A DOMAIN THIS NODE REFUSES LEADS THE STATUS, NAMING THE FINDING — AND A NODE
+// ON ANOTHER GENERATION OR WITH A DIVERGED LOG IS MARKED.
+//
+// The retention guide sends an operator here after a restore to find the
+// not-ready domain and the diverged peer, and the report carried neither: the
+// domain row looked ordinary, and a peer on a generation the log had left read
+// lag 0 against a sequence space that no longer exists.
+func TestRetentionStatusNamesARefusedDomainAndAStalePeer(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Domains[0].Generation = 1
+	report.Domains[0].NotReady = &statelog.DomainRefusal{
+		Code:   string(statelog.RefuseWrongStream),
+		Causes: []statelog.IdentityCause{statelog.CauseRecreated},
+		Detail: "tracker's rows are keyed to the stream created at 2031-04-01",
+	}
+	report.Domains[0].WritesRefused = &statelog.DomainRefusal{
+		Code:   string(statelog.ReasonLogTruncated),
+		Detail: "peer node-4 stands at sequence 918000000",
+	}
+	report.Nodes[1].Domains["tracker"] = statelog.NodeDomainReport{
+		Generation: 0, Seq: 918000000, AppliedThrough: 918000000,
+		GenerationState: statelog.GenerationLeft, LogDiverged: true,
+	}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	first := strings.SplitN(strings.TrimSpace(stdout), "\n", 2)[0]
+	if first != "NOT READY tracker: wrong_stream (recreated) — tracker's rows are "+
+		"keyed to the stream created at 2031-04-01" {
+		t.Errorf("the first line is %q, want the refusal naming its finding", first)
+	}
+	for _, want := range []string{
+		"WRITES REFUSED tracker: log_truncated — peer node-4",
+		"left gen 0",
+		"LOG DIVERGED",
+		"GEN",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the status never says %q:\n%s", want, stdout)
 		}
 	}
 }

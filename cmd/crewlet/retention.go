@@ -159,6 +159,37 @@ type retentionDomain struct {
 	Prose             string          `json:"prose"`
 	SnapshotBlockedBy string          `json:"snapshot_blocked_by"`
 	Terms             []retentionTerm `json:"terms"`
+
+	// TrimFloorState says whether TrimFloor and Terms are a conclusion at
+	// all — in the writer's vocabulary, [statelog.TrimFloorState]. Only
+	// `published` prints a floor; the others print a dash, because a zero
+	// there is the trim having concluded nothing about this generation of
+	// the log yet, or a register nobody could read, and never a floor.
+	TrimFloorState string `json:"trim_floor_state"`
+
+	// NotReady and WritesRefused are the answering node's own refusals of
+	// the domain, printed above every table.
+	NotReady      *retentionRefusal `json:"not_ready"`
+	WritesRefused *retentionRefusal `json:"writes_refused"`
+}
+
+// retentionRefusal is why the answering node refuses a domain.
+type retentionRefusal struct {
+	Code   string   `json:"code"`
+	Causes []string `json:"causes"`
+	Detail string   `json:"detail"`
+}
+
+// floorOrDash is the TRIM FLOOR cell: the floor where one is published, and
+// what stands in its place where none is.
+func (d retentionDomain) floorOrDash() string {
+	switch d.TrimFloorState {
+	case string(statelog.TrimFloorPublished):
+		return strconv.FormatUint(d.TrimFloor, 10)
+	case string(statelog.TrimFloorUnreadable):
+		return "unreadable"
+	}
+	return "-"
 }
 
 // retentionTerm is one of the six, with the third value it can take — in the
@@ -198,10 +229,36 @@ type retentionNodeSeat struct {
 	Seq            uint64 `json:"seq"`
 	AppliedThrough uint64 `json:"applied_through"`
 
+	// GenerationState is the position's generation against the domain's —
+	// [statelog.GenerationState]. A position from another generation is a
+	// sequence in another number space, so its LAG cell names the
+	// generation instead of a distance.
+	GenerationState string `json:"generation_state"`
+
 	// Lag is NIL when the stream could not be read, and printed as `-`:
 	// an unknown lag rendered as zero is a node reported as caught up.
 	Lag      *uint64 `json:"lag"`
 	Deferred int     `json:"deferred"`
+
+	// LogDiverged is the node's own report that the log holds another
+	// record at its checkpoint than the one it consumed there.
+	LogDiverged bool `json:"log_diverged"`
+}
+
+// lagCell is a node row's LAG: a distance within one generation, the
+// generation where the position is from another, and a dash where the
+// stream could not be read.
+func (d retentionNodeSeat) lagCell() string {
+	switch d.GenerationState {
+	case string(statelog.GenerationLeft):
+		return fmt.Sprintf("left gen %d", d.Generation)
+	case string(statelog.GenerationAhead):
+		return fmt.Sprintf("ahead gen %d", d.Generation)
+	}
+	if d.Lag == nil {
+		return "-"
+	}
+	return strconv.FormatUint(*d.Lag, 10)
 }
 
 // retentionSnapshot is one node's artefact, or its absence with the reason.
@@ -280,6 +337,24 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout)
 	}
 
+	// A DOMAIN THIS NODE REFUSES, BEFORE ANYTHING ELSE ABOUT IT: every
+	// figure below describes rows no read or write of it is served from,
+	// and the guides send an operator here to find a recreated, restored
+	// or diverged log by exactly this line.
+	for _, d := range report.Domains {
+		if *domain != "" && d.Domain != *domain {
+			continue
+		}
+		if r := d.NotReady; r != nil {
+			fmt.Fprintf(stdout, "NOT READY %s: %s — %s\n", d.Domain,
+				refusalCode(*r), r.Detail)
+		}
+		if r := d.WritesRefused; r != nil {
+			fmt.Fprintf(stdout, "WRITES REFUSED %s: %s — %s\n", d.Domain,
+				refusalCode(*r), r.Detail)
+		}
+	}
+
 	// THE BLOCKING TERM FIRST AND IN PROSE, because it is the answer to
 	// the only question anybody runs this for. A table an operator has to
 	// read a `blocked_by` column out of is a table they read second.
@@ -345,11 +420,11 @@ func retentionDomains(w io.Writer, report retentionReport, only string) {
 		if only != "" && d.Domain != only {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%d\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n",
 			d.Domain, d.Stream, d.Generation, d.Replay, d.FirstSeq, d.LastSeq,
 			humanBytes(int64(d.Bytes)), ceilingOrDash(d.MaxBytes),
 			reserveOrDash(d.ReserveBytes), headroomOrDash(d.HeadroomFraction),
-			d.TrimFloor)
+			d.floorOrDash())
 	}
 }
 
@@ -360,6 +435,22 @@ func retentionWatermarks(w io.Writer, report retentionReport, only string) {
 			continue
 		}
 		fmt.Fprintf(w, "\nWATERMARKS %s\tTERM\tSTATE\tAT\tDETAIL\n", d.Domain)
+		// NOTHING CONCLUDED IS SAID, never printed as an empty block: an
+		// empty block beside no blocking term reads as a trim with
+		// nothing holding it — advancing — about one that has not yet
+		// looked at the stream it now runs.
+		switch d.TrimFloorState {
+		case string(statelog.TrimFloorUnreadable):
+			fmt.Fprintf(w, "\tthe trim floor register could not be read, so "+
+				"nothing is known here about the trim of generation %d\t\t\t\n",
+				d.Generation)
+			continue
+		case string(statelog.TrimFloorPublished):
+		default:
+			fmt.Fprintf(w, "\tthe trim has concluded nothing about generation %d "+
+				"yet — its first tick on this stream is pending\t\t\t\n", d.Generation)
+			continue
+		}
 		for _, t := range d.Terms {
 			// A SEQUENCE ONLY WHERE THE TERM WAS READ AND BINDS: an
 			// unreadable, absent or unbounded term carries a number
@@ -382,7 +473,7 @@ func retentionNodes(w io.Writer, report retentionReport) {
 	if len(report.Nodes) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\nNODE\tDOMAIN\tSEQ\tAPPLIED\tLAG\tDEFERRED\tCOUNTED\tLIVE\tAT")
+	fmt.Fprintln(w, "\nNODE\tDOMAIN\tGEN\tSEQ\tAPPLIED\tLAG\tDEFERRED\tCOUNTED\tLIVE\tAT")
 	for _, n := range report.Nodes {
 		if len(n.Domains) == 0 {
 			// A COUNTED NODE WITH NO POSITION STILL GETS A ROW.
@@ -390,7 +481,7 @@ func retentionNodes(w io.Writer, report retentionReport) {
 			// heartbeat — a node adopting a snapshot — and it
 			// blocks every term derived from the counted set, so
 			// dropping the row would hide the block's cause.
-			fmt.Fprintf(w, "%s\t-\t-\t-\t-\t-\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t-\t-\t-\t-\t-\t-\t%s\t%s\t%s\n",
 				n.NodeID, yesNo(n.Counted), yesNo(n.Live), noteOrStamp(n))
 			continue
 		}
@@ -407,15 +498,27 @@ func retentionNodes(w io.Writer, report retentionReport) {
 			if i > 0 {
 				name = ""
 			}
-			lag := "-"
-			if d.Lag != nil {
-				lag = strconv.FormatUint(*d.Lag, 10)
+			// A DIVERGED NODE IS MARKED, because nothing else on its
+			// line shows it: its position is at or below the log's end,
+			// where a lagging node's is, while every other node refuses
+			// its own writes of that log on its account.
+			note := noteOrStamp(n)
+			if d.LogDiverged {
+				note = "LOG DIVERGED at its checkpoint; " + note
 			}
-			fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\t%d\t%s\t%s\t%s\n",
-				name, domain, d.Seq, d.AppliedThrough, lag, d.Deferred,
-				yesNo(n.Counted), yesNo(n.Live), noteOrStamp(n))
+			fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%s\t%d\t%s\t%s\t%s\n",
+				name, domain, d.Generation, d.Seq, d.AppliedThrough, d.lagCell(),
+				d.Deferred, yesNo(n.Counted), yesNo(n.Live), note)
 		}
 	}
+}
+
+// refusalCode is a refusal's word, with the findings behind a `wrong_stream`.
+func refusalCode(r retentionRefusal) string {
+	if len(r.Causes) == 0 {
+		return r.Code
+	}
+	return r.Code + " (" + strings.Join(r.Causes, ", ") + ")"
 }
 
 // retentionReplica prints what THIS node costs to replace.
@@ -725,12 +828,16 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 			"is printed: %v\n", err)
 		return nil
 	}
-	now := make(map[string]uint64, len(after))
+	now := make(map[string]string, len(after))
 	for _, d := range after {
 		now[d.domain] = d.floor
 	}
 	for _, d := range before {
-		fmt.Fprintf(stdout, "  %s trim floor %d → %d\n", d.domain, d.floor, now[d.domain])
+		after, ok := now[d.domain]
+		if !ok {
+			after = "-"
+		}
+		fmt.Fprintf(stdout, "  %s trim floor %s → %s\n", d.domain, d.floor, after)
 	}
 	return nil
 }
@@ -829,9 +936,10 @@ func gateAdvice(actions []string, c gateAdviceContext) []string {
 				" <bytes> -confirm <bytes>, then run this again with "+c.again)
 		case statelog.GateWait:
 			if c.readmit {
-				out = append(out, "its SEQ in `crewlet retention status` says when it "+
-					"has caught up, and `crewlet retention snapshots` whether a peer "+
-					"can donate one; then run this again")
+				out = append(out, "its SEQ in `crewlet retention status`, at the "+
+					"domain's own GEN, says when it has caught up, and `crewlet "+
+					"retention snapshots` whether a peer can donate one; then run this "+
+					"again")
 			} else {
 				out = append(out, "its LIVE column in `crewlet retention status` reads "+
 					"no once the lease has lapsed; then run this again")
@@ -878,15 +986,17 @@ func retentionFloors(client *nodeClient) ([]domainFloor, error) {
 	}
 	out := make([]domainFloor, 0, len(report.Domains))
 	for _, d := range report.Domains {
-		out = append(out, domainFloor{domain: d.Domain, floor: d.TrimFloor})
+		out = append(out, domainFloor{domain: d.Domain, floor: d.floorOrDash()})
 	}
 	return out, nil
 }
 
-// domainFloor is one domain's published floor, as the watermark print reads it.
+// domainFloor is one domain's published floor, as the watermark print reads
+// it: the number where one is published, and a dash or `unreadable` where
+// none is — never a zero standing in for no conclusion.
 type domainFloor struct {
 	domain string
-	floor  uint64
+	floor  string
 }
 
 func ceilingOrDash(maxBytes uint64) string {

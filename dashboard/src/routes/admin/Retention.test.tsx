@@ -14,6 +14,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  DomainBlock,
   DomainSize,
   gateAction,
   MaintenanceBanner,
@@ -52,7 +53,15 @@ test("a deferral renders as its own state rather than as lag", () => {
   render(
     <NodePositions
       node={node({
-        domains: { tracker: { generation: 1, seq: 90, applied_through: 41, deferred: 2 } },
+        domains: {
+          tracker: {
+            generation: 1,
+            seq: 90,
+            applied_through: 41,
+            deferred: 2,
+            generation_state: "current",
+          },
+        },
       })}
     />,
   );
@@ -64,7 +73,11 @@ test("a deferral renders as its own state rather than as lag", () => {
   cleanup();
   render(
     <NodePositions
-      node={node({ domains: { tracker: { generation: 1, seq: 90, applied_through: 90 } } })}
+      node={node({
+        domains: {
+          tracker: { generation: 1, seq: 90, applied_through: 90, generation_state: "current" },
+        },
+      })}
     />,
   );
   expect(screen.queryByText(/applied/)).toBeNull();
@@ -77,7 +90,11 @@ test("a deferral renders as its own state rather than as lag", () => {
 test("an unreadable lag renders as unknown rather than as caught up", () => {
   render(
     <NodePositions
-      node={node({ domains: { tracker: { generation: 1, seq: 90, applied_through: 90 } } })}
+      node={node({
+        domains: {
+          tracker: { generation: 1, seq: 90, applied_through: 90, generation_state: "current" },
+        },
+      })}
     />,
   );
   expect(screen.getByText("lag —")).toBeTruthy();
@@ -128,6 +145,7 @@ const domain = (over: Partial<RetentionDomain> = {}): RetentionDomain => ({
   max_bytes: 1024 * 1024 * 1024 + 64 * 1024 * 1024,
   trim_floor: 1,
   trim_to: 1,
+  trim_floor_state: "published",
   terms: [],
   ...over,
 });
@@ -250,4 +268,98 @@ test("a node with an unfinished gesture offers to finish it rather than start af
   expect(
     gateAction(node({ evicted: { by: "o", at: "", effective_at: "", effective: true } }), {}),
   ).toEqual({ evict: false, label: "Readmit…" });
+});
+
+// A DOMAIN THE TRIM HAS CONCLUDED NOTHING ABOUT SAYS SO — AND DRAWS AT ALL.
+//
+// After every reanchor, until the trim's first tick on the adopted stream, the
+// row had no floor, no blocking term and `terms: null`: `terms.map` threw
+// during render, and with no error boundary the whole dashboard went blank on
+// the Fleet screen and the domain page — the two things an operator opens to
+// watch a reanchor recover. Guarded, both drew "floor 0 · advancing".
+test("a reanchored domain with no conclusion renders its state, never advancing", () => {
+  render(
+    <DomainBlock
+      domain={domain({
+        generation: 1,
+        trim_floor: 0,
+        trim_to: 0,
+        trim_floor_state: "none_at_generation",
+        terms: [],
+      })}
+    />,
+  );
+  expect(screen.getByText(/concluded nothing about generation 1 yet/)).toBeTruthy();
+  expect(screen.getByText("no conclusion yet")).toBeTruthy();
+  expect(screen.getByText("no floor yet")).toBeTruthy();
+  expect(screen.queryByText("advancing")).toBeNull();
+  expect(screen.queryByText(/floor 0/)).toBeNull();
+
+  // AN UNREADABLE REGISTER IS NOT A TRIM THAT HAS CONCLUDED NOTHING.
+  cleanup();
+  render(<DomainBlock domain={domain({ trim_floor_state: "unreadable", terms: [] })} />);
+  expect(screen.getAllByText(/floor unreadable/).length).toBeGreaterThan(0);
+  expect(screen.queryByText("advancing")).toBeNull();
+
+  // THE CONTROL: a published, unblocked floor is the one that advances.
+  cleanup();
+  render(<DomainBlock domain={domain()} />);
+  expect(screen.getByText("advancing")).toBeTruthy();
+});
+
+// A BLOCKED DOMAIN'S CONCLUSION IS "BLOCKED", not "concluded 0": the wire value
+// is zero while blocked, and printed as a number it reads as a position.
+test("a blocked domain reads blocked rather than a conclusion of zero", () => {
+  render(
+    <DomainBlock domain={domain({ trim_floor: 700, trim_to: 0, blocked_by: "backup_floor" })} />,
+  );
+  expect(screen.getByText(/blocked/)).toBeTruthy();
+  expect(screen.queryByText(/concluded/)).toBeNull();
+  expect(screen.getByText("backup_floor")).toBeTruthy();
+});
+
+// A DOMAIN THIS NODE REFUSES SAYS SO ABOVE EVERYTHING ELSE ABOUT IT, NAMING THE
+// FINDING — the guides send an operator here after a restore to find it.
+test("a refused domain names its refusal, the finding and the sentence", () => {
+  render(
+    <DomainBlock
+      domain={domain({
+        not_ready: {
+          code: "wrong_stream",
+          causes: ["recreated"],
+          detail: "tracker's rows are keyed to the stream created at 2031-04-01",
+        },
+        writes_refused: { code: "log_truncated", detail: "peer node-4 stands past the end" },
+      })}
+    />,
+  );
+  expect(screen.getByText("wrong_stream")).toBeTruthy();
+  expect(screen.getByText(/\(recreated\)/)).toBeTruthy();
+  expect(screen.getByText(/keyed to the stream created at/)).toBeTruthy();
+  expect(screen.getByText("log_truncated")).toBeTruthy();
+});
+
+// A POSITION FROM ANOTHER GENERATION IS LABELLED, NOT SUBTRACTED, and a
+// diverged node is marked — nothing else on its line shows it.
+test("a node on a generation the log left is labelled rather than caught up", () => {
+  render(
+    <NodePositions
+      node={node({
+        domains: {
+          tracker: {
+            generation: 0,
+            seq: 918000000,
+            applied_through: 918000000,
+            generation_state: "left",
+            log_diverged: true,
+          },
+        },
+      })}
+    />,
+  );
+  expect(screen.getByText("left gen 0")).toBeTruthy();
+  expect(screen.getByText("gen 0")).toBeTruthy();
+  expect(screen.getByText("log diverged")).toBeTruthy();
+  expect(screen.queryByText("lag —")).toBeNull();
+  expect(screen.queryByText(/behind/)).toBeNull();
 });

@@ -2228,9 +2228,34 @@ counted node is. The first is what a node must hold to replay; the second says
 whether the trim is moving. Both, with `terms`, `blocked_by` and
 `blocked_since`, come from the row the trim published at the domain's OWN
 `generation` only: just after a reanchor that row is about the stream the
-domain left, and the domain answers with no floor, no terms and not blocked
-until the trim's first tick on the adopted one. See
-[Retention](../guides/retention.md#the-trim-floor).
+domain left. **`trim_floor_state`** says which it is — `published` (the floor,
+the conclusion, the terms and the blocking term are that tick's),
+`none_at_generation` (the trim has concluded nothing about this generation yet:
+a fresh fleet before its first tick, or any fleet just after a reanchor, until
+the trim's first tick on the adopted stream) or `unreadable` (the floor
+register could not be read). Only `published` makes `trim_floor` and `trim_to`
+a number worth reading; `terms` is always a list, **empty** rather than null
+where nothing is concluded. See [Retention](../guides/retention.md#the-trim-floor).
+
+**`not_ready`** is present when the answering node refuses every read of the
+domain right now — the same refusal its readiness probe reads — with `code`
+(`wrong_stream`, `stalled`, `below_floor`, `behind`, `floor_unknown`,
+`evicted`, or `broker_unreachable` where its health could not be read),
+`causes` naming each identity finding behind a `wrong_stream` (`recreated`,
+`ahead_of_log`, `log_diverged`, `generation_passed`) and `detail`, the sentence
+the refusal carries everywhere else. **`writes_refused`** is present while the
+node serves the domain's reads and refuses its writes: `code` `log_truncated`,
+with `detail` naming the peer whose rows hold records the log lost. Both are
+the answering node's own facts, like the replica block.
+
+Each node's per-domain row carries **`generation_state`** — `current`, `left`
+(a generation the log has since left), `ahead` (one above the answering node's)
+or `unknown` (a domain the answering node does not run) — and `lag` only where
+it is `current`, because a sequence from another generation is a number in
+another space and the difference is not a distance. It also carries the node's
+own **`log_diverged`**, and **`stream_created_at`** and
+**`checkpoint_stored_at`** — the stream its rows are keyed to and the record its
+checkpoint stands on — where the node published them.
 
 A term's `state` is one of four, and `seq` is an answer in exactly one of them:
 `ok` carries the sequence the term permits, `unknown` is a term that could not

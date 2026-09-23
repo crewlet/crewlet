@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -971,7 +972,7 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	r := &retention{state: &stateLog{}, fleet: coordmem.NewFleet(), nodeID: "node-a"}
 	now := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 
-	none := r.reading(t.Context(), now, coord.BackupPoint{}, false)
+	none := r.reading(t.Context(), now, coord.BackupPoint{}, false, nil)
 	if none.BackupAge != nil {
 		t.Errorf("a fleet with no backup reported an age of %v", *none.BackupAge)
 	}
@@ -995,7 +996,7 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	// AND A REAL BACKUP IS STILL MEASURED against the same clock, so the
 	// nil above is the absence rather than a field nothing fills.
 	taken := r.reading(t.Context(), now,
-		coord.BackupPoint{At: now.Add(-2 * time.Hour)}, true)
+		coord.BackupPoint{At: now.Add(-2 * time.Hour)}, true, nil)
 	if taken.BackupAge == nil || *taken.BackupAge != 2*time.Hour {
 		t.Fatalf("a two-hour-old backup reported %v", taken.BackupAge)
 	}
@@ -1080,4 +1081,65 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 		t.Fatal("the report calls the pages trim blocked on a conclusion about " +
 			"the stream the reanchor left")
 	}
+	// AND IT SAYS SO, rather than leaving a reader to infer it from zeros:
+	// a row with no conclusion read as "floor 0 · advancing", and its null
+	// terms crashed both retention screens the moment after every reanchor.
+	if got.TrimFloorState != statelog.TrimFloorNoneAtGeneration {
+		t.Errorf("the reanchored pages row's floor state is %q, want %q",
+			got.TrimFloorState, statelog.TrimFloorNoneAtGeneration)
+	}
+	if rows[trackerName].TrimFloorState != statelog.TrimFloorPublished {
+		t.Errorf("the tracker row's floor state is %q, want %q",
+			rows[trackerName].TrimFloorState, statelog.TrimFloorPublished)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"terms":[]`) {
+		t.Errorf("the reanchored pages row encodes %s, want an empty terms list", encoded)
+	}
+}
+
+// A DOMAIN THIS NODE REFUSES SAYS SO ON THE REPORT, NAMING THE FINDING.
+//
+// The retention guide sends an operator to `crewlet retention status` to find a
+// recreated log — "shows the domain as not ready, naming the recreation" — and
+// the report carried no readiness at all: the domain row looked ordinary while
+// every read and write of it was refused.
+func TestTheRetentionReportNamesARecreatedLog(t *testing.T) {
+	t.Parallel()
+	e, js := aRunningNode(t)
+	s := e.native.Load().log
+	e.stopRetention()
+	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
+	pagesName := pages.Domain{}.Name()
+
+	rebuildLog(t, js, s.Domain(pagesName).domain.Stream())
+	s.publishPositions(t.Context())
+
+	report := r.Report(t.Context())
+	for _, d := range report.Domains {
+		if d.Domain != pagesName {
+			if d.NotReady != nil {
+				t.Errorf("%s, whose log nobody touched, reports not ready: %+v",
+					d.Domain, d.NotReady)
+			}
+			continue
+		}
+		if d.NotReady == nil {
+			t.Fatalf("the rebuilt pages log is reported ready: %+v", d)
+		}
+		if d.NotReady.Code != string(statelog.RefuseWrongStream) ||
+			!slices.Contains(d.NotReady.Causes, statelog.CauseRecreated) {
+			t.Errorf("the rebuilt pages log reports %+v, want wrong_stream naming "+
+				"the recreation", d.NotReady)
+		}
+		if !strings.Contains(d.NotReady.Detail, "created at") {
+			t.Errorf("the refusal's sentence does not name the creation instants: %s",
+				d.NotReady.Detail)
+		}
+		return
+	}
+	t.Fatal("the report carries no pages row")
 }

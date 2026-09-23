@@ -682,8 +682,17 @@ purpose — see below.
 
 ### `crewlet retention status`
 
-The blocking term is printed **first and in prose**, because it is the answer
-to the only question anybody runs this for:
+A domain this node **refuses** leads, before anything else about it, with the
+refusal's own sentence — and for a `wrong_stream`, which finding is behind it
+(`recreated`, `ahead_of_log`, `log_diverged`, `generation_passed`):
+
+```
+NOT READY pages: wrong_stream (recreated) — pages's rows are keyed to the stream created at … and the broker's CREWLET_PAGES_LOG was created at …
+WRITES REFUSED tracker: log_truncated — peer node-4 stands at sequence … of CREWLET_TRACKER_LOG, which ends at …
+```
+
+Then the blocking term, **in prose**, because it is the answer to the only
+question anybody runs this for:
 
 ```
 Nothing is being trimmed on tracker: the newest complete backup is 3 days old
@@ -691,9 +700,16 @@ Nothing is being trimmed on tracker: the newest complete backup is 3 days old
 ```
 
 Then one row per registered domain — its stream, generation, replay protocol,
-both ends, bytes, ceiling, reserve and headroom — the six terms with their
-state and detail, one row per node per domain, and this node's own replica
-line. `RESERVE` is the top of the ceiling the tracker and pages logs keep for
+both ends, bytes, ceiling, reserve, headroom and trim floor — the six terms
+with their state and detail, one row per node per domain, and this node's own
+replica line. `TRIM FLOOR` is `-` where the trim has concluded nothing about
+the domain's generation yet — right after a reanchor, until its first tick on
+the adopted stream — and `unreadable` where the floor register could not be
+read; the watermark block says which instead of listing terms. Each node row
+carries its position's generation (`GEN`), and a position from a generation
+the log has left prints `left gen N` (or `ahead gen N`) in place of a lag,
+since its sequence compares with nothing the log holds now; a node that
+reported its log diverged at its checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling the tracker and pages logs keep for
 gate records ([the gate reserve](../guides/retention.md#the-gate-reserve)),
 `-` on the vector changelog, which keeps none; `HEADROOM` is what is left of
 the rest, the ceiling ordinary writes are refused at — so a log at `0%` still
@@ -839,7 +855,7 @@ $ crewlet retention readmit node-4 -confirm node-4
 crewlet: the node answered 409: readmission_refused
   statelog: node-4 may not be readmitted: its last position in tracker (reported 2031-04-02T03:14:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800) — it has to catch up before the fleet counts it again
   start node-4 if it is not running: it catches up on its own, …
-  its SEQ in `crewlet retention status` says when it has caught up, and `crewlet retention snapshots` whether a peer can donate one; then run this again
+  its SEQ in `crewlet retention status`, at the domain's own GEN, says when it has caught up, and `crewlet retention snapshots` whether a peer can donate one; then run this again
 ```
 
 The comparison is the one the node's own write fence makes: its **last
@@ -859,8 +875,11 @@ snapshot where it does not (`crewlet retention snapshots` says whether any peer
 can donate). Readmit it once its `SEQ` in `crewlet retention status` has
 reached one less than the higher of that domain's `TRIM FLOOR` and `FIRST` — the
 refusal's own `floor`, `first_seq` and `generation` are the numbers it
-compared, and right after a reanchor the domain shows no `TRIM FLOOR` until the
-trim's first tick on the adopted stream, so the bound is `FIRST` alone. The
+compared, and right after a reanchor the domain shows `-` in `TRIM FLOOR` until
+the trim's first tick on the adopted stream, so the bound is `FIRST` alone. The
+node's `GEN` column says whether its position is at the log's current
+generation: one from a generation the log has left prints `left gen N` in place
+of a lag and is refused whatever its `SEQ` reads. The
 position is a heartbeat old, so a node that has only just caught up can be
 refused once more; run the command again.
 

@@ -65,6 +65,7 @@ import type {
   RetentionDomain,
   RetentionMaintenance,
   RetentionNode,
+  RetentionNodeDomain,
   RetentionSnapshot,
   RetentionTerm,
 } from "~/protocol/index.ts";
@@ -560,18 +561,25 @@ export function NodePositions({ node }: { node: RetentionNode }) {
       {domains.map(([name, d]) => (
         <span key={name} className="row gap-1 t-caption">
           <InlineCode>{name}</InlineCode>
+          {/* THE GENERATION BESIDE THE SEQUENCE, because a sequence is a
+              number in ONE generation's space: the readmission refusal tells
+              an operator to compare a node's position "at the log's current
+              generation", and this screen showed no generation at all. */}
+          <span className="muted">gen {d.generation}</span>
           <span className="t-num">
             {d.seq}
             {d.applied_through !== d.seq && (
               <span className="muted"> · applied {d.applied_through}</span>
             )}
           </span>
-          {d.lag != null ? (
-            d.lag > 0 && <span className="muted">{d.lag} behind</span>
-          ) : (
-            <span className="muted" title="the stream could not be read, so the lag is unknown">
-              lag —
-            </span>
+          <PositionStanding d={d} />
+          {d.log_diverged && (
+            <Tag
+              variant="danger"
+              title="the log holds another record at this node's checkpoint than the one it consumed there; every other node refuses its writes of this log until an operator decides which history the fleet keeps"
+            >
+              log diverged
+            </Tag>
           )}
           {(d.deferred ?? 0) > 0 && (
             <Tag
@@ -587,7 +595,35 @@ export function NodePositions({ node }: { node: RetentionNode }) {
   );
 }
 
-/** DomainBlock is one registered domain: its window, its floor, and its six terms. */
+/**
+ * How a node's position stands against the log: how far behind within one
+ * generation, or which generation it is on where that is not the log's.
+ *
+ * A POSITION FROM ANOTHER GENERATION IS NOT A DISTANCE. Its sequence is in a
+ * space the log has left, and the difference read 0 whenever the old number
+ * was the larger — a node on a dead number space reported caught up.
+ */
+function PositionStanding({ d }: { d: RetentionNodeDomain }) {
+  if (d.generation_state === "left" || d.generation_state === "ahead") {
+    return (
+      <Tag
+        variant="warning"
+        title="this position is from another generation of the log, so its sequence compares with nothing the log holds now"
+      >
+        {d.generation_state} gen {d.generation}
+      </Tag>
+    );
+  }
+  if (d.lag == null) {
+    return (
+      <span className="muted" title="the stream could not be read, so the lag is unknown">
+        lag —
+      </span>
+    );
+  }
+  return d.lag > 0 ? <span className="muted">{d.lag} behind</span> : null;
+}
+
 /**
  * One domain's whole state, drawn once.
  *
@@ -599,6 +635,7 @@ export function NodePositions({ node }: { node: RetentionNode }) {
 export function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
   return (
     <div className="col gap-2">
+      <DomainRefusals domain={d} />
       <div className="row wrap gap-2 baseline">
         <InlineCode>{d.domain}</InlineCode>
         <Tag appearance="outline">{d.replay}</Tag>
@@ -607,20 +644,116 @@ export function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
           {d.first_seq}…{d.last_seq}
         </span>
         <span className="t-caption">
-          floor {d.trim_floor}
-          {d.trim_to !== d.trim_floor && <> · this tick concluded {d.trim_to}</>}
+          <FloorFact domain={d} />
         </span>
         <span className="t-caption t-num">
           <DomainSize domain={d} />
         </span>
-        {d.blocked_by ? (
-          <Tag variant="warning">{d.blocked_by}</Tag>
-        ) : (
-          <Tag variant="success">advancing</Tag>
-        )}
+        <TrimStatus domain={d} />
       </div>
-      <Terms terms={d.terms} snapshotBlocked={d.snapshot_blocked_by} />
+      <Terms terms={d.terms} snapshotBlocked={d.snapshot_blocked_by} empty={noConclusion(d)} />
     </div>
+  );
+}
+
+/**
+ * The trim's status as one tag — ONE rendering, for the card and the page.
+ *
+ * "ADVANCING" ONLY WHERE THE TRIM HAS CONCLUDED SOMETHING. A domain with no
+ * published floor at its own generation has no blocking term because it has
+ * no terms at all, and both screens drew that as a trim nothing is holding —
+ * right after every reanchor, which is when they are read.
+ */
+export function TrimStatus({ domain: d }: { domain: RetentionDomain }) {
+  switch (d.trim_floor_state) {
+    case "published":
+      return d.blocked_by ? (
+        <Tag variant="warning">{d.blocked_by}</Tag>
+      ) : (
+        <Tag variant="success">advancing</Tag>
+      );
+    case "unreadable":
+      return <Tag variant="warning">floor unreadable</Tag>;
+    default:
+      return <Tag variant="neutral">no conclusion yet</Tag>;
+  }
+}
+
+/**
+ * The floor and what this tick concluded, as one phrase.
+ *
+ * THE FLOOR IS THE FLEET'S PUBLISHED BOUND — everything below it may already be
+ * gone, and it never moves down within a generation — and THE CONCLUSION IS
+ * WHAT THIS TICK'S SIX TERMS PERMITTED, which is zero while the trim is blocked.
+ * They are equal on a healthy domain; a blocked one reads "blocked" rather than
+ * "concluded 0", which is the wire value and not a position. Neither is a
+ * number at all where nothing is published.
+ */
+export function FloorFact({ domain: d }: { domain: RetentionDomain }) {
+  switch (d.trim_floor_state) {
+    case "published":
+      return (
+        <>
+          floor <span className="t-num">{d.trim_floor}</span>
+          {d.blocked_by ? (
+            <span className="muted"> · blocked</span>
+          ) : (
+            d.trim_to !== d.trim_floor && (
+              <span className="muted">
+                {" "}
+                · this tick concluded <span className="t-num">{d.trim_to}</span>
+              </span>
+            )
+          )}
+        </>
+      );
+    case "unreadable":
+      return <>floor unreadable</>;
+    default:
+      return <>no floor yet</>;
+  }
+}
+
+/** The sentence a domain with no conclusion shows in place of its terms. */
+function noConclusion(d: RetentionDomain): string | undefined {
+  switch (d.trim_floor_state) {
+    case "published":
+      return undefined;
+    case "unreadable":
+      return `The trim floor register could not be read, so nothing is known here about the trim of generation ${d.generation}.`;
+    default:
+      return `The trim has concluded nothing about generation ${d.generation} yet — its first tick on this stream is pending.`;
+  }
+}
+
+/**
+ * The answering node's own refusals of a domain, above everything else about
+ * it: every figure beside them describes rows no read — or no write — of this
+ * domain is served from, and the guides send an operator here after a restore
+ * to find exactly this.
+ */
+export function DomainRefusals({ domain: d }: { domain: RetentionDomain }) {
+  return (
+    <>
+      {d.not_ready && (
+        <Callout variant="danger" role="alert">
+          <span>
+            <strong>Not ready on this node:</strong> <InlineCode>{d.not_ready.code}</InlineCode>
+            {(d.not_ready.causes?.length ?? 0) > 0 && (
+              <> ({d.not_ready.causes!.join(", ")})</>
+            )} — {d.not_ready.detail}
+          </span>
+        </Callout>
+      )}
+      {d.writes_refused && (
+        <Callout variant="warning" role="alert">
+          <span>
+            <strong>Writes refused on this node:</strong>{" "}
+            <InlineCode>{d.writes_refused.code}</InlineCode> — {d.writes_refused.detail}
+          </span>
+        </Callout>
+      )}
+    </>
   );
 }
 
@@ -657,9 +790,12 @@ export function DomainSize({ domain: d }: { domain: RetentionDomain }) {
 export function Terms({
   terms,
   snapshotBlocked,
+  empty,
 }: {
   terms: RetentionTerm[];
   snapshotBlocked?: string;
+  /** What stands in the table's place where there are no terms to draw. */
+  empty?: string;
 }) {
   return (
     <div className="col gap-2">
@@ -672,6 +808,7 @@ export function Terms({
           </span>
         </Callout>
       )}
+      {terms.length === 0 && empty && <p className="t-caption muted">{empty}</p>}
       <table className="table">
         <tbody>
           {terms.map((t) => (
