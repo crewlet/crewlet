@@ -1160,6 +1160,9 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		// And the nudge, so an operator's change lands on every node in
 		// milliseconds rather than at the next reconcile poll.
 		Queue: e.Backends().Queue,
+		// And this node's Tier A, which a document is judged against as
+		// the apply judges it — see configapi.Options.Bootstrap.
+		Bootstrap: boot,
 	})
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))

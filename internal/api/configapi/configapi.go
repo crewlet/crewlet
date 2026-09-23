@@ -72,6 +72,7 @@ type Service struct {
 	plane   coord.Plane
 	queue   queue.Publisher
 	cipher  secrets.Cipher
+	boot    *config.Bootstrap
 	now     func() time.Time
 }
 
@@ -90,6 +91,14 @@ type Options struct {
 	// Cipher opens and seals a stored revision. Nil reads plaintext and
 	// writes plaintext, which is the documented opt-out.
 	Cipher secrets.Cipher
+
+	// Bootstrap is this node's Tier A, which a company document is judged
+	// against as well as on its own ([config.CheckTiers]). Required: the
+	// apply refuses a document the deployment cannot run — native backends
+	// on an in-memory stream — so a write that skipped the check was
+	// accepted, activated, and then refused by every node, leaving the
+	// fleet on the old epoch and the operator with a 201.
+	Bootstrap *config.Bootstrap
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
 	// on every node in milliseconds instead of at the next reconcile poll.
@@ -116,6 +125,10 @@ func New(opts Options) (*Service, error) {
 	case opts.Plane == nil:
 		return nil, errors.New("configapi: Options.Plane is required: a revision " +
 			"takes effect only once the fleet's activation pointer names it")
+	case opts.Bootstrap == nil:
+		return nil, errors.New("configapi: Options.Bootstrap is required: a " +
+			"company document is valid only against the deployment it runs on, " +
+			"and every node's apply judges it against its own")
 	}
 	now := opts.Now
 	if now == nil {
@@ -123,7 +136,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
-		cipher: opts.Cipher, queue: opts.Queue, now: now,
+		cipher: opts.Cipher, queue: opts.Queue, boot: opts.Bootstrap, now: now,
 	}, nil
 }
 

@@ -641,6 +641,12 @@ document, and to the rules its question needs:
   admission rule is accepted, and each node logs `org_admission_warning` when it
   applies it. A revert to a revision sealed under a key this node does not hold
   answers `409 unreadable_revision`.
+- **Every one of them** is also judged against the answering node's own Tier A,
+  with the rule the apply runs: a document this deployment cannot run — the
+  engine's own tracker or knowledge base on an embedded stream that keeps its
+  streams in memory — answers `400 validation_error` naming
+  `stream.store_dir`, rather than being activated for every node to refuse a
+  moment later and leave the fleet on its old epoch.
 
 #### Fields a newer build wrote survive every write
 

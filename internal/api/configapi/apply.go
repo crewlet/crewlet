@@ -293,6 +293,13 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if invalid := d.rules(company); invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
 	}
+	// AND AGAINST THE DEPLOYMENT, with the rule the apply itself runs
+	// ([config.CheckTiers]): a document every node would refuse to apply is
+	// refused here, naming the Tier A field, rather than activated to be
+	// refused everywhere a moment later.
+	if invalid := config.CheckTiers(s.boot, company); invalid != nil {
+		return nil, &ValidationError{Err: invalid, Derived: derived}
+	}
 	p := &prepared{document: document, warnings: company.Warnings(), derived: derived}
 	if found {
 		p.base = active.ID
