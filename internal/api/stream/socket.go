@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -308,6 +310,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	// be served live for the rest of the interval. See [Service.Join].
 	svc.Join(client)
 	defer svc.Hub().Unregister(client)
+	seats := &watching{hub: svc.Hub(), client: client, chart: svc.chart}
 
 	var writer sync.WaitGroup
 	writer.Go(func() {
@@ -323,11 +326,11 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	var checking sync.WaitGroup
 	checking.Go(func() {
 		revalidate(ctx, conn, client, check, who, svc.revalidateEvery,
-			svc.now, svc.Snapshot)
+			svc.now, svc.Snapshot, seats.recheck)
 	})
 	defer checking.Wait()
 
-	code, reason := readLoop(ctx, conn, svc.Hub(), client, query, who, slots)
+	code, reason := readLoop(ctx, conn, seats, client, query, who, slots)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -390,7 +393,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // answered ON the socket and the socket stays open. See [CloseUnauthenticated]
 // and [FrameDegraded].
 func readLoop(ctx context.Context, conn *websocket.Conn,
-	hub *Hub, client *Client, query Query, who *asking,
+	seats *watching, client *Client, query Query, who *asking,
 	slots chan struct{},
 ) (websocket.StatusCode, string) {
 	// THE CONCURRENCY BOUND ARRIVES FROM THE SERVICE rather than being
@@ -424,7 +427,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// learns why its pushes stopped.
 			client.Reply(Envelope{Kind: KindPong})
 		case "watch":
-			if code, reason := watch(who.context(ctx), hub, client, req); code != 0 {
+			if code, reason := seats.watch(who.context(ctx), req); code != 0 {
 				return code, reason
 			}
 		case "query":
@@ -463,26 +466,58 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 	}
 }
 
-// watch makes this client a recipient for one seat, or reports the close code
-// that refuses it.
+// watching is one socket's subscription to a seat's frames, and the authority
+// that decides it.
 //
-// # A subscription is a WRITE, so it needs a credential
+// # A subscription is a WRITE, and it is a READ of somebody's inbox
 //
-// A watch is not a read: it installs a row in the hub's routing index, on this
-// node, on behalf of a caller, and it stays there until the socket goes away.
+// A watch installs a row in the hub's routing index, on this node, on behalf of
+// a caller, and it stays there until the socket goes away. What it buys is the
+// `inbox_changed` frames for that seat — which say whose inbox moved, when and
+// under which reason — so it is decided exactly as the `work_inbox` question
+// about that seat is: [authz.ActionPersonRead], which admits the seat's own
+// holder, whoever leads it through the chart, and the admin grant. Any
+// resolved caller could watch any seat before, which made the routing index a
+// way to follow somebody else's inbox that the question itself refused.
 //
-// THE CHECK IS KEPT THOUGH EVERY SOCKET IS NOW AUTHENTICATED, and it is not
-// belt-and-braces: [resolved] is what decides a socket's caller, it asks the
-// auth package's exemption list, and that list is somebody else's to change. A
-// watch reaching this function with nobody resolved would mean the socket
-// path had become exempt — and installing routing state for a caller
-// nobody can name is the one outcome that must not follow silently from that.
+// THREE ANSWERS, and none of them closes the socket:
 //
-// A close rather than an error frame, because a watch carries no correlation
-// id: the socket itself is the only channel the refusal has.
-func watch(ctx context.Context, hub *Hub, client *Client,
-	req request,
-) (websocket.StatusCode, string) {
+//   - ALLOWED: the watch is installed.
+//   - REFUSED: nothing is installed, the socket watches NOTHING, and a
+//     `unauthorized` error frame says so. Not a 4403 close, which is what the
+//     dashboard reads as "this browser may not have the live channel at all"
+//     — it stops reconnecting and says access was withdrawn — when all that
+//     was refused is one seat's frames on a socket that is otherwise fine.
+//   - UNDECIDABLE (the chart could not be read): nothing is installed either,
+//     and an `unavailable` error frame asks the client to try again. It is the
+//     only answer that is not a guess: installing would hand a seat's frames
+//     to somebody this node could not show was allowed them, and a refusal
+//     would tell a lead they lead nobody because this node is behind — the
+//     mistake authz's three-valued chart exists to make unrepresentable.
+//
+// WHY THE PREVIOUS WATCH IS DROPPED on a refused or undecidable one: a watch
+// is a screen saying where it now is ([Hub.Watch] keeps one seat per socket
+// for that reason), so the seat it asked to leave is not one it still wants.
+type watching struct {
+	hub    *Hub
+	client *Client
+	chart  authz.Chart
+}
+
+// watchWhat is what a watch refusal's error frame names in `what`, which is
+// how a client tells it from a query's.
+const watchWhat = "watch"
+
+// watch handles one `watch` frame, or reports the close code that refuses it.
+//
+// THE CREDENTIAL CHECK IS KEPT THOUGH EVERY SOCKET IS NOW AUTHENTICATED, and
+// it is not belt-and-braces: [resolved] is what decides a socket's caller, it
+// asks the auth package's exemption list, and that list is somebody else's to
+// change. A watch reaching here with nobody resolved would mean the socket path
+// had become exempt — and installing routing state for a caller nobody can name
+// is the one outcome that must not follow silently from that. That arm is a
+// close, because there is nobody left to answer.
+func (w *watching) watch(ctx context.Context, req request) (websocket.StatusCode, string) {
 	// WHO IS WATCHING IS THE GUARD'S ANSWER, read from the context rather
 	// than from an id passed alongside — this socket reached the handler
 	// past the guard, so a principal it could not resolve never gets here.
@@ -491,9 +526,69 @@ func watch(ctx context.Context, hub *Hub, client *Client,
 		return CloseUnauthenticated,
 			"watching a seat needs a credential this node can resolve"
 	}
-	hub.Watch(client, req.Seat)
-	log.DebugContext(ctx, "stream_watch", "login", principal.Login, "seat", req.Seat)
+	seat := strings.TrimSpace(req.Seat)
+	if seat == "" {
+		// CLEARING IS ALWAYS ALLOWED: it withdraws routing, and needs
+		// nobody's authority to stop receiving something.
+		w.hub.Watch(w.client, "")
+		return 0, ""
+	}
+	if code, ok := w.decide(ctx, principal, seat); !ok {
+		w.hub.Watch(w.client, "")
+		w.client.Reply(Envelope{Kind: KindError, ID: req.ID, What: watchWhat,
+			Error: code})
+		return 0, ""
+	}
+	w.hub.Watch(w.client, seat)
+	log.DebugContext(ctx, "stream_watch", "login", principal.Login, "seat", seat)
 	return 0, ""
+}
+
+// decide asks the table whether principal may watch seat, answering the error
+// code a refusal carries.
+func (w *watching) decide(ctx context.Context, principal iam.Principal,
+	seat string) (httpjson.Code, bool) {
+
+	d := authz.Decide(ctx, principal, authz.ActionPersonRead,
+		authz.Object{Kind: authz.KindPerson, Owner: seat}, w.chart)
+	switch {
+	case d.Unknown():
+		log.InfoContext(ctx, "stream_watch_undecidable", "login", principal.Login,
+			"seat", seat, "error", d.Err)
+		return CodeUnavailable, false
+	case !d.Allowed:
+		log.InfoContext(ctx, "stream_watch_refused", "login", principal.Login,
+			"seat", seat, "reason", string(d.Reason))
+		return CodeUnauthorized, false
+	}
+	return "", true
+}
+
+// recheck re-decides the seat this socket watches, as whoever the latest
+// revalidation resolved — the watch's own half of revalidate.go's argument: a
+// decision taken once and kept for the life of the socket would let a lead
+// moved off a team go on following a former report's inbox.
+//
+// A REFUSAL withdraws the watch and says so. AN UNDECIDABLE ANSWER KEEPS IT,
+// which is the opposite of what a new watch gets and deliberately so: nothing
+// has been learned against a decision this node already made, and a chart
+// blip that silently unsubscribed every lead's screen would be a notification
+// outage caused by the node being behind.
+func (w *watching) recheck(ctx context.Context) {
+	seat := w.client.Seat()
+	if seat == "" {
+		return
+	}
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved {
+		return
+	}
+	code, ok := w.decide(ctx, principal, seat)
+	if ok || code == CodeUnavailable {
+		return
+	}
+	w.hub.Watch(w.client, "")
+	w.client.Reply(Envelope{Kind: KindError, What: watchWhat, Error: code})
 }
 
 // runQuery answers one question onto the client's own queue.

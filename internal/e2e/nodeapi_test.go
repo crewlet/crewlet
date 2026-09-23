@@ -193,6 +193,7 @@ func wireAPI(
 		Bootstrap:    boot,
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
 		Runtime:      runtime,
+		Inbox:        e,
 		Chart:        chartSurface,
 		QueueBackend: backends.Queue.Backend(),
 		Sources: queries.Sources{

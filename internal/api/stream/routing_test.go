@@ -5,7 +5,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -165,9 +167,10 @@ func TestTheHubPostureReachesEveryClient(t *testing.T) {
 func TestEveryPushKindHasARoute(t *testing.T) {
 	t.Parallel()
 	kinds := declaredKinds(t)
-	// The kind this PR declares, named explicitly: it is the first
-	// seat-routed one and nothing publishes it yet, so a walk that
-	// silently stopped finding it would look exactly like a pass.
+	// The first seat-routed kind, named explicitly: a walk that silently
+	// stopped finding it would look exactly like a pass — and it is the
+	// one kind whose route decides WHO receives it rather than whether
+	// anybody does.
 	if !slicesContains(kinds, stream.KindInboxChanged) {
 		t.Fatalf("the walk found %v and not %q, so it is not reading the "+
 			"frozen list", kinds, stream.KindInboxChanged)
@@ -187,35 +190,69 @@ func TestEveryPushKindHasARoute(t *testing.T) {
 	}
 }
 
-// withoutARoute is the kinds with no entry on the route table.
-func withoutARoute(kinds []string) []string {
-	var out []string
-	for _, kind := range kinds {
-		if !stream.RouteOf(kind).Valid() {
-			out = append(out, kind)
+// EVERY SEAT-ROUTED KIND HAS A PRODUCER.
+//
+// A seat-routed kind is a promise to a screen — "you will be told when this
+// seat's inbox moves" — and a promise with a route and an index and nothing
+// that ever builds the frame is a screen waiting on a push that cannot come,
+// indistinguishable from a quiet company. `inbox_changed` shipped in exactly
+// that state, declared and routed with its publisher to follow. So the walk
+// reads this package's own source for a PushSeat call naming each such kind,
+// which is the one constructor a seat-routed frame can be built with.
+func TestEverySeatRoutedKindHasAProducer(t *testing.T) {
+	t.Parallel()
+	consts := declaredKindConsts(t)
+	produced := seatProducers(t)
+	for name, kind := range consts {
+		if stream.RouteOf(kind) != stream.RouteSeat {
+			continue
 		}
+		if !produced[name] {
+			t.Errorf("%s (%q) is routed by seat and nothing in this package "+
+				"builds one with PushSeat: a screen watching for it waits on a "+
+				"push that cannot come", name, kind)
+		}
+	}
+	// THE CONTROL: the walk is worth having only if it can find a producer,
+	// and only if an unproduced name would fail it.
+	if !produced["KindInboxChanged"] {
+		t.Fatalf("the walk found producers for %v and not KindInboxChanged, so "+
+			"it is not reading Service.InboxChanged", produced)
+	}
+	if produced["KindFromTheFuture"] {
+		t.Error("the walk reports a producer for a kind nothing declares")
+	}
+}
+
+// seatProducers is every Kind… constant this package's non-test source passes
+// as the first argument of PushSeat.
+func seatProducers(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, file := range parsedSource(t) {
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			if fn, ok := call.Fun.(*ast.Ident); !ok || fn.Name != "PushSeat" {
+				return true
+			}
+			if kind, ok := call.Args[0].(*ast.Ident); ok {
+				out[kind.Name] = true
+			}
+			return true
+		})
 	}
 	return out
 }
 
-// declaredKinds is every string constant named Kind… in this package's source.
-func declaredKinds(t *testing.T) []string {
+// declaredKindConsts is every Kind… string constant in this package's source,
+// by name.
+func declaredKindConsts(t *testing.T) map[string]string {
 	t.Helper()
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read the package directory: %v", err)
-	}
-	fset := token.NewFileSet()
-	var kinds []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
+	out := map[string]string{}
+	for _, file := range parsedSource(t) {
 		for _, decl := range file.Decls {
 			gen, ok := decl.(*ast.GenDecl)
 			if !ok || gen.Tok != token.CONST {
@@ -238,11 +275,52 @@ func declaredKinds(t *testing.T) []string {
 					if err != nil {
 						t.Fatalf("%s: %v", ident.Name, err)
 					}
-					kinds = append(kinds, kind)
+					out[ident.Name] = kind
 				}
 			}
 		}
 	}
+	return out
+}
+
+// parsedSource is this package's non-test files, parsed.
+func parsedSource(t *testing.T) []*ast.File {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the package directory: %v", err)
+	}
+	fset := token.NewFileSet()
+	var out []*ast.File
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		out = append(out, file)
+	}
+	return out
+}
+
+// withoutARoute is the kinds with no entry on the route table.
+func withoutARoute(kinds []string) []string {
+	var out []string
+	for _, kind := range kinds {
+		if !stream.RouteOf(kind).Valid() {
+			out = append(out, kind)
+		}
+	}
+	return out
+}
+
+// declaredKinds is every string constant named Kind… in this package's source.
+func declaredKinds(t *testing.T) []string {
+	t.Helper()
+	kinds := slices.Sorted(maps.Values(declaredKindConsts(t)))
 	if len(kinds) == 0 {
 		t.Fatal("no Kind constant found in this package, so this test could not fail")
 	}

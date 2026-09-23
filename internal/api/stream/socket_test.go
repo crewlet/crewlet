@@ -514,7 +514,12 @@ func TestTheSocketsCallerReachesTheQuery(t *testing.T) {
 // and that case cannot be reached from here.
 func TestAWatchNeedsAnOperator(t *testing.T) {
 	t.Parallel()
-	f := newSocket(t, nil, nil)
+	// THE ADMIN GRANT, so the counterfactual below is about the credential
+	// and not about whose seat "lead" is — which is watch_test.go's.
+	f := newSocket(t, func(a *config.APIAuth) {
+		a.Tokens = []config.APIToken{{ID: "founder", Token: fixtureToken,
+			Grants: []iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}}}
+	}, nil)
 
 	if conn, _, err := f.dialAnonymous(t); err == nil {
 		_ = conn.Close(websocket.StatusNormalClosure, "")

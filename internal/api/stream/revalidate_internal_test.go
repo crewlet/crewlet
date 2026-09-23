@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -213,6 +214,15 @@ func openRevalidatedAs(t *testing.T, opened iam.Principal,
 	answer func(*http.Request) (*http.Request, *auth.Refusal), query Query) *revalidated {
 
 	t.Helper()
+	return openRevalidatedOver(t, opened, answer, query, authz.NoChart{})
+}
+
+// openRevalidatedOver is openRevalidatedAs deciding every watch through chart.
+func openRevalidatedOver(t *testing.T, opened iam.Principal,
+	answer func(*http.Request) (*http.Request, *auth.Refusal), query Query,
+	chart authz.Chart) *revalidated {
+
+	t.Helper()
 	svc, err := NewService(livestate.New(), Options{
 		Health:          func() Health { return Health{Status: "ok"} },
 		Posture:         func(Health) FramePosture { return FrameLive },
@@ -221,6 +231,7 @@ func openRevalidatedAs(t *testing.T, opened iam.Principal,
 		Org:             func() any { return map[string]any{} },
 		Tools:           func() []map[string]any { return nil },
 		Schedules:       func() any { return []any{} },
+		Chart:           chart,
 		RevalidateEvery: testInterval,
 	})
 	if err != nil {

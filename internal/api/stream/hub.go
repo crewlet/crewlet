@@ -80,15 +80,14 @@ const (
 	// KindInboxChanged says one seat's inbox moved, and it is the first
 	// kind routed to an AUDIENCE rather than to everyone: it carries the
 	// seat in [Envelope.Seat] and reaches only the clients that asked to
-	// watch that seat (see [Hub.Watch]).
+	// watch that seat (see [Hub.Watch]) and were allowed to (see
+	// [watching]).
 	//
-	// NOTHING PUBLISHES IT YET. It is a declared contract, not a kind
-	// somebody forgot to wire: the seat routing, the index behind it and
-	// the `watch` request frame that fills the index all ship here, and
-	// the change that derives an inbox movement from the durable record
-	// and publishes it lands separately. Until then the route exists, the
-	// index exists, and no frame of this kind is ever built — which is why
-	// a grep for a publisher comes up empty and must.
+	// IT IS HOW A PERSON LEARNS THEY HAVE WORK. The tracker's applier, on
+	// every node, says whose inbox each committed batch moved, and each
+	// node pushes that to its OWN sockets through [Service.InboxChanged] —
+	// every node applies every record, so no node forwards to another. The
+	// payload is an [InboxChange]: identifiers and a count, never content.
 	KindInboxChanged = "inbox_changed"
 
 	// KindIdentity tells ONE client whether this node could verify the

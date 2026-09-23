@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -95,6 +96,9 @@ type Service struct {
 	now      func() time.Time
 	interval time.Duration
 
+	// chart decides a `watch` frame. See [Options.Chart].
+	chart authz.Chart
+
 	// revalidateEvery is how often an open socket's credential is checked
 	// again. See [Options.RevalidateEvery].
 	revalidateEvery time.Duration
@@ -114,11 +118,12 @@ type HandleFunc func() map[string]string
 
 // Options configure a service.
 //
-// Health, Handles, Roster, Org, Tools and Schedules are REQUIRED, and
-// [NewService] refuses a missing one by name. Each is something the engine
-// beside the API always answers, so a missing one is a wiring mistake, and
-// serving around it would push a confident answer where there is none: a
-// health frame reading "ok", an empty catalogue, an organization with no seats.
+// Health, Posture, Handles, Roster, Org, Tools, Schedules and Chart are
+// REQUIRED, and [NewService] refuses a missing one by name. Each is something
+// the engine beside the API always answers, so a missing one is a wiring
+// mistake, and serving around it would push a confident answer where there is
+// none: a health frame reading "ok", an empty catalogue, an organization with
+// no seats, a lead told they may not watch their own report.
 type Options struct {
 	Health HealthFunc
 
@@ -172,6 +177,14 @@ type Options struct {
 	// Injectable for HealthInterval's reason: a revocation case that had
 	// to wait out a minute per assertion would be a case nobody runs.
 	RevalidateEvery time.Duration
+
+	// Chart answers who leads whom, which is what a `watch` frame is
+	// decided by — see [watching]. REQUIRED: a watch installs routing for
+	// a seat's inbox, and the question it asks is the one the `work_inbox`
+	// query asks of the same seat, through the same seam. A service built
+	// without one would answer every lead's watch of a report as
+	// "undecidable" for the life of the process.
+	Chart authz.Chart
 }
 
 // NewService builds the fan-out over a projection, or refuses a missing
@@ -189,6 +202,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		{"Org", opts.Org == nil},
 		{"Tools", opts.Tools == nil},
 		{"Schedules", opts.Schedules == nil},
+		{"Chart", opts.Chart == nil},
 	} {
 		if field.absent {
 			missing = append(missing, "Options."+field.name)
@@ -210,6 +224,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		org:       opts.Org,
 		tools:     opts.Tools,
 		schedules: opts.Schedules,
+		chart:     opts.Chart,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
 
@@ -393,6 +408,37 @@ func (s *Service) currentTools() []map[string]any { return s.tools() }
 // own data — the roster, the org tree, the tool catalogue, the schedules.
 func (s *Service) Broadcast(kind string, data any) {
 	s.hub.Broadcast(Push(kind, data, s.now()))
+}
+
+// InboxChange is the payload of an `inbox_changed` frame: whose inbox moved,
+// by how many notices, and the subject and reason of the newest.
+//
+// IDENTIFIERS AND A COUNT, NEVER CONTENT. The frame reaches whoever watches
+// the seat, and what it is for is telling that screen to re-read the inbox
+// through the `work_inbox` question — the same question, decided by the same
+// authority, as the poll it makes immediate. An excerpt here would be the
+// inbox's content read around that authority. The count is a HINT: the rows
+// are the truth, and a screen re-reads them rather than adding these up.
+type InboxChange struct {
+	Handle      string `json:"handle"`
+	UnreadDelta int    `json:"unread_delta"`
+	Subject     string `json:"subject"`
+	Reason      string `json:"reason"`
+}
+
+// InboxChanged pushes one seat's inbox movement to the clients watching that
+// seat and to nobody else — see [KindInboxChanged].
+//
+// NEVER BLOCKS, for [Hub.Broadcast]'s reason, and its caller is why that
+// matters: this is called from the tracker applier's post-commit half, on the
+// apply loop's own goroutine, with the next batch waiting behind it.
+func (s *Service) InboxChanged(change InboxChange) {
+	if change.Handle == "" {
+		// NO SEAT, NO AUDIENCE: a seat-routed frame with no address is
+		// refused by the hub, loudly. A movement for nobody is not one.
+		return
+	}
+	s.hub.Broadcast(PushSeat(KindInboxChanged, change.Handle, change, s.now()))
 }
 
 func (s *Service) currentHealth() Health { return s.health() }

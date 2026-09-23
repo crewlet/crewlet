@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -48,6 +49,11 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 	if opts.Schedules == nil {
 		opts.Schedules = func() any { return []any{} }
 	}
+	if opts.Chart == nil {
+		// NO CHART, which every lead relation reads as UNKNOWN: a case
+		// about who may watch whom names the chart it means.
+		opts.Chart = authz.NoChart{}
+	}
 	s, err := stream.NewService(livestate.New(), opts)
 	if err != nil {
 		t.Fatalf("stream.NewService: %v", err)
@@ -69,7 +75,7 @@ func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 		t.Fatal("a service with no surface functions was built")
 	}
 	for _, field := range []string{
-		"Health", "Posture", "Handles", "Roster", "Org", "Tools", "Schedules",
+		"Health", "Posture", "Handles", "Roster", "Org", "Tools", "Schedules", "Chart",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

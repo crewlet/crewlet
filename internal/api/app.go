@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -255,6 +256,16 @@ type Options struct {
 	// Runtime is the engine this process runs beside.
 	Runtime NodeRuntime
 
+	// Inbox is where this node hears whose inbox a committed tracker
+	// batch moved, which [New] turns into `inbox_changed` frames for the
+	// sockets watching each seat — see [InboxFeed].
+	//
+	// REQUIRED, like Runtime: every node that serves the API applies the
+	// tracker's log, so a node that heard nothing would be a wiring
+	// mistake rather than a narrower node, and the dashboard would go back
+	// to learning about somebody's work a poll interval late.
+	Inbox InboxFeed
+
 	// State is the projection to serve. Nil builds an empty one.
 	State *livestate.LiveState
 
@@ -482,12 +493,18 @@ func New(opts Options) (*App, error) {
 		// itself through the `schedules` question.
 		Schedules: func() any { return opts.Sources.ConfiguredSchedules() },
 
+		// WHO LEADS WHOM, which a `watch` frame is decided by — the SAME
+		// seam the `work_inbox` question about the same seat asks.
+		Chart: opts.Sources.Chart,
+
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
 	}
+	// AND WHOSE INBOX MOVED, pushed to the sockets watching each seat.
+	opts.Inbox.SetOnInboxMoved(a.pushInboxMoved)
 
 	tree := opts.Assets
 	if tree == nil {
@@ -654,6 +671,7 @@ func (o Options) missing() error {
 		absent bool
 	}{
 		{"Runtime", o.Runtime == nil},
+		{"Inbox", o.Inbox == nil},
 		{"Sources.Company", o.Sources.Company == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
@@ -741,6 +759,30 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sour
 
 // ServeHTTP makes the app the process's handler.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.ServeHTTP(w, r) }
+
+// InboxFeed is where this node hears whose inbox moved: the engine, whose
+// tracker applier says so after every committed batch.
+//
+// CONSUMER-DEFINED and one method wide. The engine satisfies it with
+// [engine.Engine.SetOnInboxMoved]; a test hands in a feed it fires by hand.
+type InboxFeed interface {
+	SetOnInboxMoved(func([]tracker.InboxMovement))
+}
+
+// pushInboxMoved turns one committed batch's inbox movements into
+// `inbox_changed` frames, each reaching only the sockets watching that seat.
+//
+// NO FORWARDING BETWEEN NODES, and none is missing: every node applies every
+// tracker record, so every node hears every movement from its own applier and
+// pushes to the sockets it holds.
+func (a *App) pushInboxMoved(moved []tracker.InboxMovement) {
+	for _, m := range moved {
+		a.stream.InboxChanged(stream.InboxChange{
+			Handle: m.Handle, UnreadDelta: m.UnreadDelta,
+			Subject: m.Subject, Reason: string(m.Reason),
+		})
+	}
+}
 
 // Stream exposes the live channel, for the engine to feed.
 func (a *App) Stream() *stream.Service { return a.stream }

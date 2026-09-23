@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -92,6 +93,7 @@ func TestTheSnapshotCarriesOnlyWhatItsAudienceMayRead(t *testing.T) {
 		Org:       func() any { return map[string]any{} },
 		Tools:     func() []map[string]any { return nil },
 		Schedules: func() any { return []any{} },
+		Chart:     authz.NoChart{},
 	})
 	if err != nil {
 		t.Fatal(err)

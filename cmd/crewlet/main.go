@@ -1702,6 +1702,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// bind of a development build.
 		DevPrincipal: dev,
 		Runtime:      runtime,
+		// WHOSE INBOX MOVED, from this engine's own tracker applier —
+		// how a person at the dashboard learns they have work.
+		Inbox: e,
 		// THE ENGINE'S OWN RECEIVER, not a second one built here. The API
 		// verifies tokens this process's engine minted, and two receivers
 		// would sign with two per-process keys unless a keyring happened

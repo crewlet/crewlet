@@ -148,7 +148,7 @@ func (a *asking) context(ctx context.Context) context.Context {
 // the old grant rather than keep it until a reload.
 func revalidate(ctx context.Context, conn *websocket.Conn, client *Client,
 	check checkFunc, who *asking, every time.Duration, now func() time.Time,
-	resync func(Audience) map[string]any) {
+	resync func(Audience) map[string]any, rewatch func(context.Context)) {
 
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
@@ -197,6 +197,12 @@ func revalidate(ctx context.Context, conn *websocket.Conn, client *Client,
 			return
 		default:
 			who.set(principal)
+			// AND THE SEAT IT WATCHES, as whoever this check resolved:
+			// a lead moved off a team stops following a former
+			// report's inbox here rather than at the next reconnect.
+			if rewatch != nil {
+				rewatch(who.context(ctx))
+			}
 			audience := AudienceOf(principal.Grants)
 			changed := client.SetAudience(audience)
 			if client.ReleaseIdentity() {

@@ -150,7 +150,11 @@ func register() []registration {
 		{
 			Domain: tracker.Domain{},
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
-				return tracker.NewApplier(s.nodeID, nil), nil
+				// THE INBOX LISTENER, which is how a person learns they
+				// have work: the apply is the one thing that sees every
+				// notice on every node, and each node tells its own
+				// sockets. See internal/tracker/inboxmove.go.
+				return tracker.NewApplier(s.nodeID, s.inboxMoved), nil
 			},
 			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
 				rows, err := tracker.NewRows(s.db)

@@ -44,6 +44,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // Engine is one process running a company.
@@ -148,6 +149,10 @@ type Engine struct {
 	// the surfaces derived from the company itself. Nil runs nothing — see
 	// [Engine.SetOnCompanyPublished].
 	onPublished atomic.Pointer[func(context.Context)]
+
+	// onInbox is told whose inbox each committed tracker batch moved on
+	// this node. Nil tells nobody — see [Engine.SetOnInboxMoved].
+	onInbox atomic.Pointer[func([]tracker.InboxMovement)]
 
 	// ownsBackends says whether Stop closes them. Ownership is a separate
 	// fact from use: a borrowed Backends is still the one this engine

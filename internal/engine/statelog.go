@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -241,14 +242,17 @@ type stateLog struct {
 	// not authenticate. Nil reports nothing beyond the log and the metric.
 	witness statelog.Witness
 
-	// skills is this build's tool-skill parser and nudge, threaded down
-	// because the PAGES APPLIER is what notices a skill page arriving or
-	// leaving: natively there is no page webhook and the change feed
-	// deliberately drops those changes, so the apply is the only thing
-	// that sees both halves. Nil answers "not a skill" and nudges nobody,
-	// which is a build with no skill parser wired.
-	skills      pages.SkillDetector
-	nudgeSkills func()
+	// skills is this build's tool-skill parser, threaded down because the
+	// PAGES APPLIER is what notices a skill page arriving or leaving:
+	// natively there is no page webhook and the change feed deliberately
+	// drops those changes, so the apply is the only thing that sees both
+	// halves. Nil answers "not a skill", which is a build with no skill
+	// parser wired.
+	skills pages.SkillDetector
+
+	// applyHooks is what each domain's applier calls after a committed
+	// batch — see [applyHooks].
+	applyHooks
 
 	// shredder destroys a removed person's data encryption key, which is
 	// what the IDENTITY APPLIER does to a person after the rows that
@@ -264,30 +268,6 @@ type stateLog struct {
 	// state rather than a wiring mistake: a node with no keyring deletes
 	// the rows and the key is a peer's to destroy.
 	shredder iamdomain.Shredder
-
-	// nudgeChart is what the CHART APPLIER calls after a committed batch,
-	// threaded down for the same reason nudgeSkills is: the apply is the
-	// only thing that sees every change on EVERY node, and the company
-	// view is derived from those rows.
-	//
-	// The change feed is deliberately not what notices. It relays a record
-	// to ONE node, so every other node's view would go on serving a chart
-	// it had already applied and could not see it had.
-	//
-	// IT MUST NOT BLOCK. This runs on the apply loop's own goroutine with
-	// the next batch waiting behind it, and the derivation reads the
-	// estate — so what it does is signal, and the rebuild happens
-	// elsewhere. Nil answers "nobody is listening", which is a build with
-	// no engine behind the log.
-	nudgeChart func()
-
-	// nudgeDirectory is what the IDENTITY APPLIER calls after a committed
-	// batch that moved a seat's standing — a suspension, a bind, an
-	// unbind, a removal — threaded down for nudgeChart's reason: the apply
-	// is the only thing that sees it on every node, and a suspension
-	// moves nothing a published company would ever carry. It must not
-	// block either. See internal/engine/directory.go.
-	nudgeDirectory func()
 
 	// ceilings is the byte ceiling each domain's stream is CREATED with,
 	// sized from Tier A inside the broker's budget ([ceilingsFor]). It is
@@ -349,6 +329,67 @@ type stateLog struct {
 	rejoining   bool
 	rejoinAfter time.Time
 	rejoinPause time.Duration
+}
+
+// applyHooks are what each domain's applier calls after a committed batch,
+// built ONCE by [Engine.applyHooks] rather than field by field where the log
+// is assembled.
+//
+// ONE CONSTRUCTOR, because each hook is a line nothing else would miss: a
+// domain whose applier is handed nil compiles, runs and passes every case in
+// its own package, and the consequence — a skill page nobody re-reads, a chart
+// nobody rebuilds, a suspension that reaches no contact map, a person's screen
+// a poll interval behind their work — shows up nowhere near the line that
+// dropped it. The directory and inbox cases in this package build their
+// appliers from the register with the same value a running node does, so
+// dropping either of those hooks here fails a case there.
+type applyHooks struct {
+	// nudgeSkills is what the PAGES APPLIER calls after a committed batch
+	// that moved a tool-skill page, for the reason [stateLog.skills] is
+	// threaded down: the apply is the only thing that sees both an
+	// arrival and a departure. Nil nudges nobody.
+	nudgeSkills func()
+
+	// nudgeChart is what the CHART APPLIER calls after a committed batch,
+	// threaded down for the same reason nudgeSkills is: the apply is the
+	// only thing that sees every change on EVERY node, and the company
+	// view is derived from those rows.
+	//
+	// The change feed is deliberately not what notices. It relays a record
+	// to ONE node, so every other node's view would go on serving a chart
+	// it had already applied and could not see it had.
+	//
+	// IT MUST NOT BLOCK. This runs on the apply loop's own goroutine with
+	// the next batch waiting behind it, and the derivation reads the
+	// estate — so what it does is signal, and the rebuild happens
+	// elsewhere. Nil answers "nobody is listening", which is a build with
+	// no engine behind the log.
+	nudgeChart func()
+
+	// nudgeDirectory is what the IDENTITY APPLIER calls after a committed
+	// batch that moved a seat's standing — a suspension, a bind, an
+	// unbind, a removal — threaded down for nudgeChart's reason: the apply
+	// is the only thing that sees it on every node, and a suspension
+	// moves nothing a published company would ever carry. It must not
+	// block either. See internal/engine/directory.go.
+	nudgeDirectory func()
+
+	// inboxMoved is what the TRACKER APPLIER calls after a committed
+	// batch that wrote somebody a notice — see [Engine.SetOnInboxMoved].
+	// Threaded down for nudgeChart's reason: every node applies every
+	// record, so every node tells its own sockets, and the apply is the
+	// only thing that sees it on each. It must not block.
+	inboxMoved func([]tracker.InboxMovement)
+}
+
+// applyHooks is every post-commit hook this engine hands its appliers.
+func (e *Engine) applyHooks() applyHooks {
+	return applyHooks{
+		nudgeSkills:    e.nudgeSkills,
+		nudgeChart:     e.nudgeChart,
+		nudgeDirectory: e.nudgeDirectory,
+		inboxMoved:     e.inboxMoved,
+	}
 }
 
 // RejoinRetryCeiling bounds how long a node below the floor waits between
@@ -504,8 +545,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
 		witness: e.stateLogWitness(),
-		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
-		nudgeChart: e.nudgeChart, nudgeDirectory: e.nudgeDirectory,
+		skills:  skillDetector{}, applyHooks: e.applyHooks(),
 		shredder: e.personKeys(),
 		ceilings: ceilings, volume: streamVolume(boot),
 		run: runCtx, stop: cancel,

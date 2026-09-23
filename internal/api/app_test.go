@@ -195,6 +195,9 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.AuthEvents == nil {
 		opts.AuthEvents = silentAudit{}
 	}
+	if opts.Inbox == nil {
+		opts.Inbox = &fakeInbox{}
+	}
 	return opts
 }
 
@@ -226,7 +229,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID", "Sources.Chart",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Budgets", "Retention", "Capacity", "Backup",
-		"AuthEvents",
+		"AuthEvents", "Inbox",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

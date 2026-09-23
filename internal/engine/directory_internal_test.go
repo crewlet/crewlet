@@ -346,7 +346,7 @@ func newDirectoryRig(t *testing.T) *directoryRig {
 		t.Fatal("the register has no identity domain")
 	}
 	applier, err := entry.NewApplier(&stateLog{
-		nodeID: "node-a", nudgeDirectory: e.nudgeDirectory,
+		nodeID: "node-a", applyHooks: e.applyHooks(),
 	})
 	if err != nil {
 		t.Fatalf("build the applier: %v", err)
