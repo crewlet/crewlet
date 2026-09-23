@@ -964,6 +964,13 @@ type SecretRecord struct {
 	UpdatedAt time.Time
 	UpdatedBy string
 	Source    string
+
+	// Version is the store's own revision of the row, set on every read
+	// and ignored on every write: what [Secrets.UpdateSecret] and
+	// [Secrets.DeleteSecretAt] are conditioned on. Store-wide rather than
+	// per row, as a KV revision is, so a row deleted and written again
+	// never hands back a version an older incarnation of it already used.
+	Version uint64
 }
 
 // Secrets is the fleet's encrypted credential store.
@@ -1016,6 +1023,31 @@ type Secrets interface {
 
 	// DeleteSecret removes a value, reporting whether it was there.
 	DeleteSecret(ctx context.Context, name string) (bool, error)
+
+	// CreateSecret writes a sealed value only where no value is stored
+	// under its name, reporting whether it wrote. False is somebody else's
+	// row, not a failure.
+	//
+	// THE ENGINE'S OWN KEY MATERIAL NEEDS THE SANDBOX RUNS' DISCIPLINE, and
+	// last-write-wins is exactly wrong for it: a person's data key that two
+	// writers minted at once is one whose loser's values were sealed under
+	// a key the store no longer holds, and a key re-written after a removal
+	// destroyed it is a removal undone. So beside the operator's plain put,
+	// the three conditional writes a key's lifecycle needs.
+	CreateSecret(ctx context.Context, rec SecretRecord) (bool, error)
+
+	// UpdateSecret replaces a sealed value only while the row is still at
+	// version, reporting whether it wrote. False is a LOST RACE — the row
+	// moved or went away since the caller read it — and the caller
+	// re-reads and re-decides rather than writing over what it never saw.
+	UpdateSecret(ctx context.Context, rec SecretRecord, version uint64) (bool, error)
+
+	// DeleteSecretAt removes a value only while the row is still at
+	// version, reporting whether it removed it. False is a row somebody
+	// wrote after the caller judged it, or one already gone. A version of
+	// zero names no row and removes nothing: a caller that never read one
+	// has not judged anything.
+	DeleteSecretAt(ctx context.Context, name string, version uint64) (bool, error)
 }
 
 // Integrations is the fleet's record of where each external surface got to.

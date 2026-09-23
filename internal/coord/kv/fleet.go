@@ -1933,6 +1933,7 @@ func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecor
 		return coord.SecretRecord{}, false, fmt.Errorf(
 			"coord/kv: the stored secret %q is not decodable", name)
 	}
+	rec.Version = entry.Revision()
 	return rec, true, nil
 }
 
@@ -1950,6 +1951,7 @@ func (f *FleetStore) SecretValues(ctx context.Context) ([]coord.SecretRecord, er
 		if !ok {
 			return fmt.Errorf("coord/kv: a stored secret is not decodable")
 		}
+		rec.Version = kve.Revision()
 		out = append(out, rec)
 		return nil
 	})
@@ -1965,26 +1967,114 @@ func (f *FleetStore) SecretValues(ctx context.Context) ([]coord.SecretRecord, er
 // A PLAIN PUT, not a compare-and-swap: see [coord.Secrets] for why rotation
 // wants last-write-wins rather than a lost race one operator has to retry.
 func (f *FleetStore) PutSecret(ctx context.Context, rec coord.SecretRecord) error {
+	raw, err := encodeSecret(rec)
+	if err != nil {
+		return err
+	}
+	if _, err := f.secrets.Put(ctx, encodeKey(rec.Name), raw); err != nil {
+		return unavailable("write the secret", err)
+	}
+	return nil
+}
+
+// encodeSecret refuses a row no store should hold and renders the rest.
+//
+// ONE CHECK FOR EVERY WRITE, conditional or not: an empty envelope is a caller
+// that forgot to seal, and it is no more storable because the write was
+// conditioned on a version.
+func encodeSecret(rec coord.SecretRecord) ([]byte, error) {
 	switch {
 	case rec.Name == "":
-		return errors.New("coord/kv: a secret needs a name")
+		return nil, errors.New("coord/kv: a secret needs a name")
 	case rec.Value == "":
 		// An empty envelope is not an empty secret — it is a caller that
 		// forgot to seal. Storing it would resolve as an empty ${VAR} on
 		// every node, which is the failure this bucket exists to prevent.
-		return fmt.Errorf("coord/kv: secret %q has no sealed value", rec.Name)
+		return nil, fmt.Errorf("coord/kv: secret %q has no sealed value", rec.Name)
 	}
 	raw, err := json.Marshal(secretRecord{
 		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
 		UpdatedAt: rec.UpdatedAt.UTC(), UpdatedBy: rec.UpdatedBy, Source: rec.Source,
 	})
 	if err != nil {
-		return fmt.Errorf("coord/kv: encode the secret: %w", err)
+		return nil, fmt.Errorf("coord/kv: encode the secret: %w", err)
 	}
-	if _, err := f.secrets.Put(ctx, encodeKey(rec.Name), raw); err != nil {
-		return unavailable("write the secret", err)
+	return raw, nil
+}
+
+// CreateSecret writes a sealed value only where none is stored.
+//
+// A PURGED ROW IS ABSENT, which the client's Create already reads correctly: it
+// re-publishes at the purge marker's revision rather than refusing a key whose
+// only history is a delete. What it does not map is that re-publish LOSING — a
+// second creator landing between the two — which answers a bare
+// wrong-last-sequence, so that is read as the row somebody else created too.
+func (f *FleetStore) CreateSecret(ctx context.Context, rec coord.SecretRecord) (bool, error) {
+	raw, err := encodeSecret(rec)
+	if err != nil {
+		return false, err
 	}
-	return nil
+	_, err = f.secrets.Create(ctx, encodeKey(rec.Name), raw)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyExists), isWrongLastSequence(err):
+		return false, nil
+	default:
+		return false, unavailable("create the secret", err)
+	}
+}
+
+// UpdateSecret replaces a sealed value only while it is still at version.
+//
+// A ZERO VERSION NAMES NO ROW and writes nothing, for [FleetStore.DeleteSecretAt]'s
+// reason — and here it would be worse than a no-op: the client reads an
+// expected revision of zero as "this key has never been written", which is a
+// create wearing an update's name, and the one row it could resurrect is one a
+// removal destroyed.
+func (f *FleetStore) UpdateSecret(ctx context.Context, rec coord.SecretRecord, version uint64) (bool, error) {
+	raw, err := encodeSecret(rec)
+	if err != nil {
+		return false, err
+	}
+	if version == 0 {
+		return false, nil
+	}
+	_, err = f.secrets.Update(ctx, encodeKey(rec.Name), raw, version)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyExists),
+		isWrongLastSequence(err):
+		return false, nil
+	default:
+		return false, unavailable("update the secret", err)
+	}
+}
+
+// DeleteSecretAt removes a value only while it is still at version.
+//
+// PURGED, like [FleetStore.DeleteSecret], and conditioned the way
+// [FleetStore.DeleteSandboxRun] is: the client drops a LastRevision of zero and
+// purges unconditionally, so a zero version is refused here rather than handed
+// over as a delete of whatever is there.
+func (f *FleetStore) DeleteSecretAt(ctx context.Context, name string, version uint64) (bool, error) {
+	if name == "" {
+		return false, errors.New("coord/kv: a secret needs a name")
+	}
+	if version == 0 {
+		return false, nil
+	}
+	err := f.secrets.Purge(ctx, encodeKey(name), jetstream.LastRevision(version))
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyNotFound),
+		isWrongLastSequence(err):
+		return false, nil
+	default:
+		return false, unavailable("delete the secret", err)
+	}
 }
 
 // DeleteSecret removes a value, reporting whether it was there.

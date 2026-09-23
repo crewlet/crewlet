@@ -829,17 +829,82 @@ func (f *Fleet) SecretValues(_ context.Context) ([]coord.SecretRecord, error) {
 
 // PutSecret writes a sealed value, replacing any prior one.
 func (f *Fleet) PutSecret(_ context.Context, rec coord.SecretRecord) error {
+	if err := checkSecret(rec); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.storeSecret(rec)
+	return nil
+}
+
+// checkSecret refuses a row no store should hold, for every write alike.
+func checkSecret(rec coord.SecretRecord) error {
 	switch {
 	case rec.Name == "":
 		return errors.New("coord/memory: a secret needs a name")
 	case rec.Value == "":
 		return fmt.Errorf("coord/memory: secret %q has no sealed value", rec.Name)
 	}
+	return nil
+}
+
+// storeSecret writes one row at the next store-wide version. The caller holds
+// the lock.
+//
+// THE VERSION IS THE STORE'S, never the caller's: a write ignores whatever
+// version the record it was handed carries, exactly as the KV assigns its own
+// revision, so a caller replaying a record it read cannot hand an old version
+// back to the store.
+func (f *Fleet) storeSecret(rec coord.SecretRecord) {
+	f.version++
+	rec.UpdatedAt = rec.UpdatedAt.UTC()
+	rec.Version = f.version
+	f.secrets[rec.Name] = rec
+}
+
+// CreateSecret writes a sealed value only where none is stored.
+func (f *Fleet) CreateSecret(_ context.Context, rec coord.SecretRecord) (bool, error) {
+	if err := checkSecret(rec); err != nil {
+		return false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	rec.UpdatedAt = rec.UpdatedAt.UTC()
-	f.secrets[rec.Name] = rec
-	return nil
+	if _, exists := f.secrets[rec.Name]; exists {
+		return false, nil
+	}
+	f.storeSecret(rec)
+	return true, nil
+}
+
+// UpdateSecret replaces a sealed value only while it is still at version.
+func (f *Fleet) UpdateSecret(_ context.Context, rec coord.SecretRecord, version uint64) (bool, error) {
+	if err := checkSecret(rec); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	held, ok := f.secrets[rec.Name]
+	if !ok || version == 0 || held.Version != version {
+		return false, nil
+	}
+	f.storeSecret(rec)
+	return true, nil
+}
+
+// DeleteSecretAt removes a value only while it is still at version.
+func (f *Fleet) DeleteSecretAt(_ context.Context, name string, version uint64) (bool, error) {
+	if name == "" {
+		return false, errors.New("coord/memory: a secret needs a name")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	held, ok := f.secrets[name]
+	if !ok || version == 0 || held.Version != version {
+		return false, nil
+	}
+	delete(f.secrets, name)
+	return true, nil
 }
 
 // DeleteSecret removes a value, reporting whether it was there.

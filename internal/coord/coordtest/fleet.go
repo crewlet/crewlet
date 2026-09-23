@@ -2669,6 +2669,171 @@ var secretCases = []fleetCase{{
 		if _, err := h.f.DeleteSecret(h.ctx, ""); err == nil {
 			h.t.Fatal("deleting an empty name was accepted")
 		}
+		if _, err := h.f.DeleteSecretAt(h.ctx, "", 1); err == nil {
+			h.t.Fatal("a conditional delete of an empty name was accepted")
+		}
+	},
+}, {
+	// A CREATE IS THE FIRST WRITER'S. Two writers minting one person's data
+	// key at once each seal that person's values under the key they wrote,
+	// and with a plain put the store keeps one of them — so the loser's
+	// values are sealed under a key nobody holds any more. The second
+	// create must be told the row is somebody else's, and must not have
+	// touched it.
+	name: "a create writes only where no row is stored",
+	fn: func(h *fleetHarness) {
+		created, err := h.f.CreateSecret(h.ctx, coord.SecretRecord{
+			Name: "iam/person/p1/dek", Value: "v1:first", KeyID: "key-1",
+			UpdatedAt: h.now(),
+		})
+		if err != nil || !created {
+			h.t.Fatalf("the first create = (%v, %v), want it written", created, err)
+		}
+		created, err = h.f.CreateSecret(h.ctx, coord.SecretRecord{
+			Name: "iam/person/p1/dek", Value: "v1:second", KeyID: "key-1",
+			UpdatedAt: h.now(),
+		})
+		if err != nil || created {
+			h.t.Fatalf("the second create = (%v, %v), want it refused as "+
+				"somebody else's row", created, err)
+		}
+		if rec, _ := h.secret("iam/person/p1/dek"); rec.Value != "v1:first" {
+			h.t.Fatalf("a refused create replaced the row: %q", rec.Value)
+		}
+		// AND A DELETED ROW IS ABSENT AGAIN: a create is not refused over
+		// the history of a key somebody destroyed.
+		if _, err := h.f.DeleteSecret(h.ctx, "iam/person/p1/dek"); err != nil {
+			h.t.Fatalf("DeleteSecret: %v", err)
+		}
+		created, err = h.f.CreateSecret(h.ctx, coord.SecretRecord{
+			Name: "iam/person/p1/dek", Value: "v1:third", KeyID: "key-1",
+			UpdatedAt: h.now(),
+		})
+		if err != nil || !created {
+			h.t.Fatalf("a create after the row was deleted = (%v, %v), want "+
+				"it written", created, err)
+		}
+	},
+}, {
+	// A VERSION IS READ, AND EVERY WRITE MOVES IT. What a conditional write
+	// is conditioned on has to be on what a read hands back, and a write
+	// that left it where it was would let a caller holding the old one win
+	// against a row it never saw.
+	name: "every read carries the row's version and every write moves it",
+	fn: func(h *fleetHarness) {
+		h.putSecret("GITLAB_TOKEN", "v1:old", "key-1")
+		first, _ := h.secret("GITLAB_TOKEN")
+		if first.Version == 0 {
+			h.t.Fatal("a stored row reads back with no version, so nothing " +
+				"can be conditioned on it")
+		}
+		h.putSecret("GITLAB_TOKEN", "v2:new", "key-1")
+		second, _ := h.secret("GITLAB_TOKEN")
+		if second.Version == first.Version {
+			h.t.Fatalf("a rotation left the version at %d", first.Version)
+		}
+		rows, err := h.f.SecretValues(h.ctx)
+		if err != nil || len(rows) != 1 || rows[0].Version != second.Version {
+			h.t.Fatalf("the listing = (%+v, %v), want the row at version %d",
+				rows, err, second.Version)
+		}
+	},
+}, {
+	// AN UPDATE IS REFUSED OVER A ROW THAT MOVED, AND NEVER RESURRECTS ONE.
+	// A rekey re-seals the value it READ: written over an operator's
+	// rotation it silently reinstates the credential they replaced, and
+	// written after a removal destroyed a person's key it brings the key —
+	// and with it every copy of their name — back. Both are an update at a
+	// version the row no longer holds.
+	name: "an update writes only while the row is at the version read",
+	fn: func(h *fleetHarness) {
+		h.putSecret("GITLAB_TOKEN", "v1:old", "key-1")
+		read, _ := h.secret("GITLAB_TOKEN")
+		h.putSecret("GITLAB_TOKEN", "v2:rotated", "key-1")
+		wrote, err := h.f.UpdateSecret(h.ctx, coord.SecretRecord{
+			Name: "GITLAB_TOKEN", Value: "v3:resealed-old", KeyID: "key-2",
+			UpdatedAt: h.now(),
+		}, read.Version)
+		if err != nil || wrote {
+			h.t.Fatalf("an update at a version the row moved past = (%v, %v), "+
+				"want it refused", wrote, err)
+		}
+		if rec, _ := h.secret("GITLAB_TOKEN"); rec.Value != "v2:rotated" {
+			h.t.Fatalf("the refused update replaced the rotation: %q", rec.Value)
+		}
+		current, _ := h.secret("GITLAB_TOKEN")
+		wrote, err = h.f.UpdateSecret(h.ctx, coord.SecretRecord{
+			Name: "GITLAB_TOKEN", Value: "v3:resealed", KeyID: "key-2",
+			UpdatedAt: h.now(),
+		}, current.Version)
+		if err != nil || !wrote {
+			h.t.Fatalf("an update at the current version = (%v, %v), want it "+
+				"written", wrote, err)
+		}
+		// GONE IS NOT A VERSION.
+		gone, _ := h.secret("GITLAB_TOKEN")
+		if _, err := h.f.DeleteSecret(h.ctx, "GITLAB_TOKEN"); err != nil {
+			h.t.Fatalf("DeleteSecret: %v", err)
+		}
+		wrote, err = h.f.UpdateSecret(h.ctx, coord.SecretRecord{
+			Name: "GITLAB_TOKEN", Value: "v4:resurrected", KeyID: "key-2",
+			UpdatedAt: h.now(),
+		}, gone.Version)
+		if err != nil || wrote {
+			h.t.Fatalf("an update of a deleted row = (%v, %v), want it refused", wrote, err)
+		}
+		if _, found := h.secret("GITLAB_TOKEN"); found {
+			h.t.Fatal("an update brought a deleted row back")
+		}
+		// NOR IS ZERO: a caller that never read one has judged nothing.
+		if wrote, err := h.f.UpdateSecret(h.ctx, coord.SecretRecord{
+			Name: "GITLAB_TOKEN", Value: "v5:blind", KeyID: "key-2",
+			UpdatedAt: h.now(),
+		}, 0); err != nil || wrote {
+			h.t.Fatalf("an update at version zero = (%v, %v), want nothing written",
+				wrote, err)
+		}
+		if _, found := h.secret("GITLAB_TOKEN"); found {
+			h.t.Fatal("an update at version zero created the row")
+		}
+	},
+}, {
+	// A CONDITIONAL DELETE SPARES A ROW WRITTEN AFTER IT WAS JUDGED. The
+	// key duty destroys a key nobody owns on the strength of a census, and
+	// a retried enrolment that re-used the key since has written it again:
+	// deleted anyway, the retry's values are sealed under a key that is
+	// gone.
+	name: "a conditional delete removes only the version it was given",
+	fn: func(h *fleetHarness) {
+		h.putSecret("iam/person/p2/dek", "v1:minted", "key-1")
+		judged, _ := h.secret("iam/person/p2/dek")
+		h.putSecret("iam/person/p2/dek", "v1:minted", "key-1")
+		removed, err := h.f.DeleteSecretAt(h.ctx, "iam/person/p2/dek", judged.Version)
+		if err != nil || removed {
+			h.t.Fatalf("a delete at a version the row moved past = (%v, %v), "+
+				"want it refused", removed, err)
+		}
+		if _, found := h.secret("iam/person/p2/dek"); !found {
+			h.t.Fatal("a refused conditional delete removed the row")
+		}
+		if removed, err := h.f.DeleteSecretAt(h.ctx, "iam/person/p2/dek", 0); err != nil || removed {
+			h.t.Fatalf("a delete at version zero = (%v, %v), want nothing removed",
+				removed, err)
+		}
+		current, _ := h.secret("iam/person/p2/dek")
+		removed, err = h.f.DeleteSecretAt(h.ctx, "iam/person/p2/dek", current.Version)
+		if err != nil || !removed {
+			h.t.Fatalf("a delete at the current version = (%v, %v), want it "+
+				"removed", removed, err)
+		}
+		if _, found := h.secret("iam/person/p2/dek"); found {
+			h.t.Fatal("the conditional delete reported success and the row survived")
+		}
+		again, err := h.f.DeleteSecretAt(h.ctx, "iam/person/p2/dek", current.Version)
+		if err != nil || again {
+			h.t.Fatalf("a second conditional delete = (%v, %v), want nothing "+
+				"there", again, err)
+		}
 	},
 }}
 
