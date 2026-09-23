@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,10 +60,13 @@ import (
 
 // ErrPassInFlight reports that a pass for this seat is already running.
 //
-// A sentinel rather than a silent no-op: the caller publishes a
-// CompactionCompleted carrying the skip reason, and an operator reading a
-// stream of "compacted nothing" needs to tell "there was nothing to do" from
-// "a burst of requests collapsed into one pass".
+// A sentinel rather than a silent no-op, so a caller can tell a seat another
+// pass is working on from a pass that found nothing to do.
+//
+// THE ENGINE NEVER MEETS IT: [Background] runs one pass at a time, from one
+// loop. It stays because [Lifecycle.Pass] is exported and this is the only
+// thing that stops two concurrent callers summarising one seat's clusters
+// twice.
 var ErrPassInFlight = errors.New("learning: a compaction pass for this seat is already running")
 
 // Cluster is one group of similar turns, handed to a [Summarizer].
@@ -339,21 +343,71 @@ type Lifecycle struct {
 	sum  Summarizer
 	opts Options
 
-	// inflight is the per-seat single-flight. A burst of writes crossing
-	// the threshold publishes a request per write, and two passes over one
-	// seat would fetch the same candidates, summarise them twice and write
-	// two rows claiming the same turns. The durable half of that guard is
-	// the compacted row's work key (see [Lifecycle.foldCluster]) — this
-	// half stops the second pass from spending the LLM call at all.
-	mu       sync.Mutex
+	// walks is the per-seat state one pass leaves for the next. Every
+	// Lifecycle is built with its own; a [Background] replaces it with the
+	// one it keeps for the life of the process, which is what lets that
+	// state outlive this Lifecycle. See [seatWalks].
+	walks atomic.Pointer[seatWalks]
+}
+
+// seatWalks is what compaction keeps per seat between one pass and the next:
+// which seats have a pass in flight, and where each seat's next window starts.
+//
+// ITS OWN VALUE, rather than fields of [Lifecycle], because a Lifecycle does
+// not live as long as the walk it serves. Every config apply builds the passes
+// again and hands them to [Background.Reconfigure], so a position the replaced
+// Lifecycle held would send every seat's next window back to its oldest row
+// on every apply — and in a company that applies config more often than a
+// walk takes, [Lifecycle.compact] would keep reading the same first windows,
+// which is the stuck window the walk exists to get out of. [Background] keeps
+// one for as long as it runs and hands it to every Lifecycle it is given.
+//
+// THIS PROCESS'S AND IN MEMORY, and nothing has to agree on it: a position is
+// a read position over this node's own copy of the seat's episodes, and
+// losing it only makes the next pass start again from the oldest row. A
+// restart loses it, and a seat this process has no entry for starts there.
+type seatWalks struct {
+	mu sync.Mutex
+
+	// inflight is the per-seat single-flight; see [ErrPassInFlight] for
+	// when it can fire. Two passes over one seat at once would fetch the
+	// same candidates and summarise each cluster twice. The durable half of
+	// that guard is the compacted row's work key (see
+	// [Lifecycle.foldCluster]), which stops the second summary landing —
+	// this half stops the second pass from spending the LLM call at all,
+	// and from moving the seat's position under the first. Kept beside the
+	// positions for that reason: two Lifecycles sharing positions must
+	// share this too.
 	inflight map[string]struct{}
+
+	// resume is where each seat's next compaction window starts: the last
+	// row of a window that did not reach the end of the eligible rows. See
+	// [Lifecycle.compact] for why the windows walk rather than restart.
+	resume map[string]windowEnd
+}
+
+func newSeatWalks() *seatWalks {
+	return &seatWalks{inflight: map[string]struct{}{}, resume: map[string]windowEnd{}}
+}
+
+// windowEnd is the sort key of the last row a compaction window read. The
+// window after it starts strictly past this (ended_at, id).
+type windowEnd struct {
+	endedAt time.Time
+	id      string
 }
 
 // NewLifecycle wraps a database handle and the summarizer that folds
 // clusters.
 func NewLifecycle(db *store.DB, s Summarizer, o Options) *Lifecycle {
-	return &Lifecycle{db: db, sum: s, opts: o.withDefaults(), inflight: map[string]struct{}{}}
+	l := &Lifecycle{db: db, sum: s, opts: o.withDefaults()}
+	l.walks.Store(newSeatWalks())
+	return l
 }
+
+// shareWalks makes this Lifecycle keep its per-seat state in w, so that state
+// outlives it. See [seatWalks].
+func (l *Lifecycle) shareWalks(w *seatWalks) { l.walks.Store(w) }
 
 // Options returns the knobs in force, defaults applied.
 func (l *Lifecycle) Options() Options { return l.opts }
@@ -412,10 +466,22 @@ func (l *Lifecycle) RawCount(ctx context.Context, handle string) (int, bool, err
 	return n, n >= l.opts.Threshold, nil
 }
 
-// PassResult is what one pass did. Every field is what THIS pass removed or
-// wrote, never a total: two nodes sweeping one seat each report their own
+// PassResult is what one pass did. Every count is what THIS pass read, removed
+// or wrote, never a total: two nodes sweeping one seat each report their own
 // share, and summing them is the only way to get the total.
 type PassResult struct {
+	// Candidates is how many rows the compaction window read, and
+	// CandidatesResumed says the window started where the seat's previous
+	// one stopped rather than at its oldest eligible row.
+	//
+	// MoreCandidates says eligible rows lay past the window, so the next
+	// pass reads on from its end — see [Lifecycle.compact]. It is what
+	// tells a pass that folded nothing because nothing in its window could
+	// fold from a pass that folded nothing because there was nothing.
+	Candidates        int
+	CandidatesResumed bool
+	MoreCandidates    bool
+
 	NonTerminalDropped  int
 	ConsolidatedDropped int
 
@@ -441,8 +507,8 @@ type PassResult struct {
 	RawReplaced       int
 
 	// SummarizerFailures counts clusters the model could not summarise.
-	// They are left raw and retried by the next pass — the rows are still
-	// there, so nothing is lost but the call.
+	// They are left raw and tried again when the walk next reaches their
+	// window — the rows are still there, so nothing is lost but the call.
 	SummarizerFailures int
 
 	CompactedEvicted int
@@ -464,10 +530,14 @@ func (l *Lifecycle) Pass(ctx context.Context, handle string, now time.Time) (Pas
 	if handle == "" {
 		return PassResult{}, fmt.Errorf("learning: a compaction pass needs a seat")
 	}
-	if !l.claim(handle) {
+	// ONE seatWalks FOR THE WHOLE PASS, read once: a [Background] that
+	// hands this Lifecycle its own mid-pass must not leave the claim in one
+	// and the release, or the position, in the other.
+	walks := l.walks.Load()
+	if !walks.claim(handle) {
 		return PassResult{}, ErrPassInFlight
 	}
-	defer l.release(handle)
+	defer walks.release(handle)
 
 	var res PassResult
 	n, err := l.dropNonTerminal(ctx, handle, now.Add(-l.opts.NonTerminalMaxAge))
@@ -506,7 +576,7 @@ func (l *Lifecycle) Pass(ctx context.Context, handle string, now time.Time) (Pas
 		}
 	}
 
-	if err := l.compact(ctx, handle, now, &res); err != nil {
+	if err := l.compact(ctx, walks, handle, now, &res); err != nil {
 		return res, err
 	}
 
@@ -524,6 +594,9 @@ func (l *Lifecycle) Pass(ctx context.Context, handle string, now time.Time) (Pas
 		// shape two builds on one stream have to agree on.
 		"tool_free_dropped", res.ToolFreeDropped,
 		"orphans_dropped", res.OrphansDropped,
+		"candidates", res.Candidates,
+		"candidates_resumed", res.CandidatesResumed,
+		"more_candidates", res.MoreCandidates,
 		"clusters_compacted", res.ClustersCompacted,
 		"raw_replaced", res.RawReplaced,
 		"summarizer_failures", res.SummarizerFailures,
@@ -532,20 +605,20 @@ func (l *Lifecycle) Pass(ctx context.Context, handle string, now time.Time) (Pas
 	return res, nil
 }
 
-func (l *Lifecycle) claim(handle string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if _, running := l.inflight[handle]; running {
+func (w *seatWalks) claim(handle string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, running := w.inflight[handle]; running {
 		return false
 	}
-	l.inflight[handle] = struct{}{}
+	w.inflight[handle] = struct{}{}
 	return true
 }
 
-func (l *Lifecycle) release(handle string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.inflight, handle)
+func (w *seatWalks) release(handle string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.inflight, handle)
 }
 
 // dropNonTerminal removes mid-state raw rows that ended before cutoff.
@@ -573,10 +646,56 @@ func (l *Lifecycle) dropNonTerminal(ctx context.Context, handle string, cutoff t
 func (l *Lifecycle) dropToolFree(ctx context.Context, handle string, cutoff time.Time) (int64, error) {
 	return l.exec(ctx, "drop tool-free episodes",
 		`DELETE FROM episodes WHERE agent_handle = ? AND kind = 'raw'
-		   AND (tool_sequence IS NULL OR tool_sequence IN ('[]', ''))
+		   AND `+toolFree+`
 		   AND ended_at < ?`,
 		handle, store.EncodeTime(cutoff))
 }
+
+// toolFree is the SQL test for a row that called no tools.
+//
+// ONE SPELLING, read by two queries in opposite directions: the sweep above
+// deletes what it matches, and [Lifecycle.candidates] keeps only what it does
+// not, because a turn with no tools is one [clusterByTools] can never place.
+// Two spellings could disagree about a row, and the row they disagree on is
+// one neither reaches: kept out of the fold's window as tool-free, and left
+// by the sweep as not.
+const toolFree = `(tool_sequence IS NULL OR tool_sequence IN ('[]', ''))`
+
+// retiredExemplars selects every episode id one seat's summaries keep as a
+// drill-down exemplar, for [Lifecycle.candidates] to leave out of its window.
+// Its one argument is the seat's handle.
+//
+// A SUMMARY'S LIST RETIRES ITS TEXT ELEMENTS, and only when the list is a
+// JSON array. Any other value in the column — not JSON, `null`, an object, a
+// bare string — retires nothing, and neither does an element that is not
+// text, such as a `null` or a number. The fold writes the column through
+// [jsonList], which always produces an array of strings, so every other shape
+// is one only a damaged or foreign row carries.
+//
+// THE TEXT TEST IS WHAT KEEPS THE WINDOW FROM EMPTYING. The candidates query
+// reads this through NOT IN, and `id NOT IN (…)` is never true once the list
+// holds a single NULL. json_each reports a JSON null as a NULL `value`, so
+// without the test one summary whose list read `["a", null]` would stop
+// compaction for the whole seat, while each pass logged a window of nothing
+// and no more to read.
+//
+// THE ARRAY TEST IS NESTED IN A CASE rather than written as an AND beside the
+// validity test: against the pinned driver, `json_valid(x) AND
+// json_type(x) = 'array'` raised `malformed JSON` for an x that was not JSON,
+// so the AND did not keep json_type from reading it. The CASE does.
+//
+// NOT IN, and not a correlated NOT EXISTS that would need no text test,
+// because of what the correlated form cost: measured against the pinned
+// driver on one seat holding 5 000 raw rows and 300 summaries, it took about
+// 2.5 s to read one window, and this form about 0.15 s.
+const retiredExemplars = `
+	SELECT kept.value FROM episodes summary,
+	       json_each(CASE WHEN json_valid(summary.exemplar_turn_ids)
+	                      THEN CASE json_type(summary.exemplar_turn_ids)
+	                           WHEN 'array' THEN summary.exemplar_turn_ids END
+	                 END) kept
+	WHERE summary.agent_handle = ? AND summary.kind = 'compacted'
+	  AND kept.type = 'text'`
 
 // dropConsolidated removes raw rows a skill absorbed, once the audit grace has
 // elapsed.
@@ -689,17 +808,42 @@ func doomedSummaries(ctx context.Context, tx *sql.Tx, handle string, cutoff time
 }
 
 // compact is the LLM-driven step: fetch, recover, cluster, fold.
-func (l *Lifecycle) compact(ctx context.Context, handle string, now time.Time, res *PassResult) error {
-	candidates, err := l.candidates(ctx, handle, now.Add(-l.opts.MinAge))
+//
+// ONE WINDOW OF [Options.BatchSize] ROWS PER PASS, AND THE WINDOWS WALK. A
+// window can hold rows the fold cannot take — a turn whose tool shape nothing
+// else matched, a pair short of [Options.MinClusterSize] — and those stay
+// where they are, oldest first. A window read from the oldest row every pass
+// would find the same ones there every pass once BatchSize of them had piled
+// up: it would fold nothing and never read a newer row, and its log line
+// would look exactly like a seat with nothing to fold. So a window that did
+// not reach the end of the eligible rows leaves the seat's position in
+// [seatWalks] at its last row, and the next pass reads the window after it;
+// the window that reaches the end clears it, and the pass after that starts
+// from the oldest row again. Every eligible row is read once in each walk,
+// so a row one pass left raw is read again by the next walk.
+//
+// A CLUSTER IS FORMED INSIDE ONE WINDOW, which is the cost of bounding one:
+// two similar turns either side of a window's edge are not pooled by this
+// pass. That is also what bounds the largest cluster, and so the largest
+// summarisation prompt, at BatchSize members.
+//
+// THE POSITION MOVES ONLY WHEN THE WINDOW WAS WORKED THROUGH. A store error
+// returns before it moves, so the next pass reads the same window again. A
+// cluster the model could not summarise does not hold it back: that cluster
+// is still raw, and the next walk reaches it again.
+func (l *Lifecycle) compact(ctx context.Context, walks *seatWalks, handle string, now time.Time, res *PassResult) error {
+	from, resumed := walks.resumeAt(handle)
+	window, more, err := l.candidates(ctx, handle, now.Add(-l.opts.MinAge), from)
 	if err != nil {
 		return err
 	}
+	res.Candidates, res.CandidatesResumed, res.MoreCandidates = len(window), resumed, more
 	anchors, err := l.anchors(ctx, handle)
 	if err != nil {
 		return err
 	}
 
-	live, orphans := splitOrphans(candidates, anchors, l.opts.JaccardThreshold)
+	live, orphans := splitOrphans(window, anchors, l.opts.JaccardThreshold)
 	n, err := l.sweepOrphans(ctx, handle, orphans)
 	res.OrphansDropped = int(n)
 	if err != nil {
@@ -721,42 +865,109 @@ func (l *Lifecycle) compact(ctx context.Context, handle string, now time.Time, r
 		res.ClustersCompacted++
 		res.RawReplaced += int(deleted)
 	}
+
+	if more {
+		last := window[len(window)-1]
+		walks.setResume(handle, &windowEnd{endedAt: last.EndedAt, id: last.ID})
+	} else {
+		walks.setResume(handle, nil)
+	}
 	return nil
 }
 
-// candidates returns the raw rows eligible for folding, oldest first.
+// resumeAt reports where a seat's next compaction window starts, and whether
+// that is anywhere but the oldest eligible row.
+func (w *seatWalks) resumeAt(handle string) (*windowEnd, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	at, ok := w.resume[handle]
+	if !ok {
+		return nil, false
+	}
+	return &at, true
+}
+
+// setResume records where a seat's next window starts; nil starts it at the
+// oldest eligible row.
+func (w *seatWalks) setResume(handle string, at *windowEnd) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if at == nil {
+		delete(w.resume, handle)
+		return
+	}
+	w.resume[handle] = *at
+}
+
+// candidates returns one window of the raw rows eligible for folding, oldest
+// first, starting strictly after `after` (nil starts at the oldest), and
+// whether more eligible rows lie past it.
 //
-// Eligible is the exact complement of what the earlier sweeps drop: terminal
-// (see [terminalOutcomes]), unstamped, and old enough that no other reader
-// still wants the detail.
+// Eligible is every row the fold could take and no sweep owns: terminal (see
+// [terminalOutcomes]), unstamped, old enough that no other reader still wants
+// the detail — and TWO KINDS THE FOLD CAN NEVER TAKE ARE LEFT OUT HERE, IN THE
+// QUERY, so they do not occupy the window. A turn that called no tools (see
+// [toolFree]) has no tool shape to be clustered by. And a RETIRED EXEMPLAR —
+// a member a fold kept raw as its summary's drill-down anchor — must never be
+// folded again: it is old and matches its own cluster's shape by
+// construction, so it would join the next cluster over the same work, be
+// counted a second time and be deleted, leaving the earlier summary pointing
+// at a row that no longer exists. See [retiredExemplars] for which values of
+// a summary's `exemplar_turn_ids` retire a row.
+//
+// READ PLUS ONE, and the extra row is not returned: it is the evidence that
+// the window did not reach the end, which is what moves the seat's position
+// on rather than back to the start.
 //
 // ORDERED BY (ended_at, id), and the id is load bearing rather than tidy.
 // Clustering is greedy over this order, so two passes that disagree about the
 // order of two rows stamped in the same microsecond build different clusters,
 // derive different fold keys, and each write a summary claiming turns the
-// other also claimed. SQL leaves the order of equal sort keys unspecified.
-func (l *Lifecycle) candidates(ctx context.Context, handle string, cutoff time.Time) ([]Episode, error) {
-	rows, err := l.db.SQL().QueryContext(ctx,
-		`SELECT `+episodeColumns+` FROM episodes
+// other also claimed. SQL leaves the order of equal sort keys unspecified. It
+// is also the key the window resumes on, so a row is in exactly one window of
+// a walk even where a window's edge falls between two rows stamped alike.
+func (l *Lifecycle) candidates(ctx context.Context, handle string, cutoff time.Time, after *windowEnd) ([]Episode, bool, error) {
+	query := `SELECT ` + episodeColumns + ` FROM episodes
 		 WHERE agent_handle = ? AND kind = 'raw'
 		   AND consolidated_into_skill_id IS NULL
-		   AND review_outcome IN `+terminalOutcomes+`
+		   AND review_outcome IN ` + terminalOutcomes + `
 		   AND ended_at < ?
-		 ORDER BY ended_at ASC, id ASC LIMIT ?`,
-		handle, store.EncodeTime(cutoff), l.opts.BatchSize)
-	if err != nil {
-		return nil, fmt.Errorf("learning: compaction candidates for %s: %w", handle, err)
+		   AND NOT ` + toolFree + `
+		   AND id NOT IN (` + retiredExemplars + `)`
+	args := []any{handle, store.EncodeTime(cutoff), handle}
+	if after != nil {
+		// Strictly past (ended_at, id), spelled with the range bound
+		// first so the index on (agent_handle, kind, ended_at) seeks to
+		// it rather than filtering every row before it.
+		query += `
+		   AND ended_at >= ? AND (ended_at > ? OR id > ?)`
+		at := store.EncodeTime(after.endedAt)
+		args = append(args, at, at, after.id)
 	}
-	return collectEpisodes(rows)
+	query += `
+		 ORDER BY ended_at ASC, id ASC LIMIT ?`
+	args = append(args, l.opts.BatchSize+1)
+
+	rows, err := l.db.SQL().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, fmt.Errorf("learning: compaction candidates for %s: %w", handle, err)
+	}
+	window, err := collectEpisodes(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(window) > l.opts.BatchSize {
+		return window[:l.opts.BatchSize], true, nil
+	}
+	return window, false, nil
 }
 
 // anchor is one existing summary, reduced to what the recovery sweep needs:
-// the span it claims, the tool shape it claims, and the rows it kept.
+// the span it claims and the tool shape it claims.
 type anchor struct {
 	startedAt time.Time
 	endedAt   time.Time
 	tools     []string
-	exemplars []string
 }
 
 // covers reports whether an episode falls inside the span this summary claims.
@@ -766,7 +977,7 @@ type anchor struct {
 // so nothing a crash left behind sits exactly on the boundary. What does sit
 // there is a row the batch limit cut off: candidates come back oldest-first,
 // so a tie at the last instant of a full batch leaves its twin for the next
-// pass, and a closed interval would sweep that twin as though a summary
+// window, and a closed interval would sweep that twin as though a summary
 // already counted it.
 func (a anchor) covers(ep Episode) bool {
 	return !ep.EndedAt.Before(a.startedAt) && ep.EndedAt.Before(a.endedAt)
@@ -774,14 +985,13 @@ func (a anchor) covers(ep Episode) bool {
 
 // anchors loads every summary the seat holds.
 //
-// The whole per-seat set, unbounded by time: a seat accumulates one summary
-// per cluster per pass, which is at most BatchSize/MinClusterSize per pass and
-// in practice a few dozen a year, and each row is read down to five small
+// The whole per-seat set, unbounded by time: a seat accumulates at most one
+// summary per cluster a pass folds, and each is read down to three small
 // columns. CompactedMaxAge is the knob for a deployment where that stops being
-// true.
+// small.
 func (l *Lifecycle) anchors(ctx context.Context, handle string) ([]anchor, error) {
 	rows, err := l.db.SQL().QueryContext(ctx,
-		`SELECT started_at, ended_at, tool_sequence, exemplar_turn_ids
+		`SELECT started_at, ended_at, tool_sequence
 		 FROM episodes WHERE agent_handle = ? AND kind = 'compacted'`, handle)
 	if err != nil {
 		return nil, fmt.Errorf("learning: compaction anchors for %s: %w", handle, err)
@@ -790,17 +1000,16 @@ func (l *Lifecycle) anchors(ctx context.Context, handle string) ([]anchor, error
 	var out []anchor
 	for rows.Next() {
 		var (
-			started, ended    int64
-			toolsJSON, exJSON string
+			started, ended int64
+			toolsJSON      string
 		)
-		if err := rows.Scan(&started, &ended, &toolsJSON, &exJSON); err != nil {
+		if err := rows.Scan(&started, &ended, &toolsJSON); err != nil {
 			return nil, fmt.Errorf("learning: scan compaction anchor: %w", err)
 		}
 		out = append(out, anchor{
 			startedAt: store.DecodeTime(started),
 			endedAt:   store.DecodeTime(ended),
 			tools:     parseList(toolsJSON),
-			exemplars: parseList(exJSON),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -809,50 +1018,31 @@ func (l *Lifecycle) anchors(ctx context.Context, handle string) ([]anchor, error
 	return out, nil
 }
 
-// splitOrphans divides candidates into rows still to be folded and rows an
+// splitOrphans divides a window into rows still to be folded and rows an
 // existing summary already covers.
-//
-// Two rules, and they are the same rule seen from both ends:
-//
-// A RETIRED EXEMPLAR is a member a fold deliberately kept. It is dropped from
-// the candidate list entirely — not folded, not counted, not deleted. Letting
-// it back in is what makes drill-down rot: it is old, it matches its own
-// cluster's tool shape by construction, so it joins the next cluster over the
-// same work, gets counted a second time, and is deleted — leaving the earlier
-// summary pointing at rows that no longer exist. Every pass after that costs
-// the same two rows again.
 //
 // An ORPHAN is a member the fold meant to delete and did not. Its summary
 // already counts it, so folding it again writes a second summary over turns
 // the first one claims — the double count this whole mechanism exists to
 // prevent. See [Lifecycle.foldCluster] for why that state should be
 // unreachable, and [Lifecycle.sweepOrphans] for why it is still handled.
-// RETIREMENT IS CHECKED ACROSS EVERY ANCHOR BEFORE COVERAGE IS CHECKED AT ALL,
-// and that order is the whole reason these are two loops rather than one. Two
-// summaries can claim overlapping spans with the same tool shape, so one
-// summary's exemplar can sit inside another's window — and deciding per anchor
-// in one pass would make the outcome depend on which row the database happened
-// to return first, with a live drill-down anchor deleted on half the orderings.
-func splitOrphans(candidates []Episode, anchors []anchor, threshold float64) (live, orphans []Episode) {
-	for _, ep := range candidates {
-		switch {
-		case retiredExemplar(anchors, ep.ID):
-		case coveredBySummary(anchors, ep, threshold):
+//
+// A RETIRED EXEMPLAR NEVER GETS HERE, and that is what keeps it from being
+// taken for one: [Lifecycle.candidates] leaves every id a summary's exemplar
+// list names out of the window (see [retiredExemplars] for which lists name
+// one). Two summaries can claim overlapping spans with the same tool
+// shape, so one summary's exemplar can sit inside the other's span, where
+// this coverage test alone would call it an orphan and delete a live
+// drill-down anchor.
+func splitOrphans(window []Episode, anchors []anchor, threshold float64) (live, orphans []Episode) {
+	for _, ep := range window {
+		if coveredBySummary(anchors, ep, threshold) {
 			orphans = append(orphans, ep)
-		default:
-			live = append(live, ep)
+			continue
 		}
+		live = append(live, ep)
 	}
 	return live, orphans
-}
-
-func retiredExemplar(anchors []anchor, id string) bool {
-	for _, a := range anchors {
-		if slices.Contains(a.exemplars, id) {
-			return true
-		}
-	}
-	return false
 }
 
 func coveredBySummary(anchors []anchor, ep Episode, threshold float64) bool {

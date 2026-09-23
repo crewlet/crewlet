@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // OpenCodeName is this runner's config name.
@@ -17,13 +16,6 @@ const OpenCodeName = "opencode"
 // Its own id rather than one of the vendor names, because it points at the
 // SEAT's endpoint and model, which may be neither vendor's default.
 const OpenCodeProviderID = "crewlet"
-
-// transcriptDetailLimit caps one transcript line's echoed command or path.
-//
-// A bare "[tool] bash" is useless when a run fails — you cannot see WHAT ran —
-// but a heredoc echoed whole would blow up the phase event. 160 characters is
-// a readable command line.
-const transcriptDetailLimit = 160
 
 // OpenCode drives the OpenCode CLI headless.
 //
@@ -238,7 +230,7 @@ func (OpenCode) Finished(stdout string) bool {
 	return false
 }
 
-// Parse reconstructs the answer and a readable transcript from the stream.
+// Parse reconstructs the answer from the stream.
 //
 // OpenCode exposes no stable token or cost envelope, so those stay ZERO rather
 // than being estimated: an invented number in the spend rollup is worse than a
@@ -257,22 +249,17 @@ func (OpenCode) Parse(stdout string) sandbox.Result {
 		}
 	}
 
-	var answers, transcript []string
+	var answers []string
 	errText := ""
 	for _, obj := range events {
-		part, _ := obj["part"].(map[string]any)
 		switch eventType(obj) {
 		case "text":
-			chunk := strings.TrimSpace(stringField(part, "text"))
-			if chunk != "" {
+			part, _ := obj["part"].(map[string]any)
+			if chunk := strings.TrimSpace(stringField(part, "text")); chunk != "" {
 				answers = append(answers, chunk)
-				transcript = append(transcript, chunk)
 			}
-		case "tool_use":
-			transcript = append(transcript, toolLine(part, obj))
 		case "error":
 			errText = errorText(obj["error"])
-			transcript = append(transcript, "[error] "+errText)
 		}
 	}
 	body := strings.TrimSpace(strings.Join(answers, "\n"))
@@ -280,7 +267,6 @@ func (OpenCode) Parse(stdout string) sandbox.Result {
 	res := sandbox.Result{
 		Text:          body,
 		Success:       success,
-		Transcript:    strings.TrimSpace(strings.Join(transcript, "\n")),
 		DeliveredRefs: prPattern.FindAllString(body, -1),
 	}
 	if !success {
@@ -290,45 +276,6 @@ func (OpenCode) Parse(stdout string) sandbox.Result {
 		}
 	}
 	return res
-}
-
-// toolLine renders one tool event for the transcript.
-//
-// Enriched with the call's own input, because a bare tool name is useless when
-// a run fails: what a reader needs is the command that ran. The nesting varies
-// across versions, so every lookup is defensive and falls back to the name.
-// Transcript only — never fed to a model — so a little extra length is fine.
-func toolLine(part, obj map[string]any) string {
-	name := firstString(part["tool"], obj["tool"], obj["name"])
-	if name == "" {
-		name = "tool"
-	}
-	state, _ := part["state"].(map[string]any)
-	input, _ := state["input"].(map[string]any)
-	if input == nil {
-		input, _ = part["input"].(map[string]any)
-	}
-
-	line := "[tool] " + name
-	if detail := firstString(
-		input["command"], input["filePath"], input["path"],
-		input["pattern"], input["description"],
-	); detail != "" {
-		line += ": " + firstLine(detail, transcriptDetailLimit)
-	}
-
-	status, _ := state["status"].(string)
-	failure := firstString(state["error"])
-	if failure == "" && status == "error" {
-		failure = firstString(state["output"])
-	}
-	if status == "error" || failure != "" {
-		if failure == "" {
-			failure = "failed"
-		}
-		line += " → error: " + firstLine(failure, transcriptDetailLimit)
-	}
-	return line
 }
 
 // streamEvents decodes the newline-delimited JSON objects, skipping anything
@@ -369,32 +316,4 @@ func errorText(v any) string {
 		}
 		return ""
 	}
-}
-
-func firstString(values ...any) string {
-	for _, v := range values {
-		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-			return s
-		}
-	}
-	return ""
-}
-
-// firstLine is one transcript line's echoed command or path, bounded.
-//
-// The bound is real — a heredoc echoed whole would blow up the phase event —
-// and the cut is marked. Two defects it used to carry: `line[:limit-1] + "…"`
-// emits limit+2 BYTES (limit-1 of content plus a three-byte ellipsis), so the
-// constant bounded nothing it named; and the byte slice split whatever
-// multi-byte character straddled the cut, which reaches the event store as
-// invalid UTF-8.
-func firstLine(s string, limit int) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	if limit <= 0 || len(line) <= limit {
-		return line
-	}
-	// [textcut.Within] rather than Ellipsis: that one does not count its
-	// marker against max, and this limit bounds what reaches the phase
-	// event, marker included.
-	return textcut.Within(line, limit)
 }

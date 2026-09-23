@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // TurnRef identifies the turn a detached run belongs to.
@@ -52,11 +51,14 @@ type LaunchRequest struct {
 
 	// Brief is the executor's own description of the code task. It is
 	// FRAMED, not passed through: the coding agent also gets the turn's
-	// task, its success criteria, and what its environment provides.
+	// task and what its environment provides (see [buildBrief]).
 	Brief string
 
 	// Task is the ask the suspended turn was working on, carried onto the
-	// row so a resume has the brief when the trigger is long gone.
+	// row so a resume has it when the trigger is long gone.
+	//
+	// It is also what the started event names the run by, WHOLE: see the
+	// announcement in [Launch].
 	Task string
 
 	Spec       Spec
@@ -185,7 +187,14 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
 		ConversationKey: req.Turn.ConversationKey,
-		Task:            summarise(req.Brief),
+		// THE ROW'S OWN VALUE, WHOLE. The dashboard names a run by this
+		// field until its poll of the run records returns the row, and by
+		// the row's task_description from then on — req.Task, as written
+		// above — so any other value here is a label that changes under the
+		// reader mid-run. And nothing is cut: the same text is on the row
+		// and served whole by the sandbox-runs query, so a cut here would
+		// buy nothing but a second, shorter spelling of it.
+		Task: req.Task,
 	}
 	ev := events.New(started, events.TraceContext{
 		TraceID: req.Turn.TraceID, ParentSpanID: req.Turn.SpanID,
@@ -275,24 +284,6 @@ func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequ
 		log.WarnContext(ctx, "sandbox_launch_finish_failed",
 			"turn_id", req.Turn.TurnID, "error", err.Error())
 	}
-}
-
-// briefSummaryLimit bounds the one-line task summary on the started event.
-//
-// The panel it feeds shows one row per running box, so this is a label rather
-// than a description; the full brief lives on the pending row and is never on
-// the wire. Sized to a readable row on a narrow column.
-const briefSummaryLimit = 120
-
-func summarise(brief string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(brief), "\n")
-	if len(line) <= briefSummaryLimit {
-		return line
-	}
-	// Trimmed after the cut, not before: the cut routinely lands mid-word
-	// and leaves the trailing space of the previous one, which would put
-	// the marker a space away from the text it marks.
-	return strings.TrimSpace(textcut.Bytes(line, briefSummaryLimit)) + "…"
 }
 
 // buildBrief assembles what the coding agent is actually told.

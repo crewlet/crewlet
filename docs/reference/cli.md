@@ -534,6 +534,20 @@ deliberately gets that one. There is no token *default* on the command line:
 a token typed as an argument is in the shell history, in `ps`, and in any CI
 log that echoes the command.
 
+**A refusal is read from the node's own `error` code, never from the status
+alone**, on these commands and on every other one that talks to a running node
+— `backup`, `work` and `retention`, and `config import` and `secrets` when they
+go through a node rather than a store file. A `401` carrying the node's code
+says the token was refused, and a `503` carrying one says why that node cannot
+serve the request, with its detail and hint. A body **without** the node's
+code — an auth proxy's sign-in page, a load balancer's JSON, a server that is
+not a node — is shown rather than interpreted, beside the address and the
+route that answered, because the same status from something in front of the
+node says nothing about the node: a page is reduced to its `<title>`, JSON is
+compacted, and a line past a few hundred bytes is cut with a `…`. The body
+itself is not kept, so seeing it whole means sending that request to that
+address again.
+
 The **caps** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process
 derives the same numbers without coordinating. Only the usage is shared.
@@ -631,9 +645,12 @@ gone.
 
 **The confirmation is the task's key**, not its id. The id is on the command
 line already, so repeating it confirms nothing; the key has to be looked up.
-**The reason is required** because it is the only thing that survives — the
-marker's reason is the entire account of what used to be at that key for
-whoever reads it a year later.
+**The reason is required** because the rows are destroyed and it is what
+explains the gap. It travels **whole** on the one line a purge leaves — the
+project lead's notification, whose excerpt the purge's row in the activity feed
+carries — beside the task's key and who purged it, and it is never cut to fit
+that line: a reason too long for it is refused, naming how many bytes fit, and
+nothing is purged. It is also written to the deletion marker.
 
 **Its children are moved, not destroyed.** Each direct child re-parents onto
 the purged task's own parent, or becomes a root when the purged task was one.
@@ -930,7 +947,7 @@ verdict      the two-stage search recovers the exact ranking at the shipped dept
 | `-config PATH` | `./crewlet.yaml` | Tier A, read only for the replicated store's path |
 | `-queries N` | `25` | How many held-out documents to measure over. Each one is a full exact scan, which is what bounds the run |
 | `-limit N` | `150` | The depth recall is measured at — the shipped returned depth |
-| `-candidates N` | `1200` | The stage-1 candidate depth — the shipped pair |
+| `-candidates N` | `1200` | The stage-1 candidate depth — the shipped pair. One below `-limit` runs at `-limit`, since a pool smaller than the answer cannot fill it; the report prints the depths the search ran at, not the ones asked for |
 | `-model NAME` | most populated | The embedding model to measure |
 | `-dimensions N` | the model's | The width to measure |
 | `-fit` | off | Also print the corpus's own mean pairwise cosine, which is the parameter the engine's seeded fixture is fitted from |

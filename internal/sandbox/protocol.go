@@ -192,16 +192,8 @@ type Result struct {
 	// DeliveredRefs are the branches and pull requests the run produced —
 	// what the delivery gate judges a coding turn on.
 	DeliveredRefs []string
-	ChangedFiles  []string
-	Commands      []string
 
 	Error string
-
-	// Transcript is the agent's streamed activity log — tool calls, shell
-	// commands, todos — captured from its output. It is the observability
-	// surface for an agent that emits no telemetry of its own. Tail-capped
-	// here, redacted at publish.
-	Transcript string
 }
 
 // Sandbox is one live, isolated execution environment.

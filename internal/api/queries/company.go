@@ -19,11 +19,21 @@ import (
 // The questions answered from the epoch: what the company DECLARES, which is a
 // different question from what it has done.
 
-// RecentRunsLimit bounds the schedule history a listing carries.
+// RecentRunsLimit bounds the strip of fires, across every schedule, that a
+// schedules answer carries.
 //
-// The dispatch ledger holds every fire inside its retention window, and the
-// screen shows a recent-activity strip beside the schedule table. Fifty is a
-// page of it; the ledger's own retention is what bounds the table.
+// The dispatch ledger holds the fires this node ran, for its retention
+// window, and the screen shows a recent-activity strip beside the schedule
+// table. Fifty is a page of it, read with ONE MORE as the evidence the ledger
+// holds more, so `recent_runs_truncated` is a fact about the ledger rather
+// than about the page happening to be full.
+//
+// WHAT IS NOT HERE is reached one schedule at a time, and not all of it is
+// reached. `last_runs` carries each configured schedule's own newest fire,
+// however many fires of other schedules are newer. `schedule_runs` reads one
+// schedule's newest [MaxScheduleRuns]; its fires older than that are served by
+// no question — see [MaxScheduleRuns] — and stay in this node's
+// `scheduled_runs` table until its retention sweep.
 const RecentRunsLimit = 50
 
 // schedules answers the schedules question: what is configured, and what
@@ -35,29 +45,39 @@ const RecentRunsLimit = 50
 // first fire. The history is the dispatch ledger, which is the only thing that
 // knows what actually happened.
 func (s Sources) schedules(ctx context.Context, _ Params) (any, error) {
-	runs, truncated := s.recentRuns(ctx)
+	configured := s.ConfiguredSchedules()
+	history := s.scheduleHistory(ctx, configured)
 	return map[string]any{
-		"schedules":   s.ConfiguredSchedules(),
-		"recent_runs": runs,
-		// SAYS WHEN IT CUT, which its own sibling `schedule_runs` already
-		// does in as many words: "a page that filled is indistinguishable
-		// from a schedule that has fired exactly that many times". This is
-		// the MORE likely of the two to fill, because it is every
-		// schedule's fires rather than one's — twenty hourly ones fill it
-		// in two and a half hours — so a company of any size sat
-		// permanently on a full page it could not see was full.
-		"recent_runs_truncated": truncated,
+		"schedules":   configured,
+		"recent_runs": history.recent,
+		// SAYS WHEN IT CUT, on the evidence row: a page that filled is
+		// otherwise indistinguishable from a ledger holding exactly that
+		// many fires. The MORE likely of the two schedule pages to fill,
+		// because it is every schedule's fires rather than one's.
+		"recent_runs_truncated": history.truncated,
+		// EACH CONFIGURED SCHEDULE'S OWN LAST FIRE, read per schedule
+		// rather than picked out of the strip above. The strip is the
+		// newest fifty across every schedule, so a schedule whose last
+		// fire is older than that is absent from it — and a "last fired"
+		// column built from the strip says such a schedule has never
+		// fired. One row per configured schedule the ledger holds a fire
+		// of; an absent one has no fire in the ledger this node reads.
+		"last_runs": history.last,
+		// WHETHER THE LEDGER WAS READ AT ALL. Both lists above are empty
+		// when it could not be, and so is a company whose schedules have
+		// never fired: "nothing has fired" and "nobody could look" are
+		// different facts, and only one of them is a measurement.
+		"history_available": history.available,
 	}, nil
 }
 
 // ConfiguredSchedules is the schedule rows a company's org declares, with no
 // store read at all.
 //
-// Exported because the dashboard's handshake snapshot carries them too, and
-// the two must be ONE implementation: the screen renders its rows from the
-// snapshot slice and fetches only the dispatch ledger through the question
-// above, so a second derivation here would be a screen whose contents changed
-// depending on which of the two arrived last.
+// Exported because the handshake snapshot carries them too, and the two must
+// be ONE implementation: a client holding both would otherwise hold two
+// derivations of one list, and which it drew would depend on which of the two
+// arrived last.
 //
 // The ledger half stays out. It is a store read, and the snapshot is built
 // without one — see stream.Service.Snapshot.
@@ -86,35 +106,85 @@ func (s Sources) ConfiguredSchedules() []schedule.Row {
 	return rows
 }
 
-// recentRuns is the dispatch history, or an empty list.
+// scheduleHistory is what the dispatch ledger says about a company's
+// schedules: the strip across every schedule, and each configured schedule's
+// last fire.
+type scheduleHistory struct {
+	recent    []map[string]any
+	truncated bool
+	last      []map[string]any
+	available bool
+}
+
+// scheduleHistory reads the dispatch history, or reports it could not.
 //
 // DEGRADES rather than fails: the configured schedules are the half an
 // operator opens this screen for, and refusing to show them because the
-// history is unreadable would blank the page over its footnote.
-func (s Sources) recentRuns(ctx context.Context) ([]map[string]any, bool) {
+// history is unreadable would blank the page over its footnote. What it does
+// not do is degrade SILENTLY — [scheduleHistory.available] is false whenever
+// either read failed, and both lists are then empty rather than half-filled.
+func (s Sources) scheduleHistory(ctx context.Context, configured []schedule.Row) scheduleHistory {
+	none := scheduleHistory{recent: []map[string]any{}, last: []map[string]any{}}
 	if s.Runs == nil {
-		return []map[string]any{}, false
+		return none
 	}
-	runs, err := s.Runs.Recent(ctx, RecentRunsLimit)
+	runs, err := s.Runs.Recent(ctx, RecentRunsLimit+1)
 	if err != nil {
 		log.WarnContext(ctx, "schedule_history_unreadable", "error", err)
-		return []map[string]any{}, false
+		return none
 	}
-	out := make([]map[string]any, 0, len(runs))
+	out := scheduleHistory{
+		recent:    make([]map[string]any, 0, min(len(runs), RecentRunsLimit)),
+		truncated: len(runs) > RecentRunsLimit,
+		last:      make([]map[string]any, 0, len(configured)),
+		available: true,
+	}
+	if out.truncated {
+		runs = runs[:RecentRunsLimit]
+	}
 	for _, run := range runs {
-		out = append(out, map[string]any{
-			"scope_type":    string(run.Scope),
-			"scope_id":      run.ScopeID,
-			"schedule_name": run.ScheduleName,
-			"fire_label":    run.FireLabel,
-			"target_handle": run.TargetHandle,
-			"scheduled_at":  isoOrEmpty(run.ScheduledAt),
-			"fired_at":      isoOrEmpty(run.FiredAt),
-			"outcome":       string(run.Outcome),
-			"trace_id":      run.TraceID,
-		})
+		out.recent = append(out.recent, runRow(run))
 	}
-	return out, len(out) == RecentRunsLimit
+	// ONE READ PER CONFIGURED SCHEDULE, which is what the org declares and
+	// therefore bounded by the company document rather than by traffic.
+	// Each is the ledger's own narrowed listing at a depth of one: the
+	// newest fire of that identity, however many fires of other schedules
+	// are newer.
+	for _, row := range configured {
+		newest, err := s.Runs.RecentFor(ctx, row.ScopeType, row.ScopeID, row.Name, 1)
+		if err != nil {
+			log.WarnContext(ctx, "schedule_history_unreadable", "error", err,
+				"scope_type", string(row.ScopeType), "scope_id", row.ScopeID,
+				"schedule", row.Name)
+			return none
+		}
+		if len(newest) > 0 {
+			out.last = append(out.last, runRow(newest[0]))
+		}
+	}
+	return out
+}
+
+// runRow is one fire as every schedule answer carries it.
+//
+// ONE SHAPE for the company strip, a schedule's last fire and one schedule's
+// own history, because a screen keys all three by the same identity and a
+// field spelled differently in one of them is a fire that matches nothing.
+func runRow(run schedule.Run) map[string]any {
+	return map[string]any{
+		"scope_type":    string(run.Scope),
+		"scope_id":      run.ScopeID,
+		"schedule_name": run.ScheduleName,
+		// THE FIRE LABEL IS THE IDENTITY of one fire — the minute it was
+		// scheduled for — which is what tells a catchup fire from the
+		// tick that should have run it.
+		"fire_label":    run.FireLabel,
+		"target_handle": run.TargetHandle,
+		"scheduled_at":  isoOrEmpty(run.ScheduledAt),
+		"fired_at":      isoOrEmpty(run.FiredAt),
+		"outcome":       string(run.Outcome),
+		"trace_id":      run.TraceID,
+	}
 }
 
 // integrations answers how each external surface is wired, and what has come

@@ -511,7 +511,8 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 				// THE RUN'S OWN TOOL CALLS, off its durable row. An
 				// agent-mode executor called them over the bridge, possibly
 				// in another process, so this list is the only record of
-				// what the phase did — its submission included.
+				// what the phase did — its submission included — though
+				// not always every call; see [bridgedCalls].
 				Bridged: bridgedCalls(in.Run.BridgeCalls),
 			},
 		})

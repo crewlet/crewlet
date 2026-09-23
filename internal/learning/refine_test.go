@@ -105,7 +105,7 @@ func TestASuccessfulTurnAppendsWhatPracticeTaught(t *testing.T) {
 	if stored.Version != 2 {
 		t.Fatalf("version = %d, want 2 — the prior body must be archived", stored.Version)
 	}
-	versions, err := learning.NewSkills(db).Versions(t.Context(), sk.ID, 10)
+	versions, err := learning.NewSkills(db).Versions(t.Context(), sk.ID)
 	if err != nil {
 		t.Fatalf("Versions: %v", err)
 	}

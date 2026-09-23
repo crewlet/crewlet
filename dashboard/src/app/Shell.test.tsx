@@ -265,6 +265,106 @@ describe("the Inbox rail badge", () => {
     });
     expect(document.querySelector(".rail-badge")).toBeNull();
   });
+
+  /** The rail over a socket that records every `work_inbox` ask. */
+  function railAsking(answer: Record<string, unknown>) {
+    const asked: Record<string, unknown>[] = [];
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    (
+      socket as unknown as {
+        query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).query = (what: string, params = {}) => {
+      if (what === "viewer") {
+        return Promise.resolve({
+          operator_id: "U0FOUNDER",
+          operator: true,
+          handle: "ada",
+          name: "Ada",
+          kind: "human",
+        });
+      }
+      if (what === "work_inbox") {
+        asked.push(params);
+        return Promise.resolve({ handle: "ada", unread: 0, primary: 0, ...answer });
+      }
+      return Promise.resolve({});
+    };
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <Shell>
+            <Bare />
+          </Shell>
+        </Router>
+      </ClientContext.Provider>,
+    );
+    return asked;
+  }
+
+  const settle = () =>
+    act(async () => {
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
+
+  // A PAGE THE ENGINE CUT IS A FLOOR. `next_cursor` is minted only when a row
+  // past the page came back, so the three unread here are three of more.
+  test("a page past which the engine holds more reads as a floor", async () => {
+    railAsking({
+      notices: [1, 2, 3].map((n) => notice("assignee", false, n)),
+      primary_reasons: ["assignee"],
+      next_cursor: "CREWLET_WORK_LOG@1:1",
+    });
+    await settle();
+    expect(document.querySelector(".rail-badge")?.textContent).toBe("3+");
+  });
+
+  // …AND NOTHING UNREAD ON IT IS NOT NOTHING UNREAD. The badge vanished here,
+  // over a page whose every row had been read while older ones had not been
+  // looked at.
+  test("a cut page with nothing unread says it does not know", async () => {
+    railAsking({
+      notices: [notice("assignee", true, 1)],
+      primary_reasons: ["assignee"],
+      next_cursor: "CREWLET_WORK_LOG@1:1",
+    });
+    await settle();
+    expect(document.querySelector(".rail-badge")?.textContent).toBe("?");
+  });
+
+  // THE SCAN STARTS AT THE READ MARK, over the primary reasons — both from the
+  // answer's own record — so the page is spent on what the badge counts.
+  test("the badge reads past the person's mark, over their primary reasons", async () => {
+    const asked = railAsking({
+      notices: [],
+      primary_reasons: ["assignee", "mention"],
+      seen_through: { stream: "CREWLET_WORK_LOG", generation: 1, seq: 40 },
+    });
+    await settle();
+    expect(asked.at(-1)).toEqual({
+      handle: "ada",
+      limit: 50,
+      unread: true,
+      primary_only: true,
+      since: "CREWLET_WORK_LOG@1:40",
+      reasons: "assignee,mention",
+    });
+  });
+
+  // AND ONLY FOR THE PERSON WHOSE MARK IT IS. An answer about somebody else —
+  // the one a swapped token leaves on screen until its own lands — must not
+  // start the next person's read at the first person's mark.
+  test("a read mark is applied only to the inbox it was read from", async () => {
+    const asked = railAsking({
+      handle: "bob",
+      notices: [],
+      primary_reasons: ["assignee"],
+      seen_through: { stream: "CREWLET_WORK_LOG", generation: 1, seq: 40 },
+    });
+    await settle();
+    expect(asked.every((p) => !("since" in p) && !("reasons" in p))).toBe(true);
+  });
 });
 
 // A MODAL DOES NOT OUTLIVE THE SCREEN IT WAS OPENED ON.

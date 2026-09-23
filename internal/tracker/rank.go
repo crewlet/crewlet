@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -53,40 +54,42 @@ const RankDigits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 // integer strictly below it.
 const RankOrigin = "a0"
 
-// RankRenormaliseAt is both the length at which a mint is replaced by a
-// re-spread and the initial window that re-spread takes.
+// RankRenormaliseAt is the key length past which a project's order is handed
+// to the re-spread walk.
 //
-// ONE CONSTANT RATHER THAN TWO, because the window is DERIVED from it by
-// doubling until the keys it would produce fit under it.
+// The applier flags a project whenever one of its live keys is longer than
+// this, and [PlanRespread] rewrites the project's whole order to short keys. A
+// drag is not refused for its key's length below [RankRefuseAt]: it lands long
+// and the walk tidies after it.
 //
-// SIXTY-FOUR RATHER THAN JIRA'S 128, and the number is a property of the
-// REPAIR'S COST rather than a citation: Jira's 128 is calibrated against a
-// rebalance that reindexes every issue in the system, where this repair is at
-// most 256 rows in one commit — about 150× cheaper on a 10 000-task project
-// — so the threshold balancing repair cost against key length sits far lower.
-// It is 16× the length a healthy project reaches (10 000 tasks re-spread to
-// four characters, measured), so it fires only on a genuine same-gap nest of
-// 318–380 consecutive inserts into one gap, and it halves the worst-case
-// entry in the three rank-bearing indexes.
+// SIXTY-FOUR, because it sits far above the length a healthy project reaches
+// and well below the schema's own ceiling: 10 000 tasks re-spread to keys of
+// five characters, a key grows past this only after three to four hundred
+// drags land in one gap (both measured, the second from a gap between two
+// adjacent integers), and [RankRefuseAt] is nearly four times it.
 const RankRenormaliseAt = 64
 
-// RankRespreadInline is where the inline repair stops and the project is
-// marked for the duty's paced walk instead.
+// RankRefuseAt is the longest key the schema's CHECK on `tracker_tasks.rank`
+// accepts, and a key past it is REFUSED with [ErrRankTooLong] rather than cut:
+// a shortened key is a different position.
 //
-// Both halves of it are an order of magnitude inside their budgets: 256
-// (uuid, key) pairs are ≈ 15.4 KB — 1.2 % of the maximal commit — and 256
-// apply rows are 6.4 % of one apply transaction's row budget. So an inline
-// re-spread can never be what makes a transaction long. A DRAG IS NEVER
-// REFUSED FOR LENGTH: past this many neighbours it still succeeds and the
-// walk finishes the tidying.
-const RankRespreadInline = 256
-
-// RankRefuseAt is a schema CHECK and therefore an ASSERTION, not a policy.
-//
-// It is unreachable in correct operation, because any mint that would exceed
-// [RankRenormaliseAt] is replaced by a re-spread. Its message says the
-// generator is broken.
+// It is not reached in correct operation: a key past [RankRenormaliseAt] flags
+// its project for the re-spread walk, and carrying one key from there to here
+// takes another nine hundred and fifty to eleven hundred and forty drags into
+// the same gap (measured, as above) before the walk has run. That is reachable
+// — nothing but the walk's own schedule stands between the two thresholds — so
+// the refusal a drag gets names the key's length, this limit and the remedy:
+// the walk gives every task in the project a short key again, so a drop
+// between the same two cards, read after it has run, mints a short one.
 const RankRefuseAt = 254
+
+// ErrRankTooLong is a key longer than [RankRefuseAt].
+//
+// A SENTINEL rather than a message alone, because a drag into a gap
+// subdivided past the limit reaches it with a request that is not malformed:
+// whoever dropped the card is to be told to wait for the walk, which a surface
+// can say only if it can tell this refusal from a bad key.
+var ErrRankTooLong = errors.New("tracker: a rank key is longer than the schema accepts")
 
 // Rank is one position in a project's manual order.
 type Rank string
@@ -450,85 +453,16 @@ func cut(s string, n int) string {
 	return s[n:]
 }
 
-// KeysBetween mints n keys in ascending order strictly between a and b.
-//
-// The re-spread's own primitive. It splits at the midpoint and recurses rather
-// than chaining, so the keys it produces are as short as the gap allows: a
-// chain would make the last key of a 256-row re-spread 256 characters long,
-// which is the length the re-spread exists to remove.
-func KeysBetween(a, b Rank, n int) ([]Rank, error) {
-	switch {
-	case n < 0:
-		return nil, fmt.Errorf("tracker: cannot mint %d keys", n)
-	case n == 0:
-		return nil, nil
-	}
-	if a != "" && b != "" && string(a) >= string(b) {
-		return nil, fmt.Errorf("tracker: %q is not below %q, so there is nothing "+
-			"between them", a, b)
-	}
-	mid := n / 2
-	key, err := KeyBetween(a, b)
-	if err != nil {
-		return nil, err
-	}
-	left, err := KeysBetween(a, key, mid)
-	if err != nil {
-		return nil, err
-	}
-	right, err := KeysBetween(key, b, n-mid-1)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Rank, 0, n)
-	out = append(out, left...)
-	out = append(out, key)
-	out = append(out, right...)
-	return out, nil
-}
-
-// RespreadWindow is how many neighbours a re-spread takes, DERIVED from
-// [RankRenormaliseAt] rather than declared beside it.
-//
-// Start at the threshold and double until the keys the window would produce
-// fall under it. One constant, one derivation: a second constant for the
-// window is a second thing to keep in step with the first, and the two have
-// no independent reason to differ.
-//
-// It stops at [RankRespreadInline]; past that the drag still succeeds and the
-// project is marked for the duty's paced walk.
-func RespreadWindow(a, b Rank) (int, error) {
-	window := RankRenormaliseAt
-	for {
-		keys, err := KeysBetween(a, b, window)
-		if err != nil {
-			return 0, err
-		}
-		longest := 0
-		for _, k := range keys {
-			if len(k) > longest {
-				longest = len(k)
-			}
-		}
-		if longest < RankRenormaliseAt || window >= RankRespreadInline {
-			return window, nil
-		}
-		window *= 2
-		if window > RankRespreadInline {
-			return RankRespreadInline, nil
-		}
-	}
-}
-
 // RespreadKeys is n keys, evenly spaced, all sharing one integer head.
 //
-// # Why the re-spread does not use [KeysBetween]
+// # Why the re-spread does not bisect
 //
-// KeysBetween subdivides an interval by repeated bisection, which is exactly
-// right for "put this card between those two" and exactly wrong here: half its
-// keys crowd against the upper bound and inherit its length, so re-spreading a
-// project whose keys are 69 characters long produces keys that are 70. The
-// walk that exists to SHORTEN keys would lengthen them.
+// Minting n keys by repeated bisection of an interval — [KeyBetween] applied
+// recursively — is exactly right for "put this card between those two" and
+// exactly wrong here: half the keys crowd against the upper bound and inherit
+// its length, so re-spreading a project whose keys are 69 characters long
+// produces keys that are 70. The walk that exists to SHORTEN keys would
+// lengthen them.
 //
 // What a re-spread wants instead is a fresh integer position and n evenly
 // spaced fractions inside it, each as short as the count allows: at 62 symbols

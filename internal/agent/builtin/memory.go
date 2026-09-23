@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -405,6 +406,13 @@ func (t *refreshMemory) Parameters() map[string]any {
 				"type":        "integer",
 				"description": fmt.Sprintf("How many notes (default %d, max %d)", noteLimit, maxEpisodeLimit),
 			},
+			"offset": map[string]any{
+				"type": "integer",
+				"description": "How many to skip: of the notes that bear on " +
+					"`context_hint`, or of your notes newest first when there " +
+					"is no hint. An answer that did not list them all names " +
+					"the offset to pass for the rest.",
+			},
 		},
 	}
 }
@@ -422,21 +430,65 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return failed("Durable memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", noteLimit), 1, maxEpisodeLimit)
+	offset := max(argInt(args, "offset", 0), 0)
 
 	if hint := strings.TrimSpace(argString(args, "context_hint")); hint != "" {
-		return t.filtered(ctx, turn, agentID, hint, limit)
+		return t.filtered(ctx, turn, agentID, hint, limit, offset)
 	}
-	entries, err := t.diary.Recent(ctx, agentID, time.Now().UTC(), limit)
+	return t.recent(ctx, agentID, limit, offset)
+}
+
+// recent prints one page of the seat's notes, newest first: `limit` of them,
+// starting `offset` in.
+//
+// A PAGE THAT STOPS SHORT OF THE OLDEST NOTE SAYS SO, and names the offset
+// that reads on. A seat holding more notes than one page would otherwise read
+// the page as everything it has kept.
+//
+// The store reads a seat's NEWEST n and takes no offset, so a page is read as
+// the offset+limit newest plus ONE MORE — an evidence row, never printed,
+// whose presence is what says older notes exist. What that reads is bounded by
+// what the seat holds, whatever the offset. Positions count from the newest
+// note at the time of each call, so a note kept or expired between two calls
+// moves the next page by one.
+func (t *refreshMemory) recent(ctx context.Context, agentID string, limit, offset int) (tools.Result, error) {
+	want := offset + limit + 1
+	if want < offset {
+		// The sum overflowed. An offset that large is past the end of any
+		// diary, and reading everything answers it as any such offset is
+		// answered: with how many notes there are.
+		want = math.MaxInt
+	}
+	entries, err := t.diary.Recent(ctx, agentID, time.Now().UTC(), want)
 	if err != nil {
 		return failed(fmt.Sprintf("Could not read your notes: %v", err)), nil
 	}
-	if len(entries) == 0 {
+	held := len(entries)
+	switch {
+	case held == 0:
 		return tools.Result{Output: "You have no durable notes yet."}, nil
+	case offset >= held:
+		// Fewer rows came back than were asked for, so held is every note.
+		return tools.Result{Output: fmt.Sprintf(
+			"You have %d notes, so there are none from offset %d on.", held, offset)}, nil
 	}
+	end := min(offset+limit, held)
+	older := held > end
 	var b strings.Builder
-	fmt.Fprintf(&b, "Your %d most recent notes:\n\n", len(entries))
-	for _, e := range entries {
+	switch {
+	case !older && offset == 0:
+		fmt.Fprintf(&b, "All %d of your notes, newest first:\n\n", held)
+	case !older:
+		fmt.Fprintf(&b, "Your notes, newest first, %d to %d of %d:\n\n", offset+1, end, held)
+	default:
+		fmt.Fprintf(&b, "Your notes, newest first, %d to %d:\n\n", offset+1, end)
+	}
+	for _, e := range entries[offset:end] {
 		fmt.Fprintf(&b, "- [%s] %s\n", e.Kind, e.Content)
+	}
+	if older {
+		fmt.Fprintf(&b, "\nYou have older notes than these. Call %s again "+
+			"with offset %d to read them.", RefreshMemoryTool, end)
 	}
 	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
 }
@@ -448,7 +500,7 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 // have to agree about what is relevant, and two answers to that question drift
 // in the direction nobody looks.
 func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
-	agentID, hint string, limit int,
+	agentID, hint string, limit, offset int,
 ) (tools.Result, error) {
 	if t.recall == nil {
 		return failed("This deployment cannot re-filter your notes by " +
@@ -461,8 +513,8 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 		// ANSWERED FROM THE LEDGER, which is what makes a repeat free
 		// rather than merely uncharged — see [hintLedger]. Re-rendered
 		// rather than replayed, so a repeat asking for more notes than
-		// the first call printed gets them.
-		return renderHintedNotes(take.Cached, hint, limit), nil
+		// the first call printed, or for the ones past them, gets them.
+		return renderHintedNotes(take.Cached, hint, limit, offset), nil
 	case !take.Allowed:
 		// REFUSED with the count, so the model learns the shape of the
 		// limit rather than that the tool became unreliable.
@@ -481,27 +533,48 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	// an answer, and a repeat of the hint would otherwise cost another
 	// completion to be told it again.
 	t.hints.keep(turn.RunID, hint, entries)
-	return renderHintedNotes(entries, hint, limit), nil
+	return renderHintedNotes(entries, hint, limit, offset), nil
 }
 
-// renderHintedNotes prints a hint's filtered rows, newest-first as the filter
-// ordered them, capped at limit.
+// renderHintedNotes prints one page of a hint's filtered rows, in the order
+// the filter ranked them: `limit` of them, starting `offset` in.
+//
+// A PAGE THAT IS NOT THE WHOLE ANSWER SAYS SO, with the count left and the
+// offset that reads it. The heading claims these are the notes that bear on
+// the hint, so a silent page reads as the whole set — a short answer and a
+// short set would be the same text. The rest is reachable because the rows
+// are the ledger's: a repeat of the hint is answered from [hintLedger] rather
+// than re-filtered, so the next offset is into the same ranked answer.
 //
 // An empty result is NOT a fallback to recency. "The most recent eight" would
 // put a note about one person in front of a turn about another, which is the
 // failure the filter exists to prevent.
-func renderHintedNotes(entries []learning.DiaryEntry, hint string, limit int) tools.Result {
-	if len(entries) == 0 {
+func renderHintedNotes(entries []learning.DiaryEntry, hint string, limit, offset int) tools.Result {
+	total := len(entries)
+	if total == 0 {
 		return tools.Result{Output: fmt.Sprintf(
 			"Nothing in your notes bears on %s.", clip(hint))}
 	}
-	if len(entries) > limit {
-		entries = entries[:limit]
+	if offset >= total {
+		return tools.Result{Output: fmt.Sprintf(
+			"%d of your notes bear on %s, so there are none from offset %d on.",
+			total, clip(hint), offset)}
 	}
+	end := min(offset+limit, total)
 	var b strings.Builder
-	fmt.Fprintf(&b, "Your notes that bear on %s:\n\n", clip(hint))
-	for _, e := range entries {
+	if offset == 0 && end == total {
+		fmt.Fprintf(&b, "Your notes that bear on %s:\n\n", clip(hint))
+	} else {
+		fmt.Fprintf(&b, "Your notes that bear on %s, %d to %d of %d:\n\n",
+			clip(hint), offset+1, end, total)
+	}
+	for _, e := range entries[offset:end] {
 		fmt.Fprintf(&b, "- [%s] %s\n", e.Kind, e.Content)
+	}
+	if rest := total - end; rest > 0 {
+		fmt.Fprintf(&b, "\n%d more bear on it. Call %s again with this "+
+			"context_hint and offset %d to read them — repeating a hint costs "+
+			"nothing.", rest, RefreshMemoryTool, end)
 	}
 	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}
 }

@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -217,5 +218,59 @@ func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
 	if !got.Failed || !strings.Contains(got.Output, "RFC3339") {
 		t.Errorf("an unparseable `since` gave %q, want a refusal naming the "+
 			"two shapes", got.Output)
+	}
+}
+
+// `since` TAKES THE NEWEST POSITION A CALLER HAS SEEN, and the answer hands it
+// one.
+//
+// The feed is newest first and `since` is a lower bound, so the value it needs
+// is the position of the TOP of a page. `next_cursor` is the bottom — the
+// resume point for paging older — and a caller told to pass it as `since` got
+// the same page back, shorter, and read it as the end of the history. A first
+// page therefore carries `newest_position`, which round-trips into `since`;
+// a later page does not, because its top is older than what was already read.
+func TestTaskActivityHandsBackThePositionSinceTakes(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.activity = tracker.ActivityAnswer{
+		Records: []tracker.ActivityRecord{
+			{ID: "newest", LogStream: "CREWLET_TRACKER_LOG", LogGeneration: 2, LogSeq: 11},
+			{ID: "older", LogStream: "CREWLET_TRACKER_LOG", LogGeneration: 2, LogSeq: 9},
+		},
+		NextCursor: "CREWLET_TRACKER_LOG@2:9",
+	}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	first := callWork(t, reg, tracker.TaskActivityTool, map[string]any{"task": "ENG-1"})
+	var answer struct {
+		NewestPosition string `json:"newest_position"`
+		NextCursor     string `json:"next_cursor"`
+	}
+	if err := json.Unmarshal([]byte(first.Output), &answer); err != nil {
+		t.Fatalf("the answer is not JSON: %v\n%s", err, first.Output)
+	}
+	if answer.NewestPosition != "CREWLET_TRACKER_LOG@2:11" {
+		t.Fatalf("newest_position = %q, want the first row's position — the "+
+			"top of a newest-first page", answer.NewestPosition)
+	}
+	if answer.NextCursor == "" {
+		t.Errorf("the page's own cursor was dropped: %s", first.Output)
+	}
+
+	// IT ROUND-TRIPS: what the answer offered is what `since` parses.
+	callWork(t, reg, tracker.TaskActivityTool, map[string]any{
+		"task": "ENG-1", "since": answer.NewestPosition,
+	})
+	if got := trk.activityQuery.Since.String(); got != answer.NewestPosition {
+		t.Errorf("since = %q, want the newest_position the answer offered", got)
+	}
+
+	later := callWork(t, reg, tracker.TaskActivityTool, map[string]any{
+		"task": "ENG-1", "cursor": answer.NextCursor,
+	})
+	if strings.Contains(later.Output, "newest_position") {
+		t.Errorf("a later page offered a newest_position, which is older than "+
+			"the one the first page already gave: %s", later.Output)
 	}
 }

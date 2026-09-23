@@ -123,17 +123,24 @@ const (
 	// describe what it capped.
 	//
 	// The cost of the wrong knob was not a short list. `checklistAssignees`
-	// sorts the handles before capping them, so past sixteen people the
+	// sorted the handles before it cut them, so past sixteen people the
 	// seventeenth BY ALPHABET lost their wake — silently, and permanently:
 	// a wake is not recoverable by reading the task later, because nothing
 	// tells them to look.
 	//
-	// At the item count the cap can no longer bite — there cannot be more
-	// distinct assignees than items — which is the point. It stays as a
-	// guard on a payload the fleet replicates and holds for the stream's
-	// whole retention window, and it is written as the arithmetic so that
-	// raising the item cap raises it too, exactly as [MaxRoutingRows] is.
-	MaxChecklistAssignees = MaxChecklistItemsTotal
+	// TWICE THE ITEM TOTAL, because the set is a UNION of two checklists:
+	// `checklistAssignees` names the owner of every item a commit added,
+	// removed or changed, on BOTH sides — the person who had a reassigned
+	// item as well as the person who has it. One commit replacing a full
+	// checklist of [MaxChecklistItemsTotal] items with as many differently
+	// owned ones touches every owner of both, so at the item total alone
+	// the cap could still bite. At twice it, it cannot, which is the
+	// point: nothing cuts this set, and [Notify.checkSnapshot] holds the
+	// bound as a refusal on a payload the fleet replicates and holds for
+	// the stream's whole retention window. Written as the arithmetic so
+	// that raising the item cap raises it too, exactly as
+	// [MaxRoutingRows] is.
+	MaxChecklistAssignees = 2 * MaxChecklistItemsTotal
 
 	// MaxFormerKeys bounds what a task DISPLAYS. Resolution is unbounded:
 	// every former key also has an alias row, and the applier never
@@ -150,10 +157,11 @@ const (
 	// SIXTEEN, which is the design's own figure for this collection and
 	// is derived from what a thread IS rather than from what a table
 	// holds: past a dozen or so people a comment thread is a meeting, and
-	// the routing that matters there is the mention. The cap does not
-	// silence anybody — a participant beyond it still watches the task
-	// and hears through the watcher arm; what it bounds is how many
-	// handles ride on the record.
+	// the routing that matters there is the mention. A participant beyond
+	// it is woken through the watcher arm instead, for as long as they
+	// watch the task — commenting subscribes them, except on a task
+	// already at [MaxWatchers] — so what it bounds is how many handles
+	// ride on the record.
 	MaxThreadParticipants = 16
 
 	// MaxDepth is the subtask depth, and MaxDescendants the subtree size
@@ -229,12 +237,12 @@ func checkTextCaps(id string, title, body, comment *string) error {
 // and the only code that mentioned the caps was a test.
 //
 // What that cost is one cap over: [MaxChecklistAssignees] is derived from the
-// item total on the reasoning that there cannot be more distinct assignees
-// than items, which is only true while the item total is a bound rather than a
-// sentence. Without this the routing cap sits on an unenforced number and the
-// snapshot that exceeds it is REFUSED at [Notify.checkSnapshot] — turning an
-// unbounded checklist into a failed write on the commit that touches it,
-// which is the worst place to discover it.
+// item total on the reasoning that one commit cannot touch more distinct
+// owners than the items on its two sides, which is only true while the item
+// total is a bound rather than a sentence. Without this the routing cap sits
+// on an unenforced number and the snapshot that exceeds it is REFUSED at
+// [Notify.checkSnapshot] — turning an unbounded checklist into a failed write
+// on the commit that touches it, which is the worst place to discover it.
 //
 // PURE OVER VALUES, like [checkTextCaps] beside it and for the reason coerce.go
 // gives for the same shape.
@@ -950,9 +958,9 @@ const (
 
 	// MaxGoalUpdateText bounds one health update's prose, at the plan's
 	// own 2 KiB. It is the one part of a goal somebody writes in their own
-	// words, and it is what the wake's card carries — so it is cut here
-	// rather than at the card, where a longer stored value would be
-	// invisible until somebody opened the goal.
+	// words, so a longer one is REFUSED at the write rather than cut — see
+	// [appendUpdates] — and the wake's card carries a marked excerpt of it
+	// ([latestUpdateText]).
 	MaxGoalUpdateText = 2 << 10
 	MaxTasksPerTarget = 64
 

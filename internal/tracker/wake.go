@@ -107,10 +107,11 @@ type Wake struct {
 // that holds the thread.
 type ThreadParties struct {
 	// Participants are the handles already in this thread — the parent
-	// comment's author and everyone who has replied. Capped at
-	// [MaxThreadParticipants] by the caller's own query; this package
-	// cuts what arrives longer, deterministically, so two nodes reading
-	// one record agree.
+	// comment's author and everyone who has replied. At most
+	// [MaxThreadParticipants], distinct and in the order they first
+	// spoke: [Reader.Thread]'s own query stops there. They are carried as
+	// given, and [Notify.Validate] refuses a longer list rather than
+	// cutting it.
 	Participants []string
 
 	// Asked is the handle THIS comment asks, which is a question somebody
@@ -211,7 +212,12 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 		snapshot.RoutedTo = snapshot.RoutingUnitLead
 	}
 	if len(w.Dependents) > 0 {
-		snapshot.Dependents = capParties(w.Dependents, MaxDependents)
+		// WHOLE. Every party here is a task the same commit adds to this
+		// task's dependents, each named once
+		// ([DependencyChange.normalised]), and that set is refused past
+		// [MaxDependents] inside the decide ([checkDependents]) — so a
+		// list longer than the cap belongs to a write that cannot land.
+		snapshot.Dependents = slices.Clone(w.Dependents)
 	}
 	if w.Parent != nil && w.Kind == ChangeStatus &&
 		w.Before.StatusGroup.Finished() != after.StatusGroup.Finished() {
@@ -233,8 +239,7 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 		// the person who asked a question that was answered days ago.
 		snapshot.CommentAsk = w.Thread.Asked
 		snapshot.AnsweredAuthor = w.Thread.AnsweredAuthor
-		snapshot.ThreadParticipants = capHandles(
-			w.Thread.Participants, MaxThreadParticipants)
+		snapshot.ThreadParticipants = slices.Clone(w.Thread.Participants)
 	}
 	return snapshot
 }
@@ -250,7 +255,8 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 //
 // The set is SORTED and deduped, because two nodes read the record rather than
 // re-deriving it and a slice in map order would put two spellings of one
-// notification in the store.
+// notification in the store. And it is WHOLE: an owner per item on each side
+// is at most [MaxChecklistAssignees], so there is nothing to cut.
 func checklistAssignees(before, after Task) []string {
 	was := itemsByID(before)
 	now := itemsByID(after)
@@ -282,7 +288,7 @@ func checklistAssignees(before, after Task) []string {
 		out = append(out, handle)
 	}
 	sort.Strings(out)
-	return capHandles(out, MaxChecklistAssignees)
+	return out
 }
 
 // itemsByID flattens a task's checklists to their items.
@@ -298,62 +304,14 @@ func itemsByID(task Task) map[string]ChecklistItem {
 	return out
 }
 
-// capHandles cuts a handle set to its cap, deduped, order preserved.
-//
-// CUT RATHER THAN REFUSED, unlike every collection a caller states: these are
-// derived from rows, so a set over its cap is a task that grew rather than a
-// writer that asked for too much — and refusing the write would fail somebody's
-// comment because a thread has many voices. The cap bounds what rides on the
-// record; nobody is silenced, because a participant past it is still a watcher.
-func capHandles(in []string, cap int) []string {
-	out := make([]string, 0, min(len(in), cap))
-	seen := make(map[string]bool, len(in))
-	for _, handle := range in {
-		if handle == "" || seen[handle] {
-			continue
-		}
-		seen[handle] = true
-		if len(out) == cap {
-			break
-		}
-		out = append(out, handle)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// capParties is the same cut over the two lists that name somebody else's
-// task, keyed on the task rather than on the handle.
-func capParties(in []TaskParty, cap int) []TaskParty {
-	out := make([]TaskParty, 0, min(len(in), cap))
-	seen := make(map[string]bool, len(in))
-	for _, party := range in {
-		if party.Task == "" || seen[party.Task] {
-			continue
-		}
-		seen[party.Task] = true
-		if len(out) == cap {
-			break
-		}
-		out = append(out, party)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
 // deltas are the fields that moved, as TEXT.
 //
 // Text rather than the typed value, because a change record is read by a card,
 // a person and a model, and all three want "todo → in_progress". The typed
 // value is on the row for anything that needs it.
 //
-// CAPPED AT THE DISPLAY LIMIT and no lower: the cap governs what a card SHOWS
-// and never what the mutation carries, and a writer that hit it should be
-// trimming what it shows rather than what it recorded.
+// WHOLE: [TaskDeltas] never cuts, and [Notify.Validate] is where the card's
+// own cap is held.
 func (w Wake) deltas() map[string]Delta { return TaskDeltas(w.Before, w.After) }
 
 // TaskDeltas is what changed between two versions of a task.
@@ -410,21 +368,13 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	if len(moved) == 0 {
 		return nil
 	}
-	if len(moved) > MaxDeltas {
-		// DETERMINISTICALLY, by field name: a card that showed a
-		// different twenty-eight on two nodes would be one screen
-		// disagreeing with another about what changed.
-		names := make([]string, 0, len(moved))
-		for name := range moved {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		trimmed := make(map[string]Delta, MaxDeltas)
-		for _, name := range names[:MaxDeltas] {
-			trimmed[name] = moved[name]
-		}
-		return trimmed
-	}
+	// NEVER CUT. The fields compared above are a fixed list shorter than
+	// [MaxDeltas], so every delta fits a card, and this map is also the
+	// history row's — the durable record of the change — and the source of
+	// the status-entered stamp, neither of which a display cap may govern.
+	// A list that outgrew the cap would be refused at [Notify.Validate]
+	// rather than trimmed here, and TestEveryDeltaATaskCanReportFitsOneCard
+	// is what fails first.
 	return moved
 }
 

@@ -119,7 +119,7 @@ It is **not** on every seat-scoped write, and the honest inventory is narrower t
 | `episodes` | **Collapsed** against the reader that matters. One row per unit of work in the node's own store, which is the only one its recall reads — see [Keying a write on the work](#keying-a-write-on-the-work) below |
 | `counterparty_profiles.interaction_count` | **Collapsed.** The increment is skipped when the last counted work key repeats |
 | `agent_onboarding_markers` | Upsert *plus* `learning.Onboarding.Claim`, a cross-process single-flight claim: already exclusive |
-| `agent_diary` | Byte-identical content collapses on write. Two turns that word the same fact differently still land twice |
+| `agent_diary` | **Not collapsed.** Every write mints its own row id, so a second writer's note lands beside the first whether or not it is worded the same |
 
 The last one is deliberate. Nothing can key a *differently worded* diary entry to its twin — that needs the duplicate turn not to happen, which is the completion ledger's job, not a write guard's.
 

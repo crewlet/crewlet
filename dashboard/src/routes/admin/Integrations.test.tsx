@@ -2096,3 +2096,86 @@ test("one subject is shown, not hidden behind a count", () => {
   expect(screen.queryByText(/all 1/)).toBeNull();
   expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
 });
+
+// --- what arrived on one surface, and where the rest of it is --------------- //
+
+import { SurfaceDeliveries } from "./Integrations.tsx";
+import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
+
+/** The deliveries card over `count` stored rows, answering what it is asked. */
+function deliveriesOver(count: number) {
+  Object.defineProperty(globalThis, "WebSocket", {
+    writable: true,
+    value: class {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+      readyState = 0;
+      send(): void {}
+      close(): void {}
+    },
+  });
+  const asked: Record<string, unknown>[] = [];
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (
+    socket as unknown as {
+      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (what, params = {}) => {
+    if (what !== "events") return Promise.resolve({});
+    asked.push(params);
+    const limit = Number(params.limit);
+    const events = Array.from({ length: Math.min(count, limit) }, (_, i) => ({
+      id: `e-${i}`,
+      type: "webhook:push",
+      timestamp: new Date(Date.now() - i * 1000).toISOString(),
+      source: "slack",
+      actor: "",
+      summary: `delivery ${i}`,
+      category: "webhook",
+      trace_id: "",
+      span_id: "",
+      parent_span_id: "",
+      topic: "",
+      failed: false,
+    }));
+    return Promise.resolve({ events, next: null, exhausted: events.length === 0 });
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <SurfaceDeliveries surface="slack" name="Slack" />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  return asked;
+}
+
+// A PAGE THAT FILLED IS NOT A CUT. The card decided "older deliveries exist"
+// from fifty rows, so a surface with exactly fifty said so falsely; the probe
+// row past the page is what says it now.
+test("the deliveries card marks a cut on the evidence row, and only then", async () => {
+  const asked = deliveriesOver(51);
+  expect(await screen.findByText("delivery 49")).toBeTruthy();
+  expect(asked[0]).toMatchObject({ category: "webhook", source: "slack", limit: 51 });
+  // THE PROBE IS EVIDENCE, NOT A ROW.
+  expect(screen.queryByText("delivery 50")).toBeNull();
+  expect(screen.getByText("50+")).toBeTruthy();
+  // AND THE REST IS THIS SURFACE'S, not every surface's webhooks.
+  const link = screen.getByRole("link", { name: /The rest of Slack.s deliveries/ });
+  expect(link.getAttribute("href")).toContain("source=slack");
+  expect(link.getAttribute("href")).toContain("category=webhook");
+  // ON THE WHOLE LOG: the card has no time bound and the log's fallback is a
+  // day, which holds none of a surface's deliveries older than that.
+  expect(link.getAttribute("href")).toContain("window=30d");
+});
+
+test("exactly a page of deliveries is the whole of them", async () => {
+  deliveriesOver(50);
+  expect(await screen.findByText("delivery 49")).toBeTruthy();
+  expect(screen.queryByText("50+")).toBeNull();
+  expect(screen.queryByRole("link", { name: /The rest of Slack.s deliveries/ })).toBeNull();
+});

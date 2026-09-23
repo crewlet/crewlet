@@ -27,10 +27,21 @@ import (
 // hundreds of turns a day, and a rollup carrying all of them would put a
 // megabyte of nested buckets on every socket that asked for a window. Fifty is
 // what fits on a screen a reader will actually scroll.
+//
+// # Where the turns past the cut are
+//
+// Every figure but the table still counts them ([Rollup.TurnsTotal] says how
+// many there were), and the rows themselves are reached by asking again: the
+// `tokens` question in internal/api/queries takes `recent_turns` up to
+// [MaxRecentTurns], and `since`/`until` to name a narrower half-open window,
+// which folds every turn with a phase inside it — a turn straddling an edge
+// from only its phases inside the window.
 const DefaultRecentTurns = 50
 
 // MaxRecentTurns bounds what a caller may ask for. A request for ten thousand
-// turns is a request to aggregate the whole window into one frame.
+// turns is a request to aggregate the whole window into one frame; a window
+// holding more than this is read in narrower windows, as [DefaultRecentTurns]
+// describes.
 const MaxRecentTurns = 500
 
 // Record is one completed phase's spend — the aggregator's input, and the
@@ -46,8 +57,12 @@ type Record struct {
 	// HostPhase is the phase a nested call ran under: an auxiliary
 	// learning worker's own LLM call, or the round-cap extension judge.
 	HostPhase string `json:"host_phase"`
-	// Worker names the auxiliary worker, and is set only when Phase is
-	// "auxiliary" — which is why the worker rollup keys on the pair.
+	// Worker names the worker behind the call: on a "subagent" phase the
+	// `workers:` template the delegated task ran, and on an "auxiliary"
+	// one the learning worker — the event catalogue's own definition of
+	// the field. Empty on every other phase, and on a delegation that
+	// wrote its prompt inline rather than naming a template. The worker
+	// rollup keys on the PAIR; see [workerOf].
 	Worker string `json:"worker"`
 	Model  string `json:"model"`
 
@@ -124,9 +139,15 @@ type ModelRow struct {
 	Bucket
 }
 
-// WorkerRow is the per-worker breakdown of a rollup — the background duties
-// (reflection, summarisation) that spend tokens outside any seat's turn.
+// WorkerRow is the per-worker breakdown of a rollup: a delegated task's
+// `workers:` template, or a learning worker.
+//
+// ONE ROW PER PHASE AND NAME, and Phase says which kind of worker the row is.
+// Nothing keeps the two kinds' names apart — a template may be called anything
+// the `workers:` key grammar admits, a learning worker's name included — so a
+// row keyed on the name alone would sum two unrelated workers into one figure.
 type WorkerRow struct {
+	Phase  string `json:"phase"`
 	Worker string `json:"worker"`
 	Bucket
 }
@@ -196,7 +217,9 @@ type Rollup struct {
 	ByTurn   []TurnRow   `json:"by_turn"`
 
 	// TurnsTotal is how many turns the window actually held, against the
-	// bounded slice [Breakdown.ByTurn] carries.
+	// bounded slice [Rollup.ByTurn] carries. A renderer that shows ByTurn
+	// shows this beside it, or it heads a page of the newest with a count
+	// that reads as the whole; [DefaultRecentTurns] says where the rest are.
 	//
 	// WITHOUT IT THE TABLE AND THE FIGURE ABOVE IT DESCRIBE DIFFERENT SETS.
 	// `Totals` is computed over every record in the window and the table is
@@ -274,7 +297,7 @@ func Aggregate(records []Record, opts Options) Rollup {
 
 	byPhase := map[string]*Bucket{}
 	byModel := map[string]*Bucket{}
-	byWorker := map[string]*Bucket{}
+	byWorker := map[workerID]*Bucket{}
 	byAgent := map[string]*AgentRow{}
 	byTurn := map[string]*TurnRow{}
 
@@ -290,11 +313,8 @@ func Aggregate(records []Record, opts Options) Rollup {
 		out.Totals.add(r)
 		bucketFor(byPhase, phase).add(r)
 		bucketFor(byModel, model).add(r)
-		// Keyed on the PAIR, not on the worker alone: Worker is set only
-		// on an auxiliary phase, so a bare non-empty check would fold a
-		// stray value on some other phase into a worker's total.
-		if r.Phase == PhaseAuxiliary && r.Worker != "" {
-			bucketFor(byWorker, r.Worker).add(r)
+		if id, ok := workerOf(r); ok {
+			bucketFor(byWorker, id).add(r)
 		}
 
 		agent := byAgent[role]
@@ -347,8 +367,8 @@ func Aggregate(records []Record, opts Options) Rollup {
 	for model, b := range byModel {
 		out.ByModel = append(out.ByModel, ModelRow{Model: model, Bucket: *b})
 	}
-	for worker, b := range byWorker {
-		out.ByWorker = append(out.ByWorker, WorkerRow{Worker: worker, Bucket: *b})
+	for id, b := range byWorker {
+		out.ByWorker = append(out.ByWorker, WorkerRow{Phase: id.phase, Worker: id.worker, Bucket: *b})
 	}
 	for _, a := range byAgent {
 		out.ByAgent = append(out.ByAgent, *a)
@@ -364,7 +384,9 @@ func Aggregate(records []Record, opts Options) Rollup {
 	// diff of two captures unreadable and a golden test impossible.
 	byTokensThen(out.ByPhase, func(r PhaseRow) (int, string) { return r.TotalTokens, r.Phase })
 	byTokensThen(out.ByModel, func(r ModelRow) (int, string) { return r.TotalTokens, r.Model })
-	byTokensThen(out.ByWorker, func(r WorkerRow) (int, string) { return r.TotalTokens, r.Worker })
+	byTokensThen(out.ByWorker, func(r WorkerRow) (int, string) {
+		return r.TotalTokens, workerID{phase: r.Phase, worker: r.Worker}.band()
+	})
 	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, r.Role })
 
 	// Turns are NEWEST FIRST, not biggest first: the table is a tail of
@@ -388,11 +410,51 @@ func Aggregate(records []Record, opts Options) Rollup {
 	return out
 }
 
-// PhaseAuxiliary is the phase whose records carry a worker. Named here rather
-// than imported from the event catalogue so this package stays a leaf.
-const PhaseAuxiliary = "auxiliary"
+// The phases whose records name a worker: a learning worker's own call, and a
+// delegated task. Named here rather than imported from the event catalogue so
+// this package stays a leaf; a test holds them to the catalogue's values.
+const (
+	PhaseAuxiliary = "auxiliary"
+	PhaseSubagent  = "subagent"
+)
 
-func bucketFor(m map[string]*Bucket, key string) *Bucket {
+// workerID is a worker's identity in a rollup or a series: the kind of worker
+// and its name.
+type workerID struct {
+	phase  string
+	worker string
+}
+
+// band is the identity as one string, for the one place that needs a string:
+// a series band's key, and a tie-break in a sort.
+//
+// The phase is one of two fixed words with no "/" in it, so the first "/" is
+// always the separator whatever the name holds.
+func (id workerID) band() string { return id.phase + "/" + id.worker }
+
+// workerOf is the worker a record is the spend of, and whether it is any
+// worker's at all.
+//
+// Keyed on the PHASE as well as the name, for two reasons. A Worker on a phase
+// that names none is a stray value, and a bare non-empty check would fold it
+// into a worker's total as spend that worker never made. And a template and a
+// learning worker may carry one name (see [WorkerRow]), which only the phase
+// tells apart.
+//
+// ONE PREDICATE for [Aggregate] and [Bucketed], which is what keeps the
+// rollup's worker rows and the series' worker bands counting the same records.
+func workerOf(r Record) (workerID, bool) {
+	if r.Worker == "" {
+		return workerID{}, false
+	}
+	switch r.Phase {
+	case PhaseAuxiliary, PhaseSubagent:
+		return workerID{phase: r.Phase, worker: r.Worker}, true
+	}
+	return workerID{}, false
+}
+
+func bucketFor[K comparable](m map[K]*Bucket, key K) *Bucket {
 	b := m[key]
 	if b == nil {
 		b = &Bucket{}

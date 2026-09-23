@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { useParam } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import {
   Button,
   Callout,
@@ -39,7 +39,7 @@ import {
   ScheduleGlyph,
   TuneGlyph,
 } from "@crewlethq/icons/glyphs";
-import { QueryState } from "~/components/common.tsx";
+import { CutNote, QueryState } from "~/components/common.tsx";
 // OURS, DELIBERATELY. uilet's `SegmentedControl` has no manual-activation
 // mode: with `semantics="radio"` its arrow keys COMMIT the option they land
 // on, and every group on this screen drives a `useParam` — the lens pushes a
@@ -56,7 +56,8 @@ import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
+import { fmtDateTime, plural, shortId, tsKey } from "~/lib/format.ts";
+import { pageCount } from "~/lib/work.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetNode, RevisionMeta } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -73,8 +74,21 @@ type Lens = (typeof LENSES)[number];
  * is a revision the rail can resolve — two limits would make a peek opened
  * from the bottom of the table answer "no such revision" about a row that is
  * on screen.
+ *
+ * READ WITH ONE MORE, as the evidence that the history holds more: a list of
+ * exactly a hundred revisions and one of four hundred are otherwise the same
+ * answer. The probe row is drawn nowhere and resolves nothing — see
+ * [historyOf]. Past the window, `GET /config/revisions` pages the whole history
+ * by `offset`, and `GET /config/revisions/{id}` answers any one revision.
  */
 const HISTORY_LIMIT = 100;
+const HISTORY_READ = { limit: HISTORY_LIMIT + 1 };
+
+/** The revisions a history read answered, and whether the history holds more. */
+function historyOf(answer: RevisionMeta[] | null): { rows: RevisionMeta[]; more: boolean } {
+  const all = answer ?? [];
+  return { rows: all.slice(0, HISTORY_LIMIT), more: all.length > HISTORY_LIMIT };
+}
 
 /**
  * How often the fleet's apply status is re-read.
@@ -256,8 +270,17 @@ function NodeLine({ node, state }: { node: FleetNode; state: "here" | "elsewhere
       {state === "here" ? (
         <Tag variant="success">applied</Tag>
       ) : state === "elsewhere" ? (
-        <Tag variant="warning" title={on}>
-          on {on.slice(0, 10)}
+        // THE WHOLE ID IS ONE CLICK AWAY: the revision's own page, which
+        // heads itself with it.
+        <Tag variant="warning">
+          on{" "}
+          <a
+            className="mono t-link prose-link"
+            href={href(["admin", "config", "revisions", on])}
+            title={on}
+          >
+            {shortId(on)}
+          </a>
         </Tag>
       ) : (
         <Tag appearance="outline">not saying</Tag>
@@ -358,11 +381,11 @@ function RevisionBody({
  */
 export function RevisionPeek({ id }: { id: string }) {
   const now = useNow();
-  const audit = useQuery("config_audit", { limit: HISTORY_LIMIT }, { enabled: id !== "" });
+  const audit = useQuery("config_audit", HISTORY_READ, { enabled: id !== "" });
   const fleet = useQuery("fleet", undefined, { enabled: id !== "", pollMs: FLEET_POLL_MS });
 
   const revision = useMemo(
-    () => (audit.data ?? []).find((r) => r.revision_id === id) ?? null,
+    () => historyOf(audit.data).rows.find((r) => r.revision_id === id) ?? null,
     [audit.data, id],
   );
 
@@ -379,7 +402,7 @@ export function RevisionPeek({ id }: { id: string }) {
             size="compact"
             icon={<ScheduleGlyph size="xl" />}
             title="No such revision in the recent history"
-            description={`The last ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that window, or the id may be wrong.`}
+            description={`The newest ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that — GET /config/revisions/{id} answers any revision this node holds — or the id may be wrong.`}
           />
         )}
         {revision && (
@@ -388,7 +411,7 @@ export function RevisionPeek({ id }: { id: string }) {
               size="peek"
               kind="Revision"
               icon="description"
-              identifier={revision.revision_id.slice(0, 10)}
+              identifier={revision.revision_id}
               title={revision.summary || "No summary was written"}
               status={<RevisionState revision={revision} />}
               facts={revisionFacts(revision, now)}
@@ -442,16 +465,12 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
     { kind, id: entity },
     { enabled: lens === "entities" && entity !== "" },
   );
-  const audit = useQuery(
-    "config_audit",
-    { limit: HISTORY_LIMIT },
-    {
-      // THE HISTORY IS ALSO WHAT THE ADDRESSED REVISION IS READ FROM, so the
-      // block below has something to render on the lens a link lands on
-      // rather than only on the two that show the table.
-      enabled: lens === "audit" || lens === "diff" || revisionPath !== undefined,
-    },
-  );
+  const audit = useQuery("config_audit", HISTORY_READ, {
+    // THE HISTORY IS ALSO WHAT THE ADDRESSED REVISION IS READ FROM, so the
+    // block below has something to render on the lens a link lands on
+    // rather than only on the two that show the table.
+    enabled: lens === "audit" || lens === "diff" || revisionPath !== undefined,
+  });
   const diff = useQuery(
     "config_diff",
     { revision_id: revision, against: against || "active" },
@@ -470,7 +489,8 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
   // tests `loading` and `error` first because neither of those is an answer.
   const noRevision = !ids.loading && !ids.error && !ids.data;
 
-  const rows = useMemo(() => audit.data ?? [], [audit.data]);
+  const history = useMemo(() => historyOf(audit.data), [audit.data]);
+  const rows = history.rows;
 
   // THE ORDER `[` AND `]` WALK — the history as the engine answered it, which
   // is the order the table lands in.
@@ -562,7 +582,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
               <EmptyState
                 icon={<ScheduleGlyph size="xl" />}
                 title="No such revision in the recent history"
-                description={`The last ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that window, or the id may be wrong.`}
+                description={`The newest ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that — GET /config/revisions/{id} answers any revision this node holds — or the id may be wrong.`}
               />
             )}
             {addressed && (
@@ -570,7 +590,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                 <ObjectHeader
                   kind="Revision"
                   icon="description"
-                  identifier={addressed.revision_id.slice(0, 10)}
+                  identifier={addressed.revision_id}
                   title={addressed.summary || "No summary was written"}
                   status={<RevisionState revision={addressed} />}
                   facts={revisionFacts(addressed, now)}
@@ -753,7 +773,10 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             }
           >
             <Card padding="none">
-              <Card.Header icon={<ScheduleGlyph size="sm" />} count={rows.length}>
+              <Card.Header
+                icon={<ScheduleGlyph size="sm" />}
+                count={pageCount(rows.length, history.more)}
+              >
                 Revisions
               </Card.Header>
               <DataGrid<RevisionMeta>
@@ -780,7 +803,9 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                     header: "Revision",
                     cell: (r) => (
                       <span className="row gap-1">
-                        <KeyCell value={r.revision_id.slice(0, 10)} />
+                        {/* SHORTENED AND MARKED; the whole id is the row's
+                            own address and the rail's header. */}
+                        <KeyCell value={shortId(r.revision_id)} />
                         {r.is_active && <Tag variant="success">active</Tag>}
                       </span>
                     ),
@@ -813,6 +838,18 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                   },
                 ]}
               />
+              <CutNote
+                shown={rows.length}
+                more={history.more}
+                one="revision"
+                slice="newest"
+                whole={
+                  <>
+                    <InlineCode>{`GET /config/revisions?offset=${HISTORY_LIMIT}`}</InlineCode> pages
+                    the rest of the history.
+                  </>
+                }
+              />
             </Card>
           </QueryState>
 
@@ -821,13 +858,36 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
               <Card.Header
                 icon={<ForkRightGlyph size="sm" />}
                 subtitle={
-                  against
-                    ? `against revision ${against.slice(0, 10)}`
-                    : "against the active revision"
+                  against ? `against revision ${shortId(against)}` : "against the active revision"
                 }
               >
-                {revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
+                {revision ? `Changes in ${shortId(revision)}` : "Diff"}
               </Card.Header>
+              {/* THE TWO IDS WHOLE, each a link to its own page: the header
+                  above shortens them, and the grid highlights `revision` and
+                  not `against`, so without this the only whole copy of the
+                  second was the address bar. */}
+              {revision && (
+                <p className="t-caption">
+                  <a
+                    className="mono t-link"
+                    href={href(["admin", "config", "revisions", revision])}
+                  >
+                    {revision}
+                  </a>{" "}
+                  compared with{" "}
+                  {against && against !== "active" ? (
+                    <a
+                      className="mono t-link"
+                      href={href(["admin", "config", "revisions", against])}
+                    >
+                      {against}
+                    </a>
+                  ) : (
+                    "the active revision"
+                  )}
+                </p>
+              )}
               {!revision ? (
                 <EmptyState
                   size="compact"

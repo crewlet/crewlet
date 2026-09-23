@@ -95,8 +95,8 @@ type SemanticQuery struct {
 	// the fusion below it is written against.
 	Limit int
 
-	// Candidates caps stage one. Zero takes [Stage1Depth]; anything above
-	// [BinaryCandidateCeiling] is clamped to it.
+	// Candidates is stage one's depth. Zero takes [Stage1Depth], and a
+	// depth below the limit is raised to it — see [semanticDepths].
 	Candidates int
 
 	// Shards is the bucket range this scan may read.
@@ -159,18 +159,7 @@ func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, 
 			"undefined and fails the whole statement", len(q.Vector), want)
 	}
 
-	limit := q.Limit
-	if limit <= 0 {
-		limit = ReturnDepth
-	}
-	candidates := q.Candidates
-	if candidates <= 0 {
-		candidates = Stage1Depth
-	}
-	candidates = min(candidates, BinaryCandidateCeiling)
-	// A CANDIDATE POOL SMALLER THAN THE ANSWER is a rerank that cannot
-	// fill the page it was asked for, whatever it finds.
-	candidates = max(candidates, limit)
+	limit, candidates := semanticDepths(q.Limit, q.Candidates)
 
 	// THE ARGUMENTS ARE BUILT IN STATEMENT ORDER, which is the only order
 	// a positional bind has: the exact distance's own vector first, then
@@ -268,6 +257,23 @@ func Semantic(ctx context.Context, tx *sql.Tx, q SemanticQuery) ([]SemanticHit, 
 		return nil, fmt.Errorf("search: the semantic scan: %w", err)
 	}
 	return out, nil
+}
+
+// semanticDepths is the limit and the stage-one depth [Semantic] runs at, for
+// the ones a query asked for: zero takes the shipped value, and a candidate
+// pool smaller than the answer is raised to it, because a rerank over fewer
+// documents than it returns cannot fill the page it was asked for.
+//
+// ONE FUNCTION, because [Eval] reports the depths it measured at and those
+// have to be the ones the scan ran at rather than the ones it was asked for.
+func semanticDepths(limit, candidates int) (int, int) {
+	if limit <= 0 {
+		limit = ReturnDepth
+	}
+	if candidates <= 0 {
+		candidates = Stage1Depth
+	}
+	return limit, max(candidates, limit)
 }
 
 // placeholders builds `?, ?, …`.

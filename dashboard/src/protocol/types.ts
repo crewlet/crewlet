@@ -1028,6 +1028,24 @@ export interface SchedulesAnswer {
    *  with twenty hourly ones fills this in a couple of hours. One schedule's
    *  own history is `schedule_runs`. */
   recent_runs?: ScheduleRunRow[];
+  /** The ledger holds more fires than `recent_runs` carries — read on one row
+   *  past the page, so a page that merely filled is not reported as cut. */
+  recent_runs_truncated: boolean;
+  /**
+   * Each configured schedule's OWN newest fire, read per schedule, in the same
+   * row shape as `recent_runs`. What a "last fired" column is built from: the
+   * strip above is the newest fires across every schedule, so a quiet schedule
+   * is absent from it however recently it fired. A configured schedule with no
+   * row here has no fire in the ledger this node reads.
+   */
+  last_runs: ScheduleRunRow[];
+  /**
+   * Whether the dispatch ledger was read at all. When false, `recent_runs` and
+   * `last_runs` are both empty because nobody could look — which is not the
+   * same fact as a company whose schedules have never fired, and a screen must
+   * not say "never fired" over it.
+   */
+  history_available: boolean;
 }
 
 /** One schedule's own dispatch history, newest first. */
@@ -1605,6 +1623,16 @@ export interface AgentMemoryAnswer {
 /** One recorded turn in one conversation, from the conversation ledger. */
 export interface ConversationEntry {
   turn_id?: string;
+  /**
+   * This entry's 1-based place in the WHOLE record of its conversation,
+   * stamped by the store as it appends — so it counts the turns the ledger no
+   * longer holds. When the oldest entry a reader has carries N above 1, N − 1
+   * earlier turns were trimmed (`turn_engine.conversation_session.max_entries`),
+   * swept (its `retention_days`) or left out of a limited read. ABSENT (the Go
+   * side omits a zero) is an entry written before the store stamped ordinals,
+   * and claims nothing either way.
+   */
+  ordinal?: number;
   at?: string;
   trigger?: string;
   /** What the turn set out to do, in the seat's own words. */
@@ -1621,6 +1649,12 @@ export interface ConversationEntry {
   unsent?: string;
   decision?: string;
   completed_work?: string;
+  /** What stopped a BLOCKED round, in the executor's own account — empty on
+   *  every other outcome. `decision` is the reviewer's word for whether the
+   *  round was good enough; this is what actually happened, and without it a
+   *  turn that put a question to somebody and ended there reads as one that
+   *  finished the work. */
+  blocked_on?: string;
 }
 
 export interface ConversationRow {
@@ -1654,9 +1688,51 @@ export interface A2AChannel {
   closed_at: string;
 }
 
+/**
+ * What `a2a_channels` reads. Every key is optional.
+ *
+ *  - `state` — `open` (the default for a listing), `closed` or `all`.
+ *  - `seat` — narrows to channels that seat asked OR was asked on.
+ *  - `id` — narrows to one channel wherever it falls in the order, and makes
+ *    the default state `all`, so a closed channel asked for by id is found.
+ *  - `before_time` / `before_id` — the pair `next` carries, sent back as it
+ *    came to read the page after it. Half a pair is refused as `bad_params`.
+ *
+ * A TYPE rather than an interface because the socket takes a
+ * `Record<string, unknown>`, which an interface is not assignable to.
+ */
+export type A2AChannelsParams = {
+  state?: "open" | "closed" | "all";
+  seat?: string;
+  id?: string;
+  before_time?: string;
+  before_id?: string;
+};
+
+/** Counts over EVERY channel the filters matched, not over the page. */
+export interface A2ATotals {
+  channels: number;
+  open: number;
+  messages: number;
+  /** DIRECTED requester→target pairs: A asking B is not B asking A. */
+  pairs: number;
+}
+
 export interface A2AAnswer {
   channels: A2AChannel[];
   available: boolean;
+  /** Why `available` is false — the coordination store's own error. */
+  note?: string;
+  /** The state the listing answered, defaulted. Absent when unavailable. */
+  state?: string;
+  /** More channels matched than this page carries, most recently active
+   *  first. Absent when unavailable. */
+  truncated?: boolean;
+  /** The cursor for the page after this one — present only when `truncated`;
+   *  an empty object on the last page. Absent when unavailable. */
+  next?: { before_time?: string; before_id?: string };
+  /** Absent when unavailable. */
+  totals?: A2ATotals;
 }
 
 export interface KnowledgeHit {

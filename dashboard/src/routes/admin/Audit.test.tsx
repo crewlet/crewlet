@@ -247,13 +247,17 @@ test("the export escapes what a spreadsheet would otherwise split", () => {
       kind: "dashboard",
       actor: "founder",
       actorKind: "operator",
-      subject: "rev-1",
+      subject: "6dd4b0df…",
+      subjectId: "6dd4b0df-f455-448e-80e9-0a1b2c3d4e5f",
       detail: 'turn on Slack, and say "done"',
     },
   ]);
   const [header, row] = csv.split("\n");
-  expect(header).toBe("at,where,who,who_kind,what,to,detail");
+  expect(header).toBe("at,where,who,who_kind,what,to,to_id,detail");
   expect(row).toContain('"turn on Slack, and say ""done"""');
-  // Seven columns, whatever the detail held.
-  expect(row?.match(/","/g)?.length).toBe(6);
+  // Eight columns, whatever the detail held.
+  expect(row?.match(/","/g)?.length).toBe(7);
+  // THE WHOLE ID, because `to` shortens a uuid to a prefix no tool accepts and
+  // the export is where a row goes when somebody has to act on it.
+  expect(row).toContain('"6dd4b0df-f455-448e-80e9-0a1b2c3d4e5f"');
 });

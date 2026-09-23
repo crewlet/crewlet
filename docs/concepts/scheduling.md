@@ -339,9 +339,20 @@ holds the `scheduler` fleet duty.
   name, scope, cron, task, when it next fires and how it last went — and the
   recent dispatch ledger beside it, both sortable. It is backed by
   `GET /schedules`, which serves `schedules` (the resolved schedule list with
-  next-run times, projected from the current organization on each request)
-  and `recent_runs` (the 50 most recent `scheduled_runs` rows). The next-fire times tick as you watch: every relative time in the
-  product reads one shared clock rather than being baked at render.
+  next-run times, projected from the current organization on each request),
+  `recent_runs` (the 50 most recent `scheduled_runs` rows across every
+  schedule, with `recent_runs_truncated` saying the ledger holds more),
+  `last_runs` (each configured schedule's own newest fire, read per schedule
+  so a quiet one is not pushed off by busier ones) and `history_available`
+  (false when the ledger could not be read, rather than an empty history).
+  The screen's **Last** column is the schedule's newest row in
+  `recent_runs`. One schedule's own history is
+  `GET /schedules/{scope_type}/{scope_id}/{name}/runs`: its newest 50 fires,
+  with `truncated` saying it has older ones. Those older fires are not served
+  by either answer; they stay in the node's `scheduled_runs` table until the
+  retention sweep takes them. The next-fire times tick as you watch: every
+  relative time in the product reads one shared clock rather than being baked
+  at render.
 - **`ScheduledTaskFired`** event (`crewlet.events.scheduled_task_fired`) is
   emitted per dispatch with `scope_type`, `scope_id`, `schedule_name`,
   `target_handle`, and `scheduled_at` — surfaced in the dashboard / event

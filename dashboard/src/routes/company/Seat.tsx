@@ -9,6 +9,7 @@ import { useId, useMemo, useRef, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import {
   CutNote,
+  PhasesDroppedNote,
   QueryState,
   RECORD_MAX_HEIGHT,
   SeatChip,
@@ -22,7 +23,14 @@ import {
 // personal page did not.
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
-import { Asks, Checklist, TaskBlock } from "~/routes/me/MyWork.tsx";
+import {
+  Asks,
+  BLOCK_SLICE,
+  BLOCK_WHOLE,
+  Checklist,
+  TaskBlock,
+  blockWhole,
+} from "~/routes/me/MyWork.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
 import {
@@ -79,6 +87,8 @@ import {
   useAgents,
   useOrg,
   usePhaseEvents,
+  usePhasesDropped,
+  usePhasesDroppedSince,
   useSandboxes,
   useSchedules,
   useTokens,
@@ -102,7 +112,15 @@ import {
   type SeatReading,
   type SeatSettings,
 } from "~/lib/seats.ts";
-import { configValueKind, fmtCount, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import {
+  configValueKind,
+  fmtCount,
+  fmtDateTime,
+  plural,
+  relTime,
+  shortId,
+  tsKey,
+} from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { spanWords } from "~/lib/range.ts";
 // THE TURNS READ'S OWN HORIZON, from the screen that declares it. The
@@ -130,6 +148,7 @@ import {
   streamedPhases,
   type PhaseRecord,
 } from "~/lib/phases.ts";
+import { MAX_PHASES } from "~/protocol/index.ts";
 import type {
   AgentRow,
   CompanyDocument,
@@ -819,6 +838,9 @@ export function SeatScreen({ handle }: { handle: string }) {
     [pushed, handle],
   );
 
+  // THE STREAMED HALF CAN LOSE A PHASE, and the merge below cannot see that it
+  // has: see `usePhasesDroppedSince`.
+  const phasesDropped = usePhasesDroppedSince(history.data);
   const phases = useMemo<PhaseRecord[]>(() => {
     const stored = (history.data?.llm_history ?? [])
       .map((ev) => fromPhaseEvent(ev as EventRecord))
@@ -919,7 +941,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             leadingIcon={<TimelineGlyph size="xs" />}
             size="small"
             variant="secondary"
-            onClick={() => nav.to(["activity"], { actor: seat.name })}
+            onClick={() => nav.to(["activity", "events"], { actor: seat.name })}
           >
             Its events
           </Button>
@@ -1622,13 +1644,26 @@ export function SeatScreen({ handle }: { handle: string }) {
                 they are reading somebody else's queue. */}
             {mayReadPerson ? (
               <>
-                <Asks rows={mine.data?.asked_of_me ?? []} now={now} chrome={chrome} />
+                {/* EACH BLOCK IS CUT AT `tracker.MyWorkRows` and says so off
+                    the answer's own `truncated`, which `#/me` reads for the
+                    same blocks — without it a full block drew its page size as
+                    the total. */}
+                <Asks
+                  rows={mine.data?.asked_of_me ?? []}
+                  now={now}
+                  chrome={chrome}
+                  more={mine.data?.truncated?.asked_of_me}
+                  whole={blockWhole(BLOCK_WHOLE.asked_of_me(handle))}
+                />
                 <TaskBlock
                   title="What they mean to do first"
                   hint="Their own order, as they set it."
                   rows={mine.data?.priorities ?? []}
                   now={now}
                   chrome={chrome}
+                  more={mine.data?.truncated?.priorities}
+                  slice={BLOCK_SLICE.priorities}
+                  whole={blockWhole(BLOCK_WHOLE.priorities(handle))}
                 />
                 <TaskBlock
                   title="Collaborating"
@@ -1636,8 +1671,15 @@ export function SeatScreen({ handle }: { handle: string }) {
                   rows={mine.data?.collaborating ?? []}
                   now={now}
                   chrome={chrome}
+                  more={mine.data?.truncated?.collaborating}
+                  slice={BLOCK_SLICE.collaborating}
+                  whole={blockWhole(BLOCK_WHOLE.collaborating(handle))}
                 />
-                <Checklist rows={mine.data?.checklist_items ?? []} />
+                <Checklist
+                  rows={mine.data?.checklist_items ?? []}
+                  more={mine.data?.truncated?.checklist_items}
+                  whole={blockWhole(BLOCK_WHOLE.checklist_items(handle))}
+                />
               </>
             ) : (
               <p className="t-caption">
@@ -1805,6 +1847,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               log at all. Only the settled half of this screen comes from that
               query; the running half is pushed. */}
             {history.error && <QueryState error={history.error} loading={history.loading} />}
+            {phasesDropped && <PhasesDroppedNote reread={history.refetch} />}
             {!history.loading && !history.error && !turns.length && (
               <EmptyState
                 size="compact"
@@ -1999,6 +2042,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     />
                   ) : threads.data?.entries?.length ? (
                     <div className="list">
+                      <EarlierTurns entries={threads.data.entries} />
                       {threads.data.entries.map((entry, i) => (
                         <ThreadTurn key={entry.turn_id || i} entry={entry} />
                       ))}
@@ -2478,7 +2522,9 @@ export function SeatScreen({ handle }: { handle: string }) {
                       // for twice. See `adr/0017`.
                       cell: (t) => (
                         <span className="row gap-1">
-                          <KeyCell value={t.turn_id.slice(0, 8)} />
+                          {/* SHORTENED AND MARKED; the row opens the turn,
+                              whose page heads itself with the whole id. */}
+                          <KeyCell value={shortId(t.turn_id)} />
                           {t.work_key && (spendReruns.get(t.work_key) ?? 0) > 1 && (
                             <Tag
                               appearance="outline"
@@ -2651,6 +2697,9 @@ export function SeatPeek({ handle }: { handle: string }) {
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const phaseEvents = usePhaseEvents();
+  // NO QUERY STANDS BEHIND THIS PANEL, so every phase the tab has dropped is
+  // one it may have held — see `usePhasesDropped`.
+  const dropped = usePhasesDropped();
   const now = useNow();
 
   const index = useMemo(() => indexOrg(org), [org]);
@@ -2785,12 +2834,24 @@ export function SeatPeek({ handle }: { handle: string }) {
                     turn ↗
                   </a>
                 </div>
+                {dropped > 0 && (
+                  <p className="t-caption">
+                    This tab holds the newest {MAX_PHASES} completed phases across the company and
+                    has dropped older ones, so this turn may be missing its first. The turn page
+                    reads its whole record.
+                  </p>
+                )}
               </div>
             ) : (
               <p className="t-caption">
-                Nothing has streamed to this tab yet. What the engine has RECORDED for this seat is
-                on its own Model activity tab — this panel only ever shows what completed while the
-                tab was open.
+                {dropped > 0
+                  ? `Nothing this tab still holds: it keeps the newest ${MAX_PHASES} completed phases across the company and has dropped older ones.`
+                  : "Nothing has streamed to this tab yet."}{" "}
+                What the engine has RECORDED for this seat is on its page&rsquo;s{" "}
+                <a className="t-link prose-link" href={href(seatPath(seat), { tab: "turns" })}>
+                  Turns tab
+                </a>{" "}
+                — this panel only ever shows what completed while the tab was open.
               </p>
             )}
           </section>
@@ -2946,6 +3007,38 @@ export function CounterpartyRow({ profile }: { profile: CounterpartyProfile }) {
  *  since last quarter looks current. */
 const STALE_TRAIT_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * How many turns of a thread came before the oldest entry the ledger still
+ * holds — 0 when it holds the first, or when the entry predates ordinals and
+ * cannot say. `entries` is oldest first, the order `queries.conversations`
+ * answers in.
+ */
+export function earlierTurns(entries: readonly ConversationEntry[]): number {
+  const first = entries[0]?.ordinal ?? 0;
+  return first > 1 ? first - 1 : 0;
+}
+
+/**
+ * THE TURNS THE LEDGER NO LONGER HOLDS, said above the ones it does.
+ *
+ * The ledger keeps the newest `max_entries` turns of each thread and sweeps by
+ * age, so the entries here are the survivors, and a list of survivors reads as
+ * the whole conversation. The oldest one's ordinal is what says it is not.
+ */
+function EarlierTurns({ entries }: { entries: readonly ConversationEntry[] }) {
+  const earlier = earlierTurns(entries);
+  if (earlier === 0) return null;
+  return (
+    <p className="t-caption">
+      {plural(earlier, "earlier turn")} in this thread {earlier === 1 ? "is" : "are"} no longer in
+      the ledger, which keeps the newest{" "}
+      <InlineCode>turn_engine.conversation_session.max_entries</InlineCode> of a thread and forgets
+      one older than its <InlineCode>retention_days</InlineCode>. What was said is still in the
+      thread itself.
+    </p>
+  );
+}
+
 /** One recorded turn in one conversation.
  *
  *  # `reply` and `unsent` are NOT the same field rendered twice
@@ -2981,6 +3074,13 @@ export function ThreadTurn({ entry }: { entry: ConversationEntry }) {
         </Callout>
       )}
       {entry.completed_work && <p className="t-caption">{entry.completed_work}</p>}
+      {/* WHAT STOPPED IT, where something did — the executor's own account,
+          which the reviewer's `decision` beside it does not carry. */}
+      {entry.blocked_on && (
+        <p className="t-caption">
+          <strong>Blocked on:</strong> {entry.blocked_on}
+        </p>
+      )}
       {/* A BLOCK, NOT A BARE `pre`. This was hand-written markup carrying the
           block stylesheet's own class, which is `overflow: auto` under a
           ceiling — so a long tool log was a scroll container with no tab stop

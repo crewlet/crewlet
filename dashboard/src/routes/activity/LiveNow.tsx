@@ -82,6 +82,7 @@ import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { WHOLE_LOG } from "./Activity.tsx";
 
 /**
  * WHICH WINDOWS THE STRIP HAS.
@@ -106,17 +107,39 @@ const STRIP_OFFER: Offer = { ranges: ["15m", "1h", "6h"], custom: false, fallbac
 const STRIP_CELLS = 60;
 
 /**
+ * How many of the newest events the Activity card lists under its strip.
+ *
+ * A GLANCE, on a landing screen: the card says what just happened, and the
+ * list stops at a screenful rather than scrolling. When it is not all of the
+ * events this tab holds it says how many it is showing, and links to the
+ * event log on [WHOLE_LOG] — the log draws the events this tab holds, but
+ * only those inside its window, and its own fallback is a day.
+ */
+const FEED_ROWS = 7;
+
+/**
  * How many coding runs the "In a box" panel draws before it says how many more.
  *
- * EIGHT, which is the feed's seven beside it plus a row: both lists are on a
- * landing screen read at a glance, and a row is `--row-h` tall, so eight is a
- * screenful rather than a scroll. The set is NOT bounded by the seat count the
+ * THE FEED'S ROWS PLUS ONE: both lists are on a landing screen read at a
+ * glance, and the feed's card spends a row on its strip that this one does
+ * not. Derived rather than written as a second number, so the two cannot
+ * drift. The set is NOT bounded by the seat count the
  * way the live tiles are — a run parked on a question that nobody ever answers
  * stays in the record until the retention sweep takes it, so a company can
  * accumulate more of these than it has seats. The full list is one click away
  * and the panel says how much of it is not here.
  */
-const IN_BOX_ROWS = 8;
+const IN_BOX_ROWS = FEED_ROWS + 1;
+
+/**
+ * How many seats "Top seats by spend" ranks before it counts the rest.
+ *
+ * SIX, the rows the "Spend by phase" card beside it draws when every phase has
+ * spent — the six the engine emits, which `Model.tsx` lists as `PHASES` — so
+ * the pair of cards is one height. Every seat is ranked on the Spend screen,
+ * which the card's own button opens, and the card says how many it left off.
+ */
+const TOP_SEATS = 6;
 
 export function LiveNow() {
   const nav = useNavigator();
@@ -216,12 +239,13 @@ export function LiveNow() {
     [tokens],
   );
 
+  const spenders = tokens?.by_agent?.length ?? 0;
   const topSeats = useMemo(
     () =>
       (tokens?.by_agent ?? [])
         .slice()
         .sort((a, b) => b.total_tokens - a.total_tokens)
-        .slice(0, 6)
+        .slice(0, TOP_SEATS)
         .map((a) => ({
           id: a.handle || a.role,
           label: a.role,
@@ -361,7 +385,11 @@ export function LiveNow() {
           <Card.Header
             icon={<TimelineGlyph size="sm" />}
             actions={
-              <Button size="small" variant="tertiary" onClick={() => nav.to(["activity"])}>
+              <Button
+                size="small"
+                variant="tertiary"
+                onClick={() => nav.to(["activity", "events"])}
+              >
                 Event log
               </Button>
             }
@@ -389,9 +417,20 @@ export function LiveNow() {
               </span>
             )}
             <div className="list">
-              {events.slice(0, 7).map((ev) => (
+              {events.slice(0, FEED_ROWS).map((ev) => (
                 <EventRow key={ev.id} event={ev} />
               ))}
+              {events.length > FEED_ROWS && (
+                <a
+                  className="list-row clickable"
+                  href={href(["activity", "events"], { window: WHOLE_LOG })}
+                >
+                  <span className="t-caption">
+                    The newest {FEED_ROWS} of {plural(events.length, "event")} this tab holds — the
+                    event log ↗
+                  </span>
+                </a>
+              )}
               {!events.length && (
                 <EmptyState
                   size="compact"
@@ -514,10 +553,21 @@ export function LiveNow() {
           <Card.Header
             icon={<GroupGlyph size="sm" />}
             subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
+            actions={
+              <Button size="small" variant="tertiary" onClick={() => nav.to(["cost"])}>
+                Spend
+              </Button>
+            }
           >
             <Card.Title>Top seats by spend</Card.Title>
           </Card.Header>
           <BarList data={topSeats} emptyLabel="No seat has spent tokens in this window." />
+          {spenders > TOP_SEATS && (
+            <a className="t-link t-caption" href={href(["cost"])}>
+              {plural(spenders - TOP_SEATS, "more seat")} spent in this window — Spend ranks every
+              one →
+            </a>
+          )}
         </Card>
       </div>
 

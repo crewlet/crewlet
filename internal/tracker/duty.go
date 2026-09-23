@@ -1,10 +1,13 @@
 package tracker
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -17,7 +20,7 @@ import (
 // # What is here and what deliberately is not
 //
 // Every job below completes something a WRITER started and could not end — a
-// re-spread whose inline window was too small, a merge whose holder died
+// re-spread a drag's long key asked for, a merge whose holder died
 // mid-walk, a dependent nobody told. None of them is a scan looking for
 // trouble, and that is the shape rather than an accident: a duty that goes
 // looking is a duty that costs the same whether or not anything is wrong, on
@@ -219,12 +222,25 @@ func (d *duty) clearDuplicates(ctx context.Context, now, _ time.Time) (int64, er
 //
 // NOTHING IS LOST TO THE BOUND. [duty.clearProbe] clears the project's flag
 // only when NO duplicate is left, so a project this read cut stays selected
-// and the next sweep reads the rest from the same indexed query.
+// and the next sweep reads the rest from the same query.
+//
+// # Why a cut sweep takes the HIGHEST ids at a shared rank
+//
+// The board breaks a tie on id, ascending, so the tasks at one key read in id
+// order and the repair has to leave them in it. Every fresh key is above the
+// shared one, so what a sweep moves ends up above what it leaves behind — and
+// that is the tie order only when what it moves are the highest ids. Taking
+// the lowest instead would put the ids a cut left at the shared key ahead of
+// the ids it moved — the first batch of the tie jumping behind the rest of it,
+// a reorder nobody asked for. The next sweep's ceiling is the lowest key this
+// one minted, so what it moves lands below this sweep's and the order holds
+// across every sweep it takes.
 func (d *duty) duplicatesIn(ctx context.Context, project string) (
 	[]Placement, bool, error) {
 
 	var losers []Placement
 	var truncated bool
+	ceilings := map[Rank]Rank{}
 	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.rank FROM tracker_tasks t
@@ -234,8 +250,9 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) (
 			                AND o.rank = t.rank AND o.id < t.id)
 			-- ONE ROW PAST THE BOUND: the extra row is evidence that
 			-- the project holds more duplicates than this sweep
-			-- re-mints, never an answer.
-			ORDER BY t.rank, t.id LIMIT ?`, project, WalkBatch+1)
+			-- re-mints, never an answer. HIGHEST ID FIRST within a
+			-- rank, so a cut leaves the lowest ids at the shared key.
+			ORDER BY t.rank, t.id DESC LIMIT ?`, project, WalkBatch+1)
 		if err != nil {
 			return fmt.Errorf("tracker: read %s's duplicate ranks: %w", project, err)
 		}
@@ -256,24 +273,90 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) (
 		if truncated {
 			losers = losers[:WalkBatch]
 		}
+		// BACK INTO THE BOARD'S OWN ORDER, id ascending within a rank, so
+		// the mint below chains each rank's losers upward in the order a
+		// tie already reads them in.
+		slices.SortFunc(losers, func(a, b Placement) int {
+			return cmp.Or(strings.Compare(string(a.Rank), string(b.Rank)),
+				strings.Compare(a.Task, b.Task))
+		})
+		// THE NEXT KEY ABOVE EACH SHARED ONE, in this same snapshot: it is
+		// the ceiling every fresh key for that rank must stay under, or
+		// the repair would carry a card past a neighbour somebody put
+		// above it.
+		for _, loser := range losers {
+			if _, held := ceilings[loser.Rank]; held {
+				continue
+			}
+			ceiling, err := rankAbove(ctx, tx, project, loser.Rank)
+			if err != nil {
+				return err
+			}
+			ceilings[loser.Rank] = ceiling
+		}
 		return nil
 	})
 	if err != nil || len(losers) == 0 {
 		return nil, false, err
 	}
-	// A FRESH KEY JUST ABOVE THE ONE THEY SHARE, which keeps each
-	// duplicate adjacent to where somebody put it rather than moving it
-	// to the end of the board.
+	// A FRESH KEY JUST ABOVE THE ONE THEY SHARE AND BELOW THE NEXT ONE UP,
+	// which keeps each duplicate adjacent to where somebody put it. The
+	// losers of one rank are in id order here and each mints above the
+	// last, so the tasks sharing a key leave in the order a tie already
+	// drew them in.
 	placements := make([]Placement, 0, len(losers))
+	minted := map[Rank]Rank{}
 	for _, loser := range losers {
-		next, err := KeyBetween(loser.Rank, "")
-		if err != nil {
-			return nil, false, fmt.Errorf("tracker: mint a key above %q for "+
-				"%s: %w", loser.Rank, loser.Task, err)
+		floor := loser.Rank
+		if last, held := minted[loser.Rank]; held {
+			floor = last
 		}
+		next, err := KeyBetween(floor, ceilings[loser.Rank])
+		if err != nil {
+			return nil, false, fmt.Errorf("tracker: mint a key between %q and "+
+				"%q for %s: %w", floor, ceilings[loser.Rank], loser.Task, err)
+		}
+		minted[loser.Rank] = next
 		placements = append(placements, Placement{Task: loser.Task, Rank: next})
 	}
 	return placements, truncated, nil
+}
+
+// rankAbove is the lowest key in the project strictly above rank, or — when
+// rank is the highest — the next integer position above it.
+//
+// NEVER AN OPEN END. [KeyBetween] with an empty upper bound walks the CREATE
+// lattice, so a repair minted that way is the next pure integer: it carries
+// the card past every key between, and it can land on a key a task already
+// holds or on the one the next create mints. A create's key is strictly the
+// new maximum and a pure integer, so it is never below the next integer
+// position above the current maximum — and a key under that bound is one no
+// create can collide with.
+//
+// A REMOVED TASK'S KEY COUNTS, as it does in the applier's own duplicate
+// probe: a restore brings it back where it was, and a repair that took its
+// key would make the restore the next duplicate.
+func rankAbove(ctx context.Context, tx *sql.Tx, project string, rank Rank) (Rank, error) {
+	var above sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT MIN(rank) FROM tracker_tasks
+		WHERE project_key = ? AND rank > ?`, project, string(rank)).
+		Scan(&above); err != nil {
+		return "", fmt.Errorf("tracker: read the key above %q in %s: %w",
+			rank, project, err)
+	}
+	if above.Valid {
+		return Rank(above.String), nil
+	}
+	integer, err := integerPart(string(rank))
+	if err != nil {
+		return "", err
+	}
+	next, err := incrementInteger(integer)
+	if err != nil {
+		return "", err
+	}
+	return Rank(next), nil
 }
 
 // pendingMerges reads whether any task is mid-merge.

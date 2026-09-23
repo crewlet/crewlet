@@ -31,6 +31,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -131,7 +132,24 @@ type APIError struct {
 	Status int
 	Method string
 	Path   string
+
+	// Detail is what Atlassian said as ONE LINE, bounded for a log line and a
+	// reconcile finding, so it can hold less than was said; see [detailFrom].
 	Detail string
+
+	// said is everything the answer said, whole and in order: every entry of
+	// Atlassian's own envelope, or the one line [httpx.QuoteRefusal]
+	// distilled from any other body. A DECISION about the answer reads this
+	// rather than Detail — see [Client.Grant] — because Detail may have cut,
+	// or only counted, the entry carrying the words the decision looks for.
+	said []string
+}
+
+// says reports whether anything the answer said contains phrase.
+func (e *APIError) says(phrase string) bool {
+	return slices.ContainsFunc(e.said, func(s string) bool {
+		return strings.Contains(s, phrase)
+	})
 }
 
 func (e *APIError) Error() string {
@@ -214,7 +232,15 @@ func GrantsFor(cloudID string) []PermissionRule {
 // report a seat as still coming up rather than as failed.
 var ErrAccountNotReady = errors.New("atlassian: the account is not grantable yet")
 
+// notInDirectory is the words that 404 carries.
+const notInDirectory = "not found in the directory"
+
 // Grant gives one service account access to the site's products.
+//
+// The not-ready answer is recognised in EVERYTHING Atlassian said, never in
+// [APIError.Detail]: Detail is a line bounded for a log, and the entry
+// carrying [notInDirectory] may be one it cut, or one it only counted.
+// Missing it there reports a seat that is still coming up as failed.
 func (c *Client) Grant(ctx context.Context, key, orgID, accountID string, rules []PermissionRule) error {
 	if len(rules) == 0 {
 		return nil
@@ -224,7 +250,7 @@ func (c *Client) Grant(ctx context.Context, key, orgID, accountID string, rules 
 
 	var apiErr *APIError
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound &&
-		strings.Contains(apiErr.Detail, "not found in the directory") {
+		apiErr.says(notInDirectory) {
 		return ErrAccountNotReady
 	}
 	return err
@@ -474,9 +500,17 @@ func (c *Client) call(ctx context.Context, key, method, path string, body, out a
 		// CUT: io.LimitReader stops at its limit and reports io.EOF, so
 		// a capped refusal is half a page quoted as the whole of one.
 		body, readErr := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
+		detail, said, shortened := detailFrom(resp.Header.Get("Content-Type"), body, readErr)
+		if shortened {
+			// THE PART THE LINE COULD NOT HOLD, and the only place it
+			// outlives this call. See [detailFrom].
+			log.InfoContext(ctx, "atlassian_refusal_shortened",
+				"method", method, "path", path, "status", resp.StatusCode,
+				"said", said, "detail", detail)
+		}
 		return &APIError{
 			Status: resp.StatusCode, Method: method, Path: path,
-			Detail: detailFrom(resp.Header.Get("Content-Type"), body, readErr),
+			Detail: detail, said: said,
 		}
 	}
 	// REFUSED PAST THE CEILING here too, and the ceiling is the larger one
@@ -496,11 +530,13 @@ func (c *Client) call(ctx context.Context, key, method, path string, body, out a
 	return nil
 }
 
-// detailFrom pulls Atlassian's own words out of a refusal.
+// detailFrom pulls Atlassian's own words out of a refusal: as one line, and
+// whole beside it, with whether the line holds less.
 //
-// Its admin APIs answer in more than one shape, so this tries each — the
-// vendor half of the split [httpx.Refusal]'s doc draws — and hands every
-// other outcome to [httpx.RefusalOf] rather than to the caller verbatim.
+// Its admin APIs answer in more than one shape, so this tries its own
+// envelope — the vendor half of the split [httpx.Refusal]'s doc draws — and
+// hands every other outcome to [httpx.QuoteRefusal] rather than to the caller
+// verbatim.
 //
 // IT USED TO RETURN THE RAW BODY, on the reasoning that an operator needs what
 // Atlassian said and an empty string helps nobody. Both clauses are true and
@@ -509,23 +545,66 @@ func (c *Client) call(ctx context.Context, key, method, path string, body, out a
 // doctype, head, inline styles, script tags — reached the log around a
 // sentence nobody could find.
 //
-// # Atlassian's own envelope is bounded too, and that was the residue
+// # Atlassian's own envelope is bounded too
 //
-// Dropping the markup left the envelope arm unbounded, which is the same
-// defect with a nicer shape: `message` is a string Atlassian chooses, this
-// value becomes [APIError.Detail], and Detail reaches a log line and a
-// reconcile finding. Bounded at [httpx.RefusalDetail], which is the tree's
-// named answer for the length of an error LINE — five times under the read
-// ceiling, because what is worth READING off a refused call and what is worth
-// QUOTING in one sentence are different questions. [textcut.Within] rather
-// than Ellipsis, because RefusalDetail is a ceiling the suite asserts, so the
-// marker fits inside it; and MARKED at all because an Atlassian message cut
-// mid-clause reads as a complete one.
+// Its messages are strings Atlassian chooses, the line becomes
+// [APIError.Detail], and Detail reaches a log line and a reconcile finding.
+// Bounded at [httpx.RefusalDetail], which is the tree's named answer for the
+// length of an error LINE — five times under the read ceiling, because what
+// is worth READING off a refused call and what is worth QUOTING in one
+// sentence are different questions. [textcut.Within] rather than Ellipsis,
+// because RefusalDetail is a ceiling the suite asserts, so the marker fits
+// inside it; and MARKED at all because an Atlassian message cut mid-clause
+// reads as a complete one.
 //
-// The whole message is not recoverable from this process — the body is read
-// once and dropped — so the marker is the only thing telling a reader to go
-// to Atlassian's own admin audit log for the rest.
-func detailFrom(contentType string, body []byte, readErr error) string {
+// # An envelope with several messages is several answers
+//
+// Every message the envelope carries is part of Atlassian's answer, and each
+// entry of its `errors` list is something it refused. So the line carries as
+// many of them WHOLE as fit, in Atlassian's order, and COUNTS the rest —
+// "(+2 more)" — rather than quoting the first and dropping the others
+// silently: an operator who fixes the one error shown would otherwise learn
+// about the second only on the next refused call. The count
+// is spelled differently from the "(and N more)" a reconcile report appends:
+// this line can end a finding's own sentence, and the dashboard strips a
+// trailing "(and N more)" from a report to find the finding it stands for.
+//
+// # Where the whole of it is
+//
+// shortened reports that the line holds less than said — a message cut,
+// messages counted, or a line [httpx.QuoteRefusal] cut from any other body —
+// and [Client.call] then logs said whole as atlassian_refusal_shortened,
+// beside the method, the path and the status. That record is the only place
+// the rest outlives the call: the body is read once, bounded at
+// [httpx.RefusalBytes], and dropped, and [APIError] carries said only for a
+// decision to read, never to print.
+func detailFrom(contentType string, body []byte, readErr error) (line string, said []string, shortened bool) {
+	if said = envelopeOf(body, readErr); len(said) > 0 {
+		line = sayWithin(said, httpx.RefusalDetail)
+		return line, said, line != strings.Join(said, errorSeparator)
+	}
+	quote := httpx.QuoteRefusal(contentType, body, readErr)
+	if quote.Said != "" {
+		said = []string{quote.Said}
+	}
+	return quote.Line, said, quote.Shortened
+}
+
+// errorSeparator joins the messages of one envelope on one line.
+const errorSeparator = "; "
+
+// envelopeOf is every message Atlassian's own envelope carries, in the order
+// it carries them — a top-level `message`, a top-level `detail`, then each
+// entry of its `errors` list — or nil for a body that is not that envelope.
+//
+// ALL OF THEM rather than the first that is set: an envelope carrying a
+// `message` and an `errors` list said both, and a line built from the message
+// alone would drop the list with no count and no record of it. An entry of
+// the list is its `detail`, or its `title` where it has none.
+func envelopeOf(body []byte, readErr error) []string {
+	if readErr != nil {
+		return nil
+	}
 	var shaped struct {
 		Message string `json:"message"`
 		Detail  string `json:"detail"`
@@ -534,20 +613,49 @@ func detailFrom(contentType string, body []byte, readErr error) string {
 			Title  string `json:"title"`
 		} `json:"errors"`
 	}
-	if readErr == nil && json.Unmarshal(body, &shaped) == nil {
-		for _, candidate := range []string{shaped.Message, shaped.Detail} {
-			if candidate != "" {
-				return textcut.Within(candidate, httpx.RefusalDetail)
-			}
-		}
-		for _, e := range shaped.Errors {
-			if e.Detail != "" {
-				return textcut.Within(e.Detail, httpx.RefusalDetail)
-			}
-			if e.Title != "" {
-				return textcut.Within(e.Title, httpx.RefusalDetail)
-			}
+	if json.Unmarshal(body, &shaped) != nil {
+		return nil
+	}
+	var said []string
+	for _, top := range []string{shaped.Message, shaped.Detail} {
+		if top != "" {
+			said = append(said, top)
 		}
 	}
-	return httpx.RefusalOf(contentType, body, readErr)
+	for _, e := range shaped.Errors {
+		switch {
+		case e.Detail != "":
+			said = append(said, e.Detail)
+		case e.Title != "":
+			said = append(said, e.Title)
+		}
+	}
+	return said
 }
+
+// sayWithin is said on one line of at most max bytes: as many entries WHOLE
+// as fit, in order, and a count of the rest.
+//
+// Only the FIRST entry is ever cut, with a marker, and only when it cannot
+// fit whole even alone: a line that quoted nothing at all would name no
+// reason. Room for the count is part of every fit, so the line never ends in
+// an entry that crowded out the words saying there were more.
+func sayWithin(said []string, max int) string {
+	if joined := strings.Join(said, errorSeparator); len(joined) <= max {
+		return joined
+	}
+	for kept := len(said) - 1; kept >= 1; kept-- {
+		head := strings.Join(said[:kept], errorSeparator)
+		if tail := moreThan(len(said) - kept); len(head)+len(tail) <= max {
+			return head + tail
+		}
+	}
+	tail := ""
+	if len(said) > 1 {
+		tail = moreThan(len(said) - 1)
+	}
+	return textcut.Within(said[0], max-len(tail)) + tail
+}
+
+// moreThan is the count of entries a line left out.
+func moreThan(n int) string { return fmt.Sprintf(" (+%d more)", n) }

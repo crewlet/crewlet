@@ -52,7 +52,9 @@ every hit on a long page used to come back as the page's preamble, and a
 snippet that does not contain the search term reads as a wrong result even
 when the ranking is right. The bodies are read per query for the ranked hits
 alone, never for the corpus, and a read that cannot be taken falls back to the
-stored opening rather than failing the search.
+stored opening rather than failing the search. That opening is at most 600 bytes
+of the body and **carries its own `…` where it was cut**, so a fallback snippet
+that runs to the end of it still says the page goes on.
 
 The window is **200 bytes of content**, and each end that was cut says so with
 an `…` — an end that reached the document's own start or finish claims nothing.
@@ -61,15 +63,26 @@ over it; the budget bounds the content. A snippet is a **pointer**, never the
 only copy: it exists to say which page to open, and the page itself is whole in
 the store, reachable through the same knowledge tools that returned the hit.
 
-One term contributes at most **5 000 documents** to a query. A word in nearly
-every page — the company's own name, or "the" — otherwise makes one query a
-scan of the whole corpus for a term whose weight is near zero, and the
-ranking is decided by the query's other words anyway. What the cap drops is
-the **bottom** of that term's list: the read is ordered by the term's own BM25
-contribution, so a document it leaves out is one that would have ranked below
-five thousand others of its own. Ordering by raw term count instead would keep
-the longest documents, which is the same runbook-over-page inversion the
-length normalisation above exists to prevent, reintroduced underneath it.
+One term's posting list is first read **5 000 documents** deep, best-scoring
+first. The store visits the whole list either way — the order is computed per
+query, so no index serves it — and what the depth saves is the rows handed back
+and summed: on 100 000 documents, a word held by 80 000 of them read in 165 ms
+at that depth against 389 ms whole. The read is ordered by the word's own BM25
+contribution, which is what makes stopping safe: nothing it left out scores
+more than the first posting it left out. Ordering by raw term count instead
+would keep the longest documents, which is the same runbook-over-page
+inversion the length normalisation above exists to prevent, reintroduced
+underneath it.
+
+**The depth never changes the answer.** A document the other words did reach,
+but that sits past one word's first read, has the missing words looked up
+exactly, by primary key, whenever that bound says it could still move into or
+within the answer. And when the most a document **no** read reached could
+score still reaches the last hit's score, the capped words are read whole and
+the ranking is taken again — so keyword search always returns the exact BM25
+top results. Only the queries that need the whole lists pay for them: on the
+same 100 000 documents, three words each held by 80 000 of them were settled
+by the first reads in 0.7 s, and six such words took 4.5 s.
 
 ### Semantic search: two stages, no index, no new dependency
 
@@ -183,6 +196,14 @@ Both source kinds are covered: the tracker's work items and the knowledge
 base's published pages. A **rename does not re-embed a page** — the vector is
 stored against the page's own edit number rather than the log version a rename
 also stamps.
+
+**A document that leaves loses every vector it had.** A removed work item, or a
+page that is trashed, unpublished or purged, is withdrawn one window at a time
+— each window is its own record and its own row, so withdrawing only the first
+would leave the rest of a long document findable by meaning with nothing left
+to select it. Withdrawals cost no provider call and are not rationed by the
+8-call budget; a tick withdraws up to 1 024 windows per corpus and the next
+tick carries on from what is left.
 
 Those 8 calls are the **whole company's**, not each corpus's, and they are
 handed out **round robin** between the two. With both behind, each gets four a

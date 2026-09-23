@@ -2,6 +2,7 @@ package codingagent_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -312,43 +313,55 @@ func TestARunThatProducedNothingReportsWhyRatherThanStallingSilently(t *testing.
 	}
 }
 
-// The transcript is the observability surface for an agent that emits no
-// telemetry of its own.
-func TestTheTranscriptFallsBackToStderr(t *testing.T) {
+// A RUN THAT ANSWERED IS COLLECTED WITHOUT ITS STDERR. Nothing reads the
+// stderr of a run that reported, and a box can refuse to hand a large file
+// back — which must not cost the report sitting beside it.
+func TestARunThatAnsweredIsCollectedWithoutReadingItsStderr(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
-	b.Put(p.Result(), `{"result":"done","subtype":"success"}`)
-	b.Put(p.Err(), "cloning…\nrunning tests…")
+	b := refusingStderr{box(t, runner)}
+	b.Put(paths(b).Findings(), "Outcome: succeeded")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
-		t.Fatalf("Collect: %v", err)
+		t.Fatalf("a run that reported was not collected: %v", err)
 	}
-	if !strings.Contains(res.Transcript, "running tests") {
-		t.Fatalf("transcript = %q", res.Transcript)
+	if !res.Success || !strings.Contains(res.Text, "succeeded") {
+		t.Fatalf("the report was lost: %+v", res)
 	}
 }
 
 // Everything collected came out of a box whose environment holds the seat's
-// credentials, and everything returned reaches a model, a store and a screen.
+// credentials, and the result is what the rest of the engine is told about
+// the run — so a run that reported and a run that crashed are both checked,
+// since only the second one's error is its stderr.
 func TestEverythingCollectedIsRedacted(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
 	secret := "ghp_" + strings.Repeat("b", 36)
-	b.Put(p.Findings(), "cloned with "+secret)
-	b.Put(p.Err(), "git clone https://"+secret+"@example.com/acme/api")
-	b.Put(p.Ask(), `{"question":"is `+secret+` right?","to":"requester"}`)
 
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	reported := box(t, runner)
+	p := paths(reported)
+	reported.Put(p.Findings(), "cloned with "+secret)
+	reported.Put(p.Ask(), `{"question":"is `+secret+` right?","to":"requester"}`)
+	answered, err := runner.Collect(t.Context(), reported, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
+
+	crashed := box(t, runner)
+	p = paths(crashed)
+	crashed.Put(p.Err(), "fatal: could not read https://"+secret+"@example.com/acme/api")
+	crashed.Put(p.ExitCode(), "128")
+	failed, err := runner.Collect(t.Context(), crashed, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
 	for name, field := range map[string]string{
-		"text": res.Text, "transcript": res.Transcript,
-		"error": res.Error, "question": res.Question,
+		"text": answered.Text, "question": answered.Question, "error": failed.Error,
 	} {
+		if field == "" {
+			t.Fatalf("%s is empty, so there is nothing to check it for", name)
+		}
 		if strings.Contains(field, secret) {
 			t.Fatalf("a credential survived in %s: %q", name, field)
 		}
@@ -409,25 +422,33 @@ func TestAMalformedAskDoesNotLoseTheResult(t *testing.T) {
 	}
 }
 
-func TestTheTranscriptIsTailCapped(t *testing.T) {
+// A run that left nothing else is explained by its exit status and its
+// stderr, which nothing bounds: the error keeps the stderr's END, where a
+// crash explains itself, says it cut — and keeps the status, which sits in
+// front of the stderr and would go with its head if the two were cut as one.
+func TestACrashsErrorIsTailCapped(t *testing.T) {
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	p := paths(b)
-	b.Put(p.Findings(), "Outcome: succeeded")
-	b.Put(p.Err(), strings.Repeat("x", codingagent.MaxTranscript*2)+"\nTHE CONCLUSION")
+	b.Put(p.Err(), strings.Repeat("x", codingagent.OutputTailBytes*2)+"\nTHE CONCLUSION")
+	b.Put(p.ExitCode(), "1")
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if len(res.Transcript) > codingagent.MaxTranscript+64 {
-		t.Fatalf("transcript is %d characters", len(res.Transcript))
+	// The bound, plus the status line and the marker in front of the tail.
+	if len(res.Error) > codingagent.OutputTailBytes+128 {
+		t.Fatalf("the error is %d bytes, past the %d-byte bound",
+			len(res.Error), codingagent.OutputTailBytes)
 	}
-	// The TAIL is kept: the conclusion is what a reader wants.
-	if !strings.Contains(res.Transcript, "THE CONCLUSION") {
-		t.Fatal("the tail cap dropped the end of the transcript instead of the start")
+	if !strings.HasPrefix(res.Error, "the coding agent exited with status 1: ") {
+		t.Fatalf("the exit status was cut away: %q", res.Error[:min(80, len(res.Error))])
 	}
-	if !strings.Contains(res.Transcript, "truncated") {
+	if !strings.HasSuffix(res.Error, "THE CONCLUSION") {
+		t.Fatal("the cap dropped the end of the stderr instead of the start")
+	}
+	if !strings.Contains(res.Error, "truncated") {
 		t.Fatal("the cap was silent")
 	}
 }
@@ -471,4 +492,15 @@ func lastBackground(t *testing.T, b *sandbox.FakeSandbox) string {
 		t.Fatal("nothing was started in the background")
 	}
 	return cmds[len(cmds)-1]
+}
+
+// refusingStderr is a box whose read-back refuses the stderr file, as the E2B
+// backend refuses a file past the size it reads back.
+type refusingStderr struct{ *sandbox.FakeSandbox }
+
+func (b refusingStderr) ReadFile(ctx context.Context, p string) ([]byte, error) {
+	if p == codingagent.PathsFor(b).Err() {
+		return nil, errors.New("the stderr file is past the size this box reads back")
+	}
+	return b.FakeSandbox.ReadFile(ctx, p)
 }

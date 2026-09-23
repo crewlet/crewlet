@@ -6,30 +6,40 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 var log = logging.Get("sandbox.coding_agent")
 
-// MaxTranscript caps the captured activity transcript carried on the result.
+// OutputTailBytes bounds what a run hands back from a stream the coding agent
+// wrote and nothing bounds: its stderr, which becomes the error of a run that
+// left no findings and whose output parsed to no answer, and Claude Code's
+// stdout when it does not parse at all ([ClaudeCode.Parse]), which becomes the
+// run's text. Past the bound only the stream's LAST OutputTailBytes are kept,
+// after a marker saying earlier output was cut (see [tail]).
 //
-// The TAIL is kept: the most recent activity plus the conclusion is what a
-// reader wants, and the head — the clone, the dependency install — is the
-// least interesting thing to drop. 100k characters is a few hundred lines of
-// a coding agent's streamed events, which is enough to see what it did without
-// putting a megabyte of log through the event store per run.
+// The TAIL, because a crash explains itself at the bottom: the fatal error and
+// the failing test come after the banner, the clone and the dependency
+// install.
 //
-// THE WHOLE STREAM IS STILL IN THE BOX, which is what makes a cut here a
-// summary rather than a loss: [tail] runs when the result is read, and what it
-// was read from — [Paths.Result] and [Paths.Err], under the box's own .crewlet
-// directory — is not touched by it. The sandbox coordinator PAUSES the box
-// after collecting rather than tearing it down, so the untruncated transcript
-// is readable for as long as that box lives; it goes when the box does.
-const MaxTranscript = 100_000
+// 64 KiB BECAUSE OF WHO READS IT. Either text becomes the run_sandbox answer
+// the resumed executor is handed ([sandbox.ResumeRequest]) — one tool answer
+// in a model's context, beside everything else the turn holds — and 64 KiB is
+// the ceiling [github.com/crewlet/crewlet/internal/agent/builtin.ToolAnswerBytes]
+// sets on one tool answer, for that same reader.
+//
+// WHAT THE CUT DROPS IS KEPT ONLY IN THE BOX, AND ONLY UNTIL THE RESUMED TURN
+// IS OVER. [Runner.Collect] leaves [Paths.Result] and [Paths.Err] in place and
+// the coordinator pauses the box after collecting. When the resumed turn is
+// over the coordinator reclaims the box, unless that turn launched another
+// run — which reuses the box, and whose [Runner.Start] truncates both files
+// before its agent begins. From then on the head of an output longer than this
+// is kept nowhere.
+const OutputTailBytes = 64 << 10
 
 // prPattern matches a pull-request URL, on either of the two hosts this engine
 // integrates with. It is a FALLBACK: a runner whose output names its delivered
@@ -40,11 +50,12 @@ var prPattern = regexp.MustCompile(
 
 // CLI is what one coding agent contributes on top of the shared plumbing.
 //
-// Two methods, and deliberately only two: the invocation and the parser. Every
-// runner difference this engine has met is one of those — where the marker
-// goes, how the box is torn down, how a question is signalled and how a
-// transcript is capped are the same for all of them, and a runner that could
-// override those would be a second implementation of the completion protocol.
+// Only what differs between runners: the name, the invocation, the config
+// file, the parser and the finished signal. Every runner difference this
+// engine has met is one of those — where the marker goes, how the box is torn
+// down, how a question is signalled and how a crash's stderr is capped are the
+// same for all of them, and a runner that could override those would be a
+// second implementation of the completion protocol.
 type CLI interface {
 	// Name is the coding agent's config name: "claude-code", "opencode".
 	Name() string
@@ -252,22 +263,6 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 	result := r.cli.Parse(stdout)
 
-	// The transcript is the observability surface for an agent that emits no
-	// telemetry of its own. The parser may have built one from streamed
-	// events; otherwise the raw stderr is it. Read once, reused below for
-	// the crash detail.
-	stderr, err := readText(ctx, box, paths.Err())
-	if err != nil {
-		return sandbox.Result{}, err
-	}
-	stderr = strings.TrimSpace(stderr)
-	switch {
-	case result.Transcript != "":
-		result.Transcript = tail(result.Transcript)
-	case stderr != "":
-		result.Transcript = tail(stderr)
-	}
-
 	code, err := readText(ctx, box, paths.ExitCode())
 	if err != nil {
 		return sandbox.Result{}, err
@@ -299,7 +294,27 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// No report AND nothing parsed: the job produced nothing. Surface
 		// the stderr and the exit code so the completion reports a real
 		// failure rather than a silent stall.
-		detail := stderr
+		//
+		// Read HERE, the one place it is used, rather than on every
+		// collect: a box's read-back can refuse a large file (the E2B
+		// backend refuses one past the size it reads back), and a stderr
+		// nobody would read must not fail the collect of a run that did
+		// answer.
+		stderr, err := readText(ctx, box, paths.Err())
+		if err != nil {
+			return sandbox.Result{}, err
+		}
+		// TAILED to [OutputTailBytes], because nothing bounds what the
+		// coding agent writes to paths.Err(). It used to be cut to 500
+		// bytes from the HEAD with no marker, which was wrong in all three
+		// ways — too small to hold the line naming the failing file, taken
+		// from the end that says least about a crash, and silent about
+		// having cut at all.
+		//
+		// The STDERR is tailed, and the exit status goes in front of what
+		// is left: tailing the two together would cut the status away
+		// with the head of any stderr past the bound.
+		detail := tail(strings.TrimSpace(stderr))
 		if crashed {
 			crash := "the coding agent exited with status " + code
 			if detail != "" {
@@ -308,25 +323,14 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 				detail = crash
 			}
 		}
-		if detail != "" {
-			// TAILED, exactly like the transcript above, and for the same
-			// reason: paths.Err() is a file the coding agent wrote and
-			// nothing bounds it, so a run that looped printing errors
-			// produces one the event store cannot carry. It used to be cut
-			// to 500 bytes from the HEAD with no marker, which was wrong
-			// in all three ways — too small to hold the line naming the
-			// failing file, taken from the end that says least about a
-			// crash, and silent about having cut at all.
-			result.Error = tail(detail)
-		}
+		result.Error = detail
 	}
 
 	// Redacted HERE, at the boundary: everything above came out of a box
-	// whose environment holds the seat's credentials, and everything below
-	// reaches a model, an event store and a screen.
+	// whose environment holds the seat's credentials, and the result is what
+	// the rest of the engine is told about the run.
 	result.Text = redact.Secrets(result.Text)
 	result.Error = redact.Secrets(result.Error)
-	result.Transcript = redact.Secrets(result.Transcript)
 
 	return r.overlayAsk(ctx, box, result)
 }
@@ -371,26 +375,25 @@ func readText(ctx context.Context, box sandbox.Sandbox, path string) (string, er
 	return string(raw), nil
 }
 
-// tail keeps the last MaxTranscript characters with a marker saying it cut.
+// tail keeps the last [OutputTailBytes] of text, after a marker saying
+// earlier output was cut, and returns text within the bound untouched.
 //
-// The bound is NOT a parameter. Every caller is bounding the same thing — a
-// coding run's own account of itself — and a per-caller cap would let the
-// transcript and the error text disagree about how much of one run survives.
+// The bound is NOT a parameter. Both callers bound a stream that becomes the
+// same run_sandbox answer, so they share that answer's budget, and a
+// per-caller cap would be a second number for one reader.
 //
-// RUNES, not bytes, and the kept half starts on a boundary. A byte slice at a
-// fixed offset from the end begins mid-rune whenever the text is not ASCII,
-// and the event store's JSON encoding replaces that partial rune with U+FFFD
-// — so a run whose output names a non-ASCII path opened with mojibake rather
-// than with a whole character. It is also what makes MaxTranscript's stated
-// unit true.
+// The kept half starts on a whole character. A byte offset from the end lands
+// inside a multi-byte one whenever the text is not ASCII, and a JSON encoder
+// replaces what that leaves with U+FFFD, so the run's own output would open
+// with mojibake; [textcut.TrimOrphanContinuation] clears it.
 func tail(text string) string {
-	if utf8.RuneCountInString(text) <= MaxTranscript {
+	if len(text) <= OutputTailBytes {
 		return text
 	}
-	i := len(text)
-	for n := 0; n < MaxTranscript; n++ {
-		_, size := utf8.DecodeLastRuneInString(text[:i])
-		i -= size
-	}
-	return "…[earlier output truncated]…\n" + text[i:]
+	kept := textcut.TrimOrphanContinuation([]byte(text[len(text)-OutputTailBytes:]))
+	return outputCutMarker + string(kept)
 }
+
+// outputCutMarker opens a tailed output, so its reader can tell a cut from a
+// run that said little.
+const outputCutMarker = "…[earlier output truncated]…\n"

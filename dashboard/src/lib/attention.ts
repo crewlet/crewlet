@@ -318,7 +318,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           // model round that never came back.
           detail: `${call.phase} · ${roundLabel(call.round_num).text} — no update since ${call.updated_at}.`,
           path: ["company", "people", String(agent.handle ?? agent.id)],
-          query: { tab: "model" },
+          query: { tab: "turns" },
           at: call.updated_at,
           who: String(agent.handle ?? agent.role),
         });

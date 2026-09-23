@@ -54,6 +54,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
+import { shortId } from "~/lib/format.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useTimeRange, type Offer } from "~/lib/range.ts";
 import { rest } from "~/protocol/index.ts";
@@ -120,8 +121,15 @@ export interface AuditEntry {
   actor: string;
   /** `operator`, `human`, `agent`, `system` — empty where none was recorded. */
   actorKind: string;
-  /** What it was done to, as a person would name it. */
+  /** What it was done to, as a person would name it — a uuid shortened. */
   subject: string;
+  /**
+   * What it was done to, WHOLE: the key, the handle, the name or the uuid a
+   * tool call takes. The export's `to_id` column, because `subject` shortens a
+   * uuid to a prefix no tool accepts, and the export is where a row goes when
+   * somebody has to act on it.
+   */
+  subjectId: string;
   /** Where that object lives, where it still has an address. */
   path?: string[];
   /** The one line that says what actually changed. */
@@ -139,16 +147,19 @@ export interface AuditEntry {
  * with nothing saying what they were.
  *
  * So a subject with no key is named by its KIND and linked to the page that
- * holds it, with the id shortened to the part a person would actually use to
- * tell two apart. The id is kept because it is what a reader pastes into a
- * tool call; it is not what they read the row by.
+ * holds it, with the id shortened — see [shortId] — to the part a person uses
+ * to tell two apart. The WHOLE id, which is what a reader pastes into a tool
+ * call, is the link's own address and the export's `to_id`.
  */
-function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "path"> {
+function workSubject(
+  record: WorkActivityRecord,
+): Pick<AuditEntry, "subject" | "subjectId" | "path"> {
   const kind = record.subject_kind;
   const id = record.subject_id;
   if (record.subject_key) {
     return {
       subject: record.subject_key,
+      subjectId: record.subject_key,
       // A PURGED TASK HAS NO PAGE. Its rows are destroyed and this entry is
       // the only evidence it existed, so a link here would be a NotFound on
       // the one row a reader most wants to follow.
@@ -157,25 +168,20 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
   }
   switch (kind) {
     case "goal":
-      return { subject: `goal ${short(id)}`, path: ["goals", id] };
+      return { subject: `goal ${shortId(id)}`, subjectId: id, path: ["goals", id] };
     case "view":
-      return { subject: `view ${short(id)}`, path: ["work", "views", id] };
+      return { subject: `view ${shortId(id)}`, subjectId: id, path: ["work", "views", id] };
     case "person":
-      return { subject: id, path: ["company", "people", id] };
+      return { subject: id, subjectId: id, path: ["company", "people", id] };
     case "project":
-      return { subject: id, path: ["work", id] };
+      return { subject: id, subjectId: id, path: ["work", id] };
     default:
       // EVERY OTHER SUBJECT KIND HAS NO PAGE — a counter, a catalogue, a
       // tag set, an alias. Named by its kind rather than linked,
       // because a link to a screen the product does not have is worse than
       // none: the row still says what was changed.
-      return { subject: kind ? `${kind} ${short(id)}` : short(id) };
+      return { subject: kind ? `${kind} ${shortId(id)}` : shortId(id), subjectId: id };
   }
-}
-
-/** The leading segment of a uuid, which is what tells two of them apart. */
-function short(id: string): string {
-  return id.length > 8 && id.includes("-") ? id.slice(0, 8) : id;
 }
 
 /**
@@ -269,6 +275,7 @@ export function Audit() {
         actor: change.actor ?? "",
         actorKind: change.actor_kind ?? "",
         subject: change.title || change.page_id,
+        subjectId: change.page_id,
         path:
           change.container && change.title
             ? ["knowledge", change.container, change.title]
@@ -288,7 +295,9 @@ export function Audit() {
         kind: revision.source || "revision",
         actor: revision.created_by ?? "",
         actorKind: "operator",
-        subject: revision.revision_id.slice(0, 8),
+        // THE WHOLE ID IS THE LINK'S ADDRESS and the export's `to_id`.
+        subject: shortId(revision.revision_id),
+        subjectId: revision.revision_id,
         path: ["admin", "config", "revisions", revision.revision_id],
         detail: revision.summary ?? "",
       });
@@ -307,6 +316,7 @@ export function Audit() {
         actor: row.updated_by ?? "",
         actorKind: "operator",
         subject: row.name,
+        subjectId: row.name,
         path: ["admin", "credentials"],
         detail: row.source ? `from ${row.source}` : "",
       });
@@ -533,7 +543,7 @@ function useSecrets(): { rows: SecretRow[] | null } {
  */
 export function auditCsv(rows: AuditEntry[]): string {
   const cell = (value: string) => `"${value.replaceAll('"', '""')}"`;
-  const lines = [["at", "where", "who", "who_kind", "what", "to", "detail"].join(",")];
+  const lines = [["at", "where", "who", "who_kind", "what", "to", "to_id", "detail"].join(",")];
   for (const row of rows) {
     lines.push(
       [
@@ -543,6 +553,7 @@ export function auditCsv(rows: AuditEntry[]): string {
         row.actorKind,
         row.kind,
         row.subject,
+        row.subjectId,
         row.detail,
       ]
         .map(cell)

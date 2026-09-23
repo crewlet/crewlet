@@ -309,11 +309,34 @@ func (f *Fleet) run(ctx context.Context, s *seatSocket) {
 		// lost. Doing it in this order can only produce duplicates,
 		// which the dedupe ring absorbs.
 		f.replay(ctx, s)
-		attempt = 0
+		live := f.now()
 		f.pump(ctx, s, socket)
 		_ = socket.Close()
+		if f.now().Sub(live) >= stableAfter {
+			// A NEW INCIDENT, so the schedule starts again from its
+			// floor. Anything shorter is the same one continuing, and
+			// the schedule keeps climbing: see [stableAfter].
+			attempt = 0
+		}
 	}
 }
+
+// stableAfter is how long a connection has to stay live before its drop
+// starts the reconnect schedule again from the bottom.
+//
+// Mattermost closes without a close frame, so an ordinary disconnect after
+// hours of traffic and a server hanging up the moment it is reached end the
+// read identically. Resetting on every successful connect treats the second
+// as the first: a server refusing a seat on sight is redialled at the
+// schedule's floor for ever, and each redial is a backfill walking every
+// channel the seat belongs to.
+//
+// A MINUTE, which is two [PingInterval]s: a connection that has answered the
+// heartbeat twice was live, and one hung up on sight never reaches the first.
+// Timed from the start of the read rather than the dial, because the
+// backfill before it issues a request per channel and says nothing about
+// whether the socket is live.
+const stableAfter = time.Minute
 
 // delay is the backoff for an attempt, jittered.
 func (f *Fleet) delay(attempt int) time.Duration {
@@ -424,8 +447,8 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
 		// truncated: "we missed two hours" is something an operator
 		// needs to know, and a seat cannot infer it.
 		log.WarnContext(ctx, "mattermost_backfill_window_exceeded", "handle", s.seat.Handle,
-			"gap", floor.Add(f.backfill).Sub(since).String(),
-			"window", f.backfill.String())
+			"skipped_seconds", floor.Sub(since).Seconds(),
+			"window_seconds", f.backfill.Seconds())
 		since = floor
 	}
 
@@ -646,12 +669,33 @@ func dialWebsocket(ctx context.Context, seat Seat, c *Client) (Socket, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mattermost: dial %s: %w", c.WebsocketURL(), err)
 	}
-	// Mattermost sends whole posts as JSON strings inside an event
-	// envelope, and a busy channel's message with attachments is well
-	// past the library's default.
-	conn.SetReadLimit(4 << 20)
+	conn.SetReadLimit(maxFrameBytes)
 	return &wsSocket{conn: conn}, nil
 }
+
+// maxFrameBytes is the largest websocket message a seat's socket reads.
+//
+// coder/websocket's own default is 32 KiB, and one post can be far past it:
+// Mattermost admits a message of up to 262 144 runes and props of up to
+// 800 000 runes (PostMessageMaxRunesV2 and PostPropsMaxRunes, in the server's
+// model/post.go), which at UTF-8's four bytes a rune is over four megabytes
+// before any other field of the post. And a frame carries the post as a JSON
+// STRING inside the event envelope (see [wsSocket.Read]), so every escape the
+// post already holds is escaped a second time. Eight mebibytes is those two
+// ceilings with room for the second escaping and for the fields the server
+// adds — a judgement from the server's limits rather than a measurement — and
+// it bounds ONE frame while it is read, not a buffer any seat keeps.
+//
+// # A frame past it is refused, never cut
+//
+// The library does not hand back a prefix: Read fails with an error wrapping
+// websocket.ErrMessageTooBig and the connection is closed with
+// StatusMessageTooBig. [Fleet.pump] logs that as mattermost_socket_closed,
+// [Fleet.run] reconnects, and the reconnect's [Fleet.replay] reads the seat's
+// channels over REST ([Client.PostsSince]) from its cursor — which moves only
+// on a post that was delivered, so the replay starts from where the socket
+// stopped rather than past the post it refused.
+const maxFrameBytes = 8 << 20
 
 type wsSocket struct{ conn *websocket.Conn }
 

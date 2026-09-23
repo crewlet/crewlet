@@ -279,9 +279,9 @@ theoretical one:
 - **A wedged-alive zombie can act for up to one LLM round plus one heartbeat
   interval** after losing its lease. Fencing bounds the damage to that window;
   it does not prevent the window.
-- **One seat-scoped write still duplicates, deliberately.** A
-  differently-worded `agent_diary` entry (identical content already
-  collapses on write). Nothing can key a reworded
+- **One seat-scoped write still duplicates, deliberately.** An
+  `agent_diary` entry: every write mints its own row id, so a duplicate
+  turn's note lands twice, however it is worded. Nothing can key a reworded
   memory to its twin — that needs the duplicate *turn* not to happen, which
   is the completion ledger's job. `episodes` and the counterparty interaction
   count are collapsed against the reader that matters — the node running the

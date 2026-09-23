@@ -27,6 +27,10 @@ type aux struct {
 	answers []string
 	asked   []llm.Request
 	err     error
+
+	// stop is the finish reason every completion carries — a length stop
+	// is how a case says the model ran out of output before it finished.
+	stop string
 }
 
 func (a *aux) Complete(_ context.Context, r llm.Request) (*llm.Completion, error) {
@@ -43,7 +47,7 @@ func (a *aux) Complete(_ context.Context, r llm.Request) (*llm.Completion, error
 	if len(a.answers) > 1 {
 		a.answers = a.answers[1:]
 	}
-	return &llm.Completion{Content: answer}, nil
+	return &llm.Completion{Content: answer, FinishReason: a.stop}, nil
 }
 
 func (a *aux) Model() string { return "aux-model" }
@@ -375,6 +379,83 @@ func TestAnUnavailableFilterSurfacesNoMemoryAtAll(t *testing.T) {
 				t.Fatalf("an unfiltered memory reached the prompt:\n%s", got)
 			}
 		})
+	}
+}
+
+// A FILTER THAT PICKS MORE THAN IT WAS TOLD IS SHOWN WHOLE.
+//
+// Every index the filter returns is a memory it judged relevant, and nothing
+// reads the turn-start answer after the block does. Cut to the number the
+// filter was told and dropped there, the ninth and tenth would be judged
+// relevant and reach nobody. The refresh seam returns the whole answer for the
+// same reason: its caller pages it.
+func TestAFilterThatPicksMoreThanItWasToldIsShownWhole(t *testing.T) {
+	t.Parallel()
+	var stored []learning.DiaryEntry
+	var all []string
+	for i := range 10 {
+		stored = append(stored, memory("m"+strconv.Itoa(i), "standing rule number "+strconv.Itoa(i)))
+		all = append(all, strconv.Itoa(i))
+	}
+	answer := "[" + strings.Join(all, ", ") + "]"
+	src := prefetch.Sources{
+		Diary:  diary{recent: stored},
+		Models: models{provider: &aux{answers: []string{answer}}},
+	}
+
+	block := fetch(t, src, request(t)).PersonalMemory
+	for i := range 10 {
+		if !strings.Contains(block, "standing rule number "+strconv.Itoa(i)) {
+			t.Errorf("the block dropped pick %d of the filter's 10:\n%s", i, block)
+		}
+	}
+
+	_, seat := company(t)
+	got, err := prefetch.New(src).RecallMemories(t.Context(), seat, "agent-1", "standing rules")
+	if err != nil {
+		t.Fatalf("RecallMemories: %v", err)
+	}
+	if len(got) != 10 {
+		t.Fatalf("the refresh seam returned %d of the filter's 10 picks", len(got))
+	}
+}
+
+// A LENGTH STOP IS NOT AN ANSWER, for any of the three auxiliary passes.
+//
+// The content of a completion cut at its output cap is whatever the model had
+// written by then. The briefing is the one where that costs most: it REPLACES
+// the raw episode bullets it summarises, so a briefing cut mid-sentence took
+// the whole block with it. Each pass has a path for a failed call already —
+// the raw bullets, or no block — and a cut answer has to take it.
+func TestATruncatedAuxiliaryAnswerIsNotUsed(t *testing.T) {
+	t.Parallel()
+	hits := episodes{hits: []learning.Hit{{Episode: learning.Episode{
+		TaskSummary: "fixed a redirect loop on staging"}}}}
+
+	recall := fetch(t, prefetch.Sources{Episodes: hits, Embed: embeds,
+		SummarizeEpisodes: true,
+		Models: models{provider: &aux{stop: llm.FinishMaxTokens,
+			answers: []string{"- you fixed staging redirects by"}}},
+	}, request(t)).EpisodeRecall
+	if !strings.Contains(recall, "redirect loop") || strings.Contains(recall, "redirects by") {
+		t.Errorf("a briefing cut at its output cap replaced the raw bullets: %q", recall)
+	}
+
+	memory := fetch(t, prefetch.Sources{
+		Diary: diary{recent: []learning.DiaryEntry{
+			memory("m1", "Sam prefers very short replies")}},
+		Models: models{provider: &aux{stop: llm.FinishLength, answers: []string{"[0]"}}},
+	}, request(t)).PersonalMemory
+	if strings.Contains(memory, "Sam prefers") {
+		t.Errorf("a filter answer cut at its output cap was acted on:\n%s", memory)
+	}
+
+	finder := &searcher{hits: []knowledge.Hit{{Title: "Runbook"}}}
+	fetch(t, prefetch.Sources{Knowledge: finder,
+		Models: models{provider: &aux{stop: llm.FinishLength, answers: []string{"staging redir"}}},
+	}, request(t))
+	if asked := finder.asked(); len(asked) != 0 {
+		t.Errorf("a search query cut at its output cap was searched: %+v", asked)
 	}
 }
 

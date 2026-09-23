@@ -41,9 +41,9 @@ func (PageCorpus) Source() Source { return SourcePage }
 // spends the provider bill on a document no query can return; and a trashed
 // page whose vector survived is findable by meaning after it was thrown away,
 // which is why both directions are here rather than only the first.
-func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []string, error) {
+func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []Subject, error) {
 	var stale []Document
-	var gone []string
+	var gone []Subject
 	err := c.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT p.id, p.container, p.edit_version, p.title, p.body
@@ -53,9 +53,8 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			 AND v.chunk = 0
 			  -- CHUNK 0, because this join asks about DOCUMENTS and a
 			  -- document is several windows: without it a page with
-			  -- twelve windows is selected twelve times, and the
-			  -- forget arm below would name it twelve times over.
-			  -- Every embedded document has a chunk 0.
+			  -- twelve windows is selected, and re-embedded, twelve
+			  -- times over. Every embedded document has a chunk 0.
 			WHERE p.status = 'published' AND p.trashed_at IS NULL
 			  AND (v.source_id IS NULL
 			       OR v.source_rev <> p.edit_version
@@ -87,26 +86,18 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 		// took down stays findable by meaning for ever — nothing else
 		// will ever select it, because the selection above is driven by
 		// the rows that remain.
-		dead, err := tx.QueryContext(ctx, `
-			SELECT v.source_id
+		//
+		// EVERY WINDOW, with no chunk filter: see [Corpus.Stale].
+		gone, err = goneWindows(ctx, tx, SourcePage, `
+			SELECT v.source_id, v.chunk
 			FROM kb_vectors v
 			LEFT JOIN pages_heads p
 			  ON p.id = v.source_id AND p.status = 'published'
 			 AND p.trashed_at IS NULL
-			WHERE v.source = 'page' AND v.chunk = 0 AND p.id IS NULL
+			WHERE v.source = 'page' AND p.id IS NULL
+			ORDER BY v.source_id, v.chunk
 			LIMIT ?`, limit)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = dead.Close() }()
-		for dead.Next() {
-			var id string
-			if err := dead.Scan(&id); err != nil {
-				return err
-			}
-			gone = append(gone, id)
-		}
-		return dead.Err()
+		return err
 	})
 	if err != nil {
 		return nil, nil, err

@@ -28,7 +28,16 @@
 
 import { useCallback, useMemo } from "react";
 import { QueryState, Section } from "~/components/common.tsx";
-import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  Card,
+  EmptyState,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -38,19 +47,50 @@ import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { href } from "~/app/router.tsx";
 import { ChatGlyph, GroupGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
-import { useOrg } from "~/lib/store-hooks.ts";
+import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useOlderPages } from "~/lib/paging.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { elapsedMs, fmtDateTime, fmtDuration, relTime, tsKey } from "~/lib/format.ts";
+import { elapsedMs, fmtDateTime, fmtDuration, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { A2AChannel } from "~/protocol/index.ts";
+import type { A2AChannel, A2AChannelsParams } from "~/protocol/index.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { WHOLE_LOG } from "./Activity.tsx";
 
 /** The channel record has no push behind it; a channel's life is one exchange. */
 const POLL_MS = 30_000;
 
 /** Every channel the record holds, open and closed. See the file's own doc. */
-const WHOLE_RECORD = { state: "all" };
+const WHOLE_RECORD: A2AChannelsParams = { state: "all" };
+
+/**
+ * One channel by its id, wherever it falls in the record's order.
+ *
+ * NOT A SEARCH OF A PAGE. The listing is one page of the most recently active
+ * channels, so a channel looked up in it was found only while it was recent —
+ * and one older than the page drew "no such channel" on a channel the record
+ * holds. `id` narrows the read itself, and it names `all` because a lookup
+ * must find a closed channel too.
+ */
+function oneChannel(id: string): A2AChannelsParams {
+  return { state: "all", id };
+}
+
+/** A page of channels resumes after this pair — see `queries.beforeCursor`. */
+type ChannelCursor = { before_time: string; before_id: string };
+
+/**
+ * The pair a listing's `next` carries, or null where it carries none: the last
+ * page's `next` is an empty object, and half a pair is refused by the engine.
+ */
+function cursorOf(next: { before_time?: string; before_id?: string } | undefined) {
+  return next?.before_time && next.before_id
+    ? { before_time: next.before_time, before_id: next.before_id }
+    : null;
+}
+
+/** A channel's identity, for the pager. */
+const channelKey = (channel: A2AChannel) => channel.id;
 
 /**
  * A handle resolved to the seat's name, or the handle itself.
@@ -173,7 +213,9 @@ function Exchange({
         and are published as events.{" "}
         <a
           className="t-link prose-link"
-          href={href(["activity"], { category: "a2a", q: channel.id })}
+          // ON THE WINDOW THAT REACHES THE WHOLE LOG: a channel's events are as
+          // old as the channel, and the log's own fallback is a day.
+          href={href(["activity", "events"], { category: "a2a", q: channel.id, window: WHOLE_LOG })}
         >
           Read this channel's events ↗
         </a>
@@ -285,8 +327,8 @@ function ChannelBody({
  *
  * A peek is opened from a pasted URL as often as from a row, and the channel
  * it names has usually CLOSED by the time anybody reads it — one ask and one
- * answer is the whole life of one. So this reads every channel the record
- * holds and finds its own, rather than the open ones the default answers.
+ * answer is the whole life of one. So this asks for its own channel by id —
+ * see [oneChannel] — rather than for the open ones the default answers.
  *
  * # Three answers, not two
  *
@@ -298,7 +340,7 @@ function ChannelBody({
 export function ChannelPeek({ id }: { id: string }) {
   const now = useNow();
   const seatName = useSeatName();
-  const { data, loading, error } = useQuery("a2a_channels", WHOLE_RECORD, {
+  const { data, loading, error } = useQuery("a2a_channels", oneChannel(id), {
     enabled: id !== "",
     pollMs: POLL_MS,
   });
@@ -319,7 +361,7 @@ export function ChannelPeek({ id }: { id: string }) {
             size="compact"
             icon={<LinkGlyph size={32} />}
             title="No such channel in the record"
-            description="A channel is kept until the retention horizon and this listing holds the 200 most recent. It may have been purged, or the id may be wrong."
+            description="A channel is kept until the retention horizon. It may have been purged, or the id may be wrong."
           />
         )}
         {channel && (
@@ -346,8 +388,39 @@ export function ChannelPeek({ id }: { id: string }) {
 export function Conversations({ channelId }: { channelId?: string }) {
   const now = useNow();
   const seatName = useSeatName();
-  const channels = useQuery("a2a_channels", WHOLE_RECORD, { pollMs: POLL_MS });
-  const rows = useMemo(() => channels.data?.channels ?? [], [channels.data]);
+  const { socket } = useClient();
+
+  // THE PAGES PAST THE FIRST, from the cursor each answer carries — and while
+  // any are held the first page is frozen and stops polling; see
+  // `lib/paging.ts` for why.
+  const pager = useOlderPages<A2AChannel, ChannelCursor>(channelKey, WHOLE_RECORD);
+  const channels = useQuery("a2a_channels", WHOLE_RECORD, {
+    pollMs: pager.frozen ? undefined : POLL_MS,
+  });
+  const firstNext = channels.data?.truncated ? cursorOf(channels.data.next) : null;
+  const rows = useMemo(() => pager.rows(channels.data?.channels), [pager.rows, channels.data]);
+  const more = pager.more(firstNext);
+  // THE ENGINE'S COUNTS, over every channel the listing matched — taken
+  // before its cut, so they do not change as a reader pages. Absent when the
+  // record could not be read at all, which the callout below says.
+  const totals = channels.data?.totals;
+  const loadOlder = () =>
+    void pager.loadOlder(channels.data?.channels, firstNext, async (cursor) => {
+      const page = await socket.query("a2a_channels", { ...WHOLE_RECORD, ...cursor });
+      return { rows: page.channels, next: page.truncated ? cursorOf(page.next) : null };
+    });
+  const backToNewest = () => {
+    pager.backToNewest();
+    channels.refetch();
+  };
+
+  // THE CHANNEL THIS PATH NAMES, read by its id — see [oneChannel] — rather
+  // than looked up in the page above, which holds it only while it is recent.
+  const addressed = channelId ?? "";
+  const lookup = useQuery("a2a_channels", oneChannel(addressed), {
+    enabled: addressed !== "",
+    pollMs: POLL_MS,
+  });
 
   // THE ORDER `[` AND `]` WALK. Published from the rows this screen holds, so
   // the stepper walks the record as the reader sorted it rather than the order
@@ -358,7 +431,6 @@ export function Conversations({ channelId }: { channelId?: string }) {
 
   const { open: openPeek } = usePeekControls();
   const peek = usePeek();
-  const addressed = channelId ?? "";
   const focused = peek?.kind === "channel" ? peek.id : addressed;
 
   const openChannel = useCallback(
@@ -378,7 +450,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
     [openPeek],
   );
 
-  const addressedChannel = rows.find((c) => c.id === addressed) ?? null;
+  const addressedChannel = (lookup.data?.channels ?? []).find((c) => c.id === addressed) ?? null;
   // AND THAT NAME IS THE CHANNEL'S EVERYWHERE, not just in the header below.
   // The breadcrumb, the browser tab and the palette's recents read the one
   // label a screen publishes and otherwise show the raw path segment — a
@@ -397,23 +469,26 @@ export function Conversations({ channelId }: { channelId?: string }) {
           itself — the same hairline, radius and clip our `panel-flush` did —
           and the tiles inside it are flush, so wrapping it would be two
           surfaces around one row. */}
+      {/* THE ENGINE'S TOTALS, NOT A FOLD OVER THE ROWS. The rows are a page of
+          the most recently active channels, so a count reduced over them
+          described the page and changed as a reader loaded more. */}
       <StatGroup columns={3}>
         <StatCard
           icon={<LinkGlyph size="xs" />}
           label="Open channels"
-          value={rows.filter((c) => !c.closed_at).length}
-          sub="one ask, one answer, then closed"
+          value={totals ? totals.open : ""}
+          sub={totals ? `of ${plural(totals.channels, "channel")} in the record` : undefined}
         />
         <StatCard
           icon={<ChatGlyph size="xs" />}
           label="Messages"
-          value={rows.reduce((n, c) => n + c.messages, 0)}
+          value={totals ? totals.messages : ""}
           sub="across every channel in the record"
         />
         <StatCard
           icon={<GroupGlyph size="xs" />}
           label="Pairs"
-          value={new Set(rows.map((c) => `${c.requester}->${c.target}`)).size}
+          value={totals ? totals.pairs : ""}
           sub="distinct requester/target pairs"
         />
       </StatGroup>
@@ -497,6 +572,42 @@ export function Conversations({ channelId }: { channelId?: string }) {
                 },
               ]}
             />
+            {/* WHERE THE REST ARE: the next page, read from the cursor the
+                answer carries. Drawn only where there is one, or where the
+                list is a paged snapshot that has to say so. */}
+            {(more || pager.frozen || pager.error) && (
+              <Card.Footer variant="meta">
+                <span className="row gap-2 wrap">
+                  {pager.error ? (
+                    <QueryState error={pager.error} loading={false} />
+                  ) : (
+                    <span className="t-caption">
+                      {totals
+                        ? `${plural(rows.length, "channel")} of ${totals.channels.toLocaleString()}, most recently active first.`
+                        : `${plural(rows.length, "channel")}, most recently active first.`}
+                      {pager.frozen && " Updates are paused while older channels are loaded."}
+                    </span>
+                  )}
+                  <span className="spacer" />
+                  {more && (
+                    <Button
+                      size="small"
+                      variant="secondary"
+                      onClick={loadOlder}
+                      disabled={pager.paging}
+                      loading={pager.paging}
+                    >
+                      Load older channels
+                    </Button>
+                  )}
+                  {pager.frozen && (
+                    <Button size="small" variant="secondary" onClick={backToNewest}>
+                      Back to the newest
+                    </Button>
+                  )}
+                </span>
+              </Card.Footer>
+            )}
           </Card>
         </QueryState>
       )}
@@ -530,11 +641,11 @@ export function Conversations({ channelId }: { channelId?: string }) {
           see `queries.a2aChannels` — and a present answer is what tells a read
           that happened from one that did not; the sibling `ChannelPeek` gets
           both for free by rendering inside `QueryState`. */}
-      {addressed !== "" && !addressedChannel && channels.data?.available === true && (
+      {addressed !== "" && !addressedChannel && lookup.data?.available === true && (
         <EmptyState
           icon={<LinkGlyph size={32} />}
           title="No such channel in the record"
-          description="A channel is kept until the retention horizon and this listing holds the 200 most recent. It may have been purged, or the id may be wrong."
+          description="A channel is kept until the retention horizon. It may have been purged, or the id may be wrong."
         />
       )}
 

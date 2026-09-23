@@ -245,3 +245,105 @@ func jsonEnvelope(message string) (string, error) {
 	}{message})
 	return string(encoded), err
 }
+
+// WHAT THE LINE COULD NOT HOLD IS LOGGED WHOLE, on both arms, because the
+// log is the only place it outlives the attempt: the body is read once and
+// dropped, and [mattermost.Error] carries the line alone.
+func TestTheWholeOfAShortenedRefusalIsLogged(t *testing.T) {
+	t.Parallel()
+	envelope, err := jsonEnvelope("Mattermost's own words, unique to this case: " +
+		strings.Repeat("é", 300))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		arm, contentType, body, said string
+	}{
+		{"Mattermost's own envelope", "application/json", envelope,
+			"Mattermost's own words, unique to this case: " + strings.Repeat("é", 300)},
+		{"a shape this build does not know", "text/plain",
+			"a load balancer's sentence, unique to this case: " + strings.Repeat("é", 300) + "\n",
+			"a load balancer's sentence, unique to this case: " + strings.Repeat("é", 300)},
+	} {
+		t.Run(c.arm, func(t *testing.T) {
+			t.Parallel()
+			line := refusalFor(t, c.contentType, c.body).Message
+			if !strings.HasSuffix(line, "…") {
+				t.Fatalf("the fixture was not cut, so this case asserts nothing: %q", line)
+			}
+			var found map[string]any
+			for _, record := range logs.records(t, "mattermost_refusal_shortened") {
+				if record["message"] == line {
+					found = record
+				}
+			}
+			if found == nil {
+				t.Fatalf("no mattermost_refusal_shortened record carries the line %q, "+
+					"so what it left out exists nowhere", line)
+			}
+			if found["said"] != c.said {
+				t.Errorf("the logged record says %v, want the whole of it", found["said"])
+			}
+		})
+	}
+}
+
+// AND A LINE THAT HOLDS EVERYTHING LOGS NOTHING, or the record stops meaning
+// that something was left out.
+func TestAWholeRefusalIsNotLoggedAsShortened(t *testing.T) {
+	t.Parallel()
+	const whole = "a refusal short enough to quote in full, unique to this case"
+	body, err := jsonEnvelope(whole)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := refusalFor(t, "application/json", body).Message; got != whole {
+		t.Fatalf("message = %q, want %q unchanged", got, whole)
+	}
+	for _, record := range logs.records(t, "mattermost_refusal_shortened") {
+		if record["message"] == whole {
+			t.Errorf("a refusal quoted whole was logged as shortened: %v", record)
+		}
+	}
+}
+
+// "ALREADY A MEMBER" IS RECOGNISED IN THE WHOLE OF WHAT THE SERVER SAID,
+// never in the line bounded for a log.
+//
+// A reconcile's second run gets a 400 for the membership its first run made,
+// and reads it as success by the word "already". Decided on
+// [mattermost.Error.Message], the word past the line's cut failed that run.
+// The fixture is built so the line does NOT carry the word, which is asserted
+// first: a line that happened to carry it would pass on the wrong decision.
+func TestAnExistingMembershipIsRecognisedPastTheLine(t *testing.T) {
+	t.Parallel()
+	body, err := jsonEnvelope(strings.Repeat("é", 250) + " This user is already a team member.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line := refusalFor(t, "application/json", body).Message; strings.Contains(line, "already") {
+		t.Fatalf("the line %q carries the word, so this case asserts nothing", line)
+	}
+
+	joinAgainst := func(t *testing.T, body string) error {
+		t.Helper()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Cleanup(srv.Close)
+		c, err := mattermost.NewClient(mattermost.ClientOptions{URL: srv.URL, Token: "tok"})
+		if err != nil {
+			t.Fatalf("NewClient: %v", err)
+		}
+		return c.AddTeamMember(context.Background(), "team-1", "user-1")
+	}
+	if err := joinAgainst(t, body); err != nil {
+		t.Errorf("AddTeamMember = %v, want the existing membership read as success", err)
+	}
+	// And the control: a 400 that does not say so is still a refusal.
+	if err := joinAgainst(t, `{"message":"Invalid or missing team_id."}`); mattermost.Status(err) != http.StatusBadRequest {
+		t.Errorf("AddTeamMember = %v, want the 400 itself", err)
+	}
+}

@@ -237,8 +237,9 @@ func TestTheCoercionTable(t *testing.T) {
 	}
 }
 
-// A MULTI-VALUED FIELD IS EVERY MEMBER THROUGH THE TABLE, and the cap is the
-// one the rows take.
+// A MULTI-VALUED FIELD IS EVERY MEMBER THROUGH THE TABLE, and a set past
+// [MaxFieldValueSeq] is REFUSED here — the write is the only place that bound
+// is held, because the applier indexes every member a record carries.
 func TestAMultiValuedFieldCoercesEveryMember(t *testing.T) {
 	t.Parallel()
 	field := FieldDef{Slug: "areas", Type: FieldLabels, Config: FieldConfig{
@@ -269,6 +270,22 @@ func TestAMultiValuedFieldCoercesEveryMember(t *testing.T) {
 		t.Errorf("a single value on a multi field was refused: %v", err)
 	} else if string(got.Value) != `"o1"` {
 		t.Errorf("a single value became %s", got.Value)
+	}
+	// AND ONE MEMBER PAST THE BOUND IS REFUSED NAMING IT, never trimmed:
+	// a trimmed set is one the caller was told it wrote.
+	wide := make([]string, 0, MaxFieldValueSeq+1)
+	for range MaxFieldValueSeq + 1 {
+		wide = append(wide, "api")
+	}
+	raw, err := json.Marshal(wide)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if _, err := coerceField(field, raw, world()); err == nil {
+		t.Errorf("a set of %d members was accepted past the %d bound",
+			len(wide), MaxFieldValueSeq)
+	} else if !strings.Contains(err.Error(), strconv.Itoa(MaxFieldValueSeq)) {
+		t.Errorf("the refusal %q does not name the bound", err)
 	}
 }
 

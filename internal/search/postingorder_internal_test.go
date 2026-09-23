@@ -9,14 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/textindex"
 )
 
-// WHAT A CAPPED TERM LOSES HAS TO BE THE BOTTOM OF ITS LIST.
+// WHAT A CAPPED READ LEAVES OUT HAS TO BE THE BOTTOM OF ITS LIST.
 //
-// [maxPostingScan] is defended by the claim that a term with a list that long
-// is not discriminating — but the cap is an absolute 5 000, and a term in
-// 5 001 documents of 100 000 has an IDF near 3 and decides the ranking. What
-// makes the cap safe is therefore not the claim but the ORDER: the read is
-// sorted by the term's own BM25 contribution, so a capped term drops only
-// postings that would have ranked below five thousand others of its own.
+// [Indexer.Search] decides whether its first read was enough on one bound:
+// that nothing a capped read left out scores more than the first posting it
+// left out. That holds only if the read is sorted by the term's own BM25
+// contribution — sorted any other way, the posting after the cut is no bound
+// on the ones after it, and a search that trusts it can skip the whole read it
+// needed.
 //
 // It was `ORDER BY p.freq DESC`, which is that order only if every document
 // is the same length. This test is the fixture where the two disagree: a long
@@ -25,9 +25,9 @@ import (
 // frequency puts the runbook at the head of the list and the page that is
 // ABOUT the term at the tail, which is where a LIMIT cuts.
 //
-// AN INTERNAL TEST because the property is about `postings`, and the only
-// way to see it through the exported surface is a corpus of 5 001 documents —
-// a five-second index build to assert what three rows already show.
+// AN INTERNAL TEST because the property is about `postings`, and through the
+// exported surface it takes a corpus past [maxPostingScan] to see at all — an
+// index of thousands of documents to assert what three rows already show.
 func TestACappedPostingListKeepsTheHighestScoringPostings(t *testing.T) {
 	t.Parallel()
 
@@ -45,19 +45,25 @@ func TestACappedPostingListKeepsTheHighestScoringPostings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("corpus: %v", err)
 	}
-	got, docs, err := x.postings(t.Context(), "deploy", LexicalQuery{}, corpus)
+	list, err := x.postings(t.Context(), "deploy", LexicalQuery{}, corpus, maxPostingScan)
 	if err != nil {
 		t.Fatalf("postings: %v", err)
 	}
-	if docs != 3 {
-		t.Fatalf("the term is held by %d documents, want 3", docs)
+	got := list.postings
+	if len(got) != 3 || list.capped {
+		t.Fatalf("read %d postings (capped %v) of a term three documents hold",
+			len(got), list.capped)
 	}
 
 	// THE ORDER THE SCORER ITSELF WOULD PUT THEM IN, computed here rather
 	// than written down: an expectation spelled as a list of ids would
 	// pass a SQL expression that agreed with it by accident and say
 	// nothing about whether it agrees with [textindex.Score].
-	idf := textindex.IDF(corpus.Docs, docs)
+	idf := textindex.IDF(corpus.Docs, 3)
+	if list.idf != idf {
+		t.Fatalf("the term's IDF is %v, want %v over the three documents that "+
+			"hold it", list.idf, idf)
+	}
 	want := slices.Clone(got)
 	slices.SortStableFunc(want, func(a, b textindex.Posting) int {
 		sa, sb := textindex.Score(idf, a, corpus), textindex.Score(idf, b, corpus)

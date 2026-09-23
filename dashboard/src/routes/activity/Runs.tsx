@@ -350,7 +350,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
               size="peek"
               kind="Coding run"
               icon="terminal"
-              identifier={run.turn_id.slice(0, 8)}
+              identifier={run.turn_id}
               title={runTitle(run)}
               status={<RunStatus status={run.status} />}
               facts={runFacts(run)}
@@ -642,7 +642,7 @@ export function Runs({ runId }: { runId?: string }) {
           <ObjectHeader
             kind="Coding run"
             icon="terminal"
-            identifier={detail.turn_id.slice(0, 8)}
+            identifier={detail.turn_id}
             title={runTitle(detail)}
             status={<RunStatus status={detail.status} />}
             facts={runFacts(detail)}

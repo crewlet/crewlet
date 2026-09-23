@@ -232,6 +232,10 @@ describe("what it surfaces", () => {
       input({ agents: [call(new Date(now - 900_000).toISOString())] }),
     );
     expect(stalled[0]?.severity).toBe("critical");
+    // IT LANDS ON THE TAB THAT DRAWS THE ROUND. The seat's tab for its turns is
+    // `turns`; a `tab=model` it no longer has fell back to Overview, a page
+    // with no round on it at all.
+    expect(stalled[0]?.query).toEqual({ tab: "turns" });
   });
 
   // A SPENT BUDGET OUTRANKS ONE MERELY NEAR ITS CAP, and both are read off

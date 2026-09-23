@@ -46,10 +46,12 @@ var workerKey = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 // Worker is one reusable delegate template.
 type Worker struct {
 	// Description is what the EXECUTOR is told this worker is for. It is
-	// the only part of the template that reaches the parent's prompt, so
-	// it is written for the model choosing between workers rather than for
-	// the operator: "reads sources and reports findings with citations"
-	// beats "the research worker".
+	// the only prose of the template that reaches the parent's prompt —
+	// [DescribeWorker] adds the tool names and the returned fields beside
+	// it — so it is written for the model choosing between workers rather
+	// than for the operator: "reads sources and reports findings with
+	// citations" beats "the research worker". Line breaks are folded into
+	// spaces there, never cut at.
 	//
 	// Required, because a worker nobody can tell apart from another is a
 	// worker the executor picks by name-similarity alone.
@@ -117,7 +119,7 @@ func (w Worker) validate(path Path, providers map[string]struct{}, ceiling int) 
 	var p problems
 	if strings.TrimSpace(w.Description) == "" {
 		p.add(at(path, "description"), ErrMissing,
-			"a worker needs a description: it is the only thing an executor "+
+			"a worker needs a description: it is the only prose an executor "+
 				"reads when choosing between workers")
 	}
 	if strings.TrimSpace(w.SystemPrompt) == "" {
@@ -456,7 +458,7 @@ func cloneValue(v any) any {
 // would let the prompt and the delegate tool's own refusal message describe
 // the same worker differently.
 func DescribeWorker(name string, w Worker) string {
-	line := "- `" + name + "`: " + firstLine(w.Description)
+	line := "- `" + name + "`: " + oneLine(w.Description)
 	var notes []string
 	if len(w.Tools) > 0 {
 		notes = append(notes, "tools: "+strings.Join(w.Tools, ", "))
@@ -481,11 +483,16 @@ func propertyNames(schema map[string]any) []string {
 	return sortedKeys(props)
 }
 
-// firstLine keeps a description to one line wherever it is rendered into a
-// list — a multi-line description would break the enumeration it sits in.
-func firstLine(s string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return strings.TrimSpace(line)
+// oneLine folds a description onto one line for the list it is rendered into:
+// a line break inside one entry would read as the start of the next.
+//
+// FOLDED, NEVER CUT. A YAML block scalar (`description: |`) is the natural way
+// to write a description longer than a line, and the description is the only
+// PROSE of a template the executor reads when choosing a worker — so every
+// word of it reaches the line, with each run of whitespace, line breaks
+// included, becoming one space.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // Delegation is the runtime bounds every `delegate` call runs under.

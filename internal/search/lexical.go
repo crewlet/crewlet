@@ -274,21 +274,39 @@ type posting struct {
 // [Indexer.resnippet] — because a window over the opening cannot centre on a
 // match that is not in the opening, and a snippet without the search term in
 // it reads as a wrong result. What this value covers is the case where that
-// read cannot be taken: a source that no longer holds the row, or an estate
-// that would not answer. Three times [knowledge.SnippetLimit], so the
-// fallback still has a window to choose within.
+// read gives nothing: a source that no longer holds the row, an estate that
+// would not answer, or a body that is now empty. Three times
+// [knowledge.SnippetLimit], so the fallback still has a window to choose
+// within.
 const excerptLimit = 600
 
-// excerptOf keeps the opening of a body for the fallback snippet.
+// excerptOf keeps the opening of a body for the fallback snippet, MARKED where
+// it was cut.
 //
 // Whitespace is collapsed first, so a markdown body's blank lines do not
-// spend the budget, and the cut goes through [textcut.Bytes] — a plain slice
+// spend the budget, and the cut goes through [textcut.Within] — a plain slice
 // splits a multi-byte rune, and the invalid UTF-8 that produces is
 // substituted by the JSON encoder and read by a model as a replacement
-// character. No marker: this value is snippet INPUT, and an ellipsis inside
-// it would be cut again by the snippet.
+// character.
+//
+// THE MARKER IS STORED IN THE VALUE, because the snippet cannot supply it.
+// [textindex.Snippet] marks an edge it cut itself and leaves unmarked an edge
+// that reached the end of the text it was handed — and handed this, that is
+// the end of the excerpt rather than of the document. Unmarked, a match near
+// the excerpt's end would give a snippet stopping mid-word on text the page
+// goes on past, with nothing to say so. Marked here, that snippet ends in this
+// marker; a window that stops earlier cuts the marker away with the rest of
+// the tail and adds its own.
+//
+// [textcut.Within] rather than [textcut.Ellipsis], so the stored value stays
+// inside [excerptLimit] marker and all.
+//
+// NOT THE ONLY COPY. The whole body is the source row's own —
+// `pages_heads.body` for a page, the body inside `tracker_tasks.document` for a
+// work item — which a hit's source and id address, and which
+// [Indexer.resnippet] reads through [LexicalSource.Fetch] whenever it can.
 func excerptOf(body string) string {
-	return textcut.Bytes(strings.Join(strings.Fields(body), " "), excerptLimit)
+	return textcut.Within(strings.Join(strings.Fields(body), " "), excerptLimit)
 }
 
 // Remove drops a document from the index.
@@ -507,12 +525,15 @@ func (x *Indexer) versions(ctx context.Context, source string,
 // would delete whichever row sorted first. An exported form that answered bare
 // ids stood here after the walk became source-plural, with no caller and
 // exactly the signature the new code could not use safely.
-func (x *Indexer) orphanPass(ctx context.Context, limit int) (string, []string, error) {
+//
+// LAP says whether each source's walk runs until it finds orphans or wraps, or
+// takes one step; see [Indexer.Sweep] for which it is asked for, and when.
+func (x *Indexer) orphanPass(ctx context.Context, limit int, lap bool) (string, []string, error) {
 	if limit <= 0 {
 		limit = IndexBatch
 	}
 	for _, source := range x.sources {
-		gone, err := x.orphansOf(ctx, source, limit)
+		gone, err := x.orphansOf(ctx, source, limit, lap)
 		if err != nil {
 			return source.Source(), nil, err
 		}
@@ -523,58 +544,99 @@ func (x *Indexer) orphanPass(ctx context.Context, limit int) (string, []string, 
 	return "", nil, nil
 }
 
-// orphansOf is one source's share of that walk, and it answers the ids to
-// drop from the index under that source's own name.
+// orphansOf is one source's share of that walk, and it answers up to limit ids
+// to drop from the index under that source's own name.
+//
+// # The lap is the unit, as it is for [Indexer.staleIn]
+//
+// A step that found nothing is not a lap that found nothing, and [Indexer.Sweep]
+// hands its caller a licence to sleep only on the second. So a step reads
+// [ScanBatch] index rows — ids alone, then one existence check on the source
+// for all of them — and with lap set the walk keeps stepping until it has
+// orphans to report or reaches the end. A walk paced at [IndexBatch] rows per
+// [indexIdle] tick instead would leave a page somebody trashed findable by
+// keyword until it came round — over half an hour on an index of twenty
+// thousand documents.
+//
+// THE CURSOR IS STAGED, NEVER ADVANCED BEFORE THE CHECK SUCCEEDS, for
+// [Indexer.staleIn]'s reason: it is in-memory state, and a check that failed
+// after the cursor moved would skip every row in that window until the walk
+// next wrapped. And it STOPS WHERE THE ANSWER DOES, so the rows after the
+// limit-th orphan are checked again on the next call rather than passed over.
 func (x *Indexer) orphansOf(ctx context.Context, source LexicalSource,
-	limit int) ([]string, error) {
+	limit int, lap bool) ([]string, error) {
 
-	// THE SAME ESTATE BOUNDARY as [Indexer.Stale], and the same answer: a
-	// batch of index rows read here, and their sources checked against the
-	// replicated estate in a second read.
+	name := source.Source()
+	for {
+		// THE SAME ESTATE BOUNDARY as [Indexer.Stale], and the same
+		// answer: a batch of index rows read here, and their sources
+		// checked against the replicated estate in a second read.
+		candidates, err := x.indexedAfter(ctx, name, x.orphanCursor[name])
+		if err != nil {
+			return nil, err
+		}
+		if len(candidates) == 0 {
+			x.orphanCursor[name] = ""
+			return nil, nil
+		}
+
+		var live map[string]bool
+		// THROUGH THE HANDLE, for [Indexer.staleIn]'s reason: a nil pool
+		// from a closed replicated estate panics where the handle
+		// answers [store.ErrNoEstate].
+		if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+			var err error
+			live, err = source.Live(ctx, tx, candidates)
+			return err
+		}); err != nil {
+			return nil, fmt.Errorf("search: check which indexed %s documents "+
+				"still exist: %w", name, err)
+		}
+		next := candidates[len(candidates)-1]
+		var out []string
+		for _, id := range candidates {
+			if live[id] {
+				continue
+			}
+			out = append(out, id)
+			if len(out) == limit {
+				next = id
+				break
+			}
+		}
+		x.orphanCursor[name] = next
+		if len(out) > 0 || !lap {
+			return out, nil
+		}
+		if err := ctx.Err(); err != nil {
+			// A CANCELLED LAP ESTABLISHED NOTHING, on [Indexer.staleIn]'s
+			// terms: answering (nil, nil) would read to [Indexer.Sweep]
+			// as a lap that found nothing.
+			return nil, err
+		}
+	}
+}
+
+// indexedAfter is the next [ScanBatch] ids this node's index holds for one
+// source, after a cursor and in id order.
+func (x *Indexer) indexedAfter(ctx context.Context, source, after string) ([]string, error) {
 	rows, err := x.db.SQL().QueryContext(ctx,
 		`SELECT source_id FROM kb_docs WHERE source = ? AND source_id > ?
-		  ORDER BY source_id LIMIT ?`,
-		source.Source(), x.orphanCursor[source.Source()], limit)
+		  ORDER BY source_id LIMIT ?`, source, after, ScanBatch)
 	if err != nil {
 		return nil, fmt.Errorf("search: read the next index rows to check: %w", err)
 	}
-	var candidates []string
+	defer func() { _ = rows.Close() }()
+	var out []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
 			return nil, fmt.Errorf("search: scan an index row: %w", err)
 		}
-		candidates = append(candidates, id)
+		out = append(out, id)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return nil, fmt.Errorf("search: read the next index rows to check: %w", err)
-	}
-	_ = rows.Close()
-	if len(candidates) == 0 {
-		x.orphanCursor[source.Source()] = ""
-		return nil, nil
-	}
-	x.orphanCursor[source.Source()] = candidates[len(candidates)-1]
-
-	live := map[string]bool{}
-	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason: a nil pool from
-	// a closed replicated estate panics where the handle answers
-	// [store.ErrNoEstate].
-	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		held, err := source.Live(ctx, tx, candidates)
-		live = held
-		return err
-	}); err != nil {
-		return nil, fmt.Errorf("search: check which indexed %s documents "+
-			"still exist: %w", source.Source(), err)
-	}
-	var out []string
-	for _, id := range candidates {
-		if !live[id] {
-			out = append(out, id)
-		}
 	}
 	return out, nil
 }
@@ -595,7 +657,7 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	// SUMMED ACROSS SOURCES, because the gate is about the whole index: a
 	// seat whose company has pages indexed and items not is one that would
 	// be told its own tracker holds nothing.
-	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason.
+	// THROUGH THE HANDLE, for [Indexer.staleIn]'s reason.
 	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		for _, source := range x.sources {
 			n, err := source.Count(ctx, tx)
@@ -738,9 +800,20 @@ const indexIdle = 2 * time.Second
 
 // Sweep does ONE unit of index work, reporting whether it found any.
 //
-// A `false` means a whole LAP over every source found nothing — the walk
-// wraps inside [Indexer.staleIn] rather than returning between batches — so
-// it is the caller's licence to sleep rather than merely the end of a batch.
+// A `false` means a whole LAP over every source found nothing, IN BOTH
+// DIRECTIONS — nothing to index and nothing to drop — so it is the caller's
+// licence to sleep rather than merely the end of a batch. The stale walk laps
+// inside [Indexer.staleIn]; the orphan walk laps inside [Indexer.orphansOf],
+// and only when the stale walk came back empty.
+//
+// # Why the orphan walk laps only on a quiet sweep
+//
+// Because that is the only sweep whose `false` it has to make true. A sweep
+// that indexed something reports work whatever the orphans say, and its
+// caller comes straight back — so there the orphan walk takes ONE step, and a
+// cold build pays one index read and one existence check per batch rather
+// than a lap of an index that is growing under it. Only a sweep about to
+// report nothing has to have looked at every row, and that one laps.
 //
 // EXPORTED because two callers need exactly this and neither should reach past
 // it: [Indexer.Run] is the loop, and a test drives the index to a fixed point
@@ -749,25 +822,25 @@ const indexIdle = 2 * time.Second
 // the index is missing and is deliberately blind to a row that is merely
 // stale.
 func (x *Indexer) Sweep(ctx context.Context) (bool, error) {
-	// THE ORPHAN PASS NAMES ITS SOURCE, because the index is one table over
-	// every corpus and a page and a work item can share an id-shaped
-	// string: removing by id alone would delete whichever row sorted first.
-	source, orphans, err := x.orphanPass(ctx, IndexBatch)
+	stale, err := x.Stale(ctx, IndexBatch)
 	if err != nil {
 		return false, err
 	}
-	for _, id := range orphans {
+	if err := x.Upsert(ctx, stale); err != nil {
+		return false, err
+	}
+	// THE ORPHAN PASS NAMES ITS SOURCE, because the index is one table over
+	// every corpus and a page and a work item can share an id-shaped
+	// string: removing by id alone would delete whichever row sorted first.
+	source, orphans, err := x.orphanPass(ctx, IndexBatch, len(stale) == 0)
+	if err != nil {
+		return len(stale) > 0, err
+	}
+	for i, id := range orphans {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := x.Remove(ctx, source, id); err != nil {
-			return false, err
+			return len(stale) > 0 || i > 0, err
 		}
 	}
-	stale, err := x.Stale(ctx, IndexBatch)
-	if err != nil {
-		return len(orphans) > 0, err
-	}
-	if err := x.Upsert(ctx, stale); err != nil {
-		return len(orphans) > 0, err
-	}
-	return len(orphans) > 0 || len(stale) > 0, nil
+	return len(stale) > 0 || len(orphans) > 0, nil
 }

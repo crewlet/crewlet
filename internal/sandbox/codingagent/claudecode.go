@@ -125,13 +125,13 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	}
 	obj, ok := decodeObject(text)
 	if !ok {
-		// TAILED, not head-cut. Unparseable output is the case where the
-		// text IS the result — there is no structured field to fall back
-		// to — and the useful part of it (the actual error, after the
-		// banner and the warnings) is at the END, which is exactly what a
-		// 2000-byte head cut discarded. Bounded because this is the CLI's
-		// whole stdout and nothing upstream limits it; marked, so a reader
-		// can tell a cut from a short run.
+		// TAILED to [OutputTailBytes], not head-cut. Unparseable output is
+		// the case where the text IS the result — there is no structured
+		// field to fall back to — and the useful part of it (the actual
+		// error, after the banner and the warnings) is at the END, which
+		// is exactly what a 2000-byte head cut discarded. Bounded because
+		// nothing bounds what the CLI writes to its stdout; marked, so a
+		// reader can tell a cut from a short run.
 		return sandbox.Result{
 			Text:  tail(text),
 			Error: "the coding agent's output could not be parsed",

@@ -26,6 +26,7 @@ import type { EventRecord } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { WHOLE_LOG } from "./Activity.tsx";
 
 interface Node {
   event: EventRecord;
@@ -131,7 +132,10 @@ export function TraceScreen({ traceId }: { traceId: string }) {
             size="small"
             variant="secondary"
             leadingIcon={<TimelineGlyph size="xs" />}
-            onClick={() => nav.to(["activity"], { q: traceId })}
+            // THE LOG'S OWN TRACE FILTER, on the window that reaches the whole
+            // log — the rows past a capped trace are there, and no other
+            // window is sure to hold them.
+            onClick={() => nav.to(["activity", "events"], { trace: traceId, window: WHOLE_LOG })}
           >
             In the log
           </Button>

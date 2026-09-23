@@ -794,6 +794,80 @@ func TestTheFailureViewCarriesWhatThePhaseManaged(t *testing.T) {
 	}
 }
 
+// A LOOP THAT DIED AFTER A ROUND WAS CUT STILL SAYS IT WAS CUT.
+//
+// The failure path publishes the snapshot's text, and a round cut at its
+// output cap is text that stops short whether or not the loop later died. The
+// snapshot dropped both round-level facts a finished Result reports, so a
+// worker or a phase that was cut and then timed out read as one that had said
+// what it meant to — and a round that answered nothing went uncounted.
+func TestTheFailureViewCarriesTheRoundsTruncationAndEmptyAnswers(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{
+		turns: []llm.Completion{
+			{Content: "", ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+			{Content: "", FinishReason: llm.FinishMaxTokens},
+		},
+		failAt: 3,
+	}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
+	prog := &toolloop.Progress{}
+
+	if _, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 5, Progress: prog,
+	}); err == nil {
+		t.Fatal("Run succeeded against a failing provider")
+	}
+
+	snap := prog.Snapshot()
+	if !snap.Truncated {
+		t.Error("the snapshot of a loop whose round was cut at its output cap " +
+			"does not say so")
+	}
+	if snap.EmptyAnswers != 1 {
+		t.Errorf("empty answers = %d, want the round that answered nothing", snap.EmptyAnswers)
+	}
+}
+
+// A PROGRESS HANDED TO A SECOND INVOCATION DESCRIBES THAT INVOCATION.
+//
+// An extended phase runs the loop again with the same Progress. One that died
+// on its first provider call — before it had published anything — reported
+// the first invocation's calls and tokens as its own, and a caller folding
+// that snapshot onto the first invocation's result counted them twice.
+func TestASecondInvocationDoesNotReportTheFirstAsItsOwn(t *testing.T) {
+	t.Parallel()
+	prog := &toolloop.Progress{}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
+
+	first := &scriptedProvider{turns: []llm.Completion{
+		{Content: "", InputTokens: 7, ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+		{Content: "", FinishReason: llm.FinishMaxTokens},
+	}}
+	if _, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: first, Surface: s, MaxRounds: 2, Progress: prog,
+	}); err != nil {
+		t.Fatalf("first invocation: %v", err)
+	}
+
+	second := &scriptedProvider{failAt: 1}
+	if _, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: second, Surface: s, MaxRounds: 2, Progress: prog,
+	}); err == nil {
+		t.Fatal("the second invocation succeeded against a failing provider")
+	}
+	snap := prog.Snapshot()
+	if len(snap.Executions) != 0 || snap.InputTokens != 0 || snap.RoundsUsed != 0 {
+		t.Errorf("the second invocation's snapshot carries the first's work: "+
+			"%d executions, %d input tokens, %d rounds", len(snap.Executions),
+			snap.InputTokens, snap.RoundsUsed)
+	}
+	if snap.Truncated || snap.EmptyAnswers != 0 {
+		t.Errorf("the second invocation inherited the first's round facts: "+
+			"truncated=%v empty=%d", snap.Truncated, snap.EmptyAnswers)
+	}
+}
+
 // --- the response grammar --------------------------------------------------
 
 func TestOneBuilderRendersReasoningAndContentTogether(t *testing.T) {

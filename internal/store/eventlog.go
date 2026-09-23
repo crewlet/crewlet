@@ -60,6 +60,8 @@ const (
 	// a generic failure. The OLDEST rows are kept: the root is what
 	// explains a trace, and a truncated tail is legible where a truncated
 	// head is not.
+	//
+	// The rows past it are NOT gone: [EventLog.Trace] says where they are.
 	MaxTraceEvents = 500
 
 	// defaultListLimit is the page size when a caller names none.
@@ -75,9 +77,11 @@ const (
 
 // EventRecord is one row of the audit log.
 //
-// Payload is populated only by ByID. List and Trace deliberately leave it nil:
-// they never select the column, because thirty days of serialized events is a
-// large amount of JSON to move for a listing that shows a summary line.
+// Payload is populated by the reads that show a record whole — ByID, ByKey,
+// Turn, TurnClosing, AgentPhases and Phases. List and Trace deliberately leave
+// it nil: they never select the column, because thirty days of serialized
+// events is a large amount of JSON to move for a listing that shows a summary
+// line.
 type EventRecord struct {
 	// THE TAGS ARE THE WIRE CONTRACT, and the names are the DASHBOARD's.
 	//
@@ -188,6 +192,14 @@ type Cursor struct {
 	ID   string
 }
 
+// ErrHalfCursor is returned for a [Cursor] that names no row id.
+//
+// REFUSED, because both ways of serving it are wrong. Read as its time alone it
+// is a strict comparison on a key that is not unique, so every row sharing the
+// boundary's instant is on no page; read as no cursor at all it answers "the
+// next page" with the first one, and a pager following it never ends.
+var ErrHalfCursor = errors.New("store: a cursor needs the row's id as well as its time")
+
 // ListQuery selects a page of the event log. The zero value asks for the most
 // recent defaultListLimit events.
 type ListQuery struct {
@@ -220,9 +232,13 @@ type ListQuery struct {
 	// It over-fetches and merges, so a page shorter than Limit does NOT
 	// mean history is exhausted here; only a zero-row page does. Both
 	// reads behind such a page take the same [ListQuery.window] and the
-	// same [ListQuery.cursor], so a row is still on exactly one page of a
-	// walk and the walk still ends — see [EventLog.traceSiblings] for what
-	// is deliberately NOT shared between them.
+	// same [ListQuery.cursor], so a walk returns no row twice and still
+	// ends — see [EventLog.traceSiblings] for what is deliberately NOT
+	// shared between them.
+	//
+	// It does NOT return every row. A trace sibling the page's cut dropped
+	// can be on no page of the walk at all; [cutToPage] says which rows
+	// those are and which read returns them.
 	RelatedAgent string
 
 	// Since and Until bound the window a caller is asking about, as a
@@ -243,7 +259,8 @@ type ListQuery struct {
 	Since time.Time
 	Until time.Time
 
-	// Before is an exclusive cursor. Nil starts at the newest row.
+	// Before is an exclusive cursor. Nil starts at the newest row; one with
+	// no id is refused with [ErrHalfCursor].
 	Before *Cursor
 }
 
@@ -541,13 +558,12 @@ func (q ListQuery) window(col func(string) string) (where []string, args []any) 
 // different lifetimes — the window is what the reader asked for and does not
 // move, the cursor moves with every page — which is the same reason
 // [ListQuery.predicate] does not carry it.
+//
+// Always the PAIR: [EventLog.List] refuses a cursor without its id before it
+// gets here, with [ErrHalfCursor].
 func (q ListQuery) cursor(col func(string) string) (where []string, args []any) {
 	if q.Before == nil {
 		return nil, nil
-	}
-	if q.Before.ID == "" {
-		return []string{col("event_time") + " < ?"},
-			[]any{EncodeTime(q.Before.Time)}
 	}
 	return []string{"(" + col("event_time") + ", " + col("event_id") + ") < (?, ?)"},
 		[]any{EncodeTime(q.Before.Time), q.Before.ID}
@@ -556,6 +572,9 @@ func (q ListQuery) cursor(col func(string) string) (where []string, args []any) 
 // List returns a page of events, newest first, ordered by (time, id)
 // descending.
 func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error) {
+	if q.Before != nil && q.Before.ID == "" {
+		return nil, ErrHalfCursor
+	}
 	limit := q.Limit
 	if limit <= 0 {
 		limit = defaultListLimit
@@ -638,12 +657,11 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 //
 // The siblings it does not reach are older than what it did return, and what
 // becomes of them is [cutToPage]'s subject: a sibling below the page's cut
-// may be returned by no page at all, and is reached through [EventLog.Trace]
-// on a trace the caller was given, as far as that read reaches — [cutToPage]
-// states the bound, and is the one place that states it. A sibling NEWER than
-// the cursor is in the same position for the same reason: it was a candidate
-// on the page the cursor came from, so it is on that page or reached the same
-// way under the same bound.
+// may be returned by no page at all, and is reached by the trace id of a row
+// the caller was given — [cutToPage] says through which reads, and is the one
+// place that says it. A sibling NEWER than the cursor is in the same position
+// for the same reason: it was a candidate on the page the cursor came from, so
+// it is on that page or reached the same way.
 func (l *EventLog) traceSiblings(ctx context.Context, q ListQuery, direct []EventRecord,
 	limit int,
 ) ([]EventRecord, error) {
@@ -688,17 +706,29 @@ func (l *EventLog) traceSiblings(ctx context.Context, q ListQuery, direct []Even
 //
 // The cut is [cutToPage], and its doc is where the reason lives: the page has
 // to end at the row the caller's next cursor resumes from, and what that
-// leaves behind is reachable through [EventLog.Trace] on a trace the caller
-// was given.
+// leaves behind is reachable by the trace id of a row the caller was given —
+// [cutToPage] says through which reads.
 func mergeRelated(direct, siblings []EventRecord, limit int) []EventRecord {
-	seen := make(map[string]struct{}, len(direct)+len(siblings))
+	// DEDUPLICATED ON THE PRIMARY KEY, (event_time, event_id). A direct match
+	// is in its own trace, so the sibling read returns it again and one copy
+	// has to go — but the id alone does not name a row, and a key narrower
+	// than the table's drops a DISTINCT row for sharing an id with one
+	// already on the page. Microseconds rather than the time.Time, because
+	// that is exactly what the column holds and a time.Time is not a safe
+	// map key.
+	type key struct {
+		at int64
+		id string
+	}
+	seen := make(map[key]struct{}, len(direct)+len(siblings))
 	out := make([]EventRecord, 0, len(direct)+len(siblings))
 	for _, group := range [][]EventRecord{direct, siblings} {
 		for _, rec := range group {
-			if _, dup := seen[rec.ID]; dup {
+			k := key{EncodeTime(rec.Time), rec.ID}
+			if _, dup := seen[k]; dup {
 				continue
 			}
-			seen[rec.ID] = struct{}{}
+			seen[k] = struct{}{}
 			out = append(out, rec)
 		}
 	}
@@ -714,9 +744,22 @@ func mergeRelated(direct, siblings []EventRecord, limit int) []EventRecord {
 	return cutToPage(out, limit)
 }
 
-// Trace returns every event in a trace, OLDEST first, because a trace is read
-// as a causal sequence rather than a feed. A caller that gets exactly
-// MaxTraceEvents rows should say the view is truncated.
+// Trace returns a trace's OLDEST [MaxTraceEvents] rows inside the history
+// window, oldest first, because a trace is read as a causal sequence rather
+// than a feed.
+//
+// WHETHER THE READ WAS CUT is [EventLog.TraceEventCount]'s to say, not the row
+// count's: a trace of exactly MaxTraceEvents rows holds every row it has, and
+// a caller that read a full page as a cut one would mark a complete trace
+// short.
+//
+// WHERE THE REST IS. A cut leaves out the trace's NEWEST rows, and
+// [EventLog.List] with [ListQuery.TraceID] reads that same trace newest first,
+// paged by [ListQuery.Before], under the same history window and with no cap on
+// the walk. The two orders are mirror images of one (time, id) order, so that
+// walk, stopped at the last row this read returned — matched on its time AND
+// its id, since the id alone is not unique — has by then returned every row of
+// the trace newer than it, which is what this read stopped short of.
 func (l *EventLog) Trace(ctx context.Context, traceID string) ([]EventRecord, error) {
 	return l.scanRows(ctx,
 		"SELECT "+listColumns+" FROM crewlet_events "+
@@ -733,12 +776,21 @@ func (l *EventLog) Trace(ctx context.Context, traceID string) ([]EventRecord, er
 // trace can span several turns (a webhook that wakes two seats), and a turn
 // resumed on another node after a restart can span several traces.
 //
-// A caller that gets exactly MaxTurnEvents rows should say the view is
-// truncated, and should read [EventLog.TurnClosing] beside it: because this
-// read is ordered forwards, what a cut loses is the turn's own ENDING, which
-// is where the records a reader came for live. The cap is the trace's, for the
-// same reason: a turn that has self-iterated many times is the one worth
-// reading, and a bound low enough to cut it short would hide exactly that.
+// WHETHER THE READ WAS CUT is [EventLog.TurnEventCount]'s to say, not the row
+// count's, for the reason that method gives. A caller whose read WAS cut reads
+// [EventLog.TurnClosing] beside it: because this read is ordered forwards, what
+// a cut loses is the turn's own ENDING, which is where the records a reader
+// came for live. The cap is the trace's, for the same reason: a turn that has
+// self-iterated many times is the one worth reading, and a bound low enough to
+// cut it short would hide exactly that.
+//
+// WHERE THE MIDDLE IS. What neither this read nor TurnClosing returns is on
+// [EventLog.List] with [ListQuery.TurnID], which reads the same turn newest
+// first, paged by [ListQuery.Before], under the same history window and with no
+// cap on the walk. A listing carries no payload, so a row reached that way is
+// read whole by [EventLog.ByKey], with the time and id the listing gave it —
+// not by [EventLog.ByID], which answers the newest row carrying the id and so
+// can hand back another row's payload.
 func (l *EventLog) Turn(ctx context.Context, turnID string) ([]EventRecord, error) {
 	return l.scanPayloads(ctx,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
@@ -747,7 +799,8 @@ func (l *EventLog) Turn(ctx context.Context, turnID string) ([]EventRecord, erro
 		turnID, EncodeTime(now().Add(-EventHistory)), MaxTurnEvents)
 }
 
-// MaxTurnEvents bounds one turn's read.
+// MaxTurnEvents bounds one turn's read. [EventLog.Turn] says what a cut leaves
+// out and where it is.
 const MaxTurnEvents = MaxTraceEvents
 
 // TurnEventCount is how many rows one turn has in the window, whatever a
@@ -856,8 +909,10 @@ func (l *EventLog) countEvents(ctx context.Context, column, id string) (int, err
 //
 // Oldest first among themselves, so a caller appends rather than reverses.
 // The rows may OVERLAP the head read on a turn that only just reached the cap
-// — they are the same rows from the other end — so a caller merges on the
-// event id rather than concatenating.
+// — they are the same rows from the other end — so a caller merges rather than
+// concatenating, and merges on (event_time, event_id), the table's primary
+// key. Not on the id alone: nothing constrains it to one row, and a merge on
+// it drops a distinct row for sharing an id with one already held.
 func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([]EventRecord, error) {
 	if limit <= 0 {
 		// ALLOCATED, like every other list read here — asking for no rows is
@@ -882,25 +937,48 @@ func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([
 //
 // The identity is (event_time, event_id) and a caller holding only an id — a
 // link, a line pasted from a log — has no time to seek with, so this reads the
-// id index and takes the newest match.
+// id index and takes the newest match. That is a guess whenever the id is
+// shared: the primary key is the pair, and nothing in the schema constrains
+// the id alone. A caller that got the row from a listing holds both halves and
+// reads it with [EventLog.ByKey] instead.
+func (l *EventLog) ByID(ctx context.Context, id string) (EventRecord, error) {
+	return l.one(ctx, "event "+id,
+		"WHERE event_id = ? ORDER BY event_time DESC LIMIT 1", id)
+}
+
+// ByKey returns the one event at (at, id) WITH its payload, or ErrNotFound.
+//
+// THE ROW A LISTING NAMED, which [EventLog.ByID] cannot promise: it holds only
+// the id and answers the newest row carrying it, so a caller that took the id
+// off a listing row is handed ANOTHER row's payload whenever an id is shared.
+// Every row a listing returns carries its [EventRecord.Time] and
+// [EventRecord.ID], and this seeks the primary key with both.
+//
+// No history window, like ByID: both read a row the caller already names.
+func (l *EventLog) ByKey(ctx context.Context, at time.Time, id string) (EventRecord, error) {
+	return l.one(ctx, "event "+id+" at "+at.UTC().Format(time.RFC3339Nano),
+		"WHERE event_time = ? AND event_id = ?", EncodeTime(at), id)
+}
+
+// one is the point read ByID and ByKey share: a WHERE naming at most one row,
+// with its payload.
 //
 // THROUGH THE SHARED SCANNER although it wants one row, which is what
 // QueryRow would give it more directly. A second hand-written Scan is a second
 // copy of the agreement between `listColumns` and the destination list, and
 // that is precisely the drift [EventLog.scanPayloads] exists to prevent: the
 // `work_key` promotion added a column to the list, every listing picked it up,
-// and this reader kept a twelve-argument Scan that failed at RUNTIME — on the
-// one read a person reaches by pasting an id. LIMIT 1 makes the slice at most
+// and ByID, holding its own twelve-argument Scan, failed at RUNTIME — on the
+// one read a person reaches by pasting an id. Each caller's WHERE names at most
 // one row, so the cost is one allocation on a path that serves a link.
-func (l *EventLog) ByID(ctx context.Context, id string) (EventRecord, error) {
+func (l *EventLog) one(ctx context.Context, what, where string, args ...any) (EventRecord, error) {
 	recs, err := l.scanPayloads(ctx,
-		"SELECT "+listColumns+", payload FROM crewlet_events "+
-			"WHERE event_id = ? ORDER BY event_time DESC LIMIT 1", id)
+		"SELECT "+listColumns+", payload FROM crewlet_events "+where, args...)
 	if err != nil {
-		return EventRecord{}, fmt.Errorf("store: read event %s: %w", id, err)
+		return EventRecord{}, fmt.Errorf("store: read %s: %w", what, err)
 	}
 	if len(recs) == 0 {
-		return EventRecord{}, fmt.Errorf("%w: event %s", ErrNotFound, id)
+		return EventRecord{}, fmt.Errorf("%w: %s", ErrNotFound, what)
 	}
 	return recs[0], nil
 }
@@ -1058,7 +1136,10 @@ var agentTagKeys = []string{"agent_role", "target", "recipient", "sender"}
 // WHAT IT ACTUALLY DROPS, and where that is reachable. Only
 // [EventLog.List]'s related-agent path merges, so this runs nowhere else. A
 // dropped DIRECT match is not lost at all: it is older than the cursor, so the
-// next page returns it. A dropped SIBLING may never be returned by any page —
+// next page's direct read returns it — and if that page's cut drops it again,
+// every row that page kept is newer than it, so each such page brings the walk
+// closer and a later one returns it. A dropped SIBLING may never be returned
+// by any page —
 // it is older than the cursor while the direct match that pulled its trace in
 // can be newer, so that trace is not re-queried further down the walk. That
 // row is recovered by TRACE: the direct match IS on a page the caller gets
@@ -1068,13 +1149,13 @@ var agentTagKeys = []string{"agent_role", "target", "recipient", "sender"}
 // row the caller was given, so there is no dropped sibling whose trace the
 // caller cannot NAME.
 //
-// AND THAT IS WHERE THE RECOVERY STOPS, said here because this is the
-// paragraph a reader takes the guarantee from. The trace read is capped, and
+// THE TRACE READ IS CAPPED, and that is not where the recovery stops. It is
 // ordered forwards, so what it returns is that trace's OLDEST MaxTraceEvents
-// rows within EventHistory: on a longer trace a sibling below them is in
-// neither answer. Which case a caller is in is not left to be guessed:
-// [EventLog.Trace] states the obligation that covers it — a read that comes
-// back holding MaxTraceEvents rows must say the view is truncated.
+// rows within EventHistory, and on a longer trace a dropped sibling can be past
+// them. It is then on [EventLog.List] with [ListQuery.TraceID], which reads the
+// same trace newest first with no cap on the walk — see [EventLog.Trace]. Which
+// case a caller is in is [EventLog.TraceEventCount]'s answer, never the row
+// count's.
 //
 // A limit of zero or less returns the set unchanged, matching
 // [EventLog.List], which substitutes defaultListLimit before it gets here —
@@ -1110,16 +1191,12 @@ type PhaseTokenQuery struct {
 	// AgentRole restricts the rollup to one seat. Empty is the whole org.
 	AgentRole string
 
-	// Limit keeps only the newest Limit records of the window. Zero or less
-	// is the WHOLE window, and that is what a rollup must ask for: see the
-	// note below on why the rollup has no row cap, since a total folded from
-	// a truncated window is an undercount that reads as an underspend.
-	//
-	// It exists for a caller that RETAINS only a bounded tail anyway, which
-	// is the live projection's startup seed: without it a day busier than
-	// the projection's record cap was read in full, into memory, inside the
-	// seed's time budget, only to be cut down to that cap on arrival.
-	Limit int
+	// THERE IS NO ROW BOUND HERE, and that is structural rather than a
+	// default. [EventLog.PhaseTokens] reads the whole window because a total
+	// folded from part of one is an undercount that reads as an underspend;
+	// the bounded read is [EventLog.PhaseTokenTail], a different method with
+	// a different second answer, so a rollup cannot be cut by a field it
+	// forgot to leave at zero.
 }
 
 // Window reports the instants this query actually covers, after the floor.
@@ -1207,13 +1284,15 @@ SELECT event_time, event_id, agent_id, agent_role,
 FROM crewlet_events
 WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 
-// AgentPhaseLimit bounds a seat's phase history.
+// AgentPhaseLimit bounds one page of a seat's phase history.
 //
-// Sized to the screen rather than to the table: the seat page renders these as
-// an expandable list and each row carries the phase's prompts and its whole
-// response verbatim, so a hundred of them is already megabytes on the wire for
-// a list nobody scrolls to the end of. The dashboard keeps its own cap at the
-// same number, so the page and the answer agree about where history stops.
+// Sized by the ROW rather than by the table: each row carries the phase's
+// prompts and its whole response verbatim, which is the reason
+// [MaxPhasePage] gives for the company-wide page too.
+//
+// A PAGE, NOT THE RECORD. [EventLog.AgentPhases] reports whether the seat's
+// history holds more than this, and the rest is reached by handing the page's
+// last row back as its `before` cursor.
 const AgentPhaseLimit = 50
 
 // The event_time floor is EventHistory, the same one every other read of this
@@ -1254,9 +1333,19 @@ const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // agent_phase_completed only. That is the durable record — the prompts, the
 // response, the tools, the tokens — while agent_turn_progress is stream-only
 // by design, so history here is exactly the calls that finished.
-func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, before *Cursor) ([]EventRecord, error) {
+//
+// THE SECOND RETURN SAYS THE SEAT'S RECORD HOLDS MORE than this page, read as
+// one row past [AgentPhaseLimit] and dropped (see [probed]). Without it a seat
+// with exactly a page of history and one with a month of it answer
+// identically, and a caller offering an older page on a FULL one offers an
+// empty page on the first. The rest is the next page: the last row's (time, id)
+// handed back as `before`.
+func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, before *Cursor) ([]EventRecord, bool, error) {
 	if agentID == "" && agentRole == "" {
-		return nil, nil
+		return nil, false, nil
+	}
+	if before != nil && before.ID == "" {
+		return nil, false, ErrHalfCursor
 	}
 	query := agentPhaseSQL
 	args := []any{EncodeTime(now().Add(-EventHistory))}
@@ -1270,13 +1359,18 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 	clause, ids := seatClause(agentID, agentRole)
 	query += clause
 	args = append(args, ids...)
-	if before != nil && before.ID != "" {
+	if before != nil {
 		query += agentPhaseCursorSQL
 		args = append(args, EncodeTime(before.Time), before.ID)
 	}
 	query += agentPhaseOrderSQL
-	args = append(args, AgentPhaseLimit)
-	return l.scanPayloads(ctx, query, args...)
+	args = append(args, AgentPhaseLimit+1)
+	out, err := l.scanPayloads(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	out, more := probed(out, AgentPhaseLimit)
+	return out, more, nil
 }
 
 // seatClause narrows to a seat by whichever identifier the caller holds.
@@ -1324,14 +1418,21 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // one keystroke away.
 //
 // `role` narrows to one seat when a caller wants it; empty means the company.
-func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *Cursor) ([]EventRecord, error) {
+//
+// The second return is [EventLog.AgentPhases]' own and for its reason: the
+// record holds more than this page, read as one row past `limit` and dropped.
+// The rest is the next page, from the last row's (time, id) as `before`.
+func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *Cursor) ([]EventRecord, bool, error) {
+	if before != nil && before.ID == "" {
+		return nil, false, ErrHalfCursor
+	}
 	query := phasesSQL
 	args := []any{EncodeTime(now().Add(-EventHistory))}
 	if role != "" {
 		query += ` AND agent_role = ?`
 		args = append(args, role)
 	}
-	if before != nil && before.ID != "" {
+	if before != nil {
 		query += agentPhaseCursorSQL
 		args = append(args, EncodeTime(before.Time), before.ID)
 	}
@@ -1339,8 +1440,13 @@ func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *C
 	if limit <= 0 || limit > MaxPhasePage {
 		limit = MaxPhasePage
 	}
-	args = append(args, limit)
-	return l.scanPayloads(ctx, query, args...)
+	args = append(args, limit+1)
+	out, err := l.scanPayloads(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	out, more := probed(out, limit)
+	return out, more, nil
 }
 
 // MaxPhasePage bounds one page of company-wide phase records.
@@ -1357,12 +1463,53 @@ const MaxPhasePage = 60
 // so a rollup over seven days and a rollup over the live one cannot disagree
 // about what a phase costs.
 //
-// The token counts come out of the PAYLOAD rather than from columns of their
-// own. That is deliberate: they are five numbers on one event type, and
-// promoting them would mean a migration and five more columns that are NULL on
-// every other row in the table. The filterable dimensions — the ones a query
-// selects ON — are the promoted ones.
+// The token counts are COLUMNS (schema/0015), so the window folds without
+// reading a payload; the price is the one value still read out of it, for the
+// reason given at [phaseTokenSQL].
+//
+// THE WHOLE WINDOW, always. A caller that keeps only a bounded tail reads
+// [EventLog.PhaseTokenTail] instead.
 func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
+	return l.phaseTokens(ctx, q, 0)
+}
+
+// PhaseTokenTail returns the NEWEST `limit` spend records inside the window,
+// newest first, and whether the window held more than that.
+//
+// For a caller that RETAINS only a bounded tail anyway, which is the live
+// projection's startup seed: reading the whole of a day busier than its record
+// cap would load every record into memory inside the seed's time budget only to
+// drop the oldest on arrival.
+//
+// THE SECOND RETURN IS THE POINT, and it is read, not inferred. A caller that
+// kept a tail has to head what it folds with the span the tail covers rather
+// than with the window it asked for — a total over eighteen hours under a
+// twenty-four-hour heading is a wrong total — and a page of exactly `limit`
+// records cannot say which it is: a window that held exactly that many and one
+// that held ten times as many answer with the same rows. One record past the
+// limit is read as the evidence and dropped (see [probed]). What the tail
+// leaves out is the older part of the same window, which [EventLog.PhaseTokens]
+// returns whole.
+//
+// A limit below one is REFUSED rather than read as "no bound": the whole
+// window is the other method, and a tail read that silently became it is the
+// memory spike this read exists to avoid.
+func (l *EventLog) PhaseTokenTail(ctx context.Context, q PhaseTokenQuery, limit int) ([]tokens.Record, bool, error) {
+	if limit < 1 {
+		return nil, false, fmt.Errorf("store: a phase-token tail needs a limit of at least 1, got %d "+
+			"— the whole window is PhaseTokens", limit)
+	}
+	out, err := l.phaseTokens(ctx, q, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	out, more := probed(out, limit)
+	return out, more, nil
+}
+
+// phaseTokens is the one statement both spend reads run: `depth` rows deep, or
+// the whole window at zero.
+func (l *EventLog) phaseTokens(ctx context.Context, q PhaseTokenQuery, depth int) ([]tokens.Record, error) {
 	since, until := q.Window(now())
 
 	// BOTH EDGES, ALWAYS, and the top one EXCLUSIVE — matching the
@@ -1379,12 +1526,11 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 		args = append(args, q.AgentRole)
 	}
 	// Newest first, which is the order the breakdown renders in, and the
-	// order a Limit keeps the head of. No LIMIT unless the caller asked for
-	// a tail: see the note where the rollup's cap used to be.
+	// order a tail keeps the head of.
 	sql += " ORDER BY event_time DESC, event_id DESC"
-	if q.Limit > 0 {
+	if depth > 0 {
 		sql += " LIMIT ?"
-		args = append(args, q.Limit)
+		args = append(args, depth)
 	}
 
 	rows, err := l.db.sql.QueryContext(ctx, sql, args...)

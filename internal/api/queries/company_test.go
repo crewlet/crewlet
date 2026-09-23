@@ -150,8 +150,13 @@ type fakeRuns struct {
 	}
 }
 
-func (f *fakeRuns) Recent(context.Context, int) ([]schedule.Run, error) {
-	return f.runs, f.err
+// Recent honours the limit, as the ledger does, so a case about the evidence
+// row cannot pass by being handed every row whatever it asked for.
+func (f *fakeRuns) Recent(_ context.Context, limit int) ([]schedule.Run, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.runs[:min(limit, len(f.runs))], nil
 }
 
 func (f *fakeRuns) RecentFor(_ context.Context, scope types.ScheduleScope,
@@ -163,7 +168,9 @@ func (f *fakeRuns) RecentFor(_ context.Context, scope types.ScheduleScope,
 	// the narrowing would have excluded.
 	out := []schedule.Run{}
 	for _, run := range f.runs {
-		if run.Scope == scope && run.ScopeID == scopeID && run.ScheduleName == name {
+		if run.Scope == scope && run.ScopeID == scopeID && run.ScheduleName == name &&
+			len(out) < limit {
+
 			out = append(out, run)
 		}
 	}
@@ -2258,6 +2265,153 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	}
 }
 
+// fires builds n fires of one schedule identity, newest first, one minute apart
+// ending at `newest` — the order the ledger answers in.
+func fires(scope types.ScheduleScope, scopeID, name string, newest time.Time, n int) []schedule.Run {
+	out := make([]schedule.Run, 0, n)
+	for i := range n {
+		at := newest.Add(-time.Duration(i) * time.Minute)
+		out = append(out, schedule.Run{
+			FireKey: schedule.FireKey{
+				Scope: scope, ScopeID: scopeID, ScheduleName: name,
+				FireLabel: at.Format("20060102T1504"), TargetHandle: scopeID,
+			},
+			ScheduledAt: at, FiredAt: at, Outcome: schedule.OutcomeFired,
+		})
+	}
+	return out
+}
+
+// THE STRIP SAYS IT WAS CUT WHEN THE LEDGER HOLDS MORE, and only then.
+//
+// A full page is not evidence: a ledger holding exactly fifty fires fills it
+// too. The read takes one row past the page, so `recent_runs_truncated` is
+// what the ledger holds rather than what the page happened to reach.
+func TestTheFireStripIsCutOnTheEvidenceRowAlone(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	for _, tc := range []struct {
+		held      int
+		truncated bool
+	}{
+		{held: queries.RecentRunsLimit, truncated: false},
+		{held: queries.RecentRunsLimit + 1, truncated: true},
+	} {
+		body := asMap(t, answer(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+			Runs:    &fakeRuns{runs: fires(types.ScheduleScopeRole, "other", "report", pinned, tc.held)},
+		}, "schedules", nil))
+		if got := len(rows(t, body["recent_runs"])); got != queries.RecentRunsLimit {
+			t.Errorf("ledger of %d: the strip carries %d fires, want %d",
+				tc.held, got, queries.RecentRunsLimit)
+		}
+		if body["recent_runs_truncated"] != tc.truncated {
+			t.Errorf("ledger of %d: recent_runs_truncated = %v, want %v",
+				tc.held, body["recent_runs_truncated"], tc.truncated)
+		}
+	}
+}
+
+// A SCHEDULE WHOSE LAST FIRE IS OLDER THAN THE STRIP STILL HAS ONE.
+//
+// The strip is the newest fifty fires across every schedule, so one busy
+// schedule pushes a quiet one's fires off it — and a "last fired" column
+// built from the strip then says the quiet schedule has never fired. Its own
+// newest fire is read per schedule, so it is on the answer however many fires
+// of other schedules are newer.
+func TestEveryConfiguredScheduleCarriesItsOwnLastFire(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	src := queries.Sources{Company: func() *config.Company { return cfg }}
+	configured := src.ConfiguredSchedules()
+	if len(configured) != 1 {
+		t.Fatalf("the fixture declares %d schedules, want 1", len(configured))
+	}
+	standup := configured[0]
+
+	busy := fires(types.ScheduleScopeRole, "other", "report", pinned, queries.RecentRunsLimit+10)
+	quiet := fires(standup.ScopeType, standup.ScopeID, standup.Name, pinned.Add(-24*time.Hour), 1)
+	src.Runs = &fakeRuns{runs: append(busy, quiet...)}
+	body := asMap(t, answer(t, src, "schedules", nil))
+
+	for _, run := range rows(t, body["recent_runs"]) {
+		if run["schedule_name"] == standup.Name {
+			t.Fatalf("the quiet schedule's fire made the strip; this case asserts " +
+				"nothing unless the busy one pushed it off")
+		}
+	}
+	last := rows(t, body["last_runs"])
+	if len(last) != 1 {
+		t.Fatalf("last_runs = %v, want the quiet schedule's own fire", body["last_runs"])
+	}
+	if last[0]["schedule_name"] != standup.Name ||
+		last[0]["scope_id"] != standup.ScopeID ||
+		last[0]["fired_at"] != pinned.Add(-24*time.Hour).Format(time.RFC3339Nano) {
+
+		t.Errorf("last_runs[0] = %v, want %s's fire of a day ago", last[0], standup.Name)
+	}
+	if body["history_available"] != true {
+		t.Errorf("history_available = %v on a ledger that answered", body["history_available"])
+	}
+}
+
+// "NOTHING HAS FIRED" AND "NOBODY COULD LOOK" ARE DIFFERENT ANSWERS.
+//
+// Both leave the history lists empty — the configured half still renders —
+// and without a flag they are one answer, which a screen renders as every
+// schedule having never fired.
+func TestAnUnreadableLedgerIsNotAnEmptyOne(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	for _, tc := range []struct {
+		name      string
+		runs      queries.ScheduleRuns
+		available bool
+	}{
+		{"a ledger that answered empty", &fakeRuns{}, true},
+		{"a ledger that failed", &fakeRuns{err: errors.New("disk gone")}, false},
+		{"no ledger on this node", nil, false},
+	} {
+		body := asMap(t, answer(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+			Runs:    tc.runs,
+		}, "schedules", nil))
+		if body["history_available"] != tc.available {
+			t.Errorf("%s: history_available = %v, want %v",
+				tc.name, body["history_available"], tc.available)
+		}
+		if len(rows(t, body["recent_runs"])) != 0 || len(rows(t, body["last_runs"])) != 0 {
+			t.Errorf("%s: history lists are not empty: %v", tc.name, body)
+		}
+	}
+}
+
+// ONE SCHEDULE'S PAGE IS CUT ON THE EVIDENCE ROW TOO, for the reason the strip
+// is: a schedule that has fired exactly fifty times fills the page.
+func TestOneSchedulesPageIsCutOnTheEvidenceRowAlone(t *testing.T) {
+	t.Parallel()
+	params := map[string]any{"scope_type": "role", "scope_id": "ceo", "name": "standup"}
+	for _, tc := range []struct {
+		held      int
+		truncated bool
+	}{
+		{held: queries.MaxScheduleRuns, truncated: false},
+		{held: queries.MaxScheduleRuns + 1, truncated: true},
+	} {
+		body := asMap(t, answer(t, queries.Sources{Runs: &fakeRuns{
+			runs: fires(types.ScheduleScopeRole, "ceo", "standup", pinned, tc.held),
+		}}, "schedule_runs", params))
+		if got := len(rows(t, body["runs"])); got != queries.MaxScheduleRuns {
+			t.Errorf("ledger of %d: the page carries %d fires, want %d",
+				tc.held, got, queries.MaxScheduleRuns)
+		}
+		if body["truncated"] != tc.truncated {
+			t.Errorf("ledger of %d: truncated = %v, want %v",
+				tc.held, body["truncated"], tc.truncated)
+		}
+	}
+}
+
 // ONE SCHEDULE'S HISTORY, which the company-wide ledger cannot be.
 //
 // `schedules.recent_runs` is fifty rows across EVERY schedule, so a company
@@ -2298,9 +2452,10 @@ func TestOneSchedulesRunsAreReadableOnTheirOwn(t *testing.T) {
 
 		t.Errorf("the ledger was asked about %+v", ledger.asked)
 	}
-	if ledger.asked.limit != queries.MaxScheduleRuns {
-		t.Errorf("the ledger was asked for %d rows, want the cap %d",
-			ledger.asked.limit, queries.MaxScheduleRuns)
+	// ONE PAST THE PAGE, which is the evidence row `truncated` is read from.
+	if ledger.asked.limit != queries.MaxScheduleRuns+1 {
+		t.Errorf("the ledger was asked for %d rows, want the cap plus the "+
+			"evidence row, %d", ledger.asked.limit, queries.MaxScheduleRuns+1)
 	}
 }
 

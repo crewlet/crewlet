@@ -46,28 +46,38 @@ const (
 	memoryVectorLimit  = 50
 	memoryRecencyLimit = 50
 
-	// memoryMaxSelected caps what the filter may pick. Eight memories is
-	// already a paragraph of standing instructions in front of the task.
+	// memoryMaxSelected is how many memories the filter is told it may
+	// pick. Eight memories is already a paragraph of standing instructions
+	// in front of the task.
+	//
+	// AN INSTRUCTION, NOT A CUT. Every index the filter returns is a memory
+	// it judged relevant, so an answer naming more than this is kept whole
+	// and the block shows all of it: the block is the only place the
+	// turn-start answer reaches the seat, so a memory it left out would be
+	// one the seat never heard of. The block is bounded by the pool the
+	// filter picks from — memoryVectorLimit plus memoryRecencyLimit — which
+	// it cannot name an index outside of.
 	memoryMaxSelected = 8
 
 	// memoryMarkBudget bounds the detached write that records which
 	// memories the filter picked.
 	//
-	// ONE indexed UPDATE over at most memoryMaxSelected ids against a
-	// local file, so the work is sub-millisecond and this is a guard
-	// against a wedged store rather than a real allowance. It has to be
-	// finite because the write deliberately outlives the turn's context:
-	// an unbounded detached write on a store that never answers would
-	// park a goroutine per turn for the life of the process.
+	// ONE indexed UPDATE over the ids the filter picked — at most the
+	// candidate pool — against a local file, so the work is
+	// sub-millisecond and this is a guard against a wedged store rather
+	// than a real allowance. It has to be finite because the write
+	// deliberately outlives the turn's context: an unbounded detached
+	// write on a store that never answers would park a goroutine per turn
+	// for the life of the process.
 	memoryMarkBudget = 5 * time.Second
 
 	// memoryFilterTokens is headroom for the filter's answer.
 	//
-	// The visible output is a JSON array of at most eight integers — ten
-	// tokens. The cap is two thousand because it covers THINKING as well:
-	// on an extended-thinking model a tight cap is spent reasoning, the
-	// call returns with output at the cap and content empty, and every
-	// turn then renders an empty block with no error anywhere to say why.
+	// The visible output is a JSON array the filter is told to keep to
+	// [memoryMaxSelected] integers — ten tokens. The cap is two thousand
+	// because it covers THINKING as well: on an extended-thinking model a
+	// tight cap is spent reasoning, the call returns with output at the cap
+	// and content empty, and every turn then renders an empty block.
 	memoryFilterTokens = 2000
 )
 
@@ -82,7 +92,12 @@ const EmptyMemoryHint = "(no stored memories surfaced at turn start — re-run "
 	"the filter with your memory-refresh tool once you have gathered more " +
 	"context about what this task actually needs)"
 
-// memoryFilterSystemPrompt is the filter's whole instruction.
+// memoryFilterSystemPrompt is the filter's whole instruction, with the
+// selection limit filled in from [memoryMaxSelected], where its reason is.
+var memoryFilterSystemPrompt = fmt.Sprintf(memoryFilterSystemTemplate, memoryMaxSelected)
+
+// memoryFilterSystemTemplate is the filter's instruction before the limit is
+// filled in.
 //
 // THE THREE RULES ARE THE POINT, and the distinction underneath them is what
 // a memory is ABOUT. An operational memory is about a situation and tells
@@ -92,14 +107,14 @@ const EmptyMemoryHint = "(no stored memories surfaced at turn start — re-run "
 // leave, whoever the routing target is) while its meaning is about the
 // situation, and a filter that excluded it on a name mismatch would drop
 // exactly the memories that matter most.
-const memoryFilterSystemPrompt = `You are a memory-relevance filter for an AI agent.
+const memoryFilterSystemTemplate = `You are a memory-relevance filter for an AI agent.
 
 Given the agent's current task and a numbered list of stored personal memories, return the indices of the memories genuinely relevant to this task.
 
 Output format (strict):
 - A single JSON array of integer indices, most relevant first.
 - No prose before or after. Examples: [3, 0, 7] or []
-- At most 8 indices.
+- At most %d indices.
 
 The user prompt may include a "Current sender:" line identifying who triggered this turn. Use it when judging per-subject relevance (rule 3), but it is NOT a hard filter on its own — an operational rule that mentions a different person can still apply.
 
@@ -140,6 +155,8 @@ func (f *Fetcher) personalMemory(ctx context.Context, r Request) string {
 	if len(selected) == 0 {
 		return EmptyMemoryHint
 	}
+	// EVERY memory the filter picked, however many — see
+	// [memoryMaxSelected] for why the limit it was told is not a cut.
 	bullets := make([]string, 0, len(selected))
 	for _, entry := range selected {
 		bullets = append(bullets, renderMemory(entry))
@@ -188,7 +205,13 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request) []learning.Di
 	return out
 }
 
-// filterMemories asks the auxiliary model which candidates bear on the task.
+// filterMemories asks the auxiliary model which candidates bear on the task,
+// and returns EVERY one it picked, in its order.
+//
+// Not cut at [memoryMaxSelected]: that is what the filter is TOLD, and an
+// answer past it is still the filter's judgement. Cut here, the memories past
+// the limit would be judged relevant and then dropped where no caller could
+// see them.
 func (f *Fetcher) filterMemories(ctx context.Context, r Request, candidates []learning.DiaryEntry) []learning.DiaryEntry {
 	answer, ok := f.auxCall(ctx, r.Seat, memoryFilterSystemPrompt,
 		memoryFilterPrompt(r, candidates), memoryFilterTokens)
@@ -196,9 +219,6 @@ func (f *Fetcher) filterMemories(ctx context.Context, r Request, candidates []le
 		return nil
 	}
 	picked := parseIndices(answer, len(candidates))
-	if len(picked) > memoryMaxSelected {
-		picked = picked[:memoryMaxSelected]
-	}
 	out := make([]learning.DiaryEntry, 0, len(picked))
 	ids := make([]string, 0, len(picked))
 	for _, i := range picked {

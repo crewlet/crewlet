@@ -29,6 +29,14 @@ import "sort"
 // 2/(60+r) > 1/61 for every r below 62. A semantic-only document's best
 // possible fused position is therefore already one past the overlap, and
 // losing it costs the answer its best distinct entry.
+//
+// # It returns every document it was given
+//
+// Fusion ORDERS; it does not choose how many. How many is the caller's
+// question, answered by the limit the caller was asked for, so a ceiling here
+// would be a second limit nobody asked for — one that no caller reaches, and
+// that would cut silently, with nothing on the answer to say so, the day one
+// did.
 func Fuse(lists ...[]string) []string {
 	scores := make(map[string]float64)
 	first := make(map[string]int)
@@ -54,9 +62,6 @@ func Fuse(lists ...[]string) []string {
 		// make the answer depend on what somebody called a task.
 		return first[fused[a]] < first[fused[b]]
 	})
-	if len(fused) > FuseCandidateCeiling {
-		fused = fused[:FuseCandidateCeiling]
-	}
 	return fused
 }
 

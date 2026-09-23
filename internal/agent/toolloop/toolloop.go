@@ -225,6 +225,14 @@ type Progress struct {
 	outputTokens int
 	roundsUsed   int
 	model        string
+
+	// truncated and emptyAnswers are the two facts about the loop's
+	// rounds that a finished [Result] reports and a snapshot used to drop.
+	// A loop that died AFTER a round was cut at its output cap is still a
+	// loop whose text stops short, and the failure path is the one that
+	// publishes that text — so it has to say so too.
+	truncated    bool
+	emptyAnswers int
 }
 
 // Snapshot freezes the partial state into a Result.
@@ -244,7 +252,35 @@ func (p *Progress) Snapshot() Result {
 		RoundsUsed:   p.roundsUsed,
 		Model:        p.model,
 		Messages:     append([]llm.Message(nil), p.messages...),
+		Truncated:    p.truncated,
+		EmptyAnswers: p.emptyAnswers,
 	}
+}
+
+// rounds records the loop's round-level facts as they change, rather than at
+// the next publish: a round cut at its cap can be followed by a charge that
+// refuses, and that return comes before any publish would.
+func (p *Progress) rounds(truncated bool, emptyAnswers int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.truncated, p.emptyAnswers = truncated, emptyAnswers
+}
+
+// start resets the view to an invocation that has done nothing yet.
+//
+// A caller may hand ONE Progress to several invocations — an extended phase
+// runs the loop again — and until the new invocation first publishes, the
+// view still describes the last one. An invocation that died before that
+// point, on its first provider call, then reported the previous
+// invocation's calls, tokens and rounds as its own, and a caller folding
+// that onto what it already held counted them twice.
+func (p *Progress) start(msgs []llm.Message) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.messages = append([]llm.Message(nil), msgs...)
+	p.executions, p.narration = nil, nil
+	p.inputTokens, p.outputTokens, p.roundsUsed, p.model = 0, 0, 0, ""
+	p.truncated, p.emptyAnswers = false, 0
 }
 
 func (p *Progress) record(msgs []llm.Message, execs []Execution, narr []Narration, in, out, rounds int, model string) {
@@ -461,6 +497,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 
 	msgs := append([]llm.Message(nil), cfg.Messages...)
+	if cfg.Progress != nil {
+		cfg.Progress.start(msgs)
+	}
 	var execs []Execution
 	var narration []Narration
 	var inTokens, outTokens int
@@ -638,6 +677,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			// nothing by design — the frame that publishes the phase
 			// event is the one that says so.
 			truncated = true
+			if cfg.Progress != nil {
+				cfg.Progress.rounds(truncated, emptyAnswers)
+			}
 		}
 
 		// Charge BEFORE running the tools this round asked for. A round
@@ -689,6 +731,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			answeredNothing := strings.TrimSpace(completion.Content) == ""
 			if answeredNothing {
 				emptyAnswers++
+				if cfg.Progress != nil {
+					cfg.Progress.rounds(truncated, emptyAnswers)
+				}
 			}
 
 			// A required tool call that did not arrive. Some endpoints

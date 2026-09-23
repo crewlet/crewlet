@@ -179,13 +179,18 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	svc.Hub().Register(client)
 	defer svc.Hub().Unregister(client)
 
+	// ONE CONSTRUCTION of the snapshot frame, for the handshake and for
+	// every resync after it: a tab healed mid-connection must hold exactly
+	// what a tab that had just connected would.
+	snapshot := func() Envelope { return Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()) }
+
 	var writer sync.WaitGroup
 	writer.Go(func() {
 		defer cancel()
-		writeLoop(ctx, conn, client)
+		writeLoop(ctx, socketWriter(conn), client, snapshot)
 	})
 
-	client.send(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
+	client.send(snapshot())
 	readLoop(ctx, conn, guard, client, query, operatorID)
 
 	// Unregister closes the client's queue, which is what ends the writer.
@@ -199,46 +204,107 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 // One writer per connection, and it is the ONLY thing that writes: a WebSocket
 // connection permits one concurrent writer, so a query answered on its own
 // goroutine goes through this queue rather than to the socket directly.
-func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
+//
+// # A tab that fell behind is RESYNCED, not merely told
+//
+// [Client.send] drops the oldest frame when a tab falls [QueueDepth] behind,
+// and a dropped push is a state delta: the tab is then drawing something other
+// than the truth. Every frame carries the running count ([Envelope.Dropped]),
+// but a count only helps a client that reads it — and the fix for a lost push
+// is the same whoever applies it: a fresh snapshot, which the projection can
+// build at any moment. So after every frame it writes, this writer checks the
+// connection's count, and when it has moved past what the last resync
+// covered it empties the queue ([Client.catchUp]) — discarding the pushes the
+// snapshot supersedes, keeping everything else — delivers what it kept, and
+// then a snapshot built NOW.
+//
+// THE COUNT, NOT THE FRAME'S STAMP, is what is checked: a frame is stamped
+// when it is queued, so the frames queued before a burst all read the older
+// total, and waiting for a stamp to move would deliver that whole superseded
+// backlog before repairing anything.
+//
+// THE KEPT FRAMES GO FIRST, and the snapshot carries the highest stamp any
+// frame written so far did, so the count a client sees never goes down:
+// frames are stamped in queue order, and the snapshot is written after all
+// of them.
+//
+// WHAT A RESYNC CANNOT RETURN is an answer that was itself dropped. A result
+// or an error is held by no projection, so it is recovered only by asking
+// again — see [Envelope.Dropped].
+func writeLoop(ctx context.Context, write frameWriter, client *Client, snapshot func() Envelope) {
+	healed := 0
 	for {
+		var env Envelope
 		select {
 		case <-ctx.Done():
 			return
-		case env, open := <-client.Out():
+		case next, open := <-client.Out():
 			if !open {
 				return
 			}
-			raw, err := Encode(env)
-			if err != nil {
-				// A frame that cannot be encoded is this server's bug,
-				// not the client's. Dropping it keeps the socket alive
-				// for every other kind rather than tearing down a
-				// working dashboard over one malformed push.
-				log.ErrorContext(ctx, "stream_encode_failed", "kind", env.Kind, "error", err)
-				continue
-			}
-			// A DEADLINE PER WRITE. A TCP peer that has vanished
-			// without a FIN — a laptop lid closed, a NAT entry
-			// dropped, a mobile network handing off — leaves this
-			// Write blocked until the kernel gives up, which is
-			// minutes with default keepalives. Until then the
-			// goroutine, the client's queue and the hub registration
-			// all stay live, so a page nobody is reading holds a slot
-			// on every broadcast.
-			//
-			// THIRTY SECONDS, not a few: QueueDepth above decides
-			// deliberately that a slow tab must not be disconnected
-			// ("a visible failure for a reader who did nothing
-			// wrong"), so this deadline is here to tell GONE from
-			// SLOW and nothing else. A tighter one would sever a
-			// mobile tab mid-snapshot and contradict that decision.
-			writeCtx, cancelWrite := context.WithTimeout(ctx, writeTimeout)
-			err = conn.Write(writeCtx, websocket.MessageText, raw)
-			cancelWrite()
-			if err != nil {
+			env = next
+		}
+		if err := write(ctx, env); err != nil {
+			return
+		}
+		if client.Dropped() <= healed {
+			continue
+		}
+		kept, latest, open := client.catchUp()
+		for _, k := range kept {
+			if err := write(ctx, k); err != nil {
 				return
 			}
 		}
+		if !open {
+			return
+		}
+		// EVERY DROP COUNTED BEFORE THE BUILD IS COVERED BY IT: a push is
+		// broadcast after its change is applied, so the projection held it
+		// before it could be dropped. Read before the snapshot, then, this
+		// is what the count has to exceed to mean anything new.
+		covered := client.Dropped()
+		resync := snapshot()
+		resync.Dropped = max(env.Dropped, latest)
+		if err := write(ctx, resync); err != nil {
+			return
+		}
+		healed = covered
+	}
+}
+
+// frameWriter delivers one envelope to a client, or reports that the
+// connection is gone and the writer should stop.
+type frameWriter func(ctx context.Context, env Envelope) error
+
+// socketWriter is the frameWriter over a real WebSocket.
+func socketWriter(conn *websocket.Conn) frameWriter {
+	return func(ctx context.Context, env Envelope) error {
+		raw, err := Encode(env)
+		if err != nil {
+			// A frame that cannot be encoded is this server's bug, not
+			// the client's. Dropping it keeps the socket alive for every
+			// other kind rather than tearing down a working dashboard over
+			// one malformed push.
+			log.ErrorContext(ctx, "stream_encode_failed", "kind", env.Kind, "error", err)
+			return nil
+		}
+		// A DEADLINE PER WRITE. A TCP peer that has vanished without a
+		// FIN — a laptop lid closed, a NAT entry dropped, a mobile network
+		// handing off — leaves this Write blocked until the kernel gives
+		// up, which is minutes with default keepalives. Until then the
+		// goroutine, the client's queue and the hub registration all stay
+		// live, so a page nobody is reading holds a slot on every
+		// broadcast.
+		//
+		// THIRTY SECONDS, not a few: QueueDepth decides deliberately that
+		// a slow tab must not be disconnected ("a visible failure for a
+		// reader who did nothing wrong"), so this deadline is here to tell
+		// GONE from SLOW and nothing else. A tighter one would sever a
+		// mobile tab mid-snapshot and contradict that decision.
+		writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+		defer cancel()
+		return conn.Write(writeCtx, websocket.MessageText, raw)
 	}
 }
 

@@ -22,12 +22,17 @@ import (
 // defect below.
 const RefusalBytes = 2 << 10
 
-// RefusalDetail bounds what reaches a log line or an error message.
+// RefusalDetail bounds how much of what an endpoint SAID reaches a log line
+// or an error message.
 //
 // Shorter than what is READ, deliberately: the read cap stops a client
 // buffering a document, and this stops a sentence-shaped answer from an
-// endpoint having a paragraph's worth of stack trace after it. A refusal that
-// needs more than this to be understood needs the endpoint's own logs.
+// endpoint having a paragraph's worth of stack trace after it.
+//
+// What a line cuts is not lost by the cutting: a [Quote] carries the whole
+// of what was said beside the line, and whether the line holds less of it.
+// Keeping that whole somewhere a reader will look is the caller's to do,
+// because this package holds nothing once it returns.
 const RefusalDetail = 400
 
 // Refusal is what an endpoint SAID about refusing a request, as one line.
@@ -46,7 +51,7 @@ const RefusalDetail = 400
 // an HTML page's TITLE, which is where a proxy, a gateway and a login wall all
 // put the reason ("403 Forbidden", "Sign in to continue"), and plain text as
 // itself. A page with no title yields nothing HERE — the markup is layout and
-// the status code already says more than it does — and [RefusalOf] is what
+// the status code already says more than it does — and [QuoteRefusal] is what
 // turns that nothing into a line, because a dropped page reported as "" reads
 // as an endpoint that was silent.
 //
@@ -55,11 +60,12 @@ const RefusalDetail = 400
 // The distilled line is bounded by [RefusalDetail] with [textcut.Within]
 // rather than [textcut.Bytes]: that budget is a CEILING its callers assert,
 // so the marker has to fit inside it rather than push past it, and an
-// unmarked cut is a severed sentence read as a whole one. The whole body is
-// not recoverable from this process — it is read once and dropped — which is
-// why the marker is the only thing standing between a reader and a half
-// sentence they will treat as the endpoint's complete answer; the rest of it
-// is in the endpoint's own logs.
+// unmarked cut is a severed sentence read as a whole one.
+//
+// Refusal returns the line ALONE, so what it cut is gone once it returns:
+// nothing in this package keeps a body, a line or the rest of one. A caller
+// whose reader needs the rest takes [QuoteRefusal] instead, whose [Quote]
+// hands back the whole of what was said beside the line.
 //
 // # Shared, because the fallback is the part that was wrong everywhere
 //
@@ -69,25 +75,71 @@ const RefusalDetail = 400
 // not a shape I know; what can I say?" — which is where each had its own
 // mistake.
 func Refusal(contentType string, body []byte) string {
-	text := strings.TrimSpace(string(body))
-	if text == "" {
-		return ""
-	}
+	return QuoteSaid(distill(contentType, strings.TrimSpace(string(body)))).Line
+}
+
+// distill is the whole of what a trimmed body said, before any cut — or ""
+// for a body with nothing quotable in it.
+func distill(contentType, text string) string {
 	switch {
+	case text == "":
+		return ""
 	case looksJSON(contentType, text):
 		// A SHAPE THE CALLER DID NOT KNOW. Pretty-printed JSON in a log line
 		// is noise, and a compact object is at least readable, so it is
 		// re-encoded rather than passed through.
-		return textcut.Within(compactJSON(text), RefusalDetail)
+		return compactJSON(text)
 	case looksHTML(contentType, text):
-		return textcut.Within(titleOf(text), RefusalDetail)
+		return titleOf(text)
 	default:
-		return textcut.Within(collapseSpace(text), RefusalDetail)
+		return collapseSpace(text)
 	}
 }
 
-// RefusalOf is [Refusal] for a caller that read the body with [ReadBody], and
-// it is the call every vendor client makes.
+// A Quote is what an endpoint said about refusing a request: the line to
+// report, and the whole of what that line was cut from.
+//
+// The whole travels BESIDE the line because this package holds nothing once
+// it returns: a caller that keeps only the line has lost the rest for good.
+// Shortened is what that caller reads to learn there is a rest to keep.
+type Quote struct {
+	// Line is the one line to report. Where the endpoint said something
+	// quotable it is that, at most [RefusalDetail] bytes and ending in "…"
+	// where it was cut. Otherwise it is a sentence naming why nothing could
+	// be quoted: the read's own error, whole, or a body that distilled to
+	// nothing. From [QuoteRefusal], empty means exactly one thing — the body
+	// was empty.
+	Line string
+
+	// Said is the whole of what the endpoint said, distilled and never cut:
+	// an unknown JSON shape compacted onto one line, a page's <title>, text
+	// with its whitespace collapsed, or the sentence a vendor client pulled
+	// out of its own envelope. Empty when nothing was quotable.
+	Said string
+
+	// Shortened reports that Line holds less than Said.
+	Shortened bool
+}
+
+// QuoteSaid bounds one thing an endpoint said to a line, keeping the whole of
+// it beside the line.
+//
+// It is the cut [Refusal] makes, exported for a vendor client that decoded
+// its own envelope: the sentence it pulled out is bounded to the same
+// ceiling and marked the same way as everything this package distils.
+func QuoteSaid(said string) Quote {
+	line := textcut.Within(said, RefusalDetail)
+	return Quote{Line: line, Said: said, Shortened: line != said}
+}
+
+// RefusalOf is the line of [QuoteRefusal] alone, for a caller with nowhere to
+// keep the rest: what that line cut is gone once this returns.
+func RefusalOf(contentType string, body []byte, err error) string {
+	return QuoteRefusal(contentType, body, err).Line
+}
+
+// QuoteRefusal is [Refusal] for a caller that read the body with [ReadBody],
+// and it keeps what the line cut.
 //
 // # Three outcomes, because "" used to mean all three
 //
@@ -105,7 +157,7 @@ func Refusal(contentType string, body []byte) string {
 //     explanation — but reporting the drop as "" says the endpoint was
 //     silent, when what actually happened is that a proxy answered a page.
 //
-// So an empty answer from here means exactly one thing: the endpoint sent an
+// So an empty Line from here means exactly one thing: the endpoint sent an
 // empty body. [github.com/crewlet/crewlet/internal/mattermost.Error]'s Message
 // field documents that invariant, and it is enforced here because this is the
 // function that decides it.
@@ -119,32 +171,33 @@ func Refusal(contentType string, body []byte) string {
 // every copy still compiles, and every copy still produces a plausible
 // string, so nothing but a reader comparing two logs would notice.
 //
-// # Where the whole body is
+// # A body that was not read is named, never quoted
 //
-// Nowhere in this process, deliberately: a refusal body is read once and
-// dropped, so there is no store column and no event payload to recover it
-// from. That is exactly why nothing here may quote a prefix of it — the
-// endpoint's own logs hold the whole answer, and this line has to say the
-// body went unread rather than imply it has been quoted.
-func RefusalOf(contentType string, body []byte, err error) string {
+// [ReadBody] answers nil beside its error, so a caller that read with it
+// holds none of a body it refused. There is no prefix to quote and no rest
+// to keep, which is why that arm reports the read's failure and nothing
+// else: Said stays empty, because the endpoint's words never arrived.
+func QuoteRefusal(contentType string, body []byte, err error) Quote {
 	if err != nil {
-		// MARKED, NAMED AND BOUNDED. The sentinel's own text carries the
-		// ceiling that refused the body, and a transport failure's text is
-		// the only unbounded part of this line — so it is cut INSIDE
-		// [RefusalDetail] rather than at a literal, with the marker that
-		// stops a severed sentence reading as a complete one.
-		return textcut.Within("the refusal body could not be read: "+err.Error(), RefusalDetail)
+		// WHOLE, NOT CUT. This is the READ's error rather than anything the
+		// body said — [ReadBody]'s sentinel naming the ceiling that refused
+		// it, or whatever the transport reported for a body that stopped
+		// arriving — and [RefusalDetail] bounds what an endpoint SAID. Cut
+		// here, the rest would exist nowhere: the error goes no further than
+		// this line.
+		return Quote{Line: "the refusal body could not be read: " + err.Error()}
 	}
 	text := strings.TrimSpace(string(body))
 	if text == "" {
-		// THE ONE THING "" IS ALLOWED TO MEAN.
-		return ""
+		// THE ONE THING AN EMPTY LINE IS ALLOWED TO MEAN.
+		return Quote{}
 	}
-	if line := Refusal(contentType, body); line != "" {
-		return line
+	if quote := QuoteSaid(distill(contentType, text)); quote.Line != "" {
+		return quote
 	}
-	return fmt.Sprintf("the endpoint answered %d bytes with nothing quotable in them: %s",
-		len(body), unquotable(contentType, text))
+	return Quote{Line: fmt.Sprintf(
+		"the endpoint answered %d bytes with nothing quotable in them: %s",
+		len(body), unquotable(contentType, text))}
 }
 
 // unquotable names what a body that distilled to nothing actually was.

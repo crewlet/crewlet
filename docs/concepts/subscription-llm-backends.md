@@ -743,6 +743,13 @@ nowhere** — a CLI's output is read once and dropped, so there is no
 second place to look and the message does not pretend there is. The
 overrun is logged as `cli_agent_output_truncated` either way.
 
+A failure message quotes the **last fifty lines** of the stream it
+reports and says how many earlier ones it left out. Those are not lost
+the way the cap's bytes are: each omitted line is logged as a
+`cli_agent_omitted_line` debug event, numbered and naming its stream, so
+on a node logging at debug level the whole retained stream is in the
+log. Above debug the count in the message is all that survives of them.
+
 The **version probe** refuses a clipped stdout too, for a narrower
 reason. It reads a single line, so the cap normally costs it
 nothing — whatever overran came after the newline that ended the version

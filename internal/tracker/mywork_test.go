@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -250,6 +251,53 @@ func TestMyWorkCarriesTheAnswerForm(t *testing.T) {
 	if after := r.myWork("ana"); len(after.AskedOfMe) != 0 {
 		t.Errorf("asked_of_me still holds %d after the ask was answered",
 			len(after.AskedOfMe))
+	}
+}
+
+// A LONG ASK IS AN OPENING WITH A WAY BACK TO THE WHOLE.
+//
+// A row is for choosing which ask to answer, so it carries the opening — at
+// most [tracker.AskBodyShown] bytes, marked where it was cut, on a whole rune.
+// That is only honest if the rest is one read away, and the row's own comment
+// id is that read: the detail's `comment` answers the ask exactly as written.
+func TestALongAskIsAnOpeningWithAWayBackToTheWhole(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	assign(t, r, "asked", "ana")
+	// A two-byte rune ON the boundary, which a byte slice would split.
+	body := strings.Repeat("q", tracker.AskBodyShown-2) + "é" +
+		strings.Repeat("z", 400)
+	askOn(t, r, "op-ask", "asked", tracker.Comment{
+		ID: "c-long", Task: "asked", Author: "bob", AuthorKind: tracker.AuthorHuman,
+		Body: body, Ask: "ana", CreatedAt: wednesday,
+	})
+
+	got := r.myWork("ana")
+	if len(got.AskedOfMe) != 1 {
+		t.Fatalf("asked_of_me is %+v, want the one open ask", got.AskedOfMe)
+	}
+	ask := got.AskedOfMe[0]
+	switch {
+	case len(ask.Body) > tracker.AskBodyShown:
+		t.Errorf("the row carries %d bytes of the ask against a bound of %d",
+			len(ask.Body), tracker.AskBodyShown)
+	case !strings.HasSuffix(ask.Body, "…"):
+		t.Errorf("the opening is unmarked — an ask cut at the bound and handed "+
+			"over bare reads as a question that ENDED there: %q",
+			ask.Body[max(0, len(ask.Body)-8):])
+	case !utf8.ValidString(ask.Body):
+		t.Error("the opening is not valid UTF-8, so the cut went through a rune")
+	}
+
+	whole, err := r.reader.Task(t.Context(), ask.Key,
+		tracker.DetailWants{Comment: ask.Comment},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("open the ask the row names: %v", err)
+	}
+	if len(whole.Comments) != 1 || whole.Comments[0].Body != body {
+		t.Fatal("the row's key and comment id do not open the whole ask — the " +
+			"opening is then a loss rather than a pointer")
 	}
 }
 

@@ -1,7 +1,9 @@
 package tracker_test
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -74,6 +76,202 @@ func TestARespreadPreservesTheOrderAtEveryBatch(t *testing.T) {
 				"threshold it exists to bring them under",
 				rank, len(rank), tracker.RankRenormaliseAt)
 		}
+	}
+}
+
+// A RE-SPREAD KEEPS A LONG RUN BETWEEN THE SHORT KEYS AROUND IT.
+//
+// Long keys are a NEST — the product of dropping into one gap over and over —
+// so they sit between short-keyed neighbours rather than making up the whole
+// board. The walk rewrites into a reserve below the project's minimum, so a
+// plan that moved only the long rows would put them in front of every short
+// one: the case above, which crowds every row, cannot see that.
+func TestARespreadKeepsALongRunBetweenItsNeighbours(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const total = 6
+	for i := range total {
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			newTask(fmt.Sprintf("t-%02d", i)), nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	long := strings.Repeat("0", tracker.RankRenormaliseAt)
+	if _, err := r.writer.MoveTasks(t.Context(), "op-nest", "ENG",
+		[]tracker.Placement{
+			{Task: "t-00", Rank: "a1"},
+			{Task: "t-01", Rank: tracker.Rank("a1" + long + "1")},
+			{Task: "t-02", Rank: tracker.Rank("a1" + long + "2")},
+			{Task: "t-03", Rank: tracker.Rank("a1" + long + "3")},
+			{Task: "t-04", Rank: "a2"},
+			{Task: "t-05", Rank: "a3"},
+		}); err != nil {
+		t.Fatalf("nest the order: %v", err)
+	}
+	r.drain()
+	want := boardOrder(t, r)
+
+	plan, err := tracker.PlanRespread(t.Context(), r.db, "ENG")
+	if err != nil {
+		t.Fatalf("PlanRespread: %v", err)
+	}
+	// ONE ROW PER BATCH, so every boundary the walk can stop at is looked
+	// at — including the ones between a short row and a long one.
+	for i, placement := range plan.Placements {
+		if _, err := r.writer.MoveTasks(t.Context(),
+			fmt.Sprintf("op-r%d", i), "ENG", []tracker.Placement{placement}); err != nil {
+			t.Fatalf("the re-spread batch: %v", err)
+		}
+		r.drain()
+		if got := boardOrder(t, r); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("after batch %d the board reads %v and it read %v before "+
+				"the walk began", i, got, want)
+		}
+	}
+	for _, rank := range boardRanks(t, r) {
+		if len(rank) > tracker.RankRenormaliseAt {
+			t.Errorf("the walk left rank %q at %d characters", rank, len(rank))
+		}
+	}
+}
+
+// A WALK'S BATCH FITS ONE MOVE.
+//
+// The re-spread walk and the duplicate repair publish [tracker.WalkBatch]
+// placements a record through [tracker.Writer.MoveTasks], which refuses more
+// than [tracker.MaxBulkTasks]. A batch wider than the writer accepts would be
+// refused on its first record and leave the project flagged for ever.
+func TestAWalksBatchFitsOneMove(t *testing.T) {
+	t.Parallel()
+	if tracker.WalkBatch > tracker.MaxBulkTasks {
+		t.Fatalf("a walk publishes %d placements a record and a move carries "+
+			"at most %d", tracker.WalkBatch, tracker.MaxBulkTasks)
+	}
+}
+
+// A DRAG MOVES THE TASK DRAGGED AND NOTHING ELSE.
+//
+// A key is long because its gap is narrow, and every key inside a narrow gap
+// is long — so re-keying the tasks a drag finds in its gap brings none of them
+// back under the threshold. And the gap a person dropped into is not always empty: a card a filter
+// hides sits in it too. So a drag writes its own key, lands long when the gap
+// is narrow, and hands the project to the walk through the applier's flag;
+// the hidden card keeps its key and its place.
+func TestADragMovesTheTaskDraggedAndNothingElse(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for i := range 4 {
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			newTask(fmt.Sprintf("t-%02d", i)), nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	long := "a1" + strings.Repeat("0", tracker.RankRenormaliseAt)
+	after, hidden, before := tracker.Rank(long+"1"), tracker.Rank(long+"2V"),
+		tracker.Rank(long+"3")
+	if _, err := r.writer.MoveTasks(t.Context(), "op-nest", "ENG",
+		[]tracker.Placement{
+			{Task: "t-00", Rank: after}, {Task: "t-01", Rank: hidden},
+			{Task: "t-02", Rank: before}, {Task: "t-03", Rank: "a3"},
+		}); err != nil {
+		t.Fatalf("nest the order: %v", err)
+	}
+	r.drain()
+
+	// t-03 DROPPED BETWEEN t-00 AND t-02, which is the gap t-01 sits in.
+	if _, err := r.writer.MoveTask(t.Context(), "op-drag", "ENG", "t-03",
+		after, before); err != nil {
+		t.Fatalf("MoveTask: %v", err)
+	}
+	r.drain()
+
+	if got := strings.Join(boardOrder(t, r), ","); got != "t-00,t-03,t-01,t-02" {
+		t.Fatalf("the board reads %s, want t-00,t-03,t-01,t-02", got)
+	}
+	if ranks := boardRanks(t, r); ranks[2] != hidden {
+		t.Errorf("the card in the gap was re-keyed from %q to %q — a drag "+
+			"moves the task dragged, and a re-key inside a narrow gap "+
+			"brings nothing under the threshold", hidden, ranks[2])
+	}
+	if !flagged(t, r, "rank_respread_pending") {
+		t.Error("the drag landed a key past the threshold and the project is " +
+			"not flagged, so nothing hands its order to the walk")
+	}
+}
+
+// A DRAG PAST THE SCHEMA'S CEILING IS REFUSED, AND THE REFUSAL NAMES ITS CURE.
+//
+// Between [tracker.RankRenormaliseAt] and [tracker.RankRefuseAt] a drag lands
+// long and the walk tidies after it; past the second there is no key to land,
+// and nothing but the walk's schedule stands between the two. So a person can
+// reach this refusal with a request that is not malformed, and what they are
+// owed is the length, the limit and the walk — not a verdict that their key is
+// broken. The case then RUNS the cure: the same two cards, read after a walk,
+// take the same drop.
+func TestADragPastTheSchemasCeilingIsRefusedNamingItsCure(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for i := range 3 {
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			newTask(fmt.Sprintf("t-%02d", i)), nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	// TWO NEIGHBOURS AT THE CEILING, differing only in their last symbol,
+	// so every key between them is one character past it.
+	prefix := "a0" + strings.Repeat("V", tracker.RankRefuseAt-3)
+	after, before := tracker.Rank(prefix+"1"), tracker.Rank(prefix+"2")
+	if _, err := r.writer.MoveTasks(t.Context(), "op-nest", "ENG",
+		[]tracker.Placement{
+			{Task: "t-00", Rank: after}, {Task: "t-01", Rank: before},
+		}); err != nil {
+		t.Fatalf("nest the order at the ceiling: %v", err)
+	}
+	r.drain()
+	was := boardRanks(t, r)
+
+	_, err := r.writer.MoveTask(t.Context(), "op-drag", "ENG", "t-02",
+		after, before)
+	if !errors.Is(err, tracker.ErrRankTooLong) {
+		t.Fatalf("a drag needing a %d-character key answered %v, want "+
+			"ErrRankTooLong — a surface cannot tell this person to wait for "+
+			"the walk without it", tracker.RankRefuseAt+1, err)
+	}
+	for _, want := range []string{
+		fmt.Sprint(tracker.RankRefuseAt + 1), fmt.Sprint(tracker.RankRefuseAt),
+		"re-spread walk",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q — it has to name the "+
+				"length, the limit and the cure", err, want)
+		}
+	}
+	r.drain()
+	if got := boardRanks(t, r); !slices.Equal(got, was) {
+		t.Fatalf("a refused drag moved the board from %v to %v", was, got)
+	}
+
+	// THE CURE, run: after the walk the same two cards are far apart.
+	if _, err := r.writer.Respread(t.Context(), "op-walk", "ENG"); err != nil {
+		t.Fatalf("Respread: %v", err)
+	}
+	r.drain()
+	order, ranks := boardOrder(t, r), boardRanks(t, r)
+	at := map[string]tracker.Rank{}
+	for i, id := range order {
+		at[id] = ranks[i]
+	}
+	if _, err := r.writer.MoveTask(t.Context(), "op-drag-again", "ENG", "t-02",
+		at["t-00"], at["t-01"]); err != nil {
+		t.Fatalf("the same drop after the walk: %v — the refusal promised the "+
+			"walk makes room", err)
+	}
+	r.drain()
+	if got := strings.Join(boardOrder(t, r), ","); got != "t-00,t-02,t-01" {
+		t.Fatalf("the board reads %s, want t-00,t-02,t-01", got)
 	}
 }
 

@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -69,7 +70,7 @@ func TestTurnsFoldOneRowPerTurn(t *testing.T) {
 	seedTurn(t, log, "t-1", base, "PM", nil)
 	seedTurn(t, log, "t-2", base.Add(time.Minute), "Dev", nil)
 
-	got, err := log.Turns(t.Context(), store.TurnQuery{})
+	got, _, err := log.Turns(t.Context(), store.TurnQuery{})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestATurnWithNoCompletionSaysSo(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := log.Turns(t.Context(), store.TurnQuery{})
+	got, _, err := log.Turns(t.Context(), store.TurnQuery{})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestATurnSumsItsTokensAndNamesEveryModel(t *testing.T) {
 		rec.Payload = payload
 	})
 
-	got, err := log.Turns(t.Context(), store.TurnQuery{})
+	got, _, err := log.Turns(t.Context(), store.TurnQuery{})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}
@@ -212,7 +213,7 @@ func TestTheTurnListNarrowsBySeatModelAndFailure(t *testing.T) {
 
 	ids := func(q store.TurnQuery) []string {
 		t.Helper()
-		got, err := log.Turns(t.Context(), q)
+		got, _, err := log.Turns(t.Context(), q)
 		if err != nil {
 			t.Fatalf("Turns(%+v): %v", q, err)
 		}
@@ -244,39 +245,114 @@ func TestTheTurnListNarrowsBySeatModelAndFailure(t *testing.T) {
 
 // THE CURSOR IS ON THE TURN'S START, which is what the listing is ordered by:
 // a cursor on any one event would page a turn twice, which is exactly the
-// defect the browser-side fold had at its page boundary.
+// defect the browser-side fold had at its page boundary. And the walk is
+// asserted WHOLE rather than merely free of repeats: a cursor that skipped a
+// turn would pass a test that only looked for one twice.
 func TestTheTurnCursorPagesWithoutRepeating(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
 	base := time.Now().UTC().Add(-time.Hour)
+	var want []string
 	for i := range 5 {
-		seedTurn(t, log, fmt.Sprintf("t-%d", i),
-			base.Add(time.Duration(i)*time.Minute), "PM", nil)
+		id := fmt.Sprintf("t-%d", i)
+		seedTurn(t, log, id, base.Add(time.Duration(i)*time.Minute), "PM", nil)
+		want = append(want, id)
 	}
+	slices.Reverse(want)
 
-	first, err := log.Turns(t.Context(), store.TurnQuery{Limit: 2})
-	if err != nil {
-		t.Fatalf("Turns: %v", err)
+	if got := walkTurns(t, log, 2); !slices.Equal(got, want) {
+		t.Fatalf("pages of 2 walked %v, want every turn once, newest first: %v", got, want)
 	}
-	if len(first) != 2 {
-		t.Fatalf("the first page has %d turns", len(first))
+}
+
+// TWO TURNS THAT BEGIN IN ONE INSTANT ARE BOTH ON SOME PAGE.
+//
+// A start is an event time, and [store.Cursor] records why that is not unique.
+// A cursor on the start alone is `MIN(event_time) < ?`, which is strict — so
+// when a page ended on one of two turns sharing a start, the next page began
+// strictly below that instant and the other turn was on no page at all. The
+// tiebreak is the turn id, in the ORDER BY and in the cursor alike.
+func TestTwoTurnsStartingInOneInstantAreBothListed(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	seedTurn(t, log, "t-early", at.Add(-time.Minute), "PM", nil)
+	seedTurn(t, log, "t-a", at, "PM", nil)
+	seedTurn(t, log, "t-b", at, "Dev", nil)
+
+	want := []string{"t-b", "t-a", "t-early"}
+	if got := walkTurns(t, log, 1); !slices.Equal(got, want) {
+		t.Fatalf("pages of 1 walked %v, want %v — a turn sharing the boundary's "+
+			"start was stepped over", got, want)
 	}
-	second, err := log.Turns(t.Context(), store.TurnQuery{
-		Limit: 2, Before: first[len(first)-1].StartedAt,
-	})
-	if err != nil {
-		t.Fatalf("Turns: %v", err)
+}
+
+// A PAGE SAYS WHETHER THE WINDOW HOLDS MORE, and the boundary is the case: a
+// window of exactly `limit` turns is COMPLETE, so a caller inferring "more"
+// from a full page pages into nothing, and one inferring "complete" from it
+// draws a page as the window.
+func TestATurnPageSaysWhetherTheWindowHoldsMore(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	for i := range 3 {
+		seedTurn(t, log, fmt.Sprintf("t-%d", i), base.Add(time.Duration(i)*time.Minute), "PM", nil)
 	}
-	if len(second) != 2 {
-		t.Fatalf("the second page has %d turns", len(second))
-	}
-	for _, a := range first {
-		for _, b := range second {
-			if a.TurnID == b.TurnID {
-				t.Fatalf("%s is on both pages", a.TurnID)
-			}
+	for _, c := range []struct {
+		limit int
+		want  int
+		more  bool
+	}{
+		{limit: 2, want: 2, more: true},
+		{limit: 3, want: 3, more: false},
+		{limit: 4, want: 3, more: false},
+	} {
+		got, more, err := log.Turns(t.Context(), store.TurnQuery{Limit: c.limit})
+		if err != nil {
+			t.Fatalf("Turns(limit %d): %v", c.limit, err)
+		}
+		if len(got) != c.want || more != c.more {
+			t.Errorf("Turns(limit %d) = %d turns, more=%v; want %d, more=%v",
+				c.limit, len(got), more, c.want, c.more)
 		}
 	}
+}
+
+// HALF A CURSOR IS REFUSED, not read as "from the top": a pager handed its
+// first page again in answer to "the next one" pages for ever.
+func TestATurnCursorWithoutAnIDIsRefused(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	_, _, err := log.Turns(t.Context(), store.TurnQuery{
+		Before: &store.Cursor{Time: time.Now().UTC()},
+	})
+	if !errors.Is(err, store.ErrHalfCursor) {
+		t.Fatalf("a cursor with no turn id answered %v, want ErrHalfCursor", err)
+	}
+}
+
+// walkTurns pages the whole default window at `limit` turns a page, following
+// each page's evidence and cursor exactly as a caller would.
+func walkTurns(t *testing.T, log *store.EventLog, limit int) []string {
+	t.Helper()
+	var out []string
+	var before *store.Cursor
+	for range 100 {
+		page, more, err := log.Turns(t.Context(), store.TurnQuery{Limit: limit, Before: before})
+		if err != nil {
+			t.Fatalf("Turns: %v", err)
+		}
+		for _, turn := range page {
+			out = append(out, turn.TurnID)
+		}
+		if !more {
+			return out
+		}
+		last := page[len(page)-1]
+		before = &store.Cursor{Time: last.StartedAt, ID: last.TurnID}
+	}
+	t.Fatalf("the walk did not end in 100 pages: %v", out)
+	return nil
 }
 
 func splitModels(s string) []string {
@@ -312,7 +388,7 @@ func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "PM"})
+	got, _, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "PM"})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}
@@ -324,7 +400,7 @@ func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
 	// AND THE SAME TRAP ONE FUNCTION OVER. `AgentPhases` bound both
 	// identifiers the same way, so a handle that resolved to no role was
 	// answered every seatless phase in the window.
-	phases, err := log.AgentPhases(t.Context(), "", "PM", nil)
+	phases, _, err := log.AgentPhases(t.Context(), "", "PM", nil)
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -361,7 +437,7 @@ func TestTwoRunsOfOneWorkKeyAreTwoRowsWithTheirOwnOutcome(t *testing.T) {
 	// Attempt two: the same trigger, redelivered, and this time it worked.
 	seedRun(t, log, "run-2", "wk-1", base.Add(2*time.Minute), "CEO", false, 327_000)
 
-	got, err := log.Turns(t.Context(), store.TurnQuery{})
+	got, _, err := log.Turns(t.Context(), store.TurnQuery{})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}
@@ -404,7 +480,7 @@ func TestTheTurnListAnswersForEveryRunOfOneWorkKey(t *testing.T) {
 	seedRun(t, log, "run-2", "wk-1", base.Add(time.Minute), "CEO", false, 10)
 	seedRun(t, log, "run-3", "wk-2", base.Add(2*time.Minute), "CEO", false, 10)
 
-	got, err := log.Turns(t.Context(), store.TurnQuery{WorkKey: "wk-1"})
+	got, _, err := log.Turns(t.Context(), store.TurnQuery{WorkKey: "wk-1"})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}

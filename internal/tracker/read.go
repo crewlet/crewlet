@@ -165,9 +165,13 @@ type Answer struct {
 	// exact total. The hint is clamped TO the ceiling when it is set, so
 	// a reader that ignores the flag is merely imprecise rather than
 	// wrong about a number nobody counted.
-	TotalHint   int    `json:"total_hint"`
-	TotalCapped bool   `json:"total_capped,omitempty"`
-	NextCursor  string `json:"next_cursor,omitempty"`
+	TotalHint   int  `json:"total_hint"`
+	TotalCapped bool `json:"total_capped,omitempty"`
+
+	// NextCursor resumes exactly after this page's last row, and is empty
+	// when the page reaches the end of the matched set — see [PageMax]. A
+	// grouped answer mints none.
+	NextCursor string `json:"next_cursor,omitempty"`
 
 	// Totals are the aggregates the query asked for, over the WHOLE
 	// matched set rather than over this page — a number on a header that
@@ -245,7 +249,21 @@ type Answer struct {
 // capped.
 const TotalHintCeiling = 10_000
 
-// PageDefault and PageMax bound one page.
+// PageDefault is the page a caller that names no limit gets, and PageMax the
+// largest page any caller gets — a larger limit is lowered to it, not refused.
+//
+// THEY BOUND A PAGE, NEVER WHAT A QUERY REACHES. [readTasksJoined] reads one
+// row past the page, and when that row is there [Answer.NextCursor] resumes
+// exactly after the page's last row, while [Answer.TotalHint] counts the
+// whole matched set up to [TotalHintCeiling]. So a renderer that draws `rows`
+// must read `next_cursor` or `total_hint` beside it: the length of `rows` is
+// the page, not the answer.
+//
+// PageMax HAS A CEILING OF ITS OWN: [loadBlockers] binds the whole page's ids,
+// plus one, in ONE statement, so it has to stay under the parameter limit
+// internal/store states every engine it runs on accepts — 999, its
+// conservative floor. Past that, a full page on such an engine would be a
+// refused statement rather than a slow one.
 const (
 	PageDefault = 50
 	PageMax     = 500

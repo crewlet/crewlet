@@ -138,21 +138,17 @@ func TestAnImportThatLostARaceSaysWhatWorksAgainstARunningNode(t *testing.T) {
 	}
 }
 
-// AN ANSWER THAT IS NOT THE ENGINE'S JSON IS QUOTED, AND ONLY SO MUCH OF IT.
-// The client reads a company-sized answer now, and a proxy's page of that size
-// pasted whole into an error is a terminal full of markup.
-func TestARefusalQuotesAnAnswerThatIsNotJSONBoundedly(t *testing.T) {
+// AN ANSWER TOO LARGE TO READ POINTS AT THE NODE, not at `crewlet config show`.
+// The import went through a node's API because that node's engine holds this
+// machine's store, or because -api named another machine — and in both cases
+// the offline command opens a store that cannot answer what the fleet is on.
+func TestAnAnswerTooLargeToReadPointsAtTheNodesOwnRoute(t *testing.T) {
 	t.Parallel()
-	page := "<html>" + strings.Repeat("a gateway error page ", 10_000) + "</html>"
-	client := answering(t, http.StatusBadGateway, []byte(page))
-	_, _, err := client.Import(t.Context(), []byte("name: Acme\n"), "import")
-	if err == nil {
-		t.Fatal("a gateway error was reported as a write")
+	err := answerTooLarge("http://node.example.com:8080")
+	if strings.Contains(err.Error(), "crewlet config show") {
+		t.Errorf("the message sends the operator to a command that opens the store:\n%s", err)
 	}
-	if !strings.Contains(err.Error(), "<html>a gateway error page") {
-		t.Errorf("the refusal %q does not quote the answer", err)
-	}
-	if len(err.Error()) > maxRefusalTextBytes+512 {
-		t.Errorf("the refusal is %d bytes long, want the answer quoted to %d", len(err.Error()), maxRefusalTextBytes)
+	if !strings.Contains(err.Error(), "http://node.example.com:8080/config") {
+		t.Errorf("the message does not name the node's own route:\n%s", err)
 	}
 }

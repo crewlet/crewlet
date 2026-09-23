@@ -2,12 +2,14 @@ package learning_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
@@ -483,6 +485,104 @@ func TestAFailedWriteReportsTheTierItFailedNotNothingToPersist(t *testing.T) {
 	}
 	if ev.Classification != types.PersistLong {
 		t.Errorf("classification = %q, want the tier that failed", ev.Classification)
+	}
+}
+
+// A seat whose durable memory is full has its LONG refused by the store, and
+// the decider has nobody to hand that refusal to: it is the store keeping its
+// promise rather than failing, so it must not be reported as a failed worker.
+// The tier still says what the model concluded, so the event records a LONG
+// that did not land rather than a turn with nothing in it.
+func TestALongRefusedByTheCapIsReportedNotFailed(t *testing.T) {
+	t.Parallel()
+	store := &fakeDiary{writeErr: &learning.DiaryFullError{
+		AgentID: "agent-uuid", Held: learning.DiaryLongCap,
+	}}
+	d := decider(t, says(`{"kind":"LONG","content":"a durable fact"}`), store)
+
+	payloads, err := d.Reflect(context.Background(), pdTurn())
+	if err != nil {
+		t.Fatalf("Reflect = %v, want the cap's refusal handled rather than raised", err)
+	}
+	ev := onlyPayload(t, payloads).(types.PersistDeciderCompleted)
+	if ev.Persisted || ev.DocID != "" || ev.Classification != types.PersistLong {
+		t.Errorf("event = %+v, want a LONG that did not land", ev)
+	}
+}
+
+// A note the decider classified and did not keep exists nowhere once the
+// decider moves on: no row was written, and the event carries the tier and no
+// content. So each one is logged twice, a warning quoting its head and marked
+// where it was cut, and a debug twin holding it whole. A warning without the
+// twin would be the note being lost rather than shortened.
+func TestANoteTheDeciderDidNotKeepIsLoggedWhole(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, event string
+		store       *fakeDiary
+		content     string
+	}{
+		{
+			name:  "refused by the cap",
+			event: "persist_decider_diary_full",
+			store: &fakeDiary{writeErr: &learning.DiaryFullError{
+				AgentID: "agent-uuid", Held: learning.DiaryLongCap,
+			}},
+			// Multi-byte throughout, so a quote that split a rune shows
+			// up as invalid UTF-8.
+			content: "refused-by-the-cap " + strings.Repeat("記", 200),
+		},
+		{
+			name:    "past the note limit",
+			event:   "persist_decider_note_oversized",
+			store:   &fakeDiary{},
+			content: "past-the-note-limit " + strings.Repeat("記", learning.MaxContentBytes/3+1),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			answer, err := json.Marshal(map[string]string{"kind": "LONG", "content": tc.content})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := decider(t, says(string(answer)), tc.store)
+			if _, err := d.Reflect(context.Background(), pdTurn()); err != nil {
+				t.Fatalf("Reflect = %v, want the note skipped rather than failed", err)
+			}
+			if len(tc.store.written()) != 0 {
+				t.Fatal("the note was written")
+			}
+			head := strings.Fields(tc.content)[0]
+
+			var quotes []string
+			for _, r := range logs.records(t, tc.event) {
+				if q, _ := r["content"].(string); strings.HasPrefix(q, head) {
+					quotes = append(quotes, q)
+				}
+			}
+			if len(quotes) != 1 {
+				t.Fatalf("%d %s lines quote this note, want one", len(quotes), tc.event)
+			}
+			quote := quotes[0]
+			if quote == tc.content || !strings.HasSuffix(quote, "…") ||
+				!strings.HasPrefix(tc.content, strings.TrimSuffix(quote, "…")) {
+				t.Errorf("the warning's quote is not the note's head marked as cut: %q", quote)
+			}
+			if !utf8.ValidString(quote) {
+				t.Error("the quote split a rune")
+			}
+
+			whole := 0
+			for _, r := range logs.records(t, tc.event+"_content") {
+				if r["content"] == tc.content && r["level"] == "DEBUG" {
+					whole++
+				}
+			}
+			if whole != 1 {
+				t.Errorf("%d debug lines carry the note whole, want one: without it the "+
+					"quote above is all that is left of the note", whole)
+			}
+		})
 	}
 }
 

@@ -35,7 +35,7 @@ import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 // along; the alternative is this product spelling "there are more" twice.
 import { pageNote, type PageSlice } from "~/lib/work.ts";
 import { useNow } from "~/lib/clock.ts";
-import { requestToken } from "~/protocol/index.ts";
+import { MAX_PHASES, requestToken } from "~/protocol/index.ts";
 import {
   roundLabel,
   runState,
@@ -134,6 +134,28 @@ export function CutNote({
         {note} {whole}
       </span>
     </Card.Footer>
+  );
+}
+
+/**
+ * THE STREAM DROPPED A PHASE, said — for a screen that merges the tab's
+ * streamed phases over its own query answer and has been told, by
+ * `usePhasesDroppedSince`, that one which completed after that answer is gone.
+ *
+ * "MAY", because the tab's buffer is company-wide and keeps no record of whose
+ * phase it dropped. The phase itself is in the event store, so the remedy is
+ * the screen's own query asked again — which is the button, and which clears
+ * this note, since a new answer moves the mark.
+ */
+export function PhasesDroppedNote({ reread }: { reread: () => void }) {
+  return (
+    <Callout variant="warning" icon={<WarningGlyph size="md" />}>
+      Phases that completed after this page loaded may be missing. This tab holds the newest{" "}
+      {MAX_PHASES} completed phases across the company and has dropped older ones.{" "}
+      <Button size="small" variant="secondary" onClick={reread}>
+        Read again
+      </Button>
+    </Callout>
   );
 }
 

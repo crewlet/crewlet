@@ -360,7 +360,7 @@ func TestRefiningArchivesThePriorBodyAndBumpsTheVersion(t *testing.T) {
 	if !out.CreatedAt.Equal(base) {
 		t.Errorf("created_at moved to %v; an edit is not a re-creation", out.CreatedAt)
 	}
-	versions, err := s.Versions(ctx, sk.ID, 0)
+	versions, err := s.Versions(ctx, sk.ID)
 	if err != nil {
 		t.Fatalf("Versions: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestARefinementKindOutsideTheFixedSetIsRefusedBeforeAnythingIsWritten(t *te
 	if got := mustSkill(t, s, sk.ID); got.Version != 1 || got.Content != sk.Content {
 		t.Errorf("a refused refinement still wrote: v%d %q", got.Version, got.Content)
 	}
-	if vs, _ := s.Versions(ctx, sk.ID, 0); len(vs) != 0 {
+	if vs, _ := s.Versions(ctx, sk.ID); len(vs) != 0 {
 		t.Errorf("a refused refinement archived %d row(s)", len(vs))
 	}
 
@@ -410,7 +410,7 @@ func TestARefinementKindOutsideTheFixedSetIsRefusedBeforeAnythingIsWritten(t *te
 	} {
 		mustUpdate(t, s, sk.ID, rev, learning.Refinement{Kind: kind, At: base})
 	}
-	vs, _ := s.Versions(ctx, sk.ID, 0)
+	vs, _ := s.Versions(ctx, sk.ID)
 	if len(vs) != 6 {
 		t.Fatalf("%d archived rows, want one per accepted kind", len(vs))
 	}
@@ -484,7 +484,7 @@ func TestTheArchiveAndTheLiveRowCannotDisagree(t *testing.T) {
 	}); !errors.Is(err, boom) {
 		t.Fatalf("body failure: err = %v, want the injected failure", err)
 	}
-	if vs, err := s.Versions(ctx, sk.ID, 0); err != nil || len(vs) != 0 {
+	if vs, err := s.Versions(ctx, sk.ID); err != nil || len(vs) != 0 {
 		t.Errorf("%d archived row(s) (%v) survived a refinement that never landed",
 			len(vs), err)
 	}
@@ -502,7 +502,7 @@ func TestTheArchiveAndTheLiveRowCannotDisagree(t *testing.T) {
 	if out.Version != 2 {
 		t.Errorf("control refinement produced v%d, want v2", out.Version)
 	}
-	if vs, _ := s.Versions(ctx, sk.ID, 0); len(vs) != 1 {
+	if vs, _ := s.Versions(ctx, sk.ID); len(vs) != 1 {
 		t.Errorf("control refinement archived %d rows, want 1", len(vs))
 	}
 }
@@ -525,7 +525,7 @@ func TestHistoryIsPrunedToTheCapAndTheTrimSelfHeals(t *testing.T) {
 	for n := 1; n <= 12; n++ {
 		refine(n)
 	}
-	vs, err := s.Versions(ctx, sk.ID, 100)
+	vs, err := s.Versions(ctx, sk.ID)
 	if err != nil {
 		t.Fatalf("Versions: %v", err)
 	}
@@ -544,14 +544,14 @@ func TestHistoryIsPrunedToTheCapAndTheTrimSelfHeals(t *testing.T) {
 	if out.Version != 14 || out.Content != "body 13" {
 		t.Errorf("refinement lost to a failed prune: v%d %q", out.Version, out.Content)
 	}
-	if vs, _ := s.Versions(ctx, sk.ID, 100); len(vs) != 11 {
+	if vs, _ := s.Versions(ctx, sk.ID); len(vs) != 11 {
 		t.Errorf("%d archived rows after a failed prune, want the cap overshot by one", len(vs))
 	}
 	// ...and the next one heals the overshoot, because the delete is
 	// offset-based rather than "delete the row I just displaced".
 	fault.disarm()
 	refine(14)
-	if vs, _ := s.Versions(ctx, sk.ID, 100); len(vs) != 10 {
+	if vs, _ := s.Versions(ctx, sk.ID); len(vs) != 10 {
 		t.Errorf("%d archived rows after the next refinement, want the cap restored", len(vs))
 	}
 }
@@ -573,7 +573,7 @@ func TestTheTrimKeepsTheHighestVersionsWhenTheStampsTie(t *testing.T) {
 			Kind: learning.RefineObserved, KeepVersions: 2, At: base,
 		})
 	}
-	vs, err := s.Versions(ctx, sk.ID, 100)
+	vs, err := s.Versions(ctx, sk.ID)
 	if err != nil {
 		t.Fatalf("Versions: %v", err)
 	}
@@ -596,7 +596,7 @@ func TestKeepVersionsZeroMeansTheDefaultRatherThanUnbounded(t *testing.T) {
 			At: base.Add(time.Duration(n) * time.Minute),
 		})
 	}
-	vs, _ := s.Versions(ctx, sk.ID, 100)
+	vs, _ := s.Versions(ctx, sk.ID)
 	if len(vs) != 10 {
 		t.Fatalf("%d archived rows with KeepVersions 0, want the default cap of 10", len(vs))
 	}
@@ -610,34 +610,41 @@ func TestKeepVersionsZeroMeansTheDefaultRatherThanUnbounded(t *testing.T) {
 			At: base.Add(time.Duration(n) * time.Minute),
 		})
 	}
-	if vs, _ := s.Versions(ctx, sk2.ID, 100); len(vs) != 3 {
+	if vs, _ := s.Versions(ctx, sk2.ID); len(vs) != 3 {
 		t.Errorf("%d archived rows with KeepVersions 3", len(vs))
 	}
 }
 
-func TestAVersionListingIsBoundedAndNewestFirst(t *testing.T) {
+// The listing is every body retention kept. max_versions_kept is the
+// operator's answer to how much rollback history to hold, so a listing that
+// stopped short of it would keep the oldest rollback targets and never offer
+// them.
+func TestAVersionListingIsTheWholeRetainedHistoryNewestFirst(t *testing.T) {
 	t.Parallel()
 	s, _ := skillStore(t)
 	ctx := context.Background()
 	sk := mustInsert(t, s, newSkill("alice", "triage", base))
-	for n := 1; n <= 5; n++ {
+	const kept = 25
+	for n := 1; n <= kept; n++ {
 		rev := sk.Revision()
 		rev.Content = fmt.Sprintf("body %d", n)
 		mustUpdate(t, s, sk.ID, rev, learning.Refinement{
-			Kind: learning.RefineObserved, At: base.Add(time.Duration(n) * time.Minute),
+			Kind: learning.RefineObserved, KeepVersions: kept,
+			At: base.Add(time.Duration(n) * time.Minute),
 		})
 	}
-	vs, err := s.Versions(ctx, sk.ID, 2)
+	vs, err := s.Versions(ctx, sk.ID)
 	if err != nil {
 		t.Fatalf("Versions: %v", err)
 	}
-	if got := versionNumbers(vs); !slices.Equal(got, []int{5, 4}) {
-		t.Errorf("bounded listing = %v, want the two newest", got)
+	want := make([]int, 0, kept)
+	for v := kept; v >= 1; v-- {
+		want = append(want, v)
 	}
-	if vs, _ := s.Versions(ctx, sk.ID, 0); len(vs) != 5 {
-		t.Errorf("%d rows with no limit given, want the default listing", len(vs))
+	if got := versionNumbers(vs); !slices.Equal(got, want) {
+		t.Errorf("listing = %v, want all %d kept, newest first", got, kept)
 	}
-	if vs, _ := s.Versions(ctx, "no-such-skill", 0); len(vs) != 0 {
+	if vs, _ := s.Versions(ctx, "no-such-skill"); len(vs) != 0 {
 		t.Errorf("%d versions for an unknown skill", len(vs))
 	}
 }
@@ -659,7 +666,7 @@ func TestRollbackIsAForwardStepThatArchivesWhatItUndoes(t *testing.T) {
 		Kind: learning.RefineTool, At: base.Add(time.Hour),
 	})
 
-	vs, _ := s.Versions(ctx, sk.ID, 0)
+	vs, _ := s.Versions(ctx, sk.ID)
 	if len(vs) != 1 {
 		t.Fatalf("%d archived rows before the rollback", len(vs))
 	}
@@ -675,7 +682,7 @@ func TestRollbackIsAForwardStepThatArchivesWhatItUndoes(t *testing.T) {
 			"undoing it is possible in turn", back.Version)
 	}
 	// The rewrite it undid is itself in history now, tagged as the rollback.
-	vs, _ = s.Versions(ctx, sk.ID, 0)
+	vs, _ = s.Versions(ctx, sk.ID)
 	if len(vs) != 2 || vs[0].Kind != learning.RefineRollback ||
 		vs[0].Content != "the regrettable rewrite" {
 		t.Fatalf("history after rollback = %+v", versionNumbers(vs))
@@ -876,7 +883,7 @@ func TestConcurrentRefinementsKeepTheVersionChainGapFree(t *testing.T) {
 			"chain must be gap-free and count every winner exactly once",
 			got.Version, won, won+1)
 	}
-	vs, err := s.Versions(ctx, sk.ID, 500)
+	vs, err := s.Versions(ctx, sk.ID)
 	if err != nil {
 		t.Fatalf("Versions: %v", err)
 	}
@@ -940,7 +947,7 @@ func TestATransitionStampsWhatItEntersAndClearsWhatItLeaves(t *testing.T) {
 			"restarts its disuse clock", got.State, got.StaleAt, got.ArchivedAt)
 	}
 	// No transition writes history: the table is for bodies, not for states.
-	if vs, _ := s.Versions(ctx, sk.ID, 0); len(vs) != 0 {
+	if vs, _ := s.Versions(ctx, sk.ID); len(vs) != 0 {
 		t.Errorf("%d version rows written by state transitions", len(vs))
 	}
 }
@@ -1447,7 +1454,7 @@ func TestTheHistoryForeignKeyIsEnforcedAndCascades(t *testing.T) {
 		`DELETE FROM synthesized_skills WHERE id = ?`, sk.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if vs, err := s.Versions(ctx, sk.ID, 100); err != nil || len(vs) != 0 {
+	if vs, err := s.Versions(ctx, sk.ID); err != nil || len(vs) != 0 {
 		t.Errorf("%d history rows survived the delete (%v)", len(vs), err)
 	}
 }

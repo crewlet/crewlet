@@ -199,12 +199,37 @@ func elideTail(text string, limit int) string {
 	return "…" + strings.TrimLeft(text[i:], " \t\n\r")
 }
 
+// elideMiddle keeps the first and last runes of text within limit, with a
+// marked gap between them.
+//
+// Both walks are the ones [elide] and [elideTail] take — forward from the
+// start and back from the end, each a rune at a time — so it counts what those
+// count and cuts where they would, and the gap never splits a character.
+func elideMiddle(text string, limit int) string {
+	if limit <= 0 || utf8.RuneCountInString(text) <= limit {
+		return text
+	}
+	headRunes := limit - limit/2
+	i := 0
+	for n := 0; n < headRunes && i < len(text); n++ {
+		_, size := utf8.DecodeRuneInString(text[i:])
+		i += size
+	}
+	j := len(text)
+	for n := 0; n < limit/2 && j > i; n++ {
+		_, size := utf8.DecodeLastRuneInString(text[:j])
+		j -= size
+	}
+	return strings.TrimRight(text[:i], " \t\n\r") + " … " +
+		strings.TrimLeft(text[j:], " \t\n\r")
+}
+
 // Elide trims text to limit runes with a visible ellipsis.
 //
 // Exported for callers outside this package that need the same marked,
-// rune-safe trim — today the sub-agent runner, bounding the error text it
-// reports back to its parent. Two trimming functions would eventually
-// disagree about where a limit falls and whether the cut is marked.
+// rune-safe trim — today the extension judge, bounding a failed call's error
+// in the log it is shown. Two trimming functions would eventually disagree
+// about where a limit falls and whether the cut is marked.
 //
 // NOT [textcut.Ellipsis], which is the tree's other shared head cut, and the
 // difference is deliberate: that one counts BYTES and reads a limit of 0 as
@@ -235,3 +260,17 @@ func Elide(text string, limit int) string { return elide(text, limit) }
 //
 // A limit of 0 or less means unbounded, the same contract [Elide] carries.
 func ElideTail(text string, limit int) string { return elideTail(text, limit) }
+
+// ElideMiddle keeps the HEAD and the TAIL of text within limit runes, with
+// " … " marking what was left out between them.
+//
+// The third answer to where a value's payoff sits: at both ends. An error
+// chain wraps outward, so its first words say what failed, and it ends in the
+// cause it wrapped — a provider's refusal, say — which is usually what says
+// what to change. [Elide] keeps the first and drops the second; [ElideTail]
+// the reverse. Half the budget goes to each end, the odd rune to the head.
+//
+// Exported for the sub-agent runner, which reports each worker's failure to
+// the parent model this way. A limit of 0 or less means unbounded, the same
+// contract [Elide] carries.
+func ElideMiddle(text string, limit int) string { return elideMiddle(text, limit) }

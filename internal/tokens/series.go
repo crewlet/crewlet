@@ -94,7 +94,7 @@ func (g Group) Valid() bool { return slices.Contains(Groups, g) }
 // key is the group a record falls in, and whether it falls in one at all.
 //
 // A THREE-VALUED ANSWER flattened to two, and the false is load-bearing:
-// GroupWorker leaves out every record that is not an auxiliary worker's, and a
+// GroupWorker leaves out every record that is not a worker's, and a
 // record with no worker is not "the unknown worker" — it is a phase that has
 // nothing to do with this grouping and belongs in no band of the chart. Every
 // other dimension is present on every record, so the empty ones become
@@ -118,13 +118,15 @@ func (g Group) key(r Record, units map[string]string) (string, bool) {
 		}
 		return unattachedUnit, true
 	case GroupWorker:
-		// Keyed on the PAIR for the reason the rollup's worker bucket is:
-		// Worker is set only on an auxiliary phase, so a bare non-empty
-		// check would fold a stray value on some other phase in.
-		if r.Phase == PhaseAuxiliary && r.Worker != "" {
-			return r.Worker, true
+		// The rollup's own predicate, so a worker's band and its row count
+		// the same records. The key carries the phase for the reason
+		// [WorkerRow] does: a template and a learning worker may share a
+		// name, and one band would sum them.
+		id, ok := workerOf(r)
+		if !ok {
+			return "", false
 		}
-		return "", false
+		return id.band(), true
 	case GroupTurn:
 		// A phase with no turn is real spend that cannot be attributed to
 		// one — the same judgement [Aggregate] makes, and for the same

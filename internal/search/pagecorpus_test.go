@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
@@ -97,6 +98,15 @@ func TestAWithdrawnPageLosesItsVector(t *testing.T) {
 		writePage(t, db, row)
 		writeVector(t, db, "page", row.id, 1)
 	}
+	// THE TRASHED PAGE AND THE KEPT ONE ARE LONG. A withdrawn page is
+	// forgotten one window at a time, because each window is its own
+	// subject and its own row — and the kept page's later windows are the
+	// control, since a selection that named every window of every page
+	// would pass the count below on its own.
+	for chunk := 1; chunk <= 2; chunk++ {
+		writeWindow(t, db, "page", "trashed", chunk, 1)
+		writeWindow(t, db, "page", "kept", chunk, 1)
+	}
 
 	stale, gone, err := corpus.Stale(t.Context(), "m", 8, 10)
 	if err != nil {
@@ -105,10 +115,17 @@ func TestAWithdrawnPageLosesItsVector(t *testing.T) {
 	if len(stale) != 0 {
 		t.Errorf("a fully embedded corpus produced %d stale document(s)", len(stale))
 	}
-	if len(gone) != 2 {
-		t.Errorf("a trashed page and a draft left %d vector(s) to forget; both "+
-			"are documents no search may return and nothing else will ever "+
-			"select them", len(gone))
+	want := []search.Subject{
+		{Source: search.SourcePage, ID: "draft", Chunk: 0},
+		{Source: search.SourcePage, ID: "trashed", Chunk: 0},
+		{Source: search.SourcePage, ID: "trashed", Chunk: 1},
+		{Source: search.SourcePage, ID: "trashed", Chunk: 2},
+	}
+	if !slices.Equal(gone, want) {
+		t.Errorf("the withdrawn pages left %v to forget, want %v: a trashed "+
+			"page and a draft are documents no search may return, every one "+
+			"of their windows is a row that answers by meaning, and nothing "+
+			"else will ever select them", gone, want)
 	}
 
 	// AND THE COVERAGE COUNTS THE SAME POPULATION. A denominator that
@@ -166,15 +183,22 @@ func writePage(t *testing.T, db *store.DB, row pageRow) {
 
 func writeVector(t *testing.T, db *store.DB, source, id string, rev int64) {
 	t.Helper()
+	writeWindow(t, db, source, id, 0, rev)
+}
+
+// writeWindow writes one window's vector row, which is what a long document is
+// several of.
+func writeWindow(t *testing.T, db *store.DB, source, id string, chunk int, rev int64) {
+	t.Helper()
 	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(context.WithoutCancel(t.Context()), `
 			INSERT INTO kb_vectors
 				(source, source_id, chunk, source_rev, model, dim,
 				 search_shard, text_sha, embedding, embedded_at, version)
-			VALUES (?, ?, 0, ?, 'm', 8, 0, 'sha', x'', 0, 1)
+			VALUES (?, ?, ?, ?, 'm', 8, 0, 'sha', x'', 0, 1)
 			ON CONFLICT (source, source_id, chunk) DO UPDATE SET
 				source_rev = excluded.source_rev`,
-			source, id, rev)
+			source, id, chunk, rev)
 		return err
 	}); err != nil {
 		t.Fatalf("write a vector: %v", err)

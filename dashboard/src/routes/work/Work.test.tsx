@@ -338,7 +338,12 @@ test("a crowded day folds the rest into a count", () => {
     row("e", { due }),
   ]);
   expect(container.querySelectorAll(".work-cal-chip")).toHaveLength(3);
-  expect(screen.getByText("+2 more")).toBeTruthy();
+  // AND THE COUNT OPENS THE DAY. An inert `+2 more` left the folded work on
+  // no surface at all — the grid below says nothing about a day's fold.
+  fireEvent.click(screen.getByRole("button", { name: "+2 more" }));
+  expect(container.querySelectorAll(".work-cal-chip")).toHaveLength(5);
+  fireEvent.click(screen.getByRole("button", { name: "Fewer" }));
+  expect(container.querySelectorAll(".work-cal-chip")).toHaveLength(3);
 });
 
 // ---------------------------------------------------------------------------

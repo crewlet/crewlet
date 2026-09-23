@@ -1,6 +1,8 @@
 package tracker_test
 
 import (
+	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -772,5 +774,79 @@ func TestAnAllDayDueDateIsNotTruncatedToTheWrongDay(t *testing.T) {
 	if got.To != "2031-04-15T22:00:00Z" {
 		t.Errorf("due = %q, want the stored instant: a day rendered here is "+
 			"rendered without the zone that decided it", got.To)
+	}
+}
+
+// EVERY DELTA A TASK CAN REPORT FITS ONE CARD, so none is ever cut.
+//
+// [tracker.TaskDeltas] feeds the notification card AND the history row — the
+// durable record of the change — AND the status-entered stamp, so it never
+// cuts: a cap there would drop a delta from the one record nothing rebuilds.
+// What keeps the card valid instead is that the fields it compares are fewer
+// than [tracker.MaxDeltas], and [tracker.Notify.Validate] refuses a card past
+// it. This is the case that fails the day a new compared field would carry
+// the list past the cap — before a write is refused for it.
+//
+// Two tasks differing in EVERY exported field, filled by reflection, so a
+// field TaskDeltas starts comparing is covered without this test naming it.
+func TestEveryDeltaATaskCanReportFitsOneCard(t *testing.T) {
+	t.Parallel()
+	var before, after tracker.Task
+	fillDistinct(reflect.ValueOf(&before).Elem(), 1)
+	fillDistinct(reflect.ValueOf(&after).Elem(), 2)
+
+	moved := tracker.TaskDeltas(before, after)
+	if len(moved) == 0 {
+		t.Fatal("two tasks differing in every field reported no delta, so this " +
+			"case measures nothing")
+	}
+	if len(moved) > tracker.MaxDeltas {
+		t.Fatalf("a task can report %d deltas and a card carries %d — every "+
+			"write moving them all would be refused at Notify.Validate",
+			len(moved), tracker.MaxDeltas)
+	}
+	if err := (&tracker.Notify{Kind: tracker.ChangeFields, Fields: moved}).Validate(); err != nil {
+		t.Fatalf("the card carrying every delta a task can report is refused: %v", err)
+	}
+}
+
+// fillDistinct sets every settable field reachable from v to a value derived
+// from seed, so two values filled with different seeds differ everywhere.
+func fillDistinct(v reflect.Value, seed int) {
+	switch v.Kind() {
+	case reflect.String:
+		v.SetString(fmt.Sprintf("s%d", seed))
+	case reflect.Bool:
+		v.SetBool(seed%2 == 1)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		v.SetInt(int64(seed))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v.SetUint(uint64(seed))
+	case reflect.Float32, reflect.Float64:
+		v.SetFloat(float64(seed) + 0.5)
+	case reflect.Pointer:
+		v.Set(reflect.New(v.Type().Elem()))
+		fillDistinct(v.Elem(), seed)
+	case reflect.Slice:
+		v.Set(reflect.MakeSlice(v.Type(), 1, 1))
+		fillDistinct(v.Index(0), seed)
+	case reflect.Map:
+		m := reflect.MakeMap(v.Type())
+		key := reflect.New(v.Type().Key()).Elem()
+		fillDistinct(key, seed)
+		value := reflect.New(v.Type().Elem()).Elem()
+		fillDistinct(value, seed)
+		m.SetMapIndex(key, value)
+		v.Set(m)
+	case reflect.Struct:
+		if v.Type() == reflect.TypeFor[time.Time]() {
+			v.Set(reflect.ValueOf(time.Unix(int64(seed)*86_400, 0).UTC()))
+			return
+		}
+		for i := range v.NumField() {
+			if v.Field(i).CanSet() {
+				fillDistinct(v.Field(i), seed)
+			}
+		}
 	}
 }

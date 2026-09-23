@@ -98,19 +98,15 @@ var (
 const (
 	// defaultVersionsKept caps one skill's archived history at 10.
 	//
-	// The table has no retention sweep of its own — unlike the five tables
-	// the maintenance worker walks — so this prune is the only bound on it. A
-	// skill the auto-refiner annotates after every turn would otherwise grow
-	// one full copy of its body per turn, forever.
+	// The maintenance worker has no retention sweep for this table, so this
+	// prune is the only bound on it. A skill the auto-refiner annotates after
+	// every turn would otherwise grow one full copy of its body per turn,
+	// forever.
 	defaultVersionsKept = 10
 
 	// The disuse schedule: stale at 30 days, archived at 90.
 	defaultStaleAfter   = 30 * 24 * time.Hour
 	defaultArchiveAfter = 90 * 24 * time.Hour
-
-	// defaultVersionListing is how many archived versions a listing returns
-	// when the caller does not say.
-	defaultVersionListing = 20
 )
 
 // Reasons recorded on a curator transition. They land in the log line and on
@@ -622,16 +618,19 @@ func (s *Skills) pruneVersions(ctx context.Context, skillID string, keep int) {
 	}
 }
 
-// Versions returns a skill's archived bodies, newest first.
-func (s *Skills) Versions(ctx context.Context, skillID string, limit int) ([]SkillVersion, error) {
-	if limit <= 0 {
-		limit = defaultVersionListing
-	}
+// Versions returns every archived body a skill has, newest first.
+//
+// EVERY ONE, WITH NO LIMIT, because the history is already bounded where it is
+// written: [Skills.pruneVersions] trims it to the refinement's KeepVersions
+// (learning.skill_refinement.max_versions_kept) on each edit. That setting is
+// the operator's answer to how much rollback history to keep, and a listing
+// that stopped short of it would leave its oldest rollback targets kept but
+// never offered.
+func (s *Skills) Versions(ctx context.Context, skillID string) ([]SkillVersion, error) {
 	rows, err := s.db.SQL().QueryContext(ctx,
 		`SELECT `+versionColumns+` FROM synthesized_skill_versions
 		 WHERE skill_id = ?
-		 ORDER BY archived_at DESC, version DESC
-		 LIMIT ?`, skillID, limit)
+		 ORDER BY archived_at DESC, version DESC`, skillID)
 	if err != nil {
 		return nil, fmt.Errorf("learning: list versions of %s: %w", skillID, err)
 	}

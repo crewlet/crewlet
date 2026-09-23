@@ -107,3 +107,46 @@ test("an open thread's turns are counted", async () => {
     expect(header("Thread turns").querySelector(".crewlet-count")?.textContent).toBe("2"),
   );
 });
+
+// A TRIMMED THREAD SAYS SO. The ledger keeps the newest turns of a thread and
+// sweeps by age, so what comes back is the survivors — and the oldest one's
+// ordinal is what says turns came before it.
+test("a thread whose oldest held turn is not its first says how many came before", async () => {
+  mount(`tab=threads&conversation=${encodeURIComponent(KEY)}`, [
+    { turn_id: "t5", ordinal: 5, at: "2026-03-01T09:00:00Z", intent: "picked it up again" },
+    { turn_id: "t6", ordinal: 6, at: "2026-03-01T10:00:00Z", intent: "followed up" },
+  ]);
+  expect(
+    await screen.findByText(/4 earlier turns in this thread are no longer in the ledger/),
+  ).toBeTruthy();
+});
+
+test("a thread held from its first turn, or from before ordinals, claims nothing", async () => {
+  mount(`tab=threads&conversation=${encodeURIComponent(KEY)}`, [
+    { turn_id: "t1", ordinal: 1, at: "2026-03-01T09:00:00Z", intent: "answered" },
+  ]);
+  await screen.findByText("answered");
+  expect(screen.queryByText(/no longer in the ledger/)).toBeNull();
+  cleanup();
+  // AN ENTRY WRITTEN BEFORE THE STORE STAMPED ORDINALS carries none, and says
+  // nothing either way.
+  mount(`tab=threads&conversation=${encodeURIComponent(KEY)}`, [
+    { turn_id: "t1", at: "2026-03-01T09:00:00Z", intent: "answered" },
+  ]);
+  await screen.findByText("answered");
+  expect(screen.queryByText(/no longer in the ledger/)).toBeNull();
+});
+
+// WHAT STOPPED A BLOCKED TURN is its own field, and it was on the wire and on
+// no screen: the turn read exactly like one that finished the work.
+test("a blocked turn says what it was blocked on", async () => {
+  mount(`tab=threads&conversation=${encodeURIComponent(KEY)}`, [
+    {
+      turn_id: "t1",
+      at: "2026-03-01T09:00:00Z",
+      decision: "done",
+      blocked_on: "asked the CTO which region to deploy to",
+    },
+  ]);
+  expect(await screen.findByText(/asked the CTO which region to deploy to/)).toBeTruthy();
+});

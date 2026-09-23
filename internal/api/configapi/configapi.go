@@ -61,7 +61,7 @@ const (
 type revisionStore interface {
 	Active(ctx context.Context) (store.Revision, bool, error)
 	Get(ctx context.Context, revisionID string) (store.Revision, bool, error)
-	List(ctx context.Context, limit, offset int) ([]store.Revision, error)
+	List(ctx context.Context, limit, offset int) ([]store.Revision, bool, error)
 	Insert(ctx context.Context, r store.Revision) (string, error)
 	Activate(ctx context.Context, revisionID string, at time.Time) (string, error)
 }

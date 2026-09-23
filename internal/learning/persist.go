@@ -3,6 +3,7 @@ package learning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -16,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // PersistDecider is the post-turn classifier that decides what, if anything,
@@ -287,9 +287,9 @@ func (d *PersistDecider) Reflect(ctx context.Context, t Turn) ([]events.Payload,
 // for one.
 //
 // It ALWAYS returns a Decision. An error accompanies it when something went
-// wrong producing it — an unreachable model, a refused write — and the tier
-// still reports what was concluded before the failure, so a caller can tell a
-// LONG that failed to land from a turn with nothing in it.
+// wrong producing it — an unreachable model, a write the store failed — and
+// the tier still reports what was concluded before the failure, so a caller
+// can tell a LONG that failed to land from a turn with nothing in it.
 func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 	member, err := d.models.Head(t.Role, phase.Auxiliary)
 	if err != nil {
@@ -384,13 +384,12 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		// carries the rule WHOLE, exactly as an undecodable answer is
 		// reported, and for the same reason: a bounded quote is a
 		// shortening only when the rest is somewhere.
-		log.InfoContext(ctx, "persist_decider_doc_observed", "turn_id", t.Event.TurnID,
-			"agent_handle", t.Event.AgentHandle, "target_hint", dir.TargetHint,
-			"content", textcut.Ellipsis(dir.Content, directiveLogDetail))
-		log.DebugContext(ctx, "persist_decider_doc_observed_content",
+		seen, whole := quotedPair("content", dir.Content, directiveLogDetail,
 			"turn_id", t.Event.TurnID, "agent_handle", t.Event.AgentHandle,
-			"target_hint", dir.TargetHint, "rationale", dir.Rationale,
-			"content", dir.Content)
+			"target_hint", dir.TargetHint)
+		log.InfoContext(ctx, "persist_decider_doc_observed", seen...)
+		log.DebugContext(ctx, "persist_decider_doc_observed_content",
+			append(whole, "rationale", dir.Rationale)...)
 		return Decision{Tier: types.PersistDoc, Directive: dir}, nil
 
 	case types.PersistLong:
@@ -417,7 +416,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 	return Decision{Tier: types.PersistNOOP}, nil
 }
 
-// write records one row and returns what landed, zero on failure.
+// write records one row and returns what landed, zero when nothing did.
 func (d *PersistDecider) write(
 	ctx context.Context, t Turn, content string, kind DiaryKind, ttl, now time.Time,
 ) (DiaryEntry, error) {
@@ -442,20 +441,34 @@ func (d *PersistDecider) write(
 	if len(content) > MaxContentBytes {
 		// SKIPPED, and said out loud. The tool path refuses an over-long
 		// note so the model can tighten it; there is nobody to ask here, so
-		// the honest move is to drop the row rather than store a note whose
+		// the honest move is to keep no row rather than store a note whose
 		// tail the seat will never read back — and to log it, because a
 		// classifier that keeps producing documents is a prompt to fix.
-		log.WarnContext(ctx, "persist_decider_note_oversized",
+		logUnkeptNote(ctx, "persist_decider_note_oversized", content,
 			"turn_id", t.Event.TurnID, "agent_handle", t.Event.AgentHandle,
 			// BYTES, named as bytes: the guard is len() on a Go string,
 			// and a field called `chars` beside a CJK note would put a
 			// number in the log that nobody can reproduce by counting
 			// what the model wrote. [MaxContentBytes] states the unit.
 			"bytes", len(content), "max", MaxContentBytes,
-			"detail", "the note was dropped rather than stored half-written")
+			"detail", "the note was not stored rather than stored half-written")
 		return DiaryEntry{}, nil
 	}
 	if err := d.diary.Write(ctx, entry); err != nil {
+		var full *DiaryFullError
+		if errors.As(err, &full) {
+			// REFUSED BY THE CAP, and handled like the oversized note
+			// above rather than as a failure: the store did what it
+			// promises, and there is nobody here to hand the refusal to.
+			// Warned, because once a seat's durable memory is full every
+			// LONG this path classifies for it is refused, and that has to
+			// be visible to somebody.
+			logUnkeptNote(ctx, "persist_decider_diary_full", content,
+				"turn_id", t.Event.TurnID, "agent_handle", t.Event.AgentHandle,
+				"held", full.Held, "max", DiaryLongCap,
+				"detail", "the note was not kept; nothing the seat already keeps was dropped")
+			return DiaryEntry{}, nil
+		}
 		return DiaryEntry{}, fmt.Errorf("learning: persist %s for %s: %w",
 			kind, t.Event.AgentHandle, err)
 	}
@@ -469,6 +482,35 @@ func (d *PersistDecider) write(
 	log.InfoContext(ctx, "persist_decider_stored", "turn_id", t.Event.TurnID, "doc_id", entry.ID,
 		"kind", string(kind), "agent_handle", t.Event.AgentHandle, "ttl_until", deadline)
 	return entry, nil
+}
+
+// noteLogDetail is how much of a note the decider did not keep reaches the
+// warning that says so.
+//
+// A NOTE IS ASKED TO BE ONE DECLARATIVE FACT, and every fact
+// [PersistSystemPrompt] shows as an example is one sentence of at most 71
+// bytes, so 120 bytes names the fact in the ordinary case and bounds the
+// answer that wrote a document instead — which is every answer on the
+// oversized path, where the note is past [MaxContentBytes] by definition.
+//
+// Its own constant rather than [directiveLogDetail] because it bounds a
+// different field, so a reason to move one is not a reason to move the other.
+//
+// BYTES, because [github.com/crewlet/crewlet/internal/textcut.Ellipsis] counts
+// bytes.
+const noteLogDetail = 120
+
+// logUnkeptNote reports a note the decider classified and did not keep, on a
+// [quotedPair]: the warning quotes [noteLogDetail] of it, marked where it was
+// cut, and a debug twin named for the event plus `_content` carries it whole.
+//
+// BOTH LINES, because the note has no other copy: no row was written, and the
+// `persist_decider_completed` event carries the tier and no content. Without
+// the twin the quote would be the note being lost rather than shortened.
+func logUnkeptNote(ctx context.Context, event, content string, fields ...any) {
+	seen, whole := quotedPair("content", content, noteLogDetail, fields...)
+	log.WarnContext(ctx, event, seen...)
+	log.DebugContext(ctx, event+"_content", whole...)
 }
 
 // PersistSystemPrompt is the classifier's contract.

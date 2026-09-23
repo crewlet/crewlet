@@ -80,8 +80,9 @@ func TestPlainTextIsKeptOnOneLine(t *testing.T) {
 // [httpx.RefusalDetail] is a CEILING the vendor suites assert, so the marker
 // has to fit INSIDE it: [textcut.Within], not Ellipsis and not Bytes. Without
 // the marker a sentence severed mid-clause reads as the endpoint's complete
-// answer, and nothing here can prove otherwise — the body is read once and
-// dropped, so the rest of it exists only in the endpoint's own logs.
+// answer, and a caller that took the line alone holds nothing to prove
+// otherwise. What keeps the rest is asserted in
+// [TestAShortenedQuoteCarriesTheWholeOfWhatWasSaid].
 //
 // The three arms are asserted together because they are one policy. A commit
 // that changed one of them alone would ship two marking policies for one
@@ -149,22 +150,20 @@ func TestAnUnreadBodyIsReportedWithTheCeilingThatRefusedIt(t *testing.T) {
 	}
 }
 
-// THE ERR ARM IS BOUNDED AND MARKED TOO, because a transport failure's text
-// is the one part of that line this package does not choose.
+// THE ERR ARM IS REPORTED WHOLE, because nothing else holds it.
 //
-// It is the arm most easily left unbounded — an err is "just a few words"
-// until a proxy's error carries a URL, a chain of wrapped contexts and a
-// certificate subject.
-func TestAnUnreadableBodysReasonIsBoundedAndMarked(t *testing.T) {
+// [httpx.RefusalOf] returns a string, so the error it is handed goes no
+// further than this line: a cut here would leave the rest of the read's own
+// explanation nowhere at all.
+func TestAnUnreadableBodysReasonIsReportedWhole(t *testing.T) {
 	t.Parallel()
-	got := httpx.RefusalOf("text/html", nil,
-		errors.New(strings.Repeat("dial tcp: ", 400)))
-	if len(got) > httpx.RefusalDetail {
-		t.Errorf("RefusalOf is %d bytes, past the %d-byte ceiling",
-			len(got), httpx.RefusalDetail)
+	reason := strings.Repeat("dial tcp: ", 400) + "connection reset by peer"
+	got := httpx.RefusalOf("text/html", nil, errors.New(reason))
+	if !strings.HasSuffix(got, reason) {
+		t.Errorf("RefusalOf = %q, which does not carry the read's error whole", got)
 	}
-	if !strings.HasSuffix(got, "…") {
-		t.Errorf("RefusalOf = %q, which was cut with nothing saying so", got)
+	if strings.Contains(got, "…") {
+		t.Errorf("RefusalOf = %q, which marks a cut nothing needed", got)
 	}
 }
 
@@ -258,5 +257,95 @@ func TestTheShapeIsRecognisedWithoutAContentType(t *testing.T) {
 	}
 	if got := httpx.Refusal("", []byte("<!doctype html><title>Sign in</title>")); got != "Sign in" {
 		t.Errorf("untyped HTML = %q", got)
+	}
+}
+
+// WHAT A LINE CUT IS HANDED BACK WHOLE, on every arm that can cut.
+//
+// Nothing in httpx keeps a body once it returns, so a caller that holds only
+// the line holds only the line. [httpx.Quote] is what lets a caller keep the
+// rest, and Shortened is what tells it there is a rest to keep — both are
+// asserted per arm, because an arm that cut without saying so would leave its
+// caller logging nothing.
+func TestAShortenedQuoteCarriesTheWholeOfWhatWasSaid(t *testing.T) {
+	t.Parallel()
+	// Each body is past the line and inside the read ceiling: the case a
+	// caller that read with [httpx.ReadBody] at [httpx.RefusalBytes] meets.
+	for _, c := range []struct {
+		arm, contentType, body, said string
+	}{
+		{"plain text", "text/plain",
+			strings.Repeat("verboseé\n", 100),
+			strings.TrimSpace(strings.Repeat("verboseé ", 100))},
+		{"a JSON shape this build does not know", "application/json",
+			`{"why": "` + strings.Repeat("whyé ", 100) + `"}`,
+			`{"why":"` + strings.Repeat("whyé ", 100) + `"}`},
+		{"a page whose title is longer than the line", "text/html",
+			"<title>" + strings.Repeat("Forbiddené ", 60) + "</title><div>x</div>",
+			strings.TrimSpace(strings.Repeat("Forbiddené ", 60))},
+	} {
+		t.Run(c.arm, func(t *testing.T) {
+			t.Parallel()
+			if len(c.body) >= httpx.RefusalBytes || len(c.said) <= httpx.RefusalDetail {
+				t.Fatalf("the fixture says %d bytes in a %d-byte body; it must be past "+
+					"the line and inside the read ceiling", len(c.said), len(c.body))
+			}
+			quote := httpx.QuoteRefusal(c.contentType, []byte(c.body), nil)
+			if !quote.Shortened {
+				t.Errorf("the line was cut and the quote does not say so: %+v", quote)
+			}
+			if quote.Said != c.said {
+				t.Errorf("Said = %q, want the whole of what was said, %q", quote.Said, c.said)
+			}
+			if want := httpx.Refusal(c.contentType, []byte(c.body)); quote.Line != want {
+				t.Errorf("Line = %q, want the line Refusal reports, %q", quote.Line, want)
+			}
+			if !strings.HasPrefix(quote.Said, strings.TrimSuffix(quote.Line, "…")) {
+				t.Errorf("the line %q is not a cut of what was said", quote.Line)
+			}
+		})
+	}
+}
+
+// A QUOTE THAT FITS IS NOT SHORTENED, or a caller keeping the rest would keep
+// a copy of every refusal and the flag would stop meaning anything.
+func TestAQuoteThatFitsIsNotShortened(t *testing.T) {
+	t.Parallel()
+	const said = "no healthy upstream"
+	for name, quote := range map[string]httpx.Quote{
+		"QuoteRefusal": httpx.QuoteRefusal("text/plain", []byte(said+"\n"), nil),
+		"QuoteSaid":    httpx.QuoteSaid(said),
+	} {
+		if quote.Shortened || quote.Line != said || quote.Said != said {
+			t.Errorf("%s = %+v, want %q whole on both sides and not shortened",
+				name, quote, said)
+		}
+	}
+}
+
+// A QUOTE OF NOTHING SAID HAS NOTHING TO KEEP. A body that was not read, a
+// page with no title and an empty body each get a Line — or, for the last,
+// none — but the endpoint's words never arrived, so Said stays empty and a
+// caller keeping Said never keeps a sentence this package wrote as though
+// the endpoint had.
+func TestAQuoteOfNothingSaidHasNothingToKeep(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, contentType, body string
+		err                     error
+	}{
+		{name: "a body that was not read", contentType: "text/plain",
+			err: errors.New(strings.Repeat("connection reset ", 40))},
+		{name: "a page with no title", contentType: "text/html",
+			body: `<html><body>` + strings.Repeat("<div>x</div>", 40) + `</body></html>`},
+		{name: "an empty body", contentType: "application/json"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			quote := httpx.QuoteRefusal(c.contentType, []byte(c.body), c.err)
+			if quote.Said != "" || quote.Shortened {
+				t.Errorf("QuoteRefusal = %+v, want nothing said and nothing shortened", quote)
+			}
+		})
 	}
 }

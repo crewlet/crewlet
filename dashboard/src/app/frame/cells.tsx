@@ -200,27 +200,29 @@ export function TokenCell({ value }: { value?: number | null }) {
   return <span className="t-num">{fmtCount(value)}</span>;
 }
 
-/** Tags, capped with a count rather than wrapping a row to three lines. */
-export function TagsCell({ tags, max = 3 }: { tags?: string[] | null; max?: number }) {
+/**
+ * Tags, every one of them, wrapping rather than cut.
+ *
+ * NOT CAPPED, because neither thing it draws has anywhere else to be read. A
+ * node's ROLES are the three `node.roles` accepts (`ingress`, `seats`,
+ * `workers`), so a fleet row never holds more than a short line of them; its
+ * placement LABELS are drawn on the node's own page, which is the one surface
+ * that lists them. A cut there would hide a label in a hover title on a span
+ * that neither a keyboard nor a touch can reach.
+ */
+export function TagsCell({ tags }: { tags?: string[] | null }) {
   const list = tags ?? [];
   if (list.length === 0) return <EmptyValue label="No tags" />;
-  const shown = list.slice(0, max);
-  const rest = list.length - shown.length;
   return (
     <span className="row gap-1 wrap">
       {/* NEUTRAL AND OUTLINE: a tag names a thing, and uilet's tone doc draws
           the same line ours does — identity takes no colour. `outline` is
           their `appearance`, which is what our `outline` prop was. */}
-      {shown.map((tag) => (
+      {list.map((tag) => (
         <Tag key={tag} appearance="outline" size="xs">
           {tag}
         </Tag>
       ))}
-      {rest > 0 && (
-        <span className="t-caption" title={list.slice(max).join(", ")}>
-          +{rest}
-        </span>
-      )}
     </span>
   );
 }

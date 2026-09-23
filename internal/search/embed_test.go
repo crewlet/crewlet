@@ -120,6 +120,55 @@ func TestARemovedTaskLosesItsVector(t *testing.T) {
 	}
 }
 
+// A REMOVED LONG TASK LOSES EVERY WINDOW, not only its first.
+//
+// Each window is its own subject and its own row, and the applier forgets
+// exactly the window a record names. The forget selection is the only thing
+// that ever names a gone document's windows — the stale selection is driven by
+// the source rows, which are gone — so a forget that named chunk 0 alone would
+// leave the rest of the document findable by meaning with nothing left to
+// select it. The single-window case above cannot see that: its one window IS
+// chunk 0.
+func TestARemovedLongTaskLosesEveryWindow(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	h.seedTasks(map[string]string{
+		"t-long": strings.Repeat("a long body with plenty of prose. ", 500),
+		"t-kept": "a short task that stays",
+	})
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	h.drain()
+	before := h.vectors()
+	if before < 3 {
+		t.Fatalf("the long task produced %d vector(s) with its neighbour, want "+
+			"several — without windows this case asserts nothing", before)
+	}
+
+	h.removeTask("t-long")
+	published, err := h.duty.Tick(t.Context())
+	if err != nil {
+		t.Fatalf("tick after the removal: %v", err)
+	}
+	if want := before - 1; published != want {
+		t.Fatalf("the duty published %d forget(s) for a removed task of %d "+
+			"window(s)", published, want)
+	}
+	h.drain()
+	if got := h.vectors(); got != 1 {
+		t.Fatalf("%d vector(s) survive, want only the kept task's one: every "+
+			"window of a removed document is findable by meaning until "+
+			"something forgets it, and nothing else ever selects it", got)
+	}
+	// AND A TICK AFTER THAT HAS NOTHING LEFT TO FORGET, which is what says
+	// the selection is over the rows rather than a list it keeps.
+	if published, err := h.duty.Tick(t.Context()); err != nil || published != 0 {
+		t.Fatalf("the tick after every window was forgotten published %d "+
+			"record(s), err %v", published, err)
+	}
+}
+
 // A PROVIDER FAILURE COSTS THE BATCH AND NOT THE CORPUS.
 //
 // The tick's unit of work is a batch and the failures this meets are per batch
@@ -179,7 +228,7 @@ func TestABackloggedCorpusDoesNotStarveTheOneAfterIt(t *testing.T) {
 	// withdraw: under the old scheduling its selection never ran at all,
 	// so the page somebody deleted stayed findable by meaning for ever.
 	pages := &scriptedCorpus{source: search.SourcePage, backlog: -1,
-		gone: []string{"p-deleted"}}
+		gone: []search.Subject{{Source: search.SourcePage, ID: "p-deleted"}}}
 
 	published, err := h.dutyOver(tasks, pages).Tick(t.Context())
 	if err != nil {
@@ -666,13 +715,13 @@ func (s *scriptedEmbedder) callsPerSource() map[search.Source]int {
 type scriptedCorpus struct {
 	source  search.Source
 	backlog int
-	gone    []string
+	gone    []search.Subject
 	err     error
 }
 
 func (c *scriptedCorpus) Source() search.Source { return c.source }
 
-func (c *scriptedCorpus) Stale(_ context.Context, _ string, _, limit int) ([]search.Document, []string, error) {
+func (c *scriptedCorpus) Stale(_ context.Context, _ string, _, limit int) ([]search.Document, []search.Subject, error) {
 	if c.err != nil {
 		return nil, nil, c.err
 	}

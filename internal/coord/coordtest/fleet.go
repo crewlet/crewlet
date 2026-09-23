@@ -922,6 +922,13 @@ var planeCases = []fleetCase{{
 		if len(got[0].Error) >= len(huge) {
 			h.t.Fatalf("the failure text was stored whole (%d bytes)", len(got[0].Error))
 		}
+		// A CEILING, marker included: every peer reads this record on every
+		// tick, so the bound is what a backend STORES, not how much content
+		// it keeps before appending a note about the rest.
+		if len(got[0].Error) > coord.MaxApplyErrorLength {
+			h.t.Errorf("the failure text is %d bytes, past the %d-byte bound",
+				len(got[0].Error), coord.MaxApplyErrorLength)
+		}
 
 		// NEVER THROUGH A RUNE. The cut was a plain byte slice, so a driver
 		// error naming a non-ASCII path ended in half a character — which
@@ -946,6 +953,10 @@ var planeCases = []fleetCase{{
 			}
 			if !strings.HasSuffix(n.Error, "…") {
 				h.t.Errorf("the cut is unmarked: %q", n.Error[max(0, len(n.Error)-12):])
+			}
+			if len(n.Error) > coord.MaxApplyErrorLength {
+				h.t.Errorf("the failure text is %d bytes, past the %d-byte bound",
+					len(n.Error), coord.MaxApplyErrorLength)
 			}
 		}
 	},

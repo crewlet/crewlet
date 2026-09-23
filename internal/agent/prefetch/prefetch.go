@@ -340,6 +340,19 @@ func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user stri
 			"model", member.Key)
 		return "", false
 	}
+	if completion.Truncated() {
+		// A LENGTH STOP IS NOT AN ANSWER. The content is whatever the
+		// model had written when it hit maxTokens — a briefing that stops
+		// mid-sentence, a JSON array that never closed, a query cut
+		// mid-word — and each caller would use it as though the model had
+		// finished: the briefing REPLACES the raw episode bullets it was
+		// summarising. Refused here, so every caller takes the path it
+		// already has for a failed call, which is its raw block or none.
+		log.WarnContext(ctx, "prefetch_auxiliary_answer_truncated", "seat", seat.Handle(),
+			"model", member.Key, "output_tokens", completion.OutputTokens,
+			"max_tokens", maxTokens)
+		return "", false
+	}
 	text := strings.TrimSpace(completion.Content)
 	if text == "" {
 		// An empty answer from a THINKING model usually means the cap
@@ -362,9 +375,9 @@ func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user stri
 // shortened, it was silently emptied of everything after its first entry, and
 // a counterparty profile of the second sender in a conversation simply never
 // rendered. What actually bounds these blocks is the ITEM cap each one
-// already has (the memories the filter may pick, the episodes recalled, the
-// knowledge hits searched for), every one of which is a number a reader can
-// reason about — unlike a character ceiling that lands mid-list.
+// already has (the candidate pool the memory filter picks from, the episodes
+// recalled, the knowledge hits searched for), every one of which is a number a
+// reader can reason about — unlike a character ceiling that lands mid-list.
 //
 // The empty-drop is load-bearing: renderEpisode and renderSkill both return
 // "" for an entry with nothing to say, and joining those blindly leaves blank

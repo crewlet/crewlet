@@ -1146,6 +1146,20 @@ func (w *Worker) reconcile(
 	// to be classified with the rest. See [StampRegistration].
 	findings = append(findings, StampRegistration(&state, w.currentRegistration(kind))...)
 
+	// THE WHOLE OF EVERY SENTENCE THE ROW WILL CUT, logged here because a
+	// loop pass has no response and no run record: once the fold below has
+	// cut it, this line is the only place the rest of it exists. Only on a
+	// clean pass, because the fold keeps none of a failed pass's findings.
+	// See [MaxDetailLength].
+	if err == nil {
+		for _, f := range clipped(findings) {
+			log.InfoContext(ctx, "integration_finding_clipped",
+				"integration", kind.String(), "finding", string(f.Kind),
+				"subject", f.Subject, "detail", f.Detail,
+				"row_limit_bytes", MaxDetailLength)
+		}
+	}
+
 	// THE FOLD IS integration.Observe, shared with the pass an operator
 	// runs from the dashboard: a status row must not depend on which
 	// surface produced it. It carries the field stamped above through.

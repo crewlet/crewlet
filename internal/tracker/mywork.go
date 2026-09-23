@@ -58,16 +58,36 @@ import (
 // fix by being longer.
 const MyWorkRows = 20
 
+// AskBodyShown is how much of an ask's body one [AskRow] carries, marker
+// included.
+//
+// A ROW IS FOR CHOOSING WHICH ASK TO ANSWER, not for reading it: up to
+// [MyWorkRows] of them share one turn-start block with six other lists, and a
+// body is accepted at up to [MaxCommentBody] — so twenty whole ones could be
+// most of the answer. Six hundred bytes is twenty rows at about 12 KB, which is
+// the arithmetic this bound buys and the reason it is not larger.
+//
+// THE CUT IS MARKED AND IT IS NOT A LOSS: a body past this ends in `…`
+// ([textcut.Within] keeps the marker inside the bound), and the whole ask is
+// one read away — `get_work_item` with the row's key as `item` and its
+// [AskRow.Comment] as `comment` answers that comment exactly as it was
+// written ([DetailWants.Comment]).
+const AskBodyShown = 600
+
 // AskRow is one question waiting on this person, with what to do about it.
 type AskRow struct {
 	TaskRow
 
-	// Comment is the ask itself — the id an answer replies to, and the
-	// body, so a model can decide without a second read.
+	// Comment is the ask's id — what an answer replies to, and what
+	// `get_work_item` takes as `comment` to read the ask whole.
 	Comment string    `json:"comment"`
 	AskedBy string    `json:"asked_by"`
 	AskedAt time.Time `json:"asked_at"`
-	Body    string    `json:"body"`
+
+	// Body is the ask's OPENING, at most [AskBodyShown] bytes, ending in
+	// `…` where it was cut — see [AskBodyShown] for why, and for where
+	// the rest is.
+	Body string `json:"body"`
 
 	// Answer is the literal call that answers it. A model handed the
 	// comment id still has to compose the call, and every one it composes
@@ -484,7 +504,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		out = append(out, AskRow{
 			TaskRow: row, Comment: a.comment, AskedBy: a.author,
 			AskedAt: store.DecodeTime(a.at),
-			Body:    textcut.Within(a.body, MaxExcerpt),
+			Body:    textcut.Within(a.body, AskBodyShown),
 			// THE LITERAL CALL, composed here rather than described.
 			// A model handed a comment id still has to compose the
 			// answer, and every one it composes differently is a

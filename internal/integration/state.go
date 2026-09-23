@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -174,6 +175,11 @@ func (s State) Due(now time.Time) bool { return !now.Before(s.NextAttemptAt) }
 // integration's state. Truncated rather than refused: the first sentence of a
 // long error is the useful part, and dropping the whole write would lose the
 // phase alongside it.
+//
+// WHERE THE WHOLE ERROR IS: in the log line of the pass that produced it. The
+// loop logs it as integration_reconcile_failed or integration_teardown_failed
+// ([Worker]); a pass run from the dashboard logs it as setup_pass_failed, and
+// that run's record carries it whole as its `error`.
 const MaxLastErrorLength = 2000
 
 // MaxDetailLength bounds one finding's own sentence, and the report's.
@@ -186,20 +192,73 @@ const MaxLastErrorLength = 2000
 // REFUSED, so the surface's whole status silently stops being recorded.
 //
 // A sentence naming what is outstanding fits easily; this is a ceiling on a
-// third-party app's prose, not a budget for the engine's own.
+// third-party app's prose, not a budget for the engine's own. The report may
+// run past it by one thing only, the "(and N more)" [Classify] appends AFTER
+// the cut, because a cut taken over the finished sentence falls on the count
+// first.
+//
+// # Where the whole sentence is
+//
+// A sentence past the ceiling is cut on a rune boundary and MARKED with an
+// ellipsis, in the row and nowhere else. Which place has it whole depends on
+// who ran the pass:
+//
+//   - The reconcile loop logs every finding the row will cut, whole, as
+//     integration_finding_clipped on the node that ran the pass ([Worker]).
+//   - A pass an operator runs from the dashboard answers with its findings
+//     whole — in the response, and in that run's record at
+//     GET /setup/integrations/{kind}/runs/{id}, which the node that ran it
+//     keeps in memory among its last few runs.
+//
+// The second is true only because [Observe] cuts a COPY. The findings it is
+// handed are the caller's, and the dashboard's caller is holding them for
+// exactly that response and that record.
+//
+// A finding with no detail of its own is reported through
+// [FindingKind.sentence] around its Subject, and a cut there loses nothing:
+// the Subject is stored whole on the finding beside it.
 const MaxDetailLength = 500
 
-// bound caps every piece of third-party text a status row carries.
+// boundDetail applies [MaxDetailLength] to one sentence.
+//
+// One function because three places need the same answer — the stored
+// findings, the report's headline and the loop's decision to log a finding
+// whole — and the dashboard tells the headline from the rest of the list by
+// comparing the two strings, so a headline cut any other way would render its
+// own finding a second time.
+func boundDetail(detail string) string {
+	return textcut.Ellipsis(detail, MaxDetailLength)
+}
+
+// boundFindings is findings with every Detail within [MaxDetailLength], as a
+// COPY.
+//
+// A copy because the slice is the caller's. [Promote] hands its input back
+// unchanged when there is one finding or the worst is already first, so
+// writing through it cut the caller's own findings on some passes and not on
+// others, depending on the order a vendor happened to list them in.
 //
 // AT THE BOUNDARY rather than in each vendor, because the limit belongs to
-// what this row is written into and there are seven vendors who would each
-// have to remember it — and the two most recent did not.
-func bound(report Report, findings []Finding) (Report, []Finding) {
-	report.Detail = textcut.Ellipsis(report.Detail, MaxDetailLength)
-	for i := range findings {
-		findings[i].Detail = textcut.Ellipsis(findings[i].Detail, MaxDetailLength)
+// what this row is written into, and every vendor would otherwise have to
+// remember it.
+func boundFindings(findings []Finding) []Finding {
+	out := slices.Clone(findings)
+	for i := range out {
+		out[i].Detail = boundDetail(out[i].Detail)
 	}
-	return report, findings
+	return out
+}
+
+// clipped is the findings [boundFindings] would cut, WHOLE — what the loop
+// logs, so the part the row cannot hold is somewhere a reader can find it.
+func clipped(findings []Finding) []Finding {
+	var out []Finding
+	for _, f := range findings {
+		if boundDetail(f.Detail) != f.Detail {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // truncateError applies [MaxLastErrorLength].
@@ -327,7 +386,10 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		state.Attempts++
 		state.LastError = truncateError(err.Error())
 	default:
-		state.Report, state.Findings = bound(Classify(findings), Promote(findings))
+		// CLASSIFIED FROM THE BOUNDED COPY, so the headline is the stored
+		// sentence of the finding it names, byte for byte. See [boundDetail].
+		kept := boundFindings(findings)
+		state.Report, state.Findings = Classify(kept), Promote(kept)
 		state.LastError = ""
 		if state.Report.Phase == PhaseReady {
 			state.Attempts = 0

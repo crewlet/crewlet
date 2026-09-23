@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/textindex"
@@ -79,24 +80,36 @@ type FusedHit struct {
 	Snippet   string
 }
 
-// maxPostingScan bounds how many postings one term contributes to a query.
+// maxPostingScan is how many postings a term's FIRST read takes.
 //
-// Five thousand. A term in nearly every document — a company's own name, or
-// "the" — has a posting list the size of the corpus, and scanning all of it
-// buys nothing: its IDF is near zero, so every one of those documents scores
-// almost the same and the ranking is decided by the query's OTHER terms. The
-// cap turns the pathological query into a bounded one.
+// IT CHANGES WHAT A QUERY COSTS AND NEVER WHAT IT ANSWERS. [Indexer.Search]
+// reads one posting past it to learn the most anything it left out can score,
+// resolves exactly every document it reached that could still move, and reads
+// a capped term's list WHOLE when a document no read reached could still
+// outrank the last hit — so the hits are the exact BM25 top-N at any value of
+// this constant.
 //
-// WHAT IT DROPS IS THE BOTTOM OF THE LIST, which is the only thing that makes
-// an absolute cap defensible at all. The paragraph above justifies cutting a
-// term that appears in nearly every document, and 5 000 is not that on a
-// large corpus: a term in 5 001 of 100 000 documents has an IDF near 3 and
-// decides the ranking. So the cut cannot be arbitrary, and the read is
-// ORDERED BY THE TERM'S OWN BM25 CONTRIBUTION — see [Indexer.postings] — so
-// what a capped term loses are postings that would have ranked below five
-// thousand others of its own.
+// WHAT IT SAVES IS ROWS, NOT THE SCAN. The read is ordered by an expression
+// over a join, which no index serves, so the store reads every posting of the
+// term either way; the cap bounds what is handed back and summed.
+// Measured on 100 000 documents: a read of a term held by 80 000 of them took
+// 165 ms capped against 389 ms whole, and a query of three such terms 0.7 s
+// against 1.4 s. Five thousand is therefore a cost trade and nothing else — a
+// larger value moves more rows on every query, a smaller one sends more
+// queries to the whole read.
 //
-// It was `ORDER BY p.freq DESC`, which is the same thing only when every
+// A QUERY THE FIRST READS CANNOT SETTLE PAYS TWICE. Six such terms took 4.5 s:
+// the first reads and their resolution, then the whole read they could not
+// rule out — where reading all six whole from the start took 2.8 s. Three of
+// them settled on the first reads. That is what an exact answer costs on the
+// queries that need the whole lists, and every other query does not pay it.
+//
+// WHAT IT LEAVES OUT IS THE BOTTOM OF THE LIST, because the read is ORDERED BY
+// THE TERM'S OWN BM25 CONTRIBUTION — see [Indexer.postings] — so every posting
+// it did not read scores at most what the first one it left out scores. That
+// bound is what lets the first read stop at all.
+//
+// The order was `ORDER BY p.freq DESC`, which is the same thing only when every
 // document is the same length. BM25 divides by length, so raw frequency keeps
 // the LONGEST documents — a 10 000-term runbook mentioning the term five
 // times displaced a 50-term page mentioning it five times, though the page
@@ -116,6 +129,29 @@ const defaultSearchLimit = 10
 // knowledge adapter above it is what turns a failure into the empty block a
 // turn tolerates. Collapsing them here would make a broken index look exactly
 // like a company that has written nothing down.
+//
+// THE HITS ARE THE EXACT BM25 TOP-N, whatever [maxPostingScan] is.
+//
+// # What a capped term costs the ranking, and how it is paid back
+//
+// A term whose list [maxPostingScan] cut contributes nothing to a document
+// past the cut, so read alone the scores are a LOWER bound for exactly those
+// documents — and a document past term A's cut that another term did reach
+// can lose A's whole contribution and slide below one that kept it. The read
+// is ordered by contribution, so each cut also yields an UPPER bound: nothing
+// it left out scores more than the first posting it left out.
+//
+// With both bounds, a document the scan reached is a CONTENDER when its score
+// plus the bounds of the capped terms it is missing reaches the last hit's
+// score. Contenders are resolved EXACTLY, by one primary-key lookup of the
+// missing terms per batch of them, and the top-N is taken again over the
+// exact scores. A document the scan reached that is not a contender cannot
+// reach the answer, since its bound is below a score that resolution only
+// raises. What remains is a document NO read reached, whose score is at most
+// the sum of the capped terms' bounds. When that sum reaches the last hit's
+// score, the capped terms are read WHOLE and the ranking is taken again over
+// complete lists — the cost [maxPostingScan] was saving, paid only by a query
+// that needs it.
 func (x *Indexer) Search(ctx context.Context, q LexicalQuery) ([]LexicalHit, error) {
 	terms := textindex.Terms(q.Text)
 	if len(terms) == 0 {
@@ -134,21 +170,42 @@ func (x *Indexer) Search(ctx context.Context, q LexicalQuery) ([]LexicalHit, err
 		return nil, nil
 	}
 
-	scores := map[string]float64{}
+	lists := make([]termList, 0, len(terms))
 	for _, term := range terms {
-		postings, docs, err := x.postings(ctx, term, q, corpus)
+		list, err := x.postings(ctx, term, q, corpus, maxPostingScan)
 		if err != nil {
 			return nil, err
 		}
-		idf := textindex.IDF(corpus.Docs, docs)
-		for _, p := range postings {
-			scores[p.DocID] += textindex.Score(idf, p, corpus)
-		}
+		lists = append(lists, list)
 	}
-	if len(scores) == 0 {
+	ranking := rankLists(lists, corpus)
+	if len(ranking.scores) == 0 {
 		return nil, nil
 	}
-	return x.hydrateHits(ctx, q, scores, terms, limit)
+	if ranking.capped() {
+		for i, ids := range ranking.contenders(limit) {
+			found, err := x.lookup(ctx, lists[i].term, ids)
+			if err != nil {
+				return nil, err
+			}
+			ranking.resolve(i, ids, found, corpus)
+		}
+		// AFTER THE RESOLUTION, because it can only raise the last hit's
+		// score, and a higher last hit is one fewer query sent to the
+		// whole read.
+		if ranking.unreached(limit) {
+			for i, list := range lists {
+				if !list.capped {
+					continue
+				}
+				if lists[i], err = x.postings(ctx, list.term, q, corpus, 0); err != nil {
+					return nil, err
+				}
+			}
+			ranking = rankLists(lists, corpus)
+		}
+	}
+	return x.hydrateHits(ctx, q, ranking.scores, terms, limit)
 }
 
 // corpus reads the collection statistics BM25 needs.
@@ -165,17 +222,18 @@ func (x *Indexer) corpus(ctx context.Context) (textindex.Corpus, error) {
 	return textindex.Corpus{Docs: docs, AvgLength: avg}, nil
 }
 
-// postings reads one term's list, filtered to the query's scope, and the
-// number of documents holding the term.
+// postings reads one term's list, filtered to the query's scope, with the
+// term's IDF. A depth above zero reads that many postings and — when the list
+// holds more — the bound on what the read left out; zero reads the whole list.
 //
-// THE DOCUMENT COUNT IS UNFILTERED, deliberately. It is the term's rarity
+// THE DOCUMENT COUNT BEHIND THE IDF IS UNFILTERED, deliberately. It is the term's rarity
 // across the whole corpus, which is what makes it a weight; counting only
 // within a scope would make the same word rare in a small space and common in
 // a large one, so a hit's rank would depend on which container it happened to
 // be in rather than on how well it matched.
 //
-// ORDERED BY THE TERM'S OWN BM25 CONTRIBUTION, which is what makes
-// [maxPostingScan] a cut of the bottom of the list rather than of an
+// ORDERED BY THE TERM'S OWN BM25 CONTRIBUTION, which is what makes a read
+// that stops at a depth leave out the bottom of the list rather than an
 // arbitrary slice of it. The expression is the ORDER of [textindex.Score] and
 // not the score: `idf` and `K1+1` are constants within one term, and
 // `tf/(tf+K)` is increasing in `tf/K`, so ordering by `tf/K` gives exactly
@@ -186,17 +244,19 @@ func (x *Indexer) corpus(ctx context.Context) (textindex.Corpus, error) {
 //
 // A DOCUMENT WITH NO RECORDED LENGTH scores as AVERAGE here, exactly as
 // [textindex.Score] treats it: as infinitely short it would sort above
-// everything and take the cap's whole budget.
+// everything and fill the first read's whole depth.
 func (x *Indexer) postings(ctx context.Context, term string, q LexicalQuery,
-	corpus textindex.Corpus) ([]textindex.Posting, int, error) {
+	corpus textindex.Corpus, depth int) (termList, error) {
+	list := termList{term: term}
 	var total int
 	if err := x.db.SQL().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM kb_postings WHERE term = ?`, term).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("search: count postings for %q: %w", term, err)
+		return termList{}, fmt.Errorf("search: count postings for %q: %w", term, err)
 	}
 	if total == 0 {
-		return nil, 0, nil
+		return list, nil
 	}
+	list.idf = textindex.IDF(corpus.Docs, total)
 
 	where := []string{"p.term = ?"}
 	args := []any{term}
@@ -228,7 +288,17 @@ func (x *Indexer) postings(ctx context.Context, term string, q LexicalQuery,
 	if avg <= 0 {
 		avg = 1
 	}
-	args = append(args, textindex.B, avg, textindex.B, avg, maxPostingScan)
+	args = append(args, textindex.B, avg, textindex.B, avg)
+	limit := ""
+	if depth > 0 {
+		// ONE PAST THE DEPTH, which is the evidence it was reached: a
+		// list that fills exactly depth was read whole, and one that
+		// returns the extra row was not — and that row, being the best
+		// posting the read left out, is also the bound on every other
+		// one it left out.
+		limit = "LIMIT ?"
+		args = append(args, depth+1)
+	}
 
 	rows, err := x.db.SQL().QueryContext(ctx, `
 		SELECT p.doc_id, p.freq, d.length
@@ -238,23 +308,265 @@ func (x *Indexer) postings(ctx context.Context, term string, q LexicalQuery,
 		 ORDER BY p.freq /
 		          ((1 - ?) * ? + ? * (CASE WHEN d.length > 0 THEN d.length ELSE ? END))
 		          DESC, p.doc_id
-		 LIMIT ?`, args...)
+		 `+limit, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("search: read postings for %q: %w", term, err)
+		return termList{}, fmt.Errorf("search: read postings for %q: %w", term, err)
 	}
 	defer rows.Close()
 	var out []textindex.Posting
 	for rows.Next() {
 		var p textindex.Posting
 		if err := rows.Scan(&p.DocID, &p.Freq, &p.Length); err != nil {
-			return nil, 0, fmt.Errorf("search: scan posting for %q: %w", term, err)
+			return termList{}, fmt.Errorf("search: scan posting for %q: %w", term, err)
 		}
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("search: read postings for %q: %w", term, err)
+		return termList{}, fmt.Errorf("search: read postings for %q: %w", term, err)
 	}
-	return out, total, nil
+	if depth > 0 && len(out) > depth {
+		probe := out[depth]
+		out = out[:depth]
+		list.capped = true
+		list.ceiling = textindex.Score(list.idf, probe, corpus) * (1 + ceilingSlack)
+	}
+	list.postings = out
+	return list, nil
+}
+
+// lookup reads one term's postings for a set of documents, by primary key.
+//
+// It is how a capped term's contribution is resolved for the documents that
+// could still move: `kb_postings` is keyed (term, doc_id), so each id is one
+// seek however long the term's list is — which keeps a resolution's cost in
+// proportion to the capped reads that produced its contenders rather than to
+// the lists they cut.
+//
+// THE PLAN IS STATED, because the planner does not find it. Asked for
+// `term = ? AND doc_id = ?`, as a join or one id at a time, it seeks
+// `kb_postings_doc_idx` on the id and filters on the term, which walks every
+// term the document holds: measured over documents of two hundred terms,
+// 1 999 ids took 160 ms joined and 350 ms one at a time, against 14 ms
+// through the primary key. So the ids drive the join from a VALUES list, and
+// INDEXED BY names the primary key's own index — the name SQLite gives a
+// table's first automatic index, and one whose absence fails the statement
+// when it is prepared rather than slowing it down. An IN list is not used
+// either: the plan seeks the term and tests each of its postings against the
+// list, which took 330 ms for 1 999 ids against a six-thousand-posting term.
+//
+// BATCHED to the estate's own parameter limit, less the term's own bind. An id
+// with no row does not hold the term.
+func (x *Indexer) lookup(ctx context.Context, term string,
+	ids []string) ([]textindex.Posting, error) {
+
+	batch := x.db.Caps().MaxVariables - 1
+	var out []textindex.Posting
+	for len(ids) > 0 {
+		chunk := ids[:min(batch, len(ids))]
+		ids = ids[len(chunk):]
+		args := make([]any, 0, len(chunk)+1)
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		args = append(args, term)
+		err := func() error {
+			rows, err := x.db.SQL().QueryContext(ctx, `
+				WITH wanted(id) AS (VALUES `+valueRows(len(chunk))+`)
+				SELECT p.doc_id, p.freq, d.length
+				  FROM wanted w
+				 CROSS JOIN kb_postings p INDEXED BY sqlite_autoindex_kb_postings_1
+				  JOIN kb_docs d ON d.id = p.doc_id
+				 WHERE p.term = ? AND p.doc_id = w.id`, args...)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var p textindex.Posting
+				if err := rows.Scan(&p.DocID, &p.Freq, &p.Length); err != nil {
+					return err
+				}
+				out = append(out, p)
+			}
+			return rows.Err()
+		}()
+		if err != nil {
+			return nil, fmt.Errorf("search: resolve %q for %d document(s) its "+
+				"capped read left out: %w", term, len(chunk), err)
+		}
+	}
+	return out, nil
+}
+
+// valueRows renders n one-column VALUES rows of placeholders.
+func valueRows(n int) string {
+	return strings.TrimSuffix(strings.Repeat("(?),", n), ",")
+}
+
+// termList is one query term's postings as [Indexer.postings] read them.
+type termList struct {
+	term string
+	idf  float64
+
+	// postings are the ones read, in descending contribution.
+	postings []textindex.Posting
+
+	// capped says the term has more postings in scope than were read.
+	capped bool
+
+	// ceiling bounds the contribution of every posting NOT read: the score
+	// of the first one the read left out, widened by [ceilingSlack]. Zero
+	// when nothing was left out.
+	ceiling float64
+}
+
+// ceilingSlack widens a capped term's ceiling, relatively.
+//
+// The read is ORDERED in SQL and SCORED in Go, by two float computations of
+// one monotone function, so two postings whose true order is a near tie can
+// come back in the other order and score an ulp or two apart the wrong way. A
+// ceiling taken as the probe's own score could then sit below a posting it is
+// meant to bound, and [Indexer.Search] would skip the whole read on a bound
+// that is not one. One part in a billion is over a million times that
+// rounding, and all a wider ceiling can do is resolve a few more documents and
+// send a query to the whole read a little sooner.
+const ceilingSlack = 1e-9
+
+// ranking is a query's scores, kept per term so a contribution resolved later
+// is summed in the same order as the ones read at first.
+type ranking struct {
+	lists []termList
+
+	// contrib[i] is term i's contribution to each document it is known to
+	// hold. A document absent from contrib[i] either was not reached by a
+	// capped read of term i, or does not hold it.
+	contrib []map[string]float64
+
+	// resolved[i] is the documents whose term-i contribution is now exact
+	// whether or not they hold the term.
+	resolved []map[string]bool
+
+	scores map[string]float64
+}
+
+// rankLists sums the lists' contributions into per-document scores.
+func rankLists(lists []termList, corpus textindex.Corpus) *ranking {
+	r := &ranking{
+		lists:    lists,
+		contrib:  make([]map[string]float64, len(lists)),
+		resolved: make([]map[string]bool, len(lists)),
+		scores:   map[string]float64{},
+	}
+	for i, list := range lists {
+		r.contrib[i] = make(map[string]float64, len(list.postings))
+		r.resolved[i] = map[string]bool{}
+		for _, p := range list.postings {
+			r.contrib[i][p.DocID] = textindex.Score(list.idf, p, corpus)
+			r.scores[p.DocID] = 0
+		}
+	}
+	for id := range r.scores {
+		r.scores[id] = r.sum(id, false)
+	}
+	return r
+}
+
+// sum is one document's score, added up in TERM ORDER whenever its parts
+// became known, so a resolved score is the very number a read with no cap
+// would have summed and not one that differs from it in the last place —
+// float addition is not associative. With bound set, a capped term the
+// document is missing contributes its ceiling instead of nothing.
+func (r *ranking) sum(id string, bound bool) float64 {
+	total := 0.0
+	for i, list := range r.lists {
+		if c, ok := r.contrib[i][id]; ok {
+			total += c
+			continue
+		}
+		if bound && list.capped && !r.resolved[i][id] {
+			total += list.ceiling
+		}
+	}
+	return total
+}
+
+func (r *ranking) capped() bool {
+	for _, list := range r.lists {
+		if list.capped {
+			return true
+		}
+	}
+	return false
+}
+
+// last is the score of the limit-th document, or zero when fewer are scored.
+func (r *ranking) last(limit int) float64 {
+	top := topN(r.scores, limit)
+	if len(top) < limit {
+		return 0
+	}
+	return r.scores[top[limit-1]]
+}
+
+// contenders is, per capped term, the scored documents missing it whose upper
+// bound reaches the last hit's score — the ones a resolution can move.
+func (r *ranking) contenders(limit int) map[int][]string {
+	floor := r.last(limit)
+	out := map[int][]string{}
+	for id, score := range r.scores {
+		upper := r.sum(id, true)
+		if upper == score || upper < floor {
+			continue
+		}
+		for i, list := range r.lists {
+			if _, ok := r.contrib[i][id]; !ok && list.capped {
+				out[i] = append(out[i], id)
+			}
+		}
+	}
+	for i := range out {
+		sort.Strings(out[i])
+	}
+	return out
+}
+
+// resolve records term i's exact contribution for ids, from the postings the
+// lookup found: an id with no posting does not hold the term.
+func (r *ranking) resolve(i int, ids []string, found []textindex.Posting,
+	corpus textindex.Corpus) {
+
+	for _, p := range found {
+		r.contrib[i][p.DocID] = textindex.Score(r.lists[i].idf, p, corpus)
+	}
+	for _, id := range ids {
+		r.resolved[i][id] = true
+	}
+	for _, id := range ids {
+		r.scores[id] = r.sum(id, false)
+	}
+}
+
+// unreached reports whether a document no read reached could still outrank the
+// limit-th scored one: its score is at most the capped terms' ceilings summed,
+// and ties go against the answer, since a tie's order is decided by id and the
+// unread document's id is unknown. With a term capped and fewer than limit
+// documents scored it is always true, since then every document holding a
+// term belongs in the answer.
+func (r *ranking) unreached(limit int) bool {
+	bound := r.unread()
+	return bound > 0 && bound >= r.last(limit)
+}
+
+// unread is the most a document no read reached can score: the capped terms'
+// ceilings, summed. Zero when no term was capped.
+func (r *ranking) unread() float64 {
+	bound := 0.0
+	for _, list := range r.lists {
+		if list.capped {
+			bound += list.ceiling
+		}
+	}
+	return bound
 }
 
 // hydrateHits turns scores into ranked hits, reading only the top ones.

@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -729,6 +731,72 @@ func TestE2BKillingAGoneBoxSucceeds(t *testing.T) {
 	var apiErr *sandbox.E2BError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusForbidden {
 		t.Errorf("the refusal is not typed: %v", err)
+	}
+}
+
+// A CONTROL-PLANE REFUSAL SAYS WHAT E2B SAID, AND NEVER HALF OF IT.
+//
+// A body past the ceiling this client reads is reported as unread, naming
+// the ceiling: quoting the part that arrived would hand an operator a severed
+// sentence as though it were E2B's whole answer. A page is distilled to its
+// title and a JSON body to one line, exactly as every other client's
+// refusals are — the E2B error is read by the same person as theirs.
+func TestE2BARefusalIsDistilledAndNeverQuotedInPart(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name        string
+		contentType string
+		body        string
+		want        func(detail string) bool
+		describe    string
+	}{
+		{
+			name: "a body past the read ceiling", contentType: "application/json",
+			body: `{"message": "` + strings.Repeat("quota ", httpx.RefusalBytes) + `"}`,
+			want: func(d string) bool {
+				return !strings.Contains(d, "quota") &&
+					strings.Contains(d, strconv.Itoa(httpx.RefusalBytes))
+			},
+			describe: "reported as unread, naming the ceiling, with none of the body quoted",
+		},
+		{
+			name: "a gateway's page", contentType: "text/html",
+			body: "<html><head><title>502 Bad Gateway</title><style>p{}</style></head>" +
+				"<body>" + strings.Repeat("<p>layout</p>", 20) + "</body></html>",
+			want:     func(d string) bool { return d == "502 Bad Gateway" },
+			describe: "the page's title and nothing of its markup",
+		},
+		{
+			name: "a JSON envelope", contentType: "application/json",
+			body:     "{\n  \"code\": 403,\n  \"message\": \"team is over its sandbox limit\"\n}",
+			want:     func(d string) bool { return d == `{"code":403,"message":"team is over its sandbox limit"}` },
+			describe: "the envelope on one line",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", c.contentType)
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(c.body))
+			}))
+			t.Cleanup(server.Close)
+			provider, err := sandbox.NewE2B(sandbox.E2BOptions{
+				APIKey: "k", Domain: "test.invalid",
+				HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = provider.Kill(context.Background(), "sbx1")
+			var apiErr *sandbox.E2BError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("the refusal is not typed: %v", err)
+			}
+			if !c.want(apiErr.Detail) {
+				t.Errorf("Detail = %q, want %s", apiErr.Detail, c.describe)
+			}
+		})
 	}
 }
 

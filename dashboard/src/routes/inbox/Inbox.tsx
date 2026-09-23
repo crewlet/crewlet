@@ -66,7 +66,7 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Callout, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, Callout, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
 import { ArrowForwardGlyph, InboxGlyph } from "@crewlethq/icons/glyphs";
 // A CONDITION'S MARK IS DATA — `lib/attention.ts` names it, and that name is
 // still one of ours. Resolving it to a glyph is the other half of this port and
@@ -78,11 +78,15 @@ import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import { plainText } from "~/lib/markdown.ts";
 import {
   useAgents,
+  useClient,
   useConnection,
   useOrgBudget,
   useSandboxes,
   useTokens,
 } from "~/lib/store-hooks.ts";
+import { INBOX_PAGE, pageCount } from "~/lib/work.ts";
+import { useOlderPages } from "~/lib/paging.ts";
+
 import { attentionQueue, SUBJECTS, WATCHED, type Attention } from "~/lib/attention.ts";
 import { ToolCallBlock } from "~/components/ToolCall.tsx";
 import { runState } from "~/lib/seats.ts";
@@ -104,6 +108,9 @@ import { FacetRail } from "~/ui/FacetRail.tsx";
 // scopes is three queries for a reader who wanted one.
 import { Segmented } from "~/ui/primitives.tsx";
 import { Pulse, PULSE_GLYPHS, type PulseFact } from "./Pulse.tsx";
+
+/** A notice's identity, for the pager — the history row it came from. */
+const noticeKey = (notice: WorkInboxNotice) => notice.record_id;
 
 /**
  * The three scopes the notices band can ask for.
@@ -159,21 +166,42 @@ export function Inbox() {
   const [reason, setReason] = useParam("reason", "");
   const [open, setOpen] = useParam("row", "");
 
-  const inbox = useQuery(
-    "work_inbox",
-    viewer.handle
-      ? {
-          handle: viewer.handle,
-          limit: 50,
-          unread: state === "unread",
-          include_snoozed: state === "snoozed",
-        }
-      : undefined,
-    { enabled: viewer.handle !== "", pollMs: 30_000 },
+  const { socket } = useClient();
+  const params = useMemo(
+    () =>
+      viewer.handle
+        ? {
+            handle: viewer.handle,
+            limit: INBOX_PAGE,
+            unread: state === "unread",
+            include_snoozed: state === "snoozed",
+          }
+        : undefined,
+    [viewer.handle, state],
   );
+  // THE PAGES PAST THE FIRST, from the cursor each answer mints — and while
+  // any are held the first page is frozen and stops polling; see
+  // `lib/paging.ts` for why. Another scope is another question, so the pages
+  // read under the old one go.
+  const pager = useOlderPages<WorkInboxNotice, string>(noticeKey, params);
+  const inbox = useQuery("work_inbox", params, {
+    enabled: viewer.handle !== "",
+    pollMs: pager.frozen ? undefined : 30_000,
+  });
   usePageCoverage(inbox.data);
-
-  const loaded = inbox.data?.notices ?? [];
+  const firstNext = inbox.data?.next_cursor || null;
+  const more = pager.more(firstNext);
+  const loadOlder = () =>
+    params &&
+    void pager.loadOlder(inbox.data?.notices, firstNext, async (cursor) => {
+      const page = await socket.query("work_inbox", { ...params, cursor });
+      return { rows: page.notices, next: page.next_cursor || null };
+    });
+  const backToNewest = () => {
+    pager.backToNewest();
+    inbox.refetch();
+  };
+  const loaded = useMemo(() => pager.rows(inbox.data?.notices), [pager.rows, inbox.data]);
   // THE REASON NARROWS CLIENT-SIDE, which is what makes the chips honest. Sent
   // to the engine it narrowed the ANSWER, so the page the facet counts were
   // derived from became the page one facet had selected: every other chip's
@@ -300,6 +328,7 @@ export function Inbox() {
             <Band
               title="Notices"
               count={inbox.data ? notices.length : null}
+              more={more}
               note="What reached you, and the one reason of nineteen it reached you under."
               controls={
                 /* THREE SCOPES, EXACTLY ONE CHOSEN. As a facet rail this could
@@ -362,6 +391,7 @@ export function Inbox() {
                 state,
                 reason,
                 shown: notices.length,
+                more,
               })}
             >
               {inbox.loading && !inbox.data && (
@@ -378,10 +408,41 @@ export function Inbox() {
                   />
                 ))}
               </QueryState>
-              {inbox.data?.next_cursor && (
-                <p className="t-caption">
-                  More notices exist beyond this page. The engine returns at most 50 at a time.
-                </p>
+              {/* WHERE THE REST ARE: the next page, from the answer's own
+                  cursor. The engine reads at most INBOX_PAGE notices at a
+                  time, and `unread` and the snooze filter are applied to that
+                  page — so the rows past it can hold exactly what this scope
+                  is asking for. */}
+              {(more || pager.frozen || pager.error) && (
+                <div className="row gap-2 wrap">
+                  {pager.error ? (
+                    <QueryState error={pager.error} loading={false} />
+                  ) : (
+                    <span className="t-caption">
+                      {more
+                        ? `More notices exist past these. The engine reads ${INBOX_PAGE} at a time.`
+                        : "That is every notice this scope reaches."}
+                      {pager.frozen && " Updates are paused while older notices are loaded."}
+                    </span>
+                  )}
+                  <span className="spacer" />
+                  {more && (
+                    <Button
+                      size="small"
+                      variant="secondary"
+                      onClick={loadOlder}
+                      disabled={pager.paging}
+                      loading={pager.paging}
+                    >
+                      Load older notices
+                    </Button>
+                  )}
+                  {pager.frozen && (
+                    <Button size="small" variant="secondary" onClick={backToNewest}>
+                      Back to the newest
+                    </Button>
+                  )}
+                </div>
               )}
             </Band>
           )}
@@ -440,8 +501,10 @@ export function noticeQuiet(input: {
   reason: string;
   /** How many rows survive the reason filter. */
   shown: number;
+  /** A page past the ones read exists — the last read minted a cursor. */
+  more: boolean;
 }): { title: string; hint: string } | null {
-  const { answer, error, state, reason, shown } = input;
+  const { answer, error, state, reason, shown, more } = input;
   // NOTHING IS KNOWN. The skeleton and the refusal are this band's children and
   // they are what belongs here; a sentence would be a claim about a company
   // nobody has read. A failed poll keeps its last answer, so an error beside
@@ -468,10 +531,10 @@ export function noticeQuiet(input: {
   // (`tracker.InboxQuery.Unread`), while the cursor is computed from the
   // unfiltered page — so no rows and more pages is an ordinary answer, and "you
   // are caught up" over it is a claim about rows nobody looked at.
-  if (answer.next_cursor) {
+  if (more) {
     return {
       title: "None on this page",
-      hint: "The engine answers 50 notices at a time and every one on this page was filtered out here. There are more beyond it.",
+      hint: `The engine answers ${INBOX_PAGE} notices at a time and every one read so far was filtered out here. There are more past them — load the older ones below.`,
     };
   }
 
@@ -509,6 +572,7 @@ export function noticeQuiet(input: {
 function Band({
   title,
   count,
+  more = false,
   note,
   controls,
   filters,
@@ -521,6 +585,8 @@ function Band({
    *  a false one for as long as the read is in flight, which is the rule the
    *  pulse strip's own figures follow one component up. */
   count: number | null;
+  /** The rows are a page and more exist past it, so `count` is a floor. */
+  more?: boolean;
   note: string;
   controls?: React.ReactNode;
   /** Controls over this band's OWN rows, drawn above the list and drawn
@@ -543,7 +609,11 @@ function Band({
             changes on every poll, and inside the heading it would resize the
             heading and shift whatever sits beside it. */}
         <span className="inbox-band-count">
-          {count ?? <EmptyValue label="Not counted: this read did not answer" />}
+          {count === null ? (
+            <EmptyValue label="Not counted: this read did not answer" />
+          ) : (
+            pageCount(count, more)
+          )}
         </span>
         <span className="spacer" />
         {controls}

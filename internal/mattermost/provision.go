@@ -345,6 +345,10 @@ func isStatus(err error, status int) bool { return Status(err) == status }
 // channel membership is a 409. A reconcile that only knew one would fail on
 // its second run against whichever endpoint used the other — which is the
 // bug that makes a provisioner "work once".
+//
+// The 400's words are read in the whole of what the server said, never in
+// [Error.Message]: Message is a line bounded for a log, and "already" past
+// its cut would fail a second run on what the first one did.
 func isConflictStatus(err error) bool {
 	switch Status(err) {
 	case http.StatusConflict:
@@ -352,7 +356,7 @@ func isConflictStatus(err error) bool {
 	case http.StatusBadRequest:
 		var e *Error
 		return errors.As(err, &e) && strings.Contains(
-			strings.ToLower(e.Message), "already")
+			strings.ToLower(e.said), "already")
 	}
 	return false
 }

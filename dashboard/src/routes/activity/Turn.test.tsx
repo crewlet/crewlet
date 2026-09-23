@@ -227,6 +227,8 @@ describe("turnFacts", () => {
       attempt: null,
       events: [],
       cut: false,
+      phasesDropped: false,
+      reread: () => {},
       phases: [],
       own: [{} as PhaseRecord],
       nested: new Map(),

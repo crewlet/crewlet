@@ -153,9 +153,16 @@ type publisher struct {
 	topics []string
 	events []*events.Event
 	err    error
+
+	// refuseDone refuses a publish under a context that is already done,
+	// as the broker client does before it sends anything.
+	refuseDone bool
 }
 
-func (p *publisher) Publish(_ context.Context, topic string, ev *events.Event) error {
+func (p *publisher) Publish(ctx context.Context, topic string, ev *events.Event) error {
+	if p.refuseDone && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.topics = append(p.topics, topic)
@@ -1808,19 +1815,26 @@ func TestAnExplicitModelIsUsedAndAnUnknownOneIsRefused(t *testing.T) {
 			res.ProviderKey, fast.count(), slow.count())
 	}
 
-	// An unknown key fails THIS TASK rather than the call: its siblings are
-	// running on keys that do resolve, and refusing the whole call would
-	// throw away work already in flight.
-	results := run(t, cfg, subagent.Request{Tasks: []subagent.Task{
+	// An unknown key refuses the CALL before any task runs, as a cycle
+	// does: found only when its task started, everything scheduled ahead of
+	// it — here a sibling, and in a graph whole waves — would already have
+	// run and spent on a graph that cannot finish.
+	before := slow.count()
+	_, err := subagent.Run(t.Context(), cfg, subagent.Request{Tasks: []subagent.Task{
 		{ID: "good", SystemPrompt: "s", Prompt: "go"},
 		{ID: "bad", SystemPrompt: "s", Prompt: "go", Model: "nope"},
 	}})
-	if results[0].Status != subagent.StatusOK {
-		t.Errorf("a healthy sibling was failed by a bad model key: %+v", results[0])
+	if _, ok := subagent.AsPlanError(err); !ok {
+		t.Fatalf("an unknown model key was not refused as a plan the model can "+
+			"fix: %v", err)
 	}
-	if results[1].Status != subagent.StatusFailed ||
-		!strings.Contains(results[1].Error, "not configured") {
-		t.Errorf("an unknown model key was not refused: %+v", results[1])
+	for _, want := range []string{`"bad"`, `"nope"`, "default, fast"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %s: %v", want, err)
+		}
+	}
+	if slow.count() != before {
+		t.Error("a sibling ran before the call was refused")
 	}
 }
 
@@ -2659,5 +2673,171 @@ func TestAWorkersProviderHandOffIsPublishedAgainstTheParentTurn(t *testing.T) {
 	// not already carry, and it is what a role-less consumer reads.
 	if actor := pub.events[0].Actor(); actor != "CTO" {
 		t.Errorf("actor = %q, want CTO", actor)
+	}
+}
+
+// A WORKER'S FAILURE IS KEPT WHOLE, and the parent is shown both ends of it.
+//
+// The record is what the worker's phase event publishes, so a cut taken there
+// is a cut nobody can undo — and an error chain puts its cause at the END,
+// where a head cut lands. What the parent's model is shown is bounded, and
+// keeps the start that says what stopped and the end that says why.
+func TestAWorkersFailureIsKeptWholeAndItsReportKeepsBothEnds(t *testing.T) {
+	t.Parallel()
+	cause := "the cause is HERE: the provider refused this key"
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return nil, fmt.Errorf("upstream said %s — %s", strings.Repeat("noise ", 400), cause)
+	}}
+	w := newWorld(t)
+	cfg := baseConfig(t, w, p)
+	cfg.ParentRemaining = 0
+
+	res := one(t, cfg, subagent.Request{Tasks: []subagent.Task{
+		{ID: "a", SystemPrompt: "s", Prompt: "go"},
+	}})
+	if res.Status != subagent.StatusFailed {
+		t.Fatalf("status = %s, want failed", res.Status)
+	}
+	if !strings.Contains(res.Error, cause) || !strings.Contains(res.Error, strings.Repeat("noise ", 400)) {
+		t.Fatalf("the recorded error was cut — the phase event publishes this "+
+			"field, so the rest is nowhere (%d bytes kept)", len(res.Error))
+	}
+
+	report, err := subagent.NewTool(cfg).Call(t.Context(), map[string]any{"tasks": []any{
+		taskArg("a", "go", nil),
+	}})
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	var payload struct {
+		Tasks []struct {
+			Error string `json:"error"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(report.Output), &payload); err != nil || len(payload.Tasks) != 1 {
+		t.Fatalf("the report is not one task of JSON: %v\n%s", err, report.Output)
+	}
+	shown := payload.Tasks[0].Error
+	if !strings.Contains(shown, cause) {
+		t.Errorf("the parent was not shown the END of the error, where its "+
+			"cause is:\n%s", shown)
+	}
+	if !strings.Contains(shown, "upstream said") || !strings.Contains(shown, " … ") {
+		t.Errorf("the parent's excerpt lost its start or its marker:\n%s", shown)
+	}
+	if n := len([]rune(shown)); n > 510 {
+		t.Errorf("the parent was shown %d runes of one task's error", n)
+	}
+}
+
+// A WORKER CUT AT ITS OUTPUT CAP IS REPORTED AS CUT.
+//
+// A length stop is a 200 with a short body: prose that stops mid-word, a
+// submission missing what it was called for. The loop reports it, and a
+// result that dropped the fact handed the parent a cut answer as the worker's
+// considered one.
+func TestAWorkerCutAtItsOutputCapIsReportedAsCut(t *testing.T) {
+	t.Parallel()
+	p := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return &llm.Completion{Model: "scripted", Content: "the answer is that the",
+			FinishReason: llm.FinishMaxTokens}, nil
+	}}
+	w := newWorld(t)
+	cfg := baseConfig(t, w, p)
+	cfg.ParentRemaining = 0
+
+	res := one(t, cfg, subagent.Request{Tasks: []subagent.Task{
+		{ID: "a", SystemPrompt: "s", Prompt: "go"},
+	}})
+	if !res.Truncated {
+		t.Fatalf("a worker whose answer stopped at its output cap reads as "+
+			"finished: %+v", res)
+	}
+
+	report, err := subagent.NewTool(cfg).Call(t.Context(), map[string]any{"tasks": []any{
+		taskArg("a", "go", nil),
+	}})
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if !strings.Contains(report.Output, `"output_truncated":true`) {
+		t.Errorf("the parent was not told the worker's answer was cut:\n%s", report.Output)
+	}
+}
+
+// A WORKER WHOSE CONTEXT ENDED IS STILL REPORTED.
+//
+// A timed-out worker's context is past its deadline and a cancelled one's is
+// cancelled, and the broker client refuses a publish under a context that is
+// already done — so a hook handed the worker's own context loses the record of
+// exactly the workers an operator opens a fan-out to find.
+func TestAWorkerWhoseContextEndedIsReportedUnderALiveOne(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	blocked := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ llm.Request) (*llm.Completion, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	cfg := baseConfig(t, w, blocked)
+	cfg.Limits.TaskTimeout = 20 * time.Millisecond
+	var (
+		mu     sync.Mutex
+		status subagent.Status
+		ended  error
+	)
+	cfg.Telemetry = func(ctx context.Context, res subagent.Result) {
+		mu.Lock()
+		defer mu.Unlock()
+		status, ended = res.Status, ctx.Err()
+	}
+
+	one(t, cfg, subagent.Request{Tasks: []subagent.Task{
+		{ID: "a", Prompt: "go", SystemPrompt: "you are a worker"},
+	}})
+	mu.Lock()
+	defer mu.Unlock()
+	if status != subagent.StatusTimedOut {
+		t.Fatalf("reported status = %q, want the worker to have hit its cap", status)
+	}
+	if ended != nil {
+		t.Errorf("the timed-out worker was reported under a context that had "+
+			"already ended (%v), which a broker refuses to publish under", ended)
+	}
+}
+
+// AND SO IS A CALL WHOSE PARENT WAS TORN DOWN. Its summary records a call that
+// ran; published under the parent's own cancelled context, the broker refuses
+// it and nothing says the workers ran at all.
+func TestACallWhoseParentWasTornDownIsStillSummarised(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	p := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ llm.Request) (*llm.Completion, error) {
+		cancel()
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	pub := &publisher{refuseDone: true}
+	cfg := baseConfig(t, w, p)
+	cfg.Publisher = pub
+
+	res := oneOn(ctx, t, cfg, subagent.Request{Tasks: []subagent.Task{
+		{ID: "a", Prompt: "go", SystemPrompt: "you are a worker"},
+	}})
+	if res.Status != subagent.StatusCancelled {
+		t.Fatalf("status = %q, want the worker cancelled with its parent", res.Status)
+	}
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	var batched int
+	for _, ev := range pub.events {
+		if ev.Type == "subagent_batched" {
+			batched++
+		}
+	}
+	if batched != 1 {
+		t.Errorf("%d subagent_batched events for a call whose parent was torn "+
+			"down, want 1", batched)
 	}
 }

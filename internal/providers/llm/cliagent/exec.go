@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -27,12 +28,22 @@ import (
 // same reason.
 const termGrace = 5 * time.Second
 
-// stderrTail is how many lines of a failed child's stderr are reported.
+// stderrTail is how many lines of a child's stream an operator-facing failure
+// message quotes: the LAST fifty. Same figure the MCP supervisor uses.
 //
-// A CLI that crashes on startup prints a stack trace; the first line names
-// the failure and the rest names the vendor's own internals. Fifty lines
-// carries a real Node or Rust trace intact while keeping one bad provider out
-// of the log budget for every other seat. Same figure the MCP supervisor uses.
+// The stream is read after the process has exited, so its end is what the
+// process said last, and the message quotes that rather than the whole of it
+// — a stream can be [maxOutput] long, and a failure message is logged,
+// published on the phase's event and rendered on the dashboard.
+//
+// WHERE THE EARLIER LINES ARE: in the engine's log, on one condition.
+// [renderTail] emits every line the window leaves out as a
+// cli_agent_omitted_line debug event, in order and numbered, and the window's
+// own marker says so — so on a node logging at debug level the whole
+// retained stream is there. Above debug the count in the marker is all that
+// survives of them, which is the honest limit of the route and the same one
+// the MCP supervisor's tailLines states. What [maxOutput] dropped before any
+// of this is held nowhere; see [tail].
 const stderrTail = 50
 
 // maxOutput bounds what is read from a child's stdout and stderr.
@@ -142,14 +153,20 @@ type rawResult struct {
 // message, each carrying ITS OWN drop count.
 //
 // THE PAIRING IS THE POINT and it is why [tail] is never called directly from
-// here. tail cannot say a stream was shortened unless it is told, and the
-// count it needs sits in a field beside three others of the same type — so a
-// caller free to pass one would be free to pass stderr's count for stdout's
-// text, which renders a marker for a loss that did not happen and no marker
-// for one that did. Two methods and no loose call sites means the wrong
-// pairing cannot be written.
-func (r *rawResult) stderrTailText() string { return tail(r.stderr, r.droppedStderr) }
-func (r *rawResult) stdoutTailText() string { return tail(r.stdout, r.droppedStdout) }
+// here — every render goes through [renderTail], with the count of the
+// stream it was handed. tail cannot say a stream was shortened unless it is
+// told, and the count it needs sits in a field beside three others of the
+// same type — so a caller free to pass one would be free to pass stderr's
+// count for stdout's text, which renders a marker for a loss that did not
+// happen and no marker for one that did. Two methods and no loose call sites
+// means the wrong pairing cannot be written.
+func (r *rawResult) stderrTailText(ctx context.Context) string {
+	return renderTail(ctx, log, "stderr", r.stderr, r.droppedStderr)
+}
+
+func (r *rawResult) stdoutTailText(ctx context.Context) string {
+	return renderTail(ctx, log, "stdout", r.stdout, r.droppedStdout)
+}
 
 // failureTailText renders whichever stream has something to say about a failed
 // run, with the drop count of the stream it chose.
@@ -160,14 +177,14 @@ func (r *rawResult) stdoutTailText() string { return tail(r.stdout, r.droppedStd
 // a JSONL profile assembles its answer out of decoded events
 // ([extractStream]), so the bytes the cap dropped are the stream's own and
 // [tail] reports them as that.
-func (r *rawResult) failureTailText(parsed string) string {
+func (r *rawResult) failureTailText(ctx context.Context, parsed string) string {
 	if strings.TrimSpace(r.stderr) != "" {
-		return r.stderrTailText()
+		return r.stderrTailText(ctx)
 	}
 	if strings.TrimSpace(parsed) != "" {
-		return tail(parsed, r.droppedStdout)
+		return renderTail(ctx, log, "stdout", parsed, r.droppedStdout)
 	}
-	return r.stdoutTailText()
+	return r.stdoutTailText(ctx)
 }
 
 // stderrDetailText appends a CLI's stderr to a message, or nothing when it
@@ -176,11 +193,11 @@ func (r *rawResult) failureTailText(parsed string) string {
 // A trailing empty ":" after a sentence that already said what went wrong is
 // how a message stops reading like one — and stderr is genuinely absent on the
 // paths that use this, because a CLI that exits 0 usually says nothing there.
-func (r *rawResult) stderrDetailText() string {
+func (r *rawResult) stderrDetailText(ctx context.Context) string {
 	if strings.TrimSpace(r.stderr) == "" {
 		return ""
 	}
-	return " It wrote on stderr:\n" + r.stderrTailText()
+	return " It wrote on stderr:\n" + r.stderrTailText(ctx)
 }
 
 // stdoutFirstLine is the opening line of stdout, and whether [maxOutput] could
@@ -512,8 +529,10 @@ func (c *cappedBuffer) Truncated() int { return c.dropped }
 //
 // # Two cuts meet here, and the reader must be able to see both
 //
-// The first is this function's own: the lines before the last [stderrTail] are
-// omitted and the marker counts them. The second was taken long before, at the
+// The first is this function's own: the lines before the last [stderrTail]
+// are omitted, and the marker counts them and names the debug event
+// [renderTail] logs each one as — which is why a message renders through that
+// and never through this directly. The second was taken long before, at the
 // far end of the stream, by [maxOutput] — dropped is what
 // [cappedBuffer.Truncated] reported for THIS text, and it is the reason the
 // marker cannot simply say "the last fifty lines". The cap keeps the HEAD, so
@@ -537,8 +556,9 @@ func tail(text string, dropped int) string {
 	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
 	out := strings.Join(lines, "\n")
 	if len(lines) > stderrTail {
-		out = fmt.Sprintf("… %d earlier lines omitted …\n%s",
-			len(lines)-stderrTail, strings.Join(lines[len(lines)-stderrTail:], "\n"))
+		out = fmt.Sprintf("… %d earlier lines omitted — at debug level the log "+
+			"has each one as %s …\n%s", len(lines)-stderrTail, omittedLineEvent,
+			strings.Join(lines[len(lines)-stderrTail:], "\n"))
 	}
 	if dropped <= 0 {
 		return out
@@ -547,6 +567,29 @@ func tail(text string, dropped int) string {
 		"%s\n… and %d further bytes were dropped at the engine's output cap, so "+
 			"this ends where the cap fell rather than where the CLI stopped …",
 		out, dropped)
+}
+
+// omittedLineEvent is the debug event each line a [tail] window leaves out is
+// logged as. A constant because the window's marker names it to the operator,
+// and a marker naming an event nothing emits would send them looking for it.
+const omittedLineEvent = "cli_agent_omitted_line"
+
+// renderTail is [tail] for a message, with the lines it leaves out sent to the
+// log at DEBUG — see [stderrTail] for why that is where they go.
+//
+// Every render of a stream goes through here rather than calling [tail]
+// directly, because the marker [tail] writes says the omitted lines are in the
+// log, and only this makes that true. The logger is a parameter so a test can
+// read what was emitted without pointing the process-wide sink at a buffer.
+func renderTail(ctx context.Context, logger *slog.Logger, stream, text string, dropped int) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if omitted := len(lines) - stderrTail; omitted > 0 {
+		for i, line := range lines[:omitted] {
+			logger.DebugContext(ctx, omittedLineEvent, "stream", stream,
+				"line_no", i+1, "line", line)
+		}
+	}
+	return tail(text, dropped)
 }
 
 // extract reads a CLI's stdout into the answer and its token counts.

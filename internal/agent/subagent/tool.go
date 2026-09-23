@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -283,7 +284,10 @@ type taskReport struct {
 	TokensUsed    int      `json:"tokens_used"`
 	Model         string   `json:"model,omitempty"`
 	RejectedTools []string `json:"rejected_tools,omitempty"`
-	Error         string   `json:"error,omitempty"`
+	// OutputTruncated says the worker hit its model's output cap in some
+	// round, so `text` or `result` may stop short — see [Result.Truncated].
+	OutputTruncated bool   `json:"output_truncated,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // renderResults is the tool's output: JSON, so the parent reads the per-task
@@ -299,7 +303,8 @@ func renderResults(results []Result) string {
 		rep := taskReport{
 			ID: r.ID, Worker: r.Worker, Status: string(r.Status),
 			TurnsUsed: r.Rounds, TokensUsed: r.Tokens(), Model: r.Model,
-			RejectedTools: r.Rejected, Error: r.Error,
+			RejectedTools: r.Rejected, OutputTruncated: r.Truncated,
+			Error: errorExcerpt(r.Error),
 		}
 		if r.Status == StatusOK {
 			rep.Result = r.Output
@@ -320,6 +325,17 @@ func renderResults(results []Result) string {
 	}
 	return string(blob)
 }
+
+// errorExcerpt is what the parent's model is shown of one task's failure: the
+// whole text when it fits [errorLimit], and otherwise its start and its end
+// with a marked gap between them.
+//
+// Both ends, because a failure here is an error chain: its start says what
+// stopped — "worker panicked", or the loop round a provider call failed in —
+// and its end is the cause it wrapped, which is what says what to change: a
+// provider's refusal, for one. The whole text stays on [Result.Error]; see
+// [errorLimit] for where it is published.
+func errorExcerpt(text string) string { return ledger.ElideMiddle(text, errorLimit) }
 
 // remarshal moves a decoded argument map into a typed struct, via JSON
 // because the arguments already came off the wire as JSON and the struct tags

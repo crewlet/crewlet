@@ -502,9 +502,12 @@ crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
 
 The confirmation is the task's **key**, not its id: the id is already on the
 command line, so repeating it confirms nothing, while the key has to be looked
-up — which is the point of asking. The **reason is required** because it is the
-only thing that survives: the rows are destroyed, and the deletion marker's
-reason is the entire account of what used to be at that key. A purge is an
+up — which is the point of asking. The **reason is required** because the rows
+are destroyed and it is what explains the gap. It travels whole on the line a
+purge leaves — the project lead's notification, whose excerpt the purge's row
+in the activity feed carries — and on the deletion marker, and a reason too
+long for that line is refused, naming how many bytes fit, rather than cut. A
+purge is an
 **operator gesture** — a person or an operator token, never an agent and never
 the engine — because nothing else can be asked to confirm it.
 

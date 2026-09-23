@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -22,13 +23,19 @@ type Conversations interface {
 	// the next turn some history; failing the turn over it costs the reply
 	// the requester is waiting for.
 	//
+	// It STAMPS the entry's [ledger.Session.Ordinal] — one past the newest
+	// entry already held for this conversation — so an entry says its
+	// place in the whole record however many older ones are later trimmed.
+	//
 	// Deduped on the WORK key, never a turn id: two nodes completing one
 	// trigger mint two turn ids, so a turn-keyed dedupe RECORDS the
 	// duplicate instead of collapsing it.
 	Append(ctx context.Context, handle, conversation string, entry ledger.Session,
 		workKey string, at time.Time, maxEntries int) error
 
-	// History returns prior entries oldest-first, newest `limit` kept.
+	// History returns prior entries oldest-first, newest `limit` kept. What
+	// it leaves out, and what a trim or the sweep already deleted, the
+	// oldest entry's [ledger.Session.Ordinal] counts.
 	//
 	// RAISES on failure rather than returning nothing. Swallowing made
 	// "unreadable" and "nothing said yet" one answer, and a screen drew a
@@ -79,11 +86,19 @@ var _ Conversations = (*SQLConversations)(nil)
 func (s *SQLConversations) Append(ctx context.Context, handle, conversation string,
 	entry ledger.Session, workKey string, at time.Time, maxEntries int,
 ) error {
-	blob, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("ledgerstore: encode session for %s: %w", handle, err)
-	}
 	return s.db.Tx(ctx, func(tx *sql.Tx) error {
+		// THE ORDINAL IS READ AND WRITTEN IN ONE TRANSACTION, which takes
+		// the write lock at BEGIN, so two appends to one conversation
+		// cannot both read the same newest entry.
+		ordinal, err := nextOrdinal(ctx, tx, handle, conversation)
+		if err != nil {
+			return err
+		}
+		entry.Ordinal = ordinal
+		blob, err := json.Marshal(entry)
+		if err != nil {
+			return fmt.Errorf("ledgerstore: encode session for %s: %w", handle, err)
+		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO conversation_sessions
 			   (entry_id, agent_handle, conversation_key, work_key, turn_id,
@@ -112,7 +127,15 @@ func (s *SQLConversations) Append(ctx context.Context, handle, conversation stri
 		// TRIM ON WRITE. The retention sweep alone is not enough: a chat
 		// DM keys on the whole CHANNEL, so one conversation never stops
 		// growing however recent its entries are.
-		_, err := tx.ExecContext(ctx,
+		//
+		// What it deletes is COUNTED, not lost from sight: the survivors
+		// keep the ordinals they were stamped with, so the oldest one says
+		// how many turns came before it, and [ledger.RenderHistory] tells
+		// the seat they are not shown. What was said in them is still in
+		// the thread the conversation key names, which is where that
+		// marker sends the seat; each turn's own record is its phase
+		// events, which carry the same conversation key.
+		_, err = tx.ExecContext(ctx,
 			`DELETE FROM conversation_sessions
 			 WHERE agent_handle = ? AND conversation_key = ? AND id NOT IN (
 			   SELECT id FROM conversation_sessions
@@ -121,6 +144,38 @@ func (s *SQLConversations) Append(ctx context.Context, handle, conversation stri
 			handle, conversation, handle, conversation, maxEntries)
 		return err
 	})
+}
+
+// nextOrdinal is one past the ordinal of the newest entry this conversation
+// holds, or 1 for its first.
+//
+// Off the newest entry's own stamp rather than a COUNT of rows: the trim and
+// the sweep delete rows, so a count restarts low after either and hands two
+// entries the same place. An entry stored before ordinals existed carries 0,
+// and the next one after it is numbered 1 — which undercounts what came
+// before, and never claims turns that did not happen.
+func nextOrdinal(ctx context.Context, tx *sql.Tx, handle, conversation string) (int, error) {
+	var blob string
+	err := tx.QueryRowContext(ctx,
+		`SELECT entry FROM conversation_sessions
+		 WHERE agent_handle = ? AND conversation_key = ?
+		 ORDER BY created_at DESC, id DESC LIMIT 1`,
+		handle, conversation).Scan(&blob)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 1, nil
+	case err != nil:
+		return 0, fmt.Errorf("ledgerstore: read the newest entry of %s's "+
+			"conversation: %w", handle, err)
+	}
+	var newest ledger.Session
+	if err := json.Unmarshal([]byte(blob), &newest); err != nil {
+		// An undecodable newest row is History's to report, which it does
+		// by name; here it only means the count restarts, which
+		// undercounts rather than failing the append.
+		return 1, nil //nolint:nilerr // see the comment above
+	}
+	return newest.Ordinal + 1, nil
 }
 
 // History returns a thread's prior turns, most recent last. Reads RAISE:

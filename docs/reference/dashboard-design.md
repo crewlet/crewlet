@@ -256,7 +256,7 @@ what they did, what it cost, the machine.
 
 | Row | Route prefix | Badge |
 |---|---|---|
-| **Inbox** | `#/inbox` | unread notices on the first page under a reason the person's record counts as PRIMARY, `caution` hue — the only badge in the chrome allowed a status colour. Not every unread notice: most of a busy company's are things it merely told you (a task you watch moved, a goal you own was updated), nobody answers those, and a count that never reaches zero however diligent the reader is reads as a broken counter. The primary half is small by construction and goes down by answering |
+| **Inbox** | `#/inbox` | unread notices under a reason the person's record counts as PRIMARY, `caution` hue — the only badge in the chrome allowed a status colour. Not every unread notice: most of a busy company's are things it merely told you (a task you watch moved, a goal you own was updated), nobody answers those, and a count that never reaches zero however diligent the reader is reads as a broken counter. The primary half is small by construction and goes down by answering. Counted over ONE read of `INBOX_PAGE` notices, and that read is narrowed where the engine SCANS rather than after it: from the person's own read mark (`seen_through`) and to their primary reasons, both taken from the badge's previous answer — so a page of notices already read, or of ones merely told about, does not hide an unread primary notice older than it. The engine counts no total, so where it minted a cursor the badge reads `N+`, and where the page held nothing unread but was cut it reads `?` rather than vanishing: nothing unread in one page is not nothing unread |
 | **My work** | `#/me` | — |
 | **Work** | `#/work`, `#/goals` | — |
 | **Company** | `#/company` | — |
@@ -337,7 +337,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/activity/schedules` | **Schedules** | |
 | `#/activity/a2a` | **Agent-to-agent** | |
 | `#/activity/traces/{id}` | **Trace** — one distributed trace, every span of it. NO LIST: nothing enumerates traces, so a bare `#/activity/traces` is the turns list, which is the nearest thing to "the traces" this product has | |
-| `#/activity/events` · `#/activity/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `q=` · `failed=` |
+| `#/activity/events` · `#/activity/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `source=` · `trace=` · `q=` · `failed=`. `source=` and `trace=` narrow on the server, like `actor=`; `q=` and `failed=` narrow the rows this tab has loaded. A link that means "the rest of these rows" opens on `window=30d`, the floor every read of the log stops at, since the fallback is a day |
 | `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
 | `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
 | `#/admin/fleet` · `#/admin/fleet/{node}` · `#/admin/fleet/domains/{domain}` | **Infrastructure** — nodes, leases, duties, replication, and one state-log domain with every node's position in it *(operator)*. ONE tail segment is a node and two are a domain, discriminated on the tail's LENGTH rather than on the word, because a node id is operator-chosen and `domains` is a legal one | |
@@ -657,13 +657,14 @@ contract — a slot that cuts is the one place a sentence about a cut may not
 live.
 
 **A peek is bounded here rather than by the engine, and the same rule holds.**
-A rail that lists the first eight pages of a container, or the first twelve
-seats with memory, is drawing from something this screen already holds — so the
-bound is a named constant with its reason at the definition (`PEEK_PAGES`,
-`PEEK_WRITERS`, `PEEK_SEATS`), never a literal at the call site, and what it
-leaves out is counted and linked: "12 more pages in this container →". Twelve
-cards under a heading reading *What each seat has learned for itself* is a
-claim about a company the screen had decided not to show.
+A rail that lists the eight pages of a container written most recently, or the
+first twelve seats with memory, is cutting rows the screen already read or
+holds — so the bound is a named constant with its reason at the definition
+(`PEEK_PAGES`, `PEEK_SEATS`), never a literal at the call site, and what it
+leaves out is marked and linked to where all of it is: "All 40 pages in this
+container →" or "28 more agent seats on the roster →". Twelve cards under a
+heading reading *What each seat has learned for itself* is a claim about a
+company the screen had decided not to show.
 
 ### The frame-level keys
 
@@ -1197,7 +1198,14 @@ rules fix it, and each one names a specific mechanism:
    is why the server itself caps one page of these at 60. It is company-wide and
    drop-oldest, so it is a supplement rather than a guarantee — a fleet busy
    enough to evict a record a tab still wants renders that turn with a phase
-   missing, and the reload that supersedes it is authoritative.
+   missing. So an eviction is COUNTED: the store numbers every phase it takes
+   (`phaseArrivals`) and every one it drops (`phasesDropped`), a screen notes the
+   arrivals when its query answers (`usePhasesDroppedSince`), and once the drops
+   pass that mark a phase that completed after the answer may be gone. The
+   screen says so rather than rendering the gap as a turn that simply had fewer
+   phases — "may", because the buffer keeps no record of whose phase it dropped
+   — with a **Read again** that asks its query again, which reads the event
+   store where the phase is kept and moves the mark.
 2. **One block per round: thought, speech, then calls.** A round groups
    `round_narration[]` and `tool_executions[]` on the `round` they share,
    and rounds only ever append — so nothing above an insertion point can

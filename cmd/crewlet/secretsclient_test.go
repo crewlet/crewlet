@@ -237,31 +237,39 @@ func TestAMissingSecretIsTheNotFoundSentinel(t *testing.T) {
 	}
 }
 
-// A 404 WITH NO not_found BODY IS AN OLD NODE, not a missing secret.
+// A 404 WITHOUT THE NODE'S not_found IS NOT A MISSING SECRET.
 //
-// A binary from before secrets moved onto the fleet serves no /secrets at
-// all, and reporting that as "no such secret" would have an operator set a
-// value over and over against a node that will never hold it.
-func TestA404WithoutTheBodyIsReportedAsAMissingSurface(t *testing.T) {
+// The provisioning sink treats the sentinel as "mint one", so a 404 from
+// something that is not the node's secret store — a proxy, another server, a
+// route this address does not have — read as the sentinel would have the run
+// set a value, over and over, against a surface that will never hold it. The
+// body is shown instead, with the address and the route that answered.
+func TestA404WithoutTheNodesCodeIsNotAMissingSecret(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
 	node.status, node.body = http.StatusNotFound, `{}`
 
 	_, err := node.client(t).Get(t.Context(), "TOKEN")
-	if errors.Is(err, secrets.ErrNotFound) {
-		t.Fatalf("a node with no /secrets surface was reported as a missing "+
-			"secret: %v", err)
+	if err == nil {
+		t.Fatal("a 404 was reported as a secret")
 	}
-	if !strings.Contains(err.Error(), "/secrets") {
-		t.Errorf("the refusal does not say what is missing: %v", err)
+	if errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("a 404 the node's code did not come with was reported as a "+
+			"missing secret: %v", err)
+	}
+	for _, want := range []string{node.server.URL, "/secrets/TOKEN", "404"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
 	}
 }
 
-// A REJECTED TOKEN NAMES THE VARIABLE THAT FIXES IT.
+// A REJECTED TOKEN NAMES THE VARIABLE THAT FIXES IT — when the node is what
+// rejected it, which its guard says with `invalid_token`.
 func TestARejectedTokenSaysWhatToSet(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
-	node.status = http.StatusUnauthorized
+	node.status, node.body = http.StatusUnauthorized, `{"error":"invalid_token"}`
 
 	err := node.client(t).Set(t.Context(), "T", "v", "", "", time.Now())
 	if err == nil || !strings.Contains(err.Error(), apiTokenEnv) {

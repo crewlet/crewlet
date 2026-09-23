@@ -112,8 +112,17 @@ func (m *MemoryConversations) Append(_ context.Context, handle, conversation str
 		}
 	}
 	m.seq++
+	// THE ORDINAL, as the durable store stamps it: one past the newest
+	// entry held, so it survives the trim below and counts what the trim
+	// took. See [ledger.Session.Ordinal].
+	entry.Ordinal = 1
+	if len(rows) > 0 {
+		entry.Ordinal = rows[len(rows)-1].entry.Ordinal + 1
+	}
 	rows = append(rows, memoryEntry{entry: entry, workKey: workKey, at: at, seq: m.seq})
 	if maxEntries > 0 && len(rows) > maxEntries {
+		// Counted, not lost from sight — the survivors keep their
+		// ordinals; see the durable store's trim for where the rest is.
 		rows = slices.Clone(rows[len(rows)-maxEntries:])
 	}
 	m.rows[key] = rows
@@ -126,6 +135,7 @@ func (m *MemoryConversations) History(_ context.Context, handle, conversation st
 	defer m.mu.Unlock()
 	rows := m.rows[convKey(handle, conversation)]
 	if limit > 0 && len(rows) > limit {
+		// Marked by the oldest kept entry's ordinal, as a trim is.
 		rows = rows[len(rows)-limit:]
 	}
 	out := make([]ledger.Session, 0, len(rows))

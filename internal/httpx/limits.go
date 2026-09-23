@@ -37,7 +37,5 @@ const MaxResponseBody = 32 << 20
 // the same lever [MaxResponseBody] exists to take away.
 //
 // Named rather than repeated because the three caps in this file are one
-// decision each, and the tree had already proved what happens to an unnamed
-// one: see [RefusalBytes], which replaced six spellings of a number whose doc
-// comment in each of the six asserted it matched the others.
+// decision each.
 const DrainBytes = 1 << 20

@@ -21,7 +21,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import { CutNote, QueryState, SeatChip } from "~/components/common.tsx";
 import { Card, EmptyState, EmptyValue, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import {
   CalendarTodayGlyph,
@@ -40,6 +40,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { describe as describeCron, nextFires } from "~/lib/cron.ts";
 import { fmtDateTime, fmtDuration, inTime, relTime, tsKey, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { pageCount } from "~/lib/work.ts";
 import type { ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -131,10 +132,30 @@ function scheduleFacts(row: ScheduleRow, now: number): Fact[] {
       // target rather than worked out here: a unit schedule targeting `each`
       // wakes every member, one targeting `lead` wakes one seat, and a role
       // schedule's target is meaningless rather than defaulted.
+      //
+      // A COUNT PAST ONE, never a joined list: a fact value is one line cut
+      // at a pixel, and a unit schedule targeting `each` names a whole team.
+      // Every one of them is the Definition's own Wakes row, which wraps.
       label: "Wakes",
-      value: row.runners?.length ? row.runners.join(", ") : <span className="muted">nobody</span>,
+      value: wakesSummary(row.runners),
     },
   ];
+}
+
+/**
+ * Who a fire reaches, as one line: the seat itself when there is one, and how
+ * many when there are more.
+ *
+ * NOT A SLICE OF THE LIST. The grid cell and the fact line are both one line,
+ * so the list itself is drawn only where it can wrap — [ScheduleDefinition]'s
+ * Wakes row, on the schedule's page and in its rail — and a line here names
+ * the count rather than the first few names and a remainder.
+ */
+function wakesSummary(runners: string[] | null | undefined): ReactNode {
+  const list = runners ?? [];
+  if (list.length === 0) return <span className="muted">nobody</span>;
+  if (list.length === 1) return list[0];
+  return plural(list.length, "seat");
 }
 
 /**
@@ -213,6 +234,22 @@ function ScheduleDefinition({ row }: { row: ScheduleRow }) {
                     ""
                   )),
                 title: "which members of the unit a fire reaches",
+              },
+              {
+                // EVERY SEAT, and the one place the list is drawn whole — the
+                // grid cell and the fact line name a count (see
+                // [wakesSummary]). A property value wraps.
+                label: "Wakes",
+                value: row.runners?.length ? (
+                  <span className="row gap-1 wrap">
+                    {row.runners.map((handle) => (
+                      <SeatChip key={handle} name={handle} handle={handle} />
+                    ))}
+                  </span>
+                ) : (
+                  <span className="muted">nobody — this schedule wakes no seat</span>
+                ),
+                title: "the seats a fire reaches, resolved from the scope and the target",
               },
               {
                 label: "Catchup",
@@ -357,6 +394,9 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
 
   const schedules = data?.schedules ?? [];
   const runs = data?.recent_runs ?? [];
+  // WHETHER ANYBODY COULD LOOK. Both run lists are empty when the ledger was
+  // unreadable, and "never fired" over that is a claim nobody measured.
+  const historyKnown = data?.history_available === true;
   const due = schedules.filter((s) => tsKey(s.next_run) > 0 && tsKey(s.next_run) - now < 3_600_000);
   // A schedule that cannot fire at all, which is a defect rather than a
   // choice: a cron nobody can parse, a timezone that no longer exists. The
@@ -382,10 +422,12 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
     ),
   );
 
-  // The last fire per schedule, from the ledger. `Recent` returns newest
-  // first, so the first row per identity is the latest one.
+  // EACH SCHEDULE'S OWN LAST FIRE, from `last_runs`, which the engine reads per
+  // configured schedule. Built from `recent_runs` it was a lookup into the
+  // company's newest fifty across every schedule, so a daily standup that
+  // fired three hours ago, beside twenty hourly schedules, drew "never fired".
   const lastFire = new Map<string, ScheduleRunRow>();
-  for (const run of runs) if (!lastFire.has(runID(run))) lastFire.set(runID(run), run);
+  for (const run of data?.last_runs ?? []) lastFire.set(runID(run), run);
 
   const chosen = detail
     ? schedules.find(
@@ -570,22 +612,21 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 // and the target — a unit schedule targeting `each` wakes
                 // every member, one targeting `lead` wakes one seat, and a
                 // role schedule's target is meaningless rather than defaulted.
-                // A CHIP LIST RATHER THAN `SeatCell`: this cell holds up to
-                // three people and a remainder, which is a composite the
-                // one-seat cell cannot be.
+                //
+                // ONE SEAT, OR HOW MANY. This is a `shrink` column — one line,
+                // capped at a fifth of the grid and clipped past it — so a
+                // list of chips here was cut twice: at a count, and again
+                // wherever the cap fell. The whole list is the Definition's
+                // Wakes row, in the rail a click on this row opens.
                 key: "runners",
                 header: "Wakes",
                 shrink: true,
+                sortValue: (s) => s.runners?.length ?? 0,
                 cell: (s) =>
-                  s.runners?.length ? (
-                    <span className="row gap-1">
-                      {s.runners.slice(0, 3).map((handle) => (
-                        <SeatChip key={handle} name={handle} handle={handle} />
-                      ))}
-                      {s.runners.length > 3 && (
-                        <span className="t-caption">+{s.runners.length - 3}</span>
-                      )}
-                    </span>
+                  s.runners?.length === 1 ? (
+                    <SeatChip name={s.runners[0]!} handle={s.runners[0]!} />
+                  ) : s.runners?.length ? (
+                    <span className="t-caption">{wakesSummary(s.runners)}</span>
                   ) : (
                     <EmptyValue label="Nobody — this schedule wakes no seat" />
                   ),
@@ -619,8 +660,17 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 shrink: true,
                 sortValue: (s) => tsKey(lastFire.get(rowID(s))?.fired_at ?? ""),
                 cell: (s) => {
+                  if (!historyKnown) {
+                    return <EmptyValue label="The dispatch ledger could not be read" />;
+                  }
                   const run = lastFire.get(rowID(s));
-                  if (!run) return <EmptyValue label="This schedule has never fired" />;
+                  // NOT "NEVER FIRED". The ledger is this node's own record of
+                  // what it dispatched, until its retention sweep — a fire
+                  // another node ran, or one older than the sweep, is in
+                  // neither `last_runs` nor anywhere this screen can read.
+                  if (!run) {
+                    return <EmptyValue label="No fire in the ledger this node keeps" />;
+                  }
                   return (
                     <span className="row gap-1">
                       <DateCell at={run.fired_at} now={now} />
@@ -636,7 +686,13 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         </Card>
 
         <Card padding="none">
-          <Card.Header icon={<ScheduleGlyph size="sm" />} count={runs.length}>
+          {/* A FLOOR WHEN THE LEDGER HOLDS MORE, off the answer's own evidence
+              row — the strip is the company's newest fifty across every
+              schedule, so a busy company fills it within hours. */}
+          <Card.Header
+            icon={<ScheduleGlyph size="sm" />}
+            count={pageCount(runs.length, !!data?.recent_runs_truncated)}
+          >
             <Card.Title>Recent runs</Card.Title>
           </Card.Header>
           <DataGrid
@@ -652,10 +708,17 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               openSchedule(scheduleRef(r.scope_type, r.scope_id, r.schedule_name), e)
             }
             defaultSort="-fired"
-            empty={{
-              title: "No runs recorded",
-              hint: "A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record.",
-            }}
+            empty={
+              historyKnown
+                ? {
+                    title: "No runs recorded",
+                    hint: "A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record.",
+                  }
+                : {
+                    title: "The dispatch ledger could not be read",
+                    hint: "This node's record of what it fired did not answer, so nothing here says whether anything fired. The schedules above are the configuration, which does not depend on it.",
+                  }
+            }
             columns={[
               {
                 key: "fired",
@@ -733,6 +796,13 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                   ),
               },
             ]}
+          />
+          <CutNote
+            shown={runs.length}
+            more={!!data?.recent_runs_truncated}
+            one="fire"
+            slice="newest"
+            whole="One schedule's own fires are its page's — open a row for them."
           />
         </Card>
       </QueryState>
@@ -832,15 +902,9 @@ function OneSchedule({
         }
       >
         <Card padding="none">
-          <Card.Header
-            icon={<ScheduleGlyph size="sm" />}
-            count={runs.length}
-            // SAYS WHEN IT CUT: a page that filled is indistinguishable from a
-            // schedule that has fired exactly that many times.
-            subtitle={
-              truncated ? `the newest ${runs.length} — older fires are past this page` : undefined
-            }
-          >
+          {/* SAYS WHEN IT CUT: a page that filled is indistinguishable from a
+              schedule that has fired exactly that many times. */}
+          <Card.Header icon={<ScheduleGlyph size="sm" />} count={pageCount(runs.length, truncated)}>
             <Card.Title>Fires</Card.Title>
           </Card.Header>
           <DataGrid
@@ -893,6 +957,16 @@ function OneSchedule({
                   ),
               },
             ]}
+          />
+          {/* NO QUESTION SERVES WHAT IS PAST THIS PAGE: `schedule_runs` takes no
+              cursor (see `queries.MaxScheduleRuns`), so the rest is named by
+              the table it is in. */}
+          <CutNote
+            shown={runs.length}
+            more={truncated}
+            one="fire"
+            slice="newest"
+            whole="Older fires stay in this node's scheduled_runs table until its retention sweep takes them."
           />
         </Card>
       </QueryState>
@@ -980,12 +1054,11 @@ export function SchedulePeek({ scope }: { scope: string }) {
               <Card padding="none">
                 <Card.Header
                   icon={<ScheduleGlyph size="sm" />}
-                  count={runs.length}
-                  // WHICH OF THE COUNT IS DRAWN. The chip is the ledger's own
-                  // total and the rows are the newest few of it — a panel that
-                  // said 12 over three rows and nothing else would read as a
-                  // list that failed to finish rendering.
-                  subtitle={runs.length > PEEK_RUNS ? `the newest ${PEEK_RUNS} of them` : undefined}
+                  // THE CHIP IS WHAT `schedule_runs` ANSWERED — a floor when it
+                  // says the ledger holds older fires — and the rows are the
+                  // newest few of it. The footer says which few and links the
+                  // page that draws the answer whole.
+                  count={pageCount(runs.length, !!history.data?.truncated)}
                 >
                   <Card.Title>Last fires</Card.Title>
                 </Card.Header>
@@ -1028,6 +1101,20 @@ export function SchedulePeek({ scope }: { scope: string }) {
                     description="A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record."
                   />
                 )}
+                <CutNote
+                  shown={Math.min(runs.length, PEEK_RUNS)}
+                  more={runs.length > PEEK_RUNS || !!history.data?.truncated}
+                  one="fire"
+                  slice="newest"
+                  whole={
+                    <a
+                      className="t-link prose-link"
+                      href={href(["activity", "schedules", scopeType, scopeId, name])}
+                    >
+                      Its fires, on the schedule's page →
+                    </a>
+                  }
+                />
               </Card>
             </>
           )}

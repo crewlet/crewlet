@@ -556,13 +556,12 @@ export function NodeScreen({ id }: { id: string }) {
                     <span className="t-label">Roles</span>
                     {/* WHAT THIS NODE MAY RUN — `ingress`, `seats`, `workers` —
                         which is a different fact from the duties it holds. */}
-                    <TagsCell tags={node.roles} max={8} />
+                    <TagsCell tags={node.roles} />
                   </div>
                   <div className="row wrap gap-2">
                     <span className="t-label">Labels</span>
                     <TagsCell
                       tags={Object.entries(node.labels ?? {}).map(([k, v]) => `${k}=${v}`)}
-                      max={8}
                     />
                   </div>
                   {node.owner && (

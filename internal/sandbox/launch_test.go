@@ -47,7 +47,7 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 		t.Fatalf("the row does not name the job: %+v", run)
 	}
 	if run.TaskDescription != "get CI green" {
-		t.Fatalf("the brief was not persisted: %+v", run)
+		t.Fatalf("the task was not persisted: %+v", run)
 	}
 	// THE DELIVERY OBLIGATION, persisted because the resumed turn never
 	// sees its trigger: without it a turn somebody asked for comes back
@@ -79,22 +79,33 @@ func TestALaunchIsAnnouncedAndRoutedToTheSeat(t *testing.T) {
 	}
 }
 
-// The full brief lives on the row; the wire carries a label for one panel row.
-func TestTheStartedEventCarriesALabelNotTheWholeBrief(t *testing.T) {
+// THE STARTED EVENT NAMES THE RUN BY THE ROW'S OWN TASK, WHOLE.
+//
+// A screen shows the event's value until the run record arrives and the
+// record's task_description after it, so the two must be one value — and
+// that value is on the row whole, so cutting it here would only give the
+// same text a second, shorter spelling. The brief is neither: it is what the
+// coding agent is told, not what the run is for.
+func TestTheStartedEventNamesTheRunByTheRowsOwnTask(t *testing.T) {
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
-	req.Brief = strings.Repeat("a very long brief. ", 40)
+	req.Task = strings.Repeat("get CI green on every supported platform. ", 20) +
+		"\nThen tell the requester which tests were flaky."
 	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	rig.queue.mu.Lock()
-	defer rig.queue.mu.Unlock()
 	payload := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
-	if len(payload.Task) > briefSummaryLimit+4 {
-		t.Fatalf("the started event carries %d characters of brief", len(payload.Task))
+	rig.queue.mu.Unlock()
+
+	if payload.Task != req.Task {
+		t.Errorf("the started event names the run %q, want the turn's task whole: %q",
+			payload.Task, req.Task)
 	}
-	if !strings.HasSuffix(payload.Task, "…") {
-		t.Fatalf("a truncated label does not say it was cut: %q", payload.Task)
+	if row := rig.get("t1"); payload.Task != row.TaskDescription {
+		t.Errorf("the event says %q and the row says %q: a screen showing one "+
+			"and then the other relabels the run under its reader",
+			payload.Task, row.TaskDescription)
 	}
 }
 

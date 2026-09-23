@@ -456,3 +456,94 @@ test("the quiet band names every subject the engine's queue watches", async () =
     expect(quiet?.textContent, phrase).toContain(phrase);
   }
 });
+
+// THE REST OF THE INBOX IS READ, NOT MERELY ANNOUNCED. The band said "more
+// notices exist beyond this page" and offered no way to them — so an unread
+// notice older than fifty newer ones was on no screen at all.
+test("a cut inbox loads its older notices from the cursor it minted", async () => {
+  const asked: Record<string, unknown>[] = [];
+  const store = new Store();
+  store.applyHealth({ status: "healthy" });
+  const socket = new LiveSocket(store);
+  (
+    socket as unknown as {
+      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (what: string, params = {}) => {
+    if (what === "viewer") {
+      return Promise.resolve({
+        operator_id: "U0FOUNDER",
+        operator: true,
+        handle: "ada",
+        name: "Ada",
+        kind: "human",
+      });
+    }
+    if (what === "work_inbox") {
+      asked.push(params);
+      // A NEWER NOTICE LANDS AFTER THE FIRST READ, so any later first page no
+      // longer holds notice 2 — which the older page was read AFTER.
+      const firstPages = asked.filter((p) => !p.cursor).length;
+      if (!params.cursor && firstPages > 1) {
+        return Promise.resolve({
+          handle: "ada",
+          notices: [notice("asked", 3)],
+          primary_reasons: [],
+          unread: 1,
+          primary: 0,
+          next_cursor: "CREWLET_WORK_LOG@1:3",
+        });
+      }
+      return Promise.resolve(
+        params.cursor
+          ? {
+              handle: "ada",
+              notices: [notice("mention", 1)],
+              primary_reasons: [],
+              unread: 1,
+              primary: 0,
+            }
+          : {
+              handle: "ada",
+              notices: [notice("assignee", 2)],
+              primary_reasons: [],
+              unread: 1,
+              primary: 0,
+              next_cursor: "CREWLET_WORK_LOG@1:2",
+            },
+      );
+    }
+    if (what === "sandbox_runs") return Promise.resolve({ runs: [] });
+    if (what === "work_projects")
+      return Promise.resolve({ projects: [], total: 0, complete: true });
+    if (what === "work_workload") return Promise.resolve({ rows: [] });
+    return Promise.resolve({});
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Inbox />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  await settle();
+  // A FLOOR, beside the band's title.
+  expect(document.querySelector(".inbox-band-count")?.parentElement).toBeTruthy();
+  expect([...document.querySelectorAll(".inbox-band-count")].map((c) => c.textContent)).toContain(
+    "1+",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Load older notices" }));
+  await settle();
+  expect(asked.find((p) => p.cursor)).toMatchObject({
+    handle: "ada",
+    limit: 50,
+    cursor: "CREWLET_WORK_LOG@1:2",
+  });
+  expect(screen.getByText(/something happened, mention 1/)).toBeTruthy();
+  // THE FIRST PAGE AS IT WAS READ, which is what the older one continues: a
+  // live one would have dropped notice 2 into the gap between the two.
+  expect(screen.getByText(/something happened, assignee 2/)).toBeTruthy();
+  // THE LAST PAGE MINTED NO CURSOR, so nothing further is offered.
+  expect(screen.queryByRole("button", { name: "Load older notices" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Back to the newest" })).toBeTruthy();
+});

@@ -20,6 +20,22 @@ import "strings"
 type Session struct {
 	TurnID string `json:"turn_id,omitempty"`
 
+	// Ordinal is this entry's place in its conversation's WHOLE record: 1
+	// for the first turn this seat recorded there, counting every entry
+	// since, including the ones no longer stored. Set by the store as it
+	// appends, never by the caller, because only the store sees the entry
+	// before it.
+	//
+	// IT IS HOW A TRIMMED HISTORY SAYS SO. The store keeps the newest
+	// `turn_engine.conversation_session.max_entries` and deletes the rest,
+	// and the retention sweep deletes by age — so the entries a reader gets
+	// back are the survivors, and nothing about a list of survivors says
+	// whether it is the whole conversation. The oldest survivor's ordinal
+	// does: anything above 1 is that many minus one turns that happened and
+	// are not here. [RenderHistory] reports them. Zero is an entry written
+	// before the store assigned ordinals, and claims nothing either way.
+	Ordinal int `json:"ordinal,omitempty"`
+
 	// At is the completion time, rendered so the next turn can tell "ten
 	// minutes ago" from "last Tuesday" — the difference between a live
 	// exchange and a thread that has moved on.
@@ -197,6 +213,14 @@ type HistoryOptions struct {
 // Returns "" when there is nothing to show — the first turn of every
 // conversation — so the caller drops the whole section rather than emitting an
 // empty heading. Section headings are the caller's, matching RenderIterations.
+//
+// THE COUNT OF WHAT IS NOT SHOWN has two sources, and the marker is their sum:
+// the entries this render drops to fit its budget, and the ones that were
+// never handed to it — trimmed from the record at write, swept by age, or left
+// out of a limited read — which the oldest entry's [Session.Ordinal] counts.
+// Either kind alone left the other silent, and a silently shortened history
+// reads as the whole conversation. Where the dropped turns can still be read
+// is the thread itself, which is what the marker tells the seat.
 func RenderHistory(entries []Session, opts HistoryOptions) string {
 	if len(entries) == 0 {
 		return ""
@@ -209,7 +233,7 @@ func RenderHistory(entries []Session, opts HistoryOptions) string {
 	for _, entry := range selected {
 		blocks = append(blocks, renderSession(entry))
 	}
-	dropped := len(entries) - len(blocks)
+	dropped := len(entries) - len(blocks) + unrecorded(entries)
 	if opts.MaxChars > 0 {
 		// The newest entry always survives, however long it is: a block
 		// trimmed to nothing tells the next turn this conversation has no
@@ -230,6 +254,20 @@ func RenderHistory(entries []Session, opts HistoryOptions) string {
 	return out
 }
 
+// unrecorded is how many turns of this conversation came before the oldest
+// entry a reader was handed, and are not among the entries at all.
+//
+// Off the oldest entry's ordinal, which the store assigned counting every turn
+// it ever recorded here. An ordinal of zero is an entry the store wrote before
+// it assigned them, and counts nothing: the honest answer about a row that
+// cannot say is to claim nothing, not to claim it was the first.
+func unrecorded(entries []Session) int {
+	if len(entries) == 0 || entries[0].Ordinal <= 1 {
+		return 0
+	}
+	return entries[0].Ordinal - 1
+}
+
 // renderSession renders one entry as prose.
 //
 // Second person throughout ("You set out to", "You replied") because the reader
@@ -241,7 +279,10 @@ func renderSession(e Session) string {
 		head = "### " + e.At
 	}
 	if e.TurnID != "" {
-		head += " (turn " + shortID(e.TurnID) + ")"
+		// WHOLE. A prefix of an id reads as the id and matches nothing
+		// anybody can look up; the whole one is what the turn's events
+		// carry as `turn_id`.
+		head += " (turn " + e.TurnID + ")"
 	}
 	lines := []string{head}
 	for _, kv := range []struct{ label, value string }{
@@ -288,14 +329,4 @@ func renderSession(e Session) string {
 		lines = append(lines, "Turn ended: "+e.Decision)
 	}
 	return strings.Join(lines, "\n")
-}
-
-// shortID trims a turn id for display without assuming it is a UUID. Slicing
-// [:8] blindly panics on anything shorter, and the id is a string the caller
-// supplies.
-func shortID(id string) string {
-	if len(id) <= 8 {
-		return id
-	}
-	return id[:8]
 }

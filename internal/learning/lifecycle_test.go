@@ -535,8 +535,8 @@ func TestAPassThatFindsNothingOpensNoTransaction(t *testing.T) {
 	write(t, e, rawEp("s0", daysAgo(60), "slack_post"), rawEp("s1", daysAgo(59), "slack_post"))
 
 	fault.reset()
-	if res := mustPass(t, l); res != (PassResult{}) {
-		t.Fatalf("quiet pass = %+v, want nothing done", res)
+	if res := mustPass(t, l); res != (PassResult{Candidates: 2}) {
+		t.Fatalf("quiet pass = %+v, want the two rows read and nothing done", res)
 	}
 	// The store has ONE writer. A pass over a seat with nothing to do runs on
 	// every threshold crossing, and opening a transaction to delete an empty
@@ -1066,7 +1066,9 @@ func TestClusteringIsGreedyAgainstTheRepresentative(t *testing.T) {
 
 func TestTheCandidateBatchHasATotalOrder(t *testing.T) {
 	t.Parallel()
-	l, e, _ := newLife(t, Options{})
+	l, e, _ := newLife(t, Options{MinClusterSize: 2, BatchSize: 2})
+	ctx := context.Background()
+	cutoff := t0.Add(-defaultMinAge)
 	at := daysAgo(60)
 	// Written newest-first and out of id order, so neither insertion order
 	// nor the ended_at column alone produces the wanted sequence.
@@ -1074,21 +1076,59 @@ func TestTheCandidateBatchHasATotalOrder(t *testing.T) {
 		rawEp("m", at, "x"), rawEp("a", at, "x"), rawEp("z", at, "x"),
 		rawEp("newer", at.Add(time.Hour), "x"))
 
-	got, err := l.candidates(context.Background(), "ceo", t0.Add(-defaultMinAge))
-	if err != nil {
-		t.Fatalf("candidates: %v", err)
-	}
-	want := []string{"a", "m", "z", "newer"}
+	// The order is also the key a window resumes on, and a window's edge
+	// here falls BETWEEN two rows stamped in the same instant: resuming on
+	// ended_at alone would skip z, and resuming at-or-after it would read m
+	// twice.
 	var order []string
-	for _, ep := range got {
-		order = append(order, ep.ID)
+	var from *windowEnd
+	for range 3 {
+		window, more, err := l.candidates(ctx, "ceo", cutoff, from)
+		if err != nil {
+			t.Fatalf("candidates: %v", err)
+		}
+		for _, ep := range window {
+			order = append(order, ep.ID)
+		}
+		if !more {
+			break
+		}
+		last := window[len(window)-1]
+		from = &windowEnd{endedAt: last.EndedAt, id: last.ID}
 	}
-	if !slices.Equal(order, want) {
-		t.Errorf("candidate order = %v, want %v", order, want)
+	if want := []string{"a", "m", "z", "newer"}; !slices.Equal(order, want) {
+		t.Errorf("candidate order across windows = %v, want %v", order, want)
 	}
 }
 
-func TestCandidatesExcludeEveryRowASweepOwns(t *testing.T) {
+func TestTheWindowReportsWhetherItReachedTheEnd(t *testing.T) {
+	t.Parallel()
+	l, e, _ := newLife(t, Options{MinClusterSize: 2, BatchSize: 2})
+	ctx := context.Background()
+	cutoff := t0.Add(-defaultMinAge)
+
+	write(t, e, rawEp("a", daysAgo(60), "x"), rawEp("b", daysAgo(59), "x"))
+	window, more, err := l.candidates(ctx, "ceo", cutoff, nil)
+	if err != nil {
+		t.Fatalf("candidates: %v", err)
+	}
+	// EXACTLY a window's worth is not a full window: nothing lies past it,
+	// and only the probe row can say so.
+	if len(window) != 2 || more {
+		t.Fatalf("window = %v more=%v, want both rows and the end reached", idsOf(window), more)
+	}
+
+	write(t, e, rawEp("c", daysAgo(58), "x"))
+	window, more, err = l.candidates(ctx, "ceo", cutoff, nil)
+	if err != nil {
+		t.Fatalf("candidates: %v", err)
+	}
+	if want := []string{"a", "b"}; !slices.Equal(idsOf(window), want) || !more {
+		t.Errorf("window = %v more=%v, want %v and more past it", idsOf(window), more, want)
+	}
+}
+
+func TestTheWindowHoldsOnlyRowsTheFoldCanTake(t *testing.T) {
 	t.Parallel()
 	l, e, _ := newLife(t, Options{})
 	ctx := context.Background()
@@ -1098,19 +1138,87 @@ func TestCandidatesExcludeEveryRowASweepOwns(t *testing.T) {
 	midState := rawEp("mid", daysAgo(31), "x")
 	midState.ReviewOutcome = "self_iterate"
 	stamped := rawEp("stamped", daysAgo(31), "x")
+	// No tools: nothing can ever cluster it, so it only takes a slot.
+	toolFreeTurn := rawEp("tool-free", daysAgo(31))
+	// A drill-down anchor a fold kept raw on purpose.
+	kept := rawEp("kept", daysAgo(31), "x")
 	summary := rawEp("summary", daysAgo(31), "x")
-	summary.Kind, summary.Count = KindCompacted, 3
-	write(t, e, tooNew, old, midState, stamped, summary)
+	summary.Kind, summary.Count, summary.WorkKey = KindCompacted, 3, "compact:one"
+	summary.ExemplarTurnIDs = []string{"kept"}
+	write(t, e, tooNew, old, midState, stamped, toolFreeTurn, kept, summary)
 	if _, err := l.MarkConsolidated(ctx, "ceo", "skill-1", []string{"stamped"}); err != nil {
 		t.Fatalf("MarkConsolidated: %v", err)
 	}
+	// A summary whose exemplar list is not JSON retires nothing, and must
+	// not cost the read either.
+	if _, err := l.db.SQL().ExecContext(ctx, `UPDATE episodes SET exemplar_turn_ids = 'not json'
+		WHERE id = ?`, "summary"); err != nil {
+		t.Fatalf("corrupt the exemplar list: %v", err)
+	}
+	other := rawEp("summary-2", daysAgo(31), "y")
+	other.Kind, other.Count, other.WorkKey = KindCompacted, 3, "compact:two"
+	other.ExemplarTurnIDs = []string{"kept"}
+	write(t, e, other)
 
-	got, err := l.candidates(ctx, "ceo", t0.Add(-defaultMinAge))
+	got, _, err := l.candidates(ctx, "ceo", t0.Add(-defaultMinAge), nil)
 	if err != nil {
 		t.Fatalf("candidates: %v", err)
 	}
 	if want := []string{"old"}; !slices.Equal(idsOf(got), want) {
 		t.Errorf("candidates = %v, want %v", idsOf(got), want)
+	}
+}
+
+// One summary's exemplar list, whatever shape it has, decides only which rows
+// THAT summary retires. The read is a NOT IN, so a list yielding a single
+// NULL — a JSON null, alone or inside an array — would otherwise make the
+// predicate NULL for every row and empty the seat's whole window, and every
+// pass would then report nothing to fold.
+func TestAnExemplarListRetiresOnlyItsTextElements(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		list string
+		want []string
+	}{
+		{list: `["kept"]`, want: []string{"plain"}},
+		{list: `["kept", 5]`, want: []string{"plain"}},
+		{list: `["kept", null]`, want: []string{"plain"}},
+		{list: `null`, want: []string{"kept", "plain"}},
+		{list: `[null]`, want: []string{"kept", "plain"}},
+		{list: `{"a":null}`, want: []string{"kept", "plain"}},
+		{list: `{"a":"kept"}`, want: []string{"kept", "plain"}},
+		{list: `"kept"`, want: []string{"kept", "plain"}},
+		{list: `not json`, want: []string{"kept", "plain"}},
+		{list: `[]`, want: []string{"kept", "plain"}},
+	} {
+		t.Run(tc.list, func(t *testing.T) {
+			t.Parallel()
+			l, e, _ := newLife(t, Options{})
+			ctx := context.Background()
+			// A second summary with a well-formed list, whose own
+			// exemplar must stay retired whatever the first one holds.
+			good := rawEp("summary-good", daysAgo(31), "y")
+			good.Kind, good.Count, good.WorkKey = KindCompacted, 3, "compact:good"
+			good.ExemplarTurnIDs = []string{"kept-good"}
+			odd := rawEp("summary-odd", daysAgo(31), "x")
+			odd.Kind, odd.Count, odd.WorkKey = KindCompacted, 3, "compact:odd"
+			write(t, e, rawEp("kept", daysAgo(33), "x"), rawEp("plain", daysAgo(32), "x"),
+				rawEp("kept-good", daysAgo(34), "y"), good, odd)
+			if _, err := l.db.SQL().ExecContext(ctx,
+				`UPDATE episodes SET exemplar_turn_ids = ? WHERE id = ?`,
+				tc.list, "summary-odd"); err != nil {
+				t.Fatalf("write the exemplar list: %v", err)
+			}
+
+			got, more, err := l.candidates(ctx, "ceo", t0.Add(-defaultMinAge), nil)
+			if err != nil {
+				t.Fatalf("candidates: %v", err)
+			}
+			if !slices.Equal(idsOf(got), tc.want) || more {
+				t.Errorf("candidates = %v (more %v), want %v and no more",
+					idsOf(got), more, tc.want)
+			}
+		})
 	}
 }
 
@@ -1480,7 +1588,7 @@ func TestTheBatchSizeBoundsOnePass(t *testing.T) {
 		write(t, e, rawEp(fmt.Sprintf("s%d", i), daysAgo(60-i), "slack_post"))
 	}
 
-	mustPass(t, l)
+	first := mustPass(t, l)
 
 	if sum.calls() != 1 || len(sum.seen[0].Episodes) != 4 {
 		t.Fatalf("first pass folded %d turns, want the batch of 4", len(sum.seen[0].Episodes))
@@ -1490,28 +1598,172 @@ func TestTheBatchSizeBoundsOnePass(t *testing.T) {
 	if want := []string{"s0", "s1", "s2", "s3"}; !slices.Equal(idsOf(sum.seen[0].Episodes), want) {
 		t.Errorf("batch = %v, want the oldest four %v", idsOf(sum.seen[0].Episodes), want)
 	}
+	if first.Candidates != 4 || !first.MoreCandidates || first.CandidatesResumed {
+		t.Errorf("first pass = %+v, want a full window read from the oldest row", first)
+	}
+
+	second := mustPass(t, l)
+
+	if sum.calls() != 2 {
+		t.Fatalf("summarizer called %d times, want once per pass", sum.calls())
+	}
+	if want := []string{"s4", "s5", "s6", "s7"}; !slices.Equal(idsOf(sum.seen[1].Episodes), want) {
+		t.Errorf("second batch = %v, want the four the first window stopped before %v",
+			idsOf(sum.seen[1].Episodes), want)
+	}
+	if second.Candidates != 4 || second.MoreCandidates || !second.CandidatesResumed {
+		t.Errorf("second pass = %+v, want the rest, read on from the first window's end", second)
+	}
 }
 
-// ---- the gap this port does not close ---------------------------------- //
+// Every config apply builds a new Lifecycle and hands it to the Background. A
+// walk that lived in the Lifecycle would start over at every apply, and a
+// company applying more often than a walk takes would read its first windows
+// for ever.
+func TestAnApplyDoesNotSendTheWalkBackToTheOldestRow(t *testing.T) {
+	t.Parallel()
+	db := openLearningDB(t)
+	e := NewEpisodes(db)
+	sum := &fakeSummarizer{}
+	o := Options{BatchSize: 3, MinClusterSize: 3, ExemplarCount: 1}
+	// Three turns that resemble nothing, oldest, fill the first window; the
+	// cluster the fold can take is in the window after it.
+	for i, tool := range []string{"calendar_read", "github_merge", "confluence_edit"} {
+		write(t, e, rawEp(fmt.Sprintf("lone%d", i), daysAgo(90-i), tool))
+	}
+	for i := range 3 {
+		write(t, e, rawEp(fmt.Sprintf("s%d", i), daysAgo(60-i), "slack_post"))
+	}
+	before := NewLifecycle(db, sum, o)
+	b := NewBackground(BackgroundOptions{Passes: BackgroundPasses{Lifecycle: before}})
+	if stuck := mustPass(t, before); stuck.ClustersCompacted != 0 || !stuck.MoreCandidates {
+		t.Fatalf("first pass = %+v, want a window of singletons and more past it", stuck)
+	}
+
+	after := NewLifecycle(db, sum, o)
+	b.Reconfigure(BackgroundPasses{Lifecycle: after})
+	moved := mustPass(t, after)
+
+	if !moved.CandidatesResumed || moved.ClustersCompacted != 1 {
+		t.Errorf("pass after the apply = %+v, want it to read on from the first "+
+			"window's end and fold the cluster there", moved)
+	}
+	if want := []string{"s0", "s1", "s2"}; sum.calls() != 1 ||
+		!slices.Equal(idsOf(sum.seen[0].Episodes), want) {
+		t.Errorf("summarised %d cluster(s), want the one of %v", sum.calls(), want)
+	}
+}
+
+// A pass still running on the Lifecycle an apply replaced holds the seat
+// against the one that replaced it: they share the seat's position, and a
+// second pass would read the same window, summarise its clusters again and
+// move the position under the first.
+func TestAPassOnTheReplacedLifecycleHoldsTheSeatAgainstItsReplacement(t *testing.T) {
+	t.Parallel()
+	db := openLearningDB(t)
+	before := NewLifecycle(db, &fakeSummarizer{}, Options{})
+	b := NewBackground(BackgroundOptions{Passes: BackgroundPasses{Lifecycle: before}})
+	walks := before.walks.Load()
+	if !walks.claim("ceo") {
+		t.Fatal("the seat was already claimed")
+	}
+	defer walks.release("ceo")
+
+	after := NewLifecycle(db, &fakeSummarizer{}, Options{})
+	b.Reconfigure(BackgroundPasses{Lifecycle: after})
+
+	if _, err := after.Pass(context.Background(), "ceo", t0); !errors.Is(err, ErrPassInFlight) {
+		t.Errorf("Pass on the replacement = %v, want %v", err, ErrPassInFlight)
+	}
+}
+
+// A window read from the oldest row every pass stops moving once it is full
+// of rows the fold cannot take: every pass reads the same ones, folds nothing,
+// and never reaches the newer turns that could be folded.
+func TestAWindowTheFoldCannotDrainDoesNotHideTheNewerTurns(t *testing.T) {
+	t.Parallel()
+	l, e, sum := newLife(t, Options{BatchSize: 3, MinClusterSize: 3, ExemplarCount: 1})
+	// Three turns that resemble nothing, oldest: singletons the fold leaves
+	// raw, pass after pass.
+	for i, tool := range []string{"calendar_read", "github_merge", "confluence_edit"} {
+		write(t, e, rawEp(fmt.Sprintf("lone%d", i), daysAgo(90-i), tool))
+	}
+	for i := range 3 {
+		write(t, e, rawEp(fmt.Sprintf("s%d", i), daysAgo(60-i), "slack_post"))
+	}
+
+	stuck := mustPass(t, l)
+	if stuck.ClustersCompacted != 0 || stuck.Candidates != 3 || !stuck.MoreCandidates {
+		t.Fatalf("first pass = %+v, want a full window of singletons and more past it", stuck)
+	}
+
+	moved := mustPass(t, l)
+	if moved.ClustersCompacted != 1 || !moved.CandidatesResumed {
+		t.Fatalf("second pass = %+v, want the newer cluster folded from where the first stopped", moved)
+	}
+	if want := []string{"s0", "s1", "s2"}; sum.calls() != 1 || !slices.Equal(idsOf(sum.seen[0].Episodes), want) {
+		t.Fatalf("summarised %d cluster(s), want the one of %v", sum.calls(), want)
+	}
+
+	// The walk reached the end, so the next pass starts over from the
+	// oldest row — the singletons are read again, not forgotten.
+	again := mustPass(t, l)
+	if again.CandidatesResumed || again.Candidates != 3 || again.MoreCandidates {
+		t.Errorf("third pass = %+v, want the walk restarted at the oldest row", again)
+	}
+}
+
+// Two kinds of row can never be folded — a turn with no tools and a summary's
+// retained exemplar — and a window that held them would hold fewer rows the
+// fold can take. Enough of them and it would hold none.
+func TestRowsTheFoldCanNeverTakeDoNotOccupyTheWindow(t *testing.T) {
+	t.Parallel()
+	l, e, sum := newLife(t, Options{BatchSize: 3, MinClusterSize: 3, ExemplarCount: 2})
+	for i := range 3 {
+		write(t, e, rawEp(fmt.Sprintf("p%d", i), daysAgo(80-i), "slack_post"))
+	}
+	mustPass(t, l)
+	if _, compacted := snapshot(t, e); len(compacted) != 1 || len(compacted[0].ExemplarTurnIDs) != 2 {
+		t.Fatalf("setup: want one summary keeping two exemplars, got %v", compacted)
+	}
+
+	// Older than the new cluster, so each would come first in the window.
+	write(t, e, rawEp("chat0", daysAgo(70)), rawEp("chat1", daysAgo(69)))
+	for i := range 3 {
+		write(t, e, rawEp(fmt.Sprintf("q%d", i), daysAgo(50-i), "jira_get"))
+	}
+
+	res := mustPass(t, l)
+
+	if res.Candidates != 3 || res.ClustersCompacted != 1 {
+		t.Fatalf("pass = %+v, want a window of the three foldable turns, folded", res)
+	}
+	if want := []string{"q0", "q1", "q2"}; sum.calls() != 2 || !slices.Equal(idsOf(sum.seen[1].Episodes), want) {
+		t.Errorf("second fold = %v, want %v", idsOf(sum.seen[len(sum.seen)-1].Episodes), want)
+	}
+}
+
+// ---- turns the fold cannot pool ---------------------------------------- //
 
 func TestTurnsThatCalledNoToolsAreNeverCompacted(t *testing.T) {
 	t.Parallel()
 	l, e, sum := newLife(t, Options{})
 	// A chat-only seat: every turn reads a message and replies, calling
 	// nothing. Tool-sequence Jaccard is the only similarity signal the pass
-	// has, so none of these can ever be pooled — the seat's raw count grows
-	// without bound and every threshold crossing fires a pass that does
-	// nothing. Fixing it needs a second clustering signal (the rows carry
-	// embeddings), which would also have to agree with what the skill
-	// drafting pass calls "the same work".
+	// has, so none of these can ever be pooled: they stay raw until
+	// ToolFreeMaxAge drops them (TestAToolFreeTurnIsDroppedOnceItHasAgedOut),
+	// and they are never read into the fold's window at all. Pooling them
+	// needs a second clustering signal (the rows carry embeddings), which
+	// would also have to agree with what the skill drafting pass calls "the
+	// same work".
 	for i := range 10 {
 		write(t, e, rawEp(fmt.Sprintf("chat%d", i), daysAgo(60-i)))
 	}
 
 	res := mustPass(t, l)
 
-	if sum.calls() != 0 || res.ClustersCompacted != 0 {
-		t.Fatalf("tool-free turns were compacted after all: %+v", res)
+	if sum.calls() != 0 || res.ClustersCompacted != 0 || res.Candidates != 0 {
+		t.Fatalf("tool-free turns were read or compacted after all: %+v", res)
 	}
 	if rawRows, _ := snapshot(t, e); len(rawRows) != 10 {
 		t.Errorf("raw rows = %d, want all 10 still there", len(rawRows))

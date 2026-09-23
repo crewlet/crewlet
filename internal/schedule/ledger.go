@@ -131,10 +131,19 @@ type Ledger interface {
 	// A limit of zero or below returns nothing. That is the honest reading
 	// of "give me no rows"; treating it as unbounded would make a caller
 	// whose page size arrived as 0 pull the whole table.
+	//
+	// AT MOST limit, AND NOTHING HERE SAYS WHETHER MORE EXIST: a page that
+	// came back full is indistinguishable from a ledger holding exactly
+	// that many rows. A caller that tells its reader whether a page is
+	// complete asks for ONE ROW MORE than it shows and treats that row as
+	// evidence — present, the page was cut; absent, the page is everything
+	// the ledger holds — and never reads `len(rows) == limit` as a cut. So
+	// a backend honours every positive limit exactly and never caps it at
+	// a page size of its own, which would swallow the probe.
 	Recent(ctx context.Context, limit int) ([]Run, error)
 
 	// RecentFor is [Ledger.Recent] narrowed to ONE schedule, in the same
-	// order and under the same limit rule.
+	// order and under the same limit rule — the probe row included.
 	//
 	// Because `Recent` is the whole company's, and a company-wide page of
 	// fifty is not a history of anything: twenty schedules firing hourly

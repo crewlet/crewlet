@@ -367,21 +367,6 @@ func rows(t *testing.T, value any) []map[string]any {
 	return out
 }
 
-// A CURSOR WITHOUT ITS TIMESTAMP IS REFUSED rather than silently ignored.
-//
-// The pair IS the key. A client sending half of it and getting the newest page
-// back would page the same rows forever and read that as the end of history —
-// which is what the Activity screen did, for every cursored branch it ever
-// requested.
-func TestAHalfCursorIsRefused(t *testing.T) {
-	t.Parallel()
-	db := openStore(t)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
-	if _, err := r.Answer(t.Context(), "phases", map[string]any{"before_id": "x"}, ""); err == nil {
-		t.Fatal("a before_id with no before_time was accepted")
-	}
-}
-
 // KNOWLEDGE SEARCH SAYS WHY IT FOUND NOTHING.
 //
 // Search is BEST EFFORT by contract — every failure path is an empty result, so

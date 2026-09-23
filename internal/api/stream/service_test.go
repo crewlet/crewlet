@@ -2,6 +2,7 @@ package stream_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -411,5 +412,38 @@ func TestACancelledContextEndsTheTick(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Stop hung after the tick's context was cancelled")
+	}
+}
+
+// THE LIVE ROLLUP IS HEADED WITH WHAT IT KEPT, whatever layout its records
+// were stamped in.
+//
+// The projection accepts a zoneless timestamp as UTC, and the heading was
+// re-derived here by parsing the earliest record's own string as RFC 3339 —
+// which a zoneless stamp is not, so the parse failed and the rollup kept the
+// whole day's heading over the records the cap had left it. The projection now
+// hands back the instant it already parsed.
+func TestACappedLiveRollupIsHeadedWithTheEarliestRecordKept(t *testing.T) {
+	t.Parallel()
+	s := buildService(t, stream.Options{})
+	first := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Second)
+	spend := make([]tokens.Record, 0, livestate.SpendRecordLimit+1)
+	for i := range livestate.SpendRecordLimit + 1 {
+		spend = append(spend, tokens.Record{
+			EventID: fmt.Sprintf("p-%05d", i),
+			// Zoneless: a layout the projection accepts and RFC 3339 does not.
+			Timestamp:   first.Add(time.Duration(i) * time.Second).Format("2006-01-02T15:04:05"),
+			AgentRole:   "Lead",
+			Phase:       "plan",
+			TotalTokens: 1,
+		})
+	}
+	s.State().Seed(livestate.History{Spend: spend})
+
+	rollup := s.TokenRollup()
+	// The oldest record went to the cap, so the rollup covers from the next.
+	if want := first.Add(time.Second).Format(time.RFC3339); rollup.Since != want {
+		t.Errorf("the rollup is headed from %q, want %q — the earliest record the "+
+			"cap left it", rollup.Since, want)
 	}
 }

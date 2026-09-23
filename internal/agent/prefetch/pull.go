@@ -12,8 +12,8 @@ import (
 // The PULL side of the same two searches the turn-start prefetch pushes.
 //
 // Both blocks this file exposes are the prefetch's own, re-run on demand: the
-// vector recall behind `## Relevant prior work`, and the auxiliary relevance
-// filter behind `## What you have learned`. They are here rather than
+// vector recall behind `## Similar prior work`, and the auxiliary relevance
+// filter behind `## Personal memory`. They are here rather than
 // reimplemented in a builtin because a second implementation of "which of this
 // seat's memories bear on this text" is a second answer to it, and the two
 // would drift in exactly the direction nobody looks — the tool would quietly
@@ -66,6 +66,9 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 // empty, because "the most recent eight" would leak a memory about one person
 // into a turn about another, which is the failure the filter exists to
 // prevent.
+//
+// It returns EVERY memory the filter picked, however many it was told it
+// could; the refresh tool pages what comes back.
 func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string) ([]learning.DiaryEntry, error) {
 	if f == nil || f.src.Diary == nil || seat == nil || agentID == "" {
 		return nil, nil

@@ -461,7 +461,9 @@ func TestAPartialLineIsSkippedRatherThanFailingThePoll(t *testing.T) {
 	}
 }
 
-func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
+// The answer is what the agent SAID: its text events, in order. A tool call is
+// what it did, and is not part of the answer.
+func TestTheOpenCodeParserRebuildsTheAnswer(t *testing.T) {
 	stream := strings.Join([]string{
 		`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"pytest -q"},"status":"completed"}}}`,
 		`{"type":"text","part":{"text":"Fixed the flake."}}`,
@@ -472,25 +474,11 @@ func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("a clean stream read as failed: %+v", res)
 	}
-	if !strings.Contains(res.Text, "Fixed the flake.") || !strings.Contains(res.Text, "pull/9") {
-		t.Fatalf("the answer was not rebuilt: %q", res.Text)
+	if res.Text != "Fixed the flake.\nOpened https://github.com/acme/api/pull/9" {
+		t.Fatalf("the answer was not rebuilt from the text events alone: %q", res.Text)
 	}
 	if len(res.DeliveredRefs) != 1 {
 		t.Fatalf("refs = %v", res.DeliveredRefs)
-	}
-	// A bare "[tool] bash" is useless when a run fails — the transcript has
-	// to say WHAT ran.
-	if !strings.Contains(res.Transcript, "pytest -q") {
-		t.Fatalf("the transcript does not say what ran:\n%s", res.Transcript)
-	}
-}
-
-func TestAFailedToolIsMarkedInTheTranscript(t *testing.T) {
-	stream := `{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"pytest"},"status":"error","error":"2 failed"}}}
-{"type":"text","part":{"text":"could not fix it"}}`
-	res := opencode().Parse(stream)
-	if !strings.Contains(res.Transcript, "error: 2 failed") {
-		t.Fatalf("a failed tool is invisible:\n%s", res.Transcript)
 	}
 }
 

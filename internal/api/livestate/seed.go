@@ -25,6 +25,18 @@ type History struct {
 	// Spend is the per-phase spend records inside [LiveSpendWindow], in any
 	// order. Past [SpendRecordLimit] only the newest are kept.
 	Spend []tokens.Record
+
+	// SpendTruncated says the store left older records of the window behind,
+	// which is what heads the rollup with the earliest record kept rather
+	// than with the whole window — see [LiveState.SpendRecords].
+	//
+	// ASKED, NOT INFERRED. A read bounded at the cap stops there whether or
+	// not the window held more, so a page that fills the cap cannot say
+	// which it is; the store reads one record past the cap to answer that
+	// ([store.EventLog.PhaseTokenTail]), and this carries its answer. A window
+	// that held exactly the cap is then headed with its own span, which is
+	// true, rather than with a shorter one guessed from the count.
+	SpendTruncated bool
 }
 
 // Seed folds stored history into the projection and reports what moved.
@@ -39,7 +51,7 @@ func (s *LiveState) Seed(h History) Change {
 	defer s.mu.Unlock()
 	var change Change
 	change.Events = s.seedFeed(h.Events)
-	change.Tokens = s.seedSpend(h.Spend)
+	change.Tokens = s.seedSpend(h.Spend, h.SpendTruncated)
 	return change
 }
 
@@ -73,7 +85,7 @@ func (s *LiveState) seedFeed(rows []FeedRow) bool {
 
 // seedSpend adds stored spend records to the live window, reporting whether
 // any counted.
-func (s *LiveState) seedSpend(records []tokens.Record) bool {
+func (s *LiveState) seedSpend(records []tokens.Record, truncated bool) bool {
 	if len(records) == 0 {
 		return false
 	}
@@ -88,8 +100,14 @@ func (s *LiveState) seedSpend(records []tokens.Record) bool {
 	// stream can still redeliver.
 	slices.SortStableFunc(entries, func(a, b spendEntry) int { return a.at.chronological(b.at) })
 	// Only the newest records the window can hold are worth an id: the
-	// count cap below would drop the rest from the front anyway. The seed's
-	// own read already stops at the cap; this holds for any other caller.
+	// count cap would drop the rest from the front anyway.
+	//
+	// A CUT LATCHES [LiveState.spendCapped], as [LiveState.pruneSpend]'s cut
+	// does: when the store says it left records behind, and when a caller
+	// handed over more than the cap and this drops the oldest of them.
+	if truncated || len(entries) > SpendRecordLimit {
+		s.spendCapped = true
+	}
 	if len(entries) > SpendRecordLimit {
 		entries = entries[len(entries)-SpendRecordLimit:]
 	}

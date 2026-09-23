@@ -361,8 +361,8 @@ type Finding struct {
 	// ending `…@agents.cr…`.
 	//
 	// With this, Detail says the COUNT and the whole list travels here, for
-	// a reader that has room to lay it out. [Listed] is how a finding
-	// builds the pair, so the sentence and the list cannot disagree.
+	// a reader that has room to lay it out. The pair is built from [Count]
+	// and this field on adjacent lines; see the note after [Count].
 	//
 	// The sentence used to name three of them inline as well, which put
 	// every short list on screen twice — once as prose inside the sentence
@@ -406,7 +406,7 @@ func SameAll(a, b []Finding) bool { return slices.EqualFunc(a, b, Finding.Same) 
 // gets the verb wrong as well, which no parenthesis can rescue. English
 // regular plurals are one rule and every noun these findings count follows
 // it, so this is the whole of it; a noun that does not can be spelled by its
-// caller, which is what [Listed] taking a finished lead is for.
+// caller.
 func Count(n int, noun string) string {
 	if n == 1 {
 		return "1 " + noun
@@ -504,6 +504,11 @@ func Classify(findings []Finding) Report {
 	if detail == "" {
 		detail = worst.Kind.sentence(worst.Subject)
 	}
+	// CUT BEFORE THE COUNT IS APPENDED, never after it. The count is the
+	// only part of this sentence that says there is more than one, and a
+	// cut taken over the finished sentence falls on it first. See
+	// [MaxDetailLength] for the ceiling and where the whole sentence is.
+	detail = boundDetail(detail)
 	if same > 1 {
 		detail = fmt.Sprintf("%s (and %d more)", detail, same-1)
 	}

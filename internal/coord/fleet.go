@@ -398,13 +398,25 @@ type Activation struct {
 	Summary    string
 }
 
-// MaxApplyErrorLength bounds the failure text a node publishes.
+// MaxApplyErrorLength bounds, in BYTES, the failure text a node publishes on
+// its apply status, the marker of a cut included.
 //
 // A wrapped error chain from a failed apply is a sentence or two; a driver's
 // own message with a query in it can be kilobytes, and this value is read by
 // every peer on every reconcile tick AND rendered in the fleet view. 2000
-// characters keeps a real diagnosis intact and stops one node's stack trace
+// bytes keeps a real diagnosis intact and stops one node's stack trace
 // becoming a download for everyone else.
+//
+// # Where the whole text is
+//
+// Not here. This record is the LIVE copy, and it is cut because its size is
+// paid on every tick by every reader. The node publishes the same failure text
+// in the same step on its config_revision_applied event, which goes to the
+// audit event log and is kept for the event store's retention horizon; that
+// copy is bounded only by
+// [github.com/crewlet/crewlet/internal/events.MaxDiagnosticBytes] (64 KiB),
+// and is marked where that bound cuts it. The engine's reconciler publishes
+// both, and docs/concepts/control-plane.md shows how to read the event back.
 //
 // Applied by the BACKEND, not the caller, and asserted by the contract suite:
 // a bound one implementation enforced and another did not would be a fleet
@@ -412,7 +424,11 @@ type Activation struct {
 // other backend.
 const MaxApplyErrorLength = 2000
 
-// TruncateApplyError applies [MaxApplyErrorLength].
+// TruncateApplyError applies [MaxApplyErrorLength], marking a cut with "…".
+//
+// WITHIN THE BOUND, marker included ([textcut.Within]), because the bound is
+// a ceiling the contract suite asserts on what a backend stores rather than a
+// guide to how much content to keep.
 //
 // NEVER THROUGH A RUNE. A plain byte slice splits whatever multi-byte
 // character straddles the cut and yields invalid UTF-8, which the KV's JSON
@@ -420,7 +436,7 @@ const MaxApplyErrorLength = 2000
 // path or an accented message reached the fleet view garbled rather than
 // merely shortened.
 func TruncateApplyError(detail string) string {
-	return textcut.Ellipsis(detail, MaxApplyErrorLength)
+	return textcut.Within(detail, MaxApplyErrorLength)
 }
 
 // NodeApply is one node's last word about an epoch.
@@ -437,7 +453,10 @@ type NodeApply struct {
 	// engine's layers meet, and giving it a dependency on the posture
 	// package would make every backend import the config plane to store a
 	// word.
-	Status    string
+	Status string
+	// Error is the apply's failure text as the backend stored it: at most
+	// [MaxApplyErrorLength] bytes, ending in "…" where it was cut. See that
+	// bound for where the whole text is.
 	Error     string
 	UpdatedAt time.Time
 }

@@ -104,6 +104,83 @@ func TestTheBlockersAssigneeIsToldSomebodyWaits(t *testing.T) {
 	}
 }
 
+// A TASK NAMED TWICE IS ANNOUNCED ONCE.
+//
+// The announcement is the wake's `dependents`, carried whole: named twice, a
+// task would be listed twice on the blocker's card and counted twice against
+// [tracker.MaxDependents] on a set that holds it once — so a call repeating
+// itself could be refused for a cap its blocker is nowhere near.
+func TestATaskNamedTwiceIsAnnouncedOnce(t *testing.T) {
+	t.Parallel()
+	for name, change := range map[string]tracker.DependencyChange{
+		"waiting on a blocker twice": {
+			Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk", "blk"},
+		},
+		"blocking a dependent twice": {
+			Task: "blk", Project: "ENG", BlockingAdd: []string{"dep", "dep"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			filedTask(t, r, "dep")
+			filedTask(t, r, "blk")
+			result, err := r.writer.Depend(t.Context(), "op-depend", change,
+				fixedLeads{project: "eng-lead"})
+			if err != nil {
+				t.Fatalf("Depend: %v", err)
+			}
+			r.drain()
+			if len(result.OneSided) != 0 {
+				t.Fatalf("the mirror did not land: %v", result.OneSided)
+			}
+			announced := 0
+			for _, notify := range r.wakes(t) {
+				if len(notify.Snapshot.Dependents) == 0 {
+					continue
+				}
+				announced++
+				if len(notify.Snapshot.Dependents) != 1 {
+					t.Errorf("the blocker's wake announces %+v, want the one "+
+						"task that now waits on it, once",
+						notify.Snapshot.Dependents)
+				}
+			}
+			if announced != 1 {
+				t.Errorf("%d wakes announced a dependent, want the one mirror",
+					announced)
+			}
+		})
+	}
+}
+
+// A CHANGE THAT ADDS AND REMOVES ONE EDGE IS REFUSED BEFORE ANYTHING IS WRITTEN.
+//
+// Each end is its own commit, so whichever of the two went second would decide
+// the edge — a winner nobody chose, and one that depends on the order the
+// lists happen to be walked in.
+func TestAChangeThatAddsAndRemovesOneEdgeIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
+	before, err := r.log.End(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	_, err = r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
+		Task: "dep", Project: "ENG",
+		WaitingOnAdd: []string{"blk"}, WaitingOnRemove: []string{"blk"},
+	}, fixedLeads{project: "eng-lead"})
+	if err == nil || !strings.Contains(err.Error(), "both adds and removes") {
+		t.Fatalf("a change adding and removing one edge answered %v", err)
+	}
+	if after, err := r.log.End(t.Context()); err != nil || after != before {
+		t.Errorf("the refused change moved the log from %d to %d (%v) — the "+
+			"refusal has to come before the first append", before, after, err)
+	}
+}
+
 // A BLOCKER THAT CANNOT TAKE THE EDGE REFUSES IT BEFORE ANYTHING IS PUBLISHED.
 //
 // The order is what makes this possible: every counterparty is read before the

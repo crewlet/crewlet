@@ -50,6 +50,7 @@ import { ComputerGlyph, DarkModeGlyph, LightModeGlyph } from "@crewlethq/icons/g
 import { useAgents, useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { INBOX_PAGE, pageCount } from "~/lib/work.ts";
 import { useDensity, useTheme, type Density, type ThemeChoice } from "~/lib/prefs.ts";
 import { onTokenRequested } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
@@ -214,14 +215,61 @@ export function Shell({ children }: { children: ReactNode }) {
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
 
   const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
+  // WHERE THE BADGE'S READ STARTS, taken from its own last answer.
+  //
+  // The engine cuts an inbox read at [INBOX_PAGE] notices, newest first, and
+  // applies `unread` and `primary_only` to that page rather than to the scan —
+  // so a page of fifty the reader had already read, or fifty they are merely
+  // told about, hid every unread primary notice older than it and the badge
+  // vanished. Both of the answer's own facts narrow the SCAN instead: `since`
+  // at their read mark skips only what the mark already says they read
+  // (`tracker.InboxQuery.Unread` names it the cheap form of the question), and
+  // `reasons` at their primary split skips what is not theirs to answer.
+  //
+  // WHOSE THEY ARE travels with them: both are one person's record, and a
+  // token swapped for another person's must not read the second inbox past
+  // the first person's mark.
+  const [scan, setScan] = useState<{ handle: string; since?: string; reasons?: string }>({
+    handle: "",
+  });
   const inbox = useQuery(
     "work_inbox",
-    viewer.handle ? { handle: viewer.handle, limit: 50 } : undefined,
+    viewer.handle
+      ? {
+          handle: viewer.handle,
+          limit: INBOX_PAGE,
+          unread: true,
+          primary_only: true,
+          ...(scan.handle === viewer.handle
+            ? {
+                ...(scan.since ? { since: scan.since } : {}),
+                ...(scan.reasons ? { reasons: scan.reasons } : {}),
+              }
+            : {}),
+        }
+      : undefined,
     {
       enabled: viewer.handle !== "",
       pollMs: 60_000,
     },
   );
+  useEffect(() => {
+    const data = inbox.data;
+    if (!data) return;
+    const seen = data.seen_through;
+    const next = {
+      handle: data.handle,
+      since: seen?.stream && seen.seq ? `${seen.stream}@${seen.generation ?? 0}:${seen.seq}` : "",
+      reasons: data.primary_reasons.join(","),
+    };
+    // A NEW OBJECT ONLY WHEN IT MOVED: the query is keyed on its parameters,
+    // and a fresh-but-equal one on every answer would re-ask for ever.
+    setScan((prev) =>
+      prev.handle === next.handle && prev.since === next.since && prev.reasons === next.reasons
+        ? prev
+        : next,
+    );
+  }, [inbox.data]);
 
   // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
   // dialog forever. Everything after that is the state bar.
@@ -332,27 +380,38 @@ export function Shell({ children }: { children: ReactNode }) {
   // person's own record — so this is the company's own split rather than one
   // the client invented.
   //
-  // OVER THE FIRST PAGE, and the title says so: the reader returns at most 50
-  // notices, so a badge claiming a total would be inventing a number the
-  // engine never computed. `answer.unread` and `answer.primary` are each one
-  // half of this question and neither is it, so it is counted here rather than
-  // read off a field that does not mean what it looks like.
+  // OVER ONE PAGE, and the badge says when there was more: the engine counts
+  // no total, so `next_cursor` — minted only when a row past the page came
+  // back — is what turns the figure into a floor. `answer.unread` and
+  // `answer.primary` are each one half of this question and neither is it,
+  // so it is counted here rather than read off a field that does not mean
+  // what it looks like.
   const waiting = useMemo(() => {
     const data = inbox.data;
     if (!data) return 0;
     const primary = new Set(data.primary_reasons);
     return data.notices.filter((n) => !n.read && primary.has(n.reason)).length;
   }, [inbox.data]);
+  const pastPage = Boolean(inbox.data?.next_cursor);
 
   const badges: Partial<Record<Workspace, RailBadge | null>> = {
     inbox: waiting
       ? {
-          text: waiting >= 50 ? "50+" : String(waiting),
+          text: pageCount(waiting, pastPage),
           attention: true,
-          title:
-            "unread notices under a reason your record counts as primary, on the first page — the engine counts no total",
+          title: pastPage
+            ? `at least ${waiting} unread under a reason your record counts as primary — the engine reads ${INBOX_PAGE} notices at a time and more are past these; the Inbox pages them`
+            : "unread notices under a reason your record counts as primary",
         }
-      : null,
+      : pastPage
+        ? // NOTHING UNREAD ON THE PAGE IS NOT NOTHING UNREAD. Every notice the
+          // page held was marked read one by one, and older ones past it were
+          // not looked at — so the pip says "unknown" rather than vanishing.
+          {
+            text: "?",
+            title: `nothing unread under a primary reason in the ${INBOX_PAGE} notices read here, and more are past them — the Inbox pages them`,
+          }
+        : null,
     activity: working ? { text: String(working), title: `${working} seats working` } : null,
   };
 

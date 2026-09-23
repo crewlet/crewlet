@@ -1,8 +1,11 @@
 package cliagent
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -332,6 +335,53 @@ func TestTheStderrTailSaysWhatItDropped(t *testing.T) {
 	}
 }
 
+// THE LINES A TAIL LEAVES OUT ARE WHERE ITS MARKER SAYS.
+//
+// The marker names a debug event, so every omitted line has to be emitted as
+// one — in order, numbered, and none of the lines the window kept. A marker
+// naming an event nothing emits sends an operator looking for lines that are
+// not there, which is worse than the silence it replaced.
+func TestTheLinesATailOmitsAreLoggedWhereItsMarkerSays(t *testing.T) {
+	t.Parallel()
+	var lines []string
+	for i := range 53 {
+		lines = append(lines, fmt.Sprintf("line-%02d", i+1))
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	got := renderTail(t.Context(), logger, "stderr", strings.Join(lines, "\n"), 0)
+	if !strings.Contains(got, "3 earlier lines omitted") || !strings.Contains(got, omittedLineEvent) {
+		t.Fatalf("the marker does not count the omission or say where it went:\n%s", got)
+	}
+	var emitted []string
+	for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var rec struct {
+			Msg    string `json:"msg"`
+			Stream string `json:"stream"`
+			LineNo int    `json:"line_no"`
+			Line   string `json:"line"`
+		}
+		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+			t.Fatalf("an emitted record is not JSON: %v: %q", err, raw)
+		}
+		if rec.Msg != omittedLineEvent || rec.Stream != "stderr" || rec.LineNo != len(emitted)+1 {
+			t.Errorf("record %d = %+v, want %s on stderr numbered in order", len(emitted), rec, omittedLineEvent)
+		}
+		emitted = append(emitted, rec.Line)
+	}
+	if strings.Join(emitted, ",") != "line-01,line-02,line-03" {
+		t.Errorf("logged %v, want exactly the three lines the window left out", emitted)
+	}
+
+	// A stream that fits emits nothing: there is nothing it left out.
+	buf.Reset()
+	renderTail(t.Context(), logger, "stderr", "one\ntwo", 0)
+	if buf.Len() != 0 {
+		t.Errorf("a whole stream logged lines it did not omit:\n%s", buf.String())
+	}
+}
+
 // A STREAM CUT AT THE CAP HAS NO END LEFT TO TAKE A TAIL FROM. The capped
 // buffer keeps the HEAD, so the last lines of what survived are where the cap
 // fell rather than what the CLI last said — and a crash trace's crash is
@@ -366,12 +416,12 @@ func TestEveryRenderedStreamCarriesItsOwnDropCount(t *testing.T) {
 		want string
 		not  string
 	}{
-		{"stderr", res.stderrTailText(), "22", "11"},
-		{"stdout", res.stdoutTailText(), "11", "22"},
-		{"stderr detail", res.stderrDetailText(), "22", "11"},
+		{"stderr", res.stderrTailText(t.Context()), "22", "11"},
+		{"stdout", res.stdoutTailText(t.Context()), "11", "22"},
+		{"stderr detail", res.stderrDetailText(t.Context()), "22", "11"},
 		// stderr has content, so the failure tail is stderr's and must
 		// not be annotated with stdout's loss.
-		{"failure picks stderr", res.failureTailText("parsed"), "22", "11"},
+		{"failure picks stderr", res.failureTailText(t.Context(), "parsed"), "22", "11"},
 	} {
 		if !strings.Contains(tc.got, tc.want) {
 			t.Errorf("%s: does not report its own drop count %s:\n%s",
@@ -385,7 +435,7 @@ func TestEveryRenderedStreamCarriesItsOwnDropCount(t *testing.T) {
 	// With nothing on stderr the failure tail falls to what was parsed out
 	// of stdout.
 	quiet := &rawResult{stdout: "out", droppedStdout: 11}
-	if got := quiet.failureTailText("parsed"); !strings.Contains(got, "11") {
+	if got := quiet.failureTailText(t.Context(), "parsed"); !strings.Contains(got, "11") {
 		t.Errorf("a parsed answer did not inherit stdout's drop count:\n%s", got)
 	}
 }

@@ -305,6 +305,14 @@ func goalExcerpt(post Goal, fields map[string]Delta) string {
 }
 
 // latestUpdateText is the newest health update's prose, cut to an excerpt.
+//
+// MARKED, and the marker inside [MaxExcerpt], because [Notify.Validate]
+// refuses a card past it. The update itself is stored whole — its write
+// refuses a text past [MaxGoalUpdateText] rather than cutting it — and
+// [Reader.Goals] returns it whole on [GoalRow.Updates], which is what
+// `GET /work/goals?id=` answers with. `list_work_goals` reads the same rows
+// but refuses a whole answer past its tool-answer cap, so a goal holding many
+// long updates is whole on that route and not always through the tool.
 func latestUpdateText(goal Goal) string {
 	if len(goal.Updates) == 0 {
 		return ""

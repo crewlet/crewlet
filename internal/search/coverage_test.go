@@ -17,7 +17,7 @@ type countingCorpus struct {
 
 func (c countingCorpus) Source() search.Source { return c.source }
 
-func (countingCorpus) Stale(context.Context, string, int, int) ([]search.Document, []string, error) {
+func (countingCorpus) Stale(context.Context, string, int, int) ([]search.Document, []search.Subject, error) {
 	return nil, nil, nil
 }
 

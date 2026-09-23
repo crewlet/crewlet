@@ -49,7 +49,12 @@
 
 import { useCallback, useMemo, type ReactNode } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
-import { QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
+import {
+  PhasesDroppedNote,
+  QueryState,
+  RECORD_MAX_HEIGHT,
+  SeatChip,
+} from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import {
   Button,
@@ -118,7 +123,7 @@ import {
   type Run,
   type Story,
 } from "~/lib/turnstory.ts";
-import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { useAgents, usePhaseEvents, usePhasesDroppedSince } from "~/lib/store-hooks.ts";
 import type { EventRecord, TurnRow } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -264,6 +269,15 @@ export interface TurnView {
   events: EventRecord[];
   /** The store stopped at its per-turn cap, so what is missing is the MIDDLE. */
   cut: boolean;
+  /**
+   * The tab dropped a streamed phase that completed after the answer did, so
+   * this turn MAY be missing one — see `usePhasesDroppedSince`. Not the same
+   * gap as [TurnView.cut]: that one is the store's, this one is the tab's, and
+   * [TurnView.reread] closes it.
+   */
+  phasesDropped: boolean;
+  /** Ask the `turn` question again, which is what closes [TurnView.phasesDropped]. */
+  reread: () => void;
   /** Every phase record in hand, the workers a delegate spawned included. */
   phases: PhaseRecord[];
   /** The turn's OWN phases, without those workers. */
@@ -304,8 +318,9 @@ export interface TurnView {
    * Only on a FINISHED turn with a record to claim it from, and over the
    * WHOLE turn: a running turn has not been asked since it started, a turn
    * whose events fell out of the store's window has nothing to say either
-   * way, and a turn read to the store's cap has rows neither frame saw, any
-   * of which could be the failure. "Nothing went wrong", "nothing was read"
+   * way, and a turn read to the store's cap — or one whose streamed phases
+   * the tab has dropped — has rows neither frame saw, any of which could be
+   * the failure. "Nothing went wrong", "nothing was read"
    * and "not everything was read" must not render alike.
    */
   clean: boolean;
@@ -325,14 +340,16 @@ export function useTurnView(turnId: string): TurnView {
   // GUARDED ON THE ID. A rail is opened from a pasted `peek=turn:` as often as
   // from a row, and an empty one would ask the engine for a turn with no id
   // and be refused on the way in.
-  const { data, loading, error } = useQuery(
-    "turn",
-    { turn_id: turnId },
-    { enabled: turnId !== "" },
-  );
+  const {
+    data,
+    loading,
+    error,
+    refetch: reread,
+  } = useQuery("turn", { turn_id: turnId }, { enabled: turnId !== "" });
 
   const agents = useAgents();
   const phaseEvents = usePhaseEvents();
+  const phasesDropped = usePhasesDroppedSince(data);
 
   const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
 
@@ -465,6 +482,8 @@ export function useTurnView(turnId: string): TurnView {
     error,
     events,
     cut,
+    phasesDropped,
+    reread,
     attempt,
     phases,
     own,
@@ -493,7 +512,8 @@ export function useTurnView(turnId: string): TurnView {
     iterations: own.reduce((n, p) => Math.max(n, p.iteration), 0),
     story,
     trouble,
-    clean: trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning),
+    clean:
+      trouble === 0 && !running && !cut && !phasesDropped && Boolean(rec.summary || rec.learning),
   };
 }
 
@@ -1386,6 +1406,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             in them. {traceId ? "The trace carries the same work from the trigger down." : ""}
           </Callout>
         )}
+        {view.phasesDropped && <PhasesDroppedNote reread={view.reread} />}
 
         <TurnBrief view={view} omit={title} />
 
@@ -1697,6 +1718,7 @@ export function TurnPeek({ turnId }: { turnId: string }) {
               them.
             </Callout>
           )}
+          {view.phasesDropped && <PhasesDroppedNote reread={view.reread} />}
           <PhaseStrip phases={view.own} />
           <TurnBrief view={view} omit={title} />
         </QueryState>

@@ -72,7 +72,16 @@ import type { Offer, TimeRange } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, fmtDate, fmtDateTime, fmtExact, fmtPct, relTime, tsKey } from "~/lib/format.ts";
+import {
+  fmtCount,
+  fmtDate,
+  fmtDateTime,
+  fmtExact,
+  fmtPct,
+  relTime,
+  shortId,
+  tsKey,
+} from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -688,7 +697,9 @@ export function Spend() {
               // pair invites.
               cell: (t) => (
                 <span className="row gap-1">
-                  <KeyCell value={t.turn_id.slice(0, 8)} />
+                  {/* SHORTENED AND MARKED; the row opens the turn, whose page
+                      heads itself with the whole id. */}
+                  <KeyCell value={shortId(t.turn_id)} />
                   {t.work_key && (reruns.get(t.work_key) ?? 0) > 1 && (
                     <Tag
                       appearance="outline"

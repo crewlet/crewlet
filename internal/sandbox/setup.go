@@ -142,7 +142,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 				// and this message is logged AND handed back to the LLM.
 				// The step name plus the command's position identifies it
 				// precisely, and the operator has the config; stderr is
-				// redacted for the same reason a transcript is.
+				// redacted because it can echo that same token.
 				return &SetupError{
 					Step:    step.Name,
 					Command: i + 1,
