@@ -1018,6 +1018,12 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
 	s := e.native.Load().log
+	// THE ENGINE'S OWN TRIM DUTY IS ENDED FIRST. It ticks the moment it
+	// starts, and on a loaded runner that first tick can land after the
+	// reanchor below — publishing a floor at the pages log's NEW generation,
+	// which is the one thing this asserts the report does not show, and
+	// failing the case for a reason that is not the rule under test.
+	e.stopRetention()
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
 	trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
 
