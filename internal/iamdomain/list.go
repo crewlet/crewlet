@@ -673,3 +673,83 @@ func (r *Reader) OutstandingBootstrapCodes(ctx context.Context, now time.Time) (
 	}
 	return out, nil
 }
+
+// SeatBinding is one person's seat binding — the columns the request path's
+// seat table reads (internal/iam/session's PersonRow), and nothing sealed.
+//
+// ITS OWN TYPE rather than a [PersonRow] with most fields left zero: the one
+// reader walks it on every alarm heartbeat, and a row type whose document,
+// grants and sealed values were silently absent would be one a later caller
+// read as a person with no grants.
+type SeatBinding struct {
+	// Person is the directory id, Login the name the dashboard prints.
+	Person, Login string
+
+	// Seat is the handle the binding names — the handle the seat had when
+	// the person was bound — and SeatAt the chart position the bind's
+	// decide read it at.
+	Seat   string
+	SeatAt uint64
+
+	// Stage is the bound person's stage, from the column; empty for a
+	// reservation.
+	Stage iam.Stage
+
+	// Shredded marks a person a removal has already shredded, whose row
+	// is kept for the audit trail and binds nobody.
+	Shredded bool
+}
+
+// Binding is the row's seat binding, as [Reader.SeatBindings] answers it.
+func (p PersonRow) Binding() SeatBinding {
+	return SeatBinding{
+		Person: p.ID, Login: p.Login, Seat: p.Seat, SeatAt: p.SeatAt,
+		Stage: p.Stage, Shredded: p.Shredded,
+	}
+}
+
+// SeatBindings is every person this node's directory binds to a seat, read in
+// ONE snapshot and ordered by seat.
+//
+// # Why not a walk of [Reader.People]
+//
+// The dangling-binding alarm asks about bindings on every heartbeat, and a
+// directory page reads every person — bound or not — and decodes each row's
+// document to answer it. This reads the binding columns of the bound rows and
+// nothing else, over the partial index the duplicate-seat report already
+// ships (`iam_people_seat_claim_idx`), so its cost is the number of people
+// bound to a seat rather than the size of the company.
+//
+// Three-valued like everything here: an error is the unknown arm, and an
+// empty answer is a real one.
+func (r *Reader) SeatBindings(ctx context.Context) ([]SeatBinding, error) {
+	var out []SeatBinding
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		out = out[:0]
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, login, stage, seat_id, chart_position, shredded
+			  FROM iam_people
+			 WHERE seat_id != ''
+			 ORDER BY seat_id, id`)
+		if err != nil {
+			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var b SeatBinding
+			var stage string
+			var at int64
+			if err := rows.Scan(&b.Person, &b.Login, &stage, &b.Seat, &at,
+				&b.Shredded); err != nil {
+				return fmt.Errorf("iamdomain: read a seat binding: %w", err)
+			}
+			b.Stage, b.SeatAt = iam.Stage(stage), uint64(max(at, 0))
+			out = append(out, b)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}

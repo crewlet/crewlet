@@ -195,3 +195,58 @@ func assertHolders(t *testing.T, got, want map[string]iamdomain.SeatHolder) {
 		}
 	}
 }
+
+// THE BINDINGS READ IS EXACTLY THE BOUND PEOPLE, with what the seat table
+// needs of each and the same values a directory page carries.
+//
+// It is what the dangling-binding alarm reads on every heartbeat instead of
+// walking the whole directory, so it must neither miss a binding the page walk
+// would have classified nor answer for somebody bound to nothing.
+func TestSeatBindingsIsEveryBindingAndNothingElse(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+
+	sarah := bindNew(t, rig, "sarah.chen", "sarah-chen")
+	priya := bindNew(t, rig, "priya.shah", "platform-lead")
+	if _, err := rig.writer.SetStage(t.Context(), priya, iam.StageSuspended,
+		"op-suspend", "on leave"); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	rig.drain()
+	unbound := bindNew(t, rig, "omar.haddad", "ops-lead")
+	if _, err := rig.writer.Release(t.Context(), iamdomain.KindSeat, "ops-lead",
+		unbound, "op-unbind", "moved teams"); err != nil {
+		t.Fatalf("unbind: %v", err)
+	}
+	rig.drain()
+
+	bindings, err := reader.SeatBindings(t.Context())
+	if err != nil {
+		t.Fatalf("SeatBindings: %v", err)
+	}
+	got := map[string]iamdomain.SeatBinding{}
+	for _, b := range bindings {
+		got[b.Person] = b
+	}
+	if len(got) != 2 {
+		t.Fatalf("read %d bindings, want the two people still bound: %+v",
+			len(bindings), bindings)
+	}
+	page, err := reader.People(t.Context(), iamdomain.PeopleQuery{Limit: iamdomain.MaxPageSize})
+	if err != nil {
+		t.Fatalf("People: %v", err)
+	}
+	for _, row := range page.People {
+		if row.Seat == "" {
+			continue
+		}
+		if b := got[row.ID]; b != row.Binding() {
+			t.Errorf("person %s: the bindings read says %+v, the directory page %+v",
+				row.ID, b, row.Binding())
+		}
+	}
+	if got[sarah].Stage != iam.StageActive || got[priya].Stage != iam.StageSuspended {
+		t.Errorf("stages read back as %q and %q", got[sarah].Stage, got[priya].Stage)
+	}
+}
