@@ -4,8 +4,22 @@ import (
 	"context"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/org"
 )
+
+// ProberForTest is the deactivation probe exactly as this node's duty builds
+// it, over a provider and a session store the case supplies.
+//
+// EXPORTED FOR A TEST ONLY, because the duty that builds it in production
+// needs a provider Tier A names — an https issuer this engine's own transport
+// dials — and a session a real sign-in opened, and neither a fake identity
+// provider nor a test certificate can stand in for those through the
+// configuration. What the case asserts is the half that is this package's:
+// that the probe the node builds says what it ends on the node's own feed.
+func ProberForTest(e *Engine, provider *oidc.Provider, sessions oidc.Sessions) *oidc.Prober {
+	return e.newProber(provider, sessions)
+}
 
 // RefreshChartForTest brings this node's chart view up to its applier's cursor
 // and reports the position the published view carries.

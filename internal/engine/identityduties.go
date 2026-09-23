@@ -273,7 +273,7 @@ func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
 			identityLog.Error("iam_duty_unarmed", "duty", identityProbeDuty,
 				"error", err.Error())
 		} else {
-			prober := oidc.NewProber(provider, sessions, identityLog)
+			prober := e.newProber(provider, sessions)
 			out = append(out, duty(identityProbeDuty, prober.Interval(),
 				func(ctx context.Context) { probePass(ctx, prober) }))
 		}

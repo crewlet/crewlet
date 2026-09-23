@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -71,6 +72,25 @@ func (e *Engine) stopAuthEvents() {
 // Never nil on an engine [New] returned, which is what lets the API refuse to
 // be built without it rather than quietly auditing nothing.
 func (e *Engine) AuthEvents() *authevents.Trail { return e.authEvents }
+
+// newProber builds the deactivation probe over this node's trail, so a session
+// it ends is announced as `iam_session_ended` with reason `idp_revoked` on the
+// feed beside the record it writes.
+//
+// THE ONE CONSTRUCTION IN THIS PACKAGE, and a gate in its tests holds that.
+// A prober built without its audit ends sessions exactly as well and says
+// nothing about it — the record still lands in `iam_history`, so nothing
+// fails — which is how the probe's reason went unpublished while the event
+// type, its producer and the producer's own test all existed. Nil-safe for a
+// node with no trail: the absence is passed as no audit at all rather than as
+// an interface holding a nil trail.
+func (e *Engine) newProber(provider *oidc.Provider, sessions oidc.Sessions) *oidc.Prober {
+	prober := oidc.NewProber(provider, sessions, identityLog)
+	if e.authEvents != nil {
+		prober.WithAudit(e.authEvents)
+	}
+	return prober
+}
 
 // stateLogWitness is the state log's witness over this node's trail, or nil when
 // the node has none — an absent interface rather than one holding a nil trail.

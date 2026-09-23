@@ -821,7 +821,9 @@ absolute lifetime ran out.
 
 So the engine asks, hourly by default, using the only thing it has: the refresh
 token the login obtained. A provider whose account is gone answers
-`invalid_grant`, and the session ends as `idp_revoked`. **Every other error is
+`invalid_grant`, and the session ends as `idp_revoked` — recorded in
+`iam_history` like every identity write, and announced as `iam_session_ended`
+on the feed of the node whose duty ended it, once the close has landed. **Every other error is
 `unknown`, and ends nothing** — treating an unreachable provider as a
 deactivation would sign the whole company out the first time somebody else's
 service had an outage.
