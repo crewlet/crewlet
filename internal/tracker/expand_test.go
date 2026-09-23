@@ -115,6 +115,27 @@ func TestAPresetExpandsToTheQuestionItNames(t *testing.T) {
 		t.Fatalf("my_queue's order is %v, want priority then due", q.Sort)
 	}
 
+	// A VIEWER WITH NO PROJECT OF THEIR OWN PICKS UP WHAT THEY HOLD. The
+	// unclaimed arm is scoped to the viewer's project, and with no project
+	// it used to go unscoped — offering every unassigned task in the
+	// company to a seat whose unit files none, and to every caller the
+	// directory binds to no seat.
+	homeless, err := r.reader.ExpandedQuery(t.Context(),
+		map[string]any{"container": "workspace", "preset": "my_queue"},
+		tracker.Viewer{Handle: "jane.doe"}, wednesday, berlin)
+	if err != nil {
+		t.Fatalf("ExpandedQuery with no project: %v", err)
+	}
+	if len(homeless.Any) != 0 {
+		t.Fatalf("my_queue for a viewer with no project has %d branches: %+v "+
+			"— an unscoped unclaimed arm is every unassigned task in the company",
+			len(homeless.Any), homeless.Any)
+	}
+	if len(homeless.Assignee) != 1 || homeless.Assignee[0] != "jane.doe" {
+		t.Fatalf("my_queue for a viewer with no project asks for %v, want "+
+			"what they hold", homeless.Assignee)
+	}
+
 	// A QUEUE WITH NOBODY'S NAME ON IT IS EVERY OPEN TASK, which is the
 	// widest possible reading of "mine" — so it is refused.
 	if _, err := r.reader.ExpandedQuery(t.Context(),

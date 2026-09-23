@@ -225,29 +225,38 @@ func expandPreset(name string, viewer Viewer) (MapParams, error) {
 		// something to pick up — it is `preset=blocked`'s answer, and
 		// putting it here would mean the two presets returned the same
 		// rows for the wrong reason.
-		mine := MapParams{"assignee": viewer.Handle}
-		unclaimed := MapParams{"assignee": "none"}
-		if home := strings.TrimSpace(viewer.Project); home != "" {
-			// THE SECOND ARM IS SCOPED TO THE VIEWER'S OWN PROJECT.
-			// Unscoped it would offer every unassigned task in the
-			// company, which is the widest possible reading of "what
-			// can I pick up" and the one nobody meant.
-			unclaimed["container"] = ContainerProject + ":" + home
-		}
-		branches, err := json.Marshal([]MapParams{mine, unclaimed})
-		if err != nil {
-			return nil, fmt.Errorf("tracker: build the %s branches: %w",
-				PresetMyQueue, err)
-		}
-		return MapParams{
-			"any":          string(branches),
+		out := MapParams{
 			"status_group": open,
 			"blocked":      "false",
 			// PRIORITY THEN DUE, which is the order
 			// `tracker_tasks_queue_idx` is built in — so the preset
 			// the index is named for is the query it serves.
 			"sort": "-priority,due",
-		}, nil
+		}
+		home := strings.TrimSpace(viewer.Project)
+		if home == "" {
+			// A VIEWER WITH NO PROJECT OF THEIR OWN HAS NO SECOND ARM.
+			// The unclaimed arm is "the work in MY project nobody
+			// holds", and with no project it used to go UNSCOPED —
+			// every unassigned task in the company, the widest reading
+			// of "what can I pick up" and the one this arm is scoped to
+			// prevent. A seat whose unit files no project, and every
+			// person the directory binds to no seat, pick up what they
+			// hold.
+			out["assignee"] = viewer.Handle
+			return out, nil
+		}
+		// THE SECOND ARM IS SCOPED TO THE VIEWER'S OWN PROJECT.
+		mine := MapParams{"assignee": viewer.Handle}
+		unclaimed := MapParams{"assignee": "none",
+			"container": ContainerProject + ":" + home}
+		branches, err := json.Marshal([]MapParams{mine, unclaimed})
+		if err != nil {
+			return nil, fmt.Errorf("tracker: build the %s branches: %w",
+				PresetMyQueue, err)
+		}
+		out["any"] = string(branches)
+		return out, nil
 	case PresetPriorities:
 		if viewer.Handle == "" {
 			return nil, fmt.Errorf("tracker: preset=%s is one person's own "+
