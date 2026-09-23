@@ -217,7 +217,8 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Log: lost, Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(r.db), Waiter: r.waiter, Identity: r.waiter,
-		NodeID: "node-a", Generation: func() uint32 { return 0 },
+		NodeID: "node-a", Admission: r.reserve,
+		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
 	if err != nil {

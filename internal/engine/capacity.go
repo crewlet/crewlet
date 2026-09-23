@@ -160,6 +160,41 @@ func (e *Engine) growthRoom(ctx context.Context) jetstream.StorageBudget {
 	return room
 }
 
+// streamKeepsGateReserve reports whether the domain log named stream keeps a
+// gate reserve under its ceiling ([statelog.KeepsGateReserve]) — a property of
+// the domain, so read from the register rather than from a running log.
+func streamKeepsGateReserve(stream string) bool {
+	for _, domain := range registeredDomains() {
+		if domain.Stream().Name == stream {
+			return statelog.KeepsGateReserve(domain)
+		}
+	}
+	return false
+}
+
+// smallestTargetAbove is the smallest ceiling a log holding bytes can be given
+// whose ordinary writes are not refused the moment it applies, and never below
+// [MinDomainCeiling].
+//
+// SEARCHED rather than solved, because [statelog.OrdinaryCeiling] rounds the
+// reserve down: the closed form is right to within a byte either way, and a
+// number an operator is told to type has to be the exact one. The ordinary
+// ceiling grows by one or by nothing per byte of target, so both walks are a
+// step or two.
+func smallestTargetAbove(bytes uint64, reserved bool) uint64 {
+	target := bytes + 1
+	if reserved {
+		target += target / (statelog.GateReserveDivisor - 1)
+	}
+	for statelog.OrdinaryCeiling(target, reserved) <= bytes {
+		target++
+	}
+	for target > 0 && statelog.OrdinaryCeiling(target-1, reserved) > bytes {
+		target--
+	}
+	return max(target, uint64(MinDomainCeiling))
+}
+
 // openCapacity takes the exclusion, or resumes the operation already holding
 // it.
 //
@@ -189,19 +224,49 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		return held, nil
 	}
 
-	// A TARGET AT OR BELOW WHAT THE LOG HOLDS IS A FULL LOG the moment it
-	// applies: every append and every linearizable read refused, fleet-wide,
-	// after three restarts spent reaching it. The usage is what a resize is
-	// decided against, and in this mode nothing moves it, so it is decided
-	// here, once, before the exclusion is taken. A resume is not asked
-	// again: its target was accepted when the window opened, and refusing
-	// it now would strand a window whose request may already be in flight.
-	if req.TargetMaxBytes <= current.Bytes {
+	// A TARGET BELOW THE FLOOR EVERY STATE LOG IS HELD TO is refused as
+	// Tier A refuses one on an explicit value and as [divide] never scales
+	// below: under a gibibyte a log is a window that refuses appends within
+	// a week of a company starting work. And on a log that keeps a gate
+	// reserve the floor is also what the reserve is sized against
+	// ([statelog.GateReserveDivisor]), so a smaller ceiling keeps a reserve
+	// too small for the appends it has to absorb. A resume is not asked,
+	// for the reason the usage below is not.
+	if req.TargetMaxBytes < uint64(MinDomainCeiling) {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
-			"engine: %s holds %d bytes, so a %d-byte ceiling would refuse every "+
-				"append the moment it applied. Choose a target above what the log "+
-				"holds, or let the trim release some of it first",
-			req.Stream, current.Bytes, req.TargetMaxBytes)
+			"engine: a %d-byte ceiling is below the %d bytes every state log's "+
+				"ceiling is floored at — the floor Tier A enforces on an explicit "+
+				"value, and the one a log's gate reserve is sized against. Choose "+
+				"a target of at least %d bytes",
+			req.TargetMaxBytes, MinDomainCeiling, MinDomainCeiling)
+	}
+
+	// A TARGET WHOSE ORDINARY CEILING IS AT OR BELOW WHAT THE LOG HOLDS IS A
+	// FULL LOG the moment it applies: every ordinary append and every
+	// linearizable read refused, fleet-wide, after three restarts spent
+	// reaching it. On a log that keeps a gate reserve that ceiling is the
+	// target less the reserve ([statelog.OrdinaryCeiling]), since that is
+	// where ordinary writes are refused; a target that only the reserve is
+	// above leaves a log an eviction can reach and nothing else can. The
+	// usage is what a resize is decided against, and in this mode nothing
+	// moves it, so it is decided here, once, before the exclusion is taken.
+	// A resume is not asked again: its target was accepted when the window
+	// opened, and refusing it now would strand a window whose request may
+	// already be in flight.
+	reserved := streamKeepsGateReserve(req.Stream)
+	if ordinary := statelog.OrdinaryCeiling(req.TargetMaxBytes, reserved); ordinary <= current.Bytes {
+		held := ""
+		if reserved {
+			held = fmt.Sprintf(" (ordinary writes are held to %d of it; the top "+
+				"%d is kept for the records that install or lift a gate)",
+				ordinary, statelog.GateReserve(req.TargetMaxBytes))
+		}
+		return coord.MaintenanceOperation{}, fmt.Errorf(
+			"engine: %s holds %d bytes, so a %d-byte ceiling%s would refuse every "+
+				"ordinary append the moment it applied. Choose a target of at "+
+				"least %d bytes, or let the trim release some of the log first",
+			req.Stream, current.Bytes, req.TargetMaxBytes, held,
+			smallestTargetAbove(current.Bytes, reserved))
 	}
 
 	// AND A RAISE THE BROKER CANNOT RESERVE, for the same reason at the other

@@ -149,6 +149,7 @@ type retentionDomain struct {
 	LastSeq           uint64          `json:"last_seq"`
 	Bytes             uint64          `json:"bytes"`
 	MaxBytes          uint64          `json:"max_bytes"`
+	ReserveBytes      uint64          `json:"reserve_bytes"`
 	HeadroomFraction  *float64        `json:"headroom_fraction"`
 	TrimFloor         uint64          `json:"trim_floor"`
 	TrimTo            uint64          `json:"trim_to"`
@@ -333,16 +334,21 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 // third domain grows a line rather than an argument. A term that does not
 // apply to a domain prints `n/a` rather than `0`, because an absent term and a
 // term that permits nothing are different facts.
+//
+// RESERVE is the top of CEILING kept for gate records on a log that claims
+// identity, and HEADROOM is what is left of the rest — the ceiling ordinary
+// writes are refused `log_full` at — so a log at 0% still takes an eviction.
 func retentionDomains(w io.Writer, report retentionReport, only string) {
-	fmt.Fprintln(w, "\nDOMAIN\tSTREAM\tGEN\tREPLAY\tFIRST\tLAST\tBYTES\tCEILING\tHEADROOM\tTRIM FLOOR")
+	fmt.Fprintln(w, "\nDOMAIN\tSTREAM\tGEN\tREPLAY\tFIRST\tLAST\tBYTES\tCEILING\tRESERVE\tHEADROOM\tTRIM FLOOR")
 	for _, d := range report.Domains {
 		if only != "" && d.Domain != only {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\t%s\t%s\t%d\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%d\n",
 			d.Domain, d.Stream, d.Generation, d.Replay, d.FirstSeq, d.LastSeq,
 			humanBytes(int64(d.Bytes)), ceilingOrDash(d.MaxBytes),
-			headroomOrDash(d.HeadroomFraction), d.TrimFloor)
+			reserveOrDash(d.ReserveBytes), headroomOrDash(d.HeadroomFraction),
+			d.TrimFloor)
 	}
 }
 
@@ -777,6 +783,16 @@ func ceilingOrDash(maxBytes uint64) string {
 		return "none"
 	}
 	return humanBytes(int64(maxBytes))
+}
+
+func reserveOrDash(reserve uint64) string {
+	if reserve == 0 {
+		// A LOG THAT KEEPS NO RESERVE — one claiming no identity, or
+		// one with no ceiling to keep it under — rather than one whose
+		// reserve is empty: nothing is ever written into it.
+		return "-"
+	}
+	return humanBytes(int64(reserve))
 }
 
 func headroomOrDash(fraction *float64) string {

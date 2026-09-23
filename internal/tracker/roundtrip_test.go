@@ -39,6 +39,11 @@ type roundTrip struct {
 	metrics  *metrics.Recorder
 	consumed uint64
 
+	// reserve is the log's gate reserve on this node, which every
+	// publisher the harness builds over the log is admitted through — one
+	// per log per node, as the engine holds it.
+	reserve *statelog.Reserve
+
 	// claims is the coordination the writer takes a walking sequence's
 	// claim from, so a case can hold one as ANOTHER node — a walk that is
 	// running somewhere else — and see what the duty makes of it.
@@ -154,10 +159,22 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 		t.Fatalf("build a metrics recorder: %v", err)
 	}
 	r.metrics = recorder
+	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
+	// engine's does, so every write here is admitted as a production one is.
+	reserve, err := statelog.NewReserve(tracker.Domain{}.Stream().Name,
+		func(ctx context.Context) (statelog.Usage, error) {
+			stats, err := log.Stats(ctx)
+			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
+		})
+	if err != nil {
+		t.Fatalf("build the gate reserve: %v", err)
+	}
+	r.reserve = reserve
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Log: log, Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
 		Metrics:       recorder,
+		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})

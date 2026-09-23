@@ -15,8 +15,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import { GateDialog, GateOutcome } from "./GateDialog.tsx";
-import { MaintenanceBanner, NodePositions, ServedLevelBanner, Terms } from "./Retention.tsx";
-import type { RetentionNode, RetentionTerm } from "~/protocol/index.ts";
+import {
+  DomainSize,
+  MaintenanceBanner,
+  NodePositions,
+  ServedLevelBanner,
+  Terms,
+} from "./Retention.tsx";
+import type { RetentionDomain, RetentionNode, RetentionTerm } from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
@@ -110,6 +116,36 @@ test("a term's third value is rendered rather than collapsed to a number", () =>
 test("a blocked snapshot loop says so separately from the trim", () => {
   render(<Terms terms={[term()]} snapshotBlocked="insufficient_space" />);
   expect(screen.getByText(/insufficient_space/)).toBeTruthy();
+});
+
+const domain = (over: Partial<RetentionDomain> = {}): RetentionDomain => ({
+  domain: "tracker",
+  stream: "CREWLET_TRACKER_LOG",
+  generation: 0,
+  replay: "strict",
+  first_seq: 1,
+  last_seq: 90,
+  bytes: 1024 * 1024 * 1024,
+  max_bytes: 1024 * 1024 * 1024 + 64 * 1024 * 1024,
+  trim_floor: 1,
+  trim_to: 1,
+  terms: [],
+  ...over,
+});
+
+// 0% FREE ON A LOG THAT KEEPS A GATE RESERVE IS NOT A LOG NOTHING CAN TAKE.
+// Its ordinary writes are refused, and an eviction — the gesture that unpins
+// it — still lands in the reserve, so the reserve is drawn beside the
+// headroom. A log that keeps none draws no reserve rather than a zero one.
+test("a log's gate reserve is drawn beside its headroom, and only where it keeps one", () => {
+  render(<DomainSize domain={domain({ headroom_fraction: 0, reserve_bytes: 64 * 1024 * 1024 })} />);
+  expect(screen.getByText(/0% free/)).toBeTruthy();
+  expect(screen.getByText(/kept for evictions/)).toBeTruthy();
+
+  cleanup();
+  render(<DomainSize domain={domain({ domain: "vectors", headroom_fraction: 0.5 })} />);
+  expect(screen.getByText(/50% free/)).toBeTruthy();
+  expect(screen.queryByText(/kept for evictions/)).toBeNull();
 });
 
 // --- the write outcome, which is step 16's clause -------------------------

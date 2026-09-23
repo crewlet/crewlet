@@ -15,8 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -473,6 +475,95 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 	if op.OriginalMaxBytes != current.MaxBytes {
 		t.Errorf("the window recorded an original ceiling of %d, want %d",
 			op.OriginalMaxBytes, current.MaxBytes)
+	}
+}
+
+// A TARGET ONLY THE GATE RESERVE IS ABOVE THE USAGE IS A FULL LOG TOO.
+//
+// Ordinary writes on a log that claims identity are refused at the target less
+// its gate reserve, so a target that clears the usage by less than the reserve
+// was carried through three restarts to a log that refused every ordinary
+// append the moment it applied — which is what refusing a target at the usage
+// exists to prevent, measured against the wrong line. A log that keeps no
+// reserve is still measured against its whole ceiling, and the target the
+// refusal names is exact: it opens, and a byte less does not.
+func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
+	ctx := context.Background()
+	current := jetstream.LogStats{Bytes: 15 << 30, MaxBytes: 32 << 30}
+	const target = 16 << 30 // a sixteenth of it is the reserve: 15 GiB left
+
+	open := func(stream string, target uint64) error {
+		e, _ := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+		_, err := e.openCapacity(ctx, CapacityRequest{
+			Stream: stream, TargetMaxBytes: target, By: "ops-3",
+		}, current, unstatedRoom)
+		return err
+	}
+	for _, domain := range []statelog.Domain{tracker.Domain{}, pages.Domain{}} {
+		stream := domain.Stream().Name
+		err := open(stream, target)
+		if err == nil {
+			t.Fatalf("a %d-byte target on %s, holding %d bytes, was accepted — "+
+				"its ordinary writes are held to %d and would all be refused",
+				uint64(target), stream, current.Bytes,
+				statelog.OrdinaryCeiling(target, true))
+		}
+		least := smallestTargetAbove(current.Bytes, true)
+		for _, want := range []string{
+			"holds 16106127360 bytes", "ordinary writes are held to 16106127360",
+			fmt.Sprintf("at least %d bytes", least),
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal on %s does not say %q: %v", stream, want, err)
+			}
+		}
+		if err := open(stream, least); err != nil {
+			t.Errorf("the target the refusal named, %d, was refused on %s: %v",
+				least, stream, err)
+		}
+		if err := open(stream, least-1); err == nil {
+			t.Errorf("a byte under the target the refusal named was accepted on "+
+				"%s, so the number it tells an operator to type is not the "+
+				"least that works", stream)
+		}
+	}
+	if err := open(search.Domain{}.Stream().Name, target); err != nil {
+		t.Errorf("the vector changelog keeps no reserve, and a target above what "+
+			"it holds was refused: %v", err)
+	}
+}
+
+// A TARGET UNDER THE FLOOR IS REFUSED ON EVERY LOG, whatever it holds.
+//
+// Tier A refuses an explicit ceiling below a gibibyte and the division of the
+// broker's budget never scales one below it; the capacity verb was the one way
+// round both. And on a log that claims identity the floor is what the gate
+// reserve is sized against, so a smaller ceiling keeps too small a reserve for
+// the appends in flight it has to absorb.
+func TestATargetUnderTheFloorIsRefused(t *testing.T) {
+	ctx := context.Background()
+	current := jetstream.LogStats{Bytes: 1 << 20, MaxBytes: 4 << 30}
+	for _, domain := range registeredDomains() {
+		stream := domain.Stream().Name
+		e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+		_, err := e.openCapacity(ctx, CapacityRequest{
+			Stream: stream, TargetMaxBytes: uint64(MinDomainCeiling) - 1, By: "ops-3",
+		}, current, unstatedRoom)
+		if err == nil {
+			t.Fatalf("a target a byte under the floor was accepted on %s", stream)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("at least %d bytes", MinDomainCeiling)) {
+			t.Errorf("the refusal on %s does not name the floor: %v", stream, err)
+		}
+		if op, found, _ := fleet.Maintenance(ctx, stream); found {
+			t.Fatalf("a window was opened anyway on %s: %+v", stream, op)
+		}
+		e, _ = capacityFixture(t, "node-1", statelog.ModeMaintenance)
+		if _, err := e.openCapacity(ctx, CapacityRequest{
+			Stream: stream, TargetMaxBytes: uint64(MinDomainCeiling), By: "ops-3",
+		}, current, unstatedRoom); err != nil {
+			t.Errorf("a target at the floor was refused on %s: %v", stream, err)
+		}
 	}
 }
 

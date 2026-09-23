@@ -79,6 +79,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			Stream:     running.domain.Stream().Name,
 			Generation: running.runner.Committed().Generation,
 			Replay:     running.domain.Stream().Replay,
+			Reserved:   statelog.KeepsGateReserve(running.domain),
 		}
 		if stats, err := running.log.Stats(ctx); err == nil {
 			d.FirstSeq, d.LastSeq = stats.FirstSeq, stats.LastSeq

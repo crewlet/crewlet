@@ -296,7 +296,17 @@ type Request struct {
 	// content nothing in this node's rows decided. It is the one write a
 	// node the fleet re-anchored past may still make, because the gesture
 	// that releases a fleet stranded by a decommissioned peer is exactly
-	// that peer's eviction — see [Publisher.checkIdentity].
+	// that peer's eviction — see [Publisher.checkIdentity] — and the one
+	// write a peer's truncated rows do not stop ([Publisher.checkTruncated]).
+	//
+	// And it is the one write that may use the GATE RESERVE at the top of
+	// the log's byte ceiling, which every other write is refused `log_full`
+	// short of ([GateReserve]): a log a gone node has filled is unpinned by
+	// that node's eviction, a record on that log. So the three excuses are
+	// one flag, and a node gate passes every fence that could otherwise
+	// stand between an operator and the gesture that ends the fault. The
+	// publisher holds the flag to the record, refusing a NodeGate write
+	// whose record the domain says installs no gate ([Publisher.stamped]).
 	NodeGate bool
 
 	// Standing judges a retry this node's ledger already answers
@@ -358,6 +368,17 @@ type Stamp struct {
 	Gen uint32
 }
 
+// Admission holds a log's ordinary appends out of its gate reserve.
+//
+// DECLARED HERE, by its callers — this publisher and the read index — and
+// satisfied by [*Reserve].
+type Admission interface {
+	// Admit takes room for one ordinary append of size bytes, refusing it
+	// `log_full` past the log's ordinary ceiling. On a nil error the caller
+	// releases the room once the broker has answered.
+	Admit(ctx context.Context, size int64) (release func(), err error)
+}
+
 // ErrExists reports a first-writer-wins create for an object that is already
 // there, established from the guarding row rather than from the broker.
 var ErrExists = errors.New("statelog: the object already exists")
@@ -395,6 +416,10 @@ type Publisher struct {
 	identity Identity
 	metrics  *metrics.Recorder
 	logger   *slog.Logger
+
+	// admission holds this log's ordinary appends out of its gate reserve,
+	// nil on a log that keeps none ([KeepsGateReserve]).
+	admission Admission
 
 	// nodeID is this node's own identity, handed to every decision as
 	// [Stamp.Writer] and checked on every record before it is appended, so
@@ -442,6 +467,10 @@ type Deps struct {
 	// logger, never silence: see loggerOr for what silence cost.
 	Logger *slog.Logger
 
+	// Admission is the log's gate reserve: required of a domain that keeps
+	// one ([KeepsGateReserve]) and refused on one that does not.
+	Admission Admission
+
 	NodeID     string
 	Generation func() uint32
 
@@ -479,6 +508,15 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		return nil, fmt.Errorf("statelog: publisher has no node id — the " +
 			"eviction gate compares against it, so a record with none is a " +
 			"record no gate can drop")
+	case KeepsGateReserve(d.Domain) && d.Admission == nil:
+		return nil, fmt.Errorf("statelog: %s claims identity and its publisher "+
+			"has no admission — without one its ordinary writes fill the log to "+
+			"the broker's ceiling and the eviction that could unpin it is refused "+
+			"with them", d.Domain.Name())
+	case !KeepsGateReserve(d.Domain) && d.Admission != nil:
+		return nil, fmt.Errorf("statelog: %s claims no identity, so its log "+
+			"carries no gate record and a reserve would only refuse its ordinary "+
+			"writes early", d.Domain.Name())
 	}
 	spec := d.Domain.Stream()
 	if err := spec.Validate(); err != nil {
@@ -501,6 +539,7 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		identity:      d.Identity,
 		metrics:       d.Metrics,
 		logger:        logger,
+		admission:     d.Admission,
 		nodeID:        d.NodeID,
 		generation:    d.Generation,
 		resolveBudget: budget,
@@ -765,6 +804,19 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 			"operation %q and the write is %q — the ledger an ambiguous publish "+
 			"is resolved by is keyed on the record's, so this write could never "+
 			"be answered for", p.domain.Name(), req.Subject, env.OpID, req.OpID)
+	case req.NodeGate && !p.domain.InstallsGate(env):
+		// A NODE GATE IS JUDGED FROM THE RECORD ITSELF, because the flag
+		// excuses three fences — the passed generation, a peer's truncated
+		// rows and the gate reserve — and one the caller set alone would
+		// let an ordinary write past all three. What the framework can ask
+		// is the domain's own gate predicate; it also answers true for the
+		// tracker's purge, which no caller flags, so this rules out every
+		// ordinary record rather than naming the one gate that is a node's.
+		return fmt.Errorf("statelog: the %s record decided for %s is a %s %q "+
+			"record, which installs no gate, and the write is flagged a node "+
+			"gate — only an eviction or a readmission may pass the fences a "+
+			"node gate is excused",
+			p.domain.Name(), req.Subject, env.Kind, env.Op)
 	}
 	return nil
 }
@@ -810,7 +862,22 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 	if err := p.fence0(ctx, req); err != nil {
 		return Result{Rounds: round}, dispDone, err
 	}
+	// THE RESERVE, for every append but a node gate's, held until the
+	// broker answers: the reading it is admitted against cannot see this
+	// append, so the append is counted in this node's budget until it has
+	// landed or been refused — and not a moment past that, since the
+	// resolution below can wait out a whole budget. A refusal is this
+	// node's own decision, made before the broker was asked, and ends the
+	// write here for fence 0's reason.
+	release := func() {}
+	if p.admission != nil && !req.NodeGate {
+		var err error
+		if release, err = p.admission.Admit(ctx, appendBytes(snap.Decision.Payload)); err != nil {
+			return Result{Rounds: round}, dispDone, withOpID(err, req.OpID)
+		}
+	}
 	seq, duplicate, appendErr := p.log.Append(ctx, p.subjectOf(req.Subject), req.OpID, expect, snap.Decision.Payload)
+	release()
 	switch f, detail := classify(appendErr); f {
 	case faultNone:
 		at := Position{Stream: p.stream, Generation: gen, Seq: seq}
@@ -828,19 +895,29 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		return res, dispDone, err
 
 	case faultFull:
+		// AND WHERE THE BLOCKING TERM IS NAMED. "Unblock the trim" is a
+		// remedy an operator cannot act on without knowing which of the
+		// six terms came lowest, and that is a property of the last tick
+		// rather than of this append — so the message points at the
+		// surface that holds it instead of taking a coordination round
+		// trip on a refusal path.
+		remedy := "raise the stream's byte ceiling (`crewlet retention " +
+			"set-capacity`) or unblock the trim (`crewlet retention status` " +
+			"names the term holding it)"
+		if req.NodeGate && p.admission != nil {
+			// A GATE RECORD REFUSED HERE found the reserve kept for it
+			// spent as well, and the gesture it belongs to is often
+			// the one that unblocks the trim — so it cannot be told to
+			// do that, and nothing but a larger ceiling makes room.
+			remedy = "this was a gate record, refused past even the reserve " +
+				"kept for it, so raise the stream's byte ceiling with " +
+				"`crewlet retention set-capacity`: no retry makes room"
+		}
 		return Result{Rounds: round}, dispDone, &Unavailable{
 			Reason: ReasonLogFull,
-			// AND WHERE THE BLOCKING TERM IS NAMED. "Unblock the trim"
-			// is a remedy an operator cannot act on without knowing
-			// which of the six terms came lowest, and that is a
-			// property of the last tick rather than of this append —
-			// so the message points at the surface that holds it
-			// instead of taking a coordination round trip on a
-			// refusal path.
 			Detail: fmt.Sprintf("the broker refused to store the record: %s — a "+
-				"full log refuses appends rather than dropping records, so raise "+
-				"the stream's byte ceiling or unblock the trim (`crewlet "+
-				"retention status` names the term holding it)", detail),
+				"full log refuses appends rather than dropping records, so %s",
+				detail, remedy),
 			OpID: req.OpID,
 		}
 
@@ -874,6 +951,16 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		})
 		return Result{Rounds: round}, dispRejected, nil
 	}
+}
+
+// withOpID puts the write's operation id on a refusal that was made without
+// it, so a caller retrying under the id the refusal names retries this write.
+func withOpID(err error, opID string) error {
+	var refusal *Unavailable
+	if errors.As(err, &refusal) && refusal.OpID == "" {
+		refusal.OpID = opID
+	}
+	return err
 }
 
 // refuseFromSnapshot is every refusal a committed snapshot settles on its

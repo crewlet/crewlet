@@ -42,8 +42,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtBytes } from "~/lib/format.ts";
-import { DomainBlock, Terms } from "./Retention.tsx";
+import { DomainBlock, DomainSize, Terms } from "./Retention.tsx";
 import type { RetentionNode } from "~/protocol/index.ts";
 
 /** How often the retention document is re-read, matching the fleet's own. */
@@ -135,10 +134,7 @@ export function DomainScreen({ name }: { name: string }) {
           label: "Size",
           value: (
             <span className="t-num">
-              {fmtBytes(domain.bytes)}
-              {domain.headroom_fraction != null && (
-                <span className="muted"> · {Math.round(domain.headroom_fraction * 100)}% free</span>
-              )}
+              <DomainSize domain={domain} />
             </span>
           ),
         },

@@ -597,7 +597,8 @@ func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, map[stri
 	for _, running := range identityLogs(t, s) {
 		name := running.domain.Name()
 		rec := &recorder{log: running.log}
-		pub, _, err := s.publisherOver(running.domain, rec, running.log, running.runner)
+		pub, _, err := s.publisherOver(running.domain, rec, running.log, running.runner,
+			running.reserve)
 		if err != nil {
 			t.Fatalf("a recorded publisher for %s: %v", name, err)
 		}

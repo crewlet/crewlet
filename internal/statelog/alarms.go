@@ -69,6 +69,11 @@ const (
 	// writes rather than dropping records, so the failure is loud — but
 	// raising a ceiling needs a maintenance window, and a tenth of a
 	// 29 GiB log is days of writing at this engine's rate.
+	//
+	// OF THE CEILING ORDINARY WRITES ARE HELD TO ([Headroom]), which on a
+	// log that keeps a gate reserve is [GateReserve] below the broker's:
+	// that is where writes start being refused, so it is what "full"
+	// means to everybody but an eviction.
 	HeadroomAlarmFraction = 0.10
 
 	// WALAlarmBytes is a write-ahead log large enough to say a checkpoint
@@ -185,8 +190,8 @@ type Reading struct {
 	// BarrierP95 is the read barrier's 95th percentile.
 	BarrierP95 time.Duration
 
-	// HeadroomFraction is how much of the log's byte ceiling is unused, as
-	// a fraction.
+	// HeadroomFraction is how much of the byte ceiling the log's ordinary
+	// writes are held to is unused, as a fraction ([Headroom]).
 	//
 	// A POINTER, because zero is a real value here and it is the worst
 	// one: a full log and a node that has not measured its log are
@@ -350,13 +355,17 @@ var table = []rule{
 			if r.HeadroomFraction == nil {
 				return "", false
 			}
-			return fmt.Sprintf("%.0f%% of the log's byte ceiling is left",
-					*r.HeadroomFraction*100),
+			return fmt.Sprintf("%.0f%% of the log's byte ceiling for "+
+					"ordinary writes is left", *r.HeadroomFraction*100),
 				*r.HeadroomFraction < HeadroomAlarmFraction
 		},
 		remedy: "Raise the log's ceiling with `crewlet retention set-capacity` " +
 			"during a maintenance window, or find out why the trim is not " +
-			"advancing. A full log refuses writes; it does not drop records.",
+			"advancing (`crewlet retention status` names the term holding it). " +
+			"A full log refuses writes; it does not drop records. On a log " +
+			"that claims identity the top of the ceiling is kept for gate " +
+			"records, so if the term is a node that is gone, `crewlet " +
+			"retention evict` still lands and unpins the trim.",
 	},
 	{
 		// ONE THRESHOLD. The form this replaces set a blocked flag once

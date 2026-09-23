@@ -549,13 +549,7 @@ export function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
           {d.trim_to !== d.trim_floor && <> · this tick concluded {d.trim_to}</>}
         </span>
         <span className="t-caption t-num">
-          {fmtBytes(d.bytes)}
-          {/* A FRACTION OF AN UNKNOWN CEILING IS NOT ZERO HEADROOM, which is
-              why the server sends it absent. Rendering it as 0% would fire
-              the one alarm nobody may ignore. */}
-          {d.headroom_fraction != null && (
-            <span className="muted"> · {Math.round(d.headroom_fraction * 100)}% free</span>
-          )}
+          <DomainSize domain={d} />
         </span>
         {d.blocked_by ? (
           <Tag variant="warning">{d.blocked_by}</Tag>
@@ -565,6 +559,35 @@ export function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
       </div>
       <Terms terms={d.terms} snapshotBlocked={d.snapshot_blocked_by} />
     </div>
+  );
+}
+
+/**
+ * A domain's size: what the log holds, how much of the ceiling its ordinary
+ * writes are held to is left, and the gate reserve kept above that ceiling.
+ *
+ * ONE RENDERING for the fleet card and the domain's page, for [DomainBlock]'s
+ * reason — the page drew its own copy, which is how two screens come to
+ * disagree about one number.
+ *
+ * THE RESERVE IS NAMED BESIDE THE HEADROOM, because on a log that keeps one
+ * "0% free" is not a log nothing can be written to: an eviction still lands
+ * there, and it is the gesture that unpins a log a gone node has filled.
+ */
+export function DomainSize({ domain: d }: { domain: RetentionDomain }) {
+  return (
+    <>
+      {fmtBytes(d.bytes)}
+      {/* A FRACTION OF AN UNKNOWN CEILING IS NOT ZERO HEADROOM, which is
+          why the server sends it absent. Rendering it as 0% would fire
+          the one alarm nobody may ignore. */}
+      {d.headroom_fraction != null && (
+        <span className="muted"> · {Math.round(d.headroom_fraction * 100)}% free</span>
+      )}
+      {d.reserve_bytes != null && (
+        <span className="muted"> · {fmtBytes(d.reserve_bytes)} kept for evictions</span>
+      )}
+    </>
   );
 }
 

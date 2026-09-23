@@ -948,7 +948,7 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 // fence that refused it would leave the fleet with one fewer.
 func TestALogThatLostWhatAPeerHoldsRefusesWritesButNotTheEviction(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
+	h := newHarnessFor(t, gatingDomain{})
 	h.applier.truncatedBy("node-newer")
 
 	before := h.appends.appends.Load()
@@ -964,16 +964,7 @@ func TestALogThatLostWhatAPeerHoldsRefusesWritesButNotTheEviction(t *testing.T) 
 	}
 
 	before = h.appends.appends.Load()
-	_, err = h.pub.Publish(t.Context(), statelog.Request{
-		Subject:  probeSubject("gate"),
-		Scope:    statelog.ScopeSet{Paths: []string{"object.gate"}},
-		OpID:     "op-gate",
-		Pattern:  statelog.PatternArbitrated,
-		NodeGate: true,
-		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return statelog.Decision{Payload: probeRecord(stamp, "op-gate", "evict"), Version: 1}, nil
-		},
-	})
+	_, err = h.gate("node-newer", "op-gate", "evict", evictionRecord)
 	if n := h.appends.appends.Load() - before; err != nil || n != 1 {
 		t.Fatalf("the eviction = %v after %d append(s), want it published", err, n)
 	}
@@ -996,16 +987,7 @@ func TestALogThatLostWhatAPeerHoldsRefusesWritesButNotTheEviction(t *testing.T) 
 func TestANodeGateIsTheOneWriteAPassedNodeStillMakes(t *testing.T) {
 	t.Parallel()
 	gate := func(h *harness) error {
-		_, err := h.pub.Publish(t.Context(), statelog.Request{
-			Subject:  probeSubject("gate"),
-			Scope:    statelog.ScopeSet{Paths: []string{"object.gate"}},
-			OpID:     "op-gate",
-			Pattern:  statelog.PatternArbitrated,
-			NodeGate: true,
-			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-				return statelog.Decision{Payload: probeRecord(stamp, "op-gate", "evict"), Version: 1}, nil
-			},
-		})
+		_, err := h.gate("node-decommissioned", "op-gate", "evict", evictionRecord)
 		return err
 	}
 	for _, c := range []struct {
@@ -1018,7 +1000,7 @@ func TestANodeGateIsTheOneWriteAPassedNodeStillMakes(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			h := newHarness(t)
+			h := newHarnessFor(t, gatingDomain{})
 			c.trip(h)
 			_, err := h.write(probeSubject("a"), "op-1", "decided from these rows")
 			var refusal *statelog.Unavailable

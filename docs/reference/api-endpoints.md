@@ -2200,7 +2200,8 @@ is three per-node facts attributed to a fleet.
       "last_seq": 918280001,
       "bytes": 67108864,
       "max_bytes": 4294967296,
-      "headroom_fraction": 0.984,
+      "reserve_bytes": 268435456,
+      "headroom_fraction": 0.983,
       "trim_floor": 918100000,
       "trim_to": 0,
       "blocked_by": "backup_floor",
@@ -2247,7 +2248,13 @@ a renderer prints the impossible one.
 
 `headroom_fraction` is a **pointer** and is absent when the broker could not be
 asked. A fraction of an unknown ceiling is not zero headroom, and zero is what
-the one alarm an operator cannot ignore fires on.
+the one alarm an operator cannot ignore fires on. It is a fraction of the
+ceiling **ordinary writes** are held to: `max_bytes` less `reserve_bytes`,
+which on the tracker and pages logs is the top sixteenth kept for the records
+that install or lift a gate, so that an eviction still lands on a log full for
+everything else ([the gate reserve](../guides/retention.md#the-gate-reserve)).
+`reserve_bytes` is absent on a log that keeps none — the vector changelog —
+where the headroom is of the whole ceiling.
 
 `crewlet retention status` renders exactly these bytes.
 
@@ -2310,7 +2317,10 @@ request, sent again with the answer's `op_id`, can finish it — and **`hint`**,
 what to do. `retry` is true for an `unknown` outcome, a lost race and a refusal
 that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`).
 It is **false** where the same request is refused the same way for ever:
-`log_full` (raise the log's ceiling with `crewlet retention set-capacity`),
+`log_full` (a gate record is admitted into the log's
+[gate reserve](../guides/retention.md#the-gate-reserve), so this is a log full
+to its broker ceiling past even that — raise the ceiling with `crewlet
+retention set-capacity`),
 `evicted` (this node is evicted itself; ask one the fleet still counts),
 `wrong_stream` (the log was rebuilt; re-anchor it), `skew`, and the two that
 are about the operation rather than the log — `superseded`, an operation whose

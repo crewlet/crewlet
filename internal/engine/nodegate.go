@@ -266,10 +266,14 @@ func (d DomainGate) judge() (bool, string) {
 				"retention reanchor` first — nothing can be written to it until "+
 				"then", d.Stream)
 		case statelog.ReasonLogFull:
-			return false, fmt.Sprintf("%s is full and refuses the gate record like "+
-				"any other append: raise its ceiling with `crewlet retention "+
-				"set-capacity`, which is the only thing that makes room for it",
-				d.Stream)
+			// PAST THE GATE RESERVE: a gate record is admitted into the
+			// room kept above the ceiling ordinary writes are refused
+			// at, so a gate record refused `log_full` found even that
+			// spent — which no retry refills.
+			return false, fmt.Sprintf("%s is full to its broker ceiling, past even "+
+				"the reserve kept there for gate records: raise its ceiling with "+
+				"`crewlet retention set-capacity`, which is the only thing that "+
+				"makes room for it", d.Stream)
 		case statelog.ReasonSuperseded:
 			return false, "a later gate record has undone this operation's since: " +
 				"start a new gesture, without -op-id, if the node should change again"

@@ -191,6 +191,59 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 	}
 }
 
+// A RESERVED LOG'S HEADROOM IS OF THE CEILING ITS ORDINARY WRITES MEET.
+//
+// On a log that keeps a gate reserve ordinary writes are refused at the ceiling
+// less the reserve, so that is where "full" is for everything the headroom
+// alarm warns about: measured against the broker's ceiling, the alarm fired a
+// sixteenth late and a log at 0% of its ordinary ceiling read as having room.
+// A log that keeps none is still measured against its whole ceiling, and the
+// reserve itself is reported beside the ceiling it is kept under.
+func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
+	t.Parallel()
+	// 12% of the broker's ceiling is left, and 6% of the 1500 bytes
+	// ordinary writes are held to.
+	reserved := healthyDomain("tracker", true)
+	reserved.Bytes, reserved.MaxBytes, reserved.Reserved = 1408, 1600, true
+	plain := healthyDomain("vectors", false)
+	plain.Bytes, plain.MaxBytes = 1408, 1600
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt,
+		Domains: []statelog.DomainInputs{reserved, plain},
+	})
+	byName := map[string]statelog.DomainReport{}
+	for _, d := range rep.Domains {
+		byName[d.Domain] = d
+	}
+	for name, want := range map[string]struct {
+		headroom float64
+		reserve  uint64
+	}{
+		"tracker": {headroom: 92.0 / 1500, reserve: 100},
+		"vectors": {headroom: 192.0 / 1600, reserve: 0},
+	} {
+		d := byName[name]
+		if d.HeadroomFraction == nil || *d.HeadroomFraction != want.headroom {
+			t.Errorf("%s reports a headroom of %v, want %v", name,
+				d.HeadroomFraction, want.headroom)
+		}
+		if d.ReserveBytes != want.reserve {
+			t.Errorf("%s reports a reserve of %d bytes, want %d", name,
+				d.ReserveBytes, want.reserve)
+		}
+	}
+	var fired []string
+	for _, a := range rep.Alarms {
+		if a.Kind == statelog.KindLogHeadroom {
+			fired = append(fired, a.Detail)
+		}
+	}
+	if len(fired) != 1 || !strings.HasPrefix(fired[0], "tracker: ") {
+		t.Fatalf("the headroom alarm fired %q, want it on tracker alone — the "+
+			"one within a tenth of the ceiling its writes are refused at", fired)
+	}
+}
+
 // THE REPORT'S COUNTED SET IS THE GATE'S OWN, TO THE INSTANT.
 //
 // An eviction takes effect one fence window after the gesture. A screen that

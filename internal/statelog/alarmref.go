@@ -39,8 +39,10 @@ var alarmMeaning = map[Kind]string{
 		"ordinary lag, and have been for longer than a heartbeat.",
 	KindBarrierSlow: "The read barrier — the append every linearizable read " +
 		"waits on — is spending a quarter of the whole read budget.",
-	KindLogHeadroom: "The log is within a tenth of its byte ceiling. A full " +
-		"log refuses writes rather than dropping records.",
+	KindLogHeadroom: "The log is within a tenth of the byte ceiling its " +
+		"ordinary writes are held to. A full log refuses writes rather than " +
+		"dropping records; on the tracker and pages logs an eviction still " +
+		"lands in the gate reserve above that ceiling.",
 	KindBackupAge: "No verified backup has been recorded, or the newest is " +
 		"older than the policy asks for. The trim does not advance either way.",
 	KindTrimBlocked: "The trim has a term it cannot satisfy, so the log is " +

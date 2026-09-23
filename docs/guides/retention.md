@@ -16,13 +16,14 @@ sometimes will not run.
 crewlet retention status
 ```
 
-Three figures per domain, and no others:
+Four figures per domain, and no others:
 
 | Figure | What it is |
 |---|---|
 | `bytes` | what the log holds now |
 | `max_bytes` | the ceiling the **broker** is enforcing |
-| `headroom_fraction` | how much of the ceiling is unused |
+| `reserve_bytes` | on the tracker and pages logs, the top of that ceiling kept for gate records — see [the gate reserve](#the-gate-reserve) |
+| `headroom_fraction` | how much of the ceiling **ordinary writes** are held to is unused: `max_bytes` less `reserve_bytes` |
 
 `max_bytes` is read from the stream's own configuration and never from the
 Tier A field, because Tier A is per node and is only the value a stream is
@@ -508,8 +509,10 @@ the wait ran out — still prints the `-op-id` that finishes it.
 Where running it again **cannot** finish a log, it says what can instead, and
 offers no `-op-id`:
 
-- `log_full` — that log is full, and a gate record is refused like any other
-  append: raise its ceiling with [`crewlet retention set-capacity`](#changing-a-logs-ceiling).
+- `log_full` — that log is full to its broker ceiling, past even the
+  [reserve kept for gate records](#the-gate-reserve), so no retry makes room:
+  raise its ceiling with [`crewlet retention set-capacity`](#changing-a-logs-ceiling).
+  A log full only for ordinary writes does not refuse an eviction at all.
 - `evicted` — the node you ran it on is itself evicted and writes nothing: run
   the gesture from a node the fleet still counts.
 - `wrong_stream` — the log was rebuilt under this node:
@@ -573,8 +576,8 @@ history it does not hold, by its own fence, whether it is readmitted or not.
 
 ## A full log refuses; it does not shed
 
-At the ceiling the log **refuses appends**, naming `log_full`, the field, and
-the retention block. It does not silently delete old records to make room:
+At its ceiling the log **refuses appends**, naming `log_full`, the ceiling, and
+the verb that raises it. It does not silently delete old records to make room:
 shedding a record no node has applied is exactly the loss the whole gate
 exists to prevent.
 
@@ -586,6 +589,48 @@ The refusal carries **no retry hint**, deliberately: the only thing that frees
 a byte is a fifteen-minute gated job, and the log is full precisely because
 that gate is closed. A number here would be a promise the mechanism does not
 make.
+
+### The gate reserve
+
+What fills a log is almost always a trim that cannot advance, and the
+commonest reason is a node that is gone and still counted, pinning the
+applied term. The gesture that unpins it — [`crewlet retention
+evict`](#eviction) — is itself a record on that log, so a
+log that refused it like any other append could never be emptied: the
+eviction was refused, run again, and refused again.
+
+So on the two logs that carry gate records, the tracker's and the knowledge
+base's, **ordinary writes are refused at a soft ceiling** a sixteenth below
+the broker's, and the top sixteenth — the **gate reserve**, `reserve_bytes`
+in `crewlet retention status` — takes only the records that install or lift a
+gate: an eviction and the readmission that inverts it. A log full for
+ordinary writes still takes an eviction, and once the evicted node's minute
+has passed the trim moves again. It takes it whatever else is refusing this
+node's ordinary writes — a peer holding what the log lost (`log_truncated`,
+below) or a generation the fleet moved past — because the eviction is the way
+out of each, and a log nothing can write to is a log nothing trims. A purge is not a gate record here: it frees
+nothing until the trim runs, and nothing bounds how many are run.
+
+| | tracker and pages logs | vector changelog |
+|---|---|---|
+| ordinary writes and barriers refused at | the ceiling less the reserve | the ceiling |
+| gate records refused at | the ceiling | — (it carries none) |
+| `headroom_fraction` measured against | the ceiling less the reserve | the ceiling |
+
+A sixteenth is sized so the reserve holds however the fleet's writes race:
+each node reads the log's usage **after** it starts an append and counts its
+own appends still in flight, so what can land past the soft ceiling is only
+what other nodes have in flight at that instant — at most one maximum record
+(8 MiB) each. At the smallest ceiling a log may have, a gibibyte, the reserve
+is 64 MiB: seven other nodes' maximum records with room to spare for the gate
+records themselves, and every larger ceiling holds more. While a rolling
+upgrade runs, a node on an older build keeps no reserve, so the reserve
+holds once every node counts its own.
+
+If a gate record is refused even there, the refusal says so and points at
+`crewlet retention set-capacity` rather than suggesting a retry; the
+[`log_headroom`](../reference/alarms.md) alarm, which fires at a tenth of the
+soft ceiling left, is there so that never happens.
 
 ## Changing a log's ceiling
 
@@ -599,11 +644,15 @@ maintenance window**, and the reason is not caution:
 
 - A resize is decided against the usage the log is at, and a publisher makes
   that a moving quantity. The verb decides it before the window opens: a
-  target at or below what the log already holds is refused, naming both,
-  because that ceiling would refuse every append the moment it applied.
-  Anything above the usage is fair, including a target under the current
-  ceiling, which is how a log created larger than its budget gives the
-  reservation back.
+  target whose soft ceiling — the target less its
+  [gate reserve](#the-gate-reserve), on the tracker and pages logs; the whole
+  target on the vector changelog — is at or below what the log already holds
+  is refused, naming both and the least target that would do, because that
+  ceiling would refuse every ordinary append the moment it applied. So is a
+  target under a gibibyte, the floor Tier A holds every log to and the one the
+  reserve is sized against. Anything else is fair, including a target under
+  the current ceiling, which is how a log created larger than its budget gives
+  the reservation back.
 - A raise is a reservation too, and the broker refuses one it cannot honour.
   Where the node can read the limit the broker holds an update to (a lone
   embedded node, or a NATS account's own JetStream limit on any topology), a
@@ -766,7 +815,8 @@ is past the log's end — confirmed against the log, which must not hold the
 record there — or whose row says `log_diverged`, stops this node's **writes**
 of that domain: each refuses `log_truncated`, naming the peer, and the node
 logs `statelog_log_truncated`. Its **reads** go on, being the log's own history.
-The eviction of that peer is still written, because it is one of the ways out.
+The eviction of that peer is still written, because it is one of the ways out —
+into the [gate reserve](#the-gate-reserve) if the log has filled meanwhile.
 The refusal lifts on its own (`statelog_log_truncated_cleared`) once the peer
 re-anchors, is rebuilt from a peer's snapshot, or is evicted. What this cannot
 see is a newer node that has not published since the restore — after a whole

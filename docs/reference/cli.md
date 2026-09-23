@@ -686,8 +686,13 @@ Nothing is being trimmed on tracker: the newest complete backup is 3 days old
 ```
 
 Then one row per registered domain — its stream, generation, replay protocol,
-both ends, bytes, ceiling and headroom — the six terms with their state and
-detail, one row per node per domain, and this node's own replica line.
+both ends, bytes, ceiling, reserve and headroom — the six terms with their
+state and detail, one row per node per domain, and this node's own replica
+line. `RESERVE` is the top of the ceiling the tracker and pages logs keep for
+gate records ([the gate reserve](../guides/retention.md#the-gate-reserve)),
+`-` on the vector changelog, which keeps none; `HEADROOM` is what is left of
+the rest, the ceiling ordinary writes are refused at — so a log at `0%` still
+takes an eviction.
 
 A term that does not apply to a domain prints `n/a` rather than `0`: the
 vector log has no wake feed, and an absent term is a different fact from one
@@ -784,7 +789,9 @@ log is written, however long after the first run the retry comes. A fresh id
 would be a second eviction rather than this one finished, and an id the engine
 did not print is refused. Where the same
 command **cannot** finish a log it offers no `-op-id` and says what can: a
-`log_full` log needs [`crewlet retention set-capacity`](#crewlet-retention-set-capacity);
+`log_full` log — full past even the reserve its gate records may use, since a
+log full only for ordinary writes still takes them — needs
+[`crewlet retention set-capacity`](#crewlet-retention-set-capacity);
 a node that is itself `evicted` cannot write, so run it from another; a
 `wrong_stream` log needs a [reanchor](#crewlet-retention-reanchor); and a
 `superseded` operation — an eviction retried after a readmission took the node
@@ -870,10 +877,15 @@ There the engine does not run the broker and cannot establish who else holds a
 connection to it, so the assertion is yours in your own words rather than a
 check that quietly proves nothing.
 
-A target at or below what the log already holds is refused before the window
-opens, naming both numbers: that ceiling would refuse every append the moment
-it applied. A target under the current ceiling and above the usage is
-accepted, and is how a log gives a reservation back. A raise the broker cannot
+A target whose ordinary ceiling is at or below what the log already holds is
+refused before the window opens, naming both numbers and the least target that
+would do: that ceiling would refuse every ordinary append the moment it
+applied. On the tracker and pages logs the ordinary ceiling is the target less
+its [gate reserve](../guides/retention.md#the-gate-reserve), a sixteenth; on
+the vector changelog it is the whole target. A target under a gibibyte is
+refused too — Tier A's floor for every log, and the one the reserve is sized
+against. A target under the current ceiling and above the usage is accepted,
+and is how a log gives a reservation back. A raise the broker cannot
 reserve is refused before the window opens too, naming what it reserves and
 what the broker has left, wherever the node can read that limit: a lone
 embedded node, or a NATS account's own limit. A clustered member cannot, and

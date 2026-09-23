@@ -169,7 +169,9 @@ const (
 
 	// ReasonLogFull — the log is at its byte ceiling and refuses
 	// appends rather than dropping records. An operator raises the
-	// ceiling or unblocks the trim.
+	// ceiling or unblocks the trim. On a log that keeps a gate reserve
+	// an ordinary write meets this at the ceiling less the reserve
+	// ([OrdinaryCeiling]), and a gate record only at the broker's own.
 	ReasonLogFull Reason = "log_full"
 
 	// ReasonSkew — the broker answered a last sequence BELOW an

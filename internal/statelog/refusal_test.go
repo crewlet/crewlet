@@ -18,22 +18,44 @@ import (
 // no answer: the write asked the log what landed, found nothing, retook its
 // snapshot, decided the same record and was refused again — sixteen times —
 // and then told its caller a colleague kept editing the object.
+//
+// TWO PATHS TO ONE ANSWER. On a log that keeps a gate reserve the reserve
+// refuses the record before it is sent, since no record above the budget it
+// admits against can be counted in it; on a log that keeps none the client
+// refuses it, and that refusal is what has to be read as too large.
 func TestAnOversizedRecordIsRefusedOnceAsTooLarge(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
-	_, err := h.write(probeSubject("a"), "op-large",
-		strings.Repeat("x", queue.MaxPayloadBytes))
-	if !errors.Is(err, queue.ErrTooLarge) {
-		t.Fatalf("an oversized record answered %v, want queue.ErrTooLarge", err)
-	}
-	if errors.Is(err, statelog.ErrConflict) {
-		t.Fatalf("an oversized record was reported as a conflict: %v", err)
-	}
-	if n := h.appends.appends.Load(); n != 1 {
-		t.Fatalf("an oversized record was sent %d times, want once — the same "+
-			"record is refused the same way on every round", n)
+	for name, tc := range map[string]struct {
+		domain statelog.Domain
+		sent   int64
+	}{
+		"on a log that keeps a gate reserve": {probeDomain{}, 0},
+		"on a log that keeps none":           {unreservedDomain{}, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarnessFor(t, tc.domain)
+			_, err := h.write(probeSubject("a"), "op-large",
+				strings.Repeat("x", queue.MaxPayloadBytes))
+			if !errors.Is(err, queue.ErrTooLarge) {
+				t.Fatalf("an oversized record answered %v, want queue.ErrTooLarge", err)
+			}
+			if errors.Is(err, statelog.ErrConflict) {
+				t.Fatalf("an oversized record was reported as a conflict: %v", err)
+			}
+			if n := h.appends.appends.Load(); n != tc.sent {
+				t.Fatalf("an oversized record was sent %d times, want %d — the "+
+					"same record is refused the same way on every round", n, tc.sent)
+			}
+		})
 	}
 }
+
+// unreservedDomain is the probe log claiming no identity, which is what keeps
+// no gate reserve — the vector changelog's shape.
+type unreservedDomain struct{ probeDomain }
+
+func (unreservedDomain) ClaimsIdentity() bool { return false }
 
 // A BROKER REFUSAL THAT IS NOT A FULL LOG IS NOT REPORTED AS ONE.
 //

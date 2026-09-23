@@ -173,7 +173,7 @@ func blockedReport() *statelog.Report {
 			Domain: "tracker", Stream: "CREWLET_TRACKER_LOG",
 			Replay:   statelog.ReplayStrict,
 			FirstSeq: 918100000, LastSeq: 918280001,
-			Bytes: 67108864, MaxBytes: 4294967296,
+			Bytes: 67108864, MaxBytes: 4294967296, ReserveBytes: 268435456,
 			HeadroomFraction: &headroom,
 			TrimFloor:        918100000,
 			BlockedBy:        statelog.TermBackupFloor,
@@ -248,6 +248,10 @@ func TestRetentionStatusLeadsWithTheBlockingTermInProse(t *testing.T) {
 		"918280001",                  // node-1's own tracker position
 		"918279004",                  // the applied term's sequence
 		"evicted by sre@example.com", // node-4's tombstone
+		// THE GATE RESERVE, beside the ceiling it is kept under: without
+		// it a headroom of 0% reads as a log nothing can be written to,
+		// when an eviction still lands there.
+		"RESERVE", "256.0 MiB",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the report never mentions %q:\n%s", want, stdout)

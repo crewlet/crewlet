@@ -11,10 +11,44 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 const gib = int64(1) << 30
+
+// THE GATE RESERVE AT THE SMALLEST CEILING ABSORBS A FLEET'S APPENDS IN FLIGHT.
+//
+// The reserve is a fraction of the ceiling and the overshoot it absorbs is not:
+// every peer of the admitting node may hold up to [statelog.MaxAppendBytes] in
+// flight that its reading cannot see. So the fraction is only sound down to
+// some ceiling, and every floor a log's ceiling can reach — the one the
+// division of the broker holds a log at, and Tier A's floor for each
+// identity-claiming log — must be at or above it, with room left for the gate
+// records themselves. A divisor raised, a fleet size raised or a floor lowered
+// without the others moving fails here, rather than as an eviction refused on
+// a full log.
+func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
+	// A thousand gate records, each under a kibibyte: an eviction and a
+	// readmission per node per identity log, many times over.
+	const gateRoom = 1 << 20
+	peers := uint64(statelog.GateReserveFleet-1) * statelog.MaxAppendBytes
+	for name, floor := range map[string]int64{
+		"the division's MinDomainCeiling":             MinDomainCeiling,
+		"Tier A's stream.tracker_log_max_bytes floor": config.TrackerLogMaxBytesFloor,
+		"Tier A's stream.pages_log_max_bytes floor":   config.PagesLogMaxBytesFloor,
+	} {
+		reserve := statelog.GateReserve(uint64(floor))
+		if reserve < peers+gateRoom {
+			t.Errorf("at %s (%d bytes) the gate reserve is %d bytes: %d peers' "+
+				"appends in flight at %d bytes each, plus %d for the gate records, "+
+				"need %d — an eviction on a log full to its ordinary ceiling can "+
+				"find the reserve spent", name, floor, reserve,
+				statelog.GateReserveFleet-1, int64(statelog.MaxAppendBytes),
+				gateRoom, peers+gateRoom)
+		}
+	}
+}
 
 // EVERY REGISTERED DOMAIN IS SIZED FROM TIER A, and the field a refusal names
 // is the field that actually sets the value.

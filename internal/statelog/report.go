@@ -161,10 +161,16 @@ type DomainReport struct {
 	// asked, which is why HeadroomFraction is a POINTER: a fraction of an
 	// unknown ceiling is not zero headroom, and rendering it as zero
 	// would fire the one alarm an operator cannot ignore.
+	//
+	// ReserveBytes is the top of MaxBytes kept for gate records — an
+	// eviction, a readmission — on a log that keeps a reserve
+	// ([GateReserve]), and HeadroomFraction is what is left of the rest:
+	// the ceiling ordinary writes are refused `log_full` at.
 	FirstSeq         uint64   `json:"first_seq"`
 	LastSeq          uint64   `json:"last_seq"`
 	Bytes            uint64   `json:"bytes"`
 	MaxBytes         uint64   `json:"max_bytes,omitempty"`
+	ReserveBytes     uint64   `json:"reserve_bytes,omitempty"`
 	HeadroomFraction *float64 `json:"headroom_fraction,omitempty"`
 
 	// TrimFloor is the floor the fleet has published — everything below it
@@ -360,6 +366,10 @@ type DomainInputs struct {
 	FirstSeq, LastSeq, Bytes, MaxBytes uint64
 	StreamReadable                     bool
 
+	// Reserved says the log keeps a gate reserve under MaxBytes
+	// ([KeepsGateReserve]), which is what its headroom is measured against.
+	Reserved bool
+
 	// TrimFloor is the published floor, and Decision is what this tick
 	// concluded from the six terms.
 	TrimFloor uint64
@@ -501,11 +511,12 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 	}
 	if d.StreamReadable && d.MaxBytes > 0 {
 		out.MaxBytes = d.MaxBytes
-		free := float64(d.MaxBytes) - float64(d.Bytes)
-		if free < 0 {
-			free = 0
+		if d.Reserved {
+			out.ReserveBytes = GateReserve(d.MaxBytes)
 		}
-		out.HeadroomFraction = Frac(free / float64(d.MaxBytes))
+		// OF THE CEILING ORDINARY WRITES ARE HELD TO, because that is
+		// where they start being refused — see [Headroom].
+		out.HeadroomFraction = Headroom(d.Bytes, d.MaxBytes, d.Reserved)
 	}
 	for _, t := range d.Decision.Terms {
 		state := termState(t)

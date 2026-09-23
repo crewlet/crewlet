@@ -575,10 +575,40 @@ type harness struct {
 	applier *applier
 	appends *countingAppender
 	log     *js.DomainLog
+
+	// reserve is the log's gate reserve, nil for a domain that keeps none.
+	reserve *statelog.Reserve
 	gen     atomic.Uint32
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessFor(t, probeDomain{}) }
+
+// noCeiling is a gate reserve over a log with no byte ceiling, for a case
+// about something other than capacity.
+func noCeiling(t testing.TB) *statelog.Reserve {
+	t.Helper()
+	reserve, err := statelog.NewReserve(probeStream,
+		func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
+	if err != nil {
+		t.Fatalf("NewReserve: %v", err)
+	}
+	return reserve
+}
+
+// reserveOn is the gate reserve on a real log, reading its usage from the
+// broker as the engine's does.
+func reserveOn(t testing.TB, log *js.DomainLog) *statelog.Reserve {
+	t.Helper()
+	reserve, err := statelog.NewReserve(probeStream,
+		func(ctx context.Context) (statelog.Usage, error) {
+			stats, err := log.Stats(ctx)
+			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
+		})
+	if err != nil {
+		t.Fatalf("NewReserve: %v", err)
+	}
+	return reserve
+}
 
 // newHarnessFor builds a publisher over a real embedded broker for one
 // domain, so a case can vary what the domain DECLARES — which is what
@@ -624,7 +654,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 		t.Fatalf("recorder: %v", err)
 	}
 
-	pub, err := statelog.NewPublisher(statelog.Deps{
+	deps := statelog.Deps{
 		Domain:        domain,
 		Log:           h.appends,
 		Rows:          h.rows,
@@ -636,7 +666,15 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 		NodeID:        "node-a",
 		Generation:    h.gen.Load,
 		ResolveBudget: 250 * time.Millisecond,
-	})
+	}
+	// THE REAL LOG'S OWN RESERVE, where the domain keeps one: every write
+	// through the harness is admitted against the broker's usage, as the
+	// engine's are.
+	if statelog.KeepsGateReserve(domain) {
+		h.reserve = reserveOn(t, log)
+		deps.Admission = h.reserve
+	}
+	pub, err := statelog.NewPublisher(deps)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}

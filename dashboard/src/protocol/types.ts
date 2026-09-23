@@ -1220,7 +1220,13 @@ export interface RetentionDomain {
   last_seq: number;
   bytes: number;
   max_bytes?: number;
-  /** ABSENT when the broker could not be asked — which is not zero headroom. */
+  /** On a log that claims identity, the top of `max_bytes` kept for the
+   *  records that install or lift a gate, so an eviction still lands on a log
+   *  full for everything else. ABSENT on a log that keeps none. */
+  reserve_bytes?: number;
+  /** Of the ceiling ORDINARY writes are held to — `max_bytes` less
+   *  `reserve_bytes`. ABSENT when the broker could not be asked — which is not
+   *  zero headroom. */
   headroom_fraction?: number;
   /** Everything below it may already be gone; it never moves down within a generation. */
   trim_floor: number;

@@ -925,6 +925,12 @@ func reanchoredDetail(c ReanchorCase) string {
 //     the record the moment it resumes, from the case's checkpoint — which the
 //     record is above, because the first sequence and the end that checkpoint
 //     was taken from were both read before the append.
+//   - THE GATE RESERVE ([GateReserve]) is not asked either, so the record may
+//     land in it. It is a gate record in the reserve's sense — it installs the
+//     generation every later record is placed in — and the stream it lands on
+//     is one every node's fence refuses ordinary writes to until it has, so
+//     nothing ordinary can have filled it since, and it lands at most once per
+//     generation.
 //
 // # A record already there is carried on from only if it is this node's own
 //

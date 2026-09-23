@@ -421,7 +421,10 @@ from the work tracker, are the first retired kind.
    `stream.tracker_vectors_max_bytes` and `stream.pages_log_max_bytes`, sized
    together as [below](#how-the-byte-ceilings-are-sized). A full log
    **refuses** appends rather than shedding old records; see
-   [Retention](retention.md).
+   [Retention](retention.md). On the tracker and pages logs ordinary writes
+   are refused a sixteenth short of it, the rest being
+   [kept for gate records](retention.md#the-gate-reserve) so that an eviction
+   can still unpin a full log.
 3. **The trim floor** — how far back the log can be replayed from, which is
    what bounds how long a node may be away.
 4. **The store's own size** — every node is a full replica, so the corpus is

@@ -357,10 +357,12 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
-			Shows: "How much of the ceiling is left. A full log refuses every " +
-				"write AND every linearizable read, and the remedy is a " +
-				"fleet-wide maintenance cycle, so this is the one number " +
-				"worth alarming on long before it is small.",
+			Shows: "How much of the ceiling ordinary writes are held to is " +
+				"left — on the tracker and pages logs, the ceiling less the " +
+				"gate reserve kept above it for evictions. At zero the log " +
+				"refuses every write AND every linearizable read, and the " +
+				"remedy is a fleet-wide maintenance cycle, so this is the one " +
+				"number worth alarming on long before it is small.",
 		},
 		{
 			Name: StatelogTrimBlockedSeconds, Kind: KindGauge, Unit: UnitSeconds,

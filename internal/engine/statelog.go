@@ -107,6 +107,12 @@ type runningDomain struct {
 	log       *jetstream.DomainLog
 	consumer  *jetstream.DomainConsumer
 
+	// reserve holds this node's ordinary appends on the log out of its gate
+	// reserve — the write authority's and the read index's alike, since its
+	// budget is everything this node has in flight there. Nil for a domain
+	// that keeps no reserve ([statelog.KeepsGateReserve]).
+	reserve *statelog.Reserve
+
 	// NO CREATION INSTANT IS HELD HERE. Which stream this domain's
 	// positions are keyed to is the runner's
 	// ([statelog.Runner.StreamCreatedAt]), and whether the live stream is
@@ -844,14 +850,18 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		s.logDiverged(ctx, domain.Name(), runner)
 	}
 
-	publisher, evicted, err := s.publisherFor(domain, appendTo, runner)
+	reserve, err := reserveFor(domain, appendTo)
+	if err != nil {
+		return nil, err
+	}
+	publisher, evicted, err := s.publisherFor(domain, appendTo, runner, reserve)
 	if err != nil {
 		return nil, err
 	}
 
 	running := &runningDomain{
 		domain: domain, runner: runner, publisher: publisher,
-		log: appendTo, consumer: consumer, evicted: evicted,
+		log: appendTo, consumer: consumer, evicted: evicted, reserve: reserve,
 	}
 	// AFTER the struct exists, because the health closure the reader
 	// holds reads through it — a reader built first would capture a
@@ -878,9 +888,33 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 // the same question the write path asks, from the same row. Two readers of
 // one tombstone is how a node comes to refuse its writes and answer its reads.
 func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.DomainLog,
-	runner *statelog.Runner) (*statelog.Publisher, func(context.Context) (bool, error), error) {
+	runner *statelog.Runner, reserve *statelog.Reserve) (*statelog.Publisher, func(context.Context) (bool, error), error) {
 
-	return s.publisherOver(domain, appendTo, appendTo, runner)
+	return s.publisherOver(domain, appendTo, appendTo, runner, reserve)
+}
+
+// reserveFor is the gate reserve on one domain's log, reading its usage from
+// the broker's own stream state — nil for a domain that keeps none
+// ([statelog.KeepsGateReserve]).
+//
+// ONE PER LOG, handed to both the write authority and the read index, because
+// its budget is every ordinary append this node has in flight on the log.
+func reserveFor(domain statelog.Domain, appendTo *jetstream.DomainLog) (*statelog.Reserve, error) {
+	if !statelog.KeepsGateReserve(domain) {
+		return nil, nil
+	}
+	reserve, err := statelog.NewReserve(domain.Stream().Name,
+		func(ctx context.Context) (statelog.Usage, error) {
+			stats, err := appendTo.Stats(ctx)
+			if err != nil {
+				return statelog.Usage{}, err
+			}
+			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("engine: build %s's gate reserve: %w", domain.Name(), err)
+	}
+	return reserve, nil
 }
 
 // publisherOver is [stateLog.publisherFor] with the appender the write
@@ -888,8 +922,8 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 // reads: one DomainLog in production, and in a case that has to see exactly
 // what reached the broker, that log behind a recorder.
 func (s *stateLog) publisherOver(domain statelog.Domain, publishTo statelog.Appender,
-	appendTo *jetstream.DomainLog,
-	runner *statelog.Runner) (*statelog.Publisher, func(context.Context) (bool, error), error) {
+	appendTo *jetstream.DomainLog, runner *statelog.Runner,
+	reserve *statelog.Reserve) (*statelog.Publisher, func(context.Context) (bool, error), error) {
 
 	deps := statelog.Deps{
 		Domain: domain, Log: publishTo, Waiter: runner, NodeID: s.nodeID,
@@ -905,6 +939,11 @@ func (s *stateLog) publisherOver(domain statelog.Domain, publishTo statelog.Appe
 		// stamping the old one would write records every applier reads
 		// as safely stale.
 		Generation: func() uint32 { return runner.Committed().Generation },
+	}
+	// A NIL RESERVE STAYS A NIL ADMISSION: a nil *Reserve in the interface
+	// would read as a reserve given to a log that keeps none.
+	if reserve != nil {
+		deps.Admission = reserve
 	}
 	var evicted func(context.Context) (bool, error)
 	switch domain.Name() {
@@ -1021,7 +1060,11 @@ func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainL
 		Metrics: s.metrics,
 	}
 	if encode != nil {
-		index, err := statelog.NewReadIndex(domain, appendTo, encode,
+		var admission statelog.Admission
+		if running.reserve != nil {
+			admission = running.reserve
+		}
+		index, err := statelog.NewReadIndex(domain, appendTo, admission, encode,
 			func() uint32 { return runner.Committed().Generation }, s.metrics)
 		if err != nil {
 			return nil, fmt.Errorf("engine: build %s's read index: %w", domain.Name(), err)

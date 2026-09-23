@@ -109,9 +109,20 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	// THIS NODE'S CHECKPOINT IS THE WAITER'S, which is what the harness's
 	// own applier advances — the position the end is compared against.
 	fence.Committed = waiter.Committed
+	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
+	// engine's does, so every write here is admitted as a production one is.
+	reserve, err := statelog.NewReserve(pages.Domain{}.Stream().Name,
+		func(ctx context.Context) (statelog.Usage, error) {
+			stats, err := log.Stats(ctx)
+			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
+		})
+	if err != nil {
+		t.Fatalf("build the gate reserve: %v", err)
+	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: pages.Domain{}, Log: log, Rows: rows, Fence: fence,
 		Gates: pages.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
+		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})

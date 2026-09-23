@@ -83,13 +83,24 @@ func Stamped(t *testing.T, new Factory) error {
 		t.Fatalf("build %s's read seam: %v", name, err)
 	}
 	log := &recordingLog{last: map[string]uint64{}}
-	pub, err := statelog.NewPublisher(statelog.Deps{
+	deps := statelog.Deps{
 		Domain: c.Domain, Log: log, Rows: rows,
 		Fence: openFence{}, Gates: openGates{},
 		Waiter: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
 		NodeID:     SuiteWriter,
 		Generation: func() uint32 { return SuiteGeneration },
-	})
+	}
+	// A RESERVE OVER A LOG WITH NO CEILING where the domain keeps one: what
+	// is under test is what the decision writes, not the log's room.
+	if statelog.KeepsGateReserve(c.Domain) {
+		reserve, reserveErr := statelog.NewReserve(c.Domain.Stream().Name,
+			func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
+		if reserveErr != nil {
+			t.Fatalf("build a reserve over %s: %v", name, reserveErr)
+		}
+		deps.Admission = reserve
+	}
+	pub, err := statelog.NewPublisher(deps)
 	if err != nil {
 		t.Fatalf("build a publisher over %s: %v", name, err)
 	}
