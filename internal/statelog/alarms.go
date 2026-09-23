@@ -43,6 +43,16 @@ const (
 	// named within a minute.
 	StallGrace = 60 * time.Second
 
+	// AlarmInterval is how often every node evaluates the table: the
+	// fifteen-second heartbeat, [coord.ReconcileInterval], on which every
+	// other fleet fact is refreshed. It is what makes the thresholds here
+	// mean what they say — [StallGrace] is four of these, so a condition
+	// that has held past it is named within one more interval — and an
+	// evaluation paced by anything slower silently raises every threshold
+	// to its own period: the table ran on the trim's quarter-hour once,
+	// which made the sixty-second alarms fire up to fifteen minutes late.
+	AlarmInterval = coord.ReconcileInterval
+
 	// DeferralGrace is how long a node may hold records it could not
 	// apply before its seats move. The alarm and the seat move share the
 	// number deliberately: an operator who sees this alarm has thirty
@@ -166,10 +176,11 @@ const (
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
 //
 // ONE STRUCT rather than a callback per condition, because the whole table is
-// evaluated together on ticks that already run — the trim's fifteen minutes
-// and the heartbeat's fifteen seconds — and a condition that fetched its own
-// input would make the cost of the table a function of how many alarms are
-// defined rather than of how many facts it reads.
+// evaluated together on ticks that already run — every [AlarmInterval], and
+// again straight after the trim's quarter-hour measurements land — and a
+// condition that fetched its own input would make the cost of the table a
+// function of how many alarms are defined rather than of how many facts it
+// reads.
 //
 // A field this node cannot measure is left at its zero value, and every
 // condition is written so that a zero reads as "nothing to report" rather than

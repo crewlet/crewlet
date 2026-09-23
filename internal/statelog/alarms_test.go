@@ -439,3 +439,27 @@ func gauge(t *testing.T, rec *metrics.Recorder, kind statelog.Kind) float64 {
 	t.Fatalf("no gauge series for %s", kind)
 	return -1
 }
+
+// THE TABLE IS EVALUATED AT A QUARTER OF ITS FINEST THRESHOLD OR FINER.
+//
+// Every alarm here fires at a duration another decision made, and the table is
+// only as punctual as the loop evaluating it: a condition that crossed its
+// threshold is named at most one interval later. The table once ran on the
+// trim's quarter-hour, which made every sixty-second alarm fire up to fifteen
+// minutes late while every case above — each handed a reading directly — went
+// on passing. Four evaluations inside the shortest threshold bounds the
+// lateness at a quarter of it.
+func TestTheTableIsEvaluatedFinerThanItsThresholds(t *testing.T) {
+	t.Parallel()
+	for name, threshold := range map[string]time.Duration{
+		"StallGrace":      statelog.StallGrace,
+		"FloorCacheStale": statelog.FloorCacheStale,
+		"DeferralGrace":   statelog.DeferralGrace,
+	} {
+		if 4*statelog.AlarmInterval > threshold {
+			t.Errorf("the table is evaluated every %s, which names a condition "+
+				"past %s (%s) up to a quarter of it late or worse",
+				statelog.AlarmInterval, name, threshold)
+		}
+	}
+}

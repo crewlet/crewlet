@@ -22,11 +22,11 @@ const alarmGauge = metrics.AlarmActive
 //
 // # Why a transition and not a level
 //
-// An alarm evaluated on a fifteen-second heartbeat is true for as long as the
-// condition is, which is minutes or days. Logging the level would write the
-// same line four times a minute for a week and make the log useless for
-// finding when it STARTED — which is the one thing an operator needs and the
-// one thing a level cannot say. So entry and exit are each logged once,
+// An alarm evaluated on the fifteen-second heartbeat ([AlarmInterval]) is
+// true for as long as the condition is, which is minutes or days. Logging the
+// level would write the same line four times a minute for a week and make the
+// log useless for finding when it STARTED — which is the one thing an
+// operator needs and the one thing a level cannot say. So entry and exit are each logged once,
 // carrying how long the alarm was up.
 //
 // The gauge is the opposite and is a level by construction: a collector
@@ -36,8 +36,9 @@ const alarmGauge = metrics.AlarmActive
 // dashboard, and "no data" is indistinguishable from a node that stopped
 // reporting.
 //
-// A Tracker is safe for concurrent use: the trim tick and the heartbeat both
-// evaluate, on different goroutines and different cadences.
+// A Tracker is safe for concurrent use: the heartbeat evaluates every
+// [AlarmInterval], and the trim tick evaluates again the moment its own
+// measurements land, on a different goroutine.
 type Tracker struct {
 	rec *metrics.Recorder
 	now func() time.Time
