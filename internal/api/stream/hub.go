@@ -360,6 +360,11 @@ type Client struct {
 	// client so a broadcast can report it and an unregister can find the
 	// bucket to leave.
 	seat string
+
+	// watches counts every [Hub.Watch] this client has been through, so a
+	// decision taken about ONE watch can withdraw that watch and no later
+	// one — see [Hub.UnwatchIf].
+	watches uint64
 }
 
 // NewClient builds a client with an empty queue, served LIVE, that may
@@ -644,6 +649,9 @@ func (h *Hub) Watch(c *Client, seat string) {
 		return
 	}
 	h.unwatchLocked(c)
+	c.mu.Lock()
+	c.watches++
+	c.mu.Unlock()
 	if seat == "" {
 		return
 	}
@@ -656,6 +664,44 @@ func (h *Hub) Watch(c *Client, seat string) {
 		h.bySeat[seat] = watchers
 	}
 	watchers[c] = struct{}{}
+}
+
+// Watching is the seat c watches and which watch that is, for a decision about
+// it taken outside the hub's lock — see [Hub.UnwatchIf].
+func (h *Hub) Watching(c *Client) (seat string, watch uint64) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.seat, c.watches
+}
+
+// UnwatchIf withdraws c's watch only if it is still the watch [Hub.Watching]
+// named, reporting whether it withdrew anything.
+//
+// A COMPARE-AND-CLEAR, because the decision to withdraw is taken on another
+// goroutine: a credential re-check reads the watch, asks the authority table
+// with no lock held, and by the time a refusal comes back the socket's own read
+// loop may have installed an allowed watch for a DIFFERENT seat — which is
+// exactly when the old one starts being refused, a rebind or a rename moving
+// the viewer's seat. An unconditional clear there withdrew the new, allowed
+// watch and told the tab it was refused, and the dashboard retries only a
+// refusal that says "unavailable", so that tab heard nothing until its next
+// socket.
+func (h *Hub) UnwatchIf(c *Client, watch uint64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c.mu.Lock()
+	current, seat := c.watches, c.seat
+	c.mu.Unlock()
+	if current != watch || seat == "" {
+		return false
+	}
+	h.unwatchLocked(c)
+	c.mu.Lock()
+	c.watches++
+	c.mu.Unlock()
+	return true
 }
 
 // unwatchLocked drops c from whatever seat bucket it is in. Caller holds the

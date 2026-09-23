@@ -62,6 +62,105 @@ func TestARevalidatedWatchIsWithdrawnOnlyByARefusal(t *testing.T) {
 		"a lead who no longer leads the seat is still watching it")
 }
 
+// A RE-CHECK WITHDRAWS ONLY THE WATCH IT DECIDED.
+//
+// The re-check runs on the revalidation goroutine and asks the authority table
+// with no lock held; the socket's own read loop installs watches meanwhile.
+// When a viewer's seat moves — a rebind, a rename — the read loop installs the
+// new seat's watch, allowed, at the very moment the old seat starts being
+// refused. The re-check that read the OLD seat then comes back refused, and an
+// unconditional clear withdrew the NEW watch and told the tab it was refused;
+// the dashboard retries only an `unavailable` refusal, so that tab heard no
+// inbox change until its next socket. The race is forced here, not waited for:
+// the chart holds the re-check's question until the new watch is in.
+func TestARecheckWithdrawsOnlyTheWatchItDecided(t *testing.T) {
+	t.Parallel()
+	hub := NewHub()
+	client := NewClient(AudienceOf([]iam.Grant{iam.GrantStateRead}))
+	hub.Register(client)
+	chart := &heldChart{asked: make(chan struct{}), release: make(chan struct{})}
+	w := &watching{hub: hub, client: client, chart: chart}
+	hub.Watch(client, "sarah-chen")
+
+	ctx := iam.WithPrincipal(t.Context(), person("platform-lead"))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.recheck(ctx)
+	}()
+	<-chart.asked
+	hub.Watch(client, "sarah") // the read loop's allowed watch, mid-decision
+	close(chart.release)
+	<-done
+
+	if got := hub.Watchers("sarah"); got != 1 {
+		t.Errorf("the re-check of the old seat withdrew the new watch (%d watchers)",
+			got)
+	}
+	select {
+	case frame := <-client.Out():
+		t.Errorf("the tab was told its watch was refused (%d bytes) while the watch it "+
+			"holds is allowed", len(frame.Raw()))
+	default:
+	}
+
+	// THE CONTROL: with nothing moving, the same refusal withdraws the watch
+	// it decided and says so.
+	chart.answerNow()
+	hub.Watch(client, "sarah-chen")
+	w.recheck(ctx)
+	if got := hub.Watchers("sarah-chen"); got != 0 {
+		t.Errorf("a refused watch nobody moved is still installed (%d watchers)", got)
+	}
+	select {
+	case <-client.Out():
+	default:
+		t.Error("a withdrawn watch said nothing to the tab")
+	}
+}
+
+// heldChart refuses every lead question, and holds the FIRST one until
+// released — which is what lets a case land a watch mid-decision.
+type heldChart struct {
+	asked, release chan struct{}
+	once           sync.Once
+	now            bool
+	mu             sync.Mutex
+}
+
+func (c *heldChart) answerNow() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = true
+}
+
+func (c *heldChart) Leads(ctx context.Context, _, _ string) (bool, error) {
+	c.mu.Lock()
+	now := c.now
+	c.mu.Unlock()
+	if !now {
+		c.once.Do(func() { close(c.asked) })
+		select {
+		case <-c.release:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	return false, nil
+}
+
+func (c *heldChart) LeadsProject(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (c *heldChart) LeadsUnit(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (c *heldChart) LeadsContainer(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 // mutableChart answers the one lead question the case asks, changeably.
 type mutableChart struct {
 	mu    sync.Mutex

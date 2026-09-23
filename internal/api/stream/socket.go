@@ -595,8 +595,14 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 // has been learned against a decision this node already made, and a chart
 // blip that silently unsubscribed every lead's screen would be a notification
 // outage caused by the node being behind.
+//
+// WITHDRAWN ONLY IF IT IS STILL THE WATCH THAT WAS DECIDED. This runs on the
+// revalidation goroutine and the read loop installs watches on its own, so a
+// refusal of the seat read here must not clear one the read loop allowed in
+// the meantime — see [Hub.UnwatchIf]. A watch that moved is the read loop's
+// to decide, and the next re-check decides it again.
 func (w *watching) recheck(ctx context.Context) {
-	seat := w.client.Seat()
+	seat, watch := w.hub.Watching(w.client)
 	if seat == "" {
 		return
 	}
@@ -608,9 +614,10 @@ func (w *watching) recheck(ctx context.Context) {
 	if ok || code == CodeUnavailable {
 		return
 	}
-	w.hub.Watch(w.client, "")
-	w.client.Reply(Envelope{Kind: KindError, What: watchWhat, Error: code,
-		Refused: refused})
+	if w.hub.UnwatchIf(w.client, watch) {
+		w.client.Reply(Envelope{Kind: KindError, What: watchWhat, Error: code,
+			Refused: refused})
+	}
 }
 
 // runQuery answers one question onto the client's own queue.
