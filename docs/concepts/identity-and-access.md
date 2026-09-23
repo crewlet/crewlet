@@ -587,8 +587,10 @@ the seat — and one evaluation feeds every surface that reports it:
   a clean directory.
 - The **`iam_binding_dangling`** alarm fires once a residue has persisted past
   the same 60 seconds every other alarm uses. The age is how long this node's
-  own evaluations — on the alarm heartbeat, every node, every fifteen seconds —
-  have kept finding it, from the first that did to the latest: nothing records
+  own evaluations — on the alarm heartbeat, every fifteen seconds, on every node
+  that runs the identity domain (`ingress`, `workers`; a seats-only node holds
+  no directory to observe, and raises nothing rather than reporting a clean one)
+  — have kept finding it, from the first that did to the latest: nothing records
   when a binding began to dangle, so the alarm never claims a persistence
   nobody saw. A bind racing a removal, or a hire a node applies a few seconds
   late, clears before it can fire. A beat that cannot read the directory, or

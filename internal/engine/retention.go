@@ -122,12 +122,15 @@ type retention struct {
 	//
 	// TAKEN ON THE TICK AND READ BY THE REPORT, because the measurement is
 	// a scan of the whole source corpus and a report is assembled on every
-	// operator request and every dashboard poll — where the trim's own
-	// inputs are read once per tick by construction. One
-	// [RetentionInterval] is also the resolution every other alarm input
-	// here has, so a fresher coverage number would be the only one on the
-	// reading that could disagree with its neighbours about which tick it
-	// describes. See [retention.measureCoverage].
+	// operator request, every dashboard poll and every alarm beat. It and
+	// each log's daily intake are the ONLY alarm inputs measured at the
+	// trim's [RetentionInterval] — both are scans, and a quarter-hour is the
+	// resolution each is honest at, since neither summarises anything that
+	// moves faster than a corpus or a day. Every other input the reading
+	// carries — apply lag, the backup register, the maintenance window,
+	// free space, the windowed metrics and the bindings' observation — is
+	// re-read on every [statelog.AlarmInterval] beat. See
+	// [retention.measureCoverage] and [retention.heartbeat].
 	coverFraction float64
 	coverKnown    bool
 
