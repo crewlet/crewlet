@@ -7,8 +7,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
+
+// applyLog is the applier's own voice, apart from the read side's: the one
+// thing it says is that a removal's key outlived the removal, and an operator
+// grepping for that should not have to know it was filed under reads.
+var applyLog = logging.Get("iam.apply")
 
 // The applier, and the four rules that make it a PURE FUNCTION of the log.
 //
@@ -147,13 +153,21 @@ func (a *Applier) Committed(ctx context.Context) {
 		return
 	}
 	for _, id := range people {
-		// THE ERROR IS DROPPED HERE AND NOWHERE ELSE. There is no
-		// caller to report it to — this runs after the commit, on the
-		// applier's own goroutine — and the durable record of what
-		// still needs destroying is the `iam_removed` row, which the
-		// duty reads. Logging it is the engine's to do where it has a
-		// logger; this package takes no dependency on one.
-		_, _ = a.shredder.Shred(ctx, id)
+		// THE FAILURE IS SAID AND NOT RETURNED. There is no caller to
+		// return it to — this runs after the commit, on the applier's
+		// own goroutine — and the durable record of what still needs
+		// destroying is the `iam_removed` row, which [ShredRemoved]
+		// reads on every pass of the key duty until the delete lands.
+		// Said at WARN, because until then the person's name and
+		// address are readable from every backup taken before the
+		// removal, and an operator asked "is that person gone" deserves
+		// a log that says not yet.
+		if _, err := a.shredder.Shred(ctx, id); err != nil {
+			applyLog.WarnContext(ctx, "iam_key_shred_deferred",
+				"person", id, "node", a.NodeID, "error", err.Error(),
+				"detail", "the removal is applied and this person's key "+
+					"still exists; the key duty retries until it is destroyed")
+		}
 	}
 }
 

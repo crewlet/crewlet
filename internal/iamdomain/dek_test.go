@@ -39,8 +39,35 @@ type keyStore struct {
 	// exactly the state in which "I could not read a key" taken as "there
 	// is no key" replaces a live one.
 	failGet error
+	// failUnset fails only the DELETE, which is the blip a removal's
+	// post-commit shred meets: the rows are durable everywhere and the key
+	// the whole removal rests on is still there.
+	failUnset error
 	// reads counts the opens, so the no-cache rule is checkable.
 	reads int
+}
+
+// blip sets or clears the delete failure, under the fake's own lock.
+func (k *keyStore) blip(err error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.failUnset = err
+}
+
+// Names is the store's listing by prefix, which the key duty reads.
+func (k *keyStore) Names(_ context.Context, prefix string) ([]string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.fail != nil {
+		return nil, k.fail
+	}
+	var out []string
+	for name := range k.values {
+		if strings.HasPrefix(name, prefix) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
 }
 
 func newKeyStore() *keyStore { return &keyStore{values: map[string]string{}} }
@@ -97,6 +124,9 @@ func (k *keyStore) Unset(_ context.Context, name string) (bool, error) {
 	defer k.mu.Unlock()
 	if k.fail != nil {
 		return false, k.fail
+	}
+	if k.failUnset != nil {
+		return false, k.failUnset
 	}
 	_, had := k.values[name]
 	delete(k.values, name)
