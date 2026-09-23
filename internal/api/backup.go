@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/backup"
 )
 
@@ -48,8 +49,7 @@ type backupTaker interface {
 func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error":  "no_destination",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeNoDestination, map[string]string{
 			"detail": "name an absolute directory with ?dir=",
 			"hint":   "it is created on the engine's host, not the caller's",
 		})
@@ -81,12 +81,12 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 		// the thing to fix is in their command rather than in this
 		// process, and sending them to the engine's logs to find it
 		// would be the wrong instruction.
-		answer := map[string]string{"error": "backup_failed"}
 		status := backupStatus(err)
+		var detail map[string]string
 		if status == http.StatusBadRequest {
-			answer["detail"] = err.Error()
+			detail = map[string]string{"detail": err.Error()}
 		}
-		writeJSON(w, status, answer)
+		httpjson.FailWith(w, status, httpjson.CodeBackupFailed, detail)
 		return
 	}
 	log.Info("backup_taken", "operator", operator, "dir", dir,

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -181,5 +182,66 @@ func TestAnAcknowledgementNamingAnUnknownStreamIsRefused(t *testing.T) {
 	}
 	if register.calls != 0 {
 		t.Errorf("a point was written anyway: %v", register.point)
+	}
+}
+
+// THE DEPLOYMENT'S CONTROLS REFUSE IN THE ENVELOPE EVERY OTHER ROUTE USES.
+//
+// A backup, a budget reset, the retention gestures and the capacity window
+// each wrote a bare `{"error": code}` of their own, so the surface an operator
+// reaches for when something is already wrong was the one whose refusals
+// carried no `message` — a screen rendering the envelope had nothing to show
+// for it, and nothing held these codes to the vocabulary at all. Each case is
+// a refusal the handler itself makes, past the grant, so what is asserted is
+// the handler's answer rather than the guard's.
+func TestTheDeploymentControlsRefuseInTheEnvelope(t *testing.T) {
+	t.Parallel()
+	node := &fakeStateLog{generations: map[string]uint32{"CREWLET_TRACKER_LOG": 3}}
+	b := closedPosture()
+	a := newApp(t, api.Options{
+		Bootstrap: &b,
+		Backup:    &fakeBackup{err: errors.New("the disk went away")},
+		Retention: &fakeBackupRegister{},
+		Capacity:  node,
+	})
+
+	cases := []struct {
+		method, path string
+		status       int
+		code         httpjson.Code
+	}{
+		{http.MethodPost, "/backup", http.StatusBadRequest, httpjson.CodeNoDestination},
+		{http.MethodPost, "/backup?dir=/tmp/x", http.StatusInternalServerError, httpjson.CodeBackupFailed},
+		{http.MethodPost, "/work/retention/ack?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodePositionRequired},
+		{http.MethodPost, "/work/retention/ack?stream=NOPE&position=9", http.StatusNotFound, httpjson.CodeUnknownStream},
+		{http.MethodPost, "/work/retention/evict/node-2?confirm=node-2", http.StatusServiceUnavailable, httpjson.CodeNoTracker},
+		{http.MethodGet, "/work/retention/reanchor", http.StatusBadRequest, httpjson.CodeStreamRequired},
+		{http.MethodPost, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeConfirmRequired},
+		{http.MethodPost, "/work/retention/capacity?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeTargetRequired},
+		{http.MethodPost, "/work/retention/capacity?stream=CREWLET_TRACKER_LOG&bytes=1024&confirm=1024", http.StatusConflict, httpjson.CodeCapacityRefused},
+		{http.MethodGet, "/work/retention/maintenance?stream=CREWLET_TRACKER_LOG", http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req.Header.Set("Authorization", "Bearer secret")
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, req)
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("the refusal is not JSON: %v (%s)", err, rec.Body)
+			}
+			if rec.Code != tc.status || body["error"] != string(tc.code) {
+				t.Fatalf("answered %d %v, want %d %s", rec.Code, body["error"],
+					tc.status, tc.code)
+			}
+			if got := rec.Header().Get("Content-Type"); got != "application/json" {
+				t.Errorf("Content-Type = %q", got)
+			}
+			if tc.code.Message() == "" || body["message"] != tc.code.Message() {
+				t.Errorf("message = %v, want the vocabulary's sentence for %s — "+
+					"a refusal a person is shown nothing for", body["message"], tc.code)
+			}
+		})
 	}
 }

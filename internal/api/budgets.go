@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
@@ -55,7 +56,7 @@ func (a *App) serveBudgetReset(w http.ResponseWriter, r *http.Request) {
 	before, err := a.budgets.Usage(r.Context())
 	if err != nil {
 		log.Warn("api_budget_reset_failed", "stage", "read", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "budget_unreadable"})
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeBudgetUnreadable)
 		return
 	}
 	var cleared []string
@@ -68,7 +69,7 @@ func (a *App) serveBudgetReset(w http.ResponseWriter, r *http.Request) {
 	n, err := a.budgets.Reset(r.Context(), scope)
 	if err != nil {
 		log.Warn("api_budget_reset_failed", "stage", "reset", "scope", scope, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "budget_reset_failed"})
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeBudgetResetFailed)
 		return
 	}
 	operator := auth.OperatorID(caller)

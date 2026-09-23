@@ -326,6 +326,59 @@ const (
 	// the project never declared. The detail is the domain's own sentence,
 	// because it is the only thing that says what to change.
 	CodeRefused Code = "refused"
+
+	// THE DEPLOYMENT'S OWN CONTROLS: a backup, a budget reset, the
+	// retention gestures and the capacity window. Each spelled its codes
+	// inline in a bare `{"error": …}` body with no `message`, so the one
+	// surface an operator reaches for when something is wrong was the one
+	// whose refusals a screen had nothing to show for. The wire values are
+	// the ones those routes always answered with, which `crewlet backup`
+	// and `crewlet retention` already branch on.
+
+	// CodeNoDestination is a backup asked for with no directory to write.
+	CodeNoDestination Code = "no_destination"
+	// CodeBackupFailed is a backup that did not finish. 400 when the
+	// destination the caller named is the problem, and the detail names it;
+	// 500 otherwise, with the reason in the log alone.
+	CodeBackupFailed Code = "backup_failed"
+	// CodeBudgetUnreadable is a reset that could not read the counters it
+	// was about to clear, so it cleared nothing.
+	CodeBudgetUnreadable Code = "budget_unreadable"
+	// CodeBudgetResetFailed is a reset the counters refused.
+	CodeBudgetResetFailed Code = "budget_reset_failed"
+	// CodePositionRequired is a backup acknowledgement that named no stream
+	// or no sequence: it moves the floor the trim deletes against, so
+	// neither has a default.
+	CodePositionRequired Code = "position_required"
+	// CodeUnknownStream is a retention or capacity gesture naming a stream
+	// this node does not have. 404 rather than 503, because nothing about
+	// it is transient.
+	CodeUnknownStream Code = "unknown_stream"
+	// CodeAckFailed is a backup acknowledgement that was not recorded.
+	CodeAckFailed Code = "ack_failed"
+	// CodeNoTracker is an eviction or readmission sent to a node that runs
+	// no native tracker, which is where the gate lives.
+	CodeNoTracker Code = "no_tracker"
+	// CodeConfirmRequired is a destructive gesture whose confirmation did
+	// not repeat what it acts on. The detail says what to repeat.
+	CodeConfirmRequired Code = "confirm_required"
+	// CodeGateFailed is an eviction or readmission that was not recorded.
+	CodeGateFailed Code = "gate_failed"
+	// CodeStreamRequired is a capacity or reanchor question that named no
+	// stream.
+	CodeStreamRequired Code = "stream_required"
+	// CodeReanchorRefused is a reanchor the stream refused.
+	CodeReanchorRefused Code = "reanchor_refused"
+	// CodeTargetRequired is a capacity change that named no stream or no
+	// byte ceiling.
+	CodeTargetRequired Code = "target_required"
+	// CodeCapacityRefused is a capacity change the window refused. The
+	// detail carries the operation already open, when there is one, since
+	// "never opened" and "open and stuck" have opposite next steps.
+	CodeCapacityRefused Code = "capacity_refused"
+	// CodeMaintenanceUnreadable is a capacity window whose state could not
+	// be read.
+	CodeMaintenanceUnreadable Code = "maintenance_unreadable"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -419,6 +472,39 @@ var codes = map[Code]string{
 		"written. Read it again and decide from what it says now.",
 	CodeRefused: "That change was refused and nothing was written. The detail " +
 		"says why.",
+
+	CodeNoDestination: "Name the directory to write the backup into, as an " +
+		"absolute path on the engine's host.",
+	CodeBackupFailed: "The backup did not finish, and no manifest was written, " +
+		"so nothing in that directory counts as a backup. If the detail names " +
+		"the destination, choose another; otherwise the reason is in this " +
+		"node's log.",
+	CodeBudgetUnreadable: "The budget counters could not be read, so nothing " +
+		"was reset. The reason is in this node's log.",
+	CodeBudgetResetFailed: "The budget counters could not be reset. The reason " +
+		"is in this node's log, and running the reset again is safe.",
+	CodePositionRequired: "Name the stream and the sequence your copy reaches. " +
+		"An acknowledgement moves what the trim may delete, so neither has a " +
+		"default.",
+	CodeUnknownStream: "This node has no stream by that name. Check it against " +
+		"the retention status.",
+	CodeAckFailed: "The acknowledgement was not recorded, so what the trim may " +
+		"delete has not moved. The reason is in this node's log.",
+	CodeNoTracker: "This node runs no native tracker, so it has no eviction " +
+		"gate to move. Send this to a node that runs one.",
+	CodeConfirmRequired: "This change needs a confirmation that repeats what it " +
+		"acts on. The detail says what to repeat.",
+	CodeGateFailed: "The eviction or readmission was not recorded. The detail " +
+		"says why.",
+	CodeStreamRequired: "Name the stream this is about.",
+	CodeReanchorRefused: "The reanchor was refused and nothing changed. The " +
+		"detail says why.",
+	CodeTargetRequired: "Name the stream and the byte ceiling to move it to. A " +
+		"target is fixed for the life of the operation, so neither has a default.",
+	CodeCapacityRefused: "The capacity change was refused. The detail says why, " +
+		"and names the operation already open when there is one.",
+	CodeMaintenanceUnreadable: "The maintenance window's state could not be " +
+		"read. The detail says why.",
 }
 
 // Codes is every code in the vocabulary, sorted.

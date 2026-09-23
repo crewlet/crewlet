@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -79,8 +80,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	position, err := strconv.ParseUint(r.URL.Query().Get("position"), 10, 64)
 	if stream == "" || err != nil || position == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "position_required",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodePositionRequired, map[string]string{
 			"detail": "name the stream and the sequence your copy reaches — " +
 				"an acknowledgement moves the floor the trim deletes against, " +
 				"so there is no value to guess",
@@ -100,8 +100,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		// the same call: nothing here is transient, and a 503 tells an
 		// operator who typed the stream name wrong to wait and try the
 		// identical request again.
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error":  "unknown_stream",
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownStream, map[string]string{
 			"detail": err.Error(),
 		})
 		return
@@ -124,8 +123,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.retention.PutBackupPoint(r.Context(), point); err != nil {
 		log.Warn("api_retention_ack_failed", "stream", stream, "error", err)
-		writeJSON(w, http.StatusInternalServerError,
-			map[string]string{"error": "ack_failed"})
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeAckFailed)
 		return
 	}
 	log.Info("retention_acknowledged", "operator", operator,
@@ -198,8 +196,7 @@ func (a *App) mountRetention(mount func(string, http.HandlerFunc)) {
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a.nodes == nil {
-			writeJSON(w, http.StatusServiceUnavailable,
-				map[string]string{"error": "no_tracker"})
+			httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeNoTracker)
 			return
 		}
 		node := r.PathValue("node")
@@ -208,8 +205,7 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 		// machine writing and a readmission lets it write again, and
 		// neither is a value to get from a shell history.
 		if node == "" || r.URL.Query().Get("confirm") != node {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "confirm_required",
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
 				"detail": "repeat the node id in ?confirm= — an eviction stops " +
 					"that machine's records applying anywhere in the fleet",
 			})
@@ -235,8 +231,8 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 		if err != nil {
 			log.Warn("api_retention_gate_failed", "node", node,
 				"evict", evict, "error", err)
-			writeJSON(w, http.StatusInternalServerError,
-				map[string]string{"error": "gate_failed", "detail": err.Error()})
+			httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeGateFailed,
+				map[string]string{"detail": err.Error()})
 			return
 		}
 		log.Info("retention_gate", "operator", operator, "node", node, "evict", evict)
@@ -296,14 +292,13 @@ func (a *App) mountCapacity(mount func(string, http.HandlerFunc)) {
 func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
-		writeJSON(w, http.StatusBadRequest,
-			map[string]string{"error": "stream_required"})
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeStreamRequired)
 		return
 	}
 	createdAt, generation, err := a.capacity.ReanchorStatus(r.Context(), stream)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound,
-			map[string]string{"error": "unknown_stream", "detail": err.Error()})
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownStream,
+			map[string]string{"detail": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -315,8 +310,7 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 	stream, confirm := r.URL.Query().Get("stream"), r.URL.Query().Get("confirm")
 	if stream == "" || confirm == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "confirm_required",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
 			"detail": "echo the stream's own created_at from GET " +
 				"/work/retention/reanchor — a reanchor declares every position " +
 				"below the new generation stale, and the confirmation is what " +
@@ -335,8 +329,8 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		log.Warn("api_reanchor_refused", "stream", stream, "error", err)
-		writeJSON(w, http.StatusConflict,
-			map[string]string{"error": "reanchor_refused", "detail": err.Error()})
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeReanchorRefused,
+			map[string]string{"detail": err.Error()})
 		return
 	}
 	log.Warn("reanchored", "operator", operator, "stream", stream, "generation", gen)
@@ -350,8 +344,7 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	target, err := strconv.ParseUint(r.URL.Query().Get("bytes"), 10, 64)
 	if stream == "" || err != nil || target == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "target_required",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeTargetRequired, map[string]string{
 			"detail": "name the stream and the byte ceiling — a target is chosen " +
 				"once for the life of an operation and never changed, so there " +
 				"is no value to guess",
@@ -359,8 +352,7 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if confirm := r.URL.Query().Get("confirm"); confirm != strconv.FormatUint(target, 10) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "confirm_required",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
 			"detail": "repeat the byte count in ?confirm= — this restarts the " +
 				"whole fleet three times and changes what the broker will accept",
 		})
@@ -381,8 +373,8 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 		// operation that never opened from one that is open and stuck,
 		// and those have opposite next steps.
 		log.Warn("api_set_capacity_refused", "stream", stream, "error", err)
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "capacity_refused", "detail": err.Error(),
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeCapacityRefused, httpjson.Detail{
+			"detail":    err.Error(),
 			"operation": operationOrNil(op),
 		})
 		return
@@ -398,14 +390,13 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
-		writeJSON(w, http.StatusBadRequest,
-			map[string]string{"error": "stream_required"})
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeStreamRequired)
 		return
 	}
 	op, acks, admissions, found, err := a.capacity.CapacityStatus(r.Context(), stream)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError,
-			map[string]string{"error": "maintenance_unreadable", "detail": err.Error()})
+		httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable,
+			map[string]string{"detail": err.Error()})
 		return
 	}
 	body := map[string]any{
@@ -438,8 +429,7 @@ func (a *App) serveAbandon(w http.ResponseWriter, r *http.Request) {
 func (a *App) serveExclude(w http.ResponseWriter, r *http.Request) {
 	node := r.URL.Query().Get("node")
 	if node == "" || r.URL.Query().Get("confirm") != node {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "confirm_required",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
 			"detail": "repeat the node id in ?confirm= — excluding a participant " +
 				"asserts that its process is stopped and holds no outstanding " +
 				"request, which is the only thing that waives its acknowledgement",
@@ -458,8 +448,7 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what strin
 
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
-		writeJSON(w, http.StatusBadRequest,
-			map[string]string{"error": "stream_required"})
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeStreamRequired)
 		return
 	}
 	// WHO IS ACTING, resolved BEFORE the gesture runs, as every other
@@ -476,8 +465,8 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what strin
 	if err != nil {
 		log.Warn("api_capacity_gesture_refused", "gesture", what,
 			"stream", stream, "operator", operator, "error", err)
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "capacity_refused", "detail": err.Error(),
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeCapacityRefused, httpjson.Detail{
+			"detail":    err.Error(),
 			"operation": operationOrNil(op),
 		})
 		return
