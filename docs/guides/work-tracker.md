@@ -942,12 +942,13 @@ to bind rather than guessing whose queue to show. See [Humans
 in the org](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)
 for the binding.
 
-The marks are the ASSISTANT'S. The dashboard is read-only, because every write
-here is attributed to somebody and a button in a browser would write as "the
-dashboard", which is nobody — so `mark_inbox` is what an assistant calls when
-you ask it to, and the screen shows what the engine recorded. Each notice
-offers the call that would mark it, pre-filled and copyable, rather than a
-control that pretends to send it.
+The dashboard does not write the marks: it is read-only, and shows what the
+engine recorded. A mark is written by `mark_inbox`, which your assistant calls
+when you ask it to, or by `PUT /work/people/{handle}/inbox` — the same verb
+over [the human write surface](../reference/api-endpoints.md#the-human-write-surface),
+attributed to whoever the request resolves to. Each notice offers the call
+that would mark it, pre-filled and copyable, rather than a control that
+pretends to send it.
 
 **And the same rows answer the other way round.** `work_inbox` reads them by
 recipient — one person, every change. `work_routing` reads them by *record* —
