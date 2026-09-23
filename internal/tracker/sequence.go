@@ -1085,9 +1085,11 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 				// THE DUTY FINISHES IT ONCE THE MOVE CAN LAND, which is
 				// not the same promise as "the duty finishes it": a
 				// survivor that went to the trash after the pre-flight
-				// takes no child until it is restored, and the duty
-				// leaves such a merge waiting — reported, not retried
-				// — rather than failing on it every tick.
+				// takes no child until it is restored, one filed under
+				// the duplicate since takes none of the subtasks above
+				// it, and the duty leaves such a merge waiting —
+				// reported, not retried — rather than failing on it
+				// every tick. See [mergeWaits].
 				return moved, fmt.Errorf("tracker: %d subtask(s) re-parented "+
 					"onto %s and %s still has more, so it stays marked "+
 					"mid-merge; the tracker duty moves the rest once the "+

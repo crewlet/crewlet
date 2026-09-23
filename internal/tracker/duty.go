@@ -291,20 +291,25 @@ func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 // next tick. The claim lapses [ClaimTTL] after its holder stops renewing, and
 // that is when a walk is abandoned rather than merely running.
 //
-// # A merge into an item in the trash WAITS, and is reported rather than run
+// # A merge only a person can unblock WAITS, and is reported rather than run
 //
-// Its survivor takes no child and no duplicate until it is restored — the
-// rule [Writer.MergeDuplicates] refuses such a merge by before its mark — so
-// a survivor that went to the trash after the mark makes running the merge a
-// refusal on every tick. Worse, it was a refusal the job RETURNED ON: the
-// selection was one batch in id order and the loop stopped at its first
-// error, so one merge waiting on the trash held up every abandoned merge whose
-// id sorted after it, for as long as nobody restored an item they may never
-// have known about. So a waiting merge is recognised from its own rows before
-// any claim is taken, it uses up no place in the tick's budget, and every
-// tick names it — which is the "still reporting" half. A restore picks it up
-// on the next tick, and so does removing the duplicate's link to the
-// survivor, which leaves a marker with no target.
+// Three states make every attempt a refusal until somebody acts, and none of
+// them is one a pre-flight can prevent, because each arrives AFTER the mark:
+// the survivor went to the trash (it takes no child and no duplicate until it
+// is restored — the rule [Writer.MergeDuplicates] refuses such a merge by
+// before its mark), the duplicate itself did (a task in the trash takes no
+// write, so neither its close nor the clearing of its mark can land), or the
+// survivor has been filed under one of the duplicate's own subtasks (moving
+// that subtask onto it would put it under itself). [mergeWaits] is the list.
+// Run, each was a refusal on every tick — and worse, one the job RETURNED ON:
+// the selection was one batch in id order and the loop stopped at its first
+// error, so one waiting merge held up every abandoned merge whose id sorted
+// after it, for as long as nobody made a change they may never have known
+// was needed. So a waiting merge is recognised from its own rows before any
+// claim is taken, it uses up no place in the tick's budget, and every tick
+// names it with what would release it — which is the "still reporting" half.
+// The next tick after that change finishes it, and removing the duplicate's
+// link to the survivor clears the mark instead.
 //
 // AND ONE MERGE'S FAILURE IS NOT THE TICK'S, for [duty.repairOneSided]'s
 // reason: the rest are on other subjects. Each failure is logged, the loop
@@ -313,7 +318,7 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 	var (
 		finished  int64
 		attempted int
-		waiting   []string
+		waiting   = map[mergeWait][]string{}
 		failed    []error
 		after     string
 	)
@@ -345,8 +350,8 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 			case err != nil:
 				fail(id, err)
 				continue
-			case walk.waiting:
-				waiting = append(waiting, id)
+			case walk.waiting != waitNothing:
+				waiting[walk.waiting] = append(waiting[walk.waiting], id)
 				continue
 			}
 			done, err := d.finishMerge(ctx, id, now)
@@ -360,15 +365,54 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 			}
 		}
 	}
-	if len(waiting) > 0 {
-		d.deps.Logger.WarnContext(ctx, "tracker_merges_waiting_on_the_trash",
-			"tasks", waiting, "detail", "each is marked mid-merge into an item "+
-				"that is now in the trash, which takes no subtask and no "+
-				"duplicate; restore that item and the next tick finishes the "+
-				"merge, or remove the duplicate's link to it and the next tick "+
-				"clears the mark")
+	for _, wait := range mergeWaits {
+		if tasks := waiting[wait.why]; len(tasks) > 0 {
+			d.deps.Logger.WarnContext(ctx, wait.event, "tasks", tasks,
+				"detail", wait.detail)
+		}
 	}
 	return finished, errors.Join(failed...)
+}
+
+// mergeWait is what an abandoned merge is waiting for somebody to change.
+type mergeWait string
+
+const (
+	// waitNothing: nothing is in the way, and the duty finishes it.
+	waitNothing mergeWait = ""
+	// waitSurvivorInTrash: the item it merges into is in the trash.
+	waitSurvivorInTrash mergeWait = "survivor_in_trash"
+	// waitDuplicateInTrash: the duplicate itself is in the trash.
+	waitDuplicateInTrash mergeWait = "duplicate_in_trash"
+	// waitSurvivorUnderDuplicate: the survivor is filed under one of the
+	// subtasks the merge would move onto it.
+	waitSurvivorUnderDuplicate mergeWait = "survivor_under_duplicate"
+)
+
+// mergeWaits is every reason an abandoned merge waits, with the line the duty
+// names it on and what releases it — ONE TABLE, so a reason cannot be
+// recognised without being said, and each is said with its own remedy: one
+// line naming three different fixes sends a reader to the wrong one.
+var mergeWaits = []struct {
+	why           mergeWait
+	event, detail string
+}{
+	{waitSurvivorInTrash, "tracker_merges_waiting_on_the_trash",
+		"each is marked mid-merge into an item that is now in the trash, " +
+			"which takes no subtask and no duplicate; restore that item and " +
+			"the next tick finishes the merge, or remove the duplicate's link " +
+			"to it and the next tick clears the mark"},
+	{waitDuplicateInTrash, "tracker_merges_of_items_in_the_trash",
+		"each is marked mid-merge and is itself in the trash, which takes no " +
+			"write — neither the close that finishes the merge nor the " +
+			"clearing of its mark; restore it and the next tick finishes the " +
+			"merge, or purge it and the merge goes with it"},
+	{waitSurvivorUnderDuplicate, "tracker_merges_waiting_on_a_cycle",
+		"each would move its subtasks onto an item that has since been filed " +
+			"under one of them, which would put that subtask under itself; " +
+			"file the item somewhere else and the next tick finishes the " +
+			"merge, or remove the duplicate's link to it and the next tick " +
+			"clears the mark"},
 }
 
 // markedAfter is one page of the tasks marked mid-merge, in id order, after a
@@ -397,7 +441,7 @@ func (d *duty) markedAfter(ctx context.Context, after string) ([]string, error) 
 
 // finishMerge completes one abandoned merge under its own claim, reporting
 // whether it did — false for a walk that is still running, or one that began
-// waiting on the trash between the selection and the claim.
+// to wait between the selection and the claim.
 func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool, error) {
 	claim, err := d.deps.Writer.hold(ctx, mergeClaim(id))
 	switch {
@@ -414,13 +458,12 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 	defer claim.release(ctx)
 
 	// READ AGAIN UNDER THE CLAIM, because the selection's read was taken
-	// before it: the walk may have finished, or the survivor gone to the
-	// trash, in between.
+	// before it: the walk may have finished, or begun to wait, in between.
 	walk, err := d.abandonedMerge(ctx, id)
 	switch {
 	case err != nil:
 		return false, err
-	case walk.waiting:
+	case walk.waiting != waitNothing:
 		return false, nil
 	}
 	opID := d.opID("merge", id, now)
@@ -483,9 +526,9 @@ type abandonedMerge struct {
 	// destroyed it, for the line that says why a marker was cleared.
 	purged string
 
-	// waiting says the survivor is in the trash, which takes nothing until
-	// it is restored — see [duty.finishMerges].
-	waiting bool
+	// waiting is what the merge waits for somebody to change, or
+	// [waitNothing] — see [duty.finishMerges].
+	waiting mergeWait
 
 	// reparent is the walk's own intent, carried on the task since the
 	// mark. FALSE for a marker written by a build that predates the
@@ -513,6 +556,14 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 				walk.into = relation.Other
 			}
 		}
+		// THE DUPLICATE IN THE TRASH FIRST, whatever became of the
+		// survivor: a tombstone is a freeze, so every write the duty could
+		// make here — the close, and the clearing of a mark with no target
+		// — is refused until it is restored.
+		if current.Removed != nil {
+			walk.waiting = waitDuplicateInTrash
+			return nil
+		}
 		if walk.into == "" {
 			return nil
 		}
@@ -523,8 +574,23 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 		switch {
 		case err != nil:
 			return err
+		case held && canonical.Removed != nil:
+			walk.waiting = waitSurvivorInTrash
+			return nil
+		case held && walk.reparent:
+			// FILED UNDER THE DUPLICATE SINCE THE MARK, which the mark's
+			// own pre-flight refused and nothing stops afterwards: the
+			// subtask it sits under would move onto it, and
+			// [refuseParent] refuses that as a cycle on every attempt.
+			var under bool
+			if under, err = inSubtree(ctx, tx, walk.task, walk.into); err != nil {
+				return err
+			}
+			if under {
+				walk.waiting = waitSurvivorUnderDuplicate
+			}
+			return nil
 		case held:
-			walk.waiting = canonical.Removed != nil
 			return nil
 		}
 		_, purged, err := purgedTask(ctx, tx, walk.into)

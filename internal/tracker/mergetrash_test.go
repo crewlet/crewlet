@@ -343,6 +343,181 @@ func TestTheDutyClearsAMergeWhoseSurvivorWasPurged(t *testing.T) {
 	}
 }
 
+// A DUPLICATE PUT IN THE TRASH AFTER ITS MARK WAITS, NAMED, UNTIL IT IS
+// RESTORED — and then the merge finishes.
+//
+// A tombstone is a freeze: the close that finishes a merge is a write on the
+// duplicate, and so is clearing a mark with no target, and a task in the trash
+// takes neither. Nothing stops a person trashing an item a merge is folding
+// away, so the duty ran that refusal on every tick — moving the subtasks
+// first, onto a survivor, on behalf of an item somebody had since thrown out.
+// Now nothing moves, the tick is not a failure, and every tick names it.
+func TestTheDutyWaitsOnADuplicateInTheTrashUntilItIsRestored(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	under := "dup"
+	kid := newTask("kid")
+	kid.Parent = &under
+	if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+		t.Fatalf("CreateTask kid: %v", err)
+	}
+	r.drain()
+	markMerging(t, r, "dup", "keep", true)
+	if _, err := r.writer.RemoveTask(t.Context(), "op-remove", "dup", "ENG",
+		false, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+
+	var logged bytes.Buffer
+	worker := loggedTrackerWorker(t, r, &logged)
+	swept, err := worker.Tick(t.Context())
+	if err != nil {
+		t.Fatalf("a tick with a trashed duplicate mid-merge = %v; waiting is "+
+			"not a failure", err)
+	}
+	r.drain()
+	if swept["tracker_abandoned_merges"] != 0 {
+		t.Errorf("the duty finished %d merges of an item in the trash",
+			swept["tracker_abandoned_merges"])
+	}
+	if got := parentOf(r.task(t, "kid")); got != "dup" {
+		t.Errorf("the subtask moved to %q on behalf of an item in the trash", got)
+	}
+	if line := logged.String(); !strings.Contains(line,
+		"tracker_merges_of_items_in_the_trash") || !strings.Contains(line, "dup") {
+		t.Errorf("the waiting merge was not reported: %s", line)
+	}
+
+	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "dup", "ENG",
+		nil); err != nil {
+		t.Fatalf("RestoreTask: %v", err)
+	}
+	r.drain()
+	if _, err := worker.Tick(t.Context()); err != nil {
+		t.Fatalf("Tick after the restore: %v", err)
+	}
+	r.drain()
+	if dup := oneTask(t, r, "dup"); dup.Merging || dup.Status != tracker.StatusCancelled {
+		t.Errorf("the merge did not finish once the duplicate was restored: "+
+			"%q, merging=%v", dup.Status, dup.Merging)
+	}
+	if got := parentOf(r.task(t, "kid")); got != "keep" {
+		t.Errorf("the subtask's parent is %q after the merge finished, want keep", got)
+	}
+}
+
+// AND A DUPLICATE IN THE TRASH WAITS EVEN WHEN ITS SURVIVOR IS GONE.
+//
+// With the survivor purged the repair is to clear the mark and leave the
+// duplicate open — but clearing it is a write on the duplicate, which the
+// trash refuses, so that repair failed on every tick too. The trash is what
+// is in the way, and a restore is what lets the mark be cleared.
+func TestADuplicateInTheTrashWaitsEvenWhenItsSurvivorIsPurged(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	markMerging(t, r, "dup", "keep", false)
+	if _, err := r.writer.RemoveTask(t.Context(), "op-remove", "dup", "ENG",
+		false, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "keep", "ENG",
+		"a test"); err != nil {
+		t.Fatalf("PurgeTask: %v", err)
+	}
+	r.drain()
+
+	worker := trackerWorker(t, r)
+	if _, err := worker.Tick(t.Context()); err != nil {
+		t.Fatalf("a tick with a trashed duplicate whose survivor was purged = "+
+			"%v; waiting is not a failure", err)
+	}
+	r.drain()
+	if !oneTask(t, r, "dup").Merging {
+		t.Fatal("the mark was cleared on an item in the trash, which takes no write")
+	}
+	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "dup", "ENG",
+		nil); err != nil {
+		t.Fatalf("RestoreTask: %v", err)
+	}
+	r.drain()
+	if _, err := worker.Tick(t.Context()); err != nil {
+		t.Fatalf("Tick after the restore: %v", err)
+	}
+	r.drain()
+	dup := oneTask(t, r, "dup")
+	if dup.Merging || dup.Status == tracker.StatusCancelled {
+		t.Errorf("once restored, the mark should be cleared and the duplicate "+
+			"left open: %q, merging=%v", dup.Status, dup.Merging)
+	}
+}
+
+// A SURVIVOR FILED UNDER THE DUPLICATE AFTER THE MARK WAITS, NAMED, UNTIL IT
+// IS FILED ELSEWHERE.
+//
+// The mark's own pre-flight refuses a merge that would move the subtasks onto
+// one of them, and nothing stops the survivor being filed under one
+// afterwards — so the subtask it sits under would move onto it, which a
+// re-parent refuses as a cycle, on every tick.
+func TestTheDutyWaitsOnASurvivorFiledUnderTheDuplicate(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "keep")
+	filedTask(t, r, "dup")
+	under := "dup"
+	kid := newTask("kid")
+	kid.Parent = &under
+	if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
+		t.Fatalf("CreateTask kid: %v", err)
+	}
+	r.drain()
+	markMerging(t, r, "dup", "keep", true)
+	refile := func(opID, parent string) {
+		t.Helper()
+		if _, err := r.writer.UpdateTask(t.Context(), opID, "keep", "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Parent: &parent},
+			tracker.ChangeReparented, nil); err != nil {
+			t.Fatalf("file keep under %q: %v", parent, err)
+		}
+		r.drain()
+	}
+	refile("op-under-kid", "kid")
+
+	var logged bytes.Buffer
+	worker := loggedTrackerWorker(t, r, &logged)
+	if _, err := worker.Tick(t.Context()); err != nil {
+		t.Fatalf("a tick with a merge waiting on a cycle = %v; waiting is not "+
+			"a failure", err)
+	}
+	r.drain()
+	if dup := oneTask(t, r, "dup"); !dup.Merging || dup.Status == tracker.StatusCancelled {
+		t.Errorf("the merge was finished or cleared (%q, merging=%v) while "+
+			"its survivor sits under the subtask it would move", dup.Status, dup.Merging)
+	}
+	if line := logged.String(); !strings.Contains(line,
+		"tracker_merges_waiting_on_a_cycle") || !strings.Contains(line, "dup") {
+		t.Errorf("the waiting merge was not reported: %s", line)
+	}
+
+	refile("op-out", "")
+	if _, err := worker.Tick(t.Context()); err != nil {
+		t.Fatalf("Tick once the survivor is filed elsewhere: %v", err)
+	}
+	r.drain()
+	if dup := oneTask(t, r, "dup"); dup.Merging || dup.Status != tracker.StatusCancelled {
+		t.Errorf("the merge did not finish once the survivor moved out: %q, "+
+			"merging=%v", dup.Status, dup.Merging)
+	}
+	if got := parentOf(r.task(t, "kid")); got != "keep" {
+		t.Errorf("the subtask's parent is %q after the merge finished, want keep", got)
+	}
+}
+
 // markMerging publishes exactly the mark [tracker.Writer.MergeDuplicates]
 // does and nothing after it — a holder that died between its first append and
 // its last.
