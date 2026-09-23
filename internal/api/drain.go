@@ -66,16 +66,15 @@ const DrainRetryAfter = 30 * time.Second
 //     Refusing by default is what keeps a write route added later from being
 //     admitted through a drain because nobody listed it.
 //
-// The one route the method rule SPLITS is /operator/mcp, which is mounted for
-// every verb because streamable HTTP is a GET for the server-to-client stream
-// and a DELETE to end a session. Its POST — every JSON-RPC call it serves,
-// reads included — is refused, its GET stream is served like any other read,
-// and its DELETE rides the default above. That last one is a session teardown
-// rather than work, so refusing it costs the caller an error on a session that
-// dies with the listener a moment later anyway: carving it out would buy that
-// back at the price of the default-refuse property, which is the thing here
-// worth keeping. /mcp/{token} is NOT split, because the whole prefix is
-// exempted above.
+// /operator/mcp needs NO rule of its own, because it is served STATELESS (see
+// internal/api/opsmcp): every call is a POST carrying its own credential, and
+// there is no server-to-client stream to hold open and no session to end — the
+// SDK answers a GET or a DELETE there with its own 405. So its POST, every
+// JSON-RPC call it serves reads included, is refused like any other write, and
+// a GET passes this gate as a read only to meet that 405: a read of nothing,
+// which starts nothing either. /mcp/{token} is the one MCP surface that DOES
+// hold sessions, and it is served through a drain for the reason the bridge
+// bullet above gives.
 func servedWhileDraining(r *http.Request) bool {
 	path := r.URL.Path
 	switch {

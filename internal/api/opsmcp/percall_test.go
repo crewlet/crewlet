@@ -224,3 +224,37 @@ func TestAnotherCredentialCannotRideTheOpenersSession(t *testing.T) {
 			"authority: %s", answer)
 	}
 }
+
+// THERE IS NO STREAM AND NO SESSION, so only a POST is served.
+//
+// The drain gate in internal/api gives this route no rule of its own on that
+// premise: a GET passes it as a read and meets this 405, and a POST is refused
+// like any write. A stateful handler would hold a server-to-client stream open
+// on GET and end a session on DELETE — work a draining node would then serve
+// through a gate that reads the one as harmless — so the premise is asserted
+// here, where the handler that makes it true is built.
+func TestTheOperatorSurfaceServesOnlyPOST(t *testing.T) {
+	t.Parallel()
+	dir := &directory{people: map[string]iam.Principal{}}
+	dir.set("ops", machine("token:ops", iam.GrantStateRead))
+	server := operatorServer(t, dir)
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		req, err := http.NewRequestWithContext(t.Context(), method, server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer ops")
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("Mcp-Session-Id", "a-session-somebody-remembers")
+		res, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+		if res.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("%s answered %d, want 405: a stateless surface holds no "+
+				"stream to open and no session to end", method, res.StatusCode)
+		}
+	}
+}
