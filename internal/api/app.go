@@ -649,14 +649,20 @@ func New(opts Options) (*App, error) {
 	a.cors = auth.NewCORS(opts.Bootstrap)
 	// THE ORDER IS THE ARGUMENT. Outermost is the page policy, so a
 	// response no handler thought about still carries its headers. Then
-	// CORS, which must answer a preflight before the guard sees it — a
-	// browser attaches no credential to one. Then the guard, which
-	// resolves the principal. Then the CSRF check, INSIDE the guard
+	// the CANONICAL-PATH refusal, before anything reads the path: the
+	// guard decides from `r.URL.Path` which routes are exempt, and a path
+	// like `/webhooks/../config` reads to it as an exempt prefix and to
+	// ServeMux as another route entirely — the mux answered it with a
+	// redirect, so nothing was served, but the guard and the router were
+	// deciding about two different paths and only the redirect kept that
+	// harmless. Then CORS, which must answer a preflight before the guard
+	// sees it — a browser attaches no credential to one. Then the guard,
+	// which resolves the principal. Then the CSRF check, INSIDE the guard
 	// because the credential's SHAPE is what decides whether a missing
 	// Origin is a refusal, and nothing before the guard knows which shape
 	// arrived.
-	a.handler = pagepolicy.Apply(
-		a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(a.drainGate(mux)))),
+	a.handler = pagepolicy.Apply(authz.CanonicalPath(
+		a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(a.drainGate(mux))))),
 		a.secure)
 	return a, nil
 }

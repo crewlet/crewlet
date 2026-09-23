@@ -363,6 +363,16 @@ lasts. So an unreadable identity estate is `503 identity_unavailable` with a
 `Retry-After`, and only a credential this node positively checked and refused
 is a `401` or a `403`.
 
+### A path is taken as it was sent, or refused
+
+A request path carrying a `.` or `..` segment, or an empty one (`//`) — spelled
+out or percent-encoded (`%2e%2e`) — is refused `400 non_canonical_path` before
+anything reads it, rather than cleaned and redirected. Which routes are exempt
+from the credential check is decided from the path, and so is which handler
+runs; a path that reads as `/webhooks/…` to one of them and as `/config` to
+the other is exactly what an authority gate must never be asked to agree with.
+Send the path it resolves to.
+
 ### Security headers on every response
 
 Every response the API writes carries four headers, set before its status line

@@ -159,8 +159,9 @@ func TestADifferentAssetGetsADifferentETag(t *testing.T) {
 func TestATraversalNeverReachesTheAssetHandler(t *testing.T) {
 	t.Parallel()
 	// The FIRST of two layers, and the only one an end-to-end request can
-	// see: http.ServeMux cleans a request path before routing, so a ".."
-	// spelled in a URL is redirected rather than routed.
+	// see: a ".." spelled in a URL is refused before it is routed at all
+	// (authz.CanonicalPath, wrapped round the whole surface), where it used
+	// to be cleaned and redirected by http.ServeMux.
 	//
 	// Which is exactly why this is not the test that proves the handler
 	// safe — it passed with the handler serving whatever it was asked for.
@@ -214,12 +215,12 @@ func TestEveryOtherResponseCarriesTheAPIPolicy(t *testing.T) {
 	guarded := newApp(t, api.Options{Bootstrap: &closed, Assets: tree()})
 
 	for name, res := range map[string]*http.Response{
-		"the redirect from /":  fetch(t, open, "/", nil),
-		"an unrouted path":     fetch(t, open, "/no-such-route", nil),
-		"a JSON read":          fetch(t, open, "/health", nil),
-		"a refusal (401)":      fetch(t, guarded, "/org", nil),
-		"a missing asset":      fetch(t, open, "/static/dashboard/js/nope.js", nil),
-		"a traversal redirect": fetch(t, open, "/static/../../etc/passwd", nil),
+		"the redirect from /": fetch(t, open, "/", nil),
+		"an unrouted path":    fetch(t, open, "/no-such-route", nil),
+		"a JSON read":         fetch(t, open, "/health", nil),
+		"a refusal (401)":     fetch(t, guarded, "/org", nil),
+		"a missing asset":     fetch(t, open, "/static/dashboard/js/nope.js", nil),
+		"a traversal refusal": fetch(t, open, "/static/../../etc/passwd", nil),
 	} {
 		assertSecurityHeaders(t, name, res, pagepolicy.API)
 	}
