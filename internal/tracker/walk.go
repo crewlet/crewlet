@@ -107,21 +107,25 @@ func (p RespreadPlan) Batch(k int) []Placement {
 
 // PlanRespread mints a project's whole re-spread.
 //
-// It reads ONE snapshot: the rows whose keys are past the threshold, in
-// ascending order, and the project's current minimum. Everything after that is
-// arithmetic — which is what makes the assignment a pure function of the plan
-// and therefore identical on whichever node completes the walk.
+// It reads ONE snapshot: every live row of the project, in ascending order,
+// and the project's current minimum. Everything after that is arithmetic —
+// which is what makes the assignment a pure function of the plan and therefore
+// identical on whichever node completes the walk.
+//
+// EVERY ROW, NOT ONLY THE LONG ONES. The walk moves what it rewrites into a
+// reserve BELOW the project's minimum, so a row it left at its old key would
+// end up after every row it moved: a board whose long keys sat between two
+// short ones would come back with the long run at its head. Rewriting every row
+// in ascending order is what makes each batch boundary the original order —
+// the moved rows the lowest originals, the untouched ones everything above.
 func PlanRespread(ctx context.Context, db *store.DB, project string) (RespreadPlan, error) {
 	var rows []Placement
 	var lowest Rank
 	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		// ONLY THE LONG ONES: a key already under the threshold costs
-		// nothing to leave where it is, and rewriting it would spend a
-		// record to change nothing.
 		found, err := tx.QueryContext(ctx, `
 			SELECT id, rank FROM tracker_tasks
-			WHERE project_key = ? AND removed_at IS NULL AND length(rank) > ?
-			ORDER BY rank, id`, project, RankRenormaliseAt)
+			WHERE project_key = ? AND removed_at IS NULL
+			ORDER BY rank, id`, project)
 		if err != nil {
 			return fmt.Errorf("tracker: read %s's re-spread rows: %w", project, err)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -525,6 +526,120 @@ func TestARepeatedHintHonoursItsOwnLimit(t *testing.T) {
 	}
 }
 
+// A PAGE OF A HINT'S ANSWER SAYS IT IS A PAGE, and names the offset that
+// reads the rest.
+//
+// The heading says these are the notes that bear on the hint, so a page cut
+// at `limit` with nothing after it reads as the whole set: a model shown five
+// of seven relevant notes could not tell a short answer from a short set. The
+// rest is reachable only because a repeat is answered from the ledger — the
+// next offset has to be into the SAME ranked answer, not a fresh filter call.
+func TestAHintedPageThatIsNotTheWholeAnswerSaysWhereTheRestIs(t *testing.T) {
+	t.Parallel()
+	var notes []learning.DiaryEntry
+	for _, n := range []string{"one", "two", "three", "four", "five", "six", "seven"} {
+		notes = append(notes, learning.DiaryEntry{Kind: "preference", Content: "note " + n})
+	}
+	recall := &fakeRecall{notes: notes}
+	tool := registered(t, builtin.Deps{
+		Diary: &countingDiary{}, Recall: recall, RefreshesPerTurn: 1,
+	}, builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+
+	first := callFor(t, tool, turn, map[string]any{"context_hint": "indexing"})
+	if first.Failed {
+		t.Fatalf("the first page was refused: %q", first.Output)
+	}
+	if strings.Contains(first.Output, "note six") {
+		t.Fatalf("the default page printed past its limit:\n%s", first.Output)
+	}
+	if !strings.Contains(first.Output, "2 more") || !strings.Contains(first.Output, "offset 5") {
+		t.Fatalf("a page of five out of seven did not say two more exist or "+
+			"where they are:\n%s", first.Output)
+	}
+
+	rest := callFor(t, tool, turn, map[string]any{"context_hint": "indexing", "offset": 5})
+	if rest.Failed {
+		t.Fatalf("the offset the first page named was refused: %q", rest.Output)
+	}
+	for _, want := range []string{"note six", "note seven"} {
+		if !strings.Contains(rest.Output, want) {
+			t.Errorf("the second page is missing %q:\n%s", want, rest.Output)
+		}
+	}
+	if strings.Contains(rest.Output, "note five") || strings.Contains(rest.Output, "more bear") {
+		t.Errorf("the last page repeated a note or claimed more exist:\n%s", rest.Output)
+	}
+	if recall.memoryCalls != 1 {
+		t.Fatalf("filter calls = %d — the second page re-ran the filter, so "+
+			"its offset is into a different answer", recall.memoryCalls)
+	}
+
+	past := callFor(t, tool, turn, map[string]any{"context_hint": "indexing", "offset": 9})
+	if past.Failed || !strings.Contains(past.Output, "7 of your notes") {
+		t.Errorf("an offset past the end did not say how many there are: %q", past.Output)
+	}
+}
+
+// A PAGE OF RECENT NOTES THAT STOPS SHORT OF THE OLDEST SAYS SO, and the
+// offset it names reads on until every note has been read.
+//
+// A seat holding more notes than one page was shown the newest few under a
+// heading that read as all of them, and nothing reached the rest. The store
+// takes no offset, so the page is read with one row past its end: that probe
+// is the only thing that can say older notes exist.
+func TestRecentNotesArePagedAndSayWhenOlderOnesExist(t *testing.T) {
+	t.Parallel()
+	var notes []learning.DiaryEntry
+	for i := range 7 {
+		notes = append(notes, learning.DiaryEntry{Kind: "preference",
+			Content: "note " + strconv.Itoa(i)})
+	}
+	diary := &newestFirst{notes: notes}
+	tool := registered(t, builtin.Deps{Diary: diary}, builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+
+	first := callFor(t, tool, turn, nil)
+	if first.Failed {
+		t.Fatalf("the first page failed: %q", first.Output)
+	}
+	if strings.Contains(first.Output, "note 5") {
+		t.Fatalf("the default page printed past its limit:\n%s", first.Output)
+	}
+	if !strings.Contains(first.Output, "older notes") || !strings.Contains(first.Output, "offset 5") {
+		t.Fatalf("a page of five of seven notes did not say older ones exist "+
+			"or where they are:\n%s", first.Output)
+	}
+
+	rest := callFor(t, tool, turn, map[string]any{"offset": 5})
+	if rest.Failed {
+		t.Fatalf("the offset the first page named was refused: %q", rest.Output)
+	}
+	for _, want := range []string{"note 5", "note 6", "6 to 7 of 7"} {
+		if !strings.Contains(rest.Output, want) {
+			t.Errorf("the last page is missing %q:\n%s", want, rest.Output)
+		}
+	}
+	if strings.Contains(rest.Output, "note 4") || strings.Contains(rest.Output, "older notes") {
+		t.Errorf("the last page repeated a note or claimed older ones exist:\n%s", rest.Output)
+	}
+
+	all := callFor(t, tool, turn, map[string]any{"limit": 7})
+	if !strings.Contains(all.Output, "All 7 of your notes") || strings.Contains(all.Output, "older notes") {
+		t.Errorf("a page holding every note did not say it was all of them:\n%s", all.Output)
+	}
+
+	past := callFor(t, tool, turn, map[string]any{"offset": 9})
+	if past.Failed || !strings.Contains(past.Output, "You have 7 notes") {
+		t.Errorf("an offset past the end did not say how many there are: %q", past.Output)
+	}
+	huge := callFor(t, tool, turn, map[string]any{"offset": strconv.Itoa(math.MaxInt)})
+	if huge.Failed || !strings.Contains(huge.Output, "You have 7 notes") {
+		t.Errorf("an offset whose read size overflows was not answered as past "+
+			"the end: %q", huge.Output)
+	}
+}
+
 // A HINT WHOSE FILTER FAILED STILL COSTS ITS SLOT, and is not answered from an
 // empty cache entry. Otherwise a failing call is retryable without bound —
 // the same unbounded spend the cap exists to stop.
@@ -655,4 +770,14 @@ func (c *countingDiary) Write(context.Context, learning.DiaryEntry) error { retu
 func (c *countingDiary) Recent(_ context.Context, _ string, _ time.Time, limit int) ([]learning.DiaryEntry, error) {
 	c.limit = limit
 	return nil, nil
+}
+
+// newestFirst is a diary whose notes are already in the store's order, newest
+// first, and which reads at most limit of them as the store does.
+type newestFirst struct{ notes []learning.DiaryEntry }
+
+func (n *newestFirst) Write(context.Context, learning.DiaryEntry) error { return nil }
+
+func (n *newestFirst) Recent(_ context.Context, _ string, _ time.Time, limit int) ([]learning.DiaryEntry, error) {
+	return n.notes[:min(limit, len(n.notes))], nil
 }

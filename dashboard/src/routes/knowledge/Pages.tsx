@@ -58,7 +58,8 @@ import {
   TimelineGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
+import { useClient, useOrg } from "~/lib/store-hooks.ts";
+import { useOlderPages } from "~/lib/paging.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 // THE TRACKER'S OWN SPELLING OF A CAPPED COUNT — `50+` rather than `50` —
@@ -72,7 +73,7 @@ import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { pageCount } from "~/lib/work.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import type { Page, PageRevision, PageSummary } from "~/protocol/index.ts";
+import type { Page, PageChange, PageRevision, PageSummary } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { useViewer } from "~/lib/viewer.ts";
@@ -250,7 +251,7 @@ function pageFlags(page: Page): React.ReactNode {
  * page link is drawn in, and a second copy of "peek rather than navigate" is
  * how one of them comes to forget the middle button.
  */
-export function PageLink({ page }: { page: PageSummary }) {
+export function PageLink({ page }: { page: Pick<PageSummary, "container" | "title"> }) {
   const { open } = usePeekControls();
   const ref = { kind: "page" as const, id: pageAddress(page) };
   return (
@@ -1200,7 +1201,16 @@ export function PagePeek({ id }: { id: string }) {
               </Card>
 
               <Card>
-                <Card.Header icon={<ScheduleGlyph size="sm" />} count={history.length}>
+                {/* OF HOW MANY, where the page keeps fewer revisions than it
+                    has saves — see [revisionsDropped]. */}
+                <Card.Header
+                  icon={<ScheduleGlyph size="sm" />}
+                  count={
+                    revisionsDropped(history) > 0
+                      ? `${history.length} of ${history.length + revisionsDropped(history)}`
+                      : history.length
+                  }
+                >
                   <Card.Title>Saves</Card.Title>
                 </Card.Header>
                 {history.length > 0 ? (
@@ -1300,6 +1310,20 @@ function DiffPane({ sections }: { sections: DiffSection[] }) {
   );
 }
 
+/**
+ * How many of a page's saves this node no longer keeps a body for.
+ *
+ * Versions run from 1 up by one a save, and a save retires the revision a
+ * bounded distance below it (`pages.RevisionsKept`) — so an oldest kept version
+ * above 1 is exactly that version minus one saves whose bodies are gone. Unsaid,
+ * a history of the kept revisions read as the page's whole history, and its
+ * oldest entry as the first draft.
+ */
+export function revisionsDropped(history: readonly PageRevision[]): number {
+  const oldest = history[history.length - 1]?.version ?? 0;
+  return oldest > 1 ? oldest - 1 : 0;
+}
+
 function PageHistory({
   pageID,
   history,
@@ -1343,11 +1367,25 @@ function PageHistory({
   );
   const stat = useMemo(() => diffStat(diff.flatMap((section) => section.lines)), [diff]);
 
+  const dropped = revisionsDropped(history);
+  const oldest = history[history.length - 1]?.version ?? 0;
+
   return (
     <Card>
       <Card.Header icon={<ScheduleGlyph size="sm" />}>
-        <Card.Title>{`History (${history.length})`}</Card.Title>
+        <Card.Title>
+          {dropped > 0
+            ? `History (${history.length} of ${history.length + dropped})`
+            : `History (${history.length})`}
+        </Card.Title>
       </Card.Header>
+      {dropped > 0 && (
+        <p className="t-caption">
+          {dropped === 1 ? "Version 1 is" : `Versions 1–${oldest - 1} are`} no longer kept: a page
+          keeps a bounded number of revisions. Who saved each and when is still in the Activity
+          record below.
+        </p>
+      )}
       {history.length ? (
         <div className="list">
           {history.map((rev) => (
@@ -1389,6 +1427,14 @@ function PageHistory({
                       a fact about the page rather than a lens the reader
                       failed to pick — so the control is absent rather than
                       offering a diff that can only say "everything". */}
+                  {previous === 0 && version > 1 && (
+                    // NOT THE FIRST DRAFT: the save before this one is past
+                    // what the page keeps, so there is nothing to compare.
+                    <span className="t-caption">
+                      The version before it is no longer kept, so there is nothing to compare it
+                      with.
+                    </span>
+                  )}
                   {previous > 0 && (
                     <Segmented
                       ariaLabel="What to show"
@@ -1479,15 +1525,33 @@ function PageChanges({
   seatName: (handle: string) => string;
   now: number;
 }) {
-  const feed = useQuery("page_activity", { page: pageID }, { pollMs: 60_000 });
-  const changes = feed.data?.changes ?? [];
+  const { socket } = useClient();
+  // THE PAGES PAST THE FIRST, from the cursor the feed mints — frozen while
+  // held, see `lib/paging.ts`. They are the only record of a save older than
+  // the revisions this page keeps, which [PageHistory] sends a reader here for.
+  const pager = useOlderPages<PageChange, string>(changeKey, pageID);
+  const feed = useQuery(
+    "page_activity",
+    { page: pageID },
+    { pollMs: pager.frozen ? undefined : 60_000 },
+  );
+  const changes = useMemo(() => pager.rows(feed.data?.changes), [pager.rows, feed.data]);
   // A NON-EMPTY CURSOR IS THE ENGINE'S OWN "there is at least one more", which
   // is the reading the tracker's own feeds take: `readActivity` asks for one
   // row past `MaxPageChanges` and mints a cursor only when that row came back,
   // so it is never `changes.length === 100` — wrong on the boundary in both
-  // directions. It was declared on `PageActivityAnswer` and read nowhere, so a
-  // page saved two hundred times drew "Activity (100)" as its whole history.
-  const more = Boolean(feed.data?.next_cursor);
+  // directions.
+  const firstNext = feed.data?.next_cursor || null;
+  const more = pager.more(firstNext);
+  const loadOlder = () =>
+    void pager.loadOlder(feed.data?.changes, firstNext, async (cursor) => {
+      const page = await socket.query("page_activity", { page: pageID, cursor });
+      return { rows: page.changes, next: page.next_cursor || null };
+    });
+  const backToNewest = () => {
+    pager.backToNewest();
+    feed.refetch();
+  };
   return (
     <Card>
       <Card.Header
@@ -1550,8 +1614,43 @@ function PageChanges({
         more={more}
         one="change"
         slice="newest"
-        whole="Older ones are behind this page of the history; the turn links above reach the work that made them."
+        whole="Older ones are read below, a page at a time."
       />
+      {(more || pager.frozen || pager.error) && (
+        <Card.Footer variant="meta">
+          <span className="row gap-2 wrap">
+            {pager.error ? (
+              <QueryState error={pager.error} loading={false} />
+            ) : (
+              pager.frozen && (
+                <span className="t-caption">
+                  Updates are paused while older changes are loaded.
+                </span>
+              )
+            )}
+            <span className="spacer" />
+            {more && (
+              <Button
+                size="small"
+                variant="secondary"
+                onClick={loadOlder}
+                disabled={pager.paging}
+                loading={pager.paging}
+              >
+                Load older changes
+              </Button>
+            )}
+            {pager.frozen && (
+              <Button size="small" variant="secondary" onClick={backToNewest}>
+                Back to the newest
+              </Button>
+            )}
+          </span>
+        </Card.Footer>
+      )}
     </Card>
   );
 }
+
+/** A change's identity, for the pager. */
+const changeKey = (change: PageChange) => change.id;

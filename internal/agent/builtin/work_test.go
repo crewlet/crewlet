@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -35,6 +36,15 @@ type fakeTracker struct {
 	// params is what the tool handed the grammar, before it was parsed.
 	params map[string]string
 	tasks  map[string]tracker.TaskDetail
+
+	// view is a saved view's own parameters, merged UNDER the tool's
+	// whenever the tool names a view — the real expansion's rule, where
+	// the caller's own keys win and the view's are defaults.
+	view map[string]any
+
+	// listed counts the list reads, so a case can assert a refusal
+	// happened before the read rather than after it.
+	listed int
 
 	// reads is every freshness the point readers were handed.
 	reads []statelog.Freshness
@@ -126,6 +136,7 @@ func newFakeTracker() *fakeTracker {
 
 func (f *fakeTracker) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
 	f.query = q
+	f.listed++
 	if f.readErr != nil {
 		return tracker.Answer{}, f.readErr
 	}
@@ -173,6 +184,11 @@ func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
 	f.params = map[string]string{}
 	for key, value := range params {
 		f.params[key] = fmt.Sprint(value)
+	}
+	if _, named := params["view"]; named && f.view != nil {
+		merged := maps.Clone(f.view)
+		maps.Copy(merged, params)
+		params = merged
 	}
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
 }
@@ -999,33 +1015,63 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	}
 }
 
-// A SEAT IS NOT TOLD A POPULATED BOARD IS EMPTY.
+// A VIEW'S GROUPING IS ANSWERED AS A PAGED LIST.
 //
-// A grouped answer has no flat rows by construction, and the empty message
-// asked only about those — so a board with five columns came back as "No work
-// items match that filter", and a seat that believed it would file the
-// duplicate.
-func TestAGroupedAnswerIsNotReportedAsEmpty(t *testing.T) {
+// A grouped answer draws a bounded number of columns and a bounded slice of
+// each, and mints no cursor — so through this tool, which takes no grouping
+// argument and no column argument, the rows past a column's slice and the
+// columns past the cap could not be reached at all. The view's filter and
+// order are kept; only the board shape goes, and the answer pages.
+func TestAViewsGroupingIsAnsweredAsAPagedList(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.answer = &tracker.Answer{
-		Groups: []tracker.Group{{
-			Key: "todo", Count: 12,
-			Rows: []tracker.TaskRow{{ID: "t-1", Key: "ENG-1"}},
-		}},
-		Complete: true,
+	trk.view = map[string]any{
+		"group_by": "assignee", "group_by2": "priority", "group_limit": 5,
+		"type": "bug",
 	}
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
 	got := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{
-		"project": "eng",
+		"view": "board-1",
 	})
-	if strings.Contains(got.Output, "No work items match") {
-		t.Fatalf("a board with a populated column was reported empty: %s",
-			got.Output)
+	if got.Failed {
+		t.Fatalf("a grouped view was refused: %s", got.Output)
 	}
-	if !strings.Contains(got.Output, "groups") {
-		t.Fatalf("the grouped half never reached the model: %s", got.Output)
+	if q := trk.query; q.GroupBy != "" || q.GroupBy2 != "" || q.GroupLimit != 0 {
+		t.Fatalf("the read still asked for a board: group_by=%q group_by2=%q "+
+			"group_limit=%d", q.GroupBy, q.GroupBy2, q.GroupLimit)
+	}
+	if len(trk.query.Types) == 0 {
+		t.Errorf("flattening the view dropped its filter too: %+v", trk.query)
+	}
+	if !strings.Contains(got.Output, `"items"`) {
+		t.Errorf("the answer carries no rows: %s", got.Output)
+	}
+}
+
+// A VIEW THAT PINS ONE COLUMN IS REFUSED, not flattened.
+//
+// `group` narrows on the axis, so dropping the axis drops the narrowing and
+// answers everything the view's other keys match — the widest reading of a
+// view that asked for one column. The refusal comes before the read, and says
+// which column it was so the model can ask for it as a filter.
+func TestAViewThatPinsOneColumnIsRefusedNamingIt(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.view = map[string]any{"group_by": "status", "group": "todo"}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{
+		"view": "todo-column",
+	})
+	if !got.Failed {
+		t.Fatalf("a view pinned to one column answered: %s", got.Output)
+	}
+	if !strings.Contains(got.Output, "group=todo") || !strings.Contains(got.Output, "group_by=status") {
+		t.Errorf("the refusal does not name the column: %s", got.Output)
+	}
+	if trk.listed != 0 {
+		t.Errorf("the refused view was read %d time(s) first", trk.listed)
 	}
 }
 

@@ -141,9 +141,16 @@ type TurnQuery struct {
 	// not. Nil is both, which is not the same as false.
 	Failed *bool
 
-	// Before is an exclusive cursor on the turn's START, which is what the
-	// listing is ordered by.
-	Before time.Time
+	// Before is an exclusive cursor: the last row of the previous page, as
+	// its START and its TURN ID. Nil starts at the newest turn.
+	//
+	// ON THE START, because that is what the listing is ordered by — a
+	// keyset on any one event would page a turn twice. AND ON THE ID, because
+	// a start is not unique: it is an event's time, which [Cursor] says is not
+	// unique either, and a cursor on the start alone steps over every other
+	// turn that began at the boundary's instant, silently. Both halves are
+	// required, and a cursor without the id is refused with [ErrHalfCursor].
+	Before *Cursor
 
 	Limit int
 }
@@ -169,8 +176,20 @@ const (
 	MaxTurnPage = 200
 )
 
-// Turns lists one row per turn, newest first.
-func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
+// Turns lists one page of turns, newest first, and whether the window holds
+// more past it.
+//
+// THE SECOND RETURN IS READ, NOT INFERRED: one turn past the limit is read as
+// the evidence and dropped (see [probed]). A page that merely FILLED says
+// nothing — a window of exactly `limit` turns and one of ten thousand answer
+// with the same rows — so a caller drawing anything from the page (a count, an
+// axis) must say it is a page when this is true. The rest is the next page:
+// the last row's start and id handed back as [TurnQuery.Before].
+func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, bool, error) {
+	if q.Before != nil && q.Before.ID == "" {
+		return nil, false, fmt.Errorf("%w: resume after the last row's turn_id, not its start alone",
+			ErrHalfCursor)
+	}
 	days := q.SinceDays
 	switch {
 	case days <= 0:
@@ -220,11 +239,12 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	}
 
 	having := []string{}
-	if q.Before.IsZero() {
-		// no cursor
-	} else {
-		having = append(having, "MIN(event_time) < ?")
-		args = append(args, EncodeTime(q.Before))
+	if q.Before != nil {
+		// THE PAIR, compared as the ORDER BY below sorts it, so every turn
+		// strictly after the cursor's position in that order is on the next
+		// page — including one that began at the cursor's own instant.
+		having = append(having, "(MIN(event_time), turn_id) < (?, ?)")
+		args = append(args, EncodeTime(q.Before.Time), q.Before.ID)
 	}
 	if q.Failed != nil {
 		if *q.Failed {
@@ -237,7 +257,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	if len(having) > 0 {
 		havingSQL = " HAVING " + strings.Join(having, " AND ")
 	}
-	args = append(args, limit)
+	args = append(args, limit+1)
 
 	// NULLIF ON THE MODEL, because `model` is `TEXT NOT NULL DEFAULT ''`
 	// and only a phase record carries one. Every turn's group also holds
@@ -266,12 +286,12 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		  FROM crewlet_events
 		 WHERE `+strings.Join(where, " AND ")+`
 		 GROUP BY turn_id`+havingSQL+`
-		 ORDER BY MIN(event_time) DESC
+		 ORDER BY MIN(event_time) DESC, turn_id DESC
 		 LIMIT ?`,
 		append([]any{phaseCompleted, turnCompleted, turnCompleted,
 			turnCompleted, turnCompleted}, args...)...)
 	if err != nil {
-		return nil, fmt.Errorf("store: list turns: %w", err)
+		return nil, false, fmt.Errorf("store: list turns: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -292,7 +312,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 			&t.Phases, &t.Iterations, &failed, &in, &outTok, &total, &models,
 			&complete, &duration, &summary, &taskID, &trigger); err != nil {
 
-			return nil, fmt.Errorf("store: scan a turn: %w", err)
+			return nil, false, fmt.Errorf("store: scan a turn: %w", err)
 		}
 		t.WorkKey = workKey.String
 		t.AgentID, t.AgentRole = agentID.String, role.String
@@ -308,7 +328,8 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		out = append(out, t)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list turns: %w", err)
+		return nil, false, fmt.Errorf("store: list turns: %w", err)
 	}
-	return out, nil
+	out, more := probed(out, limit)
+	return out, more, nil
 }

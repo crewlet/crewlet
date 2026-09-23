@@ -251,6 +251,29 @@ func TestFuseIsNotMonotoneInTheSemanticList(t *testing.T) {
 	}
 }
 
+// FUSION DROPS NOTHING IT WAS GIVEN. It orders two rankings; how many of the
+// result anybody reads is the caller's limit, and a ceiling inside the fusion
+// would be a second one that cuts with nothing on the answer to say so.
+func TestFuseKeepsEveryDocumentItWasGiven(t *testing.T) {
+	t.Parallel()
+	var keyword, semantic []string
+	for i := range 400 {
+		keyword = append(keyword, fmt.Sprintf("k%03d", i))
+		semantic = append(semantic, fmt.Sprintf("s%03d", i))
+	}
+	// One document in both lists, so the count below is of DISTINCT ids.
+	semantic[0] = keyword[0]
+
+	fused := search.Fuse(keyword, semantic)
+	if want := len(keyword) + len(semantic) - 1; len(fused) != want {
+		t.Fatalf("fusion of %d distinct documents returned %d", want, len(fused))
+	}
+	if fused[0] != keyword[0] {
+		t.Fatalf("the document both halves found is at %q's place, not first",
+			fused[0])
+	}
+}
+
 // THE TIE BREAK IS THE INDEX, AT BOTH STAGES.
 //
 // Hamming distance over a 3072-bit code takes at most 3 073 distinct values
@@ -270,6 +293,21 @@ func TestSelectionBreaksTiesOnTheIndex(t *testing.T) {
 	flat := search.Rerank([]int{3, 1, 2, 0}, func(int) float64 { return 1 }, 2)
 	if !slices.Equal(flat, []int{0, 1}) {
 		t.Fatalf("Rerank over identical scores gave %v, want [0 1]", flat)
+	}
+}
+
+// STAGE ONE KEEPS THE DEPTH IT WAS ASKED FOR. A pure function that quietly
+// returned fewer would hand the rerank a smaller pool than the caller sized,
+// and the recall measured over it would be credited to a depth it never ran
+// at.
+func TestStage1KeepsTheDepthItWasAskedFor(t *testing.T) {
+	t.Parallel()
+	codes := make([][]uint64, 5_000)
+	for i := range codes {
+		codes[i] = []uint64{uint64(i)}
+	}
+	if got := search.Stage1(codes, []uint64{0}, 4_500); len(got) != 4_500 {
+		t.Fatalf("Stage1 asked for 4 500 of 5 000 candidates returned %d", len(got))
 	}
 }
 

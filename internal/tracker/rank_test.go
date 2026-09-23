@@ -172,10 +172,16 @@ func TestTheTwoMintSetsAreDisjointByShape(t *testing.T) {
 		}
 		head = next
 	}
-	// And every other move.
-	between, err := tracker.KeysBetween("a0", "a1", 64)
-	if err != nil {
-		t.Fatalf("KeysBetween: %v", err)
+	// And every other move: drags into one gap, as a board makes them.
+	var between []tracker.Rank
+	low := tracker.Rank("a0")
+	for i := range 64 {
+		next, err := tracker.KeyBetween(low, "a1")
+		if err != nil {
+			t.Fatalf("drag %d: %v", i, err)
+		}
+		between = append(between, next)
+		low = next
 	}
 	for _, k := range between {
 		if k.Fraction() == "" {
@@ -251,9 +257,20 @@ func TestTheComputedLatticeMatchesTheWalkedOne(t *testing.T) {
 // would accept both.
 func TestNoMintedFractionEndsInZero(t *testing.T) {
 	t.Parallel()
-	keys, err := tracker.KeysBetween("a0", "a1", 256)
-	if err != nil {
-		t.Fatalf("KeysBetween: %v", err)
+	// Drags into one gap from both ends, which is where a fraction grows.
+	var keys []tracker.Rank
+	low, high := tracker.Rank("a0"), tracker.Rank("a1")
+	for i := range 256 {
+		next, err := tracker.KeyBetween(low, high)
+		if err != nil {
+			t.Fatalf("drag %d: %v", i, err)
+		}
+		keys = append(keys, next)
+		if i%2 == 0 {
+			low = next
+		} else {
+			high = next
+		}
 	}
 	head := tracker.Rank(tracker.RankOrigin)
 	for range 300 {
@@ -268,83 +285,6 @@ func TestNoMintedFractionEndsInZero(t *testing.T) {
 		if strings.HasSuffix(k.Fraction(), "0") {
 			t.Errorf("%q was minted with a fraction ending in '0'", k)
 		}
-	}
-}
-
-// A SPREAD OF N KEYS IS ASCENDING, DISTINCT AND SHORT.
-//
-// Short is the point: a chain of 256 keys each minted after the last would
-// make the final one 256 characters long, which is the length the re-spread
-// exists to remove. Splitting at the midpoint is what keeps them near the
-// gap's own depth.
-func TestASpreadIsAscendingDistinctAndShort(t *testing.T) {
-	t.Parallel()
-	keys, err := tracker.KeysBetween("a0", "a1", tracker.RankRespreadInline)
-	if err != nil {
-		t.Fatalf("KeysBetween: %v", err)
-	}
-	if len(keys) != tracker.RankRespreadInline {
-		t.Fatalf("asked for %d keys and got %d", tracker.RankRespreadInline, len(keys))
-	}
-	prev := tracker.Rank("a0")
-	longest := 0
-	for i, k := range keys {
-		if string(k) <= string(prev) {
-			t.Fatalf("key %d (%q) does not sort above %q", i, k, prev)
-		}
-		if !k.Valid() {
-			t.Fatalf("key %d (%q) is not well-formed", i, k)
-		}
-		prev = k
-		if len(k) > longest {
-			longest = len(k)
-		}
-	}
-	if string(prev) >= "a1" {
-		t.Fatalf("the last key %q is not below the upper neighbour", prev)
-	}
-	if longest >= tracker.RankRenormaliseAt {
-		t.Fatalf("a re-spread of %d rows produced a %d-character key, at or past "+
-			"the threshold that triggered it — the repair would trigger itself",
-			len(keys), longest)
-	}
-	// AND IT IS AS SHORT AS THE GAP ALLOWS, which is the property the
-	// midpoint split buys over a chain. Fitting n keys into one gap needs
-	// ceil(log62(n+1)) fractional characters; the bound below allows the
-	// integer part, that minimum and one character of slack. A chain
-	// minted from the left satisfies the threshold above and blows
-	// straight through this, which is the difference the split is for.
-	minimum := 0
-	for span := 1; span <= len(keys); span *= len(tracker.RankDigits) {
-		minimum++
-	}
-	if bound := len(tracker.RankOrigin) + minimum + 1; longest > bound {
-		t.Fatalf("a re-spread of %d rows produced a %d-character key against a "+
-			"bound of %d — the keys are not being placed at the gap's own "+
-			"depth", len(keys), longest, bound)
-	}
-}
-
-// THE RE-SPREAD WINDOW IS DERIVED, AND IT STOPS.
-//
-// One constant, one derivation. The window doubles until the keys it would
-// produce fall under the threshold, and it never exceeds the inline cap —
-// past which the drag still succeeds and the duty's paced walk finishes the
-// tidying.
-func TestTheRespreadWindowIsDerivedAndBounded(t *testing.T) {
-	t.Parallel()
-	window, err := tracker.RespreadWindow("a0", "a1")
-	if err != nil {
-		t.Fatalf("RespreadWindow: %v", err)
-	}
-	if window < tracker.RankRenormaliseAt {
-		t.Fatalf("the window is %d, below the threshold it starts at (%d)",
-			window, tracker.RankRenormaliseAt)
-	}
-	if window > tracker.RankRespreadInline {
-		t.Fatalf("the window is %d, past the inline cap (%d) — beyond that the "+
-			"repair belongs to the duty rather than to the drag's own commit",
-			window, tracker.RankRespreadInline)
 	}
 }
 
@@ -374,8 +314,8 @@ func TestAnIllFormedKeyIsNotValid(t *testing.T) {
 //
 // # The failure this exists to catch
 //
-// The walk first minted its keys with KeysBetween, which subdivides by
-// repeated bisection — so half of them crowded against the upper bound and
+// The walk first minted its keys by repeated bisection of one interval — so
+// half of them crowded against the upper bound and
 // inherited its length. Re-spreading a project whose keys were 69 characters
 // long produced keys that were 70: the walk that exists to SHORTEN keys
 // lengthened them, and the project came back for another walk immediately.

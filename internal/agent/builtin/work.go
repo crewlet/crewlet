@@ -496,7 +496,10 @@ func (t *listWorkItems) Description() string {
 		"see what you are assigned, what is open in a project, or whether " +
 		"something has already been filed before you file it again. Returns " +
 		"summaries — call get_work_item for one item's full description, " +
-		"comments and links."
+		"comments and links. An answer is one page: when it carries " +
+		"`next_cursor` there are more, and passing it back as `cursor` " +
+		"reads them. A saved `view` that groups a board answers as a list " +
+		"too; one pinned to a single column is refused, naming the column."
 }
 
 func (t *listWorkItems) Parameters() map[string]any {
@@ -670,7 +673,8 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// "that team's board", and the next page of any of them. Board
 	// FURNITURE — group, subgroup, group_limit, totals — is not on it: a
 	// model reads rows, and a grouped answer costs it a shape to unpack for
-	// a heading nobody renders.
+	// a heading nobody renders. A `view` that carries a grouping is
+	// flattened below, for that reason and one more.
 	for _, key := range []string{
 		"assignee", "limit", "removed",
 		"type", "priority", "due", "updated", "created",
@@ -773,10 +777,31 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// OVERRULED RATHER THAN DEFAULTED, for the reason the level above is: one
 	// grammar serves the board, the socket, the REST route and this tool, and
 	// a saved `view` carries an answer shape chosen for a board. A tree IS
-	// board furniture, which this tool already declines along with `group_by`
-	// and `totals` — see the passthrough list above. A model that wants a
-	// subtree asks with `parent`, which the mode does not apply to at all.
+	// board furniture, which this tool does not take as an argument — see
+	// the passthrough list above. A model that wants a subtree asks with
+	// `parent`, which the mode does not apply to at all.
 	q.Subtasks = tracker.SubtasksSeparate
+	// AND SO IS A GROUPING, which is the other board shape a `view` can
+	// carry — and the one that CUTS. A grouped answer draws at most
+	// [tracker.MaxGroups] columns and a bounded slice of each, and mints no
+	// cursor and takes none, so through this tool — which has no grouping
+	// or column argument — the rows past a column's slice and the columns
+	// past the cap could not be reached at all, and a model would read a
+	// board's first rows as the list. Flattened, the same filter and order
+	// answer as rows with a `next_cursor`, and nothing is cut.
+	//
+	// A view that PINS a column or a lane is refused rather than flattened:
+	// `group` is a narrowing expressed on the axis, so dropping the axis
+	// would drop the narrowing with it and answer the whole set — the
+	// widest possible reading of what the view asked for.
+	if q.Group != "" || q.Subgroup != "" {
+		return failed(fmt.Sprintf("%s: view %q narrows to one column of a "+
+			"board (group_by=%s group=%s group_by2=%s subgroup=%s), and this "+
+			"tool answers a list rather than a board. Ask with the filter "+
+			"that column stands for instead of the view.", ListWorkItemsTool,
+			q.View, q.GroupBy, q.Group, q.GroupBy2, q.Subgroup)), nil
+	}
+	q.GroupBy, q.GroupBy2, q.GroupLimit = "", "", 0
 	answer, err := t.deps.Reader.Tasks(ctx, q, t.deps.now())
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):
@@ -788,21 +813,10 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	case err != nil:
 		return failed(readFailure(ListWorkItemsTool, err)), nil
 	}
-	// A GROUPED ANSWER HAS NO FLAT ROWS BY CONSTRUCTION, so the empty
-	// message has to ask about the groups too — a board with five columns
-	// reported as "no work items match" is a seat about to file the
-	// duplicate.
-	if len(answer.Rows) == 0 && len(answer.Groups) == 0 && answer.Complete {
+	if len(answer.Rows) == 0 && answer.Complete {
 		return tools.Result{Output: "No work items match that filter."}, nil
 	}
 	result := map[string]any{"count": len(answer.Rows), "items": answer.Rows}
-	if len(answer.Groups) > 0 {
-		result["groups"] = answer.Groups
-		result["groups_overlap"] = answer.GroupsOverlap
-		if answer.GroupsTruncated {
-			result["groups_truncated"] = true
-		}
-	}
 	if len(answer.Totals) > 0 {
 		result["totals"] = answer.Totals
 	}

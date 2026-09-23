@@ -10,7 +10,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // THE TWO GATES, and they are in one file because they are ONE CATEGORY: a
@@ -371,9 +370,11 @@ func purgeWake(task Task, reason, actor string, leads Leads) *Notify {
 // window, which is the one thing this operation is for. The key is an
 // identifier the person already has in whatever ticket asked for the purge.
 //
-// The REASON is the operator's own sentence and is kept, cut to fit: it is
-// why they did it, and a record of an irreversible act with no reason on it is
-// the shape nobody can audit afterwards.
+// The REASON is the operator's own sentence and is carried WHOLE: it is why
+// they did it, and a record of an irreversible act with no reason on it is the
+// shape nobody can audit afterwards. So nothing here cuts it — [Writer.PurgeTask]
+// refuses a reason longer than [purgeReasonRoom] before anything is published,
+// and [Notify.Validate] refuses an excerpt past [MaxExcerpt] behind it.
 func purgeExcerpt(task Task, reason, actor string) string {
 	out := task.Key + " was purged"
 	if actor != "" {
@@ -381,9 +382,57 @@ func purgeExcerpt(task Task, reason, actor string) string {
 	}
 	out += " — this cannot be undone"
 	if reason = strings.TrimSpace(reason); reason != "" {
-		out += ": " + reason
+		out += purgeReasonSeparator + reason
 	}
-	return textcut.Within(out, MaxExcerpt)
+	return out
+}
+
+// purgeReasonSeparator is what joins the reason to the rest of the line.
+const purgeReasonSeparator = ": "
+
+// purgeReasonRoom is how many bytes of reason fit [purgeExcerpt] whole.
+//
+// THE LINE IS THE BOUND, not a constant of its own, because the reason shares
+// [MaxExcerpt] with the key and the actor it is written beside — the same
+// reason fits one task and not another with a longer key. The refusal names
+// this number so the operator knows how much to shorten by.
+//
+// THE REASON IS REFUSED RATHER THAN CUT because the excerpt is where it is
+// read: the lead's notification carries it, and the purge's row in the
+// activity feed carries that notification's excerpt. The whole reason is also
+// on the purge record's payload and in the deletion marker's `reason` column,
+// but no read surface returns either, so a reason cut on the excerpt would
+// have no way back.
+//
+// Applied whether or not the project has a lead to tell, so that what a purge
+// accepts does not change when somebody is appointed lead.
+func purgeReasonRoom(task Task, actor string) int {
+	return MaxExcerpt - len(purgeExcerpt(task, "", actor)) - len(purgeReasonSeparator)
+}
+
+// ErrPurgeReasonTooLong is a purge refused because its reason does not fit
+// whole on the line it travels on — see [purgeReasonRoom].
+//
+// A TYPED ERROR carrying the room, because this is the CALLER's to fix and the
+// caller has to be able to tell it from a purge that failed: a surface that
+// cannot classify it answers an operator's over-long sentence as a server
+// fault. And the room is the number the fix needs, since it differs from one
+// task to the next with the length of the key.
+type ErrPurgeReasonTooLong struct {
+	// Key is the task the purge named.
+	Key string
+
+	// Bytes is how long the stated reason is, surrounding space trimmed.
+	Bytes int
+
+	// Room is how many bytes of reason fit this task's line.
+	Room int
+}
+
+func (e *ErrPurgeReasonTooLong) Error() string {
+	return fmt.Sprintf("tracker: the reason for purging %s is %d bytes and at "+
+		"most %d fit — it travels whole on the one line a purge leaves, and "+
+		"nothing is purged until it fits; shorten it", e.Key, e.Bytes, e.Room)
 }
 
 // PurgeTask destroys a task and every row it produced.
@@ -425,6 +474,14 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			case !held:
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is "+
 					"not on this node: %w", id, statelog.ErrUnavailable)
+			}
+			// INSIDE THE DECIDE, because the room depends on the task's
+			// key, which is read here — see [purgeReasonRoom].
+			if stated, room := len(strings.TrimSpace(reason)),
+				purgeReasonRoom(current, w.Actor); stated > room {
+				return statelog.Decision{}, &ErrPurgeReasonTooLong{
+					Key: current.Key, Bytes: stated, Room: room,
+				}
 			}
 			decision, err := w.decide(subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`

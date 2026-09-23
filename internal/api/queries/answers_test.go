@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -240,6 +241,35 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	}
 }
 
+// THE LIVE WINDOW PAST ITS CAP IS HEADED WITH WHAT IT KEPT, whatever layout the
+// records were stamped in. The same rule the stream's own rollup follows, and
+// the same failure: the heading was re-derived by parsing the earliest
+// record's string as RFC 3339, which a zoneless stamp the projection accepts is
+// not — so the parse failed and the whole day's heading stayed on.
+func TestACappedLiveTokensAnswerIsHeadedWithTheEarliestRecordKept(t *testing.T) {
+	t.Parallel()
+	state := livestate.New()
+	first := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Second)
+	spend := make([]tokens.Record, 0, livestate.SpendRecordLimit+1)
+	for i := range livestate.SpendRecordLimit + 1 {
+		spend = append(spend, tokens.Record{
+			EventID:     fmt.Sprintf("p-%05d", i),
+			Timestamp:   first.Add(time.Duration(i) * time.Second).Format("2006-01-02T15:04:05"),
+			AgentRole:   "Lead",
+			Phase:       "plan",
+			TotalTokens: 1,
+		})
+	}
+	state.Seed(livestate.History{Spend: spend})
+	r := registryOver(t, queries.Sources{State: state})
+
+	got := askRaw(t, r, "tokens", nil).(tokens.Rollup)
+	if want := first.Add(time.Second).Format(time.RFC3339); got.Since != want {
+		t.Errorf("the answer is headed from %q, want %q — the earliest record "+
+			"the cap left the projection", got.Since, want)
+	}
+}
+
 func TestTokensOverAnotherWindowReadsTheStore(t *testing.T) {
 	t.Parallel()
 	// The live projection can only answer for its own window. Any other one
@@ -400,16 +430,38 @@ func TestAPageEchoesTheCursorToResumeFrom(t *testing.T) {
 	}
 }
 
-func TestACursorWithoutItsTimestampIsRefused(t *testing.T) {
+// HALF A CURSOR IS REFUSED BY EVERY QUESTION PAGED ON ONE, in either
+// direction, and so is a time that does not parse.
+//
+// The pair is the key. A question that read one key without the other as no
+// cursor at all answered "the next page" with the first one, and a pager
+// following it pages the same rows for ever.
+func TestAHalfCursorIsRefusedByEveryPagedQuestion(t *testing.T) {
 	t.Parallel()
-	// Time alone is not unique — burst writes share a timestamp at
-	// microsecond resolution — so a cursor missing half its key would skip
-	// or repeat whatever collided with it, silently.
 	db := openStore(t)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
-	_, err := r.Answer(t.Context(), "events", map[string]any{"before_id": "e1"}, "")
-	if !errors.Is(err, queries.ErrBadParams) {
-		t.Errorf("err = %v, want ErrBadParams", err)
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: db.Events()})
+	for _, what := range []struct {
+		name   string
+		params map[string]any
+	}{
+		{"events", nil},
+		{"phases", nil},
+		{"agent", map[string]any{"role": "Lead"}},
+	} {
+		for _, cursor := range []map[string]any{
+			{"before_id": "e1"},
+			{"before_time": "2026-04-01T12:00:00Z"},
+			{"before_id": "e1", "before_time": "yesterday"},
+		} {
+			params := maps.Clone(what.params)
+			if params == nil {
+				params = map[string]any{}
+			}
+			maps.Copy(params, cursor)
+			if _, err := r.Answer(t.Context(), what.name, params, ""); !errors.Is(err, queries.ErrBadParams) {
+				t.Errorf("%s %v: err = %v, want ErrBadParams", what.name, cursor, err)
+			}
+		}
 	}
 }
 
@@ -803,7 +855,7 @@ func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	}
 	// A page shorter than the cap is the end of the record, and says so by
 	// offering no cursor — a client that got one would page forever.
-	if got["next"] != "" {
+	if got["next"] != nil {
 		t.Errorf("next = %v, want no cursor on a short page", got["next"])
 	}
 }
@@ -867,6 +919,64 @@ func seedPhases(t *testing.T, log *store.EventLog, role, agentID string) {
 			Payload: json.RawMessage(payload),
 		}); err != nil {
 			t.Fatalf("append %s: %v", row.id, err)
+		}
+	}
+}
+
+// A SEAT'S HISTORY PAGES ON THE CURSOR IT HANDS BACK, as it hands it back.
+//
+// `next` is what a client sends to get the page beneath this one, so it has to
+// be in the shape this question READS — `before_time` and `before_id`. Two
+// phases share every instant here, so a cursor that lost the id half, or its
+// sub-second precision, would skip or repeat a row at the page boundary.
+func TestASeatsHistoryPagesOnTheCursorItHandsBack(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	const held = store.AgentPhaseLimit + 5
+	for i := range held {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID:      fmt.Sprintf("p-%03d", i),
+			Type:    "agent_phase_completed",
+			Source:  "engine",
+			Time:    base.Add(time.Duration(i/2) * time.Second),
+			Actor:   "Lead",
+			Tags:    map[string]string{"agent_role": "Lead", "agent_id": "agent-lead"},
+			Payload: json.RawMessage(`{"turn_id":"t-1","phase":"plan"}`),
+		}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+
+	seen := map[string]int{}
+	params := map[string]any{"role": "Lead"}
+	for pages := 0; ; pages++ {
+		if pages > held {
+			t.Fatal("the cursor never reached the end of the history")
+		}
+		got := ask(t, r, "agent", params)
+		history, _ := got["llm_history"].([]store.EventRecord)
+		for _, row := range history {
+			seen[row.ID]++
+		}
+		if got["next"] == nil {
+			break
+		}
+		next, ok := got["next"].(map[string]any)
+		if !ok {
+			t.Fatalf("next = %#v, want {before_time, before_id}", got["next"])
+		}
+		params = map[string]any{"role": "Lead",
+			"before_time": next["before_time"], "before_id": next["before_id"]}
+	}
+	if len(seen) != held {
+		t.Errorf("paging reached %d of %d phases", len(seen), held)
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("phase %s was listed %d times", id, n)
 		}
 	}
 }
@@ -956,8 +1066,8 @@ func TestASeatWithNoFinishedPhasesAnswersRatherThanPanics(t *testing.T) {
 	}
 	// And the cursor is withheld rather than pointing at a row that is not
 	// there, which is what makes a client stop paging.
-	if got["next"] != "" {
-		t.Errorf("next = %#v on an empty page, want the empty string", got["next"])
+	if got["next"] != nil {
+		t.Errorf("next = %#v on an empty page, want none", got["next"])
 	}
 }
 

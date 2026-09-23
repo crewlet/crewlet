@@ -71,6 +71,49 @@ func (d DependencyChange) Empty() bool {
 		len(d.BlockingAdd) == 0 && len(d.BlockingRemove) == 0
 }
 
+// normalised is the change with every counterparty stated once per list.
+//
+// A CALLER RESOLVES A LIST OF REFERENCES, and a list can hold one task twice,
+// so a repeat is an ordinary input rather than a malformed one. Every step of
+// [Writer.Depend] writes one commit per entry: a task named twice would be
+// written twice — a second commit on one subject, decided before the first
+// has applied — and announced twice on its blocker's wake, whose
+// `dependents` are carried whole and counted against [MaxDependents].
+//
+// A task both added and removed on one side is REFUSED rather than settled:
+// the call contradicts itself, and whichever of the two commits went second
+// would decide the edge without anybody having chosen it.
+func (d DependencyChange) normalised() (DependencyChange, error) {
+	for _, side := range []struct {
+		name        string
+		add, remove *[]string
+	}{
+		{"waiting_on", &d.WaitingOnAdd, &d.WaitingOnRemove},
+		{"blocking", &d.BlockingAdd, &d.BlockingRemove},
+	} {
+		*side.add, *side.remove = onceEach(*side.add), onceEach(*side.remove)
+		for _, id := range *side.add {
+			if slices.Contains(*side.remove, id) {
+				return d, fmt.Errorf("tracker: the dependency change on task %s "+
+					"both adds and removes %s under %s — state one or the other",
+					d.Task, id, side.name)
+			}
+		}
+	}
+	return d, nil
+}
+
+// onceEach is ids with every repeat dropped, in the order first named.
+func onceEach(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // DependencyResult is what the sequence did, per counterparty.
 type DependencyResult struct {
 	WriteResult
@@ -105,6 +148,10 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 			change.Task, len(change.Note), MaxRelationNote)
 	}
 
+	change, err := change.normalised()
+	if err != nil {
+		return DependencyResult{}, err
+	}
 	found, err := w.readParties(ctx, change)
 	if err != nil {
 		return DependencyResult{}, err
@@ -230,6 +277,8 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 		return e
 	}
 	// A BLOCKER THIS TASK NOW WAITS ON GAINS THIS TASK as a dependent.
+	// Once each: [DependencyChange.normalised] has already stated every
+	// counterparty once.
 	for _, id := range change.WaitingOnAdd {
 		e := touch(id)
 		e.add = append(e.add, change.Task)

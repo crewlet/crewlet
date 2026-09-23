@@ -87,9 +87,9 @@ type ManagerOptions struct {
 	DefaultSetup []SetupStep
 
 	// Telemetry mints each run's OTel environment. Nil exports nothing
-	// from inside the box, which is an ordinary configuration: the run's
-	// engine-side lifecycle events and its published transcript are the
-	// observability surface either way.
+	// from inside the box, which is an ordinary configuration: it adds to
+	// the run's environment and nothing else, so the lifecycle events the
+	// engine publishes about a run are published either way.
 	Telemetry *OtelReceiver
 }
 

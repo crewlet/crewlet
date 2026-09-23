@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1190,4 +1191,180 @@ func TestAMergeInputKeepsTheFreeSnippetAndReadsNoBody(t *testing.T) {
 		t.Errorf("a merge input read the body to cut a snippet its own "+
 			"transport cannot carry: %q", hits[0].Snippet)
 	}
+}
+
+// THE FALLBACK SNIPPET SAYS THE PAGE GOES ON.
+//
+// When a hit's body cannot be read, its snippet is cut from the opening the
+// index stored instead. A match near the END of that opening gives a window
+// reaching its last byte — an edge the snippet does not mark, because it is
+// the end of the text the snippet was handed. The page goes on well past it,
+// so the stored opening has to carry the marker itself, or the reader is shown
+// a fragment that stops mid-word as though that were where the page ends.
+func TestAFallbackSnippetMarksWhereTheStoredOpeningWasCut(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	src := &blindableSource{LexicalSource: search.PageSource{}}
+	x := search.NewIndexerOver(db, []search.LexicalSource{src})
+
+	// The match sits about five hundred bytes in, behind filler that shares
+	// no word with the query, inside the stored opening but near its end.
+	page(t, db, "p.long", "ENG", "Handbook",
+		strings.Repeat("alpha beta gamma delta ", 22)+"budget approvals "+
+			strings.Repeat("omega ", 200), 1)
+	indexAll(t, x)
+
+	// THE BODY READ FAILS from here on, which is the path every fallback
+	// takes: the fetch that would have cut the snippet from the real body.
+	src.blind.Store(true)
+	hits, err := x.Hydrate(t.Context(),
+		[]string{search.Key(search.SourcePage, "p.long")}, "budget")
+	if err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("hydrated %d hits, want the handbook", len(hits))
+	}
+	snippet := hits[0].Snippet
+	if !strings.Contains(snippet, "budget") {
+		t.Fatalf("the fallback snippet lost the match, so this case is not "+
+			"about the edge it asserts: %q", snippet)
+	}
+	if !strings.HasSuffix(snippet, "…") {
+		t.Errorf("the fallback snippet ends %q with no marker, on a page that "+
+			"goes on for another thousand bytes", snippet[max(0, len(snippet)-24):])
+	}
+}
+
+// blindableSource is a source whose body read can be made to fail, after the
+// index has been built through it.
+type blindableSource struct {
+	search.LexicalSource
+	blind atomic.Bool
+}
+
+func (b *blindableSource) Fetch(ctx context.Context, tx *sql.Tx,
+	ids []string) ([]search.Doc, error) {
+
+	if b.blind.Load() {
+		return nil, errors.New("the replicated estate would not answer")
+	}
+	return b.LexicalSource.Fetch(ctx, tx, ids)
+}
+
+// A QUIET SWEEP HAS LOOKED AT EVERY INDEXED ROW, in both directions.
+//
+// `false` from [search.Indexer.Sweep] is the loop's licence to sleep. The stale
+// walk earns it by lapping; the orphan walk has to as well, or a page somebody
+// trashed stays findable by keyword while the walk that would drop it is
+// paced at one small batch per idle tick. So: trash the page the walk reaches
+// LAST, sweep until the first quiet answer, and it must already be gone.
+func TestAQuietSweepHasDroppedEveryOrphan(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db)
+	const pages = 5 * search.IndexBatch
+	for i := range pages {
+		page(t, db, fmt.Sprintf("p.%03d", i), "ENG", fmt.Sprintf("Plan %d", i),
+			"the migration plan is here", 1)
+	}
+	indexAll(t, x)
+
+	last := fmt.Sprintf("p.%03d", pages-1)
+	if _, err := db.Replicated().SQL().ExecContext(t.Context(),
+		`UPDATE pages_heads SET status = 'trashed' WHERE id = ?`, last); err != nil {
+		t.Fatal(err)
+	}
+	quiet := false
+	for range pages {
+		worked, err := x.Sweep(t.Context())
+		if err != nil {
+			t.Fatalf("sweep: %v", err)
+		}
+		if quiet = !worked; quiet {
+			break
+		}
+	}
+	if !quiet {
+		t.Fatal("the indexer never reported a quiet sweep over a settled corpus")
+	}
+	hits, err := x.Search(t.Context(), search.LexicalQuery{
+		Text: "migration plan", Limit: pages,
+	})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	for _, hit := range hits {
+		if hit.ID == last {
+			t.Fatalf("the sweep reported nothing left to do while the trashed "+
+				"page %s was still findable — a quiet answer is a licence to "+
+				"sleep, and it was given before the orphan walk reached it", last)
+		}
+	}
+	if len(hits) != pages-1 {
+		t.Fatalf("found %d of the %d pages still published", len(hits), pages-1)
+	}
+}
+
+// A FAILED EXISTENCE CHECK DOES NOT SKIP ITS WINDOW, which is the orphan
+// walk's half of [TestAFailedIndexStepDoesNotSkipItsWindow].
+//
+// The orphan cursor is in-memory state and the check against the source can
+// fail after the index rows were read. A cursor moved before the check would
+// pass over every row in that window until the walk next wrapped — and a
+// trashed page among them would stay findable for that long.
+func TestAFailedOrphanCheckDoesNotSkipItsWindow(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	for i := range 3 {
+		page(t, db, fmt.Sprintf("p.%d", i), "ENG", fmt.Sprintf("Rollback %d", i),
+			"roll back a deploy by release", 1)
+	}
+	src := &failingLiveSource{LexicalSource: search.PageSource{}}
+	x := search.NewIndexerOver(db, []search.LexicalSource{src})
+	indexAll(t, x)
+
+	if _, err := db.Replicated().SQL().ExecContext(t.Context(),
+		`UPDATE pages_heads SET status = 'trashed' WHERE id = 'p.0'`); err != nil {
+		t.Fatal(err)
+	}
+	src.failuresLeft, src.asked = 1, nil
+	if _, err := x.Sweep(t.Context()); err == nil {
+		t.Fatal("the sweep whose existence check failed reported success")
+	}
+	if _, err := x.Sweep(t.Context()); err != nil {
+		t.Fatalf("the retry after a failed check: %v", err)
+	}
+	if len(src.asked) < 2 || !reflect.DeepEqual(src.asked[0], src.asked[1]) {
+		t.Fatalf("the failed check asked about %v and the retry about %v — a "+
+			"retry that starts anywhere else has given up on the window "+
+			"between", src.asked[0], src.asked[1:])
+	}
+	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "rollback deploy"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Errorf("found %v after the retry, want the two pages still published",
+			titles(hits))
+	}
+}
+
+// failingLiveSource fails its first N existence checks and records what each
+// one was asked about.
+type failingLiveSource struct {
+	search.LexicalSource
+	failuresLeft int
+	asked        [][]string
+}
+
+func (f *failingLiveSource) Live(ctx context.Context, tx *sql.Tx,
+	ids []string) (map[string]bool, error) {
+
+	f.asked = append(f.asked, append([]string(nil), ids...))
+	if f.failuresLeft > 0 {
+		f.failuresLeft--
+		return nil, errors.New("the replicated estate went away mid-check")
+	}
+	return f.LexicalSource.Live(ctx, tx, ids)
 }

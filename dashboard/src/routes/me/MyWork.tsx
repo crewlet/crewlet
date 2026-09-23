@@ -46,17 +46,28 @@
  * dashboard", which is not a person and cannot be asked why.
  */
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { href, useParam } from "~/app/router.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import { CutNote, QueryState, SeatChip } from "~/components/common.tsx";
 import { AsksTag, Coverage, RowList, type RowChrome } from "~/components/work.tsx";
-import { Callout, Card, Count, EmptyState, Select, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import {
+  Callout,
+  Card,
+  Count,
+  EmptyState,
+  InlineCode,
+  Select,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
 import { ErrorGlyph, HelpGlyph, InboxGlyph, KeyGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { relTime } from "~/lib/format.ts";
+import { pageCount, type PageSlice } from "~/lib/work.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { reasonAbout, reasonPhrase } from "~/lib/reasons.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -267,24 +278,29 @@ export function MyWork() {
                   'how many there are' until something says otherwise". Where
                   the server says the block was cut, the sub line is what says
                   otherwise. */}
+              {/* THE FIGURE IS A FLOOR WHERE THE BLOCK WAS CUT — `20+`, the
+                  same [pageCount] every capped card in the product draws — and
+                  the sub line names the ORDER the block was read in, which is a
+                  different one for each of these four (`readMyWork`). The rest
+                  of each is under its block below. */}
               <StatGroup columns={4}>
                 <StatCard
                   label="Priorities"
-                  value={mine.priorities.length}
+                  value={pageCount(mine.priorities.length, !!mine.truncated?.priorities)}
                   sub={
                     mine.truncated?.priorities
-                      ? "the newest — there are more"
+                      ? "the top of the list — there are more"
                       : "in the stored order"
                   }
                 />
                 <StatCard
                   label="Assigned"
-                  value={mine.assigned.length}
-                  sub={mine.truncated?.assigned ? "the newest — there are more" : undefined}
+                  value={pageCount(mine.assigned.length, !!mine.truncated?.assigned)}
+                  sub={mine.truncated?.assigned ? "the most urgent — there are more" : undefined}
                 />
                 <StatCard
                   label="Asked"
-                  value={mine.asked_of_me.length}
+                  value={pageCount(mine.asked_of_me.length, !!mine.truncated?.asked_of_me)}
                   icon={mine.asked_of_me.length ? <ErrorGlyph size="xs" /> : undefined}
                   sub={
                     mine.truncated?.asked_of_me
@@ -294,10 +310,13 @@ export function MyWork() {
                 />
                 <StatCard
                   label="Unblocked"
-                  value={mine.unblocked_recent.length}
+                  value={pageCount(
+                    mine.unblocked_recent.length,
+                    !!mine.truncated?.unblocked_recent,
+                  )}
                   sub={
                     mine.truncated?.unblocked_recent
-                      ? "the newest — there are more"
+                      ? "the latest — there are more"
                       : "newly workable"
                   }
                 />
@@ -409,6 +428,25 @@ export function MyWork() {
                       and it is the only place a reason list can be read beside
                       the tags it describes. */}
                   {inboxNote}
+                  {/* WHERE THE REST OF IT IS, when the read was cut: the engine
+                      mints a cursor only when a notice past the page came back.
+                      Your own inbox pages it; somebody else's is the same
+                      question for their handle, which no screen asks. */}
+                  {inbox.data?.next_cursor &&
+                    (ownDay ? (
+                      <>
+                        {" "}
+                        <a className="t-link prose-link" href={href(["inbox"])}>
+                          Older notices are on your inbox, which pages them →
+                        </a>
+                      </>
+                    ) : (
+                      <>
+                        {" "}
+                        Older notices: <InlineCode>{`GET /work/inbox?handle=${whose}`}</InlineCode>,
+                        paged by its cursor.
+                      </>
+                    ))}
                 </Card.Footer>
               </Card>
 
@@ -418,6 +456,7 @@ export function MyWork() {
                 chrome={chrome}
                 ownDay={ownDay}
                 more={mine.truncated?.asked_of_me}
+                whole={blockWhole(BLOCK_WHOLE.asked_of_me(whose))}
               />
               <TaskBlock
                 title="Priorities"
@@ -426,6 +465,8 @@ export function MyWork() {
                 now={now}
                 chrome={chrome}
                 more={mine.truncated?.priorities}
+                slice={BLOCK_SLICE.priorities}
+                whole={blockWhole(BLOCK_WHOLE.priorities(whose))}
               />
               <TaskBlock
                 title="Assigned"
@@ -433,6 +474,15 @@ export function MyWork() {
                 now={now}
                 chrome={chrome}
                 more={mine.truncated?.assigned}
+                slice={BLOCK_SLICE.assigned}
+                whole={
+                  <a
+                    className="t-link prose-link"
+                    href={href(["work"], { assignee: whose, scope: "open" })}
+                  >
+                    All of it on the tracker →
+                  </a>
+                }
               />
               <TaskBlock
                 title="Unblocked"
@@ -441,8 +491,14 @@ export function MyWork() {
                 now={now}
                 chrome={chrome}
                 more={mine.truncated?.unblocked_recent}
+                slice={BLOCK_SLICE.unblocked_recent}
+                whole={blockWhole(BLOCK_WHOLE.unblocked_recent(whose))}
               />
-              <Checklist rows={mine.checklist_items} more={mine.truncated?.checklist_items} />
+              <Checklist
+                rows={mine.checklist_items}
+                more={mine.truncated?.checklist_items}
+                whole={blockWhole(BLOCK_WHOLE.checklist_items(whose))}
+              />
               <TaskBlock
                 title="Collaborating"
                 hint="Brought on without owning."
@@ -450,6 +506,8 @@ export function MyWork() {
                 now={now}
                 chrome={chrome}
                 more={mine.truncated?.collaborating}
+                slice={BLOCK_SLICE.collaborating}
+                whole={blockWhole(BLOCK_WHOLE.collaborating(whose))}
               />
               <TaskBlock
                 title="Watching"
@@ -457,11 +515,73 @@ export function MyWork() {
                 now={now}
                 chrome={chrome}
                 more={mine.truncated?.watching_recent}
+                slice={BLOCK_SLICE.watching_recent}
+                whole={blockWhole(BLOCK_WHOLE.watching_recent(whose))}
               />
             </>
           )}
         </QueryState>
       )}
+    </>
+  );
+}
+
+/**
+ * The order each block of a `my_work` answer is READ in, which is the part of
+ * the set a cut block holds.
+ *
+ * Seven blocks and four orders (`internal/tracker`'s `readMyWork`): the
+ * assigned block in the queue's order, priority then due; the priorities in the
+ * list's own stored order; the asks newest first; the checklist claims by task
+ * key; and the three blocks about recent movement by `updated_at` descending.
+ * Named per block so a caller cannot hand a block a sentence about another's.
+ */
+export const BLOCK_SLICE = {
+  priorities: "listed",
+  assigned: "priority",
+  asked_of_me: "newest",
+  checklist_items: "key",
+  collaborating: "updated",
+  watching_recent: "updated",
+  unblocked_recent: "updated",
+} as const satisfies Record<string, PageSlice>;
+
+/**
+ * WHERE EACH BLOCK'S WHOLE SET IS, once `tracker.MyWorkRows` has cut it.
+ *
+ * Every block is read by a predicate the tracker's own query grammar also
+ * has, and `GET /work` — the `work_items` question — answers it paged by a
+ * cursor rather than capped. `container=workspace` is there because that
+ * question refuses to guess a scope, and `show_closed` where the block does not
+ * stop at open work (the asks, the checklist claims, the watches). The grammar
+ * answers TASKS, so for the asks and the checklist claims it names the tasks
+ * that hold them — for the claims, done items' tasks included. For
+ * collaborating, watching and unblocked it answers a SUPERSET, because each
+ * block also drops what the grammar has no key for (work the person owns;
+ * muted watches; a dependency that was never cleared).
+ *
+ * The assigned block is not here: the tracker board filters on an assignee,
+ * so it links there instead.
+ */
+export const BLOCK_WHOLE = {
+  priorities: (handle: string) => ({ priorities: handle }),
+  asked_of_me: (handle: string) => ({ asked_of: handle, show_closed: "true" }),
+  checklist_items: (handle: string) => ({ checklist_assignee: handle, show_closed: "true" }),
+  collaborating: (handle: string) => ({ collaborator: handle }),
+  watching_recent: (handle: string) => ({ watcher: handle, show_closed: "true" }),
+  unblocked_recent: (handle: string) => ({
+    assignee: handle,
+    has_dependencies: "true",
+    blocked: "false",
+  }),
+};
+
+/** A [BLOCK_WHOLE] query as the sentence a cut block ends on. */
+export function blockWhole(filter: Record<string, string>): ReactNode {
+  const query = new URLSearchParams({ container: "workspace", ...filter }).toString();
+  return (
+    <>
+      The tracker reads all of them: <InlineCode>{`GET /work?${query}`}</InlineCode>
     </>
   );
 }
@@ -475,6 +595,8 @@ export function TaskBlock({
   now,
   chrome,
   more,
+  slice,
+  whole,
 }: {
   title: string;
   hint?: string;
@@ -482,6 +604,10 @@ export function TaskBlock({
   now: number;
   chrome?: RowChrome;
   more?: boolean;
+  /** The order this block was read in — see [BLOCK_SLICE]. */
+  slice: PageSlice;
+  /** Where the rest is when the block was cut — see [BLOCK_WHOLE]. */
+  whole: ReactNode;
 }) {
   if (rows.length === 0) return null;
   // THE TRACKER'S OWN ROW, so a task looks the same here as it does on the
@@ -489,19 +615,16 @@ export function TaskBlock({
   // the board six, and only one of the two knew a task could be blocked.
   return (
     <Card padding="none">
-      {/* NO COUNT WHERE THE BLOCK IS CUT. Every block is bounded, so
+      {/* A FLOOR WHERE THE BLOCK IS CUT. Every block is bounded, so
           `rows.length` on a full one is the page rather than the total — and a
           header reading "20" beside two hundred real assignments is the claim
-          this screen exists to make and must not get wrong. */}
-      <Card.Header
-        subtitle={
-          more ? [hint, "The newest only — there are more."].filter(Boolean).join(" ") : hint
-        }
-        count={more ? undefined : rows.length}
-      >
+          this screen exists to make and must not get wrong. `20+` says it is a
+          floor, and the footer says which twenty and where the rest are. */}
+      <Card.Header subtitle={hint} count={pageCount(rows.length, !!more)}>
         <Card.Title>{title}</Card.Title>
       </Card.Header>
       <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
+      <CutNote shown={rows.length} more={!!more} one="task" slice={slice} whole={whole} />
     </Card>
   );
 }
@@ -523,24 +646,23 @@ export function Asks({
   // handle resolution records: it guessed, and told everybody they were reading
   // their own day.
   ownDay = false,
+  whole,
 }: {
   rows: WorkAskRow[];
   now: number;
   chrome?: RowChrome;
   ownDay?: boolean;
   more?: boolean;
+  /** Where the rest is when the block was cut — see [BLOCK_WHOLE]. */
+  whole: ReactNode;
 }) {
   if (rows.length === 0) return null;
   return (
     <Card>
-      {/* NO COUNT WHERE THE BLOCK IS CUT — see TaskBlock. This block matters
+      {/* A FLOOR WHERE THE BLOCK IS CUT — see TaskBlock. This block matters
           most of the seven: an unanswered question is somebody else blocked on
           this person, so "five" beside forty is the worst of the seven lies. */}
-      <Card.Header
-        icon={<HelpGlyph size="sm" />}
-        count={more ? undefined : rows.length}
-        subtitle={more ? "The newest only — there are more." : undefined}
-      >
+      <Card.Header icon={<HelpGlyph size="sm" />} count={pageCount(rows.length, !!more)}>
         <Card.Title>{ownDay ? "Asked of you" : "Asked of them"}</Card.Title>
       </Card.Header>
       <div className="col gap-3">
@@ -565,6 +687,13 @@ export function Asks({
           </div>
         ))}
       </div>
+      <CutNote
+        shown={rows.length}
+        more={!!more}
+        one="question"
+        slice={BLOCK_SLICE.asked_of_me}
+        whole={whole}
+      />
     </Card>
   );
 }
@@ -573,19 +702,21 @@ export function Asks({
  *
  *  Its own block because no assignee filter over tasks reaches one: a person
  *  holding six checklist items and no assignment reads their queue as empty. */
-export function Checklist({ rows, more }: { rows: WorkChecklistRow[]; more?: boolean }) {
+export function Checklist({
+  rows,
+  more,
+  whole,
+}: {
+  rows: WorkChecklistRow[];
+  more?: boolean;
+  /** Where the rest is when the block was cut — see [BLOCK_WHOLE]. */
+  whole: ReactNode;
+}) {
   if (rows.length === 0) return null;
   return (
     <Card>
-      {/* NO COUNT WHERE THE BLOCK IS CUT — see TaskBlock. */}
-      <Card.Header
-        count={more ? undefined : rows.length}
-        subtitle={
-          more
-            ? "On other people's tasks. The newest only — there are more."
-            : "On other people's tasks."
-        }
-      >
+      {/* A FLOOR WHERE THE BLOCK IS CUT — see TaskBlock. */}
+      <Card.Header count={pageCount(rows.length, !!more)} subtitle="On other people's tasks.">
         <Card.Title>Checklist items</Card.Title>
       </Card.Header>
       {rows.map((item) => (
@@ -593,11 +724,22 @@ export function Checklist({ rows, more }: { rows: WorkChecklistRow[]; more?: boo
           <a className="mono t-link" href={href(["work", item.task_key])}>
             {item.task_key}
           </a>
-          <span className="work-check-name">{item.name}</span>
+          {/* CLAMPED AT `.clamp`'s TWO LINES, because this is one row of a queue
+              and one long item may not set the height of the rest. The whole
+              name is on the task's own page, which the key beside it opens:
+              its checklist draws every name unclamped. */}
+          <span className="work-check-name clamp">{item.name}</span>
           <span className="spacer" />
           <span className="muted truncate">{item.task_title}</span>
         </div>
       ))}
+      <CutNote
+        shown={rows.length}
+        more={!!more}
+        one="checklist item"
+        slice={BLOCK_SLICE.checklist_items}
+        whole={whole}
+      />
     </Card>
   );
 }

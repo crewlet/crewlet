@@ -2491,11 +2491,22 @@ details > summary.int-summary::-webkit-details-marker {
   font-family: var(--font-mono);
   flex: none;
 }
+/* A BUTTON, because it opens the day in place: the chips it folds are this
+   cell's, and a count nothing can open left them on no surface at all. Drawn
+   as the caption it was, so the grid reads the same until it is pressed. */
 .work-cal-more {
   align-self: flex-start;
+  font: inherit;
   font-size: var(--fs-3xs);
   color: var(--accent-ink);
   padding: 0 var(--space-1);
+  background: none;
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.work-cal-more:hover {
+  text-decoration: underline;
 }
 .work-cal-note {
   padding: var(--space-2) var(--space-3);
@@ -2554,11 +2565,15 @@ details > summary.int-summary::-webkit-details-marker {
   color: var(--text-muted);
   text-decoration: line-through;
 }
+/* A CHECKLIST ITEM'S NAME IS PROSE, about as long as a task title, so it is
+   never cut at a pixel here (see `.clamp` in base.css for why a sentence under
+   `.truncate` is the defect). It WRAPS, and `anywhere` lets an unbroken run —
+   a URL, an id — break rather than push the assignee off the row. The task's
+   own page draws it whole this way; a surface that has to bound the row adds
+   `.clamp` in its markup and says where the whole name is. */
 .work-check-name {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 /* A comment carrying a QUESTION wears the caution rail: somebody owes it an

@@ -294,6 +294,88 @@ test("a short change feed is counted as the whole history it is", async () => {
   expect(screen.queryByText(/there are more/)).toBeNull();
 });
 
+// THE REST OF THE FEED IS READ, NOT MERELY ANNOUNCED. It said "older ones are
+// behind this page of the history" and offered no way behind it — and that
+// feed is the only record of a save older than the revisions a page keeps.
+test("a change feed with a cursor behind it pages to its older changes", async () => {
+  const query = vi.fn(async (what: string, params?: Record<string, unknown>) => {
+    if (what === "page") return { page, history: [], ancestors: [], children: [] };
+    if (what !== "page_activity") return {};
+    return params?.cursor
+      ? {
+          changes: [
+            { id: "h-old", page_id: "p-0", kind: "created", actor: "agent-cto", at, log_seq: 0 },
+          ],
+        }
+      : {
+          changes: [
+            { id: "h-new", page_id: "p-0", kind: "saved", actor: "agent-ceo", at, log_seq: 9 },
+          ],
+          next_cursor: "9",
+        };
+  });
+  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useOrg).mockReturnValue({ name: "Acme", roles: [] } as never);
+  render(
+    <Router>
+      <PageView container="LEAD" title="Test Sample Page" />
+    </Router>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Load older changes" }));
+  await waitFor(() => expect(screen.getByText("created")).toBeTruthy());
+  expect(query.mock.calls.some((c) => c[0] === "page_activity" && c[1]?.cursor === "9")).toBe(true);
+  // THE LAST PAGE MINTED NO CURSOR.
+  expect(screen.queryByRole("button", { name: "Load older changes" })).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// The revisions a page keeps
+// ---------------------------------------------------------------------------
+
+const revision = (version: number) => ({ version, author: "agent-ceo", created_at: at });
+
+// A RETENTION CUT, SAID WHERE IT IS READ. A page keeps a bounded number of
+// revisions, and "History (100)" over the kept ones read as the page's whole
+// history, its oldest entry as the first draft.
+test("a history the page has outgrown says how many saves are no longer kept", async () => {
+  serving({
+    page: {
+      page: { ...page, version: 412 },
+      history: Array.from({ length: 100 }, (_, i) => revision(412 - i)),
+      ancestors: [],
+      children: [],
+    },
+    page_activity: { changes: [] },
+  });
+  render(
+    <Router>
+      <PageView container="LEAD" title="Test Sample Page" />
+    </Router>,
+  );
+  expect(await screen.findByText("History (100 of 412)")).toBeTruthy();
+  expect(screen.getByText(/Versions 1–312 are no longer kept/)).toBeTruthy();
+});
+
+test("a history that reaches the first version draws no caution", async () => {
+  serving({
+    page: {
+      page: { ...page, version: 3 },
+      history: [revision(3), revision(2), revision(1)],
+      ancestors: [],
+      children: [],
+    },
+    page_activity: { changes: [] },
+  });
+  render(
+    <Router>
+      <PageView container="LEAD" title="Test Sample Page" />
+    </Router>,
+  );
+  expect(await screen.findByText("History (3)")).toBeTruthy();
+  expect(screen.queryByText(/no longer kept/)).toBeNull();
+});
+
 // ---------------------------------------------------------------------------
 // The browse's own window
 // ---------------------------------------------------------------------------

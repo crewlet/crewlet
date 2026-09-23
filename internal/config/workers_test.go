@@ -387,7 +387,8 @@ func TestCloningATemplateMapDetachesItFromTheLiveConfig(t *testing.T) {
 func TestAWorkerRendersAsOneLineNamingWhatItReturns(t *testing.T) {
 	t.Parallel()
 	line := config.DescribeWorker("researcher", config.Worker{
-		Description: "reads sources\nand reports findings",
+		// A BLOCK SCALAR's shape: what `description: |` decodes to.
+		Description: "reads sources\n  and reports what it found\nwith a source per claim\n",
 		Tools:       []string{"confluence_search", "confluence_get_page"},
 		Output: map[string]any{
 			"type": "object",
@@ -407,6 +408,12 @@ func TestAWorkerRendersAsOneLineNamingWhatItReturns(t *testing.T) {
 	// sits in.
 	if strings.Contains(line, "\n") {
 		t.Errorf("the line wraps: %q", line)
+	}
+	// AND NOTHING CUT TO GET THERE. The description is the prose the
+	// executor chooses a worker by, so a line break in it is folded into a
+	// space rather than taken as the end of what the founder wrote.
+	if !strings.Contains(line, "`researcher`: reads sources and reports what it found with a source per claim (") {
+		t.Errorf("the description did not reach the line whole, folded onto one: %s", line)
 	}
 	// And the fields are named in a STABLE order — the line reaches a
 	// system prompt, and one whose bytes move between turns costs the

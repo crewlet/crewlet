@@ -136,15 +136,18 @@ type spendEntry struct {
 // hours under a heading that says twenty-four is a wrong total; it is only
 // invisibly wrong, which on a MONEY figure is the worse kind.
 //
-// It is the rule the store path beside it already states in as many words:
-// labelled with what it will actually cover, never with what was asked for,
-// because "a request for a year answered over thirty days and headed 'a year'
-// is a lie about the numbers beside it".
+// ZERO WHERE NOTHING CAN HAVE BEEN DROPPED, which is the common case: the
+// caller then keeps the window's own `since`, and nothing about an ordinary
+// company's heading changes. A seed that FILLED the cap counts as a drop
+// whether or not its store read left anything behind — see [History.Spend].
 //
-// EMPTY WHERE NOTHING WAS DROPPED, which is the common case: the caller then
-// keeps the window's own `since`, and nothing about an ordinary company's
-// heading changes.
-func (s *LiveState) SpendRecords() ([]tokens.Record, string) {
+// AN INSTANT, NOT THE RECORD'S OWN STRING. Records arrive in whichever of the
+// layouts [newStamp] accepts, and RFC 3339 with fractional seconds does not
+// sort as text — "12:00:00.5Z" is lexically before "12:00:00Z" — so a minimum
+// taken over the strings can name a later record than the earliest, and a
+// caller re-parsing it as RFC 3339 would drop a zoneless layout on the floor
+// and keep the full window's heading.
+func (s *LiveState) SpendRecords() ([]tokens.Record, time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]tokens.Record, len(s.spend))
@@ -152,19 +155,19 @@ func (s *LiveState) SpendRecords() ([]tokens.Record, string) {
 		out[i] = e.Record
 	}
 	if !s.spendCapped {
-		return out, ""
+		return out, time.Time{}
 	}
 	// THE EARLIEST RETAINED, computed rather than remembered: hydration can
 	// append behind a live record, so the slice is not reliably ordered —
 	// the same reason `pruneSpend` sweeps rather than popping from the
 	// front.
-	earliest := ""
+	var earliest time.Time
 	for _, e := range s.spend {
 		if !e.at.valid {
 			continue
 		}
-		if earliest == "" || e.Record.Timestamp < earliest {
-			earliest = e.Record.Timestamp
+		if earliest.IsZero() || e.at.t.Before(earliest) {
+			earliest = e.at.t
 		}
 	}
 	return out, earliest

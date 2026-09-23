@@ -3,8 +3,10 @@ package tracker_test
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 
@@ -870,5 +872,69 @@ func TestADetailReadNamesEachFieldAndItsState(t *testing.T) {
 	}
 	if ghost.Slug != "" {
 		t.Errorf("an undeclared value named a slug %q it cannot have", ghost.Slug)
+	}
+}
+
+// EVERY MEMBER A RECORD CARRIES IS INDEXED, however many there are.
+//
+// The write refuses a multi-valued field past [tracker.MaxFieldValueSeq], and
+// that is the only place the bound belongs. A record that skipped this
+// build's coercion — a peer build with a wider bound, mid-upgrade — still
+// carries its whole set on the document, and an index holding fewer members
+// than the document answers a filter on the missing ones as though the task
+// did not carry them. So the applier writes a row for every member.
+func TestEveryMemberARecordCarriesIsIndexed(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	at := time.Unix(1_700_000_100, 0).UTC()
+
+	catalogue, err := json.Marshal(tracker.FieldCatalogue{
+		V: tracker.DocumentVersion, UpdatedAt: at,
+		Fields: []tracker.FieldDef{{
+			ID: "f-rev", Slug: "reviewers", Name: "Reviewers",
+			Type: tracker.FieldPeople,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encode the catalogue: %v", err)
+	}
+	if _, err := h.apply(tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			V: tracker.RecordVersion, OpID: "op-fields",
+			Subject: tracker.CatalogueSubject(tracker.CatalogueFields),
+			Op:      tracker.OpPatch, CreatedAt: at, Writer: "node-a",
+			Scope: tracker.ScopeSet{Subject: true},
+		},
+		Mutation: catalogue, Kind: tracker.ChangeCatalogue,
+		Actor: "ana", ActorKind: tracker.AuthorHuman,
+	}, at); err != nil {
+		t.Fatalf("apply the catalogue: %v", err)
+	}
+
+	const members = tracker.MaxFieldValueSeq + 2
+	handles := make([]string, 0, members)
+	for i := range members {
+		handles = append(handles, fmt.Sprintf("seat-%03d", i))
+	}
+	value, err := json.Marshal(handles)
+	if err != nil {
+		t.Fatalf("encode the value: %v", err)
+	}
+	task := newTask("t-wide")
+	task.Fields = map[string]json.RawMessage{"f-rev": value}
+	if _, err := h.apply(taskRecord("t-wide", tracker.OpCreate, task, nil), at); err != nil {
+		t.Fatalf("apply the task: %v", err)
+	}
+
+	if got := h.value(`SELECT COUNT(*) FROM tracker_field_values
+		WHERE task_id = 't-wide' AND field_id = 'f-rev'`); got != members {
+		t.Fatalf("the index holds %d of the %d members the document carries — "+
+			"a filter on any of the others would answer that the task does "+
+			"not carry it", got, members)
+	}
+	last := handles[members-1]
+	if got := h.value(`SELECT COUNT(*) FROM tracker_field_values
+		WHERE field_id = 'f-rev' AND ref = ? AND hidden = 0`, last); got != 1 {
+		t.Fatalf("the last member %q has %d live row(s), want 1", last, got)
 	}
 }

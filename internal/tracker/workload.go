@@ -76,6 +76,13 @@ type WorkloadAnswer struct {
 	Rows []WorkloadRow `json:"rows"`
 
 	// Truncated says the answer stopped at [MaxWorkloadHandles].
+	//
+	// Rows are heaviest first, so what a truncated answer leaves out is the
+	// LIGHTEST queues — and a figure summed over Rows is then a figure over
+	// the heaviest people only. A renderer that sums a column must read
+	// this beside it. What is left out is still reachable:
+	// [WorkloadQuery.Unit] narrows the question to one unit's projects,
+	// and any one person's queue is a task query on [Query.Assignee].
 	Truncated bool `json:"truncated,omitempty"`
 
 	Level          statelog.ReadLevel `json:"read_level,omitempty"`

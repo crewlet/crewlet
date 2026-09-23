@@ -42,6 +42,28 @@ func TestElideIsUnboundedAtZero(t *testing.T) {
 	}
 }
 
+// A MIDDLE CUT KEEPS BOTH ENDS, whole characters on each side, and marks the
+// gap. It exists for a value whose start says what failed and whose end says
+// why, so losing either end is the failure it was written against.
+func TestElideMiddleKeepsBothEndsOfWholeRunes(t *testing.T) {
+	t.Parallel()
+	got := ElideMiddle("日本語テスト日本語テスト", 6)
+	if !utf8.ValidString(got) {
+		t.Fatalf("the middle cut produced invalid UTF-8: %q", got)
+	}
+	if got != "日本語 … テスト" {
+		t.Errorf("ElideMiddle = %q, want the first three and last three runes "+
+			"around a marked gap", got)
+	}
+	if got := ElideMiddle("short", 5); got != "short" {
+		t.Errorf("a string at the budget was cut: %q", got)
+	}
+	long := strings.Repeat("x", 5000)
+	if got := ElideMiddle(long, 0); got != long {
+		t.Errorf("limit 0 cut to %d chars, want unbounded like Elide", len(got))
+	}
+}
+
 func TestPerValueElisionKeepsTheDiscriminator(t *testing.T) {
 	t.Parallel()
 	// The bug this whole design exists to prevent: capping the SERIALISED
@@ -503,7 +525,7 @@ func TestASessionReadsAsTheSeatsOwnPast(t *testing.T) {
 		Reply:   "Reposted with the corrected link.",
 	})
 	for _, want := range []string{
-		"### 2026-08-20T09:00:00Z (turn 0189d4c2)",
+		"### 2026-08-20T09:00:00Z (turn 0189d4c2-aaaa-bbbb-cccc-ddddddddddd0)",
 		"Triggered by: @alice",
 		"You set out to: repost",
 		"You called:",
@@ -527,13 +549,43 @@ func TestAnUnremarkableEndingIsNotAnnounced(t *testing.T) {
 	}
 }
 
-func TestAShortTurnIDDoesNotPanic(t *testing.T) {
+// THE TURN ID IS RENDERED WHOLE, whatever its shape.
+//
+// A prefix of an id reads as the id and matches nothing anybody can look up,
+// and the id is a string the caller supplies — a byte prefix of one that is
+// not ASCII splits a character, which a model reads as a replacement glyph.
+func TestATurnIDIsRenderedWhole(t *testing.T) {
 	t.Parallel()
-	// The id is a string the caller supplies. Slicing [:8] blindly panics
-	// on anything shorter, and a panic here takes down the turn that was
-	// only trying to describe itself.
-	if got := renderSession(Session{TurnID: "abc"}); !strings.Contains(got, "turn abc") {
-		t.Errorf("a short id did not render: %s", got)
+	for _, id := range []string{"abc", "0189d4c2-aaaa-bbbb-cccc-ddddddddddd0", "tür-ñ-日本語-turn"} {
+		if got := renderSession(Session{TurnID: id}); !strings.Contains(got, "(turn "+id+")") {
+			t.Errorf("turn id %q did not render whole: %s", id, got)
+		}
+	}
+}
+
+// WHAT A RENDER WAS NEVER HANDED IS COUNTED BESIDE WHAT IT DROPPED.
+//
+// The oldest entry's ordinal says how many turns came before it that the
+// reader does not have — trimmed, swept, or outside a limited read — and the
+// render's own budget drops more. One marker carries both, or the half it
+// leaves out reads as the start of the conversation.
+func TestTheHistoryMarkerCountsTurnsTheRecordNoLongerHolds(t *testing.T) {
+	t.Parallel()
+	survivors := []Session{
+		{Ordinal: 5, Reply: strings.Repeat("a", 400)},
+		{Ordinal: 6, Reply: "bbb"},
+	}
+	got := RenderHistory(survivors, HistoryOptions{})
+	if !strings.Contains(got, "4 earlier turn(s)") {
+		t.Errorf("four turns before the oldest survivor went unreported:\n%s", got)
+	}
+	both := RenderHistory(survivors, HistoryOptions{MaxChars: 100})
+	if !strings.Contains(both, "5 earlier turn(s)") {
+		t.Errorf("the render's own drop and the record's were not summed:\n%s", both)
+	}
+	// An entry from before ordinals claims nothing either way.
+	if legacy := RenderHistory([]Session{{Reply: "x"}}, HistoryOptions{}); strings.Contains(legacy, "earlier") {
+		t.Errorf("an unstamped entry was reported as having predecessors:\n%s", legacy)
 	}
 }
 

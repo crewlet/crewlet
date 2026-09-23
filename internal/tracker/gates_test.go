@@ -3,6 +3,8 @@ package tracker_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -244,5 +246,83 @@ func TestEveryGateTableIsCoveredByThePredicate(t *testing.T) {
 		t.Fatalf("the schema holds gate tables %v and the predicate covers %v "+
 			"— a gate table with no clause in InstallsGate is a gate every "+
 			"node defers, which licenses every later record on it", tables, want)
+	}
+}
+
+// A PURGE'S REASON TRAVELS WHOLE, OR NOTHING IS PURGED.
+//
+// The reason is the operator's account of an act with no inverse, and the line
+// a purge leaves — the lead's notification, whose excerpt the activity feed
+// row carries — is where it is read. No read surface returns the copy on the
+// deletion marker, so a reason cut to fit that line would have no way back:
+// one that does not fit is refused naming how much does, before anything is
+// destroyed. With or without a lead, so what a purge accepts does not change
+// when somebody is appointed.
+func TestAPurgeReasonTravelsWholeOrNothingIsPurged(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-a", "t-b", "t-c", "t-d"} {
+		filedTask(t, r, id)
+	}
+	r.writer.Leads = fixedLeads{project: "eng-lead"}
+	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+
+	// THE LINE WITH NO REASON ON IT is the room the reason has left,
+	// less the separator it is joined by.
+	if _, err := operator.PurgeTask(t.Context(), "op-a", "t-a", "ENG", ""); err != nil {
+		t.Fatalf("purge t-a: %v", err)
+	}
+	r.drain()
+	room := tracker.MaxExcerpt - len(r.lastWake().Excerpt) - len(": ")
+
+	// EXACTLY THE ROOM, ending on a two-byte rune, lands whole.
+	fits := strings.Repeat("r", room-2) + "é"
+	if _, err := operator.PurgeTask(t.Context(), "op-b", "t-b", "ENG", fits); err != nil {
+		t.Fatalf("a reason of exactly the %d bytes that fit was refused: %v",
+			room, err)
+	}
+	r.drain()
+	if excerpt := r.lastWake().Excerpt; !strings.HasSuffix(excerpt, ": "+fits) {
+		t.Fatalf("the lead's line does not carry the whole reason: it ends %q",
+			excerpt[max(0, len(excerpt)-16):])
+	}
+
+	// ONE BYTE PAST IT is refused naming the room, and the task survives.
+	tooLong := "r" + fits
+	for _, c := range []struct {
+		id    string
+		leads tracker.Leads
+	}{{"t-c", fixedLeads{project: "eng-lead"}}, {"t-d", nil}} {
+		r.writer.Leads = c.leads
+		operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+		_, err := operator.PurgeTask(t.Context(), "op-"+c.id, c.id, "ENG", tooLong)
+		// TYPED, because the fix is the caller's: a surface that cannot
+		// tell this from a purge that failed answers an operator's long
+		// sentence as a server fault.
+		var refused *tracker.ErrPurgeReasonTooLong
+		switch {
+		case err == nil:
+			t.Errorf("%s (lead %v): a %d-byte reason against %d bytes of room "+
+				"was accepted — the line that carries it would cut it, and no "+
+				"read surface returns the rest", c.id, c.leads != nil,
+				len(tooLong), room)
+		case !errors.As(err, &refused):
+			t.Errorf("%s: the refusal %v is not an ErrPurgeReasonTooLong, so no "+
+				"caller can tell it from a failed purge", c.id, err)
+		case refused.Room != room || refused.Bytes != len(tooLong):
+			t.Errorf("%s: the refusal carries %d bytes of reason against %d of "+
+				"room, want %d against %d", c.id, refused.Bytes, refused.Room,
+				len(tooLong), room)
+		case !strings.Contains(err.Error(), fmt.Sprintf("at most %d", room)):
+			t.Errorf("%s: the refusal %q does not say how much fits", c.id, err)
+		}
+	}
+	r.drain()
+	survivors := ids(r.ask(map[string]any{"container": "project:ENG"}))
+	for _, id := range []string{"t-c", "t-d"} {
+		if !slices.Contains(survivors, id) {
+			t.Errorf("%s was purged although its reason was refused — the "+
+				"refusal has to come before the destruction", id)
+		}
 	}
 }

@@ -9,7 +9,7 @@
  * scope, or reach for anything a Node process does not have.
  */
 
-export { Store, MAX_EVENTS } from "./store.ts";
+export { Store, MAX_EVENTS, MAX_PHASES } from "./store.ts";
 export type { StoreState, Slice } from "./store.ts";
 export { LiveSocket, queryErrorCode } from "./socket.ts";
 export { api } from "./api.ts";

@@ -31,7 +31,8 @@
 //   - a long name, past any column width a backend might have assumed;
 //   - a zero FiredAt (the production case, which asks the ledger to stamp it)
 //     and a supplied one (the test case, which must be kept verbatim);
-//   - a zero and a negative Recent limit;
+//   - a zero and a negative Recent limit, and one row past a full page —
+//     the probe a caller reads a cut from;
 //   - a purge cutoff before, exactly at, and after a row's FiredAt.
 //
 // The LIFECYCLE axis — WHEN each operation is sent, which is the axis that has
@@ -630,6 +631,37 @@ var readCases = []testCase{
 		// and still passes a length check.
 		if rows[0].ScheduleName != "s4" || rows[1].ScheduleName != "s3" {
 			h.t.Fatalf("Recent(2) = %v, want the two newest (s4, s3)", []string{rows[0].ScheduleName, rows[1].ScheduleName})
+		}
+	}},
+
+	{"recent_answers_the_probe_row_past_a_full_page", func(h *harness) {
+		// THE EVIDENCE ROW a caller reads a cut from. A dashboard page of
+		// fifty asks for fifty-one, and the fifty-first is the only thing
+		// that tells "cut" from "that is all of them" — so a backend that
+		// capped its own reads at the page size would hand back fifty
+		// either way, and every page it answered would read as complete.
+		// Sent to BOTH listings, over exactly one row more than the page.
+		const page = 50
+		for i := range page + 1 {
+			run := aRun(aKey())
+			run.FireLabel = fmt.Sprintf("20260608T%04d", i)
+			run.FiredAt = scheduledAt.Add(time.Duration(i) * time.Minute)
+			h.claimed(run)
+		}
+		key := aKey()
+		if got := len(h.recent(page + 1)); got != page+1 {
+			h.t.Fatalf("Recent(%d) = %d rows over %d, want the probe row too", page+1, got, page+1)
+		}
+		if got := len(h.recentFor(key.Scope, key.ScopeID, key.ScheduleName, page+1)); got != page+1 {
+			h.t.Fatalf("RecentFor(%d) = %d rows over %d, want the probe row too", page+1, got, page+1)
+		}
+		// And absent where there is nothing past the page: one more than
+		// the ledger holds is the ledger, whole.
+		if got := len(h.recent(page + 2)); got != page+1 {
+			h.t.Fatalf("Recent(%d) = %d rows over %d, want all of them and no more", page+2, got, page+1)
+		}
+		if got := len(h.recentFor(key.Scope, key.ScopeID, key.ScheduleName, page+2)); got != page+1 {
+			h.t.Fatalf("RecentFor(%d) = %d rows over %d, want all of them and no more", page+2, got, page+1)
 		}
 	}},
 

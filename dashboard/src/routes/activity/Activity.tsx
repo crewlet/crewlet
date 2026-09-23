@@ -20,7 +20,7 @@
  * retained history".
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
@@ -38,7 +38,7 @@ import {
   windowLabel,
   windowParam,
 } from "~/lib/range.ts";
-import type { Offer } from "~/lib/range.ts";
+import type { Offer, Range } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram } from "~/ui/Histogram.tsx";
 import { FacetRail } from "~/ui/FacetRail.tsx";
@@ -66,7 +66,25 @@ const CATEGORIES = [
   "webhook",
 ] as const;
 
+/**
+ * One page of the log, the first and every older one alike.
+ *
+ * THE ENGINE'S OWN DEFAULT (`queries.DefaultEventPage`), which it sizes to one
+ * screen of this feed: larger spends a round trip on rows nobody scrolls to,
+ * and smaller makes the first scroll a second query.
+ */
 const PAGE = 100;
+
+/**
+ * The window that reaches the whole log: `store.EventHistory`, the floor every
+ * read of the event log stops at, so no row a read can return is older.
+ *
+ * WHAT A LINK MEANING "THE REST OF THESE ROWS" OPENS ON. The log's own
+ * fallback is a day, and a list elsewhere that is cut to its newest rows has
+ * no time bound — so a link that lets the fallback stand lands on a day that
+ * holds none of the rows it promises whenever they are older than that.
+ */
+export const WHOLE_LOG: Range = "30d";
 
 /**
  * WHICH WINDOWS THE LOG HAS.
@@ -75,14 +93,14 @@ const PAGE = 100;
  * log is asked "what just happened" and "what happened last Tuesday" in the
  * same breath, and both are questions about the store rather than about what
  * this tab is holding. `1h` is the short end because that is where the minute
- * bucket stops being drawable — sixty bars — and the long end is `30d` because
- * that is `store.EventHistory`'s own default: a `90d` offer would be a window
- * two thirds of which can never have rows in it. The engine reports its actual
- * floor (`event_history_seconds`) and the footer says what it reported; this
- * offer is a fixed vocabulary of windows rather than a claim about retention.
+ * bucket stops being drawable — sixty bars — and the long end is [WHOLE_LOG]:
+ * a `90d` offer would be a window two thirds of which can never have rows in
+ * it. The engine reports its actual floor (`event_history_seconds`) and the
+ * footer says what it reported; this offer is a fixed vocabulary of windows
+ * rather than a claim about retention.
  */
 const LOG_OFFER: Offer = {
-  ranges: ["1h", "6h", "1d", "7d", "30d"],
+  ranges: ["1h", "6h", "1d", "7d", WHOLE_LOG],
   custom: true,
   fallback: "1d",
   // ALL THREE, which is why `event_series` has a bucket the spend series does
@@ -117,6 +135,15 @@ export function Activity() {
   const now = useNow();
   const [category, setCategory] = useParam("category", "");
   const [actor, setActor] = useParam("actor", "");
+  // WHICH SURFACE PUBLISHED IT, compared for equality on the server like the
+  // actor. An integration's own page links here with it, so "older deliveries
+  // on Slack" is a page of Slack's deliveries rather than every webhook the
+  // company has received, with Slack's somewhere among them.
+  const [source, setSource] = useParam("source", "");
+  // ONE TRACE, compared for equality on the server — the trace screen links
+  // here with it. The search box cannot stand in for it: it matches a row's
+  // summary, type and source, and a trace id is none of those.
+  const [trace, setTrace] = useParam("trace", "");
   const [q, setQ] = useParam("q", "");
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
   // NOT ALIGNED to the bucket. A chart rounds its edges up so the column in
@@ -171,13 +198,21 @@ export function Activity() {
   // THE WINDOW'S IDENTITY, not its two instants — see [windowKey]. A reader
   // choosing another range is a new query and its pages go; a second passing
   // is not.
+  //
+  // AND A PAGE STILL IN FLIGHT FOR THE OLD QUERY LANDS NOWHERE. It answers
+  // after this reset, so appending it put the old query's rows back and its
+  // cursor in place of the new one's — `walk` names the query a fetch was
+  // asked under, and [loadOlder] drops an answer for one that has ended.
+  const walk = useRef(0);
   useEffect(() => {
+    walk.current += 1;
     setOlder([]);
     setCursor(null);
     setExhausted(false);
+    setPaging(false);
     setPageError(null);
     setFetched(false);
-  }, [category, actor, windowKey]);
+  }, [category, actor, source, trace, windowKey]);
 
   const rows = useMemo(() => {
     const seen = new Set<string>();
@@ -206,6 +241,8 @@ export function Activity() {
         // different filters over one list, and the paged half came back empty
         // for every prefix. The search box is where substring lives.
         .filter((e) => !actor || (e.actor ?? "") === actor)
+        .filter((e) => !source || e.source === source)
+        .filter((e) => !trace || e.trace_id === trace)
         .filter((e) => !onlyFailed || e.failed)
         .filter(
           (e) =>
@@ -216,7 +253,7 @@ export function Activity() {
         )
         .sort(newestFirst)
     );
-  }, [liveEvents, older, category, actor, q, onlyFailed, since, until]);
+  }, [liveEvents, older, category, actor, source, trace, q, onlyFailed, since, until]);
 
   // THE AXIS IS THE ENGINE'S. This tab holds at most the last 400 events and
   // the store's window it never holds, so a histogram folded here would be
@@ -233,9 +270,12 @@ export function Activity() {
     bucket,
     ...(category ? { category } : {}),
     ...(actor ? { actor } : {}),
+    ...(source ? { source } : {}),
+    ...(trace ? { trace_id: trace } : {}),
   });
 
   const loadOlder = useCallback(async () => {
+    const asked = walk.current;
     setPaging(true);
     setPageError(null);
     try {
@@ -245,6 +285,8 @@ export function Activity() {
       const params: Record<string, unknown> = { limit: PAGE, since, until };
       if (category) params.category = category;
       if (actor) params.actor = actor;
+      if (source) params.source = source;
+      if (trace) params.trace_id = trace;
       if (cursor) {
         params.before_time = cursor.before_time;
         params.before_id = cursor.before_id;
@@ -259,15 +301,16 @@ export function Activity() {
       // array. Reading it as an array yielded [] every time, which the caller
       // then read as "the beginning of the retained history".
       const page = await socket.query("events", params);
+      if (asked !== walk.current) return;
       setOlder((prev) => [...prev, ...(page.events ?? [])]);
       setCursor(page.next ?? null);
       setExhausted(page.exhausted || !page.next);
     } catch (err) {
+      if (asked !== walk.current) return;
       setPageError(err instanceof Error ? err.message : "query_failed");
-    } finally {
-      setPaging(false);
     }
-  }, [socket, cursor, rows, category, actor, since, until]);
+    setPaging(false);
+  }, [socket, cursor, rows, category, actor, source, trace, since, until]);
 
   // THE FIRST PAGE OF THE WINDOW, once per window. `loadOlder` is a
   // dependency and changes with every render that changes `rows`, so the
@@ -279,7 +322,7 @@ export function Activity() {
     void loadOlder();
   }, [fetched, loadOlder]);
 
-  const filtered = !!(category || actor || q || onlyFailed);
+  const filtered = !!(category || actor || source || trace || q || onlyFailed);
 
   return (
     <>
@@ -294,6 +337,8 @@ export function Activity() {
             onClick={() => {
               setCategory("");
               setActor("");
+              setSource("");
+              setTrace("");
               setQ("");
               setOnlyFailed("");
             }}
@@ -372,9 +417,26 @@ export function Activity() {
           leading={<SearchGlyph size="sm" />}
           width="sm"
         />
+        <Input
+          type="search"
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+          aria-label="Filter by source"
+          placeholder="Source"
+          leading={<SearchGlyph size="sm" />}
+          width="sm"
+        />
         <FilterChip pressed={!!onlyFailed} onPressedChange={(on) => setOnlyFailed(on ? "1" : "")}>
           Failures only
         </FilterChip>
+        {/* THE TRACE, on screen while it narrows the log: a filter the reader
+            cannot see is a filter they cannot lift. No box sets it — a trace
+            id is something a link carries, not something anybody types. */}
+        {trace && (
+          <FilterChip pressed onPressedChange={(on) => !on && setTrace("")}>
+            Trace <span className="mono">{trace}</span>
+          </FilterChip>
+        )}
         <span className="spacer" />
       </div>
 

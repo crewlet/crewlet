@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -20,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -904,35 +904,38 @@ func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
 	return out
 }
 
-// partialTail bounds how much of a round in flight goes on the wire.
+// partialTail bounds, in BYTES, how much of a round in flight goes on the
+// wire.
 //
 // The whole accumulated text is republished five times a second — deltas
 // cannot be sent instead, because the socket hub drops the OLDEST frame when a
 // client falls behind and a consumer that had missed one would splice the
 // remaining fragments into nonsense. Republishing the accumulation is
 // therefore the correct shape for a lossy channel, and it is also quadratic in
-// the length of the round: a thirteen-thousand-character reasoning block costs
-// a seat about four megabytes over its life, times every open dashboard.
+// the length of the round.
 //
 // The tail is what a reader is actually watching — text appears at the END —
 // and the full text arrives moments later on the round's own narration, which
-// is authoritative anyway. Four thousand characters is roughly two screens at
-// this type size, so nothing a reader could have been mid-way through is cut.
+// is authoritative anyway. At four thousand bytes, each field this cuts adds
+// at most that much (plus the three-byte marker) to a frame, however long the
+// round runs. Bytes rather than characters because that cost is what the bound
+// is for, so a round written in a script whose characters take three bytes
+// each shows a third as many of them.
 const partialTail = 4000
 
-// tail is the last partialTail characters, marked when it elides.
+// tail is the last [partialTail] bytes of text, with a leading "…" when it
+// elides.
+//
+// The window's start can fall inside a character, and what the cut left of it
+// is cleared by the shared [textcut.TrimOrphanContinuation]. That clears at
+// most the bytes one interrupted character can leave, so a longer run of
+// continuation bytes is the text's own and stays.
 func tail(text string) string {
 	if len(text) <= partialTail {
 		return text
 	}
-	// Cut on a RUNE boundary: slicing a UTF-8 string by bytes can split a
-	// multi-byte character, and the replacement glyph would be the last
-	// thing on screen every time the cut landed mid-character.
-	cut := text[len(text)-partialTail:]
-	for len(cut) > 0 && !utf8.RuneStart(cut[0]) {
-		cut = cut[1:]
-	}
-	return "…" + cut
+	cut := textcut.TrimOrphanContinuation([]byte(text[len(text)-partialTail:]))
+	return "…" + string(cut)
 }
 
 // encodeArgs renders a call's arguments as JSON text, falling back to nothing

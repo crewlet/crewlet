@@ -2,11 +2,8 @@ package jetstream
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -437,23 +434,12 @@ func (q *Queue) alignDomainConsumer(ctx context.Context, stream string,
 
 // domainConsumerName is what this node's reader is called on the broker.
 //
-// A node id can hold characters a consumer name may not, and two node ids can
-// differ only in one of them — so the readable half is escaped and a digest
-// over the exact pair is appended, exactly as the mailbox consumer's name is
-// built. Truncation cannot reintroduce an alias, because the digest is taken
-// over the full pair and appended after it.
+// A node id can hold characters a consumer name may not — a dot is legal in
+// one — and two node ids can differ only in one of them, so the name is built
+// by [derivedConsumerName] like every other consumer name here: an escaped
+// label, and a digest over the exact (node, stream) pair that is its identity.
 func domainConsumerName(stream, nodeID string) string {
-	safe := func(s string) string {
-		return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)
-	}
-	sum := sha256.Sum256([]byte(nodeID + "\x00" + stream))
-	id := hex.EncodeToString(sum[:6])
-
-	readable := "statelog__" + safe(stream) + "__" + safe(nodeID)
-	if max := consumerNameMax - len(id) - 2; len(readable) > max {
-		readable = readable[:max]
-	}
-	return readable + "__" + id
+	return derivedConsumerName([]string{nodeID, stream}, "statelog", stream, nodeID)
 }
 
 // Fetch implements [statelog.Fetcher].
@@ -670,19 +656,11 @@ func (l *DomainLog) Group(ctx context.Context, name string) (*DomainGroup, error
 	return group, nil
 }
 
-// domainGroupName escapes a group's name the way every derived consumer name
-// here is escaped, and appends a digest over the exact pair.
+// domainGroupName is what a fleet-wide group over a log is called on the
+// broker: built by [derivedConsumerName] like every other consumer name here,
+// from an escaped label and a digest over the exact (group, stream) pair.
 func domainGroupName(stream, group string) string {
-	safe := func(s string) string {
-		return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)
-	}
-	sum := sha256.Sum256([]byte(group + "\x00" + stream))
-	id := hex.EncodeToString(sum[:6])
-	readable := safe(group) + "__" + safe(stream)
-	if max := consumerNameMax - len(id) - 2; len(readable) > max {
-		readable = readable[:max]
-	}
-	return readable + "__" + id
+	return derivedConsumerName([]string{group, stream}, group, stream)
 }
 
 // Next blocks for the next delivery.

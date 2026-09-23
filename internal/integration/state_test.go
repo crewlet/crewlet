@@ -3,8 +3,11 @@ package integration
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // A REFUSED CREDENTIAL IS NOT A WAIT.
@@ -191,5 +194,78 @@ func TestAskingForATeardownDropsWhatTheLastPassFound(t *testing.T) {
 	if got.Attempts != 0 || !got.NextAttemptAt.IsZero() {
 		t.Errorf("attempts=%d next=%v, so the disconnect waits out a backoff",
 			got.Attempts, got.NextAttemptAt)
+	}
+}
+
+// A FINDING'S SENTENCE IS CUT IN THE ROW, NEVER IN THE CALLER'S HANDS.
+//
+// The dashboard's pass hands Observe the very findings it then answers with
+// and keeps in that run's record — the one place a sentence too long for the
+// row survives whole. [Promote] returns its input unchanged when there is one
+// finding or the worst is already first, so a cut written through it clipped
+// those on some passes and not others, by the order a vendor listed them in.
+func TestObserveCutsACopyAndNeverTheCallersFindings(t *testing.T) {
+	long := strings.Repeat("é", MaxDetailLength) // twice the ceiling, in bytes
+	for _, c := range []struct {
+		name     string
+		findings []Finding
+	}{
+		{"one finding", []Finding{{Kind: FindingGrantShort, Detail: long}}},
+		{"the worst already first", []Finding{
+			{Kind: FindingIdentityFailed, Detail: long},
+			{Kind: FindingGrantExcess, Detail: long},
+		}},
+		{"the worst promoted from behind", []Finding{
+			{Kind: FindingGrantExcess, Detail: long},
+			{Kind: FindingIdentityFailed, Detail: long},
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, _ := Observe(State{}, KindJira, c.findings, nil, time.Now().UTC())
+			for i, f := range c.findings {
+				if f.Detail != long {
+					t.Errorf("the caller's finding %d came back %d bytes, want its "+
+						"own %d: Observe wrote through the slice it was handed",
+						i, len(f.Detail), len(long))
+				}
+			}
+			for i, f := range got.Findings {
+				if f.Detail != textcut.Ellipsis(long, MaxDetailLength) {
+					t.Errorf("stored finding %d is %d bytes and ends %q, want it "+
+						"cut at the ceiling and marked", i, len(f.Detail),
+						f.Detail[max(0, len(f.Detail)-6):])
+				}
+			}
+		})
+	}
+}
+
+// THE COUNT OUTLIVES THE CUT, and the headline stays the stored sentence of
+// the finding it names.
+//
+// Classify appends "(and N more)" to the worst finding's sentence. A cut over
+// the finished report fell on the count first, so a long vendor sentence
+// reported one finding's words and no sign there were more — and the
+// dashboard, which strips that count to find the finding the headline
+// stands for, found a string no finding carried.
+func TestACutHeadlineKeepsItsCount(t *testing.T) {
+	long := strings.Repeat("x", 2*MaxDetailLength)
+	got, _ := Observe(State{}, KindJira, []Finding{
+		{Kind: FindingGrantShort, Subject: "a", Detail: long},
+		{Kind: FindingGrantShort, Subject: "b", Detail: long},
+		{Kind: FindingGrantShort, Subject: "c", Detail: long},
+	}, nil, time.Now().UTC())
+
+	headline, found := strings.CutSuffix(got.Report.Detail, " (and 2 more)")
+	if !found {
+		t.Fatalf("the report %q lost its count", got.Report.Detail[max(0, len(got.Report.Detail)-24):])
+	}
+	if headline != got.Findings[0].Detail {
+		t.Errorf("the headline is not the stored sentence of the finding it "+
+			"names (%d bytes against %d), so the dashboard renders that finding twice",
+			len(headline), len(got.Findings[0].Detail))
+	}
+	if !strings.HasSuffix(headline, "…") {
+		t.Error("the headline was cut with nothing saying so")
 	}
 }

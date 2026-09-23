@@ -99,9 +99,11 @@ type ProjectListing struct {
 	Projects []ProjectRow `json:"projects"`
 
 	// Total is how many projects match the filter, and Truncated says the
-	// listing stopped short of it. A count rather than a cursor because a
-	// company's projects are tens, not thousands — [MaxProjectsPerAnswer]
-	// carries the rationale.
+	// listing stopped short of it. A count rather than a cursor —
+	// [MaxProjectsPerAnswer] carries the rationale and where the rest is.
+	//
+	// A RENDERER THAT DRAWS [ProjectListing.Projects] MUST READ BOTH: the
+	// length of the list is the page, and only Total is the company's.
 	Total     int  `json:"total"`
 	Truncated bool `json:"truncated,omitempty"`
 
@@ -115,11 +117,12 @@ type ProjectListing struct {
 
 // MaxProjectsPerAnswer is how many projects one listing carries.
 //
-// TWO HUNDRED, which is ≈ 30 KB of rows and is the seat tool's own ceiling. A
-// company with more projects than that has a chart problem rather than a
-// paging problem, and the answer says `truncated` and `total` rather than
-// offering a cursor nobody would page: every screen that draws projects draws
-// all of them.
+// TWO HUNDRED, and a company with more projects than that has a chart problem
+// rather than a paging problem — so the answer says `truncated` and `total`
+// rather than offering a cursor. The rows are ordered by key, and a project
+// past the bound is reached by narrowing: `q` matches its key, name or
+// purpose and `unit` the unit that owns it, while [Reader.Project] reads any
+// one project by key whatever the listing holds.
 const MaxProjectsPerAnswer = 200
 
 // ProjectQuery asks for a company's projects.

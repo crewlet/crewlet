@@ -167,10 +167,19 @@ type Corpus interface {
 	Source() Source
 
 	// Stale returns up to limit documents whose vector is missing or
-	// computed from an older version, oldest first, together with the
-	// sources whose vectors must be FORGOTTEN because the document is
-	// gone.
-	Stale(ctx context.Context, model string, dim, limit int) (stale []Document, gone []string, err error)
+	// computed from an older version, oldest first, together with up to
+	// limit WINDOWS whose vectors must be FORGOTTEN because their document
+	// is gone.
+	//
+	// EVERY WINDOW, and not the document's chunk 0: each window is its own
+	// subject on the compacted log and its own row on every node, and the
+	// applier forgets exactly the window a record names. A document
+	// forgotten by its chunk 0 alone would keep every other window
+	// findable by meaning, and nothing would ever name them again — this
+	// selection is the only thing that does. What is left past the limit
+	// is selected on a later tick, because the selection is over the rows
+	// and the rows still hold it.
+	Stale(ctx context.Context, model string, dim, limit int) (stale []Document, gone []Subject, err error)
 
 	// Coverage is how many of this corpus's sources carry a CURRENT
 	// vector, and how many sources there are.
@@ -569,8 +578,8 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 		// for, and rationing it would leave deleted work findable by
 		// meaning for exactly as long as the corpus stayed behind. It is
 		// bounded all the same, by the selection limit above.
-		for _, id := range gone {
-			if err := e.forget(ctx, corpus.Source(), id); err != nil {
+		for _, window := range gone {
+			if err := e.forget(ctx, window); err != nil {
 				// AND THIS ONE DOES STOP THE TICK, because it is
 				// not a fact about the corpus: an evicted node, an
 				// unreachable broker or a store that refuses the
@@ -720,9 +729,8 @@ func (e *Embedder) publish(ctx context.Context, source Source, dim int,
 	return e.append(ctx, subject, rec)
 }
 
-// forget withdraws a vector whose source is gone.
-func (e *Embedder) forget(ctx context.Context, source Source, id string) error {
-	subject := Subject{Source: source, ID: id}
+// forget withdraws one window's vector, because its source is gone.
+func (e *Embedder) forget(ctx context.Context, subject Subject) error {
 	return e.append(ctx, subject, VectorRecord{
 		RecordEnvelope: RecordEnvelope{
 			Subject:   subject,
@@ -803,8 +811,34 @@ func opIDFor(rec VectorRecord) string {
 		rec.Subject.String(), string(rec.Op), rec.Model,
 		fmt.Sprint(rec.Dim), fmt.Sprint(rec.SourceRev), rec.TextSHA,
 	}, "\x00")))
-	return "vec-" + hex.EncodeToString(sum[:16])
+	return "vec-" + hex.EncodeToString(sum[:opIDDigestBytes])
 }
+
+// opIDDigestBytes is how much of the SHA-256 an operation id keeps.
+//
+// SIXTEEN BYTES, 128 bits — the width
+// [github.com/crewlet/crewlet/internal/pages.TitleToken] keeps too — and here
+// it is a collision bound with a harsher consequence than that one's. A title
+// token that collides makes two creates contend at the broker and one retry.
+// This id is the message id the vector stream deduplicates on inside
+// [VectorLogDuplicates], so two DIFFERENT records that collided in one window
+// would not contend at all: the broker would acknowledge the second as a
+// repeat of the first and never store it. A dropped forget heals, because
+// the row it would have removed is still there for [Corpus.Stale] to select
+// again, and so does a dropped embed of chunk 0, the row the stale selection
+// reads. A dropped embed of any later window does not: nothing selects that
+// row, so it keeps whatever it held before — an older text's vector, or none —
+// until its source is next edited.
+//
+// Only the ids inside one duplicate window can collide, and even a million of
+// them — one per published window or forget, two minutes' worth — collide with
+// probability about 1.5e-27 (n²/2^129). The whole digest would add 32 bytes to
+// every record's message id and 32 more to its payload, to move a number that
+// is already nothing.
+//
+// NOT A CUT OF A VALUE, so nothing marks it: the id is an address derived from
+// the record, and the record carries every input to it.
+const opIDDigestBytes = 16
 
 // errUnusableVector marks a vector this duty will not publish, which its
 // caller treats as costing that document and not the batch it arrived in.
@@ -847,9 +881,9 @@ type TaskCorpus struct{ DB *store.DB }
 func (TaskCorpus) Source() Source { return SourceTask }
 
 // Stale implements [Corpus].
-func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []string, error) {
+func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []Subject, error) {
 	var stale []Document
-	var gone []string
+	var gone []Subject
 	err := c.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.project_key, t.version, t.title,
@@ -859,10 +893,9 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			  ON v.source = 'task' AND v.source_id = t.id
 			 AND v.chunk = 0
 			  -- CHUNK 0, because this join asks about DOCUMENTS and a
-			  -- document is several windows: without it a page with
-			  -- twelve windows is selected twelve times, and the
-			  -- forget arm below would name it twelve times over.
-			  -- Every embedded document has a chunk 0.
+			  -- document is several windows: without it a task with
+			  -- twelve windows is selected, and re-embedded, twelve
+			  -- times over. Every embedded document has a chunk 0.
 			WHERE t.removed_at IS NULL
 			  AND (v.source_id IS NULL
 			       OR v.source_rev <> t.version
@@ -893,30 +926,47 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 		// or purged. Without it a deleted task stays findable by meaning
 		// for ever — the row it came from is gone, so nothing else will
 		// ever select it.
-		dead, err := tx.QueryContext(ctx, `
-			SELECT v.source_id
+		//
+		// EVERY WINDOW, with no chunk filter: see [Corpus.Stale].
+		gone, err = goneWindows(ctx, tx, SourceTask, `
+			SELECT v.source_id, v.chunk
 			FROM kb_vectors v
 			LEFT JOIN tracker_tasks t
 			  ON t.id = v.source_id AND t.removed_at IS NULL
-			WHERE v.source = 'task' AND v.chunk = 0 AND t.id IS NULL
+			WHERE v.source = 'task' AND t.id IS NULL
+			ORDER BY v.source_id, v.chunk
 			LIMIT ?`, limit)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = dead.Close() }()
-		for dead.Next() {
-			var id string
-			if err := dead.Scan(&id); err != nil {
-				return err
-			}
-			gone = append(gone, id)
-		}
-		return dead.Err()
+		return err
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	return stale, gone, nil
+}
+
+// goneWindows runs one corpus's forget selection: every window, as the subject
+// a forget names, whose document the corpus no longer offers.
+//
+// ORDERED BY DOCUMENT AND WINDOW, so a document cut by the limit is finished
+// from where it was cut on the next tick rather than in whatever order the
+// plan happened to visit its rows.
+func goneWindows(ctx context.Context, tx *sql.Tx, source Source, query string,
+	limit int) ([]Subject, error) {
+
+	rows, err := tx.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Subject
+	for rows.Next() {
+		window := Subject{Source: source}
+		if err := rows.Scan(&window.ID, &window.Chunk); err != nil {
+			return nil, err
+		}
+		out = append(out, window)
+	}
+	return out, rows.Err()
 }
 
 // Coverage implements [Corpus].

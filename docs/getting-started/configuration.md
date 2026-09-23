@@ -897,7 +897,7 @@ workers:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `description` | string | yes | What this worker is for, written for the **executor choosing one** rather than for the operator. It is the only part of the template that reaches the parent's prompt |
+| `description` | string | yes | What this worker is for, written for the **executor choosing one** rather than for the operator. It is the only prose of the template that reaches the parent's prompt, on the worker's line beside the tools it names and the fields it returns. A multi-line description (`description: \|`) is folded onto that one line — every line break becomes a space, and nothing is cut |
 | `system_prompt` | string | yes | The worker's persona and standing instructions. The runtime preamble (no nesting, no colleague contact, how to answer) is appended, so a template never restates the boundary and cannot weaken it by forgetting to |
 | `tools` | list[string] | no | The tools this worker asks for. Empty means none at all, which is the right shape for a summariser. **Naming a tool grants nothing**: every name still passes the worker filter — the caller's own live tools, minus the engine-control denylist, minus shared-surface writes — so `workers:` is never a privilege-escalation path |
 | `model` | string | no | A `providers.llm` key. An explicit key gets **no fallback chain**: an operator's cheap-model choice that quietly ran somewhere else is worse than a refusal. Omit to take the seat's `llm_subagent` chain |

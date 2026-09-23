@@ -12,12 +12,12 @@
  * the rows it holds do not support.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TurnScreen } from "./Turn.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, MAX_PHASES, Store } from "~/protocol/index.ts";
 import type { EventRecord, TurnAnswer } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -365,6 +365,60 @@ test("the trace buttons name this turn's traces, not the tab's", async () => {
   button.click();
   expect(location.hash).toContain("trace-mine");
   expect(location.hash).not.toContain("trace-elsewhere");
+});
+
+// A PHASE THE TAB DROPPED IS SAID, and asking again is what clears it.
+//
+// The `turn` question is answered once; the phases that finish after it reach
+// this page only through the tab's company-wide buffer, which drops the oldest
+// past its cap and leaves nothing behind. Without a mark a phase that finished
+// here and was then pushed out by other seats' work simply disappeared from an
+// open page. Nothing before the answer counts: those phases are the answer's.
+test("a phase the tab dropped after the answer is marked, and a re-read clears it", async () => {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  let asked = 0;
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) => {
+    if (what !== "turn") return Promise.resolve({});
+    asked++;
+    return Promise.resolve({
+      turn_id: TURN,
+      events: [phase("2026-09-13T10:01:30Z", 90_000)],
+      truncated: false,
+    });
+  };
+  const elsewhere = (i: number) => ({
+    ...phase("2026-09-13T10:02:00Z", 1_000, { turn_id: `t-other-${i}`, role: "CFO" }),
+    id: `other-${i}`,
+    failed: false,
+  });
+  // A FULL BUFFER BEFORE THE PAGE OPENS: what it drops next arrived before the
+  // answer did, which the answer covers.
+  for (let i = 0; i < MAX_PHASES; i++) store.applyEvent(elsewhere(i));
+
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <TurnScreen turnId={TURN} />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  await screen.findByTitle("how long this phase took");
+  act(() => {
+    for (let i = MAX_PHASES; i < 2 * MAX_PHASES; i++) store.applyEvent(elsewhere(i));
+  });
+  expect(screen.queryByText(/may be missing/)).toBeNull();
+
+  // One more, and an arrival from after the answer is the one dropped.
+  act(() => store.applyEvent(elsewhere(2 * MAX_PHASES)));
+  expect(
+    await screen.findByText(/Phases that completed after this page loaded may be missing/),
+  ).toBeTruthy();
+  expect(screen.queryByText("nothing went wrong")).toBeNull();
+
+  screen.getByRole("button", { name: "Read again" }).click();
+  await waitFor(() => expect(asked).toBe(2));
+  await waitFor(() => expect(screen.queryByText(/may be missing/)).toBeNull());
 });
 
 // THE DOWNLOADED FILE SAYS WHAT THE SCREEN SAYS.

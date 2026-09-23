@@ -167,6 +167,27 @@ describe("completed phases", () => {
     expect(store.state.phases[0]?.id).toBe(`p${MAX_PHASES + 9}`);
   });
 
+  test("an eviction is counted, so a screen can say it may be missing a phase", () => {
+    // A dropped phase leaves nothing behind in the slice, so without the count
+    // an open Turn page loses a phase that finished after it loaded and
+    // nothing on it says so.
+    const store = new Store();
+    for (let i = 0; i < MAX_PHASES; i++) store.applyEvent(phaseEvent(`p${i}`));
+    expect(store.state.phaseArrivals).toBe(MAX_PHASES);
+    expect(store.state.phasesDropped).toBe(0);
+    const mark = store.state.phaseArrivals;
+    for (let i = MAX_PHASES; i < MAX_PHASES + 3; i++) store.applyEvent(phaseEvent(`p${i}`));
+    // Drop-oldest in arrival order: arrivals 1–3 are the ones gone, which are
+    // all BEFORE the mark, so a screen that answered at the mark lost nothing
+    // it could not have held.
+    expect(store.state.phasesDropped).toBe(3);
+    expect(store.state.phasesDropped > mark).toBe(false);
+    // A redelivery is neither an arrival nor an eviction.
+    store.applyEvent(phaseEvent(`p${MAX_PHASES + 2}`));
+    expect(store.state.phaseArrivals).toBe(MAX_PHASES + 3);
+    expect(store.state.phasesDropped).toBe(3);
+  });
+
   test("a snapshot leaves the slice alone", () => {
     // The snapshot carries payload-free feed rows and no phase payloads, so a
     // reconnect must add to this rather than blank it — the records are still

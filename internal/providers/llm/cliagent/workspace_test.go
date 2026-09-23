@@ -1,6 +1,8 @@
 package cliagent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -319,6 +321,25 @@ func TestSeatSlugIsSafeAndRecognisable(t *testing.T) {
 		}
 		if len(got) > 255 {
 			t.Errorf("seatSlug(%q) is %d bytes, past NAME_MAX", in, len(got))
+		}
+	}
+}
+
+// THE DIGEST IS THE WHOLE SHA-256, never a prefix of it.
+//
+// A seat's home is where two seats must never meet, and a prefix of the digest
+// buys a few characters in a path element that has room for all 64 at the
+// cost of making that meeting a matter of odds. The slug names the handle it
+// was made from by the full digest, so any shortening fails here.
+func TestSeatSlugCarriesTheWholeDigest(t *testing.T) {
+	t.Parallel()
+	for _, handle := range []string{"Sarah Chen", strings.Repeat("x", 200), "", "日本語"} {
+		sum := sha256.Sum256([]byte(strings.TrimSpace(handle)))
+		want := hex.EncodeToString(sum[:])
+		got := seatSlug(handle)
+		if !strings.HasSuffix(got, "-"+want) {
+			t.Errorf("seatSlug(%q) = %q, want it to end in the whole digest %s",
+				handle, got, want)
 		}
 	}
 }

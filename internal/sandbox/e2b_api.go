@@ -8,12 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The E2B control plane: minting, reclaiming and keeping a box alive.
@@ -95,6 +93,13 @@ type E2BError struct {
 	Method string
 	Path   string
 	Status int
+
+	// Detail is [httpx.RefusalOf]'s line about what the control plane
+	// said — what it quotes, how it bounds that and how it marks a cut are
+	// that function's decision, shared with every other client. A body past
+	// [httpx.RefusalBytes] is reported as unread, naming the ceiling,
+	// rather than quoted in part. The body is read once and dropped, so
+	// nothing in this process holds more of it than this line.
 	Detail string
 }
 
@@ -140,10 +145,10 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		detail := readDetail(resp.Body)
+		refusal, readErr := httpx.ReadBody(resp.Body, httpx.RefusalBytes)
 		return &E2BError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: strings.TrimSpace(detail),
+			Detail: httpx.RefusalOf(resp.Header.Get("Content-Type"), refusal, readErr),
 		}
 	}
 	if out == nil {
@@ -282,25 +287,4 @@ func (a *e2bAPI) setBoxTimeout(ctx context.Context, sandboxID string, seconds fl
 // pauseBox snapshots a sandbox.
 func (a *e2bAPI) pauseBox(ctx context.Context, sandboxID string) error {
 	return a.do(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/pause", nil, nil)
-}
-
-// readDetail reads a refusal's body, SAYING when it cut.
-//
-// An unmarked cut leaves "the explanation is off-screen" and "the vendor
-// explained itself badly" as the same string, which is the distinction the
-// reader most needs — and the read error is reported rather than dropped,
-// because a body that died mid-read is a different fact from a short one.
-func readDetail(body io.Reader) string {
-	raw, err := io.ReadAll(io.LimitReader(body, httpx.RefusalBytes+1))
-	text := strings.TrimSpace(string(raw))
-	switch {
-	case len(raw) > httpx.RefusalBytes:
-		return strings.TrimSpace(textcut.Bytes(string(raw), httpx.RefusalBytes)) +
-			"\n…(the rest of the response is past the " +
-			strconv.Itoa(httpx.RefusalBytes) + "-byte cap this build reads)"
-	case err != nil && text == "":
-		return "(the response body could not be read: " + err.Error() + ")"
-	default:
-		return text
-	}
 }

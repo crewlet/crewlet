@@ -77,6 +77,12 @@ type Background struct {
 	// loop hears that its cadence may have moved without polling for it.
 	wake chan struct{}
 
+	// walks is the compaction pass's per-seat state, handed to every
+	// [Lifecycle] this Background is given. It lives here because this
+	// value lives as long as the loops and a Lifecycle lives only until the
+	// next apply replaces it; see [seatWalks].
+	walks *seatWalks
+
 	// cancel and running are the loops' OWNED lifetime, and they are not
 	// the context Start was handed. The caller detaches that context on
 	// purpose — these loops outlive SIGTERM like the node's do — so the
@@ -169,7 +175,7 @@ func NewBackground(opts BackgroundOptions) *Background {
 		roleFor: opts.RoleFor, agentIDFor: opts.AgentIDFor,
 		seats: opts.Seats, publish: opts.Publish,
 		claimDuty: opts.ClaimDuty, now: opts.Now,
-		wake: make(chan struct{}),
+		wake: make(chan struct{}), walks: newSeatWalks(),
 	}
 	if b.now == nil {
 		b.now = func() time.Time { return time.Now().UTC() }
@@ -192,8 +198,12 @@ func (b *Background) Reconfigure(p BackgroundPasses) {
 	b.wake = make(chan struct{})
 }
 
-// normalise applies the defaults and the one pass rule the wiring can break.
+// normalise applies the defaults and the one pass rule the wiring can break,
+// and gives the compaction pass this Background's per-seat state.
 func (b *Background) normalise(p BackgroundPasses) BackgroundPasses {
+	if p.Lifecycle != nil {
+		p.Lifecycle.shareWalks(b.walks)
+	}
 	if b.roleFor == nil {
 		// A clustering pass without one resolves no model and would fail
 		// per seat, per tick, forever. Refusing the pass is the honest

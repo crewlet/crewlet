@@ -68,12 +68,10 @@ func TestEveryOpDeclaresItsScope(t *testing.T) {
 						V: tracker.RecordVersion, OpID: "rank-1",
 						Subject: tracker.RankOrderSubject("ENG"),
 						Op:      tracker.OpPatch, Writer: "node-a",
-						// THE COVERING TERM, not an enumeration: a
-						// drag's affected set is the tasks it names
-						// PLUS up to a re-spread's worth of
-						// neighbours, which is why it states the
-						// project rather than a list it could
-						// overflow.
+						// THE COVERING TERM, not an enumeration:
+						// every placement is a task in the
+						// project, so the container is the one
+						// term that covers any set of them.
 						Scope: tracker.ScopeSet{Terms: []tracker.ScopeTerm{
 							{Kind: tracker.TermContainer, ID: "ENG"},
 						}},

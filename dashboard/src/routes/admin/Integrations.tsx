@@ -47,7 +47,8 @@ import {
   SettingsGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { QueryState } from "~/components/common.tsx";
+import { CutNote, QueryState } from "~/components/common.tsx";
+import { pageCount } from "~/lib/work.ts";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
   DateCell,
@@ -78,6 +79,7 @@ import type {
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { WHOLE_LOG } from "~/routes/activity/Activity.tsx";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
 // five-value union beside the one the design system publishes, which is the
@@ -1860,25 +1862,33 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
  * one of them is a click to the event's own page. The `#/model` screen fetched
  * a payload per row and paid sixty-one round trips for one screen.
  */
-function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
+export function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
   const nav = useNavigator();
   const now = useNow();
   // Not pushed — a webhook row reaches the live stream, but this is a page of
   // history and a delivery arrives on the provider's schedule rather than
   // this screen's. A minute is the cadence "is anything arriving at all" is
   // asked at, which is the same one the traffic counters use.
+  //
+  // ONE ROW PAST THE PAGE, as evidence. The `events` answer mints `next` on any
+  // page that holds a row and says `exhausted` only on an empty one, so
+  // neither says whether a full page is the whole set — and "rows.length is
+  // the page size" read exactly fifty deliveries as a cut. The probe row says
+  // it, and is not drawn.
   const deliveries = useQuery(
     "events",
-    { category: "webhook", source: surface, limit: DELIVERY_PAGE },
+    { category: "webhook", source: surface, limit: DELIVERY_PAGE + 1 },
     { pollMs: 60_000, refetchOnFocus: true },
   );
-  const rows = deliveries.data?.events ?? [];
+  const fetched = deliveries.data?.events ?? [];
+  const more = fetched.length > DELIVERY_PAGE;
+  const rows = more ? fetched.slice(0, DELIVERY_PAGE) : fetched;
 
   return (
     <Card padding="none">
       <Card.Header
         icon={<InboxGlyph size="sm" />}
-        count={rows.length}
+        count={pageCount(rows.length, more)}
         subtitle="what the provider actually sent, newest first"
       >
         {`${name} deliveries`}
@@ -1984,20 +1994,30 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
           />
         )}
       </QueryState>
-      {rows.length >= DELIVERY_PAGE && (
-        // `Card.Footer` RATHER THAN OUR `.panel-foot`: this band is the
-        // design system's meta footer, which is the same thing the class drew
-        // — a rule, a quiet register and the card's own horizontal padding.
-        <Card.Footer variant="meta">
-          <span className="t-caption">
-            The newest {DELIVERY_PAGE}. Older deliveries are in the{" "}
-            <a className="prose-link" href={href(["activity", "events"], { category: "webhook" })}>
-              event log
-            </a>
-            , which pages.
-          </span>
-        </Card.Footer>
-      )}
+      {/* WHERE THE REST ARE: this surface's own deliveries on the event log,
+          which pages — the same two filters this card asked with, so the link
+          continues this list rather than mixing it into every surface's — on
+          the window that reaches the whole log, because this card has no time
+          bound and the log's own fallback is a day. */}
+      <CutNote
+        shown={rows.length}
+        more={more}
+        one="delivery"
+        many="deliveries"
+        slice="newest"
+        whole={
+          <a
+            className="prose-link"
+            href={href(["activity", "events"], {
+              category: "webhook",
+              source: surface,
+              window: WHOLE_LOG,
+            })}
+          >
+            The rest of {name}&rsquo;s deliveries are on the event log, which pages.
+          </a>
+        }
+      />
     </Card>
   );
 }

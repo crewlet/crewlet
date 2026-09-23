@@ -144,15 +144,31 @@ func (s *Service) ActiveRevision(ctx context.Context) (string, error) {
 	return revision.ID, nil
 }
 
-// Revisions is the history, newest first, metadata only.
-func (s *Service) Revisions(ctx context.Context, limit, offset int) ([]map[string]any, error) {
-	revisions, err := s.configs.List(ctx, limit, offset)
+// RevisionHistory is one page of the revision history, newest first.
+//
+// AN OBJECT, NOT A BARE LIST, so the page can say whether it is the whole
+// history. A list of exactly `limit` revisions reads the same whether the
+// node holds that many or a thousand, and a reader counting what it was given
+// reports the page as the history.
+type RevisionHistory struct {
+	Revisions []map[string]any `json:"revisions"`
+
+	// Truncated says older revisions exist past this page. They are at
+	// `offset + len(revisions)`, and GET /config/revisions/{id} answers any
+	// one of them directly. Read by the store as one row past the page (see
+	// [store.Configs.List]), never inferred from the count.
+	Truncated bool `json:"truncated"`
+}
+
+// Revisions is one page of the history, newest first, metadata only.
+func (s *Service) Revisions(ctx context.Context, limit, offset int) (RevisionHistory, error) {
+	revisions, truncated, err := s.configs.List(ctx, limit, offset)
 	if err != nil {
-		return nil, err
+		return RevisionHistory{}, err
 	}
-	out := make([]map[string]any, 0, len(revisions))
+	out := RevisionHistory{Revisions: make([]map[string]any, 0, len(revisions)), Truncated: truncated}
 	for _, revision := range revisions {
-		out = append(out, meta(revision))
+		out.Revisions = append(out.Revisions, meta(revision))
 	}
 	return out, nil
 }

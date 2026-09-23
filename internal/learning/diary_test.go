@@ -2,10 +2,13 @@ package learning_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -331,89 +334,38 @@ func diaryHitIDs(hs []learning.DiaryHit) []string {
 	return out
 }
 
-// A durable entry has no deadline, so nothing ages it out, but recall scans
-// and cosines every one of a seat's rows in every turn's prefetch, so an
-// unbounded diary is a per-turn cost that only grows. The bound is a cap, and
-// what it drops is decided by USE rather than by age.
-func TestTheDurableDiaryIsCappedByWorthNotByAge(t *testing.T) {
-	d := diary(t)
+// A seat over the cap — which a write never takes it to, but a hydration can —
+// keeps every durable note through the sweep. A note dropped by a sweep is a
+// fact the seat chose to keep and is never told it lost, and it would come
+// back on the next hydration anyway, since memory replication carries no
+// deletes.
+func TestTheSweepDropsNoDurableNote(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	at := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	d := fullDiary(t, learning.DiaryLongCap+5)
+	// Recalled notes and never-recalled ones alike: a sweep ranking by use
+	// would have a least-useful note to reach for.
+	d.MarkRetrieved(ctx, []string{"held-0", "held-1"}, base.Add(time.Hour))
 
-	// Six entries for one seat. The two that have been recalled are the
-	// valuable ones; among the rest the oldest is the most disposable.
-	for i := range 6 {
-		mustWrite(t, d, longEntry(fmt.Sprintf("e%d", i), "agent-a",
-			fmt.Sprintf("fact %d", i), at.Add(time.Duration(i)*time.Hour)))
-	}
-	// e0 is the OLDEST and would go first on age alone — recalling it is
-	// what proves the eviction is not an age sweep in disguise.
-	d.MarkRetrieved(ctx, []string{"e0", "e1"}, at.Add(time.Hour))
-
-	// Another seat, under the cap, must be untouched: the cap is per agent.
-	mustWrite(t, d, longEntry("other", "agent-b", "theirs", at))
-
-	dropped, err := d.TrimLong(ctx, 3)
-	if err != nil {
-		t.Fatalf("TrimLong: %v", err)
-	}
-	if dropped != 3 {
-		t.Fatalf("dropped %d, want the 3 rows past the cap", dropped)
-	}
-
-	kept := map[string]bool{}
-	rows, err := d.Recent(ctx, "agent-a", time.Now().UTC(), 100)
-	if err != nil {
-		t.Fatalf("Recent: %v", err)
-	}
-	for _, r := range rows {
-		kept[r.ID] = true
-	}
-	if len(kept) != 3 {
-		t.Fatalf("seat holds %d entries after a trim to 3: %v", len(kept), kept)
-	}
-	// The recalled pair survives, oldest-first ordering notwithstanding.
-	for _, id := range []string{"e0", "e1"} {
-		if !kept[id] {
-			t.Errorf("%s was recalled before and still got evicted: %v", id, kept)
+	for _, limit := range []int{0, 3} {
+		dropped, err := d.TrimLong(ctx, limit)
+		if err != nil || dropped != 0 {
+			t.Fatalf("TrimLong(%d) = %d, %v; want nothing dropped", limit, dropped, err)
 		}
 	}
-	// Of the never-recalled rows, the newest is the one worth keeping.
-	if !kept["e5"] {
-		t.Errorf("the newest un-recalled entry was evicted: %v", kept)
-	}
-
-	other, err := d.Recent(ctx, "agent-b", time.Now().UTC(), 10)
-	if err != nil {
-		t.Fatalf("Recent(agent-b): %v", err)
-	}
-	if len(other) != 1 {
-		t.Errorf("a seat under the cap lost entries to another seat's trim: %d", len(other))
-	}
-}
-
-// A seat under the cap is left entirely alone, and the sweep says it did
-// nothing rather than reporting a number the driver invented.
-func TestTrimmingASeatUnderTheCapChangesNothing(t *testing.T) {
-	d := diary(t)
-	ctx := context.Background()
-	at := time.Now().UTC().Add(-time.Hour)
-	for i := range 3 {
-		mustWrite(t, d, longEntry(fmt.Sprintf("k%d", i), "agent-a", "fact", at))
-	}
-	dropped, err := d.TrimLong(ctx, 10)
-	if err != nil {
-		t.Fatalf("TrimLong: %v", err)
-	}
-	if dropped != 0 {
-		t.Fatalf("dropped %d from a seat under the cap", dropped)
-	}
-	rows, err := d.Recent(ctx, "agent-a", time.Now().UTC(), 10)
+	kept, err := d.Recent(ctx, "agent-a", base.Add(time.Hour), learning.DiaryLongCap+10)
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
-	if len(rows) != 3 {
-		t.Fatalf("seat holds %d entries, want 3", len(rows))
+	if len(kept) != learning.DiaryLongCap+5 {
+		t.Errorf("seat holds %d notes after the sweep, want all %d it had",
+			len(kept), learning.DiaryLongCap+5)
+	}
+	// And the seat is still refused, so the notes it keeps are the ones it
+	// was told about.
+	err = d.Write(ctx, longEntry("one-more", "agent-a", "a fact", base))
+	if _, full := errors.AsType[*learning.DiaryFullError](err); !full {
+		t.Errorf("Write over the cap = %v, want a *DiaryFullError", err)
 	}
 }
 
@@ -519,5 +471,149 @@ func TestAWriterSuppliedVectorIsKeptAndNotReEmbedded(t *testing.T) {
 	if len(hits) != 1 || hits[0].Entry.ID != "mine" {
 		t.Errorf("hits = %v, want the entry ranked on the vector its writer brought",
 			diaryHitIDs(hits))
+	}
+}
+
+// fullDiary is a diary whose seat "agent-a" already keeps `held` durable
+// notes, written straight into the table so the fixture costs one
+// transaction rather than one per note.
+func fullDiary(t *testing.T, held int, opts ...learning.DiaryOption) *learning.Diary {
+	t.Helper()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "full.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
+		for i := range held {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO agent_diary (id, agent_id, kind, content, created_at)
+				VALUES (?, 'agent-a', 'diary_long', ?, ?)`,
+				fmt.Sprintf("held-%d", i), fmt.Sprintf("fact %d", i), store.EncodeTime(base)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("fill the diary: %v", err)
+	}
+	return learning.NewDiary(db, opts...)
+}
+
+// A seat at the cap is TOLD, and keeps everything it already had.
+//
+// The alternative — making room by deleting the least-recalled note — takes a
+// fact the seat chose to keep without the seat being told, and it goes on
+// acting as if it still knew it. A refusal reaches the writer while the note
+// is still in its hands.
+func TestADurableNoteAtTheCapIsRefusedRatherThanMadeRoomFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := fullDiary(t, learning.DiaryLongCap)
+
+	err := d.Write(ctx, longEntry("one-more", "agent-a", "the 501st fact", base))
+	var full *learning.DiaryFullError
+	if !errors.As(err, &full) {
+		t.Fatalf("Write at the cap = %v, want a *DiaryFullError", err)
+	}
+	if full.Held != learning.DiaryLongCap || full.AgentID != "agent-a" {
+		t.Errorf("refusal = %+v, want the seat and what it holds", full)
+	}
+	// The text is what a seat reads, so it has to name the limit.
+	if msg := err.Error(); !strings.Contains(msg, fmt.Sprint(learning.DiaryLongCap)) ||
+		!strings.Contains(msg, "learning.DiaryLongCap") {
+		t.Errorf("refusal %q does not name the cap", msg)
+	}
+
+	kept, err := d.Recent(ctx, "agent-a", base.Add(time.Hour), learning.DiaryLongCap+1)
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(kept) != learning.DiaryLongCap {
+		t.Fatalf("seat holds %d notes after a refused write, want the %d it had",
+			len(kept), learning.DiaryLongCap)
+	}
+	for _, e := range kept {
+		if e.ID == "one-more" {
+			t.Fatal("the refused note was stored anyway")
+		}
+	}
+
+	// The cap is on DURABLE notes of ONE seat. A short note still lands,
+	// and so does another seat's durable one.
+	short := longEntry("short", "agent-a", "OOO until Friday", base)
+	short.Kind, short.TTLUntil = learning.DiaryShort, base.Add(24*time.Hour)
+	mustWrite(t, d, short)
+	mustWrite(t, d, longEntry("theirs", "agent-b", "a fact of their own", base))
+
+	// A replay of a note already kept is not a new note, at the cap or not.
+	if err := d.Write(ctx, longEntry("held-7", "agent-a", "fact 7", base)); err != nil {
+		t.Errorf("replaying a kept note at the cap = %v, want the no-op it always was", err)
+	}
+}
+
+// A note that is going to be refused does not spend an embeddings call first.
+func TestAFullDiarySpendsNoEmbeddingOnARefusedNote(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	d := fullDiary(t, learning.DiaryLongCap, learning.WithEmbedding(
+		func(context.Context, string) ([]float32, error) {
+			calls.Add(1)
+			return []float32{1, 0, 0, 0}, nil
+		}))
+
+	err := d.Write(context.Background(), longEntry("one-more", "agent-a", "refused", base))
+	if _, ok := errors.AsType[*learning.DiaryFullError](err); !ok {
+		t.Fatalf("Write at the cap = %v, want a *DiaryFullError", err)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("the embedder was called %d times for a note the cap refused", n)
+	}
+}
+
+// The count that decides is the one read under the write lock.
+//
+// Two writers for one seat both find a slot free before either has written —
+// the embedding call sits between that first read and the insert, and this
+// embedder holds both of them there until both have arrived. Only one slot was
+// free, so exactly one of them may land.
+func TestTwoWritersRacingForTheLastSlotLandOne(t *testing.T) {
+	t.Parallel()
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+	d := fullDiary(t, learning.DiaryLongCap-1, learning.WithEmbedding(
+		func(context.Context, string) ([]float32, error) {
+			arrived.Done()
+			arrived.Wait()
+			return []float32{1, 0, 0, 0}, nil
+		}))
+
+	errs := make(chan error, 2)
+	for _, id := range []string{"left", "right"} {
+		go func() {
+			errs <- d.Write(context.Background(), longEntry(id, "agent-a", "the last slot", base))
+		}()
+	}
+	var landed, refused int
+	for range 2 {
+		err := <-errs
+		switch _, full := errors.AsType[*learning.DiaryFullError](err); {
+		case err == nil:
+			landed++
+		case full:
+			refused++
+		default:
+			t.Fatalf("Write = %v", err)
+		}
+	}
+	if landed != 1 || refused != 1 {
+		t.Fatalf("%d landed and %d were refused, want one of each", landed, refused)
+	}
+	kept, err := d.Recent(context.Background(), "agent-a", base.Add(time.Hour), learning.DiaryLongCap+1)
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(kept) != learning.DiaryLongCap {
+		t.Errorf("seat holds %d notes, want the cap of %d", len(kept), learning.DiaryLongCap)
 	}
 }

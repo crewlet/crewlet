@@ -150,31 +150,58 @@ func TestWhichBandsSurviveIsDecidedOverTheWholeWindow(t *testing.T) {
 
 func TestARecordThisGroupingPlacesNowhereStillCounts(t *testing.T) {
 	t.Parallel()
-	// Grouping by worker leaves out every phase that is not an auxiliary
-	// worker's. Those are real spend, and a chart whose bands sum to less
-	// than the company's total has to SAY so rather than let a reader
-	// discover it by comparing two screens.
+	// Grouping by worker leaves out every phase that is not a worker's.
+	// Those are real spend, and a chart whose bands sum to less than the
+	// company's total has to SAY so rather than let a reader discover it by
+	// comparing two screens.
 	got := tokens.Bucketed([]tokens.Record{
 		{EventID: "w", Timestamp: "2026-06-14T12:00:00Z",
 			Phase: "auxiliary", Worker: "reflect", TotalTokens: 30},
+		{EventID: "d", Timestamp: "2026-06-14T12:00:00Z",
+			Phase: "subagent", Worker: "researcher", TotalTokens: 20},
 		{EventID: "p", Timestamp: "2026-06-14T12:00:00Z",
 			Phase: "plan", TotalTokens: 70},
-		// Worker set on a phase that is not auxiliary: the pair is what
-		// keys the band, so this one counts nowhere either.
+		// Worker set on a phase that names none: the phase is part of
+		// what keys the band, so this one counts nowhere either.
 		{EventID: "stray", Timestamp: "2026-06-14T12:00:00Z",
 			Phase: "plan", Worker: "reflect", TotalTokens: 1},
 	}, tokens.SeriesOptions{
 		Group: tokens.GroupWorker, Interval: tokens.IntervalHour,
 		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T13:00:00Z"),
 	})
-	if got.Totals.TotalTokens != 101 {
+	if got.Totals.TotalTokens != 121 {
 		t.Errorf("totals = %d, want every record in the window", got.Totals.TotalTokens)
 	}
-	if got.Grouped.TotalTokens != 30 {
-		t.Errorf("grouped = %d, want only the auxiliary worker's", got.Grouped.TotalTokens)
+	if got.Grouped.TotalTokens != 50 {
+		t.Errorf("grouped = %d, want the learning worker's and the template's", got.Grouped.TotalTokens)
 	}
-	if len(got.ByGroup) != 1 || got.ByGroup[0].Group != "reflect" {
-		t.Errorf("by_group = %+v, want one band", got.ByGroup)
+	if len(got.ByGroup) != 2 || got.ByGroup[0].Group != "auxiliary/reflect" ||
+		got.ByGroup[1].Group != "subagent/researcher" {
+		t.Errorf("by_group = %+v, want one band per worker, keyed with its phase", got.ByGroup)
+	}
+}
+
+// A TEMPLATE AND A LEARNING WORKER SHARING A NAME ARE TWO BANDS, for the
+// reason they are two rows of the rollup: nothing reserves a learning worker's
+// name from the `workers:` grammar, and one band would chart two workers' spend
+// as one.
+func TestATemplateAndALearningWorkerWithOneNameAreTwoBands(t *testing.T) {
+	t.Parallel()
+	got := tokens.Bucketed([]tokens.Record{
+		{EventID: "w", Timestamp: "2026-06-14T12:00:00Z",
+			Phase: "auxiliary", Worker: "persist_decider", TotalTokens: 10},
+		{EventID: "d", Timestamp: "2026-06-14T12:00:00Z",
+			Phase: "subagent", Worker: "persist_decider", TotalTokens: 30},
+	}, tokens.SeriesOptions{
+		Group: tokens.GroupWorker, Interval: tokens.IntervalHour,
+		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T13:00:00Z"),
+	})
+	bands := map[string]int{}
+	for _, row := range got.ByGroup {
+		bands[row.Group] = row.TotalTokens
+	}
+	if bands["subagent/persist_decider"] != 30 || bands["auxiliary/persist_decider"] != 10 || len(bands) != 2 {
+		t.Errorf("bands = %v, want the template's 30 and the learning worker's 10 apart", bands)
 	}
 }
 

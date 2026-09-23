@@ -79,12 +79,10 @@ const (
 	// the OLDEST records, so an org past the cap sees a rollup covering
 	// slightly less than a day rather than a wrong total.
 	//
-	// Exported because two readers outside this package need the same
-	// number. The startup seed reads no more than this from the store — a
-	// record past the cap would be dropped on arrival, so reading it costs
-	// the seed's time budget and buys nothing — and the two rollup callers
-	// raise their `since` to the window [LiveState.SpendRecords] reports
-	// when this cap, rather than the window, is what bound the answer.
+	// Exported so a caller seeding [History.Spend] from a store can bound
+	// its read by the same number: a record past it is dropped on arrival.
+	// A seed that fills it is headed as cut — see [History.Spend] for why a
+	// full page is read that way.
 	SpendRecordLimit = 8000
 
 	// sandboxEntryMaxAge is how long an in-flight sandbox entry survives
@@ -247,9 +245,10 @@ type LiveState struct {
 	// had — the endpoint's, a re-implementation in the browser, and
 	// whatever a reconnect left behind.
 	spend []spendEntry
-	// spendCapped latches once the record cap has dropped something, so the
-	// rollup can be headed with what it actually covers rather than with
-	// the window it aims at — see [LiveState.SpendRecords].
+	// spendCapped latches once the record cap has dropped something, or a
+	// seed has filled it, so the rollup can be headed with what it actually
+	// covers rather than with the window it aims at — see
+	// [LiveState.SpendRecords] and [History.Spend].
 	spendCapped bool
 
 	budget OrgBudget

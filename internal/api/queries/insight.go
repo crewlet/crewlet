@@ -285,13 +285,9 @@ func mergeByID(head, tail []store.EventRecord) []store.EventRecord {
 // record without its payload has no prompts, no response, no tool calls and no
 // decision, which is everything a reader came for.
 func (s Sources) phases(ctx context.Context, p Params) (any, error) {
-	var before *store.Cursor
-	if id := p.String("before_id"); id != "" {
-		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
-		if err != nil {
-			return nil, fmt.Errorf("%w: before_id needs a before_time: %w", ErrBadParams, err)
-		}
-		before = &store.Cursor{Time: at, ID: id}
+	before, err := beforeCursor(p)
+	if err != nil {
+		return nil, err
 	}
 	limit := Clamp(p.Int("limit", 0), DefaultPhasePage, store.MaxPhasePage)
 	records, err := s.Events.Phases(ctx, p.String("role"), limit, before)
@@ -327,9 +323,16 @@ const DefaultPhasePage = 30
 // past what one company has open at once: a channel is one ask and lives for
 // one exchange, so the open set is bounded by how many asks are in flight. The
 // CLOSED set is what makes a bound necessary at all — it is kept until the
-// purge horizon, so a busy company's history is thousands of rows and a
-// listing that returned all of them would page a coordination bucket through
-// this process to draw one screen.
+// purge horizon, so a busy company's history is thousands of rows, and an
+// answer that carried all of them would send every one to a screen that
+// draws a page.
+//
+// WHERE THE REST IS: the next page. A cut answer carries `next`, the cursor
+// that resumes after its last row, and `totals` describes every channel the
+// filters matched rather than the page, so a count drawn from the answer does
+// not depend on how far a reader has paged. One channel is readable by `id`
+// wherever it falls in the order: a lookup reads the whole record unless
+// `state` narrows it.
 const MaxA2AChannels = 200
 
 // a2aChannelStates is what `state=` selects, against the one predicate a
@@ -338,6 +341,24 @@ var a2aChannelStates = map[string]func(coord.Channel) bool{
 	"open":   coord.Channel.Open,
 	"closed": func(c coord.Channel) bool { return !c.Open() },
 	"all":    func(coord.Channel) bool { return true },
+}
+
+// a2aChannelOrder is the listing's order: most recently active first, the id
+// breaking a tie.
+//
+// ON THE INSTANT, never on its rendering. RFC 3339 with fractional seconds
+// does not sort as text — "09:00:00.5Z" is lexically before "09:00:00Z" — so
+// an order over the wire strings puts a channel active half a second later
+// behind one that was not.
+//
+// A TOTAL ORDER, because the cursor resumes after a position in it: two
+// channels sharing an instant with no tiebreak could each land on either side
+// of a page boundary, and one of them on neither.
+func a2aChannelOrder(a, b coord.Channel) int {
+	if c := b.LastAt.Compare(a.LastAt); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.ID, b.ID)
 }
 
 // a2aChannels answers who has been asking whom.
@@ -353,14 +374,34 @@ var a2aChannelStates = map[string]func(coord.Channel) bool{
 // been opened" and "this node could not look" are different facts and only one
 // of them is a measurement.
 func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
-	// OPEN BY DEFAULT, which is what already shipped and what a screen
-	// watching a working company is for.
-	state := firstOf(p.String("state"), "open")
+	seat := strings.TrimSpace(p.String("seat"))
+	id := strings.TrimSpace(p.String("id"))
+	// OPEN BY DEFAULT, which is what a screen watching a working company is
+	// for — unless `id` names one channel. A LOOKUP DEFAULTS TO THE WHOLE
+	// RECORD, because under the listing's default a closed channel asked for
+	// by its id is filtered out, and an empty answer to "this channel" reads
+	// as there being no such channel. A `state` the caller names is honoured
+	// either way.
+	defaultState := "open"
+	if id != "" {
+		defaultState = "all"
+	}
+	state := firstOf(p.String("state"), defaultState)
 	keep, known := a2aChannelStates[state]
 	if !known {
 		return nil, badParams("state", state, slices.Sorted(maps.Keys(a2aChannelStates)))
 	}
-	seat := strings.TrimSpace(p.String("seat"))
+	// THE CURSOR IS A PAIR, and half of one is refused — see [beforeCursor].
+	before, err := beforeCursor(p)
+	if err != nil {
+		return nil, err
+	}
+	var after *coord.Channel
+	if before != nil {
+		after = &coord.Channel{ID: before.ID, LastAt: before.Time}
+	}
+	limit := Clamp(p.Int("limit", 0), MaxA2AChannels, MaxA2AChannels)
+
 	// THE RECORD IS READ WHOLE ONLY WHEN IT HAS TO BE. `OpenChannels` is
 	// the idle sweep's listing and is deliberately narrower — a closed
 	// channel re-reported is a second close for one channel — so the two
@@ -383,14 +424,40 @@ func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 			"note": err.Error(),
 		}, nil
 	}
-	out := make([]map[string]any, 0, len(channels))
-	for _, c := range channels {
+	matched := slices.DeleteFunc(slices.Clone(channels), func(c coord.Channel) bool {
 		// EITHER END, because a seat's page asks one question — "what
 		// did this seat ask, and what was it asked" — and splitting it
 		// into two params would make the common case two reads.
-		if !keep(c) || (seat != "" && c.Requester != seat && c.Target != seat) {
-			continue
+		return !keep(c) || (seat != "" && c.Requester != seat && c.Target != seat) ||
+			(id != "" && c.ID != id)
+	})
+	// SORTED BEFORE THE CUT, so a page is the most recent N rather than
+	// whichever N the bucket happened to walk first.
+	slices.SortFunc(matched, a2aChannelOrder)
+
+	// THE TOTALS ARE THE MATCHED SET'S, taken before the cursor and the
+	// cut: the whole record is in hand, so a count over the page would be
+	// a count that changes as a reader pages and says nothing about the
+	// company.
+	totals := a2aChannelTotals(matched)
+
+	page := matched
+	if after != nil {
+		// The first row strictly after the cursor's position in the
+		// order. By position rather than by finding the id, so a cursor
+		// whose channel has since been purged still resumes where it was.
+		from, _ := slices.BinarySearchFunc(page, *after, a2aChannelOrder)
+		if from < len(page) && a2aChannelOrder(page[from], *after) == 0 {
+			from++
 		}
+		page = page[from:]
+	}
+	truncated := len(page) > limit
+	if truncated {
+		page = page[:limit]
+	}
+	out := make([]map[string]any, 0, len(page))
+	for _, c := range page {
 		out = append(out, map[string]any{
 			"id":        c.ID,
 			"requester": c.Requester,
@@ -401,17 +468,19 @@ func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 			"closed_at": isoOrEmpty(c.ClosedAt),
 		})
 	}
-	// Most recently active first: an open channel that has not moved in a
-	// week is the anomaly, and it should not be buried under an id sort.
-	slices.SortStableFunc(out, func(a, b map[string]any) int {
-		return cmp.Compare(b["last_at"].(string), a["last_at"].(string))
-	})
-	// CUT AFTER THE SORT, so a page is the most recent N rather than
-	// whichever N the bucket happened to walk first.
-	limit := Clamp(p.Int("limit", 0), MaxA2AChannels, MaxA2AChannels)
-	truncated := len(out) > limit
+	// THE CURSOR IS THE LAST ROW'S KEY, echoed rather than left for a
+	// client to assemble, and offered only when there IS a next page: the
+	// whole set is in hand, so whether more follows is known rather than
+	// guessed from a full page. The instant is formatted in full even when
+	// it is zero, because `last_at` renders a zero as empty and an empty
+	// `before_time` is a half cursor.
+	next := map[string]string{}
 	if truncated {
-		out = out[:limit]
+		last := page[len(page)-1]
+		next = map[string]string{
+			"before_time": last.LastAt.UTC().Format(time.RFC3339Nano),
+			"before_id":   last.ID,
+		}
 	}
 	return map[string]any{
 		"channels":  out,
@@ -419,9 +488,33 @@ func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 		"state":     state,
 		// SAYS WHAT IS MISSING, like every other cut in this tree: a page
 		// that filled is indistinguishable from a company with exactly
-		// that many channels.
+		// that many channels. `next` is where the rest is.
 		"truncated": truncated,
+		"next":      next,
+		"totals":    totals,
 	}, nil
+}
+
+// a2aChannelTotals counts what a channel screen summarises, over every channel
+// the filters matched.
+func a2aChannelTotals(matched []coord.Channel) map[string]int {
+	open, messages := 0, 0
+	pairs := map[[2]string]struct{}{}
+	for _, c := range matched {
+		if c.Open() {
+			open++
+		}
+		messages += c.Messages
+		pairs[[2]string{c.Requester, c.Target}] = struct{}{}
+	}
+	return map[string]int{
+		"channels": len(matched),
+		"open":     open,
+		"messages": messages,
+		// DIRECTED, requester then target: who asks whom is the question
+		// the record answers, and A asking B is not B asking A.
+		"pairs": len(pairs),
+	}
 }
 
 // knowledgeSearch runs the company's own knowledge search.

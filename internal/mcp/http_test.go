@@ -339,7 +339,8 @@ func TestHTTPServerNeedsNoChildSupervision(t *testing.T) {
 // AN OVERSIZED ERROR BODY IS NOT BUFFERED WHOLE, and is not truncated either.
 //
 // The body must be read to be logged and replayed, and handing the SDK a
-// truncated one turns a server's clear 403 into a JSON parse error. But
+// truncated one turns a server's clear JSON-RPC error into the bare status
+// text, because the SDK reports the body only when it decodes. But
 // "whole" was unbounded, so a remote server chose this process's allocation
 // size. Past the cap the prefix is handed back in front of the still-open
 // body, so the SDK reads every byte and nothing further is held.
@@ -501,5 +502,70 @@ func TestALoggedErrorBodyIsCutOnARuneBoundary(t *testing.T) {
 			t.Errorf("%s: kept %d bytes of content, past the %d-byte ceiling",
 				tc.name, over, maxLoggedErrorBody)
 		}
+	}
+}
+
+// THE SDK REPORTS SOME FAILURES WITHOUT THEIR BODY, which is what makes the
+// http_error log line the ONLY copy of what the server said for them — and
+// what [maxLoggedErrorBody]'s doc says about where the rest of a cut body is.
+//
+// Pinned against the SDK rather than believed: a release that starts
+// surfacing these bodies turns this red, and the doc is rewritten with it. The
+// JSON-RPC case is the control, proving the check can see a body in the
+// caller's error when the SDK does pass one through.
+func TestTheSDKReportsATransientStatusWithoutItsBody(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, body, said string
+		status           int
+		reachesCaller    bool
+	}{
+		{
+			name: "a transient status", status: http.StatusServiceUnavailable,
+			body: "maintenance until 17:00 UTC", said: "maintenance until 17:00 UTC",
+		},
+		{
+			name: "a body that is not JSON-RPC", status: http.StatusForbidden,
+			body: `{"error":"token lacks the repo scope"}`, said: "repo scope",
+		},
+		{
+			name: "a JSON-RPC error, the control", status: http.StatusForbidden,
+			body: `{"jsonrpc":"2.0","id":2,"error":{"code":-32001,"message":"workspace suspended"}}`,
+			said: "workspace suspended", reachesCaller: true,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			srv, h := newHTTPMCPServer(t, toolsJSON([3]string{"get_me", "d", ""}))
+			h.mu.Lock()
+			h.fail, h.failBody = c.status, c.body
+			h.mu.Unlock()
+
+			log, rec := recorder()
+			spec := httpSpec("remote", srv.URL)
+			spec.StartupTimeout = 5 * time.Second
+			cl, err := connect(t.Context(), spec, log)
+			if err != nil {
+				t.Fatalf("connect: %v", err)
+			}
+			t.Cleanup(func() { _ = cl.stop(t.Context()) })
+
+			_, err = cl.listTools(t.Context())
+			if err == nil {
+				t.Fatalf("a %d on tools/list must fail discovery", c.status)
+			}
+			if got := strings.Contains(err.Error(), c.said); got != c.reachesCaller {
+				t.Errorf("the caller's error %q carries the server's words: %v, "+
+					"want %v", err, got, c.reachesCaller)
+			}
+			var logged bool
+			for _, r := range rec.find("http_error") {
+				body, _ := r.Attrs["response_body"].(string)
+				logged = logged || strings.Contains(body, c.said)
+			}
+			if !logged {
+				t.Error("the http_error line does not carry what the server said")
+			}
+		})
 	}
 }

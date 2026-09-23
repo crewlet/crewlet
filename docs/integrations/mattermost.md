@@ -586,6 +586,13 @@ in a channel the bot was invited to *during* the outage would otherwise be
 invisible forever. Duplicates across the boundary are caught by a per-seat
 de-duplication ring.
 
+The same path covers a message too large for the socket. A seat reads one
+websocket message of up to **8 MiB** — sized from the largest post Mattermost
+accepts, which the server sends as an escaped string inside its event — and a
+larger one is refused whole rather than cut: the socket closes, the seat logs
+`mattermost_socket_closed`, and the post arrives through the reconnect's
+re-read instead.
+
 The replay is what the live socket would have delivered, and nothing more.
 Mattermost's `since=` is *update*-based, and an update is not new content: a
 reaction touches a post, and deleting a reply touches its thread root — so a

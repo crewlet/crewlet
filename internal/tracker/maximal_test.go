@@ -111,6 +111,10 @@ func TestTheMaximalCommitFitsItsDesignMaximum(t *testing.T) {
 				Watchers:      watchers,
 				Collaborators: longHandles(tracker.MaxCollaborators, 64),
 				ProjectLead:   "a-project-lead-handle",
+				// A PATCH THAT REPLACES THE CHECKLISTS names the
+				// owners on both sides of it, which is what this cap
+				// is sized for.
+				ChecklistAssignees: longHandles(tracker.MaxChecklistAssignees, 64),
 			},
 		},
 	}

@@ -312,6 +312,23 @@ func TestTheBackfillWindowIsBounded(t *testing.T) {
 	if got[0] != want {
 		t.Fatalf("the backfill resumed from %s, want the window floor %s", got[0], want)
 	}
+
+	// AND WHAT WAS SKIPPED IS SAID, as the amount skipped rather than the
+	// whole gap: the cursor was a second past connect, and the floor is an
+	// hour on less the one-minute window.
+	skipped := (time.Hour - time.Minute - time.Second).Seconds()
+	var said bool
+	for _, record := range logs.records(t, "mattermost_backfill_window_exceeded") {
+		if record["window_seconds"] == time.Minute.Seconds() &&
+			record["skipped_seconds"] == skipped {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("no mattermost_backfill_window_exceeded record says %v seconds "+
+			"were skipped from a %v-second window: %v", skipped,
+			time.Minute.Seconds(), logs.records(t, "mattermost_backfill_window_exceeded"))
+	}
 }
 
 func TestADuplicatePostIsPublishedOnce(t *testing.T) {
@@ -777,5 +794,66 @@ func TestAQuietButHealthySocketIsNotReconnected(t *testing.T) {
 	}
 	if sock.pings.Load() == 0 {
 		t.Error("the heartbeat never ran")
+	}
+}
+
+// A SERVER THAT HANGS UP ON SIGHT IS BACKED OFF, NOT REDIALLED AT THE FLOOR.
+//
+// Mattermost closes without a close frame, so a connection it drops the moment
+// it is reached ends exactly like one that carried traffic for hours. Only the
+// second is a new incident; the first is the same one continuing, and every
+// redial is a backfill over each of the seat's channels.
+//
+// The schedule's second step is an hour, so a schedule that climbs stops at
+// two dials, and one reset to its floor after every connection does not.
+func TestAConnectionDroppedOnSightKeepsTheScheduleClimbing(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		liveFor time.Duration
+		climbs  bool
+	}{
+		{name: "dropped on sight", liveFor: 0, climbs: true},
+		{name: "dropped after a live minute", liveFor: 2 * time.Minute, climbs: false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// THE CLOCK MOVES liveFor PER READING, so every connection
+			// appears to have lived that long without the test waiting it
+			// out.
+			var mu sync.Mutex
+			clock := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+			now := func() time.Time {
+				mu.Lock()
+				defer mu.Unlock()
+				clock = clock.Add(c.liveFor)
+				return clock
+			}
+			var dials atomic.Int32
+			f, _ := mattermost.NewFleet(mattermost.FleetOptions{
+				Publisher: &recorder{},
+				Backoff:   []time.Duration{time.Millisecond, time.Hour},
+				Now:       now,
+				Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
+					dials.Add(1)
+					sock := newSocket()
+					_ = sock.Close() // hung up the moment it was reached
+					return sock, nil
+				},
+			})
+			f.Add(t.Context(), seat, client(t, newServer(t)))
+			defer f.Stop()
+
+			if !c.climbs {
+				waitFor(t, 3, func() int { return int(dials.Load()) })
+				return
+			}
+			waitFor(t, 2, func() int { return int(dials.Load()) })
+			// Long enough for a third dial at the floor to have happened
+			// many times over; an hour is what the schedule asked for.
+			time.Sleep(200 * time.Millisecond)
+			if got := dials.Load(); got != 2 {
+				t.Errorf("%d dials: a connection dropped on sight put the "+
+					"schedule back at its floor", got)
+			}
+		})
 	}
 }

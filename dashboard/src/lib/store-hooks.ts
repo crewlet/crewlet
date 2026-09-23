@@ -94,6 +94,40 @@ export function usePhaseEvents() {
   return useSlice(["phases"], (s) => s.phases);
 }
 
+/**
+ * How many completed phases this tab has DROPPED since it opened, for a screen
+ * that draws [usePhaseEvents] with no query of its own behind it — for which
+ * any drop at all may be one of its phases.
+ */
+export function usePhasesDropped(): number {
+  return useSlice(["phases"], (s) => s.phasesDropped);
+}
+
+/**
+ * Whether this tab has DROPPED a completed phase that arrived after `answer`
+ * first rendered — the one loss a screen merging [usePhaseEvents] over its own
+ * query answer cannot see in what it holds.
+ *
+ * The answer covers what completed before it; the slice supplies what
+ * completed after, until [MAX_PHASES] pushes it out. `phasesDropped` passing
+ * the arrival count noted with the answer means one of those later phases is
+ * gone. It may have been another seat's, since the slice is company-wide, so a
+ * screen says it MAY be missing one. The phase itself is in the event store,
+ * which the screen's own query reads when it is asked again.
+ *
+ * The mark is taken when the answer renders, so a phase that streamed in while
+ * the query was in flight, and is not in its answer, counts as covered.
+ */
+export function usePhasesDroppedSince(answer: unknown): boolean {
+  const { store } = useClient();
+  const dropped = usePhasesDropped();
+  // Keyed on the answer's IDENTITY, so a poll or a refetch that brings a new
+  // answer moves the mark forward.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const mark = useMemo(() => store.state.phaseArrivals, [store, answer]);
+  return dropped > mark;
+}
+
 export function useOrg() {
   return useSlice(["org"], (s) => s.org);
 }

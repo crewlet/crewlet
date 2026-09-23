@@ -531,7 +531,16 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// configured and never spawned is exactly that, and a 404 there would
 	// make a healthy new company look broken. Its history is answered the
 	// same way.
-	history, next := s.phaseHistory(ctx, seat, role, p)
+	//
+	// A MALFORMED CURSOR IS, and it is refused here rather than read as no
+	// cursor — see [beforeCursor]. Only a request paging the history
+	// carries one, so the refusal costs that page and never the seat's
+	// first paint.
+	before, err := beforeCursor(p)
+	if err != nil {
+		return nil, err
+	}
+	history, next := s.phaseHistory(ctx, seat, role, before)
 	answer := map[string]any{
 		"role": role,
 		"live": nil,
@@ -542,10 +551,9 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 		// thing and a field added to the envelope reached three screens
 		// and not the fourth.
 		"llm_history": history,
-		// The cursor the caller pages with, or "" at the end of the
-		// record. Its absence is why a seat's transcript was a hard fifty
-		// rows with no way past them, while the events it was made of sat
-		// in the store addressable by id.
+		// The cursor the caller pages with — `{before_time, before_id}`,
+		// the two parameters this question reads — or nil at the end of
+		// the record.
 		"next": next,
 	}
 	// ASSIGNED ONLY WHEN THERE IS ONE, because a nil *Overlay stored in an
@@ -567,51 +575,33 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 // turn a degraded history into no screen at all. An unreadable log and a seat
 // that has not run yet both render as "no invocations", which is the same
 // thing a reader can see for themselves from the phase chart above it.
-//
-// Each row is the event's PAYLOAD with the envelope's timestamp merged in: the
-// payload's field names are already the client's — turn_id, phase, iteration,
-// model, response, tool_executions, total_tokens, cost_usd — because the same
-// shape drives the live row, and the timestamp is the one field that lives on
-// the envelope rather than inside it.
-func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) ([]store.EventRecord, string) {
+func (s Sources) phaseHistory(ctx context.Context, seat, role string,
+	before *store.Cursor,
+) ([]store.EventRecord, any) {
 	if s.Events == nil {
-		return []store.EventRecord{}, ""
-	}
-	var before *store.Cursor
-	if id := p.String("before_id"); id != "" {
-		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
-		if err == nil {
-			before = &store.Cursor{Time: at, ID: id}
-		}
-		// A malformed cursor falls back to the newest page rather than
-		// failing: this is best effort, and refusing the whole seat page
-		// over a bad query parameter would turn a paging bug into no
-		// screen at all.
+		return []store.EventRecord{}, nil
 	}
 	records, err := s.Events.AgentPhases(ctx, s.agentIDOf(seat), role, before)
 	if err != nil {
 		log.WarnContext(ctx, "agent_history_unavailable", "seat", seat, "error", err)
-		return []store.EventRecord{}, ""
+		return []store.EventRecord{}, nil
 	}
 	if len(records) == 0 {
-		// EMPTINESS, not nil-ness, and the two are not interchangeable here:
-		// `AgentPhases` answers a nil slice for a seat it cannot name, an
-		// allocated empty one for a seat with no phases yet, and the index
-		// below is out of range on BOTH. Testing for nil alone left a seat
-		// whose history read came back empty indexing a slice of length zero.
-		return []store.EventRecord{}, ""
+		// EMPTY, NOT NIL: `AgentPhases` answers a nil slice for a seat it
+		// cannot name, which serializes as null where this answer promises
+		// a list.
+		return []store.EventRecord{}, nil
 	}
 	// The cursor is the LAST row's key, echoed rather than left for a client
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
 	// from a rendered timestamp would lose the sub-second precision the
-	// tiebreak depends on. Offered only on a FULL page — a short one is the
-	// end of the record, and a cursor there would page for ever.
-	next := ""
-	if len(records) == store.AgentPhaseLimit {
-		last := records[len(records)-1]
-		next = last.Time.UTC().Format(time.RFC3339Nano) + "|" + last.ID
+	// tiebreak depends on. IN THE SHAPE THIS QUESTION READS, so it goes back
+	// as it came. Offered only on a FULL page — a short one is the end of the
+	// record, and a cursor there would page for ever.
+	if len(records) < store.AgentPhaseLimit {
+		return records, nil
 	}
-	return records, next
+	return records, cursorOf(records)
 }
 
 // firstOf returns the first non-empty value.
@@ -709,9 +699,8 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 		// path too: the projection's record cap binds before its window
 		// and drops the OLDEST, so past the cap the numbers cover less
 		// than the window they were about to be headed with.
-		if at, err := time.Parse(time.RFC3339, covered); covered != "" &&
-			err == nil && at.After(opts.Since) {
-			opts.Since = at
+		if covered.After(opts.Since) {
+			opts.Since = covered
 		}
 		return tokens.Aggregate(records, opts), nil
 	}
@@ -779,13 +768,8 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	q.Limit = Clamp(p.Int("limit", 0), DefaultEventPage, MaxEventPage)
-	if before := p.String("before_id"); before != "" {
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
-		if err != nil {
-			return nil, fmt.Errorf("%w: before_id needs a before_time: %w", ErrBadParams, err)
-		}
-		q.Before = &store.Cursor{Time: at, ID: before}
+	if q.Before, err = beforeCursor(p); err != nil {
+		return nil, err
 	}
 
 	rows, err := s.Events.List(ctx, q)
@@ -901,6 +885,33 @@ func instantParam(p Params, name string) (time.Time, error) {
 			"(2026-04-16T09:00:00Z), and %q is not: %w", ErrBadParams, name, raw, err)
 	}
 	return at.UTC(), nil
+}
+
+// beforeCursor reads the keyset cursor a paged answer's `next` carries:
+// `before_time` and `before_id` together, or neither, which starts at the
+// newest row.
+//
+// HALF A CURSOR IS REFUSED, in either direction, rather than read as no
+// cursor: a pager handed the first page again as "the next page" pages it for
+// ever. A `before_time` that does not parse is refused for the same reason.
+func beforeCursor(p Params) (*store.Cursor, error) {
+	id, at := p.String("before_id"), p.String("before_time")
+	switch {
+	case id == "" && at == "":
+		return nil, nil
+	case id == "":
+		return nil, fmt.Errorf("%w: before_time needs a before_id — send both "+
+			"halves of `next`", ErrBadParams)
+	case at == "":
+		return nil, fmt.Errorf("%w: before_id needs a before_time — send both "+
+			"halves of `next`", ErrBadParams)
+	}
+	t, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return nil, fmt.Errorf("%w: before_time must be an RFC 3339 instant, as "+
+			"`next` carries it, and %q is not: %w", ErrBadParams, at, err)
+	}
+	return &store.Cursor{Time: t, ID: id}, nil
 }
 
 // cursorOf is the position a caller resumes from, or nil at the end.

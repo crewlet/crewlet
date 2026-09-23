@@ -91,7 +91,7 @@ func TestTheTurnFallbackDoesNotInventSpend(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	rows, err := log.Turns(t.Context(), store.TurnQuery{})
+	rows, _, err := log.Turns(t.Context(), store.TurnQuery{})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}

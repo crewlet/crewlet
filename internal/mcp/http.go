@@ -26,21 +26,36 @@ import (
 // field is 8 KiB plus the marker and the cut is taken with [textcut.Bytes],
 // which adds no marker of its own.
 //
-// WHERE THE WHOLE BODY IS: handed to the SDK, unmodified. This is a log
-// EXCERPT, never the only copy — RoundTrip below replays every byte it read in
-// front of the still-open response, so the session decodes exactly the bytes it
-// would have and a server's JSON-RPC error message reaches the caller in full.
-// What is bounded here is only what a log line is worth, which is why the
-// excerpt may be cut where the body may not.
+// WHERE THE REST OF THE BODY IS depends on what the server sent, because the
+// whole body is handed to the SDK unmodified — RoundTrip below replays every
+// byte it read in front of the still-open response — and the SDK surfaces only
+// some of it. In go-sdk v1.8.0 (streamableClientConn.checkResponse):
+//
+//   - A JSON-RPC response carrying an error, under a status the SDK does not
+//     treat as transient, reaches the caller as that decoded error, and this
+//     line is an excerpt of it — unless MCPGODEBUG=noprotocolerrorbody=1, which
+//     turns that decoding off and puts this case in the third.
+//   - A 429, 500, 502, 503 or 504 reaches the caller as its status text alone:
+//     the SDK does not read the body at all.
+//   - Any other body — an HTML page, a sentence, a JSON object that is not a
+//     JSON-RPC response — also reaches the caller as its status text alone.
+//
+// For the last two this log line is the ONLY copy, and the part past the cut
+// is NOWHERE. That is accepted rather than windowed for the reason
+// [maxStderrLine] gives: a body up to [maxBufferedErrorBody] in 8 KiB windows
+// is 128 log records per failing request, and a transient status is the one
+// most likely to repeat on every call. The SDK half of this is pinned by
+// TestTheSDKReportsATransientStatusWithoutItsBody, so a release that starts
+// surfacing the body turns that case red rather than leaving this wrong.
 const maxLoggedErrorBody = 8 << 10
 
 // maxBufferedErrorBody bounds how much of a failing response this process
 // holds in memory to log and replay.
 //
-// The read has to be WHOLE to be useful — handing the SDK a truncated body
-// turns a server's clear 403 into a JSON parse error — but "whole" is not
-// "unbounded": an unbounded read here lets a REMOTE server choose this
-// process's allocation size. [maxLoggedErrorBody] above bounds only the slice
+// The read has to be WHOLE to be useful — a truncated JSON-RPC error no
+// longer decodes, and the SDK then reports the bare status text in place of
+// the server's message — but "whole" is not "unbounded": an unbounded read
+// here lets a REMOTE server choose this process's allocation size. [maxLoggedErrorBody] above bounds only the slice
 // that reaches the log, which is no bound at all on what is held to produce
 // it, so the buffering needs a ceiling of its own.
 //
@@ -181,7 +196,8 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	//
 	// Read whole up to maxBufferedErrorBody, and only a bounded slice is
 	// logged. Handing the SDK a truncated body would turn a server's clear
-	// 403 into a JSON parse error, which is a worse diagnostic than the one
+	// JSON-RPC error into the bare status text, because the SDK reports the
+	// body only when it decodes, which is a worse diagnostic than the one
 	// this exists to produce — so past the cap the body is not truncated
 	// either: what has been read is handed back in FRONT of the still-open
 	// original, and the SDK reads exactly the bytes it would have.

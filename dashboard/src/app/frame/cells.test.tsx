@@ -27,10 +27,20 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 
-import { DurationCell, NumberCell, SeatCell, TokenCell } from "./cells.tsx";
+import { DurationCell, NumberCell, SeatCell, TagsCell, TokenCell } from "./cells.tsx";
 import { fmtCount, fmtDuration } from "~/lib/format.ts";
 
 afterEach(cleanup);
+
+// EVERY TAG IS DRAWN. The node page is the one surface that lists a node's
+// placement labels, and a cut there left the rest in a hover title on a span no
+// keyboard or touch can reach.
+test("a tag list is drawn whole, with no count standing in for the rest", () => {
+  const labels = Array.from({ length: 12 }, (_, i) => `zone${i}=eu-${i}`);
+  render(<TagsCell tags={labels} />);
+  for (const label of labels) expect(screen.getByText(label), label).toBeTruthy();
+  expect(screen.queryByText(/^\+\d+$/)).toBeNull();
+});
 
 test("a count is spelled the way fmtCount spells it", () => {
   for (const n of [0, 7, 999, 5_000, 12_345, 1_250_000]) {

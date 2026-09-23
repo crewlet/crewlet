@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 )
@@ -277,11 +276,20 @@ type Result struct {
 	// tags and all. It is the same contract the turn's own phases publish.
 	Narration []toolloop.Narration
 
+	// Truncated is true when a round of this worker ended at the model's
+	// OUTPUT cap rather than because it had finished — the loop's own
+	// [toolloop.Result.Truncated], carried through. Its Text or its
+	// submission may stop short of what the worker meant to say, and the
+	// parent is told so beside the answer rather than handed it as whole.
+	Truncated bool
+
 	// SystemPrompt and UserPrompt are what the worker was actually sent.
 	SystemPrompt string
 	UserPrompt   string
 
-	// Error is why it stopped, when it did. Empty on ok and on no_result.
+	// Error is why it stopped, when it did, WHOLE. Empty on ok and on
+	// no_result. What the parent's model is shown of it is bounded
+	// separately — see [errorLimit].
 	Error string
 }
 
@@ -333,10 +341,10 @@ func classify(kind, reason string, err error) (Status, string) {
 		if errors.As(err, &be) && be.Scope == ScopeSubagent {
 			// The call's own slice, not the seat's cap. Its own status so
 			// nobody goes looking for a company budget that never ran out.
-			return StatusBudget, ledger.Elide(err.Error(), errorLimit)
+			return StatusBudget, err.Error()
 		}
-		return StatusFailed, ledger.Elide(err.Error(), errorLimit)
+		return StatusFailed, err.Error()
 	default:
-		return StatusFailed, ledger.Elide(err.Error(), errorLimit)
+		return StatusFailed, err.Error()
 	}
 }

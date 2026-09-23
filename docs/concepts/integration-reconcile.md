@@ -49,9 +49,26 @@ reporting one as *the app said nothing* sends an operator to the wrong system.
 line ends at 400 bytes with a `…`, on a rune boundary, and the marker fits
 inside the 400 rather than pushing past it — one rule, one implementation,
 shared by every app the loop asks. Unmarked, a sentence severed mid-clause
-reads as the app's complete answer, and nothing in this engine can prove
-otherwise: the body is read once and dropped, so the rest of it lives only in
-the app's own logs.
+reads as the app's complete answer.
+
+**The rest of a cut line survives only where the client that read it keeps
+it**, because the engine reads a refusal body once and drops it. The
+Atlassian and Mattermost clients keep it: whenever the line holds less than
+the app said, the process that made the call logs all of it, whole, beside the
+method, the path and the status — as `atlassian_refusal_shortened` or
+`mattermost_refusal_shortened`.
+
+Atlassian's own error envelope can carry several messages — a `message`, a
+`detail` and a **list** of errors, each one something Atlassian refused. The
+line quotes as many of them whole as fit, in Atlassian's order, and counts the
+rest — `(+2 more)` — rather than quoting the first and dropping the others.
+Whether a just-created account is still coming up is decided on everything
+Atlassian said, never on that line, so an entry the line cut or only counted
+still reports the seat as coming up rather than as failed.
+
+When the refusal body could not be read at all — past the ceiling below, or a
+connection that failed part way through it — the line says so and carries the
+read's own error **whole**: nothing else holds it.
 
 **A body past the ceiling is refused, never cut.** Where the refusal body is
 read on its own — every GitHub, GitLab, Jira, Confluence, Mattermost and
@@ -68,7 +85,7 @@ produces an error **saying so and naming the ceiling**, rather than the first
 still has to serve both — Datadog buffers a single body and branches on the
 status afterwards — the ceiling is that call's larger one, and an overrun
 there is reported the same way. **No ceiling here is configurable**, and the
-rest of the answer is where it has always been: in the app's own logs.
+engine keeps none of a body it refused to read.
 
 **An empty message means the app sent an empty body, and nothing else.** The
 three outcomes that would otherwise collapse into it — a body in a shape the
@@ -79,7 +96,9 @@ usually the proxy in front of it.
 
 ### The advisories are always last
 
-**A finding about many things names three of them, and carries the rest beside the sentence.** A finding's detail is the card's one-line status, and the engine caps it at 500 characters — not for tidiness but because an oversized status row is **refused** by the coordination store rather than truncated, which would stop the surface recording anything at all. A finding that listed its subjects inline therefore arrived as a wall cut off mid-item: measured, 36 Datadog service accounts ending `…@agents.cr…`. So the sentence says the count and up to three examples, and the whole list travels in the finding's own `subjects`, which the screen folds away under the sentence. A finding about one thing names it and carries no list.
+**A finding about many things says how many, and carries the list beside the sentence.** A finding's detail is the card's one-line status, and the engine caps it at 500 bytes — not for tidiness but because an oversized status row is **refused** by the coordination store rather than truncated, which would stop the surface recording anything at all. A finding that listed its subjects inline therefore arrived as a wall cut off mid-item: measured, 36 Datadog service accounts ending `…@agents.cr…`. So the sentence says the count, and the whole list travels in the finding's own `subjects`, which the screen lays out under the sentence. A finding about one thing names it and carries no list.
+
+**A sentence past the cap is cut on a rune boundary and ends in `…`, and the whole of it is kept somewhere you can read.** When the loop ran the pass, the node that ran it logs every finding it cut, whole, as `integration_finding_clipped`. When you ran the pass from the dashboard, its findings come back whole in the response and in that run's record, `GET /setup/integrations/{kind}/runs/{id}`, which the node that ran it keeps among its last few runs. The report's `(and 2 more)` is added after the cut, so a long sentence never loses the count that says there are more.
 
 **And a seat that needs a person shows action required, never a finished status.** Where an act belongs to somebody at the third-party app and the engine can never perform it — creating a GitHub App, installing one — the finding is `approval_required`, whose verdict is *awaiting_admin*, owed to an admin. `identity_missing` is the engine's own work and reads as *Setting up agents*, which over an act nobody is performing is a card waiting for a pass that will never change anything. The rule extends to the tool's own `satisfied`: a surface that requires per-seat identities and has no working seat at all is not satisfied, whatever its company block says.
 

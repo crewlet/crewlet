@@ -22,9 +22,9 @@
  * where a row the engine recorded no turn id for goes directly.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PhasesDroppedNote, QueryState } from "~/components/common.tsx";
 import {
   Button,
   EmptyState,
@@ -38,7 +38,14 @@ import {
 import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { GridColumn } from "~/app/frame/DataGrid.tsx";
-import { useAgents, useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
+import {
+  useAgents,
+  useClient,
+  useEngineHealth,
+  usePhaseEvents,
+  usePhasesDroppedSince,
+} from "~/lib/store-hooks.ts";
+import { useOlderPages } from "~/lib/paging.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { eventHistoryLabel, fmtElapsed, plural, tsKey } from "~/lib/format.ts";
@@ -64,11 +71,38 @@ import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 // own hue on the next, with nothing in the build to say so.
 import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 
+/**
+ * One page of phase records, the first and every older one alike.
+ *
+ * THE ENGINE'S OWN CEILING (`store.MaxPhasePage`), which it sizes on row weight:
+ * a phase carries its prompts, its response and every tool result. Asking for
+ * less would only spend more round trips on the same history.
+ */
 const PAGE = 60;
 
 // Stable identity for the settled list. Named rather than inline so the
 // hook's dependencies do not change identity on every render.
 const phaseRecordKey = (r: PhaseRecord) => r.key;
+
+/** Where the next page of phase records starts, as the engine echoes it. */
+type PhaseCursor = { before_time?: string; before_id?: string };
+
+/** A stored phase record, named by its event id — the walk's row key. */
+const phaseKey = (row: EventRecord) => row.id;
+
+/**
+ * The cursor an answer offers, or null where it was the last page.
+ *
+ * BOTH OF THE ENGINE'S SIGNALS are read: `exhausted`, and a `next` with no
+ * `before_id` — the engine sends an empty `next` on the page that ends the
+ * record, and a half cursor is one it refuses.
+ */
+function cursorOf(
+  page: { next?: PhaseCursor; exhausted?: boolean } | null | undefined,
+): PhaseCursor | null {
+  return page && !page.exhausted && page.next?.before_id ? page.next : null;
+}
+
 // Every phase the engine emits, the turn's own two first. A phase left off
 // this row is one nobody can filter to, which on this screen means its cost
 // is only ever visible inside the "all phases" total.
@@ -82,34 +116,49 @@ export function ModelActivity() {
   const [role, setRole] = useParam("role", "");
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
 
-  const [older, setOlder] = useState<EventRecord[]>([]);
-  const [cursor, setCursor] = useState<{ before_time?: string; before_id?: string } | null>(null);
-  const [exhausted, setExhausted] = useState(false);
-  const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
-
   // `phases`, not `events?type=…`. The event listing deliberately never
   // selects the payload — a page of ordinary events with every payload
   // attached is the query that makes an activity screen slow — and a phase
   // record without its payload has no prompts, no response, no tool calls and
   // no decision, which is everything this screen is for.
-  const { data, loading, error } = useQuery("phases", {
-    limit: PAGE,
-    ...(role ? { role } : {}),
-  });
+  const question = useMemo(() => ({ limit: PAGE, ...(role ? { role } : {}) }), [role]);
+
+  // THE PAGES PAST THE FIRST, from the cursor each answer carries, on the
+  // shared walk in `lib/paging.ts`. The question is the walk's identity, so a
+  // new seat starts a new walk and a page still in flight for the old one
+  // lands nowhere. Older pages kept across a change of seat put another seat's
+  // phases under this one's name, and the next page resumed from the old
+  // seat's cursor.
+  const pager = useOlderPages<EventRecord, PhaseCursor>(phaseKey, question);
+  const { data, loading, error, refetch } = useQuery("phases", question);
+  // A NEW ARRAY PER ANSWER, an empty one included, because the drop mark
+  // below is keyed on this array's identity.
+  const firstPage = useMemo(() => data?.phases ?? [], [data]);
+  const firstNext = cursorOf(data);
+  const more = pager.more(firstNext);
 
   const phaseEvents = usePhaseEvents();
+  // THE STREAMED HALF CAN LOSE A PHASE — see `usePhasesDroppedSince`. What is
+  // gone is the stretch between the first page ON SCREEN and the oldest phase
+  // the tab still holds, so the mark is keyed on that page: the frozen one
+  // while older pages are held, which a reconnect's re-read does not replace.
+  const phasesDropped = usePhasesDroppedSince(pager.head(firstPage));
+  const backToNewest = useCallback(() => {
+    pager.backToNewest();
+    refetch();
+  }, [pager.backToNewest, refetch]);
 
+  const answered = useMemo(() => pager.rows(firstPage), [pager.rows, firstPage]);
   const stored = useMemo<PhaseRecord[]>(() => {
-    const answered = [...(data?.phases ?? []), ...older]
+    const records = answered
       .map((row) => fromPhaseEvent(row))
       .filter((r): r is PhaseRecord => r !== null);
     // The query above is answered once. Without the phases that finish after
     // it, a row here leaves "Running now" when its phase completes and never
     // appears among the recent ones — it just goes.
     const streamed = streamedPhases(phaseEvents, (r) => !role || r.role === role);
-    return [...streamed, ...answered];
-  }, [data, older, phaseEvents, role]);
+    return [...streamed, ...records];
+  }, [answered, phaseEvents, role]);
 
   const live = useMemo<PhaseRecord[]>(
     () =>
@@ -141,35 +190,15 @@ export function ModelActivity() {
   // reader has been watching it, and it lands here the moment it completes.
   const settled = useSettled(done, phaseRecordKey, runningKeys);
 
-  const loadOlder = useCallback(async () => {
-    setPaging(true);
-    setPageError(null);
-    try {
-      const params: Record<string, unknown> = { type: "agent_phase_completed", limit: PAGE };
-      if (role) params.actor = role;
-      const last = stored[stored.length - 1];
-      if (cursor) {
-        params.before_time = cursor.before_time;
-        params.before_id = cursor.before_id;
-      } else if (last) {
-        params.before_time = last.at;
-        params.before_id = last.eventId;
-      }
-      const page = await socket.query("events", params);
-      // A feed row has no payload; a phase card needs one. Each row is read
-      // back through `event`, in parallel and bounded by the page size.
-      const full = await Promise.all(
-        (page.events ?? []).map((row) => socket.query("event", { id: row.id }).catch(() => null)),
-      );
-      setOlder((prev) => [...prev, ...full.filter((e): e is EventRecord => e !== null)]);
-      setCursor(page.next ?? null);
-      setExhausted(page.exhausted || !page.next);
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : "query_failed");
-    } finally {
-      setPaging(false);
-    }
-  }, [socket, cursor, stored, role]);
+  // THE SAME QUESTION THE FIRST PAGE ASKED, resumed from the cursor its own
+  // answer carries. The older pages were an `events` listing followed by one
+  // `event` read per row, because a feed row has no payload — sixty-one round
+  // trips a page for what `phases` answers in one, payloads included.
+  const loadOlder = () =>
+    void pager.loadOlder(firstPage, firstNext, async (cursor) => {
+      const page = await socket.query("phases", { ...question, ...cursor });
+      return { rows: page.phases ?? [], next: cursorOf(page) };
+    });
 
   const roles = useMemo(
     () => [...new Set(agents.map((a) => a.role).filter(Boolean))].sort(),
@@ -185,7 +214,7 @@ export function ModelActivity() {
   // one turn in focus instead of seven competing for the page. That is still
   // where a row with no turn on it goes — see [openRow].
   const openSeat = useCallback(
-    (r: PhaseRecord) => nav.to(["company", "people", r.role], { tab: "model" }),
+    (r: PhaseRecord) => nav.to(["company", "people", r.role], { tab: "turns" }),
     [nav],
   );
 
@@ -200,7 +229,7 @@ export function ModelActivity() {
    *
    * A row with no turn id keeps the old destination. That is a live call the
    * engine published before the turn was recorded, and there is no turn to
-   * peek — the seat's model tab is the honest second-best, not an empty rail.
+   * peek — the seat's Turns tab is the honest second-best, not an empty rail.
    */
   const openRow = useCallback(
     (r: PhaseRecord, e: React.MouseEvent | React.KeyboardEvent) => {
@@ -226,7 +255,7 @@ export function ModelActivity() {
     (r: PhaseRecord) =>
       r.turnId
         ? href(["activity", "turns", r.turnId])
-        : href(["company", "people", r.role], { tab: "model" }),
+        : href(["company", "people", r.role], { tab: "turns" }),
     [],
   );
 
@@ -475,6 +504,7 @@ export function ModelActivity() {
         <Skeleton variant="text" rows={5} rowHeight={44} label="Loading model activity" />
       )}
       {error && <QueryState error={error} loading={loading} />}
+      {phasesDropped && <PhasesDroppedNote reread={backToNewest} />}
 
       {!loading && !filtered.length && !error && (
         <EmptyState
@@ -542,23 +572,34 @@ export function ModelActivity() {
           panel on Spend's data, and every "load older" click pushed it
           another sixty cards down a single scroller, so nobody ever reached
           it. A link goes where the screen does. */}
-      <div className="row gap-2">
-        {pageError ? (
-          <QueryState error={pageError} loading={false} />
-        ) : exhausted ? (
-          <span className="t-caption">That is the beginning of the retained record.</span>
-        ) : (
+      <div className="row gap-2 wrap">
+        {pager.error && <QueryState error={pager.error} loading={false} />}
+        {more ? (
           <>
             <Button
               size="small"
               variant="secondary"
-              onClick={() => void loadOlder()}
-              disabled={paging}
-              loading={paging}
+              onClick={loadOlder}
+              disabled={pager.paging}
+              loading={pager.paging}
             >
-              {paging ? "Loading…" : `Load ${PAGE} older phases`}
+              {pager.paging ? "Loading…" : `Load ${PAGE} older phases`}
             </Button>
             <span className="t-caption">{eventHistoryLabel(engine?.event_history_seconds)}</span>
+          </>
+        ) : (
+          data && <span className="t-caption">That is the beginning of the retained record.</span>
+        )}
+        {/* THE SNAPSHOT, said — see `lib/paging.ts`. Phases that finish now
+            still arrive above it; the stored first page is what holds still. */}
+        {pager.frozen && (
+          <>
+            <span className="t-caption">
+              The first page is kept as it was read while older phases are shown.
+            </span>
+            <Button size="small" variant="secondary" onClick={backToNewest}>
+              Back to the newest
+            </Button>
           </>
         )}
         <span className="spacer" />

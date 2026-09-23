@@ -408,6 +408,38 @@ export function plural(n: number, one: string, many?: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Identifiers
+// ---------------------------------------------------------------------------
+
+/**
+ * How many characters of a UUID a screen draws where the whole one would not
+ * fit.
+ *
+ * EIGHT, the first of its five groups. Every id this is handed is a version-4
+ * UUID — a turn's run id (`engine.newRunID`), a config revision
+ * (`store.Configs`), a goal and a saved view (`uuid.NewString` in their
+ * builtins) — so the group is 32 random bits, and two of the ids one list
+ * shows sharing it is a coincidence a reader will not meet. ONE NUMBER for the
+ * whole product: a revision drawn as eight characters on the audit screen and
+ * ten on the configuration screen reads as two different ids.
+ */
+export const SHORT_ID_CHARS = 8;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A UUID cut to its first group and MARKED with an ellipsis, so the reader
+ * knows it is not the whole id; anything that is not a UUID — a key, a handle,
+ * a name — is already the short form of itself and comes back whole.
+ *
+ * NEVER THE ONLY COPY. Every caller draws it beside a link, a page or an export
+ * that carries the whole id, and says which at the call.
+ */
+export function shortId(id: string): string {
+  return UUID.test(id) ? `${id.slice(0, SHORT_ID_CHARS)}…` : id;
+}
+
+// ---------------------------------------------------------------------------
 // Wall clock
 // ---------------------------------------------------------------------------
 

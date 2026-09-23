@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -321,6 +322,9 @@ func TestAppendedEntriesSurviveTheRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("History: %v", err)
 			}
+			// The one field the STORE writes: the first entry of a
+			// conversation is its first.
+			want.Ordinal = 1
 			if len(got) != 1 || got[0] != want {
 				t.Errorf("round trip changed the entry:\n got %+v\nwant %+v", got, want)
 			}
@@ -352,6 +356,86 @@ func TestConversationPurgeDropsOldEntries(t *testing.T) {
 			}
 			if len(got) != 1 || got[0].Reply != "new" {
 				t.Errorf("history = %v, want just the recent entry", replies(got))
+			}
+		})
+	}
+}
+
+// A TRIMMED HISTORY SAYS HOW MUCH IS MISSING.
+//
+// The trim deletes the oldest entries for good, and a list of survivors looks
+// exactly like a conversation that only ever had that many turns — so a DM past
+// its keep reached the next prompt reading as its whole history. Each entry is
+// stamped with its place in the whole record, the oldest survivor counts what
+// came before it, and the render says so.
+func TestATrimmedHistoryCountsWhatItNoLongerHolds(t *testing.T) {
+	t.Parallel()
+	for name, s := range conversationImpls(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			for i := range 10 {
+				if err := s.Append(ctx, "ceo", "dm", ledger.Session{Reply: string(rune('a' + i))},
+					"wk-"+string(rune('a'+i)), base.Add(time.Duration(i)*time.Minute), 3); err != nil {
+					t.Fatalf("Append: %v", err)
+				}
+			}
+			got, err := s.History(ctx, "ceo", "dm", 0)
+			if err != nil {
+				t.Fatalf("History: %v", err)
+			}
+			if len(got) != 3 {
+				t.Fatalf("history = %d entries, want the trim to have held it at 3", len(got))
+			}
+			for i, want := range []int{8, 9, 10} {
+				if got[i].Ordinal != want {
+					t.Errorf("entry %d has ordinal %d, want %d — its place in "+
+						"the whole conversation, not in what survived", i, got[i].Ordinal, want)
+				}
+			}
+			if rendered := ledger.RenderHistory(got, ledger.HistoryOptions{}); !strings.Contains(rendered, "7 earlier turn(s)") {
+				t.Errorf("seven trimmed turns were not reported:\n%s", rendered)
+			}
+		})
+	}
+}
+
+// AND SO DO THE SWEEP AND A LIMITED READ, which leave the same shape behind:
+// survivors with nothing to say the conversation was longer. A duplicate the
+// work key collapsed is not a turn, and must not take a place.
+func TestEveryShortenedHistoryIsCountedAndADuplicateIsNot(t *testing.T) {
+	t.Parallel()
+	for name, s := range conversationImpls(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			for i, reply := range []string{"old", "mid", "new"} {
+				if err := s.Append(ctx, "ceo", "t", ledger.Session{Reply: reply},
+					"wk-"+reply, base.Add(time.Duration(i)*time.Hour), 0); err != nil {
+					t.Fatalf("Append: %v", err)
+				}
+			}
+			// A redelivery of the newest trigger: collapsed, so no ordinal.
+			if err := s.Append(ctx, "ceo", "t", ledger.Session{Reply: "new"},
+				"wk-new", base.Add(3*time.Hour), 0); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+
+			limited, err := s.History(ctx, "ceo", "t", 2)
+			if err != nil {
+				t.Fatalf("History: %v", err)
+			}
+			if len(limited) != 2 || limited[0].Ordinal != 2 || limited[1].Ordinal != 3 {
+				t.Fatalf("a limited read = %+v, want ordinals 2 and 3", limited)
+			}
+
+			if _, err := s.Purge(ctx, base.Add(30*time.Minute)); err != nil {
+				t.Fatalf("Purge: %v", err)
+			}
+			swept, err := s.History(ctx, "ceo", "t", 0)
+			if err != nil {
+				t.Fatalf("History: %v", err)
+			}
+			if rendered := ledger.RenderHistory(swept, ledger.HistoryOptions{}); !strings.Contains(rendered, "1 earlier turn(s)") {
+				t.Errorf("the swept turn was not reported:\n%s", rendered)
 			}
 		})
 	}

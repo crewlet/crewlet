@@ -215,17 +215,28 @@ func (r PendingRun) UnitOfWork() string {
 	return ""
 }
 
-// MaxBridgeCalls bounds the durable log of a bridged run.
+// MaxBridgeCalls bounds how many calls the durable log of a bridged run keeps.
 //
 // The row is ONE VALUE in the coordination store, read and written whole on
-// every mutation, and a coding run can make hundreds of calls — so an
-// unbounded list turns a busy run's every status change into a growing write.
-// Two hundred is well past what a reviewer reads (the ledger elides a long log
-// anyway) and small enough that the row stays a row.
+// every mutation, so every status change and every append rewrites every call
+// it keeps.
 //
 // The MIDDLE is what gets dropped, never the start: how a run began and how it
 // ended are what explain it, and a log truncated to its last N loses the
 // former entirely.
+//
+// A DROPPED CALL'S ARGUMENTS AND OUTPUT ARE KEPT NOWHERE. This row is the only
+// durable record of them the bridge writes, and a call that falls out of the
+// middle is only counted, in [PendingRun.BridgeCallsElided]. The dashboard's
+// run detail shows that count; an agent-mode resume never reads it, so its
+// submission replay, its delivery check and its reviewer all take the kept
+// calls as the whole run.
+//
+// IT BOUNDS THE COUNT, NOT THE BYTES. [BridgeCall.Args] and [BridgeCall.Output]
+// have no bound of their own, and on the JetStream backend the row is one
+// message, so an append that would take the row past the broker's maximum
+// payload is refused by the client. The bridge logs that as
+// mcp_bridge_ledger_append_failed and the call is neither kept nor counted.
 const MaxBridgeCalls = 200
 
 // PendingRun is one detached job's durable state, keyed by its kick-off turn.
@@ -361,9 +372,8 @@ type PendingRun struct {
 	BridgeCalls []BridgeCall `json:"bridge_calls,omitempty"`
 
 	// BridgeCallsElided counts the calls dropped from the middle of that
-	// list, so a reader can tell a short run from a long one whose middle
-	// was cut. Reported rather than hidden, because a log that silently
-	// skips is a log that lies about what the run did.
+	// list, so a reader of it can tell a short run from a long one whose
+	// middle was cut. See [MaxBridgeCalls] for which readers do.
 	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
 
 	// Charged is whether this launch's collected tokens are on the fleet's

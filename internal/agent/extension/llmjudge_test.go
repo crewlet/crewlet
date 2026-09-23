@@ -16,6 +16,7 @@ import (
 // asked.
 type answering struct {
 	answer string
+	stop   string
 	err    error
 	nilOut bool
 	seen   llm.Request
@@ -31,7 +32,7 @@ func (a *answering) Complete(_ context.Context, req llm.Request) (*llm.Completio
 	if a.nilOut {
 		return nil, nil
 	}
-	return &llm.Completion{Content: a.answer}, nil
+	return &llm.Completion{Content: a.answer, FinishReason: a.stop}, nil
 }
 
 func judgeReq() extension.Request {
@@ -331,6 +332,23 @@ func TestTheLastThingSaidIsTheTailNotTheHead(t *testing.T) {
 	}
 	if strings.Contains(rendered, "OPENING: thinking about it.") {
 		t.Error("the block rendered the head, so the bound is cutting the wrong end")
+	}
+}
+
+// A VERDICT CUT AT THE JUDGE'S OUTPUT CAP IS NOT A VERDICT.
+//
+// Its first line can parse while the reason beneath it stops mid-sentence, and
+// that reason is what the phase is told when it is granted rounds — so a
+// length stop is read the way an empty answer is, as no verdict at all.
+func TestATruncatedVerdictIsNotAVerdict(t *testing.T) {
+	t.Parallel()
+	model := &answering{answer: "EXTEND 3\nfetching distinct pag", stop: llm.FinishMaxTokens}
+	got, err := extension.NewLLMJudge(model, "cheap").Decide(t.Context(), judgeReq())
+	if !errors.Is(err, extension.ErrNoVerdict) {
+		t.Fatalf("a verdict cut at the cap was read: err=%v decision=%+v", err, got)
+	}
+	if got.Extend || !got.Asked {
+		t.Errorf("decision = %+v, want an asked call that grants nothing", got)
 	}
 }
 

@@ -68,9 +68,10 @@ type Request struct {
 	Task        string
 	PlanSummary string
 
-	// Calls is the phase's tool log — the evidence. A judge shown only the
-	// narration cannot tell progress from a model saying it is making
-	// progress.
+	// Calls is the phase's WHOLE tool log — the evidence. A judge shown
+	// only the narration cannot tell progress from a model saying it is
+	// making progress. The prompt shows its most recent calls and says how
+	// many it left out; see judgeCallsShown for where the rest is read.
 	Calls []ledger.Call
 
 	LastText   string

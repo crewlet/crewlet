@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -161,6 +162,177 @@ func TestTheDutyClearsADuplicateRank(t *testing.T) {
 	if len(ranks) != 2 || ranks[0] == ranks[1] {
 		t.Fatalf("the board still reads %v — the repair mints a fresh key for "+
 			"one of them so the order between the two is defined", ranks)
+	}
+}
+
+// A REPAIRED DUPLICATE STAYS WHERE SOMEBODY PUT IT.
+//
+// The fresh key has to land above the one the tasks share and below the next
+// key up. Minted with no upper bound it is the next pure integer instead —
+// the create lattice's own shape — which carries the card past every task
+// between and can land on a key another task already holds.
+func TestARepairedDuplicateStaysWhereSomebodyPutIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2", "t-3", "t-4", "t-5"} {
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id,
+			newTask(id), nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	// THREE AT ONE KEY, with a neighbour just above them.
+	if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "ENG",
+		[]tracker.Placement{
+			{Task: "t-1", Rank: "a0V"}, {Task: "t-2", Rank: "a0V"},
+			{Task: "t-4", Rank: "a0V"}, {Task: "t-3", Rank: "a0X"},
+		}); err != nil {
+		t.Fatalf("MoveTasks: %v", err)
+	}
+	r.drain()
+	want := boardOrder(t, r)
+
+	holdTheAppliersPin(t, r)
+	if _, err := trackerWorker(t, r).Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	r.drain()
+
+	if got := boardOrder(t, r); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("the repair reordered the board: it read %v and reads %v — "+
+			"a fresh key has to stay below the next key up", want, got)
+	}
+	seen := map[tracker.Rank]bool{}
+	for _, rank := range boardRanks(t, r) {
+		if seen[rank] {
+			t.Fatalf("the board still holds two tasks at %q", rank)
+		}
+		seen[rank] = true
+	}
+}
+
+// A SWEEP CUT SHORT LEAVES THE BOARD IN ITS OWN ORDER.
+//
+// More tasks share one key than one sweep re-mints, so the repair takes two
+// sweeps and the board is read between them. The board breaks the tie on id,
+// and a cut sweep that moved the LOWEST ids above the shared key would leave
+// the highest ones at it — reading them ahead of the ones it moved, a reorder
+// nobody asked for, in the middle of a repair that exists only to make an
+// undefined order a defined one without changing what anybody sees.
+func TestASweepCutShortLeavesTheBoardInItsOwnOrder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	// TWO PAST A SWEEP'S BATCH: the first task keeps the key, so the
+	// losers are one more than a sweep carries and the first sweep cuts.
+	tasks := tracker.WalkBatch + 2
+	placements := make([]tracker.Placement, 0, tasks)
+	for i := range tasks {
+		id := fmt.Sprintf("t-%03d", i)
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id,
+			newTask(id), nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+		placements = append(placements, tracker.Placement{Task: id, Rank: "a0V"})
+	}
+	for from := 0; from < len(placements); from += tracker.MaxBulkTasks {
+		batch := placements[from:min(from+tracker.MaxBulkTasks, len(placements))]
+		if _, err := r.writer.MoveTasks(t.Context(),
+			fmt.Sprintf("op-collide-%d", from), "ENG", batch); err != nil {
+			t.Fatalf("MoveTasks: %v", err)
+		}
+		r.drain()
+	}
+	want := boardOrder(t, r)
+	if len(want) != tasks {
+		t.Fatalf("the board read %d of %d tasks, so this case would compare "+
+			"part of an order", len(want), tasks)
+	}
+
+	holdTheAppliersPin(t, r)
+	// A CLOCK THAT MOVES BETWEEN SWEEPS, as a deployment's does: the
+	// repair's operation id is derived from the tick, so two sweeps at one
+	// instant would dedupe the second against the first and prove nothing
+	// about what it reads.
+	at := wednesday
+	worker, err := maintenance.New(maintenance.Options{
+		Jobs: tracker.Jobs(tracker.DutyDeps{
+			DB: r.db, Writer: r.writer, NodeID: "node-a",
+		}),
+		Now: func() time.Time { return at },
+	})
+	if err != nil {
+		t.Fatalf("build the tracker's maintenance worker: %v", err)
+	}
+	for sweep := 1; sweep <= 2; sweep++ {
+		at = at.Add(time.Hour)
+		if _, err := worker.Tick(t.Context()); err != nil {
+			t.Fatalf("sweep %d: %v", sweep, err)
+		}
+		r.drain()
+		if got := boardOrder(t, r); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("after sweep %d the board reads %v, want the tie order %v "+
+				"— a cut sweep must leave its lower ids at the shared key, "+
+				"below the higher ones it moved", sweep, got, want)
+		}
+	}
+	// AND THE SECOND SWEEP READ WHAT THE FIRST CUT: an order that held
+	// only because nothing moved would pass the comparison above.
+	seen := map[tracker.Rank]bool{}
+	for _, rank := range boardRanks(t, r) {
+		if seen[rank] {
+			t.Fatalf("after two sweeps the board still holds two tasks at %q",
+				rank)
+		}
+		seen[rank] = true
+	}
+}
+
+// A DUPLICATE AT THE TOP IS REPAIRED BELOW THE NEXT CREATE.
+//
+// With nothing above the shared key, the ceiling is the next integer position
+// — the one the next create mints at — so the repaired card stays under every
+// task a create will ever add, rather than taking that key itself.
+func TestADuplicateAtTheTopIsRepairedBelowTheNextCreate(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-1", "t-2"} {
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id,
+			newTask(id), nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	top := boardRanks(t, r)[1]
+	if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "ENG",
+		[]tracker.Placement{{Task: "t-1", Rank: top}}); err != nil {
+		t.Fatalf("MoveTasks: %v", err)
+	}
+	r.drain()
+
+	holdTheAppliersPin(t, r)
+	if _, err := trackerWorker(t, r).Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.CreateTask(t.Context(), "op-t-3", newTask("t-3"),
+		nil); err != nil {
+		t.Fatalf("CreateTask t-3: %v", err)
+	}
+	r.drain()
+
+	if got := boardOrder(t, r); strings.Join(got, ",") != "t-1,t-2,t-3" {
+		t.Fatalf("the board reads %v, want t-1,t-2,t-3 — the repaired card "+
+			"must stay below the task the next create adds", got)
+	}
+	ranks := boardRanks(t, r)
+	if ranks[1] == ranks[2] {
+		t.Fatalf("the repair and the next create share %q", ranks[1])
+	}
+	if ranks[1].Fraction() == "" {
+		t.Errorf("the repair minted %q, a pure integer — that is a create's "+
+			"shape, and the two mint sets are disjoint only while a move never "+
+			"produces one", ranks[1])
 	}
 }
 
@@ -750,13 +922,17 @@ func TestADuplicateRankSweepSaysWhenItCutItsRead(t *testing.T) {
 				placements = append(placements,
 					tracker.Placement{Task: id, Rank: "a0V"})
 			}
-			// ONE RECORD PUTTING THEM ALL AT ONE KEY, which is what
-			// concurrent drags into the same gap produce.
-			if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "ENG",
-				placements); err != nil {
-				t.Fatalf("MoveTasks: %v", err)
+			// EVERY ONE AT ONE KEY, which is what concurrent drags into
+			// the same gap produce — in records of at most
+			// [tracker.MaxBulkTasks], the most one move carries.
+			for from := 0; from < len(placements); from += tracker.MaxBulkTasks {
+				batch := placements[from:min(from+tracker.MaxBulkTasks, len(placements))]
+				if _, err := r.writer.MoveTasks(t.Context(),
+					fmt.Sprintf("op-collide-%d", from), "ENG", batch); err != nil {
+					t.Fatalf("MoveTasks: %v", err)
+				}
+				r.drain()
 			}
-			r.drain()
 			if !flagged(t, r, "rank_duplicate_pending") {
 				t.Fatal("the applier's own probe did not notice the collision, " +
 					"so nothing hands the repair to the duty")

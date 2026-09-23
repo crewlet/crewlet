@@ -447,11 +447,23 @@ A board is drag-ordered, and the order is a real value on the task rather than
 a position in a list. Dragging one task writes one record; the key it mints
 sits between its new neighbours.
 
-Repeated insertion at the same point makes keys grow — about one character per
-sixty-two placements — and past a threshold the engine **re-spreads** the
-affected range in the background, in batches, order-preserving. Every
-intermediate state is the original order, so an interrupted re-spread leaves a
-correct board.
+Repeated insertion at the same point makes keys grow — about one character for
+every six drops into one gap — and past a threshold the engine **re-spreads**
+the project's whole order in the background, in batches, order-preserving. A
+drag does not wait for it: the drag lands with its long key and moves nothing
+but the card dragged, and the re-spread follows. Every intermediate state is
+the original order, so an interrupted re-spread leaves a correct board. The one
+drop that is refused is one whose key would pass the schema's 254-character
+ceiling — roughly a thousand more drops into one gap after it was handed to
+the re-spread, before the re-spread has run. The refusal names the length, the
+limit and the re-spread, and the same drop between the same two cards lands
+once the re-spread has given them short keys.
+
+Two concurrent drags into the same gap can mint the same key. That is repaired
+rather than refused: the engine gives all but one of the tasks sharing a key a
+fresh key just above it and below the next card up, in the order the board
+already showed them, so every one stays where it was dropped — including when
+more share a key than one repair pass moves and the rest wait for the next.
 
 ## What a seat can do
 
@@ -462,7 +474,7 @@ CHANGE rather than about state:
 
 | Tool | What it does |
 |---|---|
-| `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, `goal`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
+| `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. A view that **groups** answers as the same list too: a grouped answer draws a bounded number of columns and a bounded slice of each and mints no cursor, so through this tool the rest of a column could not be reached at all — flattened, the view's filter and order come back as rows with a `next_cursor`, and nothing is cut. A view that **pins one column** (`group=`, or a `subgroup=` lane) is refused naming the column, because dropping the axis would drop the narrowing with it; pass the filter the column stands for instead. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, `goal`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`history_truncated`** says the change feed was cut and `task_activity` holds the rest; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below |
 | `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
@@ -475,7 +487,7 @@ CHANGE rather than about state:
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
 | `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `list_work_goals` | the company's goals, what each is at, and the health updates written against them. A read only — setting a goal is a person's |
-| `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
+| `task_activity` | what HAPPENED: every change to one task or one project, newest first, with who made it and exactly which fields moved. `next_cursor` passed back as `cursor` reads the older changes; the first page's `newest_position` passed back later as `since` reads only what happened after it |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
 
 ### When a task is due and how big it is
@@ -530,7 +542,12 @@ back as something the reader could neither check nor doubt.
 there now, and a task that was reassigned twice and back looks exactly like
 one nobody touched. Its order is the **log's**, not a clock's, so its `since`
 and its cursor are log positions — which is what lets a cursor span a reanchor
-with no gap and no repeat. Its `q` needs either a task, or a project **and** a
+with no gap and no repeat. They point opposite ways, because the feed is newest
+first: `cursor` resumes **older** from the bottom of a page, and `since` is a
+lower bound that keeps only what is **newer** than a position. So `since` takes
+`newest_position` — the top of a first page, which the answer carries for
+exactly this — and never a `next_cursor`, which would answer the page it came
+from again rather than the one after it. Its `q` needs either a task, or a project **and** a
 `since` inside 90 days: an unscoped text search reads every change the company
 has ever made, and it has no cheaper mode to fall back to.
 
@@ -761,7 +778,11 @@ wakes the person who **asked** — not the person who just replied, which is wha
 routing off the answering comment's author would have done.
 
 `my_work` reads both sides: `asked_of_me` is the questions waiting on this
-seat, and the `has_open_asks` filter finds the items carrying any.
+seat, and the `has_open_asks` filter finds the items carrying any. Each row
+carries the question's **opening** — at most 600 bytes, ending in `…` where it
+was cut, because the row is for choosing which ask to answer and twenty whole
+ones could fill the answer — and `get_work_item` with the row's key and its
+`comment` id reads the question exactly as it was written.
 
 A comment from somebody who is not the assignee, naming nobody and asking
 nobody, still wakes the assignee — unaddressed, which a turn may absorb without
@@ -1017,7 +1038,9 @@ task was one. Destroying the subtree would destroy work nobody confirmed.
 tell and no watcher list worth carrying — a notification naming them would be
 a copy of exactly the content the purge exists to remove, kept on the log for
 its whole retention window. What survives is that it happened, to which key,
-by whom, and the reason the operator gave.
+by whom, and the reason the operator gave — whole: a reason too long for the
+notification's line is refused, naming how many bytes fit, before anything is
+destroyed, rather than cut to fit.
 
 The purge report gives no time guarantee, and that is honest rather than
 evasive: an offline or evicted disk keeps its copy until it replays, adopts a

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -93,24 +94,79 @@ func TestTiesBreakOnANameRatherThanOnMapOrder(t *testing.T) {
 	}
 }
 
-func TestAWorkerCountsOnlyOnItsOwnPhase(t *testing.T) {
+// A WORKER COUNTS ON THE TWO PHASES THAT NAME ONE, AND ON NO OTHER. A
+// delegated task's record names the `workers:` template it ran and a learning
+// worker's names that worker; both are a worker's spend. A Worker on any other
+// phase is a stray value, and keying on a non-empty name alone would fold it
+// into a worker's total as spend that worker never made.
+func TestAWorkerCountsOnlyOnThePhasesThatNameOne(t *testing.T) {
 	t.Parallel()
-	// Worker is set only on an auxiliary phase. Keying on a non-empty
-	// worker alone would fold a stray value on some other phase into a
-	// worker's total, which reads as a learning worker spending tokens it
-	// never spent.
 	aux := rec("CEO", "auxiliary", "haiku", "t1", "2026-06-14T12:00:00Z", 10, 5)
 	aux.Worker = "reflect"
-	stray := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:01Z", 100, 50)
+	delegated := rec("CEO", "subagent", "haiku", "t1", "2026-06-14T12:00:01Z", 200, 100)
+	delegated.Worker = "researcher"
+	stray := rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:02Z", 100, 50)
 	stray.Worker = "reflect"
+	inline := rec("CEO", "subagent", "haiku", "t1", "2026-06-14T12:00:03Z", 7, 0)
 
-	got := tokens.Aggregate([]tokens.Record{aux, stray}, tokens.Options{})
-	if len(got.ByWorker) != 1 {
-		t.Fatalf("by_worker = %+v", got.ByWorker)
+	got := tokens.Aggregate([]tokens.Record{aux, delegated, stray, inline}, tokens.Options{})
+	want := []tokens.WorkerRow{
+		{Phase: "subagent", Worker: "researcher"},
+		{Phase: "auxiliary", Worker: "reflect"},
 	}
-	if got.ByWorker[0].TotalTokens != 15 {
-		t.Errorf("worker total = %d, want only the auxiliary phase",
+	if len(got.ByWorker) != len(want) {
+		t.Fatalf("by_worker = %+v, want the template's row and the learning worker's", got.ByWorker)
+	}
+	for i, w := range want {
+		if got.ByWorker[i].Phase != w.Phase || got.ByWorker[i].Worker != w.Worker {
+			t.Errorf("by_worker[%d] = %s/%s, want %s/%s", i,
+				got.ByWorker[i].Phase, got.ByWorker[i].Worker, w.Phase, w.Worker)
+		}
+	}
+	if got.ByWorker[0].TotalTokens != 300 {
+		t.Errorf("the template's total = %d, want its own delegated task's 300",
 			got.ByWorker[0].TotalTokens)
+	}
+	if got.ByWorker[1].TotalTokens != 15 {
+		t.Errorf("the learning worker's total = %d, want only the auxiliary phase's 15",
+			got.ByWorker[1].TotalTokens)
+	}
+}
+
+// A TEMPLATE AND A LEARNING WORKER SHARING A NAME ARE TWO ROWS. Nothing
+// reserves a learning worker's name from the `workers:` grammar, so a founder
+// may call a template `persist_decider`; one row per name would sum the
+// template's delegated spend and the learning worker's into one figure that
+// belongs to neither.
+func TestATemplateAndALearningWorkerWithOneNameAreTwoRows(t *testing.T) {
+	t.Parallel()
+	aux := rec("CEO", "auxiliary", "haiku", "t1", "2026-06-14T12:00:00Z", 10, 0)
+	aux.Worker = "persist_decider"
+	delegated := rec("CEO", "subagent", "haiku", "t1", "2026-06-14T12:00:01Z", 30, 0)
+	delegated.Worker = "persist_decider"
+
+	got := tokens.Aggregate([]tokens.Record{aux, delegated}, tokens.Options{})
+	if len(got.ByWorker) != 2 {
+		t.Fatalf("by_worker = %+v, want one row per kind of worker", got.ByWorker)
+	}
+	for _, row := range got.ByWorker {
+		want := map[string]int{"auxiliary": 10, "subagent": 30}[row.Phase]
+		if row.TotalTokens != want {
+			t.Errorf("the %s row = %d tokens, want %d", row.Phase, row.TotalTokens, want)
+		}
+	}
+}
+
+// THE WORKER PHASES ARE THE EVENT CATALOGUE'S. This package spells them itself
+// to stay a leaf, and a spelling that drifted from the catalogue's would leave
+// every worker's spend out of the worker rows with nothing failing.
+func TestTheWorkerPhasesAreTheCataloguesOwn(t *testing.T) {
+	t.Parallel()
+	if tokens.PhaseAuxiliary != string(types.PhaseAuxiliary) {
+		t.Errorf("PhaseAuxiliary = %q, the catalogue says %q", tokens.PhaseAuxiliary, types.PhaseAuxiliary)
+	}
+	if tokens.PhaseSubagent != string(types.PhaseSubagent) {
+		t.Errorf("PhaseSubagent = %q, the catalogue says %q", tokens.PhaseSubagent, types.PhaseSubagent)
 	}
 }
 

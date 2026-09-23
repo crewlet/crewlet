@@ -40,8 +40,7 @@ type hostCommand struct {
 // floods stderr, a provisioning step that prints every file it unpacks — where
 // an unbounded buffer would be the engine's memory. The coding job's own output
 // does not come through here at all: it is redirected to files inside the box
-// and read back by the runner WHOLE, so nothing here has to preserve a
-// transcript.
+// and read back by the runner WHOLE, so nothing here has to preserve it.
 //
 // WHAT FALLS BETWEEN THE TWO WINDOWS IS NOT RECOVERABLE ANYWHERE, and that is
 // stated rather than hidden: [capture.String] names the gap in bytes, in the

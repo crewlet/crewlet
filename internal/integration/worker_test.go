@@ -1610,3 +1610,45 @@ func TestAnUnconfiguredSurfaceIsAskedAgainAfterAnApply(t *testing.T) {
 			"process otherwise", got)
 	}
 }
+
+// WHAT THE ROW CUTS, THE LOOP LOGS WHOLE.
+//
+// A pass the loop runs has no response and no run record, so once the fold
+// has cut a vendor's sentence to [MaxDetailLength] the log line is the only
+// place the rest of it exists. A sentence that fits is not logged, or the
+// record would stop meaning that something was cut.
+func TestTheLoopLogsTheWholeOfEverySentenceItCuts(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	long := "the loop-log case's own sentence, " + strings.Repeat("é", MaxDetailLength)
+	const short = "the loop-log case's sentence that fits"
+	r := &fakeReconciler{kind: KindGitLab, findings: []Finding{
+		{Kind: FindingGrantShort, Subject: "swe", Detail: long},
+		{Kind: FindingGrantShort, Subject: "ceo", Detail: short},
+	}}
+	store := newStore()
+
+	at(t, now, store, nil, Registration{Reconciler: r}).Tick(context.Background())
+
+	if stored := store.get(t, KindGitLab).Findings[0].Detail; stored == long {
+		t.Fatal("the row kept the sentence whole, so this case asserts nothing")
+	}
+	var whole, fits int
+	for _, record := range logs.records(t, "integration_finding_clipped") {
+		switch record["detail"] {
+		case long:
+			whole++
+			if record["subject"] != "swe" || record["integration"] != KindGitLab.String() {
+				t.Errorf("the record does not say whose sentence it is: %v", record)
+			}
+		case short:
+			fits++
+		}
+	}
+	if whole != 1 {
+		t.Errorf("the cut sentence was logged whole %d times, want once: the "+
+			"part the row could not hold exists nowhere else", whole)
+	}
+	if fits != 0 {
+		t.Errorf("a sentence the row kept whole was logged as cut %d times", fits)
+	}
+}

@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { href } from "~/app/router.tsx";
-import { plural } from "~/lib/format.ts";
+import { plural, shortId } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { rest, RestError, type EngineHealth, type FleetAnswer } from "~/protocol/index.ts";
 import { useRecheck } from "~/routes/admin/recheck.ts";
@@ -151,8 +151,18 @@ export function applyState(
   return { tone: "info", message: "The engine is applying it.", resolved: false, showFleet: false };
 }
 
-/** The first characters of a revision id, as the Configuration screen shows one. */
-export const shortRevision = (id: string) => id.slice(0, 10);
+/**
+ * A revision named the way every screen names one: [shortId], marked as
+ * shortened, and a link to the revision's own page — which heads itself with
+ * the whole id, so the whole id is one click from every mention of it.
+ */
+function RevisionRef({ id, tone }: { id: string; tone?: "inherit" }) {
+  return (
+    <a className="t-link prose-link" href={href(["admin", "config", "revisions", id])} title={id}>
+      <InlineCode tone={tone}>{shortId(id)}</InlineCode>
+    </a>
+  );
+}
 
 export function AfterSaveStrip({
   saved,
@@ -230,8 +240,7 @@ export function AfterSaveStrip({
           </span>
         }
       >
-        Saved revision <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>.{" "}
-        <span>{state.message}</span>
+        Saved revision <RevisionRef id={saved.revisionId} />. <span>{state.message}</span>
       </Callout>
       {yaml && <YamlDialog savedRevision={saved.revisionId} onClose={() => setYaml(false)} />}
     </>
@@ -264,9 +273,8 @@ export function PreviousRevisionNote() {
   if ((stream.data?.applied_epoch ?? 0) >= saved.epoch) return null;
   return (
     <Callout variant="neutral" icon={<RefreshGlyph />}>
-      This node is still applying revision{" "}
-      <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>, so what is drawn below is the
-      revision before it.
+      This node is still applying revision <RevisionRef id={saved.revisionId} />, so what is drawn
+      below is the revision before it.
     </Callout>
   );
 }
@@ -353,9 +361,8 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
         <>
           {state.revision !== null && state.revision !== savedRevision && (
             <Callout variant="warning">
-              This is revision{" "}
-              <InlineCode tone="inherit">{shortRevision(state.revision)}</InlineCode>, which is
-              active now, rather than the one you saved.
+              This is revision <RevisionRef id={state.revision} tone="inherit" />, which is active
+              now, rather than the one you saved.
             </Callout>
           )}
           <p className="t-caption">

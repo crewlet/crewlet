@@ -24,7 +24,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 // is the whole point of writing it out rather than building it from the type.
 const revisions = [
   {
-    revision_id: "01JCFGAAAA0000000000000001",
+    revision_id: "aaaaaaaa-0000-4000-8000-000000000001",
     created_at: "2026-08-23T15:00:00Z",
     created_by: "founder",
     source: "api",
@@ -32,7 +32,7 @@ const revisions = [
     is_active: true,
   },
   {
-    revision_id: "01JCFGBBBB0000000000000002",
+    revision_id: "bbbbbbbb-0000-4000-8000-000000000002",
     created_at: "2026-08-22T15:00:00Z",
     created_by: "ops",
     source: "cli",
@@ -42,8 +42,8 @@ const revisions = [
 ];
 
 const diff = {
-  from: "01JCFGBBBB0000000000000002",
-  to: "01JCFGAAAA0000000000000001",
+  from: "bbbbbbbb-0000-4000-8000-000000000002",
+  to: "aaaaaaaa-0000-4000-8000-000000000001",
   changes: [
     { path: "integrations.datadog.route_to", kind: "added", to: "sre-lead" },
     { path: "integrations.gitlab.url", kind: "changed", from: "a", to: "b" },
@@ -79,7 +79,12 @@ class InertWebSocket {
 /** Every question the screen asked, with its parameters. */
 let asked: { what: string; params: Record<string, unknown> | undefined }[] = [];
 
-function mount(hash: string, answer: unknown = diff, entities?: unknown) {
+function mount(
+  hash: string,
+  answer: unknown = diff,
+  entities?: unknown,
+  history: unknown = revisions,
+) {
   location.hash = hash;
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -94,7 +99,7 @@ function mount(hash: string, answer: unknown = diff, entities?: unknown) {
     asked.push({ what, params });
     return Promise.resolve(
       what === "config_audit"
-        ? revisions
+        ? history
         : what === "config_diff"
           ? answer
           : what === "config_entities"
@@ -124,10 +129,11 @@ afterEach(() => {
 test("a revision row renders the server's own field names", async () => {
   mount("#/config?lens=audit");
 
-  // The id: truncated to ten characters, which is what threw when the field
-  // was read under a name the server does not send.
-  expect(await screen.findByText("01JCFGAAAA")).toBeDefined();
-  expect(screen.getByText("01JCFGBBBB")).toBeDefined();
+  // The id, shortened to its first group and marked as shortened — reading it
+  // is what threw when the field was read under a name the server does not
+  // send.
+  expect(await screen.findByText("aaaaaaaa…")).toBeDefined();
+  expect(screen.getByText("bbbbbbbb…")).toBeDefined();
   expect(screen.getByText("connect datadog")).toBeDefined();
   // The author, and the active marker.
   expect(screen.getByText("founder")).toBeDefined();
@@ -136,7 +142,7 @@ test("a revision row renders the server's own field names", async () => {
 });
 
 test("a diff line carries the kind the server sends", async () => {
-  const { container } = mount("#/config?lens=diff&revision=01JCFGAAAA0000000000000001");
+  const { container } = mount("#/config?lens=diff&revision=aaaaaaaa-0000-4000-8000-000000000001");
 
   expect(await screen.findByText("integrations.datadog.route_to")).toBeDefined();
   // data-kind is what the stylesheet selects on. Under the old `data-op` with
@@ -154,7 +160,7 @@ test("a diff line carries the kind the server sends", async () => {
 });
 
 test("a cut diff says how many changes there are", async () => {
-  mount("#/config?lens=diff&revision=01JCFGAAAA0000000000000001", cutDiff);
+  mount("#/config?lens=diff&revision=aaaaaaaa-0000-4000-8000-000000000001", cutDiff);
 
   // The count is the COMPARISON's, not the listing's — a screen that showed
   // three would be reporting the response budget as the answer.
@@ -213,12 +219,12 @@ const againstAsked = () =>
 // about credential rotation.
 test("a link naming the side to compare against reads the diff against it", async () => {
   mount(
-    "#/admin/config?lens=diff&revision=01JCFGAAAA0000000000000001&against=01JCFGBBBB0000000000000002",
+    "#/admin/config?lens=diff&revision=aaaaaaaa-0000-4000-8000-000000000001&against=bbbbbbbb-0000-4000-8000-000000000002",
   );
 
   expect(await screen.findByText("integrations.datadog.route_to")).toBeDefined();
-  expect(againstAsked()).toEqual(["01JCFGBBBB0000000000000002"]);
-  expect(screen.getByText("against revision 01JCFGBBBB")).toBeDefined();
+  expect(againstAsked()).toEqual(["bbbbbbbb-0000-4000-8000-000000000002"]);
+  expect(screen.getByText("against revision bbbbbbbb…")).toBeDefined();
 });
 
 // THE CONTROL, and the half that keeps the case above from passing on a screen
@@ -227,7 +233,7 @@ test("a link naming the side to compare against reads the diff against it", asyn
 // named rather than carrying somebody else's comparison into it.
 test("a revision picked from the history is compared with the active one again", async () => {
   mount(
-    "#/admin/config?lens=diff&revision=01JCFGAAAA0000000000000001&against=01JCFGBBBB0000000000000002",
+    "#/admin/config?lens=diff&revision=aaaaaaaa-0000-4000-8000-000000000001&against=bbbbbbbb-0000-4000-8000-000000000002",
   );
 
   // THE ROW'S OWN LINK, which is what a reader presses: the grid draws a real
@@ -236,7 +242,7 @@ test("a revision picked from the history is compared with the active one again",
   await screen.findByText("first import");
   fireEvent.click(screen.getByRole("link", { name: /first import/ }));
   await waitFor(() => expect(location.hash).not.toContain("against="));
-  expect(location.hash).toContain("revision=01JCFGBBBB0000000000000002");
+  expect(location.hash).toContain("revision=bbbbbbbb-0000-4000-8000-000000000002");
   await waitFor(() => expect(againstAsked().at(-1)).toBe("active"));
   expect(screen.getByText("against the active revision")).toBeDefined();
 });
@@ -244,9 +250,34 @@ test("a revision picked from the history is compared with the active one again",
 // AND THE ORDINARY CASE NAMES NO SIDE, so every link that wants the plain
 // comparison carries no parameter at all.
 test("with no side named the diff is read against the active revision", async () => {
-  mount("#/admin/config?lens=diff&revision=01JCFGAAAA0000000000000001");
+  mount("#/admin/config?lens=diff&revision=aaaaaaaa-0000-4000-8000-000000000001");
 
   expect(await screen.findByText("integrations.datadog.route_to")).toBeDefined();
   expect(againstAsked()).toEqual(["active"]);
   expect(screen.getByText("against the active revision")).toBeDefined();
+});
+
+// A PAGE OF THE HISTORY IS NOT THE HISTORY. The grid read a hundred revisions
+// and drew "Revisions 100" whether the company had a hundred or four hundred;
+// the read now takes one past the window as the evidence.
+test("a history longer than the window says so, and where the rest is", async () => {
+  const many = Array.from({ length: 101 }, (_, i) => ({
+    ...revisions[1],
+    revision_id: `cccccccc-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    summary: `revision ${i}`,
+    is_active: false,
+  }));
+  mount("#/config?lens=audit", diff, undefined, many);
+  expect(await screen.findByText("revision 99")).toBeDefined();
+  // THE PROBE IS EVIDENCE, NOT A ROW.
+  expect(screen.queryByText("revision 100")).toBeNull();
+  expect(screen.getByText("100+")).toBeDefined();
+  expect(screen.getByText("GET /config/revisions?offset=100")).toBeDefined();
+  expect(asked.find((a) => a.what === "config_audit")?.params).toEqual({ limit: 101 });
+});
+
+test("a history that fits the window is counted plainly", async () => {
+  mount("#/config?lens=audit");
+  expect(await screen.findByText("connect datadog")).toBeDefined();
+  expect(screen.queryByText(/there are more/)).toBeNull();
 });

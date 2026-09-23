@@ -915,6 +915,17 @@ export function pageCount(shown: number, more: boolean): string {
 }
 
 /**
+ * The most notices one `work_inbox` answer carries: the engine's own
+ * `tracker.MaxInboxRows`, which clamps any larger ask down to it.
+ *
+ * ASKED FOR IN FULL wherever a person's inbox is read AS an inbox — the Inbox
+ * screen and the rail badge that points at it — so a page there is the
+ * engine's page and a sentence about "the page" names one number. `#/me` asks
+ * for fewer on purpose; see its own `INBOX_ROWS`.
+ */
+export const INBOX_PAGE = 50;
+
+/**
  * WHICH PART OF THE SET a capped page is, which is a property of the read's own
  * ORDER and never of the page.
  *
@@ -934,7 +945,19 @@ export function pageCount(shown: number, more: boolean): string {
  * these cannot quietly pick the nearest one: it fails to compile until the
  * order it actually asked for is added here, beside the sentence that names it.
  */
-export type PageSlice = "newest" | "alphabetical" | "priority";
+export type PageSlice =
+  | "newest"
+  | "alphabetical"
+  | "priority"
+  /** `ORDER BY updated_at DESC` — the recency of the last change, not of the
+   *  create, which is what `newest` says. */
+  | "updated"
+  /** The order the list itself stores, which somebody chose: a person's
+   *  priorities, re-applied in their order after the filter. */
+  | "listed"
+  /** `ORDER BY` the task's key, which is what a person's checklist claims are
+   *  read in. */
+  | "key";
 
 /**
  * What a capped page says for itself, and "" when it is the whole set.
@@ -968,6 +991,12 @@ export function pageNote(
       return `The first ${count} in title order; there are more.`;
     case "priority":
       return `The first ${count} by priority; there are more.`;
+    case "updated":
+      return `The ${count} updated most recently; there are more.`;
+    case "listed":
+      return `The first ${count} in the list's own order; there are more.`;
+    case "key":
+      return `The first ${count} by task key; there are more.`;
   }
 }
 
@@ -1168,5 +1197,12 @@ export function bucketByDay(rows: WorkSummary[]): Map<string, WorkSummary[]> {
   return out;
 }
 
-/** How many chips a calendar cell draws before it folds the rest into a count. */
+/**
+ * How many chips a calendar cell draws before it folds the rest into a count.
+ *
+ * THREE: enough to say what a day holds at a glance, few enough that a busy
+ * day does not stretch its week's row far past the others. The fold is a
+ * button that OPENS THE DAY IN PLACE — every chip, in the same cell — so the
+ * work it folded is on the grid rather than on another screen.
+ */
 export const CALENDAR_CELL_CHIPS = 3;

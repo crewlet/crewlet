@@ -258,3 +258,115 @@ test("the key a heading groups on is the string it draws", () => {
     setZone("");
   }
 });
+
+// THE SOURCE IS A SERVER-SIDE FILTER, like the actor. An integration's page
+// links its older deliveries here with `source=`, and a log that ignored the
+// key answered with every surface's webhooks, the one asked about somewhere
+// among them.
+test("a source in the address narrows the page and the axis on the server", async () => {
+  location.hash = "#/activity/events?category=webhook&source=slack";
+  const { asked } = mount();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(asked.find((a) => a.what === "events")?.params).toMatchObject({
+    category: "webhook",
+    source: "slack",
+  });
+  expect(asked.find((a) => a.what === "event_series")?.params).toMatchObject({
+    category: "webhook",
+    source: "slack",
+  });
+  // THE ROW THE STUB ANSWERED IS `engine`'s, which the live filter drops too:
+  // a list narrowed on the server and not in the browser mixes the two.
+  expect(screen.queryByText("opened a task")).toBeNull();
+  location.hash = "";
+});
+
+// A TRACE IS A SERVER-SIDE FILTER TOO, and the only way to one: the search box
+// matches a row's summary, type and source, and a trace id is none of those —
+// so the trace screen's "In the log" landed on a log filtered to nothing.
+test("a trace in the address narrows the page and the axis on the server", async () => {
+  location.hash = "#/activity/events?trace=abc123";
+  const { asked } = mount();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(asked.find((a) => a.what === "events")?.params).toMatchObject({ trace_id: "abc123" });
+  expect(asked.find((a) => a.what === "event_series")?.params).toMatchObject({
+    trace_id: "abc123",
+  });
+  // THE STUB'S ROW CARRIES NO TRACE, so the live filter drops it as well.
+  expect(screen.queryByText("opened a task")).toBeNull();
+  // AND THE FILTER IS ON SCREEN, where a reader can lift it.
+  expect(screen.getByRole("button", { name: /Trace abc123/ })).toBeTruthy();
+  location.hash = "";
+});
+
+// A PAGE IN FLIGHT WHEN THE QUERY CHANGES LANDS NOWHERE. It answers after the
+// reset, so appending it put the old query's rows under the new filters and
+// its cursor in place of the new one's.
+test("a page that answers after the filters changed is dropped", async () => {
+  location.hash = "#/activity/events?source=slack";
+  let answerOld!: (page: unknown) => void;
+  const asked: Record<string, unknown>[] = [];
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  const row = (id: string, summary: string, minutesAgo: number) => ({
+    id,
+    type: "task_created",
+    category: "task",
+    source: "slack",
+    actor: "CEO",
+    summary,
+    timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
+    failed: false,
+  });
+  (
+    socket as unknown as {
+      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (what: string, params: Record<string, unknown> = {}) => {
+    if (what !== "events") return new Promise(() => {});
+    asked.push(params);
+    if (params.source === "slack") return new Promise((resolve) => (answerOld = resolve));
+    return Promise.resolve({
+      events: [row("new-1", "the new query's row", 1)],
+      next: { before_time: new Date(Date.now() - 60_000).toISOString(), before_id: "new-1" },
+      exhausted: false,
+    });
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Activity />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    location.hash = "#/activity/events";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(screen.getByText("the new query's row")).toBeTruthy();
+  await act(async () => {
+    answerOld({
+      events: [row("old-1", "the old query's row", 2)],
+      next: { before_time: new Date(Date.now() - 120_000).toISOString(), before_id: "old-1" },
+      exhausted: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(screen.queryByText("the old query's row")).toBeNull();
+  // THE NEW QUERY'S CURSOR, not the one the old answer carried.
+  await act(async () => {
+    screen.getByRole("button", { name: /Load 100 older/ }).click();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(asked.at(-1)).toMatchObject({ before_id: "new-1" });
+  expect(asked.at(-1)?.source).toBeUndefined();
+  location.hash = "";
+});

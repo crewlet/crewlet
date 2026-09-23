@@ -15,7 +15,7 @@ import (
 // by *store.EventLog.
 type EventHistory interface {
 	List(ctx context.Context, q store.ListQuery) ([]store.EventRecord, error)
-	PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, error)
+	PhaseTokenTail(ctx context.Context, q store.PhaseTokenQuery, limit int) ([]tokens.Record, bool, error)
 }
 
 // Seeded is the projection history is folded into. Satisfied by
@@ -80,10 +80,9 @@ func Seed(ctx context.Context, history EventHistory, live Seeded) error {
 		h.Events = append(h.Events, FeedRow(rec))
 	}
 
-	h.Spend, err = history.PhaseTokens(ctx, store.PhaseTokenQuery{
+	h.Spend, h.SpendTruncated, err = history.PhaseTokenTail(ctx, store.PhaseTokenQuery{
 		Since: time.Now().UTC().Add(-livestate.LiveSpendWindow),
-		Limit: livestate.SpendRecordLimit,
-	})
+	}, livestate.SpendRecordLimit)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("observe: read the live spend window's history: %w", err))
 	}

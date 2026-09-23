@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -450,6 +451,103 @@ func TestALongCommentBodyIsAnExcerptWithAWayBackToTheWhole(t *testing.T) {
 	// caller that had to pass both would meet a silently empty thread.
 	if len(opened.Comments) == 0 {
 		t.Error("a read naming a comment but not `comments` came back empty")
+	}
+}
+
+// A THREAD PAGED TO ITS END RETURNS EVERY COMMENT EXACTLY ONCE.
+//
+// The page reads one row past its size as evidence that a next page exists,
+// and the cursor has to name the last row RETURNED rather than that probe:
+// the next page is strictly older than the cursor, so a cursor naming the
+// probe row puts it on neither page and loses one comment at every boundary.
+// The instants tie in threes so the boundary falls inside a tie, which is
+// what the id half of the cursor is for.
+func TestAThreadPagedToItsEndReturnsEveryCommentOnce(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("a long thread")
+
+	const total = tracker.DetailComments + 5
+	written := make([]string, 0, total)
+	for i := range total {
+		id := fmt.Sprintf("cm-%03d", i)
+		if _, err := r.writer.UpdateTask(t.Context(), "op-"+id, created.ID, "ENG",
+			tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+				ID: id, Task: created.ID, Author: "ana",
+				AuthorKind: tracker.AuthorHuman, Body: "comment " + id,
+				CreatedAt: wednesday.Add(time.Duration(i/3) * time.Minute),
+			}}, tracker.ChangeComment, nil); err != nil {
+			t.Fatalf("comment %s: %v", id, err)
+		}
+		r.drain()
+		written = append(written, id)
+	}
+
+	seen := map[string]int{}
+	cursor := ""
+	for page := 0; ; page++ {
+		if page > total {
+			t.Fatalf("the thread did not end after %d pages — the cursor is "+
+				"not advancing", page)
+		}
+		got, err := r.reader.Task(t.Context(), created.ID,
+			tracker.DetailWants{Comments: true, CommentCursor: cursor},
+			statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			t.Fatalf("read page %d: %v", page, err)
+		}
+		for _, comment := range got.Comments {
+			seen[comment.ID]++
+		}
+		if got.CommentsCursor == "" {
+			break
+		}
+		cursor = got.CommentsCursor
+	}
+	for _, id := range written {
+		switch seen[id] {
+		case 1:
+		case 0:
+			t.Errorf("%s was on no page — the thread lost it at a page "+
+				"boundary, and nothing told the reader it existed", id)
+		default:
+			t.Errorf("%s was on %d pages", id, seen[id])
+		}
+	}
+}
+
+// A MALFORMED THREAD CURSOR IS REFUSED, NOT READ AS THE START OF TIME.
+//
+// The page predicate is "strictly older than the cursor", so a cursor whose
+// instant decoded as zero would match nothing and answer an empty page — the
+// same answer a thread with no older comments gives.
+func TestAMalformedThreadCursorIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("a thread with one comment")
+	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", created.ID, "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+			ID: "cm-one", Task: created.ID, Author: "ana",
+			AuthorKind: tracker.AuthorHuman, Body: "hello", CreatedAt: wednesday,
+		}}, tracker.ChangeComment, nil); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+
+	for _, cursor := range []string{"not-a-cursor", "yesterday:cm-one", "12345:"} {
+		got, err := r.reader.Task(t.Context(), created.ID,
+			tracker.DetailWants{Comments: true, CommentCursor: cursor},
+			statelog.Freshness{Level: statelog.ReadStale})
+		if err == nil {
+			t.Errorf("cursor %q was accepted and answered %d comment(s) — a "+
+				"cursor this read did not mint must be refused by name",
+				cursor, len(got.Comments))
+			continue
+		}
+		if !strings.Contains(err.Error(), "comments_cursor") {
+			t.Errorf("cursor %q was refused with %q, which does not name the "+
+				"argument to fix", cursor, err)
+		}
 	}
 }
 

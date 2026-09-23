@@ -25,11 +25,12 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { SeatScreen } from "./Seat.tsx";
+import { SeatPeek, SeatScreen } from "./Seat.tsx";
 import { TURN_MAX_DAYS, TURN_MAX_RANGE } from "~/routes/activity/Turns.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, MAX_PHASES, Store } from "~/protocol/index.ts";
+import type { EventEnvelope } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -329,4 +330,133 @@ test("the thread roster asks for the read's ceiling rather than its default", as
   const asked = mountAsking("threads", { conversations: conversations(true) });
   await waitFor(() => expect(count("Threads")).toBe(`${PAGE}+`));
   expect(asked.some((a) => a.what === "conversations" && a.params?.limit === 200)).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// The rail's last turn, which no query stands behind
+// ---------------------------------------------------------------------------
+
+/** A completed phase as the socket streams it, payload and all. */
+const streamedPhase = (id: string, role: string): EventEnvelope =>
+  ({
+    id,
+    type: "agent_phase_completed",
+    category: "llm",
+    source: "engine",
+    actor: role,
+    summary: "",
+    trace_id: "",
+    span_id: "",
+    parent_span_id: "",
+    topic: "",
+    timestamp: at,
+    failed: false,
+    payload: { turn_id: `turn-${id}`, phase: "execute", iteration: 1, role },
+  }) as EventEnvelope;
+
+function mountPeek(store: Store) {
+  store.applyOrg({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }] });
+  const socket = new LiveSocket(store);
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <SeatPeek handle="ceo" />
+      </Router>
+    </ClientContext.Provider>,
+  );
+}
+
+test("a rail whose seat's phases the tab dropped does not say nothing streamed", () => {
+  // The seat's phase streamed in and was then pushed out by other seats'
+  // work. "Nothing has streamed to this tab yet" over that is false.
+  const store = new Store();
+  store.applyEvent(streamedPhase("mine", "CEO"));
+  for (let i = 0; i < MAX_PHASES; i++) store.applyEvent(streamedPhase(`other-${i}`, "CFO"));
+  mountPeek(store);
+  expect(screen.queryByText(/Nothing has streamed to this tab yet/)).toBeNull();
+  expect(screen.getByText(/Nothing this tab still holds/)).toBeTruthy();
+  // AND WHERE THE RECORD IS, as a link to the tab that draws it.
+  expect(screen.getByRole("link", { name: "Turns tab" }).getAttribute("href")).toContain(
+    "tab=turns",
+  );
+});
+
+test("a rail whose tab has dropped nothing says so plainly", () => {
+  // THE CONTROL: no drop, no caution.
+  mountPeek(new Store());
+  expect(screen.getByText(/Nothing has streamed to this tab yet/)).toBeTruthy();
+  expect(screen.queryByText(/dropped older ones/)).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// The four blocks of their own queue
+// ---------------------------------------------------------------------------
+
+/** One `work_my_work` answer, each block at the engine's `tracker.MyWorkRows`. */
+const MY_WORK_ROWS = 20;
+const myWork = (truncated: boolean) => {
+  const cut = { priorities: truncated, collaborating: truncated, asked_of_me: truncated };
+  const block = (prefix: string) =>
+    Array.from({ length: MY_WORK_ROWS }, (_, i) => ({ ...task(i), id: `${prefix}-${i}` }));
+  return {
+    handle: "ceo",
+    priorities: block("p"),
+    assigned: [],
+    asked_of_me: Array.from({ length: MY_WORK_ROWS }, (_, i) => ({
+      ...task(i),
+      comment: `c-${i}`,
+      asked_by: "cfo",
+      asked_at: at,
+      body: `question ${i}`,
+    })),
+    checklist_items: [],
+    collaborating: block("c"),
+    watching_recent: [],
+    unblocked_recent: [],
+    truncated: cut,
+    complete: true,
+  };
+};
+
+test("their own queue's blocks read the answer's truncation flags", async () => {
+  mountAsking("work", {
+    viewer: { operator_id: "op", operator: true, handle: "", name: "", kind: "" },
+    work_items: { items: [], complete: true },
+    work_my_work: myWork(true),
+  });
+  // A FLOOR, NOT A TOTAL: the engine cut each block at twenty and said so.
+  await waitFor(() => expect(count("What they mean to do first")).toBe(`${MY_WORK_ROWS}+`));
+  expect(count("Collaborating")).toBe(`${MY_WORK_ROWS}+`);
+  expect(count("Asked of them")).toBe(`${MY_WORK_ROWS}+`);
+  // AND EACH NAMES ITS OWN ORDER — a priority list is not "the newest" of
+  // anything — and where the rest of it is.
+  expect(
+    screen.getByText(/The first 20 tasks in the list's own order; there are more\./),
+  ).toBeTruthy();
+  expect(screen.getByText(/The 20 tasks updated most recently; there are more\./)).toBeTruthy();
+  expect(screen.getByText(/The newest 20 questions; there are more\./)).toBeTruthy();
+  expect(screen.getByText("GET /work?container=workspace&priorities=ceo")).toBeTruthy();
+  expect(screen.getByText("GET /work?container=workspace&collaborator=ceo")).toBeTruthy();
+});
+
+test("their own queue's blocks, whole, draw plain counts and no caution", async () => {
+  mountAsking("work", {
+    viewer: { operator_id: "op", operator: true, handle: "", name: "", kind: "" },
+    work_items: { items: [], complete: true },
+    work_my_work: myWork(false),
+  });
+  await waitFor(() => expect(count("What they mean to do first")).toBe(`${MY_WORK_ROWS}`));
+  expect(count("Collaborating")).toBe(`${MY_WORK_ROWS}`);
+  expect(screen.queryByText(/there are more/)).toBeNull();
+});
+
+// "ITS EVENTS" IS THE EVENT LOG, filtered to the seat. It navigated to the bare
+// `#/activity`, which is Live now and reads no `actor` at all — so the button
+// dropped the reader on a screen about the whole company.
+test("a seat's events open the event log narrowed to it", async () => {
+  mountAsking("overview", {});
+  const button = await screen.findByRole("button", { name: "Its events" });
+  button.click();
+  await waitFor(() => expect(location.hash).toContain("#/activity/events?"));
+  expect(location.hash).toContain("actor=CEO");
 });

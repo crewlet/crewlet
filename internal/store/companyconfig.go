@@ -12,8 +12,11 @@ import (
 )
 
 // DefaultRevisionPage is how many revisions a listing returns when the caller
-// names no limit. One screen of history, which is what the operator view asks
-// for; the whole chain is available by paging.
+// names no limit: one screen of history.
+//
+// A PAGE, NOT THE HISTORY. [Configs.List] reports whether the history holds
+// more than the page it returned, and the rest is reached by asking again at
+// the next offset.
 const DefaultRevisionPage = 50
 
 // ErrNoRevision reports a revision id that does not exist.
@@ -287,7 +290,14 @@ func (c *Configs) one(ctx context.Context, query string, args ...any) (Revision,
 	return r, true, nil
 }
 
-// List returns revisions newest first.
+// List returns one page of revisions, newest first, and whether the history
+// holds more past it.
+//
+// THE SECOND RETURN IS WHAT MAKES THE PAGE A PAGE. Without it a history of
+// exactly `limit` revisions and one of a thousand answer identically, and a
+// caller counting what it was given reports the page as the history. One row
+// past the limit is read as the evidence and dropped (see [probed]); the rows
+// after this page are at `offset + limit`.
 //
 // The tiebreak is the INSERTION order, not the revision id. Time alone is not
 // unique — an import that writes several revisions in one burst shares a
@@ -295,7 +305,7 @@ func (c *Configs) one(ctx context.Context, query string, args ...any) (Revision,
 // truthful: it can put the older of two revisions first, and a history read in
 // the wrong order is worse than one read slowly. The implicit rowid is the
 // only monotonic thing this table has, and it is exactly the fact needed.
-func (c *Configs) List(ctx context.Context, limit, offset int) ([]Revision, error) {
+func (c *Configs) List(ctx context.Context, limit, offset int) ([]Revision, bool, error) {
 	if limit <= 0 {
 		limit = DefaultRevisionPage
 	}
@@ -304,9 +314,9 @@ func (c *Configs) List(ctx context.Context, limit, offset int) ([]Revision, erro
 	}
 	rows, err := c.db.sql.QueryContext(ctx,
 		`SELECT `+revisionColumns+` FROM company_config
-		 ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`, limit, offset)
+		 ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`, limit+1, offset)
 	if err != nil {
-		return nil, fmt.Errorf("store: list config revisions: %w", err)
+		return nil, false, fmt.Errorf("store: list config revisions: %w", err)
 	}
 	defer rows.Close()
 
@@ -314,14 +324,15 @@ func (c *Configs) List(ctx context.Context, limit, offset int) ([]Revision, erro
 	for rows.Next() {
 		r, err := scanRevision(rows)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list config revisions: %w", err)
+		return nil, false, fmt.Errorf("store: list config revisions: %w", err)
 	}
-	return out, nil
+	out, more := probed(out, limit)
+	return out, more, nil
 }
 
 func scanRevision(rows *sql.Rows) (Revision, error) {

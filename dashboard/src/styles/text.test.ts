@@ -92,6 +92,15 @@ describe("how this product cuts text", () => {
     expect(owners, "the clamp is `.clamp` in base.css").toEqual(["base.css: .clamp"]);
   });
 
+  // A CHECKLIST ITEM'S NAME IS PROSE, and the task's own page is the one place
+  // it is drawn — so a pixel cut there leaves the rest of it nowhere at all.
+  test("a checklist item's name wraps rather than cutting at a pixel", () => {
+    const name = block(sheet("screens.css"), ".work-check-name");
+    expect(name).not.toMatch(/white-space:\s*nowrap/);
+    expect(name).not.toMatch(/text-overflow/);
+    expect(name).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
   // AND THE TWO RULES ARE NEVER WORN TOGETHER: their `white-space` disagrees,
   // so an element carrying both gets one line with no ellipsis, which is
   // strictly worse than either.

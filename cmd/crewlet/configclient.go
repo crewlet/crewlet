@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The CLI's client for /config, and why the command needs one.
@@ -98,16 +96,10 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 		return "", 0, fmt.Errorf("reading the answer from %s: %w", c.base, err)
 	}
 	if len(raw) > maxConfigResponseBytes {
-		return "", 0, fmt.Errorf(
-			"the answer from %s exceeded %d bytes, so it was not read: this "+
-				"build caps one answer to bound a proxy's error page. Check "+
-				"that -api names the engine rather than something in front of "+
-				"it. The revision may still have been activated — run "+
-				"`crewlet config show` before importing again",
-			c.base, maxConfigResponseBytes)
+		return "", 0, answerTooLarge(c.base)
 	}
 	if resp.StatusCode/100 != 2 {
-		return "", 0, c.refusal(resp.StatusCode, raw)
+		return "", 0, c.refusal(resp.StatusCode, resp.Header.Get("Content-Type"), raw)
 	}
 	var body struct {
 		RevisionID string `json:"revision_id"`
@@ -138,41 +130,47 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 // own timeout bounds one that never stops.
 const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 
+// answerTooLarge is what an import says when the node's answer ran past
+// [maxConfigResponseBytes] and was not read.
+//
+// THE NODE'S OWN ROUTE, not `crewlet config show`: that command opens this
+// machine's store file, which is either held by the running engine this import
+// went through or belongs to a node other than the one -api named — the reason
+// [lostRace] points at the node's routes too.
+func answerTooLarge(base string) error {
+	return fmt.Errorf(
+		"the answer from %s exceeded %d bytes, so it was not read: this "+
+			"build caps one answer to bound a proxy's error page. Check "+
+			"that -api names the engine rather than something in front of "+
+			"it. The revision may still have been activated — read "+
+			"%s/config to see what is live before importing again",
+		base, maxConfigResponseBytes, base)
+}
+
 // refusal turns a status code into something an operator can act on.
-func (c *configClient) refusal(status int, raw []byte) error {
+func (c *configClient) refusal(status int, contentType string, raw []byte) error {
 	var body struct {
-		Error   string `json:"error"`
-		Detail  string `json:"detail"`
-		Hint    string `json:"hint"`
+		refusalBody
 		Current string `json:"current_revision_id"`
 		Stored  string `json:"stored_revision_id"`
 	}
-	_ = json.Unmarshal(raw, &body)
+	decodeRefusal(raw, &body)
+	if !body.fromNode() {
+		// SHOWN, NEVER INTERPRETED — see [refusalBody.fromNode]. An
+		// answer here can be as large as maxConfigResponseBytes, which is
+		// what [unrecognisedRefusal] bounds.
+		return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status,
+			unrecognisedRefusal(contentType, raw))
+	}
 	switch {
-	case status == http.StatusNotFound:
-		return fmt.Errorf("%s has no /config surface: it is running a build "+
-			"from before this route existed, or it is not an engine node", c.base)
 	case status == http.StatusUnauthorized:
-		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
-			"api.auth.tokens", c.base, apiTokenEnv)
+		return fmt.Errorf("%s refused the bearer token for PUT /config: set %s "+
+			"to one of its api.auth.tokens", c.base, apiTokenEnv)
 	case status == http.StatusConflict && body.Error == "revision_advanced":
 		return lostRace(c.base, body.Current, body.Stored)
 	}
-	msg := body.Error
-	if msg == "" {
-		// NOT THE ENGINE'S JSON, so a proxy's page or a plain-text error,
-		// shown for a person to recognise rather than read whole: an
-		// answer can be as large as maxConfigResponseBytes.
-		msg = textcut.Ellipsis(strings.TrimSpace(string(raw)), maxRefusalTextBytes)
-	}
-	return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status,
-		withRefusalDetail(msg, body.Detail, body.Hint))
+	return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status, body.said())
 }
-
-// maxRefusalTextBytes is how much of an answer that is not the engine's JSON
-// a refusal quotes: a screenful, enough to tell a proxy's error page from a
-// node's plain-text one.
-const maxRefusalTextBytes = 2 << 10
 
 // lostRace is what an import refused with revision_advanced tells the
 // operator: what won, whether their document was kept, and what puts it live

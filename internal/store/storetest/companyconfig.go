@@ -42,7 +42,7 @@ func testOnlyOneRevisionIsActive(t *testing.T, db *store.DB) {
 	if active.ID != second {
 		t.Fatalf("active is %s, want the newest (%s)", active.ID, second)
 	}
-	all, err := configs.List(t.Context(), 0, 0)
+	all, _, err := configs.List(t.Context(), 0, 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -96,7 +96,7 @@ func testAnInsertedRevisionIsHistoryUntilActivated(t *testing.T, db *store.DB) {
 	if stored.Active || !stored.ActivatedAt.IsZero() || stored.ParentID != live {
 		t.Errorf("inserted = %+v, want inactive, never activated, with its parent", stored)
 	}
-	all, err := configs.List(t.Context(), 0, 0)
+	all, _, err := configs.List(t.Context(), 0, 0)
 	if err != nil || len(all) != 3 {
 		t.Fatalf("list: %d rows, err %v, want all three revisions", len(all), err)
 	}
@@ -177,7 +177,7 @@ func testRevisionsListInInsertionOrder(t *testing.T, db *store.DB) {
 		}
 		ids = append(ids, id)
 	}
-	listed, err := configs.List(t.Context(), 0, 0)
+	listed, _, err := configs.List(t.Context(), 0, 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -190,5 +190,62 @@ func testRevisionsListInInsertionOrder(t *testing.T, db *store.DB) {
 			t.Fatalf("position %d is %s, want %s — the listing is not newest-first",
 				i, revision.ID, want)
 		}
+	}
+}
+
+func testARevisionPageSaysWhetherTheHistoryHoldsMore(t *testing.T, db *store.DB) {
+	// A page of exactly `limit` revisions is otherwise the same answer from a
+	// history of that many and from one of a thousand, and a screen that
+	// counts the page reports it as the history. The boundary is the case
+	// that matters: a history of exactly the page size is COMPLETE, and a
+	// read that inferred "more" from a full page would offer an older page
+	// that holds nothing.
+	configs := db.Configs()
+	const page = 3
+	var ids []string
+	for i := range page {
+		id, err := configs.InsertActive(t.Context(), store.Revision{
+			Summary: "rev", CreatedAt: base.Add(time.Duration(i) * time.Minute),
+			Payload: json.RawMessage(`{}`),
+		})
+		if err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+		ids = append(ids, id)
+	}
+	exact, more, err := configs.List(t.Context(), page, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(exact) != page || more {
+		t.Fatalf("a history of exactly %d revisions listed %d with more=%v, "+
+			"want all of them and no more", page, len(exact), more)
+	}
+
+	oldest, err := configs.InsertActive(t.Context(), store.Revision{
+		Summary: "rev", CreatedAt: base.Add(-time.Minute), Payload: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("insert the oldest: %v", err)
+	}
+	head, more, err := configs.List(t.Context(), page, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(head) != page || !more {
+		t.Fatalf("a history of %d listed %d with more=%v at a page of %d, want a "+
+			"full page that says there is more", page+1, len(head), more, page)
+	}
+	if head[0].ID != ids[page-1] {
+		t.Errorf("the page opens at %s, want the newest revision %s", head[0].ID, ids[page-1])
+	}
+	// AND THE REST IS WHERE THE DOC SAYS: at offset + limit.
+	rest, more, err := configs.List(t.Context(), page, page)
+	if err != nil {
+		t.Fatalf("list the next page: %v", err)
+	}
+	if len(rest) != 1 || rest[0].ID != oldest || more {
+		t.Fatalf("the next page is %d rows (more=%v), want exactly the oldest revision %s",
+			len(rest), more, oldest)
 	}
 }

@@ -66,10 +66,14 @@ export const MAX_EVENTS = 400;
  * Eviction is drop-oldest and the buffer is COMPANY-WIDE, because one socket
  * serves every screen. So this is not a guarantee: a fleet completing more than
  * 200 phases while a tab sits open can evict a record that tab still wants, and
- * a turn then renders with a phase missing rather than with all of them. What
- * bounds the damage is that these only ever SUPPLEMENT a query answer — every
- * screen re-asks on reconnect, and a reload is authoritative — so the loss is a
- * card that is late, never a turn that is gone.
+ * a turn then renders with a phase missing rather than with all of them.
+ *
+ * AN EVICTION IS COUNTED, so a screen can say so. These only ever SUPPLEMENT a
+ * query answer: a phase dropped here is still in the event store, which the
+ * screen's own query reads when it is asked again or the page is reloaded.
+ * What the screen cannot do on its own is know that it is missing one, because
+ * a dropped phase leaves nothing behind in this slice. `phaseArrivals` and
+ * `phasesDropped` are that trace; see [StoreState.phasesDropped].
  */
 export const MAX_PHASES = 200;
 
@@ -84,6 +88,24 @@ export interface StoreState {
    * the durable history each screen loads comes from its own query.
    */
   phases: EventEnvelope[];
+  /**
+   * How many envelopes `phases` has ACCEPTED since this tab opened. Moves with
+   * the `phases` slice.
+   */
+  phaseArrivals: number;
+  /**
+   * How many of those it has DROPPED to stay within [MAX_PHASES]. Moves with
+   * the `phases` slice.
+   *
+   * EXACT AS A HORIZON because eviction is drop-oldest in arrival order: the
+   * arrivals numbered 1 through `phasesDropped` are the ones gone. So a screen
+   * that noted `phaseArrivals` when its query answered is missing a streamed
+   * phase only if `phasesDropped` has since passed that mark — see
+   * `usePhasesDroppedSince` — and a screen with no query behind it may be
+   * missing one whenever this is above zero. WHICH seat or turn a dropped phase
+   * belonged to is not kept, so a screen can only say it MAY be missing one.
+   */
+  phasesDropped: number;
   sandboxes: SandboxEntry[];
   org: OrgProjection;
   tools: ToolRow[];
@@ -123,6 +145,8 @@ function emptyState(): StoreState {
     agents: [],
     events: [],
     phases: [],
+    phaseArrivals: 0,
+    phasesDropped: 0,
     sandboxes: [],
     org: {},
     tools: [],
@@ -327,7 +351,10 @@ export class Store {
     // payload would evict a real record for a phase nothing can render.
     if (ev.type === "agent_phase_completed" && ev.payload) {
       if (!this.state.phases.some((p) => p.id === ev.id)) {
-        this.state.phases = [ev, ...this.state.phases].slice(0, MAX_PHASES);
+        const held = [ev, ...this.state.phases];
+        this.state.phaseArrivals++;
+        this.state.phasesDropped += Math.max(0, held.length - MAX_PHASES);
+        this.state.phases = held.slice(0, MAX_PHASES);
         this.emit("phases");
       }
     }

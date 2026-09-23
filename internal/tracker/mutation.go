@@ -851,13 +851,16 @@ var ChangeKinds = []ChangeKind{
 // Valid reports whether a change kind off the wire is one this build knows.
 func (k ChangeKind) Valid() bool { return slices.Contains(ChangeKinds, k) }
 
-// MaxDeltas caps what a notification DISPLAYS, and governs nothing else.
+// MaxDeltas is how many deltas one notification may carry, and
+// [Notify.Validate] REFUSES a card past it rather than trimming one.
 //
-// THIRTY-TWO IS A DISPLAY LIMIT. It must never govern the mutation: a write
-// touching 128 field values carries all 128 in its payload — that is what
-// makes the record reproducible — and shows 32. Letting one number do both
-// jobs is how a record becomes structurally unable to represent a write the
-// tools accept.
+// IT GOVERNS THE CARD AND NOTHING ELSE. The mutation carries every value it
+// changes whatever this says — that is what makes the record reproducible —
+// and a notification's deltas are a summary of it. Both producers compare a
+// fixed list of fields shorter than this — [TaskDeltas] for a task, the goal
+// wake for a goal — so a card is never cut to fit; the refusal is there for a
+// producer that grows past it, and TestEveryDeltaATaskCanReportFitsOneCard
+// fails before that producer ships.
 const MaxDeltas = 32
 
 // MaxExcerpt is how much of a body or a comment a card carries.
@@ -1049,7 +1052,7 @@ func (s Snapshot) TaskID(subject Subject) string {
 type Notify struct {
 	Kind ChangeKind `json:"kind"`
 
-	// Fields are the deltas a card renders, capped at MaxDeltas.
+	// Fields are the deltas a card renders, at most [MaxDeltas] of them.
 	Fields map[string]Delta `json:"fields,omitempty"`
 
 	CommentID string `json:"comment_id,omitempty"`
@@ -1100,8 +1103,10 @@ func (n *Notify) Validate() error {
 	}
 	if len(n.Fields) > MaxDeltas {
 		return fmt.Errorf("tracker: a notification carries %d deltas and a card "+
-			"shows %d — the cap is on the DISPLAY, and a writer that hit it "+
-			"should be trimming what it shows rather than what it recorded",
+			"carries at most %d (tracker.MaxDeltas) — the producer that built it "+
+			"has outgrown the cap: raise MaxDeltas or narrow the fields that "+
+			"producer compares, and never trim the card to fit, since a trimmed "+
+			"card tells its reader less changed than did",
 			len(n.Fields), MaxDeltas)
 	}
 	if len(n.Excerpt) > MaxExcerpt {

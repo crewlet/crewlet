@@ -122,8 +122,16 @@ const slugReadable = 48
 // length, so that was reachable from a config a founder could write.
 //
 // So: the readable form when it represents the handle EXACTLY, and otherwise
-// the readable prefix plus a digest of the whole handle. Distinct handles
-// cannot meet, whatever a vendor's API or a founder's YAML supplies.
+// the readable prefix plus the WHOLE SHA-256 of the whole handle, in hex. Two
+// distinct handles meet only on a SHA-256 collision — a digest can promise no
+// more than that, and a length cap on the handle would be the only way to be
+// exact, which is a bound nothing here can impose on a vendor's API or a
+// founder's YAML.
+//
+// NOT A PREFIX OF THE DIGEST. The collision this directory must never have is
+// two seats sharing one home, and a shortened digest trades that for fewer
+// characters in a path element that has room for all of them: the readable
+// prefix, a dash and 64 hex characters is 113 bytes against NAME_MAX's 255.
 func seatSlug(seat string) string {
 	seat = strings.TrimSpace(seat)
 	var b strings.Builder
@@ -163,7 +171,7 @@ func seatSlug(seat string) string {
 	if slug == "" {
 		slug = "seat"
 	}
-	return slug + "-" + hex.EncodeToString(sum[:])[:16]
+	return slug + "-" + hex.EncodeToString(sum[:])
 }
 
 // Checkout is one call's place to run, and the seat share it borrows.

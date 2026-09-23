@@ -122,8 +122,9 @@ func TestADropFreeFrameCarriesNoDroppedFieldOnTheWire(t *testing.T) {
 
 // ONE CLIENT'S COUNT IS ITS OWN. The envelope is broadcast by value, so a
 // stamp is per connection — a tab that kept up must never be told it missed
-// what another tab missed, which would send it to refetch a snapshot it
-// already has.
+// what another tab missed. The writer resyncs a connection on its own count,
+// so a shared one would also send a full snapshot to every tab whenever any
+// one of them fell behind.
 func TestTheDropCountIsPerConnection(t *testing.T) {
 	t.Parallel()
 	h := stream.NewHub()

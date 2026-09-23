@@ -398,7 +398,7 @@ func (p *Provider) completion(
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, 0, fmt.Errorf(
 			"the CLI did not answer within %s — raise cli.timeout_seconds if this model "+
-				"legitimately reasons for longer:\n%s", p.timeout, res.stderrTailText()))
+				"legitimately reasons for longer:\n%s", p.timeout, res.stderrTailText(ctx)))
 	}
 
 	// A CLIPPED ANSWER IS NOT AN ANSWER. stdout past maxOutput is dropped by
@@ -470,7 +470,7 @@ func (p *Provider) completion(
 	if res.exitCode != 0 || out.failed {
 		return nil, p.fail(llm.KindFatal, 0, fmt.Errorf(
 			"the CLI exited %d:\n%s", res.exitCode,
-			res.failureTailText(out.text)))
+			res.failureTailText(ctx, out.text)))
 	}
 	if strings.TrimSpace(res.stdout) == "" {
 		// Exit zero and nothing on stdout AT ALL — no envelope, no
@@ -482,7 +482,7 @@ func (p *Provider) completion(
 		// member, and the credential is not cooled.
 		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
 			"the %s CLI exited 0 but printed nothing at all%s",
-			p.agent, res.stderrDetailText()))
+			p.agent, res.stderrDetailText(ctx)))
 	}
 	if !out.located {
 		// THE PROFILE HAS DRIFTED FROM THE CLI. Its output parsed, and
@@ -509,7 +509,7 @@ func (p *Provider) completion(
 				"installed CLI, so nothing it printed can be read as the model's "+
 				"reply. Run `crewlet llm doctor %s` and set "+
 				"providers.llm.%s.cli.overrides.text_paths. It printed:\n%s",
-			p.agent, PathList(p.profile.TextPaths), p.key, p.key, res.stdoutTailText()))
+			p.agent, PathList(p.profile.TextPaths), p.key, p.key, res.stdoutTailText(ctx)))
 	}
 	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The CLI
 	// exited 0, reported no error, and the path this profile looks in

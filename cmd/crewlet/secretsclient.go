@@ -200,7 +200,7 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 				"one would be worse than none", path, maxSecretResponseBytes)
 	}
 	if resp.StatusCode/100 != 2 {
-		return c.refusal(resp.StatusCode, path, raw)
+		return c.refusal(resp.StatusCode, path, resp.Header.Get("Content-Type"), raw)
 	}
 	if out == nil {
 		return nil
@@ -220,13 +220,16 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 const maxSecretResponseBytes = (64 << 10) + (4 << 10)
 
 // refusal turns a status code into something an operator can act on.
-func (c *secretsClient) refusal(status int, path string, raw []byte) error {
-	var body struct {
-		Error  string `json:"error"`
-		Detail string `json:"detail"`
-		Hint   string `json:"hint"`
+func (c *secretsClient) refusal(status int, path, contentType string, raw []byte) error {
+	var body refusalBody
+	decodeRefusal(raw, &body)
+	if !body.fromNode() {
+		// SHOWN, NEVER INTERPRETED — see [refusalBody.fromNode]. An
+		// answer here can be as large as maxSecretResponseBytes, which is
+		// what [unrecognisedRefusal] bounds.
+		return fmt.Errorf("%s answered %d for %s: %s", c.base, status, path,
+			unrecognisedRefusal(contentType, raw))
 	}
-	_ = json.Unmarshal(raw, &body)
 	switch {
 	case status == http.StatusNotFound && body.Error == "not_found":
 		// THE SENTINEL, so a caller can tell "no such secret" from
@@ -235,18 +238,9 @@ func (c *secretsClient) refusal(status int, path string, raw []byte) error {
 		// mint rather than as a failure to abort on.
 		return fmt.Errorf("%w: %s", secrets.ErrNotFound,
 			strings.TrimPrefix(strings.SplitN(path, "?", 2)[0], "/secrets/"))
-	case status == http.StatusNotFound:
-		return fmt.Errorf("%s has no /secrets surface: it is running a build "+
-			"from before secrets moved onto the fleet, or it cannot reach the "+
-			"coordination store", c.base)
 	case status == http.StatusUnauthorized:
-		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
-			"api.auth.tokens", c.base, apiTokenEnv)
+		return fmt.Errorf("%s refused the bearer token for %s: set %s to one "+
+			"of its api.auth.tokens", c.base, path, apiTokenEnv)
 	}
-	msg := body.Error
-	if msg == "" {
-		msg = strings.TrimSpace(string(raw))
-	}
-	return fmt.Errorf("%s answered %d for %s: %s", c.base, status, path,
-		withRefusalDetail(msg, body.Detail, body.Hint))
+	return fmt.Errorf("%s answered %d for %s: %s", c.base, status, path, body.said())
 }

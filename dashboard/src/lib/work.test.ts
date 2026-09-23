@@ -952,3 +952,24 @@ test("a priority-ordered page says so, and borrows neither other order's words",
   // AND IT IS STILL SILENT OVER A WHOLE SET.
   expect(pageNote(3, false, "task", "priority")).toBe("");
 });
+
+// A PERSON'S OWN BLOCKS ARE READ IN THREE MORE ORDERS (`internal/tracker`'s
+// `readMyWork`): collaborating, watching and unblocked by `updated_at DESC`,
+// priorities in the list's stored order, checklist claims by task key. Each
+// block drew "the newest only" whatever it was, which names a set the reader
+// cannot see for all three.
+test("a person's own blocks name the order they were read in", () => {
+  expect(pageNote(20, true, "task", "updated")).toBe(
+    "The 20 tasks updated most recently; there are more.",
+  );
+  expect(pageNote(20, true, "task", "listed")).toBe(
+    "The first 20 tasks in the list's own order; there are more.",
+  );
+  expect(pageNote(20, true, "checklist item", "key")).toBe(
+    "The first 20 checklist items by task key; there are more.",
+  );
+  for (const slice of ["updated", "listed", "key"] as const) {
+    expect(pageNote(20, true, "task", slice)).not.toContain("newest");
+    expect(pageNote(3, false, "task", slice)).toBe("");
+  }
+});

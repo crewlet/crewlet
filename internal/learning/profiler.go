@@ -74,6 +74,17 @@ const (
 	// for its inbox. Eight covers every real conversation; past that the
 	// turn was woken by a room, not by people, and the tail speakers
 	// contributed a line each.
+	//
+	// A PARTY PAST THE BOUND IS NOT RECORDED EITHER, so its interaction
+	// count does not move for this turn. Recording it without a patch is
+	// the empty observation [Profiler.observe] refuses to write when a
+	// call fails, and for the same reason: an interaction nobody looked at
+	// would read as a counterparty whose traits have settled.
+	//
+	// The parties left out are COUNTED on `counterparty_subjects_not_profiled`,
+	// under the turn's id. What they said is not lost: every interaction
+	// rides the turn's `turn_completed` event, and the event log stores that
+	// event whole.
 	maxProfiledSubjects = 8
 )
 
@@ -143,7 +154,7 @@ func (p *Profiler) Skip(t Turn) string {
 		// for the observation to belong to.
 		return "no_observer"
 	}
-	if len(p.subjectsOf(t)) == 0 {
+	if subjects, _ := p.subjectsOf(t); len(subjects) == 0 {
 		return "no_counterparties"
 	}
 	return ""
@@ -157,7 +168,11 @@ func (p *Profiler) Skip(t Turn) string {
 // because the first party's model call timed out is a worse answer than
 // three profiles and a reported failure.
 func (p *Profiler) Reflect(ctx context.Context, t Turn) ([]events.Payload, error) {
-	subjects := p.subjectsOf(t)
+	subjects, unprofiled := p.subjectsOf(t)
+	if unprofiled > 0 {
+		log.InfoContext(ctx, "counterparty_subjects_not_profiled",
+			unprofiledLogFields(t, len(subjects), unprofiled)...)
+	}
 	out := make([]events.Payload, 0, len(subjects))
 	var failures []error
 	for _, s := range subjects {
@@ -316,20 +331,20 @@ type subjectMessages struct {
 	bodies  []string
 }
 
-// subjectsOf groups a turn's interactions by the party who sent them.
+// subjectsOf groups a turn's interactions by the party who sent them, and
+// counts the distinct parties past [maxProfiledSubjects] it left out.
 //
 // GROUPED rather than one pass per message: two messages from one person in
 // a coalesced trigger are one conversation, and profiling them separately
-// would spend two calls to ask the same question and move the interaction
-// counter — no, the counter is work-keyed, so the second would be dropped
-// and its call wasted entirely.
+// would spend two calls to ask the same question about one person.
 //
 // Order is first-spoken, so a bound that trims the tail trims the people who
 // contributed least.
-func (p *Profiler) subjectsOf(t Turn) []subjectMessages {
+func (p *Profiler) subjectsOf(t Turn) (profiled []subjectMessages, unprofiled int) {
 	var (
-		out   []subjectMessages
-		index = map[Subject]int{}
+		out     []subjectMessages
+		index   = map[Subject]int{}
+		leftOut = map[Subject]struct{}{}
 	)
 	for _, in := range t.Event.Interactions {
 		s := Subject{
@@ -355,12 +370,32 @@ func (p *Profiler) subjectsOf(t Turn) []subjectMessages {
 			continue
 		}
 		if len(out) >= p.maxSubjects {
+			leftOut[s] = struct{}{}
 			continue
 		}
 		index[s] = len(out)
 		out = append(out, subjectMessages{subject: s, bodies: []string{in.Body}})
 	}
-	return out
+	return out, len(leftOut)
+}
+
+// unprofiledLogFields is the `counterparty_subjects_not_profiled` line, as
+// values.
+//
+// A FUNCTION so the line's one promise can be held by a test: it names the
+// TURN, because the turn's `turn_completed` event is where the parties it
+// counts, and everything they said, can still be read.
+func unprofiledLogFields(t Turn, profiled, unprofiled int) []any {
+	return []any{
+		"observer", t.Event.AgentHandle,
+		"turn_id", t.Event.TurnID,
+		"profiled", profiled,
+		"not_profiled", unprofiled,
+		"max", maxProfiledSubjects,
+		"detail", "these parties were neither profiled nor counted as an " +
+			"interaction for this turn; their messages are on this turn's " +
+			"turn_completed event",
+	}
 }
 
 // scalarTraits keeps the flat, scalar half of what a model answered.

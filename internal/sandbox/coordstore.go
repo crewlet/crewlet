@@ -125,8 +125,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// reply arriving now belongs to the new job, not the old one.
 		existing.Question, existing.Audience = "", ""
 		// NOR ARE THE PREVIOUS JOB'S TOOL CALLS THIS JOB'S. The bridged
-		// log is the whole record an agent-mode resume rebuilds its phase
-		// from, and a second executor round under the same turn id — what
+		// log is what an agent-mode resume rebuilds its phase from (all it
+		// has, though not always every call — see [MaxBridgeCalls]),
+		// and a second executor round under the same turn id — what
 		// a reviewer's self_iterate produces — would otherwise replay the
 		// FIRST round's submit_work: a round that in fact submitted
 		// nothing would report the previous round's outcome instead of
@@ -332,8 +333,8 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, call B
 //
 // The start and the end are what explain a run — how it set about the work and
 // how it finished — so a log truncated to its last N loses the half a reader
-// most often needs. The count of what was dropped rides along, because a log
-// that silently skips is a log that lies about what the run did.
+// most often needs. The count of what was dropped rides along on the row; see
+// [MaxBridgeCalls] for which reader shows it and which does not.
 func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int) {
 	calls = append(calls, next)
 	if len(calls) <= MaxBridgeCalls {

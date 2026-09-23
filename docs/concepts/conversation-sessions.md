@@ -156,8 +156,10 @@ besides. A turn-keyed row would *record* each of those instead of collapsing
 them, and the next turn would read its own reply twice.
 
 The row still **carries** the run id beside the key, because that is what it
-renders: the seat reads "(turn a1b2c3d4)" back on its next turn of the thread,
-and that has to name an execution somebody can open.
+renders: the seat reads "(turn a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d)" back on
+its next turn of the thread — the **whole** id, never a prefix of it, because
+that has to name an execution somebody can open, and a prefix matches nothing
+anybody can look up.
 
 The dedupe index is **partial**, over `work_key <> ''`: an empty work key is
 the documented "a turn with no ledgerable trigger", and those turns are
@@ -226,10 +228,17 @@ things bound that product, and which one applies where is the whole design:
 
 - **`max_entries`, at write time** — how many turns of a conversation are kept
   at all. A chat DM keys on the whole channel, so its ledger never stops
-  receiving entries.
+  receiving entries. What the trim deletes is **counted**, not lost from
+  sight: every entry is stamped with its `ordinal` — its place in the whole
+  conversation, 1 for the first turn — so the oldest entry that survives says
+  how many came before it, and the block tells the seat they are not shown
+  and to re-read the thread itself for them. The retention sweep's deletions
+  are counted the same way. An entry written before ordinals existed carries
+  none and claims nothing either way.
 - **`ledger.InjectedMaxChars` (24 000 bytes), at render time** — how much
   reaches one prompt. It drops **whole entries**, oldest first, and says how
-  many it dropped; the newest always survives however long it is. An entry
+  many it dropped — one count, summed with the turns the trim and the sweep
+  already took; the newest always survives however long it is. An entry
   carries the seat's own reply, which is unbounded — a turn that produced a
   document puts that document in the row — so without this a busy conversation
   eventually exceeds the model's context and the turn cannot run at all.
@@ -305,9 +314,11 @@ the pre-ledger prompt) and logs that it could not read it. Swallowing it in the
 store would make "unreadable" and "nothing said yet" one answer, and a seat
 would run without its history with nothing anywhere to say why.
 
-The ledger lives in the store of the node running the seat, which every node
-opens, so it is never replicated: a seat that moves between nodes simply arrives
-with no history, which is the same fail-open answer.
+The ledger lives in the store of the node running the seat, and it rides the
+seat's [memory changelog](seat-ownership.md#a-seats-memory-follows-it) with the
+rest of what the seat has learned, so a seat that moves between nodes arrives
+with its history. Each row travels whole, the `ordinal` it was stamped with
+included.
 
 ---
 

@@ -28,6 +28,7 @@ import {
   oldestFirst,
   parseUTC,
   plural,
+  shortId,
   relTime,
   splitConversationKey,
   tsKey,
@@ -297,6 +298,22 @@ describe("how far back the log goes", () => {
       expect(eventHistoryLabel(absent)).toBe(
         "this engine did not report how far back the log goes",
       );
+    }
+  });
+});
+
+describe("a shortened id says it is one", () => {
+  // A revision drawn as eight bare characters on one screen and ten on the next
+  // read as two ids, and neither said it was not the whole of one.
+  test("a uuid is cut to its first group and marked", () => {
+    expect(shortId("6dd4b0df-f455-448e-80e9-0a1b2c3d4e5f")).toBe("6dd4b0df…");
+  });
+
+  test("anything that is not a uuid is its own short form", () => {
+    // A key, a handle, a name — and a hyphenated name above all, which the
+    // audit screen's own helper used to cut at eight characters as well.
+    for (const id of ["ENG-42", "agent-cto", "tag-set-marketing", ""]) {
+      expect(shortId(id), id).toBe(id);
     }
   });
 });

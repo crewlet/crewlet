@@ -58,6 +58,11 @@ const (
 	// handful of rounds, and the early ones are the part that worked. The
 	// whole log of a 20-round Execute would also be the largest thing in a
 	// prompt whose point is being cheap.
+	//
+	// The heading says it is a window ("last 12 of 20"), so the judge does
+	// not read the tail as the whole. The WHOLE log is the phase's own
+	// record: every call it ran is published on its agent_phase_completed
+	// event as `tool_executions`, extensions included.
 	judgeCallsShown = 12
 
 	// judgeTaskShown bounds the turn's ask in the prompt.
@@ -174,6 +179,20 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 		Model:        completion.Model,
 		InputTokens:  completion.InputTokens,
 		OutputTokens: completion.OutputTokens,
+	}
+	if completion.Truncated() {
+		// A VERDICT CUT AT THE CAP IS NOT A VERDICT. The first line can
+		// still parse while the reason under it stops mid-sentence — and
+		// the reason is what the phase is told when it is granted rounds.
+		// Refused rather than half-read, so the policy rescues exactly as
+		// it does for a judge that answered nothing; the answer is logged
+		// whole at debug for the reason the unparsed one below is.
+		log.DebugContext(ctx, "extension_judge_truncated", "model", j.key,
+			"answer", completion.Content,
+			"output_tokens", completion.OutputTokens)
+		return spent, fmt.Errorf("extension: judge %s stopped at its output cap "+
+			"of %d tokens before finishing its answer: %w",
+			j.key, JudgeMaxTokens, ErrNoVerdict)
 	}
 	decision, err := ParseVerdict(completion.Content)
 	if err != nil {
@@ -294,6 +313,9 @@ func renderJudgeRequest(req Request) string {
 // and drops whole KEYS shortest-first with a "+N more", which keeps the
 // identifiers and bounds the line, and it is now the only implementation of
 // that rule in the tree.
+//
+// Each call's arguments and result are whole on the record [judgeCallsShown]
+// names, which publishes both for every call.
 func renderJudgeCall(n int, c ledger.Call) string {
 	line := fmt.Sprintf("%d. %s(%s)", n, c.Name,
 		collapseSpace(ledger.RenderArgs(c.Args, judgeArgs)))

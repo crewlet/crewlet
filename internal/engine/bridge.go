@@ -18,7 +18,8 @@ import (
 // the node that started it. So each one is appended to the run's own row in
 // the coordination store, which is the same row the resume reads — and without
 // it a restart mid-run leaves the reviewer judging a turn whose entire tool log
-// is gone, which the delivery check reads as a turn that acted on nothing.
+// is gone, which the delivery check reads as a turn that acted on nothing. The
+// row does not always keep every call: see [sandbox.MaxBridgeCalls].
 
 // bridgedCalls turns a run's durable bridged-call log into the ledger shape
 // the resumed phase reads.
@@ -26,9 +27,12 @@ import (
 // THE ONLY RECORD AN AGENT-MODE RESUME HAS. The process collecting a run may
 // not be the one that launched it, so its tool surface is fresh and has
 // executed nothing: the delivery check, the submission's citations and the
-// iteration ledger all read this list. A call whose arguments cannot be
-// decoded keeps its name and loses its arguments, which renders one ledger
-// line worse — failing the resume over it would lose the whole turn.
+// iteration ledger all read this list. It is what the row kept, which is not
+// always every call (see [sandbox.MaxBridgeCalls]), and the count of the calls
+// the row dropped ([sandbox.PendingRun.BridgeCallsElided]) is not passed on —
+// so each of those readers takes this list as the whole run. A call whose arguments
+// cannot be decoded keeps its name and loses its arguments, which renders one
+// ledger line worse — failing the resume over it would lose the whole turn.
 func bridgedCalls(logged []sandbox.BridgeCall) []ledger.Call {
 	out := make([]ledger.Call, 0, len(logged))
 	for _, call := range logged {

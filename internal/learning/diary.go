@@ -87,8 +87,7 @@ type DiaryEntry struct {
 	Metadata map[string]any
 
 	// RetrievalCount and LastRetrievedAt are how often the entry has been
-	// recalled. They are what lets a compaction pass tell a memory that
-	// keeps proving useful from one written once and never read.
+	// recalled, and when it last was, as [Diary.MarkRetrieved] records them.
 	RetrievalCount  int
 	LastRetrievedAt time.Time
 
@@ -166,6 +165,14 @@ func NewDiary(db *store.DB, opts ...DiaryOption) *Diary {
 }
 
 // Write records one observation.
+//
+// A DURABLE NOTE IS REFUSED, NOT MADE ROOM FOR, once the seat already keeps
+// [DiaryLongCap] of them: the answer is a [*DiaryFullError] naming the cap,
+// and nothing the seat holds is touched. See [DiaryLongCap] for why a refusal
+// rather than an eviction.
+//
+// Writing an id that is already stored is a no-op that reports success, at
+// the cap as below it: that write is a replay of one that already landed.
 func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 	switch {
 	case e.ID == "" || e.AgentID == "":
@@ -184,6 +191,17 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 		return fmt.Errorf("learning: a %q entry needs a deadline", DiaryShort)
 	case e.Kind == DiaryLong && !e.TTLUntil.IsZero():
 		return fmt.Errorf("learning: a %q entry must not carry a deadline", DiaryLong)
+	}
+
+	// THE CAP IS READ TWICE, and only the second read decides. This one is
+	// here so a note that is going to be refused does not spend an
+	// embeddings call first; the one inside the insert's transaction is the
+	// rule, because the embedding call below sits between the two and
+	// another writer for the same seat can land in that gap.
+	if e.Kind == DiaryLong {
+		if err := refuseWhenFull(ctx, d.db.SQL(), e); err != nil {
+			return err
+		}
 	}
 
 	// THE VECTOR IS MADE HERE, before anything is encoded, and only when the
@@ -209,15 +227,78 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 			blob = packed
 		}
 	}
-	if _, err := d.db.SQL().ExecContext(ctx, `
-		INSERT INTO agent_diary (id, agent_id, kind, content, ttl_until, source,
-			turn_id, metadata, retrieval_count, last_retrieved_at, embedding, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
-		ON CONFLICT (id) DO NOTHING`,
-		e.ID, e.AgentID, string(e.Kind), e.Content, store.NullTime(e.TTLUntil),
-		e.Source, e.TurnID, jsonObject(e.Metadata), blob, store.EncodeTime(e.CreatedAt),
-	); err != nil {
+	// ONE TRANSACTION for the count and the insert. [store.DB.Tx] takes the
+	// file's write lock at BEGIN, so no other write can land between the
+	// two, and the count this refuses on is the count the insert lands
+	// against.
+	err := d.db.Tx(ctx, func(tx *sql.Tx) error {
+		if e.Kind == DiaryLong {
+			if refused := refuseWhenFull(ctx, tx, e); refused != nil {
+				return refused
+			}
+		}
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO agent_diary (id, agent_id, kind, content, ttl_until, source,
+				turn_id, metadata, retrieval_count, last_retrieved_at, embedding, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+			ON CONFLICT (id) DO NOTHING`,
+			e.ID, e.AgentID, string(e.Kind), e.Content, store.NullTime(e.TTLUntil),
+			e.Source, e.TurnID, jsonObject(e.Metadata), blob, store.EncodeTime(e.CreatedAt))
+		return err
+	})
+	var full *DiaryFullError
+	switch {
+	case errors.As(err, &full):
+		return err
+	case err != nil:
 		return fmt.Errorf("learning: write diary entry %s: %w", e.ID, err)
+	}
+	return nil
+}
+
+// DiaryFullError is a durable note refused because its seat already keeps
+// [DiaryLongCap] of them.
+//
+// Its text is what a seat reads: the `reflect_and_persist` builtin puts a
+// failed write's error text in front of the model, so the message says what
+// happened to the note and where else a fact can go.
+type DiaryFullError struct {
+	// AgentID is the seat, as the derived id the diary is keyed on.
+	AgentID string
+	// Held is how many durable notes the seat keeps. It can exceed the cap:
+	// see [DiaryLongCap] for the one way a seat gets there.
+	Held int
+}
+
+func (e *DiaryFullError) Error() string {
+	return fmt.Sprintf("learning: this seat already keeps %d durable notes and %d "+
+		"(learning.DiaryLongCap) is the most one seat may keep, so this note was not "+
+		"kept, and none of the notes already kept was dropped to make room for it. "+
+		"Every durable note is refused the same way while the seat keeps %d or more. "+
+		"A fact your colleagues need as well belongs in the knowledge base",
+		e.Held, DiaryLongCap, DiaryLongCap)
+}
+
+// refuseWhenFull answers a [*DiaryFullError] when the seat already keeps
+// [DiaryLongCap] durable notes and e is not one of them.
+//
+// THE ID IS ASKED FIRST, so a replay of a note that already landed is not
+// refused: the insert would have done nothing with it, and a refusal would
+// tell the writer that a note it holds was never kept.
+func refuseWhenFull(ctx context.Context, q interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}, e DiaryEntry,
+) error {
+	var stored, held int
+	if err := q.QueryRowContext(ctx, `
+		SELECT
+			(SELECT count(*) FROM agent_diary WHERE id = ?),
+			(SELECT count(*) FROM agent_diary WHERE agent_id = ? AND kind = 'diary_long')`,
+		e.ID, e.AgentID).Scan(&stored, &held); err != nil {
+		return fmt.Errorf("learning: count %s's durable diary notes: %w", e.AgentID, err)
+	}
+	if stored == 0 && held >= DiaryLongCap {
+		return &DiaryFullError{AgentID: e.AgentID, Held: held}
 	}
 	return nil
 }
@@ -457,7 +538,7 @@ func (d *Diary) MarkRetrieved(ctx context.Context, ids []string, at time.Time) {
 	}
 }
 
-// DiaryLongCap is how many durable entries one seat keeps.
+// DiaryLongCap is how many durable entries one seat may keep.
 //
 // A CAP RATHER THAN A HORIZON, because a diary_long row is a fact the agent
 // deliberately marked durable — "the release train is Thursdays", "this
@@ -472,58 +553,40 @@ func (d *Diary) MarkRetrieved(ctx context.Context, ids []string, at time.Time) {
 // seat holding five hundred durable facts about its own work is already far
 // past what a person would.
 //
-// So the bound is on WORTH rather than on age: see [Diary.TrimLong] for what
-// is dropped when a seat exceeds it.
+// ENFORCED AT THE WRITE, BY REFUSAL: [Diary.Write] answers the next durable
+// note with a [*DiaryFullError] naming this cap. Refused rather than made room
+// for, because making room means deleting a fact the seat chose to keep
+// without the seat ever being told, so it goes on acting as if it still knew
+// it. A refusal is said to whoever is writing, while the note is still in
+// their hands.
+//
+// A REFUSAL DOES NOT LIFT. Nothing in this build deletes a durable note —
+// [Diary.Expire] deletes only notes with a deadline, [Diary.Write] refuses a
+// durable note that carries one, and [Diary.TrimLong] deletes nothing — so a
+// seat that reaches the cap has every later durable note refused from then on.
+//
+// A SEAT CAN HOLD MORE, by one route: memsync's hydration writes a seat's rows
+// into this table directly rather than through [Diary.Write], so rows two
+// nodes each wrote before either had the other's can meet on one node. Such a
+// seat stays over the cap, and its durable notes are refused as at the cap.
 const DiaryLongCap = 500
 
-// TrimLong drops a seat's least-useful durable entries once it holds more
-// than cap of them, and reports how many went.
+// TrimLong deletes nothing, and reports that it deleted nothing, whatever cap
+// it is handed.
 //
-// EVICTED BY USE, NOT BY AGE. The order is retrieval count, then how recently
-// it was retrieved, then age — so what goes is what has never once been
-// recalled and has been sitting there longest, and a fact the seat reaches
-// for every week survives being old. An entry that has never been retrieved
-// is not necessarily worthless, but among five hundred it is the best
-// available guess at which one is.
+// NO SWEEP DROPS A DURABLE NOTE, for two reasons. The seat is never told: a
+// sweep runs outside every turn, so a note dropped here is a fact the seat
+// chose to keep and goes on acting as if it still knew — the eviction
+// [DiaryLongCap] refuses to make at the write. And it would not stay dropped:
+// memsync carries a seat's rows between nodes and carries no deletes, so a
+// node that hydrates the seat again inserts a dropped row again. A seat over
+// the cap therefore stays over it, which costs its recall scan the rows past
+// the cap and costs the seat nothing it knows.
 //
-// One statement per agent partition via a window function, so a fleet of
-// seats is trimmed without a query per seat.
-func (d *Diary) TrimLong(ctx context.Context, cap int) (int64, error) {
-	if cap <= 0 {
-		cap = DiaryLongCap
-	}
-	// COUNTED SEPARATELY, then deleted. RowsAffected is not usable on this
-	// statement: measured against the pinned driver, a delete whose
-	// subquery visits 12 rows and removes 6 reports 30. The count is what
-	// the sweep logs and what an operator reads, so it has to be the real
-	// number rather than whatever the driver totalled.
-	var over int64
-	if err := d.db.SQL().QueryRowContext(ctx, trimLongCountSQL, cap).Scan(&over); err != nil {
-		return 0, fmt.Errorf("learning: count trimmable diary entries: %w", err)
-	}
-	if over == 0 {
-		return 0, nil
-	}
-	if _, err := d.db.SQL().ExecContext(ctx, trimLongDeleteSQL, cap); err != nil {
-		return 0, fmt.Errorf("learning: trim diary: %w", err)
-	}
-	return over, nil
-}
-
-// rankedLongEntries ranks each seat's durable entries by worth, best first.
-// Shared by the count and the delete so the two can never disagree about
-// which rows are over the cap.
-const rankedLongEntries = `
-	SELECT id, ROW_NUMBER() OVER (
-		PARTITION BY agent_id
-		ORDER BY retrieval_count DESC, last_retrieved_at DESC, created_at DESC
-	) AS rank
-	FROM agent_diary WHERE kind = 'diary_long'`
-
-const trimLongCountSQL = `SELECT count(*) FROM (` + rankedLongEntries + `) WHERE rank > ?`
-
-const trimLongDeleteSQL = `DELETE FROM agent_diary WHERE id IN (
-	SELECT id FROM (` + rankedLongEntries + `) WHERE rank > ?)`
+// IT STAYS ONLY FOR ITS CALLER: internal/maintenance's `agent_diary_long` job
+// calls it through that package's own DiaryStore seam, and deleting that job
+// and this method is one change across the two packages.
+func (d *Diary) TrimLong(context.Context, int) (int64, error) { return 0, nil }
 
 // Expire deletes short entries whose deadline has passed.
 func (d *Diary) Expire(ctx context.Context, now time.Time) (int64, error) {

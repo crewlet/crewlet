@@ -107,8 +107,8 @@ type TaskDetail struct {
 	Comments []Comment      `json:"comments,omitempty"`
 	History  []HistoryEntry `json:"history,omitempty"`
 
-	// CommentsCursor pages the thread, and is empty when this page is the
-	// whole of it.
+	// CommentsCursor pages the thread toward its oldest comment, and is
+	// empty when this page reaches it.
 	//
 	// PRESENT RATHER THAN A COUNT, because the caller's question is "is
 	// there more" and the answer that lets them act is the cursor itself —
@@ -466,6 +466,10 @@ const CommentBodyShown = 2 << 10
 func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 	[]Comment, string, error) {
 
+	resume, err := parseCommentCursor(cursor)
+	if err != nil {
+		return nil, "", err
+	}
 	// ONE MORE THAN THE PAGE, which is how the cursor knows whether there
 	// IS a next page without a second count over a table that grows for
 	// the life of the task.
@@ -473,14 +477,14 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 		SELECT document, created_at, id FROM tracker_comments
 		WHERE task_id = ? AND (? = '' OR (created_at, id) < (?, ?))
 		ORDER BY created_at DESC, id DESC
-		LIMIT ?`, taskID, cursor, cursorAt(cursor), cursorID(cursor),
-		DetailComments+1)
+		LIMIT ?`, taskID, cursor, resume.at, resume.id, DetailComments+1)
 	if err != nil {
 		return nil, "", fmt.Errorf("tracker: read the thread on %s: %w", taskID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var (
 		out  []Comment
+		last commentCursor
 		next string
 	)
 	for rows.Next() {
@@ -491,10 +495,14 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 			return nil, "", err
 		}
 		if len(out) == DetailComments {
-			// THE EXTRA ROW IS THE CURSOR, not a result: it is the
-			// first comment of the NEXT page, and naming it is
-			// cheaper than counting what is left.
-			next = formatCommentCursor(at, id)
+			// THE EXTRA ROW IS EVIDENCE, NEVER THE CURSOR. It says a
+			// next page exists; the cursor names the last comment
+			// this page RETURNED, because the next page's predicate
+			// is strictly older than the cursor. A cursor naming the
+			// probe row would exclude it from both pages — this one
+			// stops before it and the next starts strictly below it —
+			// losing one comment at every page boundary.
+			next = formatCommentCursor(last.at, last.id)
 			break
 		}
 		var comment Comment
@@ -507,6 +515,7 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string) (
 		// elision is what makes twenty of them fit an answer at all.
 		comment.Body = elideCommentBody(comment.Body)
 		out = append(out, comment)
+		last = commentCursor{at: at, id: id}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", err
@@ -559,22 +568,39 @@ func readComment(ctx context.Context, tx *sql.Tx, taskID, commentID string) ([]C
 	return []Comment{comment}, nil
 }
 
-// The comment cursor is the pair the page is ordered by, because an instant
-// alone is not unique: two comments share a created_at routinely, and a cursor
-// that compared one would skip whichever the page boundary fell between.
+// commentCursor is where a thread page resumes: the (created_at, id) of the
+// last comment the previous page returned.
+//
+// The PAIR the page is ordered by, because an instant alone is not unique: two
+// comments share a created_at routinely, and a cursor that compared one would
+// skip whichever the page boundary fell between.
+type commentCursor struct {
+	at int64
+	id string
+}
+
 func formatCommentCursor(at int64, id string) string {
 	return strconv.FormatInt(at, 10) + ":" + id
 }
 
-func cursorAt(cursor string) int64 {
-	at, _, _ := strings.Cut(cursor, ":")
-	n, _ := strconv.ParseInt(at, 10, 64)
-	return n
-}
-
-func cursorID(cursor string) string {
-	_, id, _ := strings.Cut(cursor, ":")
-	return id
+// parseCommentCursor decodes a `comments_cursor`, and REFUSES one it cannot.
+//
+// Empty is the newest page. Anything else must be what [formatCommentCursor]
+// minted, because the page predicate is `(created_at, id) < cursor` and a
+// cursor read as zero matches nothing: a mistyped one would answer an empty
+// page, which reads exactly like a thread with no older comments.
+func parseCommentCursor(cursor string) (commentCursor, error) {
+	if cursor == "" {
+		return commentCursor{}, nil
+	}
+	at, id, found := strings.Cut(cursor, ":")
+	n, err := strconv.ParseInt(at, 10, 64)
+	if !found || err != nil || id == "" {
+		return commentCursor{}, fmt.Errorf("tracker: %q is not a "+
+			"comments_cursor a thread page minted — pass the `comments_cursor` "+
+			"a previous read returned, or none for the newest page", cursor)
+	}
+	return commentCursor{at: n, id: id}, nil
 }
 
 // readHistory is the activity feed, NEWEST FIRST and capped, and it SAYS when

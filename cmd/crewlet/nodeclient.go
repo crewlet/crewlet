@@ -158,62 +158,70 @@ func (c *nodeClient) do(ctx context.Context, method, path string, into any) erro
 	// as malformed JSON and be reported as "not the expected JSON", which
 	// sends the reader looking for a protocol fault that is not there.
 	//
-	// The read error is no longer discarded either: a connection that died
-	// mid-body is a different fact from a short answer.
+	// A read error is its own report: a connection that died mid-body is a
+	// different fact from a short answer.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxNodeResponseBytes+1))
 	if err != nil {
-		return fmt.Errorf("reading the node's answer to %s: %w", path, err)
+		return fmt.Errorf("reading the answer from %s to %s %s: %w", c.base, method, path, err)
 	}
 	if len(body) > maxNodeResponseBytes {
 		return fmt.Errorf(
-			"the node's answer to %s exceeded %d bytes, so it was not read: this "+
-				"build caps one answer to bound a proxy's error page. Check that "+
-				"-url names the engine rather than something in front of it",
-			path, maxNodeResponseBytes)
+			"the answer from %s to %s %s exceeded %d bytes, so it was not read: "+
+				"this build caps one answer to bound a proxy's error page. Check "+
+				"that -url names the engine rather than something in front of it",
+			c.base, method, path, maxNodeResponseBytes)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nodeError(resp.StatusCode, body, c.token != "")
+		return c.refusal(method, path, resp.StatusCode, resp.Header.Get("Content-Type"), body)
 	}
 	if into == nil {
 		return nil
 	}
 	if err := json.Unmarshal(body, into); err != nil {
-		return fmt.Errorf("the node's answer was not the expected JSON: %w", err)
+		return fmt.Errorf("the answer from %s to %s %s was not the expected JSON: %w",
+			c.base, method, path, err)
 	}
 	return nil
 }
 
-// nodeError turns a non-200 into something an operator can act on.
-func nodeError(status int, body []byte, sentToken bool) error {
-	var payload struct {
-		Error  string `json:"error"`
-		Detail string `json:"detail"`
-		Hint   string `json:"hint"`
+// refusal turns a non-200 into something an operator can act on.
+//
+// EVERY MESSAGE NAMES THE ADDRESS AND THE ROUTE. The address was resolved
+// from -url or from the config's api block, so the operator holding the error
+// may never have typed it, and a refusal that does not say which machine
+// refused which request cannot be followed up.
+func (c *nodeClient) refusal(method, path string, status int, contentType string, raw []byte) error {
+	var body refusalBody
+	decodeRefusal(raw, &body)
+	if !body.fromNode() {
+		// SHOWN, NEVER INTERPRETED — see [refusalBody.fromNode]. An
+		// answer here can be as large as maxNodeResponseBytes, which is
+		// what [unrecognisedRefusal] bounds.
+		return fmt.Errorf("%s answered %d for %s %s: %s", c.base, status, method, path,
+			unrecognisedRefusal(contentType, raw))
 	}
-	_ = json.Unmarshal(body, &payload)
 	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden:
-		if !sentToken {
-			return errors.New("the node refused the request and no token was sent: " +
-				"export " + apiTokenEnv + ", or pass -token")
+	case http.StatusUnauthorized:
+		// 401 ALONE, because it is the status the node refuses a token
+		// with: the API guard's `invalid_token`, and a query's
+		// `unauthorized` when no operator came with the call. A 403 from
+		// these routes is the purge's `operator_required`, whose detail
+		// says what is actually missing — so it takes the default arm
+		// rather than a sentence about the token.
+		if c.token == "" {
+			return fmt.Errorf("%s refused %s %s and no token was sent: export %s, "+
+				"or pass -token", c.base, method, path, apiTokenEnv)
 		}
-		return errors.New("the node refused the token: check it against the " +
-			"api.auth.tokens entry you meant to use")
+		return fmt.Errorf("%s refused the token for %s %s: check it against the "+
+			"api.auth.tokens entry you meant to use", c.base, method, path)
 	case http.StatusServiceUnavailable:
-		// TWO DIFFERENT FACTS on this surface, and the guess below is
-		// only one of them: a node built without the backend a route
-		// needs, and a node DRAINING for a shutdown. The body says
-		// which, so the guess is a fallback rather than the answer, and
-		// the detail and hint beside it are what say where to go
-		// instead — "draining" on its own names what happened and not
-		// what to do about it.
-		return fmt.Errorf("this node cannot serve that: %s", withRefusalDetail(
-			firstNonEmpty(payload.Error,
-				"it is running without the backend the route needs"),
-			payload.Detail, payload.Hint))
+		// The node's own 503 says why in its code — `draining` for a
+		// shutdown, `unavailable` for a read it cannot serve yet,
+		// `no_tracker` for a build with no tracker — and the detail and
+		// hint beside it are what say where to go instead: "draining" on
+		// its own names what happened and not what to do about it.
+		return fmt.Errorf("%s cannot serve %s %s: %s", c.base, method, path, body.said())
 	default:
-		return fmt.Errorf("the node answered %d: %s", status,
-			withRefusalDetail(firstNonEmpty(payload.Error, string(body)),
-				payload.Detail, payload.Hint))
+		return fmt.Errorf("%s answered %d for %s %s: %s", c.base, status, method, path, body.said())
 	}
 }

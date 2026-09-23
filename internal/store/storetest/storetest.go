@@ -15,6 +15,7 @@
 package storetest
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,6 +55,7 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"TurnClosingAnswersTheEndAOneEndedReadLoses", testTurnClosing},
 		{"ListReadsAreNeverNil", testListReadsAreNeverNil},
 		{"ByID", testByID},
+		{"ByKeyReadsTheRowAListingNamedWhenItsIDIsShared", testByKey},
 		{"ReadFloor", testReadFloor},
 		{"RetentionSweep", testRetention},
 		{"RetentionSweepDrainsABacklogWiderThanOneBatch", testRetentionBacklog},
@@ -74,6 +76,7 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ActivatingAMissingRevisionChangesNothing", testActivatingAMissingRevisionChangesNothing},
 		{"PayloadRoundTrips", testPayloadRoundTrips},
 		{"RevisionsListInInsertionOrder", testRevisionsListInInsertionOrder},
+		{"ARevisionPageSaysWhetherTheHistoryHoldsMore", testARevisionPageSaysWhetherTheHistoryHoldsMore},
 		// NOT HERE: the token counter. It is fleet state now, certified
 		// by coordtest against both coordination backends — a counter
 		// this node kept privately was the whole defect (migration
@@ -491,6 +494,68 @@ func testTraceCap(t *testing.T, db *store.DB) {
 	if got[0].ID != "s"+fourDigits(0) {
 		t.Fatalf("trace starts at %q; the cap must keep the ROOT, not the tail", got[0].ID)
 	}
+
+	// WHETHER IT WAS CUT is the count's answer, and it disagrees with the
+	// page length on exactly this case.
+	total, err := log.TraceEventCount(t.Context(), "tr-long")
+	if err != nil {
+		t.Fatalf("trace count: %v", err)
+	}
+	if total != over {
+		t.Fatalf("the trace counts %d rows, want %d", total, over)
+	}
+
+	// AND THE ROWS PAST THE CAP ARE WHERE [store.EventLog.Trace] SAYS: the
+	// listing over the same trace id, newest first, walked by its cursor down
+	// to the last row the capped read returned. Followed here rather than
+	// asserted in prose, because a recovery route nobody walks is a claim.
+	//
+	// A row of ANOTHER trace, newer than all of them, so the walk has
+	// something to leave out: without it a listing that ignored the trace
+	// id would pass.
+	write(t, log, store.EventRecord{
+		ID: "other", Type: "task_assigned", Source: "pm", Category: "task",
+		Time: base.Add(time.Hour), TraceID: "tr-other",
+	})
+	capEdge := got[len(got)-1]
+	var rest []string
+	for _, rec := range walkList(t, log, store.ListQuery{TraceID: "tr-long", Limit: 7}) {
+		// The ROW, matched on the table's key: the id alone is not unique.
+		if rec.Time.Equal(capEdge.Time) && rec.ID == capEdge.ID {
+			break
+		}
+		rest = append(rest, rec.ID)
+	}
+	slices.Reverse(rest)
+	var want []string
+	for i := store.MaxTraceEvents; i < over; i++ {
+		want = append(want, "s"+fourDigits(i))
+	}
+	if !slices.Equal(rest, want) {
+		t.Fatalf("the listing walked to the cap's edge returned %v, want exactly the %d "+
+			"rows the capped read stopped short of: %v", rest, over-store.MaxTraceEvents, want)
+	}
+}
+
+// walkList pages a listing to its end, newest first, the way a caller does:
+// each page's last row is the next page's cursor, and an empty page ends it.
+func walkList(t *testing.T, log *store.EventLog, q store.ListQuery) []store.EventRecord {
+	t.Helper()
+	var out []store.EventRecord
+	for range 10_000 {
+		page, err := log.List(t.Context(), q)
+		if err != nil {
+			t.Fatalf("list %+v: %v", q, err)
+		}
+		if len(page) == 0 {
+			return out
+		}
+		out = append(out, page...)
+		last := page[len(page)-1]
+		q.Before = &store.Cursor{Time: last.Time, ID: last.ID}
+	}
+	t.Fatalf("the listing did not end in 10000 pages")
+	return nil
 }
 
 // testTurnClosing: a turn read is capped and ordered OLDEST first, so what a
@@ -542,6 +607,68 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 		t.Errorf("closing starts at %q; the rows are not oldest-first among "+
 			"themselves", got[0].ID)
 	}
+	// AND THE MIDDLE NEITHER READ RETURNS IS WHERE [store.EventLog.Turn]
+	// SAYS: the listing over the same turn id, walked by its cursor, with
+	// each row read whole by its key. Followed rather than asserted, because
+	// a recovery route nobody walks is a claim.
+	//
+	// A row of ANOTHER turn, newer than all of them, so the walk has
+	// something to leave out: without it a listing that ignored the turn id
+	// would pass.
+	write(t, log, store.EventRecord{
+		ID: "other", Type: "agent_phase_completed", Source: "pm", Category: "lifecycle",
+		Time: base.Add(time.Hour), Payload: []byte(`{"turn_id":"tn-other"}`),
+	})
+	// And a row of another turn carrying the SAME ID as the first middle row,
+	// newer than it. The primary key is (time, id), so the log holds both —
+	// and a read by the id alone answers this one, not the row the walk found.
+	firstMiddle := "c" + fourDigits(store.MaxTurnEvents)
+	write(t, log, store.EventRecord{
+		ID: firstMiddle, Type: "agent_phase_completed", Source: "pm", Category: "lifecycle",
+		Time: base.Add(2 * time.Hour), Payload: []byte(`{"turn_id":"tn-shares-an-id"}`),
+	})
+	// Held rows keyed on the table's key, in the column's own microseconds.
+	type rowKey struct {
+		at int64
+		id string
+	}
+	held := map[rowKey]bool{}
+	for _, rec := range append(slices.Clone(head), got...) {
+		held[rowKey{rec.Time.UnixMicro(), rec.ID}] = true
+	}
+	var middle []store.EventRecord
+	for _, rec := range walkList(t, log, store.ListQuery{TurnID: "tn-long", Limit: 3}) {
+		if !held[rowKey{rec.Time.UnixMicro(), rec.ID}] {
+			middle = append(middle, rec)
+		}
+	}
+	slices.Reverse(middle)
+	var wantMiddle []string
+	for i := store.MaxTurnEvents; i < over-5; i++ {
+		wantMiddle = append(wantMiddle, "c"+fourDigits(i))
+	}
+	if !slices.Equal(ids(middle), wantMiddle) {
+		t.Fatalf("the listing reached %v past the two reads, want exactly the middle %v",
+			ids(middle), wantMiddle)
+	}
+	if byID, err := log.ByID(t.Context(), firstMiddle); err != nil {
+		t.Fatalf("read the shared id: %v", err)
+	} else if byID.Time.Equal(middle[0].Time) {
+		t.Fatal("a read by the id alone answered the middle row, so this case is " +
+			"not exercising a shared id at all")
+	}
+	whole, err := log.ByKey(t.Context(), middle[0].Time, middle[0].ID)
+	if err != nil {
+		t.Fatalf("read a middle row by its key: %v", err)
+	}
+	if !whole.Time.Equal(middle[0].Time) || whole.ID != middle[0].ID {
+		t.Fatalf("the middle row read by its key is %s at %s, want %s at %s",
+			whole.ID, whole.Time, middle[0].ID, middle[0].Time)
+	}
+	if !bytes.Contains(whole.Payload, []byte(`"tn-long"`)) {
+		t.Errorf("the middle row %s read by its key carries %s, want the tn-long "+
+			"row's own payload", middle[0].ID, whole.Payload)
+	}
 	// THE PAYLOAD RIDES ALONG. Without it the recovered ending is a row with
 	// no outcome, no duration and no summary on it — which is every field the
 	// recovery exists for.
@@ -581,6 +708,11 @@ func testListReadsAreNeverNil(t *testing.T, db *store.DB) {
 		t.Fatalf("phase tokens: %v", err)
 	} else if got == nil {
 		t.Error("PhaseTokens answered nil on an empty window, which serializes as null")
+	}
+	if got, _, err := log.PhaseTokenTail(ctx, store.PhaseTokenQuery{SinceDays: 1}, 5); err != nil {
+		t.Fatalf("phase token tail: %v", err)
+	} else if got == nil {
+		t.Error("PhaseTokenTail answered nil on an empty window, which serializes as null")
 	}
 	if got, err := log.Turn(ctx, "tn-nothing-wrote-this"); err != nil {
 		t.Fatalf("turn: %v", err)
@@ -635,6 +767,54 @@ func testByID(t *testing.T, db *store.DB) {
 
 	if _, err := log.ByID(ctx, "absent"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing id gave %v, want ErrNotFound", err)
+	}
+}
+
+// testByKey: the id alone does not name a row — the primary key is
+// (event_time, event_id) — so a read by id is a guess whenever an id is shared,
+// and the read by the key a listing hands out is not.
+func testByKey(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	older, newer := base, base.Add(time.Minute)
+	write(t, log, store.EventRecord{
+		ID: "shared", Type: "task_assigned", Source: "pm", Time: older,
+		Category: "task", Summary: "the older",
+		Payload: json.RawMessage(`{"which":"older"}`),
+	})
+	write(t, log, store.EventRecord{
+		ID: "shared", Type: "task_assigned", Source: "pm", Time: newer,
+		Category: "task", Summary: "the newer",
+		Payload: json.RawMessage(`{"which":"newer"}`),
+	})
+
+	// The guess ByID documents, so the case below is not passing by accident.
+	if rec, err := log.ByID(ctx, "shared"); err != nil {
+		t.Fatalf("ByID: %v", err)
+	} else if rec.Summary != "the newer" {
+		t.Fatalf("ByID answered %q, want the newest row carrying the id", rec.Summary)
+	}
+
+	for _, c := range []struct {
+		at      time.Time
+		summary string
+		payload string
+	}{{older, "the older", `{"which":"older"}`}, {newer, "the newer", `{"which":"newer"}`}} {
+		rec, err := log.ByKey(ctx, c.at, "shared")
+		if err != nil {
+			t.Fatalf("ByKey at %s: %v", c.at, err)
+		}
+		if rec.Summary != c.summary || !rec.Time.Equal(c.at) {
+			t.Errorf("ByKey at %s answered %q at %s, want %q", c.at, rec.Summary, rec.Time, c.summary)
+		}
+		if string(rec.Payload) != c.payload {
+			t.Errorf("ByKey at %s carried %s, want %s", c.at, rec.Payload, c.payload)
+		}
+	}
+
+	// An id that exists at ANOTHER instant is not this row.
+	if _, err := log.ByKey(ctx, base.Add(time.Hour), "shared"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("an existing id at an instant it was never written gave %v, want ErrNotFound", err)
 	}
 }
 
@@ -909,13 +1089,19 @@ func testSpendUncapped(t *testing.T, db *store.DB) {
 	}
 }
 
-// testSpendLimited: a Limit keeps the NEWEST records of the window, and zero
-// keeps the whole window.
+// testSpendLimited: a TAIL keeps the NEWEST records of the window, and says
+// whether the window held more.
 //
 // The tail is for a caller that retains only a bounded tail anyway (the live
 // projection's startup seed); the whole window is what every rollup reads, and
 // the case above insists that one is never cut. The window applies BEFORE the
 // limit, so a record that aged out is never the one a short read returns.
+//
+// THE SECOND ANSWER is asserted on the boundary, which is where it is worth
+// anything: a window of exactly `limit` records is WHOLE, and a tail that
+// reported it cut would head a complete day as a partial one — while a tail
+// that did not report a genuine cut heads a partial day as a whole one, which
+// on a money figure is the worse of the two.
 func testSpendLimited(t *testing.T, db *store.DB) {
 	log := db.Events()
 	now := time.Now().UTC()
@@ -932,27 +1118,44 @@ func testSpendLimited(t *testing.T, db *store.DB) {
 		Payload: []byte(`{"phase":"execute","model":"m","total_tokens":1}`),
 	})
 
-	spendIDs := func(q store.PhaseTokenQuery) []string {
+	tail := func(limit int) ([]string, bool) {
 		t.Helper()
-		got, err := log.PhaseTokens(t.Context(), q)
+		got, more, err := log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, limit)
 		if err != nil {
-			t.Fatalf("phase tokens %+v: %v", q, err)
+			t.Fatalf("phase token tail of %d: %v", limit, err)
 		}
 		out := make([]string, len(got))
 		for i, r := range got {
 			out[i] = r.EventID
 		}
-		return out
+		return out, more
 	}
-	if got := spendIDs(store.PhaseTokenQuery{SinceDays: 1, Limit: 2}); !slices.Equal(got, []string{"newest", "newer"}) {
-		t.Errorf("limit 2 = %v, want the two newest of the window", got)
+	if got, more := tail(2); !slices.Equal(got, []string{"newest", "newer"}) || !more {
+		t.Errorf("tail of 2 = %v (more=%v), want the two newest of the window and "+
+			"more=true", got, more)
 	}
-	if got := spendIDs(store.PhaseTokenQuery{SinceDays: 1, Limit: 10}); !slices.Equal(got,
-		[]string{"newest", "newer", "older", "oldest"}) {
-		t.Errorf("limit past the window = %v, want the window and nothing older", got)
+	if got, more := tail(4); len(got) != 4 || more {
+		t.Errorf("tail of exactly the window = %v (more=%v), want all four and more=false "+
+			"— the window is whole", got, more)
 	}
-	if got := spendIDs(store.PhaseTokenQuery{SinceDays: 1}); len(got) != 4 {
-		t.Errorf("no limit = %v, want the whole window", got)
+	if got, more := tail(10); !slices.Equal(got,
+		[]string{"newest", "newer", "older", "oldest"}) || more {
+		t.Errorf("tail past the window = %v (more=%v), want the window, nothing older, "+
+			"and more=false", got, more)
+	}
+	// AND THE REST OF THE WINDOW IS WHERE THE DOC SAYS: the whole-window read.
+	whole, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	if len(whole) != 4 {
+		t.Errorf("the whole window = %d records, want 4", len(whole))
+	}
+	// A TAIL OF NOTHING IS REFUSED, not read as the whole window: that read
+	// is the other method, and a tail that quietly became it is the memory
+	// spike the tail exists to avoid.
+	if _, _, err := log.PhaseTokenTail(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, 0); err == nil {
+		t.Error("a tail of 0 was served; it names no bound and must be refused")
 	}
 }
 

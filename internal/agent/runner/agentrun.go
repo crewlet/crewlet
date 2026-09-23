@@ -97,9 +97,10 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 
 	// The submission tool is on the surface for the same reason it is in a
 	// native pass: it is how the executor says what it did. The CLI calls
-	// it over the bridge, and the value it captures here is read only when
-	// the resume happens in THIS process — otherwise the resume rebuilds it
-	// from the run's durable bridged-call log.
+	// it over the bridge, so its decoder refuses a bad submission while the
+	// run can still correct it. The value it captures is never read: the
+	// resume is a new runner, and [Runner.resumeAgentRun] replays the call
+	// from the run's durable bridged-call log instead.
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
@@ -171,6 +172,11 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // nothing. That log is also where the submission is: the CLI ended its run by
 // calling submit_work over the bridge, and replaying that call through a fresh
 // submission tool is what recovers the outcome it declared.
+//
+// THE LOG IS WHAT THE RUN'S ROW KEPT, which is not always every call.
+// [Resume.Bridged] says which calls it can be missing; nothing here can tell
+// that it is, so a submission or a delivery among them is treated as never
+// made.
 //
 // An absent submission is NOT a value — the same rule a native pass follows.
 // A run that stopped without saying what it did is rescued as incomplete and

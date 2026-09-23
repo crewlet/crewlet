@@ -270,6 +270,20 @@ describe("the block parser", () => {
     expect(parseBlocks("")).toEqual([]);
     expect(renderMarkdown("")).toEqual([]);
   });
+
+  it("removes a continuation line's indent and never its text", () => {
+    // A continuation needs two spaces; the marker it continues can sit
+    // deeper. Stripping the MARKER's width from a shallower line ate the
+    // first letters of the sentence — "continued" rendered as "ontinued".
+    const el = draw("   - first item\n  continued here\n   - second");
+    expect([...el.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+      "first item continued here",
+      "second",
+    ]);
+    // The common shape that reaches it: a nested list's own base indent is
+    // three, and the line under its item is indented two.
+    expect(draw("1. foo\n   - bar\n  baz").textContent).toContain("baz");
+  });
 });
 
 /**

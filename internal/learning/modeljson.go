@@ -151,11 +151,20 @@ const modelAnswerDetail = 400
 // much for a line an operator has to see and exactly right for the one they
 // turn on once they have seen it.
 func answerLogFields(answer string, fields ...any) (seen, whole []any) {
+	return quotedPair("response", answer, modelAnswerDetail, fields...)
+}
+
+// quotedPair is the pair of log lines a value with no other copy is reported
+// on: `seen` carries the caller's fields and key set to value cut at limit
+// bytes by [textcut.Ellipsis], which marks the cut; `whole` carries the same
+// fields and value entire, for the debug twin. [answerLogFields] is one use;
+// the persist decider's unkept notes and observed directives are the others.
+func quotedPair(key, value string, limit int, fields ...any) (seen, whole []any) {
 	// CLONED, not appended in place: both results extend the same caller's
 	// slice, and appending twice to one backing array lets the second write
 	// overwrite the first result's last pair.
-	seen = append(slices.Clone(fields), "response", textcut.Ellipsis(answer, modelAnswerDetail))
-	whole = append(slices.Clone(fields), "response", answer)
+	seen = append(slices.Clone(fields), key, textcut.Ellipsis(value, limit))
+	whole = append(slices.Clone(fields), key, value)
 	return seen, whole
 }
 

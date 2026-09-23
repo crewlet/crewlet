@@ -1,11 +1,13 @@
 package tracker_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -253,38 +255,132 @@ func TestTheParentHearsOnlyAcrossTheFinishedEdge(t *testing.T) {
 	}
 }
 
-// THE DERIVED COLLECTIONS ARE CUT RATHER THAN REFUSED, and deterministically.
+// A THREAD CARRIES WHO SPOKE FIRST, AND THE WAKE CARRIES IT WHOLE.
 //
-// They come from ROWS, so a set over its cap is a task that grew rather than a
-// writer that asked for too much — and refusing the write would fail somebody's
-// comment because a thread has many voices. What is bounded is what rides on
-// the record; nobody is silenced, because a participant past the cap is still
-// a watcher.
-func TestTheDerivedCollectionsAreCutNotRefused(t *testing.T) {
+// A thread's voices come from its rows, and past
+// [tracker.MaxThreadParticipants] the read stops: the ones it carries are the
+// ones the thread is between — who spoke FIRST — rather than the first by
+// alphabet or the most recent. The wake then carries that list as given.
+// Nothing downstream cuts it, so a list past the cap is refused at Validate
+// rather than trimmed into a notification that told fewer people than it
+// named.
+func TestAThreadCarriesWhoSpokeFirstAndTheWakeCarriesItWhole(t *testing.T) {
 	t.Parallel()
-	task := tracker.Task{ID: "t", Key: "ENG-1", Project: "ENG"}
-	many := make([]string, 0, tracker.MaxThreadParticipants*3)
-	for i := range cap(many) {
-		many = append(many, "h"+itoa(i))
+	r := newRoundTrip(t)
+	created := r.createTask("the rollout")
+	voices := 2*tracker.MaxThreadParticipants + 1
+	// NAMED AGAINST THE ORDER THEY SPEAK IN, so the first to speak is the
+	// last by alphabet and an order by handle cannot pass for one by time.
+	spoke := make([]string, 0, voices)
+	for i := range voices {
+		author := fmt.Sprintf("h%02d", voices-i)
+		at := wednesday.Add(time.Duration(i) * time.Minute)
+		comment := &tracker.Comment{
+			ID: fmt.Sprintf("cm-%02d", i), Task: created.ID, Author: author,
+			AuthorKind: tracker.AuthorHuman, Body: "a remark",
+			CreatedAt: at, UpdatedAt: at,
+		}
+		if i > 0 {
+			root := "cm-00"
+			comment.ReplyTo = &root
+		}
+		if _, err := r.writer.UpdateTask(t.Context(), "op-"+comment.ID,
+			created.ID, "ENG", tracker.NoIfMatch,
+			tracker.TaskPatch{Comment: comment}, tracker.ChangeComment,
+			nil); err != nil {
+			t.Fatalf("comment %d: %v", i, err)
+		}
+		r.drain()
+		spoke = append(spoke, author)
 	}
+
+	thread, err := r.reader.Thread(t.Context(), tracker.ThreadQuery{
+		Task: created.ID, ReplyTo: "cm-00", Author: "zed",
+	}, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("Thread: %v", err)
+	}
+	if want := spoke[:tracker.MaxThreadParticipants]; !slices.Equal(
+		thread.Participants, want) {
+		t.Fatalf("the thread carries %v, want the first %d to speak %v",
+			thread.Participants, tracker.MaxThreadParticipants, want)
+	}
+
+	wake := func(participants []string) *tracker.Notify {
+		return tracker.Wake{
+			Kind: tracker.ChangeComment, Before: created, After: created,
+			Comment: &tracker.Comment{ID: "m", Author: "zed"},
+			Thread:  tracker.ThreadParties{Participants: participants},
+		}.Notify(fixedLeads{})
+	}
+	got := wake(thread.Participants)
+	if err := got.Validate(); err != nil {
+		t.Fatalf("the thread the read carries was refused: %v", err)
+	}
+	if !slices.Equal(got.Snapshot.ThreadParticipants, thread.Participants) {
+		t.Errorf("the wake carries %v of the thread's %v",
+			got.Snapshot.ThreadParticipants, thread.Participants)
+	}
+
+	// AND A LIST PAST THE CAP IS REFUSED, NOT CUT.
+	longer := wake(spoke)
+	if len(longer.Snapshot.ThreadParticipants) != len(spoke) {
+		t.Errorf("the wake cut %d participants to %d — a cut here tells fewer "+
+			"people than the thread named and says so nowhere", len(spoke),
+			len(longer.Snapshot.ThreadParticipants))
+	}
+	if err := longer.Validate(); err == nil {
+		t.Errorf("a snapshot naming %d participants against a cap of %d was "+
+			"accepted", len(spoke), tracker.MaxThreadParticipants)
+	}
+}
+
+// A CHECKLIST REPLACED WHOLE WAKES EVERY OWNER ON BOTH SIDES.
+//
+// The checklist set is a UNION: the owner of every item a commit added,
+// removed or changed, on the side it left as well as the side it reached. So
+// one commit swapping a full checklist for as many differently owned items
+// names twice the item total, and a cap at the item total alone would cut
+// the handles sorted last — the people whose item was taken away or handed to
+// them, told nothing and never told to look.
+func TestAChecklistReplacedWholeWakesEveryOwnerOnBothSides(t *testing.T) {
+	t.Parallel()
+	full := func(prefix string) []tracker.Checklist {
+		perList := tracker.MaxChecklistItemsTotal / tracker.MaxChecklists
+		lists := make([]tracker.Checklist, 0, tracker.MaxChecklists)
+		for l := range tracker.MaxChecklists {
+			items := make([]tracker.ChecklistItem, 0, perList)
+			for i := range perList {
+				n := l*perList + i
+				items = append(items, tracker.ChecklistItem{
+					ID: fmt.Sprintf("%s-%03d", prefix, n), Name: "step",
+					Assignee: fmt.Sprintf("%s-%03d", prefix, n), Order: i,
+				})
+			}
+			lists = append(lists, tracker.Checklist{
+				ID: fmt.Sprintf("%s-list-%02d", prefix, l), Items: items,
+			})
+		}
+		return lists
+	}
+	before := tracker.Task{ID: "t", Key: "ENG-1", Project: "ENG",
+		Checklists: full("was")}
+	after := before
+	after.Checklists = full("now")
+
 	got := tracker.Wake{
-		Kind: tracker.ChangeComment, Before: task, After: task,
-		Comment: &tracker.Comment{ID: "m", Author: "ana"},
-		Thread:  tracker.ThreadParties{Participants: many},
+		Kind: tracker.ChangeChecklist, Before: before, After: after,
 	}.Notify(fixedLeads{})
 	if err := got.Validate(); err != nil {
-		t.Fatalf("a long thread was refused rather than cut: %v", err)
+		t.Fatalf("a checklist replaced whole was refused: %v", err)
 	}
-	if len(got.Snapshot.ThreadParticipants) != tracker.MaxThreadParticipants {
-		t.Fatalf("the thread carries %d handles, want the cap of %d",
-			len(got.Snapshot.ThreadParticipants), tracker.MaxThreadParticipants)
+	if want := 2 * tracker.MaxChecklistItemsTotal; len(got.Snapshot.ChecklistAssignees) != want {
+		t.Fatalf("the commit names %d checklist owners, want every one of the "+
+			"%d on both sides", len(got.Snapshot.ChecklistAssignees), want)
 	}
-	// THE FIRST N, which is who the thread is between rather than who
-	// happened to arrive last.
-	if !slices.Equal(got.Snapshot.ThreadParticipants,
-		many[:tracker.MaxThreadParticipants]) {
-		t.Errorf("the cut kept %v rather than the first %d",
-			got.Snapshot.ThreadParticipants, tracker.MaxThreadParticipants)
+	last := fmt.Sprintf("was-%03d", tracker.MaxChecklistItemsTotal-1)
+	if !slices.Contains(got.Snapshot.ChecklistAssignees, last) {
+		t.Errorf("%s, last by alphabet, lost their wake", last)
 	}
 }
 

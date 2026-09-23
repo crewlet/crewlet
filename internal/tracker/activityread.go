@@ -106,7 +106,12 @@ type ActivityRecord struct {
 type ActivityAnswer struct {
 	Records []ActivityRecord `json:"records"`
 
-	// NextCursor resumes exactly after the last row, as a log position.
+	// NextCursor resumes exactly after the last row, as a log position,
+	// and is empty when this page reaches the oldest matching commit.
+	//
+	// A RENDERER THAT DRAWS [ActivityAnswer.Records] MUST READ IT: the
+	// length of Records is the page — see [MaxActivityRows] — and a
+	// present cursor is the only thing saying older commits match.
 	NextCursor string `json:"next_cursor,omitempty"`
 
 	Level          statelog.ReadLevel `json:"read_level"`
@@ -117,7 +122,15 @@ type ActivityAnswer struct {
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
 }
 
-// MaxActivityRows is how many commits one page carries.
+// MaxActivityRows is how many commits one page carries, and a larger limit is
+// lowered to it rather than refused.
+//
+// IT BOUNDS A PAGE, NEVER WHAT THE FEED REACHES. [readActivity] reads one row
+// past the page as evidence, and when that row is there
+// [ActivityAnswer.NextCursor] resumes exactly after the page's last commit —
+// and nothing in `tracker_history` is swept, so following the cursor reaches
+// the first commit the query matches. The value therefore decides how many
+// round trips a reader spends walking back and nothing else.
 const MaxActivityRows = 200
 
 // ActivityQuery asks for a slice of the feed.

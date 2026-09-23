@@ -155,23 +155,17 @@ func (c *Counterparties) Record(ctx context.Context, o Observation) (bool, error
 		workKey := existing.LastWorkKey
 		// An UNKEYED observation counts — see
 		// TestUnkeyedObservationsAlwaysCount for why that asymmetry is
-		// deliberate — but it must not TOUCH the guard. Assigning
-		// o.WorkKey unconditionally wrote "" into last_work_key, which
-		// disarmed the dedupe for the next observation as well: the
-		// redelivery of a keyed interaction that arrived after an unkeyed
-		// one compared its real key against "", differed, and counted a
-		// second time. So the column keeps the last KEYED unit of work,
-		// which is the only thing it can usefully remember.
+		// deliberate — but it must not TOUCH the guard; see below.
 		if o.WorkKey == "" || o.WorkKey != existing.LastWorkKey {
 			count++
 			counted = true
 			// ONLY A REAL KEY MOVES THE GUARD. Assigning o.WorkKey
-			// unconditionally wrote "" into last_work_key, which disarmed
-			// the dedupe for the next observation as well: a redelivery
-			// arriving after an unkeyed observation compared its real key
-			// against "", differed, and counted a second time. The column
-			// keeps the last KEYED unit of work, which is the only thing
-			// it can usefully remember.
+			// unconditionally would write "" into last_work_key and
+			// disarm the dedupe for the next observation as well: a
+			// redelivery arriving after an unkeyed observation would
+			// compare its real key against "", differ, and count a second
+			// time. The column keeps the last KEYED unit of work, which is
+			// the only thing it can usefully remember.
 			if o.WorkKey != "" {
 				workKey = o.WorkKey
 			}

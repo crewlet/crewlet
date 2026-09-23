@@ -343,8 +343,8 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 	}
 	// AND THE RE-SPREAD HAND-OFF, SET AND CLEARED FROM THE SAME PROBE.
 	//
-	// A key past the renormalisation threshold is one the mint could not
-	// shorten inline, so the project's order needs the duty's paced walk.
+	// A key past the renormalisation threshold is one a drag landed long,
+	// so the project's order needs the duty's paced walk.
 	// The applier owns the column in both directions — the walk's own last
 	// batch is what clears it — because a RECORD clearing it would be a
 	// second owner: the flag is derived from the rows this node holds, and

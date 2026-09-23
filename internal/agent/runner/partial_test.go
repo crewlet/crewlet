@@ -47,3 +47,32 @@ func TestTheElisionCutsOnACharacterNotAByte(t *testing.T) {
 		t.Errorf("the elided partial is not valid UTF-8: %q", got[:16])
 	}
 }
+
+// The window's start clears exactly what a cut left of one character: the
+// orphaned bytes go, and not one byte of the whole characters behind them.
+func TestTheElisionClearsOnlyTheCharacterItCut(t *testing.T) {
+	t.Parallel()
+	// The window starts on the last byte of the three-byte rune.
+	long := strings.Repeat("a", 10) + "あ" + strings.Repeat("b", partialTail-1)
+	got := tail(long)
+	if want := "…" + strings.Repeat("b", partialTail-1); got != want {
+		t.Errorf("tail kept %d bytes, want %d: it must drop the cut character's orphaned "+
+			"byte and nothing else", len(got), len(want))
+	}
+}
+
+// A run of continuation bytes longer than one interrupted character can leave
+// is the text's own, not a cut's residue, so the window keeps it: stripping it
+// would claim a cut that never happened. The rule is
+// textcut.TrimOrphanContinuation's, and this is what holds tail to it rather
+// than to a copy of the walk that strips every continuation byte it meets.
+func TestTheElisionKeepsBrokenBytesTheTextCarried(t *testing.T) {
+	t.Parallel()
+	own := strings.Repeat("\x80", utf8.UTFMax)
+	long := strings.Repeat("a", 10) + own + strings.Repeat("b", partialTail-len(own))
+	got := tail(long)
+	if want := "…" + own + strings.Repeat("b", partialTail-len(own)); got != want {
+		t.Errorf("tail kept %d bytes, want %d: the text's own bytes at the window's "+
+			"start were stripped as if a cut had left them", len(got), len(want))
+	}
+}

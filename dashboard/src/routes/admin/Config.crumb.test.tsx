@@ -2,7 +2,7 @@
  * What the page bar, the browser tab and the palette's recents call one
  * revision.
  *
- * A REVISION ID IS A ULID, so the trail ended in `01JCFGAAAA…` over a header
+ * A REVISION ID IS A UUID, so the trail ended in `aaaaaaaa-…` over a header
  * titled with the revision's own summary, `Shell` titled the browser tab from
  * that same trail, and the palette's recents kept a stack of them. The screen
  * had the name all along — it draws it in 24px — and simply never published
@@ -34,8 +34,9 @@ class InertWebSocket {
   close(): void {}
 }
 
-const NAMED = "01JCFGAAAA0000000000000001";
-const UNNAMED = "01JCFGBBBB0000000000000002";
+// UUIDS, which is what `store.Configs` mints (`uuid.NewString`).
+const NAMED = "aaaaaaaa-0000-4000-8000-000000000001";
+const UNNAMED = "bbbbbbbb-0000-4000-8000-000000000002";
 
 // `configapi.meta`'s own field names — the same fixture `Config.test.tsx`
 // keeps, for the same reason: a shape declared from memory is a screen nobody
@@ -110,7 +111,7 @@ test("a revision is named by its summary, and the crumb leaves the mono face", a
 
   expect(here()?.textContent).toBe("connect datadog");
   expect(here()?.classList.contains("mono"), "prose drawn in the mono face").toBe(false);
-  expect(trail().textContent, "the trail still carries the id").not.toContain("01JCFGAAAA");
+  expect(trail().textContent, "the trail still carries the id").not.toContain("aaaaaaaa");
   expect(document.title).toBe("connect datadog · Crewlet");
   expect(recents()).toEqual(["connect datadog"]);
 });

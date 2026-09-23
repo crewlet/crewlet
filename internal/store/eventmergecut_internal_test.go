@@ -76,12 +76,13 @@ func TestAMergedPageNeverDropsARecordItsCursorHasAlreadyPassed(t *testing.T) {
 // EVERY DROPPED SIBLING'S TRACE IS NAMED BY A RECORD THE CALLER GETS.
 //
 // This is the whole of [cutToPage]'s recoverability claim, and it is the half
-// that is NOT covered by paging: a dropped direct match comes back on the next
+// that is NOT covered by paging: a dropped direct match comes back on a later
 // page, while a dropped sibling's trace may never be queried again. What makes
 // that acceptable is that the sibling only exists because it shares a trace
-// with a row on this page, so [EventLog.Trace] on that row's TraceID returns
-// it. If the cut could ever drop a sibling whose trace no returned record
-// names, the row would be unreachable and the doc would be a fiction.
+// with a row on this page, so that row's TraceID is what reaches it —
+// [cutToPage] says through which reads. If the cut could ever drop a sibling
+// whose trace no returned record names, the row would be unreachable and the
+// doc would be a fiction.
 func TestEveryDroppedSiblingLeavesItsTraceOnThePage(t *testing.T) {
 	t.Parallel()
 	direct := []EventRecord{
@@ -111,7 +112,7 @@ func TestEveryDroppedSiblingLeavesItsTraceOnThePage(t *testing.T) {
 		dropped++
 		if _, named := traces[rec.TraceID]; !named {
 			t.Errorf("sibling %s of trace %s was dropped and no record on the page "+
-				"names that trace, so nothing can reach it through EventLog.Trace",
+				"names that trace, so the caller holds nothing that reaches it",
 				rec.ID, rec.TraceID)
 		}
 	}
@@ -139,6 +140,28 @@ func TestASiblingThatIsAlsoADirectMatchIsNotCountedTwice(t *testing.T) {
 		if page[i].ID != id {
 			t.Fatalf("page[%d] = %s, want %s (newest first, no duplicate)", i, page[i].ID, id)
 		}
+	}
+}
+
+// THE DEDUPE IS ON THE ROW, NOT THE ID. The table's primary key is
+// (event_time, event_id) and nothing constrains the id alone, so two rows of
+// one trace can carry the same id at different instants. The sibling read
+// returns the direct match again, and that copy has to go; the OTHER row
+// sharing its id is a distinct row and has to stay, or the page silently
+// holds one fewer row than the log does.
+func TestADistinctRowSharingAnIDIsNotDeduplicatedAway(t *testing.T) {
+	t.Parallel()
+	direct := []EventRecord{at("x", "t1", 20)}
+	siblings := []EventRecord{at("x", "t1", 30), at("x", "t1", 20)}
+
+	page := mergeRelated(direct, siblings, 5)
+	if len(page) != 2 {
+		t.Fatalf("page holds %d records, want 2: the direct match once, and the "+
+			"distinct row at another instant that shares its id", len(page))
+	}
+	if !page[0].Time.Equal(siblings[0].Time) || !page[1].Time.Equal(direct[0].Time) {
+		t.Fatalf("page is %s then %s, want the row at :30 then the one at :20",
+			page[0].Time.Format(time.RFC3339), page[1].Time.Format(time.RFC3339))
 	}
 }
 

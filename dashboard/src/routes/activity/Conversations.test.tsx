@@ -132,3 +132,128 @@ test("a tick of the clock does not rebuild the channel body", async () => {
   });
   expect(code()[0]).toBe(before);
 });
+
+// ---------------------------------------------------------------------------
+// A page of the record, and what is counted over it
+// ---------------------------------------------------------------------------
+
+/** Mount the plain list over a socket that records what it was asked. */
+function mountList(answer: (params: Record<string, unknown>) => unknown, channelId?: string) {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  const asked: Record<string, unknown>[] = [];
+  (
+    socket as unknown as {
+      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (what, params = {}) => {
+    if (what !== "a2a_channels") return Promise.resolve({});
+    asked.push(params);
+    return Promise.resolve(answer(params));
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Conversations channelId={channelId} />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  return asked;
+}
+
+const TOTALS = { channels: 412, open: 3, messages: 977, pairs: 41 };
+
+// THE STAT CARDS ARE THE ENGINE'S TOTALS. Reduced over the rows they described
+// one page of the most recently active channels, and changed as a reader paged.
+test("the stat cards read the answer's totals, not the page", async () => {
+  mountList(() => ({
+    channels: [channel({ closed_at: "" })],
+    available: true,
+    state: "all",
+    truncated: true,
+    next: { before_time: "2026-09-13T10:02:00Z", before_id: ID },
+    totals: TOTALS,
+  }));
+  expect(await screen.findByText("977")).toBeTruthy();
+  expect(screen.getByText("41")).toBeTruthy();
+  expect(screen.getByText("of 412 channels in the record")).toBeTruthy();
+});
+
+// THE REST IS THE NEXT PAGE, and it is asked for with both halves of `next`.
+test("a cut listing pages with the cursor it was handed", async () => {
+  const older = channel({ id: "chan-old", requester: "cfo", target: "pm" });
+  const asked = mountList((params) =>
+    params.before_id
+      ? {
+          channels: [older],
+          available: true,
+          state: "all",
+          truncated: false,
+          next: {},
+          totals: TOTALS,
+        }
+      : {
+          channels: [channel()],
+          available: true,
+          state: "all",
+          truncated: true,
+          next: { before_time: "2026-09-13T10:02:00Z", before_id: ID },
+          totals: TOTALS,
+        },
+  );
+  const button = await screen.findByRole("button", { name: "Load older channels" });
+  await act(async () => button.click());
+  const page = asked.find((p) => p.before_id);
+  expect(page).toEqual({
+    state: "all",
+    before_time: "2026-09-13T10:02:00Z",
+    before_id: ID,
+  });
+  expect(
+    await screen.findByText(/Updates are paused while older channels are loaded/),
+  ).toBeTruthy();
+  // THE LAST PAGE OFFERS NO FURTHER ONE.
+  expect(screen.queryByRole("button", { name: "Load older channels" })).toBeNull();
+});
+
+test("a listing that holds every channel offers no older page", async () => {
+  // THE CONTROL.
+  mountList(() => ({
+    channels: [channel()],
+    available: true,
+    state: "all",
+    truncated: false,
+    next: {},
+    totals: { channels: 1, open: 0, messages: 2, pairs: 1 },
+  }));
+  expect(await screen.findByText("of 1 channel in the record")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Load older channels" })).toBeNull();
+});
+
+// A CHANNEL'S OWN PAGE ASKS FOR IT BY ID. Looked up in the listing's page, a
+// channel older than the page read as "no such channel".
+test("the addressed channel is read by its id, not found in a page", async () => {
+  const asked = mountList(
+    (params) =>
+      params.id === ID
+        ? { channels: [channel()], available: true, state: "all", truncated: false, next: {} }
+        : {
+            channels: [],
+            available: true,
+            state: "all",
+            truncated: true,
+            next: {},
+            totals: TOTALS,
+          },
+    ID,
+  );
+  expect((await screen.findAllByText(ID)).length).toBeGreaterThan(0);
+  expect(screen.queryByText(PURGED)).toBeNull();
+  expect(asked.some((p) => p.id === ID && p.state === "all")).toBe(true);
+  // AND ITS WORDS ARE ON THE EVENT LOG, which is `#/activity/events`: the bare
+  // `#/activity` is the Live now screen, which reads no filter at all.
+  const words = screen.getAllByRole("link", { name: /Read this channel's events/ })[0]!;
+  expect(words.getAttribute("href")).toContain("#/activity/events?");
+  // ON THE WHOLE LOG, since the log's own fallback is a day.
+  expect(words.getAttribute("href")).toContain("window=30d");
+});

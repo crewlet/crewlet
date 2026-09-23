@@ -15,7 +15,7 @@
 
 import { useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
-import { QueryState, Section, SeatChip } from "~/components/common.tsx";
+import { CutNote, QueryState, Section, SeatChip } from "~/components/common.tsx";
 import { Button, Callout, Card, EmptyState, EmptyValue, Input, Skeleton, Tag } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
@@ -34,7 +34,7 @@ import {
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { documentUnits, indexOrg, type OrgIndex } from "~/lib/seats.ts";
-import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
+import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useMemo } from "react";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -43,7 +43,12 @@ import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRai
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { DateCell, NumberCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import type { PageContainer, PageSummary } from "~/protocol/index.ts";
+import type {
+  PageActivityAnswer,
+  PageChange,
+  PageContainer,
+  PagesAnswer,
+} from "~/protocol/index.ts";
 // THE BROWSE'S OWN SPELLING of a page's address and of a link that peeks,
 // rather than a second one here: a hit, a grid row and a container's page list
 // must resolve to the same `peek=` token, or the stepper walks past the page
@@ -62,8 +67,8 @@ import { pageAddress, PageLink } from "./Pages.tsx";
  * HAPPENED, so a company of forty seats was told that its twelve were the
  * ones with memory — over a section whose whole claim is "each".
  *
- * IT IS A PEEK, LIKE THE TWO BELOW IT, so it is bounded here rather than in
- * the read: the seats come from the org projection this screen already holds,
+ * IT IS A PEEK, LIKE [PEEK_PAGES] BELOW IT, so it is bounded here rather than
+ * in the read: the seats come from the org projection this screen already holds,
  * so nothing is fetched to draw them and the rest are one click away on the
  * roster. That is why this is a cut with a marker rather than a paged read.
  */
@@ -379,14 +384,36 @@ export function Knowledge() {
 const PEEK_PAGES = 8;
 
 /**
- * How many of a container's writers the rail names before it counts the rest.
+ * The changes a container's rail reads everything it says about writing from.
  *
- * EIGHT, on the same reasoning and against the same width: past that the chips
- * wrap into a block that is read as a crowd rather than as names, and the
- * question this panel answers — "whose tree is this" — is answered by the
- * first few.
+ * `page_activity` narrowed to the container and to the two kinds that WRITE a
+ * page — a create and a save — newest first, at the feed's own ceiling
+ * (`pages.MaxPageChanges`), because the rail folds changes into pages and a
+ * page saved many times spends several of them.
+ *
+ * NOT THE PAGE LIST. `pages` is ordered by container and TITLE and cut at its
+ * limit, so on a container larger than one read it was an alphabetical slice:
+ * the "recent" pages were the newest of the first fifty by title, the writers
+ * those of the same slice, and "N more pages" a count of that slice's
+ * remainder. The feed IS in order of writing, so the newest page written here
+ * is its first row however large the container is.
  */
-const PEEK_WRITERS = 8;
+const WRITING = { kinds: "created,saved", limit: 100 } as const;
+
+/**
+ * The container's trashed pages, which the rail takes OUT of the feed above.
+ *
+ * THE SAME SET THE COUNT COUNTS. `containers` leaves trashed pages out of a
+ * container's `pages` — "a reader clicks 12 and finds nine" is the reason in
+ * its own source — and a trash keeps the page's head, container and all, so
+ * the feed's creates and saves of a trashed page still come back filtered to
+ * this container. The feed carries no status to tell them apart; this read is
+ * what does.
+ *
+ * At `pages.MaxLimit`, the most one page listing returns, and the answer's
+ * `truncated` is read: past it the rail cannot rule a row out, and says so.
+ */
+const TRASHED = { status: "trashed", limit: 500 } as const;
 
 /**
  * The four facts a container is read by, in one order, wherever it appears.
@@ -400,18 +427,18 @@ const PEEK_WRITERS = 8;
 function containerFacts({
   container,
   newest,
-  capped,
   unread,
+  unsure,
   units,
   now,
 }: {
   container: PageContainer;
-  /** The newest `updated_at` among the pages this node returned, if any. */
+  /** When the newest create or save of a page still here landed, if any did. */
   newest?: string;
-  /** The page read came back at its own limit, so there may be more behind it. */
-  capped: boolean;
-  /** The page list has not answered — it is still in flight, or it failed. */
+  /** The writes have not been read — a read is still in flight, or failed. */
   unread: boolean;
+  /** The trash was cut, so a trashed page's write may stand in `newest`. */
+  unsure: boolean;
   /**
    * The units whose `space:` names this container, or NULL when the company
    * document could not be read: `space` is guarded, so an anonymous reader
@@ -425,28 +452,24 @@ function containerFacts({
     // A COUNT, and ZERO IS A REAL ONE: a container exists from the first write
     // into it, so one whose pages have all been trashed is a state an operator
     // comes here for rather than an absence. Trashed pages are not counted —
-    // `internal/pages` says so where it counts them — which is why this read
-    // asks for the same set the list below shows.
+    // `internal/pages` says so where it counts them.
     { label: "Pages", value: <NumberCell value={container.pages} /> },
     {
       label: "Last written",
-      // A PAGE LIST THAT DID NOT ANSWER IS NOT AN EMPTY CONTAINER, which is
-      // the same rule the panel below keeps and matters more here: this value
-      // is DERIVED from that read alone, so a failed or in-flight one would
+      // A FEED THAT DID NOT ANSWER IS NOT AN EMPTY CONTAINER: this value is
+      // DERIVED from that read alone, so a failed or in-flight one would
       // otherwise render as `DateCell`'s "never" — a container nobody has ever
       // written in, stated about a container nothing has been read about.
+      //
+      // THE FEED'S FIRST ROW TO A PAGE STILL HERE: it is newest first, so the
+      // newest write is on its first page however long the history is — unless
+      // every write that page holds is to a page since trashed.
       value: unread ? (
-        <EmptyValue label="The container's page list has not answered, so nothing here says when it last moved" />
+        <EmptyValue label="The container's writes have not been read, so nothing here says when it was last written" />
       ) : (
         <DateCell at={newest} now={now} />
       ),
-      // WHAT THE VALUE COVERS, which is what a note is for. The engine orders
-      // a page list by container and TITLE, so a read that came back at its
-      // limit is an alphabetical slice rather than the newest pages — and the
-      // newest row in it is then a FLOOR on the real answer. Said plainly
-      // rather than silently: a date that is merely the best of what was read
-      // is indistinguishable from the truth until it is wrong.
-      note: capped ? "newest of the pages this read returned" : undefined,
+      note: unsure ? "may be a trashed page's — see below" : undefined,
     },
     {
       // WHO WRITES HERE, from the CONFIG rather than from the pages: a unit's
@@ -486,43 +509,42 @@ function containerFacts({
  * from the ORG TREE rather than from any page read, which is the source this
  * screen already holds.
  *
- * # Two reads, and only one of them may blank the panel
+ * # Only the container's own read may blank the panel
  *
- * The container itself comes from `containers` and its pages from `pages`, so
- * a failed page list is a failed SUBTREE read rather than an empty container —
- * the same rule the tracker's subtask panel keeps. It is drawn where the rows
- * would have been, and only a read that actually answered is allowed to
- * conclude that nothing has been written here.
+ * The container itself comes from `containers`, and what was written in it
+ * from the change feed less the trash, so a failed read of either of those is
+ * a failed SUBTREE read rather than an empty container — the same rule the
+ * tracker's subtask panel keeps. It is drawn where the rows would have been,
+ * and only reads that actually answered are allowed to conclude that nothing
+ * has been written here.
  */
 export function ContainerPeek({ id }: { id: string }) {
   const org = useOrg();
   const now = useNow();
   const index = useMemo(() => indexOrg(org), [org]);
   const containers = useQuery("containers", undefined, { enabled: id !== "", pollMs: 60_000 });
-  // THE SAME SET THE COUNT COUNTS. `containers` excludes trashed pages from
-  // `pages` deliberately — "a reader clicks 12 and finds nine" is the reason
-  // in its own source — and an unfiltered list here would put the trashed ones
-  // back under a number that does not include them.
-  const list = useQuery(
-    "pages",
-    { container: id, status: "published,draft" },
+  // WHAT HAS BEEN WRITTEN HERE, newest first — see [WRITING] — less what has
+  // since been trashed — see [TRASHED].
+  const activity = useQuery(
+    "page_activity",
+    { container: id, ...WRITING },
     { enabled: id !== "", pollMs: 20_000 },
   );
-  const found = containers.data?.containers.find((c) => c.key === id);
-  // NEWEST FIRST, sorted here: the engine orders a page list by container and
-  // title, which is the order a browse wants and the opposite of what "what
-  // has been written lately" asks for.
-  const recent = useMemo(
-    () => [...(list.data?.pages ?? [])].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
-    [list.data],
+  const trashed = useQuery(
+    "pages",
+    { container: id, ...TRASHED },
+    { enabled: id !== "", pollMs: 20_000 },
   );
-  // WHETHER THAT READ SAW THE WHOLE CONTAINER, ASKED rather than inferred:
-  // the engine takes one row past the limit as evidence and answers
-  // `truncated`, so a container holding exactly the limit reports itself
-  // whole. `recent.length >= list.data.limit` was the inference, and it put
-  // "there may be more behind this" on every container that happened to hold
-  // a round number of pages.
-  const capped = Boolean(list.data?.truncated);
+  const writes = useMemo(
+    () => liveWrites(activity.data, trashed.data),
+    [activity.data, trashed.data],
+  );
+  const feed: WritingFeed = {
+    ...writes,
+    error: activity.error ?? trashed.error,
+    loading: activity.loading || trashed.loading,
+  };
+  const found = containers.data?.containers.find((c) => c.key === id);
   // WHO FILES HERE IS GUARDED. A unit's `space:` is the knowledge container
   // it owns, and `internal/api/orgprojection_test.go` classifies it as guarded
   // ("a knowledge container key: where this unit's pages are written"), so the
@@ -564,9 +586,9 @@ export function ContainerPeek({ id }: { id: string }) {
                 title={found.name || found.key}
                 facts={containerFacts({
                   container: found,
-                  newest: recent[0]?.updated_at,
-                  capped,
-                  unread: !list.data,
+                  newest: feed.changes?.[0]?.at,
+                  unread: !feed.changes,
+                  unsure: feed.unsure,
                   units,
                   now,
                 })}
@@ -587,8 +609,8 @@ export function ContainerPeek({ id }: { id: string }) {
                   )}
                 </Card>
 
-                <ContainerPages container={found} recent={recent} list={list} now={now} />
-                <ContainerWriters recent={recent} index={index} />
+                <ContainerPages container={found} feed={feed} now={now} />
+                <ContainerWriters feed={feed} index={index} />
               </div>
             </>
           ) : (
@@ -610,110 +632,200 @@ export function ContainerPeek({ id }: { id: string }) {
 }
 
 /**
+ * The writes [ContainerPages] and [ContainerWriters] are drawn from: the
+ * feed's creates and saves, less those of a page in the trash.
+ */
+type WritingFeed = {
+  /** NULL until BOTH reads answered: half of them is not the set. */
+  changes: PageChange[] | null;
+  /** How many writes the feed returned, trashed pages' included. */
+  read: number;
+  /** The feed filled its page, so there are older writes than these. */
+  cut: boolean;
+  /** The trash filled its page, so a trashed page's writes may be among these. */
+  unsure: boolean;
+  error: string | null;
+  loading: boolean;
+};
+
+/** The feed's writes to pages that are not in the trash — see [TRASHED]. */
+export function liveWrites(
+  activity: PageActivityAnswer | null,
+  trashed: PagesAnswer | null,
+): Pick<WritingFeed, "changes" | "read" | "cut" | "unsure"> {
+  const gone = new Set((trashed?.pages ?? []).map((page) => page.id));
+  return {
+    changes:
+      activity && trashed ? activity.changes.filter((change) => !gone.has(change.page_id)) : null,
+    read: activity?.changes.length ?? 0,
+    cut: Boolean(activity?.next_cursor),
+    unsure: Boolean(trashed?.truncated),
+  };
+}
+
+/**
+ * The pages a feed of changes touched, newest write first, each once.
+ *
+ * A PURGED PAGE IS SKIPPED: the feed keeps its entries as the record it ever
+ * existed, with no title and no container, and there is no page to link to.
+ */
+export function writtenPages(changes: readonly PageChange[]): PageChange[] {
+  const seen = new Set<string>();
+  const out: PageChange[] = [];
+  for (const change of changes) {
+    if (!change.title || seen.has(change.page_id)) continue;
+    seen.add(change.page_id);
+    out.push(change);
+  }
+  return out;
+}
+
+/**
  * What has been written in a container lately.
  *
- * ITS OWN `QueryState`, drawn WHERE THE ROWS WOULD HAVE BEEN: this is the only
- * read that can see the container's pages, so a refusal rendered as no panel
- * would say "nothing is filed here" about a container holding four hundred
- * pages. Only a read that answered may conclude the container is empty.
+ * ITS OWN `QueryState`, drawn WHERE THE ROWS WOULD HAVE BEEN: these are the
+ * only reads that can see what was written here, so a refusal rendered as no
+ * panel would say "nothing is filed here" about a container holding four
+ * hundred pages. Only reads that answered may conclude nothing was written.
+ *
+ * CUT AT [PEEK_PAGES] and marked by the footer, which links to the container's
+ * browse — where every page is — named by a count rather than by the rows,
+ * which are a few of its pages and never a count of them.
  */
 function ContainerPages({
   container,
-  recent,
-  list,
+  feed,
   now,
 }: {
   container: PageContainer;
-  recent: PageSummary[];
-  list: { error: string | null; loading: boolean };
+  feed: WritingFeed;
   now: number;
 }) {
+  const pages = useMemo(() => writtenPages(feed.changes ?? []), [feed.changes]);
+  const shown = pages.slice(0, PEEK_PAGES);
+  // EITHER SIGN OF MORE: the container's count, and rows past the cut. The
+  // count is polled on a slower cadence than the writes, so a page created
+  // since it was read is a row it does not count yet.
+  const total = Math.max(container.pages, pages.length);
   return (
     <Card>
-      <Card.Header icon={<DescriptionGlyph size="sm" />} count={recent.length}>
-        <Card.Title>Recent pages</Card.Title>
+      {/* NO COUNT: the rows are the few most recently written, and a number
+          beside that title would read as how many were. The container's own
+          count is the header's Pages fact and names the link below. */}
+      <Card.Header icon={<DescriptionGlyph size="sm" />}>
+        <Card.Title>Recently written</Card.Title>
       </Card.Header>
       <QueryState
-        error={list.error}
-        loading={list.loading}
+        error={feed.error}
+        loading={feed.loading}
         empty={
-          recent.length
+          !feed.changes || pages.length
             ? undefined
             : {
-                title: "Nothing is filed here",
-                hint: "A container is created by the first write into it. Its pages may since have been trashed, or this node's copy has not caught up.",
+                title: "Nothing written here is still on record",
+                hint:
+                  container.pages > 0
+                    ? "Its pages are on the browse; no write this rail read is to one of them."
+                    : "A container is created by the first write into it. Its pages may since have been trashed, or this node's copy has not caught up.",
               }
         }
       >
         <div className="col gap-1">
-          {recent.slice(0, PEEK_PAGES).map((page) => (
-            <span key={page.id} className="row gap-2">
-              <PageLink page={page} />
+          {shown.map((change) => (
+            <span key={change.page_id} className="row gap-2">
+              <PageLink
+                page={{ container: change.container || container.key, title: change.title ?? "" }}
+              />
               <span className="spacer" />
-              <DateCell at={page.updated_at} now={now} />
+              <DateCell at={change.at} now={now} />
             </span>
           ))}
-          {recent.length > PEEK_PAGES && (
-            <a className="t-link t-caption" href={href(["knowledge", container.key])}>
-              {plural(recent.length - PEEK_PAGES, "more page")} in this container →
-            </a>
-          )}
         </div>
+        {/* THE TRASH WAS CUT, so it cannot rule every row out. */}
+        {feed.unsure && (
+          <p className="t-caption">
+            This container has more pages in its trash than one read returns, so a page or a writer
+            here may be one of the trashed ones.
+          </p>
+        )}
       </QueryState>
+      {/* `kind=all`: the browse leaves tool-skill pages out by default, and
+          the container's count and the rows above both include them. */}
+      {total > shown.length && (
+        <Card.Footer variant="meta">
+          <a
+            className="t-link t-caption"
+            href={href(["knowledge", container.key], { kind: "all" })}
+          >
+            All {plural(total, "page")} in this container →
+          </a>
+        </Card.Footer>
+      )}
     </Card>
   );
 }
 
 /**
- * Who has actually written in this container.
+ * Who has been writing in this container.
  *
- * THE CREATORS, not the last editors, and the subtitle says so: a page's
- * `author` is stamped by its create and no save moves it (see [pageFacts] in
- * `Pages.tsx` for where that is decided in the engine). Naming them "writers"
- * without that qualification would make a container whose pages one seat
- * started and another has rewritten look like the first seat's tree.
+ * THE SEATS BEHIND THE CREATES AND SAVES OF PAGES STILL HERE, every one of
+ * them: the read is bounded by [WRITING], so the set is too, and a chip a
+ * reader cannot reach is no chip at all. When the feed was cut its footer says
+ * the set is of the newest writes, and that each page's own change history —
+ * which pages back with a cursor — holds the older ones.
  */
-function ContainerWriters({ recent, index }: { recent: PageSummary[]; index: OrgIndex }) {
+function ContainerWriters({ feed, index }: { feed: WritingFeed; index: OrgIndex }) {
+  const { changes } = feed;
   const writers = useMemo(() => {
     const seen: string[] = [];
-    for (const page of recent) {
-      if (page.author && !seen.includes(page.author)) seen.push(page.author);
+    for (const change of changes ?? []) {
+      if (change.actor && !seen.includes(change.actor)) seen.push(change.actor);
     }
     return seen;
-  }, [recent]);
+  }, [changes]);
 
   return (
     <Card>
       <Card.Header
         icon={<GroupGlyph size="sm" />}
-        count={writers.length}
-        subtitle="the seats that started these pages"
+        count={changes ? writers.length : undefined}
+        subtitle="who created or saved a page not in the trash"
       >
         <Card.Title>Who writes here</Card.Title>
       </Card.Header>
-      {writers.length > 0 ? (
+      {/* NOTHING IS CONCLUDED FROM READS THAT HAVE NOT ANSWERED — the rule
+          [ContainerPages] keeps — so an unread container is not one "nothing
+          has been written" in. */}
+      {!changes ? (
+        <QueryState error={feed.error} loading={feed.loading} />
+      ) : writers.length > 0 ? (
         <div className="row wrap gap-2">
-          {writers.slice(0, PEEK_WRITERS).map((handle) => (
+          {writers.map((handle) => (
             <SeatChip
               key={handle}
               name={index.byHandle.get(handle)?.name ?? handle}
               handle={handle}
             />
           ))}
-          {writers.length > PEEK_WRITERS && (
-            <span className="t-caption">+{writers.length - PEEK_WRITERS} more</span>
-          )}
         </div>
       ) : (
-        // TWO ABSENCES, told apart. A container with pages and no author on
-        // any of them was written by the ENGINE — the tool-skill catalogue
-        // publishes exactly that — and saying "nobody" about it would call a
-        // working sync an empty space.
+        // TWO ABSENCES, told apart. Writes with no actor on any of them were
+        // the ENGINE's — the tool-skill catalogue publishes exactly that — and
+        // saying "nobody" about them would call a working sync an empty space.
         <span className="muted">
-          {recent.length > 0
-            ? "Every page here was written by the engine — the tool-skill catalogue and the syncs carry no author."
-            : "Nothing has been written here yet."}
+          {changes.length > 0
+            ? "Every write here was the engine's — the tool-skill catalogue and the syncs carry no author."
+            : "Nobody has written a page here that is not in the trash."}
         </span>
+      )}
+      {changes && (
+        <CutNote
+          shown={feed.read}
+          more={feed.cut}
+          one="write"
+          slice="newest"
+          whole="These are the seats behind those of them to pages not in the trash; each page's own change history holds the older ones."
+        />
       )}
     </Card>
   );

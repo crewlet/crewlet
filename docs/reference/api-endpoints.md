@@ -100,7 +100,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic |
 | `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
-| `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
+| `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, 50 to a page, with `next` the cursor for the page beneath. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
 | `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
@@ -125,7 +125,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
 | `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
 | `POST` | `/work/retention/maintenance/exclude` | Record that a participant's process is stopped and holds no outstanding request |
-| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge. **Operator-only**, and absent rather than 503 on a build with no tracker |
+| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and travels whole on the purge's notification — one too long for that line is refused, naming how many bytes fit, and nothing is purged — and `?op_id=` is how an `unknown` outcome is retried without appending a second purge. **Operator-only**, and absent rather than 503 on a build with no tracker |
 | `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo |
 | `POST` | `/work/retention/reanchor` | Adopt a recreated stream at the next generation |
 | `GET` | `/work/views` | One container's **view strip**: the six every container has without anybody saving one, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) and `?viewer=` is whose personal views and pins order the strip — **your own seat, or operator-only for anybody else's**, the same scope rule as `/work/my-work`; absent is the shared strip, which needs no credential |
@@ -1205,7 +1205,10 @@ payload attached is the query that makes an activity screen slow.
 ### A seat's LLM history
 
 `llm_history` is the seat's **finished** phases, read from the event store —
-one row per `agent_phase_completed`, newest first, capped at 50. The call
+one row per `agent_phase_completed`, newest first, 50 to a page. A full page
+carries `next` — `{before_time, before_id}`, sent back as those two
+parameters for the page beneath it — and a shorter one carries `null`, which
+is the end of the record. The call
 *in flight* is not in it; that is `live.live_call`, which comes from the
 projection, and the two are different sources on purpose: the store holds what
 completed, memory holds what is happening. A screen renders both with one
@@ -1339,7 +1342,10 @@ stream-only and never persisted to the event store.
 The **spend rollup** is maintained by the projection too. It HOLDS the
 per-phase records for its own 24-hour window (the newest 8 000 of them, so a
 company past that many phases in a day sees a rollup covering slightly less
-than a day rather than a wrong total) and folds them with
+than a day rather than a wrong total — and headed with what it covers: once
+the cap has dropped a record, or the startup seed's read has filled it and so
+cannot say whether it left one behind, the rollup's `since` is the earliest
+record it kept rather than the start of the window) and folds them with
 `internal/tokens`, which is the same aggregation the event store's wider
 windows are folded with, so changing the window on screen cannot change
 what a phase is counted as. It ships in the snapshot and is re-pushed on
@@ -1485,7 +1491,9 @@ GET /events?limit=100&before_time=2026-04-01T12:00:00Z&before_id=<event_id>
 Pass the oldest row you already hold to get the page beneath it. The id
 half is not optional — burst writes routinely share a timestamp at
 microsecond resolution, and a cursor over a non-unique key silently
-skips or repeats whatever collided with it.
+skips or repeats whatever collided with it. A request carrying either half
+without the other is refused rather than answered with the first page, and
+so is every other question here paged by `before_time` / `before_id`.
 
 **A page shorter than `limit` is the end of the history.** That rule
 holds for every filter the store pushes into SQL. It does *not* hold for
@@ -1497,19 +1505,26 @@ done when a page returns zero rows.
 to be: the cursor is the page's last row, so the page must end where the
 walk resumes — carry rows older than the cursor and the next page starts
 past them, which is a hole rather than a shortening. A direct match cut
-this way is simply on the next page. A trace **sibling** cut this way may
-be on no page at all, because the direct match that pulled its trace in
-can be newer than the cursor and is therefore never re-queried. The
-trace is what recovers it: that direct match *is* on a page you get,
-every row carries its `trace_id`, and
-[`GET /events/trace/{trace_id}`](#routes) returns the trace oldest
-first, **up to 500 rows**, with `truncated` saying when it stopped at
-that cap rather than at the end of the trace. Follow the trace rather
-than expecting the feed to hold every cause it named — and where
-`truncated` is set, the recovery is partial by exactly that cut: the
-trace read is ordered forwards, so it returns the oldest 500 rows of
-that trace and a sibling past them — newer than the 500th — is in
-neither answer.
+this way is on a later page: the next one, or — if that page's own cut
+drops it again — one after, since a page that cuts it has kept only rows
+newer than it. A trace **sibling** cut this way may be on no page at all,
+because the direct match that pulled its trace in can be newer than the
+cursor and is therefore never re-queried. The trace is what recovers it:
+that direct match *is* on a page you get, every row carries its
+`trace_id`, and [`GET /events/trace/{trace_id}`](#routes) returns the
+trace oldest first, **up to 500 rows**, with `truncated` saying when it
+stopped at that cap rather than at the end of the trace. Follow the trace
+rather than expecting the feed to hold every cause it named.
+
+**Where `truncated` is set, the rest of the trace is in the listing.** The
+trace read is ordered forwards, so what the cap leaves out is the trace's
+*newest* rows — and `GET /events?trace_id=<trace_id>` lists that same
+trace newest first, under the same history floor, paged by
+`before_time` / `before_id` like any other listing here. Page it with
+`next` until you reach the last row the trace read returned — match its
+`timestamp` *and* its `id`, since an id alone is not unique in the log —
+and you have read every row of the trace newer than that one, which is
+what the cap left out.
 
 **Your cursor and your window bound the trace expansion too.** Both reads
 behind an `agent` page — the direct matches, and the other rows of their
@@ -1526,10 +1541,13 @@ by `trace_id` like every other. A sibling outside the window is not
 something you asked to see, and because the cut is by recency it would
 displace the rows you did.
 
-**So a row is on exactly one page of a walk.** The merge deduplicates by
-id within a page, and the shared cursor is what stops one coming back on
-a later one — provided you page with the cursor the answer hands you
-(`next`) rather than one you assembled yourself.
+**So no row is on two pages of a walk, and the walk ends.** The merge
+deduplicates within a page on the log's own key, `(timestamp, id)`, and
+the shared cursor is what stops a row coming back on a later one —
+provided you page with the cursor the answer hands you (`next`) rather
+than one you assembled yourself. What the walk does *not* promise is
+every row: a trace sibling cut from its page can be on none, and the
+trace is where it is (above).
 
 The persistent store retains 30 days, and
 [`event_history_seconds`](#the-health-envelope) on the health envelope is
@@ -1696,21 +1714,27 @@ how it finds out. **A drop is reported, not inferred.**
 - **It means "drops before this frame was queued"**, not "drops as of the
   moment you read it", so frames queued before a burst still report the older
   total. The newest frame always carries the current one.
-- **Refetch a push; re-ask a query.** The envelopes are gone and none of them
-  is individually recoverable, and which remedy applies depends on what was
-  lost. A dropped **push** is a state delta: everything it carried is in the
-  projection, so [`GET /stream/snapshot`](#routes), or a reconnect, which is
-  sent a `snapshot` at open, rebuilds the whole of it — and the event rows behind the
-  `event` pushes are durable besides, which `GET /events` pages. A dropped
-  **`result` or `error`** is not. Those ride the same queue under the same
-  rule, and a query answer is correlated by the `id` you minted rather than
-  being state any projection holds: no snapshot returns it, and the server does
-  not re-send it. Give every query an answer timeout of your own and ask again
-  — a reply that never lands is the one loss a refetch cannot repair.
-- **Nothing in the bundled dashboard acts on it yet.** The count is wire: an
-  operator can read it, and a client can branch on it. The dashboard this
-  release embeds does not, so a drop there surfaces only as the query timeout
-  above or as a number that is briefly behind until the next push corrects it.
+- **The server repairs the pushed state; re-ask a query.** The envelopes are
+  gone and none of them is individually recoverable, and what is recovered
+  depends on what was lost. A dropped **state push** is a delta, and
+  everything it carried is in the projection: once the connection's writer
+  has written another frame after a drop, it sends that connection a fresh
+  `snapshot`, built then, so the tab is repaired without doing anything.
+  Queued pushes that snapshot supersedes are discarded rather than delivered
+  after it; queued `event` pushes and query answers are delivered first. A
+  dropped **`event`** push is half-recovered: its feed row is in the snapshot
+  while it is among the newest 400, but the payload the push carried is not —
+  the snapshot's feed rows carry none — and the event rows are durable
+  besides, which `GET /events` pages and `GET /events/{id}` reads whole. A
+  dropped **`result` or `error`** is not recovered. Those ride the same queue
+  under the same rule, and a query answer is correlated by the `id` you minted
+  rather than being state any projection holds: no snapshot returns it, and
+  the server does not re-send it. Give every query an answer timeout of your
+  own and ask again — a reply that never lands is the one loss a snapshot
+  cannot repair.
+- **The count still matters to a client** that keeps state of its own beyond
+  what the snapshot carries: any increase means that state may have missed
+  updates.
 - **It is a field rather than a frame of its own** because a notice queued as an
   envelope would displace a real state frame in order to say a state frame was
   displaced, and under a burst the queue would fill with notices about notices.
@@ -1733,24 +1757,24 @@ REST route calls, so the two surfaces cannot diverge:
 
 | `what` | `params` | Answers with |
 |--------|----------|--------------|
-| `agent` | `{id}` | `GET /agents/{id}` — config + live state + `llm_history` |
+| `agent` | `{id, before_time, before_id}` | `GET /agents/{id}` — config + live state + `llm_history`, paged by `next` |
 | `agent_memory` | `{id}` | `GET /agents/{id}/memory`. Four collections: the diary, the episodes, the synthesized skills (with `skills_total` beside them, because the listing is a page of a set), and the COUNTERPARTY PROFILES — what this seat has learned about the colleagues it works with. Each profile carries both instants and they measure different cadences: `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits actually changed, so a colleague seen daily whose profile has not moved in months is one this seat has stopped learning about. `traits` is a bag whose keys the model invents, never a fixed schema. The diary is keyed on the derived agent id and the other three on the HANDLE; both are asked with the one identifier a caller has, and the half that does not recognise it answers nothing |
 | `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. `limit` governs the THREAD ROSTER only (50 by default, 200 at the ceiling) and `truncated` says it filled — a seat that speaks on exactly that many surfaces is otherwise indistinguishable from one whose list was cut, and the thread somebody is looking for is the one that went missing. `entries` is the named thread WHOLE, because the bound there is the write-time trim (`conversation.max_entries`) rather than a page: one number served both reads and bought nothing on a default company while silently dropping a conversation's OPENING on one that raised the knob, since the store orders newest-first to make a `LIMIT` keep the recent turns. Same scope rule as `work_my_work` |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
 | `events` | `{limit, type, source, category, trace_id, actor, agent, turn_id, work_key, since, until, before_id, before_time}` | `GET /events`. `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered. Rows written before migration `0029` carry the work key in `turn_id`, and that migration backfills it into the COLUMN, so history answers both. Every row answers with its own `work_key` read off that column rather than out of its `tags`, which is the one promoted value that is not a copy of a tag: the backfill deliberately does not rewrite a stored tags blob, since those record what the writer extracted from an event whose JSON carried no such field |
 | `event_series` | `{bucket, since, until, type, source, category, trace_id, actor, turn_id, work_key}` | `GET /events/series`. THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
-| `trace` | `{trace_id}` | `GET /events/trace/{trace_id}`. Answers `{trace_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-trace cap (500) rather than at the end of the trace, which the caller must say — a trace shown short with no note reads as a complete causal chain that simply ends. It is **counted, not inferred** from the row count: a trace of exactly the cap holds every row it has, and `len(rows) == cap` would put a truncation warning on a complete one |
+| `trace` | `{trace_id}` | `GET /events/trace/{trace_id}`. Answers `{trace_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-trace cap (500) rather than at the end of the trace, which the caller must say — a trace shown short with no note reads as a complete causal chain that simply ends. It is **counted, not inferred** from the row count: a trace of exactly the cap holds every row it has, and `len(rows) == cap` would put a truncation warning on a complete one. The rows past the cap are the trace's newest, and `events` with `trace_id` lists them — see [Paging the event history](#paging-the-event-history) |
 | `turns` | `{days, role, agent_id, model, work_key, failed, before, limit}` | `GET /turns`. ONE ROW PER RUN of a turn — a wake, a decision, its rounds and its reply — which is the view of a working company that did not exist anywhere. A turn that broke before reaching outside the engine is redelivered, so one TRIGGER is legitimately several rows; each carries the `work_key` they share and `work_key=` narrows to every attempt at one (see [a turn's two identities](../concepts/turn-engine.md#a-turns-two-identities)). A turn is what this engine DOES and every other surface is a projection of one: the spend rollup groups them, the seat page shows one seat's, an item's history links to the ones that touched it, and none of them is a list of them. The dashboard faked one by paging the raw event feed sixty-one times and folding in the browser — slow, capped at whatever the caller gave up on, and wrong at the page boundary, where a turn straddling two pages appeared twice. The aggregates are over PROMOTED COLUMNS (migration 0015) rather than payloads; only the duration, the summary and the task come from the completion record's own payload, read from the one row per turn that carries it. `complete` says whether a completion record exists — a turn with none is running or died mid-flight — and `duration_ms` is the turn's OWN measurement, which is not the span of its events: the span covers the reflection pass that publishes afterwards. `failed` is THREE-VALUED and absent means every turn, because folding it into `false` would hide every failing turn from an unparameterised list. The cursor is on the turn's START, which is what the listing is ordered by; a keyset on any one event pages a turn twice |
 | `turn` | `{turn_id}` | Every event of ONE RUN of a turn, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Rows written before migration `0014` carry no `turn_id` and do not answer this. Answers `{turn_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-turn cap (500) rather than at the end of the turn. A cut answer is the turn's **opening and its ending**, not its opening alone: a turn is read oldest first, so a head-only read would drop `agent_turn_completed` and `turn_completed` — the two records a reader takes the outcome, the duration and the plan summary from — and a turn cut at the cap would be indistinguishable from one that never finished. The last rows are recovered beside the first (up to 20 more, merged on the store's own identity, `(event_time, event_id)`, so the two reads cannot overlap into duplicates — the id alone is not unique, and a narrower key would drop a row the two reads legitimately both carry and then report a gap over a page holding the whole turn), so what `truncated` names is a gap in the **middle** — and it is **counted, not inferred** from the row count, because a turn between the cap and the cap plus twenty ends up whole on the page and must not carry a truncation warning. It also answers `work_key` and `attempts`: the unit of work this run was an attempt at, and every run of it the store holds, OLDEST FIRST — over the SAME thirty-day horizon the events above come from, not the turns list's own default week, so a turn between eight and thirty days old names its attempts rather than reporting none while displaying one — so the screen a deep link lands on can say "attempt 2 of 2" and link the other, rather than leaving a reader to conclude the company did the work twice. One element is the ordinary case; an empty `work_key` means the trigger had none to collapse on, and `attempts` is then empty too |
 | `phases` | `{role, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision |
 | `tokens` | `{since, until, since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `token_series` | `{group, bucket, since, until, previous, groups, agent_role, since_days}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE — the browser holds at most the live window's records, so an axis folded client-side would be right for a day and absent for every other range. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error |
-| `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
+| `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the fifty most recent fires across EVERY schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the ledger holds older fires of this schedule than the page — read as one row past it, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times. Those older fires are not served: this question takes no cursor, and the ledger — this node's own record of the fires it ran — keeps a week |
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read |
 | `budgets` | `{}` | `GET /budgets` |
-| `a2a_channels` | `{}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
+| `a2a_channels` | `{state, seat, id, limit, before_time, before_id}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `state` is `open`, `closed` or `all`, and defaults to `open` for a listing and to `all` when `id` is given; `seat` matches a channel at either end; `id` narrows to one channel wherever it falls in the order, closed or open unless `state` narrows it. Most recently active first, the id breaking a tie, at most 200 to a page. A cut page says `truncated: true` and carries `next` — `{before_time, before_id}`, the cursor to send back for the rest; either key without the other is refused. `totals` — `{channels, open, messages, pairs}` — counts every channel the filters matched rather than the page, so it does not move as a reader pages. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
 | `integrations` | `{}` | `GET /integrations` |
 | `work_items` | `{container, status, status_group, assignee, reporter, watcher, collaborator, tag, type, priority, parent, root, q, key, removed, blocked, blocking, has_dependencies, has_open_asks, flag, asked_of, asked_by, subtasks, f.<slug>, view, preset, viewer, group_by, group_by2, group, subgroup, group_limit, totals, sort, cursor, limit, …}` | `GET /work`. `container` is the scope — `workspace`, or `project:ENG` (a bare `ENG` works too, and the key is upper-cased because the column is) — and an ABSENT container is neither: the engine refuses to default it, because an omitted key would otherwise be the most expensive query in the system. Every list key is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent; `status` also takes `!` negation. There is no `open` flag — open and closed are STATUS GROUPS (`not_started`, `active`, `done`, `closed`), which is the level every rule in the tracker is written at. `f.<slug>=<value>` filters on a custom field — resolved against the company's catalogue by slug, id or label, and compared on the column its DECLARED TYPE says, so `f.effort=gt:9` is a numeric comparison and not a lexical one; the seventeen operators are `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `contains`, `startswith`, `in`, `range`, `any`, `all`, `not_any`, `not_all`, `me`, `null` and `not_null` — and which of them a field admits is a property of its TYPE, so `eq` on a `labels` field is REFUSED naming `any`, `all`, `not_any` and `not_all` rather than compiling to a clause that matches nothing and reads as "no task has this label". `null` and `not_null` are on every type, because "is this set" is a question about the ROW. A bare value is the type's NATURAL comparison — `any` on a set, because naming a value is not claiming the set IS it, and `eq` everywhere else. A set operator takes a comma-separated list (`any:api,ui`, at most 16) and `range` takes both ends (`range:3..8`), because a range with one end is `gte` or `lte`. A value whose text begins `<scheme>://` is a VALUE rather than an operator call, so a `url` field can be filtered by what it holds — anything else before a colon is carried through as an operator, so a typo is refused naming the set rather than silently answered. `f.<slug>=me` is resolved to the reader by the SURFACE before the query is parsed, which is what makes one saved view mean whoever opens it. A ref nothing resolves is REFUSED naming it. `q=` is a FIND rather than a search — a substring of a key (from the front) or a title (anywhere), which is what finds the item somebody half remembers; there is no `mode`, because this grammar has no ranker and ranked search over the company's prose is `search_knowledge`'s. `key=ENG-1,ENG-7` narrows to keys a caller already holds — upper-cased, like `container=` and `references=`, because a key is what somebody pasted and the column it is compared against is minted upper-case — and `removed=true` is the TRASH — the only way to list what a removal hid, which is what a restore is a gesture about. A parameter this grammar does not read is REFUSED naming it, never ignored: a filter nobody parsed is a board showing more than the person asked for, silently. An unknown status or group is refused naming the closed set rather than matching nothing. A custom field VALUE is checked against its own declaration at the write and refused naming the rule — never rounded or coerced to fit; see the coercion table in [the work tracker guide](../guides/work-tracker.md). `flag=` is the ATTENTION queue and its values OR: `cycle`, `too_deep`, `inconsistent_project` and `key_collision` are facts about a task's own row, and `one_sided` and `one_sided_final` are about a DEPENDENCY of it — an authored `waiting_on` whose blocker does not list it, and one whose mirror was refused permanently (the blocker is gone, was removed, or is full). The first is what the `tracker` duty repairs 30 seconds on; the second is what a person resolves. They OR because an attention queue asks "is anything wrong with this", and a conjunction over six flags answers nothing on every company. `totals=<column>:<op>` adds aggregates over the WHOLE matched set rather than the page — a number that changed as somebody scrolled would be the one thing a header must not do. The five ops are `sum`, `avg`, `min`, `max` and `count`; the columns are the summable ones (`points`, `estimate_min`, the `spend_*` family, `reassignments`, `depth`), the date columns for `min`/`max` only (a sum of dates is a number of microseconds nobody meant), `tasks:count`, and `f.<slug>` for a declared number or date field. A total with nothing to add up is ABSENT rather than zero: "nothing is estimated" and "everything is estimated at nothing" are different facts. `subtasks=` is how a tree is filtered: `collapsed` (the default) and `expanded` filter ROOT tasks and let their subtrees ride along unfiltered — so a todo root brings its done subtask — while `separate` filters every task on its own. The first two answer the same SET and differ only in how a caller renders it. Asking for a subtree with `parent=` or `root=` turns the mode off, because those are questions *about* subtasks and filtering their roots would answer the parent's siblings. `any=[{…},{…}]` is one level of disjunction, ANDed with the top-level keys: a branch is a PREDICATE, so it may not carry the keys that decide the answer's own shape (`removed`, `archived`, `show_closed`, `subtasks`) or how fresh it must be (`read_level`, `max_lag_seconds`, `max_lag_seq`, `min_position`) — those are the same decision at every branch or they are incoherent, and a branch that carried one would narrow what was asked for at the top level rather than widening it. An empty branch is refused, because it matches every task and makes the others decoration. `view=<id>` and `preset=<name>` are loaded FIRST and every explicit key overrides them — a saved view is a set of defaults rather than a lock, so somebody who opens a board and picks another assignee gets the view with that one key changed. A view beats a preset (somebody saved it) and what was typed beats both. The five presets are `my_queue`, `priorities`, `triage`, `blocked` and `overdue`. `my_queue` is *what can I pick up*: a DISJUNCTION of the work the viewer holds and the work in their OWN project nobody holds, open and unblocked, most important first — both arms matter, because written as "assigned to me" alone a seat with an empty queue reads the company as having nothing for it while its project's unclaimed backlog sits there, and the second arm is scoped to their project because unscoped it offers every unassigned task in the company. `priorities` is the viewer's own ordered list, open tasks only, IN THE ORDER somebody arranged it — that order is the answer, so nothing sorts over it, and a finished task drops out of the answer without the list being rewritten. `triage` is the unassigned open work, which with one fixed status set is the honest definition of "needs somebody to decide". `my_queue` and `priorities` both need `viewer=` and are refused without one, because a list with nobody's name on it is everybody's. A `view=` nothing resolves is REFUSED, never answered as the whole board. `group_by=` turns the answer into a BOARD: `groups` replaces `rows` — returning both would be the same rows twice — and each column carries its own `count` over the whole set beside a bounded slice of its rows (`group_limit`, default 20, max 100). A grouped answer mints no cursor, because across a set of columns there is no single order to be after; `group=<value>` is how a board loads one column further, and it narrows the WHOLE query, so the hint and the totals describe that column too. `group_by2=` adds swimlanes inside each column and `subgroup=` names one — a swimlane board is bounded by its CELLS rather than by either axis alone, because the work it costs is the PRODUCT of the two, so asking for lanes lowers the column cap and `subgroups_truncated` says a column has lanes beyond it. A `group_by=` over the WHOLE COMPANY is refused when the query's own narrowed predicate still matches more than 20 000 tasks: a board is drawn by sorting every one of them, and the refusal names the ceiling and what narrows it. It is a bounded COUNT rather than a check for the presence of a filter key, deliberately — `status_group=not_started,active` is a filter and narrows nothing, so a gate spelled "needs a narrowing filter" is one a caller clears in a single attempt without making the query any cheaper. Scoping to one project with `container=project:<key>` lifts it, because there the input is an index range whose width is one project's own size. An absent value is its own labelled column — "nobody is assigned" is a question a board answers rather than a row it hides. `group_by=tag` is the one axis where a task is on several columns at once; the answer sets `groups_overlap` so a reader knows the counts do not sum to `total_hint`, and `groups_truncated` says columns did not fit. Both are FLAGS rather than counts: the read takes one row past the bound as evidence, so a count computed from it could only ever be 1 — a board with two hundred assignee columns reported "1 more", which is a wrong number stated as a fact and worse than the silence the rule exists against. `sort=` takes `rank`, `updated`, `due`, `start`, `priority`, `created`, `title`, `estimate`, `points`, `spend` and `status_entered`, each reversible with a leading `-`. **An absent value sorts LAST in both directions**: "soonest first" and "latest first" are both questions about values, and a task with no due date is the answer to neither — so `sort=due` puts the undated at the end rather than ahead of the one due tomorrow, and a cursor resumes in the same place the order put it. `sort=f.<slug>` orders by a custom field, LEFT-joined so a task that set no value still appears — a sort that also filtered would be two things the caller asked for once, and such a task sorts last by the same rule. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, `totals`, `groups`, and an echo of the `view`/`preset` it was expanded from — these answers travel detached from their requests, so a board restored from a URL can still say which saved view it is showing — plus the coverage half below |
@@ -1873,8 +1897,9 @@ node, so no two nodes can write one row.  Each event
 updates the live-state projection *and* fans out to connected
 dashboards.  Backpressure is per-WebSocket: a stalled tab drops the
 oldest queued envelope so it cannot stall the publish path or other
-tabs — and is **told**, by the `dropped` count on the next frame that
-reaches it.
+tabs — and is **repaired**, by a fresh `snapshot` its writer sends once it
+has written another frame, and **told**, by the `dropped` count on the frames
+that reach it.
 
 The dashboard itself is a React + TypeScript application, built by Vite
 from `crewlet/dashboard/` into `crewlet/static/dashboard/`, which the
@@ -2858,8 +2883,9 @@ absence.
 Backs the dashboard's **Schedules** view. Returns every configured
 role/unit [schedule](../concepts/scheduling.md) with its cron, effective
 timezone, target → resolved runner handles, and a per-request `next_run`
-(computed from the cron), plus the most recent rows from the
-`scheduled_runs` dispatch ledger.
+(computed from the cron), plus what the `scheduled_runs` dispatch ledger —
+this node's own record of the fires it ran, kept for a week — says about
+them.
 
 ```json
 {
@@ -2880,13 +2906,36 @@ timezone, target → resolved runner handles, and a per-request `next_run`
       "scheduled_at": "2026-06-08T07:30:00+00:00",
       "fired_at": "2026-06-08T07:30:02+00:00", "outcome": "fired"
     }
-  ]
+  ],
+  "recent_runs_truncated": false,
+  "last_runs": [
+    {
+      "scope_type": "unit", "scope_id": "Backend",
+      "schedule_name": "daily-standup", "target_handle": "backend-dev",
+      "scheduled_at": "2026-06-08T07:30:00+00:00",
+      "fired_at": "2026-06-08T07:30:02+00:00", "outcome": "fired"
+    }
+  ],
+  "history_available": true
 }
 ```
 
-`recent_runs` is empty when the dispatch ledger cannot be read (the
-configured list and `next_run` still render). Disabled schedules return an
-empty `next_run`.
+- `recent_runs` is the newest 50 fires across **every** schedule, and
+  `recent_runs_truncated` says the ledger holds more — it is read one row past
+  the page, so a ledger of exactly 50 fires is not reported cut.
+- `last_runs` is each **configured** schedule's own newest fire, read per
+  schedule, so a quiet schedule whose last fire is older than the 50 above
+  still has one. A configured schedule with no row has no fire in the ledger.
+  It is the answer to "when did this last fire": picking that out of
+  `recent_runs` says a schedule has never fired whenever busier ones have
+  pushed its fires off that page. One schedule's own newest 50 fires are
+  `GET /schedules/{scope_type}/{scope_id}/{name}/runs` (the `schedule_runs`
+  query); its fires older than that are served by neither answer.
+- `history_available` is `false` when the dispatch ledger could not be read.
+  Both lists are then empty, and the configured list and `next_run` still
+  render — "nothing has fired" and "nobody could look" are different answers.
+
+Disabled schedules return an empty `next_run`.
 
 ---
 
@@ -2898,7 +2947,7 @@ Rolls up per-phase LLM spend across the whole org so the dashboard's
 **Tokens** view can render every breakdown from a single fetch.
 Reads `agent_phase_completed` events via
 the event store's phase-token query and groups them by phase, model,
-auxiliary worker, agent, and turn.
+worker, agent, and turn.
 
 **Query parameters**
 
@@ -2907,7 +2956,7 @@ auxiliary worker, agent, and turn.
 | `since` / `until` | (the `since_days` window) | RFC 3339 instants, and the pair a time-range control produces. The window is **half-open** — `[since, until)` — so two adjacent windows share their boundary instant without either losing it or counting it twice, and one that ends where it begins is refused rather than answered as a quiet company. `since` is floored at the store's 30-day retention. The same pair `GET /tokens/series` takes, so a reader scrubbing a range sees the figures and the chart move together. |
 | `since_days` | `7` | The same window as a count of days back from now, for a caller that has no instants. Clamped to `[1, 30]` — the event store keeps 30 days. Ignored when `since` or `until` is given. The **whole** window is folded either way: there is no row cap, so the number is the window's real total rather than a prefix of it. |
 | `agent_role` | (none) | Restrict to one role. Used by the agent detail page's per-phase summary. |
-| `recent_turns` | `50` | Cap on the per-turn list. |
+| `recent_turns` | `50` | Cap on the per-turn list, at most `500`. Every other figure still counts the turns past it, and `turns_total` says how many there were; the rows themselves are read by asking again over a narrower `since`/`until` window, which folds each turn with a phase inside it — a turn straddling an edge from only its phases inside the window. |
 
 The answer is labelled with the window it actually **covered**, never with the
 one that was asked for: a request further back than the retention is floored,
@@ -2938,7 +2987,7 @@ beside it.
     ...
   ],
   "by_worker": [
-    { "worker": "persist_decider", "input_tokens": 800,
+    { "phase": "subagent", "worker": "researcher", "input_tokens": 800,
       "output_tokens": 100, "total_tokens": 900, "calls": 1 }
   ],
   "by_agent": [
@@ -2978,7 +3027,11 @@ Notes:
   is the learning-subsystem caller (e.g. `persist_decider`,
   `counterparty_profiler`, `skill_synthesizer`), and a `subagent` row's
   is the `workers:` template it ran — empty on a delegation that wrote
-  its prompt inline.
+  its prompt inline, which therefore counts toward `by_phase` but toward no
+  worker. A worker row is keyed on its **`phase` and its name together**:
+  nothing reserves a learning worker's name from the `workers:` grammar, so
+  a template called `persist_decider` and the learning worker of that name
+  are two rows rather than one figure belonging to neither.
 - `by_model` is useful when roles override `llm_auxiliary` with a
   cheaper model for reflection / summarisation work.
 - All lists are sorted by `total_tokens` descending; `by_turn` is
@@ -3069,9 +3122,15 @@ Notes:
   for, so a legend can say "other (12)".
 - `totals` is every record in the window, **including the ones this
   grouping places in no band at all** — grouping by `worker` leaves out
-  every phase that is not a worker's, and by `turn` every phase that
-  carried no turn id. `grouped` is what the bands do cover, so the gap is a
-  number rather than an inference a reader has to make by subtracting.
+  every phase that is not a worker's (and a delegation that named no
+  template), and by `turn` every phase that carried no turn id. `grouped`
+  is what the bands do cover, so the gap is a number rather than an
+  inference a reader has to make by subtracting.
+- A `worker` band's `group` is **`<phase>/<name>`** — `subagent/researcher`
+  for a `workers:` template, `auxiliary/persist_decider` for a learning
+  worker — for the reason a `by_worker` row carries its `phase`: nothing
+  keeps the two kinds' names apart, and a band keyed on the name alone would
+  chart two workers' spend as one.
 - `at` is the bucket's **start**, never its middle or its end. A bucket
   reaches from `at` to `at` plus one hour or one day.
 - A window longer than 1000 buckets keeps the **newest** of them and

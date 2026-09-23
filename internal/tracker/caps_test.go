@@ -313,9 +313,9 @@ func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
 // header promising "Each is refused at WRITE naming the field, never cut", and
 // nothing in the engine read any of the three: the only code that mentioned
 // them was a test. One cap over, MaxChecklistAssignees is derived from the item
-// total on the reasoning that there cannot be more distinct assignees than
-// items — which is only true while the item total is a bound rather than a
-// sentence.
+// total on the reasoning that one commit cannot touch more distinct owners than
+// the items on its two sides — which is only true while the item total is a
+// bound rather than a sentence.
 func TestTheChecklistCapsAreRefusedAtTheWrite(t *testing.T) {
 	t.Parallel()
 	items := func(n int) []tracker.ChecklistItem {

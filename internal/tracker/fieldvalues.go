@@ -85,12 +85,23 @@ const (
 // one of them stops matching the other three.
 const liveFieldValue = `v.hidden = 0 AND v.kind <> '` + FieldValueForeign + `'`
 
-// MaxFieldValueSeq bounds how many entries one multi-valued field contributes.
+// MaxFieldValueSeq is how many members a write may set on one multi-valued
+// field, and [coerceMany] REFUSES a value past it.
 //
-// A LABELS OR PEOPLE FIELD IS A SET, and each member is its own row so an
-// `f.<slug>=<one>` filter is an index seek rather than a JSON scan. The cap is
-// [MaxOptions]'s, because the set a value can draw from is the declaration's
-// own option list and nothing can honestly exceed it.
+// A MULTI-VALUED FIELD IS A SET, and each member is its own row so an
+// `f.<slug>=<one>` filter is an index seek rather than a JSON scan. Where the
+// members are options — a labels field, or a dropdown declared multi — the
+// value is [MaxOptions]'s, because each member is one of the declaration's own
+// options. A people or relationship field has no option list — its members are
+// colleagues or work items — and takes the same number as a size for the set
+// rather than as a count of anything it draws from.
+//
+// IT BOUNDS THE WRITE, NEVER THE APPLY: [writeFieldValue] writes a row for
+// every member the document holds. A record that skipped this build's
+// coercion — a peer build with a different bound, during a rolling upgrade —
+// is still applied whole, because an index holding fewer members than the
+// document answers a filter on the missing ones as though the task did not
+// carry them.
 const MaxFieldValueSeq = MaxOptions
 
 // explodeFieldValues rewrites the rows one task's field values produce.
@@ -164,9 +175,10 @@ func appliesTo(field FieldDef, taskType string) bool {
 // declare.
 //
 // ONE ROW WHATEVER THE VALUE IS, because a foreign value has no type to
-// explode by: a list stays a list, in the JSON the document holds. It is
-// bounded already — [MaxFieldValueBytes] caps what a write may carry per
-// field — so nothing is cut here.
+// explode by: a list stays a list, in the JSON the document holds. Nothing is
+// cut here. [MaxFieldValueBytes] does NOT bound it — [coerceFields] passes an
+// undeclared key through untouched — so what bounds it is the record it
+// arrived in, which the writer refuses past [MaxCommitBytes].
 func writeForeignValue(ctx context.Context, tx *sql.Tx, taskID, fieldID string,
 	raw json.RawMessage) (int, error) {
 
@@ -233,9 +245,9 @@ func writeFieldValue(ctx context.Context, tx *sql.Tx, taskID string,
 		// applier salvages, because refusing here would wedge the task.
 		return 0, nil
 	}
-	if len(values) > MaxFieldValueSeq {
-		values = values[:MaxFieldValueSeq]
-	}
+	// EVERY MEMBER, with no cap here — see [MaxFieldValueSeq] for why the
+	// bound is the write's and not this one's.
+	//
 	// HIDDEN IS TWO FACTS, not one. An ARCHIVED field's values stay on
 	// their tasks and leave the filterable set; so do the values of a
 	// field whose AppliesTo excludes this task's TYPE, which is what a
@@ -247,9 +259,9 @@ func writeFieldValue(ctx context.Context, tx *sql.Tx, taskID string,
 	// than for the whole task, because `seq` is the member's index within
 	// this field's own set and the error below names the field whose value
 	// the engine could not write. A task carrying many single-valued
-	// fields is still a statement apiece; what this removes is the
-	// multi-valued case, where a labels or people field is up to
-	// [MaxFieldValueSeq] members and was up to that many statements.
+	// fields is still a statement apiece; what this removes is a statement
+	// per MEMBER of a multi-valued one, whose set [store.InsertRows] splits
+	// only where it passes the estate's parameter limit.
 	//
 	// [store.InsertRows] DIRECTLY rather than through [insertMany],
 	// because `seq` IS the index: insertMany hands its builder the item so

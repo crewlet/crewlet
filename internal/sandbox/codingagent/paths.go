@@ -44,7 +44,8 @@ func (p Paths) WorkDir() string { return p.Home + "/.crewlet" }
 // Result is where the agent's stdout is redirected.
 func (p Paths) Result() string { return p.WorkDir() + "/result.json" }
 
-// Err is where its stderr goes — the transcript's fallback source.
+// Err is where its stderr goes: the error of a run that left nothing else to
+// report (see [Runner.Collect]).
 func (p Paths) Err() string { return p.WorkDir() + "/err.log" }
 
 // Done is the done marker AND the exit code.

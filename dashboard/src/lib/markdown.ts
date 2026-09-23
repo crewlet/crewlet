@@ -335,7 +335,11 @@ function parseList(lines: string[], start: number): [Block, number] {
       continue;
     }
     if (marker === null && /^\s{2,}\S/.test(line) && open) {
-      own.push(line.slice(baseIndent));
+      // A LAZY CONTINUATION need not be indented as deeply as the marker:
+      // two spaces qualify it, and a nested list's `baseIndent` can be
+      // three or more. So only the whitespace is removed, never a character
+      // of the text — see [dedent].
+      own.push(dedent(line, baseIndent));
       i++;
       continue;
     }
@@ -343,6 +347,19 @@ function parseList(lines: string[], start: number): [Block, number] {
   }
   close();
   return [{ kind: "list", ordered, start: startNumber, items }, i];
+}
+
+/**
+ * `line` with up to `width` characters of LEADING WHITESPACE removed, and
+ * nothing else.
+ *
+ * `line.slice(width)` is only equal to this when the line is indented at least
+ * `width` deep. A continuation line under a list whose marker sat deeper than
+ * the line does is not, and the slice then cut the first letters of its text.
+ */
+function dedent(line: string, width: number): string {
+  const lead = /^\s*/.exec(line)?.[0].length ?? 0;
+  return line.slice(Math.min(lead, width));
 }
 
 // --- sectioning ------------------------------------------------------------

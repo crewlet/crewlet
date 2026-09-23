@@ -35,7 +35,7 @@
  * Back means "off this list" rather than "untick one".
  */
 
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { buildHash, href, useParam, useRoute } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -1577,6 +1577,17 @@ export function CalendarView({
   onToday: () => void;
 }) {
   const buckets = useMemo(() => bucketByDay(rows), [rows]);
+  // THE DAYS A READER HAS OPENED, by their date key. A folded day's chips are
+  // on the grid behind its count, and pressing the count shows every one of
+  // them in the cell; a new month folds them again.
+  const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => setOpened(new Set()), [month]);
+  const toggle = (key: string) =>
+    setOpened((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   return (
     <Card padding="none">
       <div className="work-cal">
@@ -1612,7 +1623,8 @@ export function CalendarView({
           ))}
           {weeks.flat().map((cell) => {
             const due = buckets.get(cell.key) ?? [];
-            const shownChips = due.slice(0, CALENDAR_CELL_CHIPS);
+            const open = opened.has(cell.key);
+            const shownChips = open ? due : due.slice(0, CALENDAR_CELL_CHIPS);
             return (
               <div
                 className={`work-cal-cell${cell.inMonth ? "" : " out"}${cell.today ? " today" : ""}`}
@@ -1652,8 +1664,15 @@ export function CalendarView({
                     <span className="truncate">{row.title}</span>
                   </a>
                 ))}
-                {due.length > shownChips.length && (
-                  <span className="work-cal-more">+{due.length - shownChips.length} more</span>
+                {due.length > CALENDAR_CELL_CHIPS && (
+                  <button
+                    type="button"
+                    className="work-cal-more"
+                    aria-expanded={open}
+                    onClick={() => toggle(cell.key)}
+                  >
+                    {open ? "Fewer" : `+${due.length - shownChips.length} more`}
+                  </button>
                 )}
               </div>
             );

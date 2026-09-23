@@ -53,6 +53,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Stream names. Kept short and uppercase because they appear in every
@@ -407,16 +408,17 @@ func streamNameFor(ns string) (string, error) {
 	return derivedPrefix + strings.ToUpper(ns), nil
 }
 
-// consumerNameMax bounds the readable part of a durable name. NATS allows
-// more; this leaves room for the hash and keeps a name an operator can read
-// in a `nats consumer ls` listing.
+// consumerNameMax bounds a whole derived durable name, digest included. NATS
+// allows 255 bytes; this keeps a name an operator can read in a
+// `nats consumer ls` listing.
 const consumerNameMax = 180
 
 // consumerName maps a (topic, group) pair onto a durable consumer name.
 //
 // It must be INJECTIVE, and making it so is the whole reason it is not just
-// a string join. JetStream durable names may not contain dots, spaces or the
-// wildcard characters, so the readable part has to be a lossy rewrite of both
+// a string join. A durable name may not contain any of [consumerNameRefused]
+// — dots, whitespace, the wildcards, slashes — so the readable part has to be
+// a lossy rewrite of both
 // halves — and lossy alone aliases: topic `a.b` and topic `a_b` in one group
 // produced ONE consumer, so two subscriptions shared a mailbox and each
 // received the other's events. Measured by the conformance suite's
@@ -431,29 +433,73 @@ const consumerNameMax = 180
 // collision probability below one in ten million for a company with ten
 // thousand subscriptions, against a real ceiling in the hundreds.
 func consumerName(topic, group string) string {
-	sum := sha256.Sum256([]byte(group + "\x00" + topic))
-	id := hex.EncodeToString(sum[:consumerDigestBytes])
-
-	readable := consumerNameSafe(group) + consumerNameSep + consumerNameSafe(topic)
-	// Truncation cannot reintroduce an alias: the digest is over the full
-	// pair and is appended after it.
-	if max := consumerNameMax - len(id) - len(consumerNameSep); len(readable) > max {
-		readable = readable[:max]
-	}
-	return readable + consumerNameSep + id
+	return derivedConsumerName([]string{group, topic}, group, topic)
 }
 
-// consumerDigestBytes is how much of the pair's digest ends a durable name, and
-// consumerNameSep what joins the three parts.
+// consumerDigestBytes is how much of the identity's digest ends a durable
+// name — the collision arithmetic is [consumerName]'s — and consumerNameSep
+// what joins the parts.
 const (
 	consumerDigestBytes = 6
 	consumerNameSep     = "__"
 )
 
+// derivedConsumerName is the one construction behind every durable consumer
+// name this backend derives: [consumerName], [domainConsumerName] and
+// [domainGroupName].
+//
+// ONE CONSTRUCTION, because each of those names is only as collision-free as
+// its digest length, its escape and its cut, and three copies of the three
+// were free to disagree with nothing to notice.
+//
+// THE DIGEST IS THE IDENTITY and the rest is a label. identity is the exact
+// values the consumer is for, joined by a NUL as [consumerName] describes, and
+// [consumerDigestBytes] of its SHA-256 end the name; readable is what an
+// operator sees, each part put through [consumerNameSafe] and joined by
+// [consumerNameSep].
+//
+// A LABEL PAST [consumerNameMax] IS CUT, on a rune boundary, and the cut
+// cannot alias two consumers because the digest over the whole identity is
+// appended after it. It carries NO MARKER, for a reason a marker cannot get
+// round: the name is a durable's identity on a broker two builds share during
+// a rolling upgrade, and labels are already cut today — a seat handle of
+// seventy characters is enough to cut its inbox's — so a marker added now
+// would rename those consumers under the upgrade and leave both builds
+// attached to two mailboxes for one seat. The label is not where the value
+// lives: the caller holds the whole identity it named the consumer with, and
+// a subscription's consumer also carries its pair in its metadata
+// ([subscriptionMetadata]).
+func derivedConsumerName(identity []string, readable ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(identity, "\x00")))
+	id := hex.EncodeToString(sum[:consumerDigestBytes])
+
+	parts := make([]string, len(readable))
+	for i, part := range readable {
+		parts[i] = consumerNameSafe(part)
+	}
+	label := strings.Join(parts, consumerNameSep)
+	if max := consumerNameMax - len(id) - len(consumerNameSep); len(label) > max {
+		label = textcut.Bytes(label, max)
+	}
+	return label + consumerNameSep + id
+}
+
+// consumerNameRefused is every character refused in a durable consumer's
+// name: what nats-server's isValidAssetName refuses on a consumer create,
+// which covers what the nats.go client's own validateConsumerName refuses
+// before sending one. A name part holding one is rewritten rather than sent to
+// be refused.
+const consumerNameRefused = " \t\r\n\f.*>\\/"
+
 // consumerNameSafe is the lossy rewrite that makes a name part legal in a
-// durable consumer name.
+// durable consumer name: each of [consumerNameRefused] becomes an underscore.
 func consumerNameSafe(s string) string {
-	return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune(consumerNameRefused, r) {
+			return '_'
+		}
+		return r
+	}, s)
 }
 
 // pairFromConsumerName recovers the (topic, group) pair a durable consumer was
@@ -464,8 +510,8 @@ func consumerNameSafe(s string) string {
 // verbatim; the group is what the name holds before the rewritten topic, and
 // the candidate counts only if it rebuilds the very name, digest included. That
 // refuses exactly the two cases the name cannot answer: a group whose rewrite
-// was lossy (a dot, a space or a wildcard became an underscore) and a name
-// whose readable part was truncated. Every group the engine creates is a
+// was lossy (a character of [consumerNameRefused] became an underscore) and a
+// name whose readable part was truncated. Every group the engine creates is a
 // plain seat or service name, so neither arises for its own consumers; a guess
 // in either case would list a subscription under a pair nothing can address,
 // and a caller deleting it would delete nothing.

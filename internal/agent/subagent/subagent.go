@@ -57,7 +57,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/structured"
@@ -121,12 +120,24 @@ const (
 // different scope name.
 const ScopeSubagent = "subagent"
 
-// errorLimit caps the failure text carried back to the model, in runes.
+// errorLimit caps the failure text the PARENT'S MODEL is shown per task, in
+// runes.
 //
-// A panic's message can arrive with a stack behind it and a provider error can
-// carry a whole response body; either would blow past the tool result the
-// parent reads. 500 runes holds two or three sentences — enough to say what
-// stopped, never enough to bury the sibling results it is rendered next to.
+// A provider error can carry a response body the engine does not control,
+// and a panic's value is whatever was panicked with; either would dwarf the
+// sibling results it is rendered next to. 500 runes holds two or three
+// sentences — enough to say what stopped.
+//
+// A BOUND ON THE REPORT, NEVER ON THE RECORD. [Result.Error] holds the whole
+// text; only [errorExcerpt] applies this, and it keeps both ends with a marked
+// gap, because an error chain says what failed at its start and what to
+// change at its end. A task that started hands its whole Result to
+// [Config.Telemetry], which the engine publishes as the worker's
+// agent_phase_completed event with this text as `error` — bounded there at
+// [events.MaxDiagnosticBytes], keeping its start. A task that never started
+// has no phase event: its text is a skip or stop reason composed here, and a
+// skip names dependencies whose own entries in the same report carry their
+// status and error.
 const errorLimit = 500
 
 // controlDenylist is the first-party engine-control surface a sub-agent never
@@ -375,14 +386,19 @@ type Config struct {
 	// required skills.
 	Guard func(*tools.Surface) tools.Guard
 
-	// Telemetry receives every child's Result, once, on every path a child
-	// can end on.
+	// Telemetry receives the Result of every task that STARTED — was
+	// handed to a worker — once, whichever way it ended, a panic included.
 	//
 	// The package produces a Result for every outcome specifically so the
 	// caller's phase event cannot be missing — and the tool below is that
 	// caller. Without this hook a spawn is invisible: its tokens are
 	// charged, its model call happened, and nothing in the event store or
 	// the dashboard says a sub-agent ran at all.
+	//
+	// A task that never started — skipped behind a dependency, or still
+	// queued when the call's deadline landed — had no worker and no phase,
+	// so it is not reported here. Its status is on the call's
+	// subagent_batched event and its entry in the parent's report.
 	Telemetry func(ctx context.Context, res Result)
 }
 
@@ -520,14 +536,18 @@ var (
 // Run plans one delegate call and executes its graph.
 //
 // The error is reserved for a request or a wiring that could not start ANY
-// task — a malformed graph, an unknown worker, a budget slice too thin to
-// share. Every way a started task can end is a Result, and the results come
-// back in the order the parent wrote them.
+// task — a malformed graph, an unknown worker, a model that does not resolve,
+// a budget slice too thin to share. Every way a started task can end is a
+// Result, and the results come back in the order the parent wrote them.
 func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	tasks, err := plan(req, cfg.Workers, cfg.Limits)
+	if err != nil {
+		return nil, err
+	}
+	models, err := resolveModels(ctx, cfg, tasks)
 	if err != nil {
 		return nil, err
 	}
@@ -550,17 +570,6 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 
 	results := runGraph(callCtx, tasks, cfg.Limits.MaxParallel,
 		func(taskCtx context.Context, r resolved, deps []Result) Result {
-			provider, key, err := resolveProvider(taskCtx, cfg, r.model)
-			if err != nil {
-				// A model key that does not resolve is this TASK's
-				// failure, not the call's: its siblings are running on
-				// keys that do, and refusing the whole call would throw
-				// away work that is already in flight.
-				return Result{
-					ID: r.ID, Worker: r.Worker, Status: StatusFailed,
-					Error: ledger.Elide(err.Error(), errorLimit),
-				}
-			}
 			// THE CLOCK STARTS WHERE THE CAP DOES, and the two
 			// were a function call apart.
 			//
@@ -577,10 +586,14 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 			began := time.Now()
 			childCtx, cancel := context.WithTimeoutCause(taskCtx, cfg.Limits.TaskTimeout, errTaskDeadline)
 			defer cancel()
-			return run(childCtx, began, cfg, provider, key, meter, r, deps)
+			return run(childCtx, began, cfg, models[r.ID], meter, r, deps)
 		})
 
-	publishCall(ctx, cfg, tasks, results)
+	// WITHOUT THE PARENT'S CANCELLATION: this records a call that already
+	// ran, and a parent torn down while its workers ran is a call worth
+	// finding afterwards. A broker client refuses a publish under a
+	// context that is already done.
+	publishCall(context.WithoutCancel(ctx), cfg, tasks, results)
 	return results, nil
 }
 
@@ -589,10 +602,11 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 // began is when this task's wall-clock cap started, which is the caller's to
 // stamp: the deadline context is created there, and a clock started here would
 // run from a point strictly later than the one the cap is measured against.
-func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider,
-	key string, meter toolloop.BudgetMeter, task resolved, deps []Result,
+func run(ctx context.Context, began time.Time, cfg Config, model workerModel,
+	meter toolloop.BudgetMeter, task resolved, deps []Result,
 ) (res Result) {
-	res.ID, res.Worker, res.ProviderKey = task.ID, task.Worker, key
+	res.ID, res.Worker, res.ProviderKey = task.ID, task.Worker, model.key
+	provider := model.provider
 
 	// TELEMETRY ON EVERY PATH, including the panic the frame below
 	// contains. Deferred FIRST so it runs LAST: the recovery below writes
@@ -603,8 +617,13 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	// caller's phase event cannot be missing, and without this a delegate
 	// call is invisible — its tokens charged, its model call made, and
 	// nothing in the event store saying a worker ran.
+	//
+	// WITHOUT ctx's CANCELLATION. The workers most worth a record are the
+	// ones whose context ended — a timed-out worker's is past its deadline,
+	// a cancelled one's is cancelled — and a broker client refuses a
+	// publish under a context that is already done.
 	if cfg.Telemetry != nil {
-		defer func() { cfg.Telemetry(ctx, res) }()
+		defer func() { cfg.Telemetry(context.WithoutCancel(ctx), res) }()
 	}
 
 	// STAMPED ON EVERY PATH TOO, and registered AFTER the telemetry hook so
@@ -633,7 +652,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		}
 		log.ErrorContext(ctx, "subagent_panicked", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
 		res.Status = StatusFailed
-		res.Error = ledger.Elide(fmt.Sprintf("worker panicked: %v", r), errorLimit)
+		res.Error = fmt.Sprintf("worker panicked: %v", r)
 	}()
 
 	grant := Permit(cfg.Universe, cfg.parentNames(), task.tools)
@@ -744,6 +763,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		res.Model = loop.Model
 		res.Executions = loop.Executions
 		res.Narration = loop.Narration
+		res.Truncated = loop.Truncated
 		res.Status, res.Output = submitted(submit)
 		if res.Status == StatusNoResult {
 			log.WarnContext(ctx, "subagent_never_submitted", "task", task.ID,
@@ -763,6 +783,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	res.Model = partial.Model
 	res.Executions = partial.Executions
 	res.Narration = partial.Narration
+	res.Truncated = partial.Truncated
 
 	kind, reason := stopReason(ctx)
 	res.Status, res.Error = classify(kind, reason, err)
@@ -827,7 +848,7 @@ func stopReason(ctx context.Context) (kind, reason string) {
 		// The parent turn was torn down. NOT a timeout: nothing exceeded a
 		// cap, and an executor told "timed out" would helpfully retry with
 		// a smaller task against an engine that is shutting down.
-		return KindCancelled, ledger.Elide(cause.Error(), errorLimit)
+		return KindCancelled, cause.Error()
 	}
 }
 
@@ -916,6 +937,33 @@ func (m *sliceMeter) Used() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.used
+}
+
+// workerModel is the provider one task runs on, and the key that names it.
+type workerModel struct {
+	provider llm.Provider
+	key      string
+}
+
+// resolveModels resolves every task's provider BEFORE any task runs, keyed by
+// task id.
+//
+// UP FRONT for the reason [plan] is: a model that does not resolve is as
+// knowable before the first worker starts as a cycle is, and finding it only
+// when its task starts lets every task scheduled ahead of it run and spend on
+// a graph that cannot finish. A refusal names the task and carries the
+// resolution's own error, which for an unknown key lists the configured ones.
+func resolveModels(ctx context.Context, cfg Config, tasks []resolved) (map[string]workerModel, error) {
+	out := make(map[string]workerModel, len(tasks))
+	for _, t := range tasks {
+		provider, key, err := resolveProvider(ctx, cfg, t.model)
+		if err != nil {
+			return nil, &PlanError{Reason: fmt.Sprintf(
+				"delegate: task %q cannot run: %v", t.ID, err)}
+		}
+		out[t.ID] = workerModel{provider: provider, key: key}
+	}
+	return out, nil
 }
 
 // resolveProvider builds the seat's sub-agent chain.

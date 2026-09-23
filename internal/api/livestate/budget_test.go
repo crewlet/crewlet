@@ -503,12 +503,12 @@ func TestACappedSpendWindowReportsWhatItCovers(t *testing.T) {
 	// UNDER THE CAP: nothing was dropped, so the caller keeps the window's
 	// own `since` and an ordinary company's heading does not change.
 	base := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
-	if _, covered := s.SpendRecords(); covered != "" {
-		t.Errorf("an empty projection claims coverage from %q", covered)
+	if _, covered := s.SpendRecords(); !covered.IsZero() {
+		t.Errorf("an empty projection claims coverage from %v", covered)
 	}
 	s.Apply(phaseSpend("p-1", base.Format(time.RFC3339), 10))
-	if _, covered := s.SpendRecords(); covered != "" {
-		t.Errorf("a projection inside the cap claims coverage from %q", covered)
+	if _, covered := s.SpendRecords(); !covered.IsZero() {
+		t.Errorf("a projection inside the cap claims coverage from %v", covered)
 	}
 
 	// PAST THE CAP: the oldest are gone, and the earliest retained record
@@ -518,25 +518,129 @@ func TestACappedSpendWindowReportsWhatItCovers(t *testing.T) {
 			base.Add(time.Duration(i)*time.Second).Format(time.RFC3339), 10))
 	}
 	rows, covered := s.SpendRecords()
-	if covered == "" {
+	if covered.IsZero() {
 		t.Fatalf("%d records were dropped and the projection reports no "+
 			"coverage, so the rollup is headed with a window it does not have",
 			livestate.SpendRecordLimit+11-len(rows))
 	}
-	if covered <= base.Format(time.RFC3339) {
-		t.Errorf("coverage starts at %q, which is at or before the record the "+
+	if !covered.After(base) {
+		t.Errorf("coverage starts at %v, which is at or before the record the "+
 			"cap dropped", covered)
 	}
 	// THE EARLIEST RETAINED, computed over the whole slice: hydration can
 	// append behind a live record, so a first-element read would be right
 	// only while the slice happened to be ordered.
-	earliest := ""
+	var earliest time.Time
 	for _, r := range rows {
-		if earliest == "" || r.Timestamp < earliest {
-			earliest = r.Timestamp
+		at, err := time.Parse(time.RFC3339, r.Timestamp)
+		if err != nil {
+			t.Fatalf("a record this test wrote does not parse: %v", err)
+		}
+		if earliest.IsZero() || at.Before(earliest) {
+			earliest = at
 		}
 	}
-	if covered != earliest {
-		t.Errorf("coverage = %q, want the earliest retained %q", covered, earliest)
+	if !covered.Equal(earliest) {
+		t.Errorf("coverage = %v, want the earliest retained %v", covered, earliest)
+	}
+}
+
+// A SEED THAT FILLS THE CAP IS HEADED WITH WHAT IT KEPT, as the live path's
+// prune is once it drops a record.
+//
+// AT the cap, not only past it: a store read bounded at
+// [livestate.SpendRecordLimit] hands over exactly that many whether or not the
+// window held more, and the full window's heading over a read that was cut
+// names hours the numbers do not cover. Headed from the earliest record kept,
+// the exact-cap page is right in both cases — when the window held exactly that
+// many, nothing inside it precedes that record. A page BELOW the cap is the
+// whole window, and keeps the window's own heading.
+// THE STORE SAYS WHETHER THE SEED WAS CUT, and the heading follows its answer
+// rather than the page's length. A page exactly at the cap is the case a
+// count cannot decide: a window that held exactly that many and one that held
+// ten times as many hand over the same rows. So the same page is headed with
+// the whole window when the store says nothing was left behind, and with the
+// earliest record kept when it says something was.
+func TestASeedThatFillsTheCapIsHeadedWithWhatItKept(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	clock := livestate.WithClock(func() time.Time { return now })
+	first := now.Add(-time.Hour)
+	page := func(n int) []tokens.Record {
+		out := make([]tokens.Record, 0, n)
+		for i := range n {
+			out = append(out, tokens.Record{
+				EventID:   fmt.Sprintf("h-%05d", i),
+				Timestamp: first.Add(time.Duration(i) * 100 * time.Millisecond).Format(time.RFC3339Nano),
+				AgentRole: "Lead", Phase: "plan", TotalTokens: 1,
+			})
+		}
+		return out
+	}
+
+	short := livestate.New(clock)
+	short.Seed(livestate.History{Spend: page(livestate.SpendRecordLimit - 1)})
+	if _, covered := short.SpendRecords(); !covered.IsZero() {
+		t.Errorf("a seed below the cap is headed from %v; it is the whole window, "+
+			"so the window's own heading is the true one", covered)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		n         int
+		truncated bool
+		want      time.Time
+	}{
+		// The window held exactly the cap: nothing precedes the page, so
+		// the window's own heading is the true one.
+		{"exactly the cap, nothing left behind", livestate.SpendRecordLimit, false, time.Time{}},
+		// Same page, but the store read past it and found more.
+		{"exactly the cap, older records left behind", livestate.SpendRecordLimit, true, first},
+		// The oldest is dropped here, so coverage starts at the second.
+		{"one past the cap", livestate.SpendRecordLimit + 1, false, first.Add(100 * time.Millisecond)},
+	} {
+		s := livestate.New(clock)
+		s.Seed(livestate.History{Spend: page(tc.n), SpendTruncated: tc.truncated})
+		rows, covered := s.SpendRecords()
+		if len(rows) != livestate.SpendRecordLimit {
+			t.Fatalf("%s: holding %d records, want the cap %d", tc.name, len(rows), livestate.SpendRecordLimit)
+		}
+		if !covered.Equal(tc.want) {
+			t.Errorf("%s: coverage from %v, want %v (a zero heads the rollup "+
+				"with the whole window)", tc.name, covered, tc.want)
+		}
+	}
+}
+
+// COVERAGE IS AN INSTANT, NOT THE SMALLEST STRING.
+//
+// RFC 3339 with fractional seconds does not sort as text: "12:00:00.5Z" is
+// lexically before "12:00:00Z", because '.' is before 'Z'. A minimum taken
+// over the records' own strings names the half-second record as the earliest
+// when the whole-second one is — and heads the rollup with a window that
+// excludes a record it summed.
+func TestCoverageIsTheEarliestInstantNotTheSmallestString(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 6, 14, 13, 0, 0, 0, time.UTC)
+	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
+	whole := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	spend := []tokens.Record{
+		// Dropped by the cap: the oldest.
+		{EventID: "oldest", Timestamp: whole.Add(-time.Second).Format(time.RFC3339Nano), TotalTokens: 1},
+		// The earliest KEPT, and the one whose text sorts after the next.
+		{EventID: "whole", Timestamp: whole.Format(time.RFC3339Nano), TotalTokens: 1},
+		{EventID: "half", Timestamp: whole.Add(500 * time.Millisecond).Format(time.RFC3339Nano), TotalTokens: 1},
+	}
+	for i := range livestate.SpendRecordLimit - 2 {
+		spend = append(spend, tokens.Record{
+			EventID:     fmt.Sprintf("later-%05d", i),
+			Timestamp:   whole.Add(time.Duration(i+1) * time.Second).Format(time.RFC3339Nano),
+			TotalTokens: 1,
+		})
+	}
+	s.Seed(livestate.History{Spend: spend})
+	_, covered := s.SpendRecords()
+	if !covered.Equal(whole) {
+		t.Errorf("coverage = %v, want %v — the earliest record kept", covered, whole)
 	}
 }

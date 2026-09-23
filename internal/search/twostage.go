@@ -19,11 +19,6 @@ import (
 //
 //	stage-1 depth  = FuseN × SemanticOverfetch × BinaryOversample = 1 200
 //	returned depth = FuseN × SemanticOverfetch                    =   150
-//
-// Applying the RETURN ceiling to stage one gives an effective oversample of
-// 3.3×, and 2× measured 0.6552 recall against 1.0000 at 8× — so the two
-// ceilings are separate constants for the same reason the two multipliers
-// are.
 const (
 	// FuseN is how many results each half contributes to the fusion.
 	FuseN = 50
@@ -46,11 +41,6 @@ const (
 	// three above rather than written again.
 	Stage1Depth = FuseN * SemanticOverfetch * BinaryOversample
 	ReturnDepth = FuseN * SemanticOverfetch
-
-	// BinaryCandidateCeiling caps stage one, and FuseCandidateCeiling caps
-	// what enters the fusion. See the note above on why they are two.
-	BinaryCandidateCeiling = 4_000
-	FuseCandidateCeiling   = 500
 
 	// FuseK is reciprocal rank fusion's constant, at the value the
 	// literature ships.
@@ -125,9 +115,6 @@ func FloorAt(n int) float64 {
 func Stage1(codes [][]uint64, query []uint64, depth int) []int {
 	if depth <= 0 || len(codes) == 0 {
 		return nil
-	}
-	if depth > BinaryCandidateCeiling {
-		depth = BinaryCandidateCeiling
 	}
 	top := newTopK(depth)
 	for i, code := range codes {

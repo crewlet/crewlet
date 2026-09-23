@@ -29,7 +29,13 @@ import (
 // two of the five schemes sign a timestamp and check it against a replay
 // window: a suite on the real clock would assert about the window's edges by
 // sleeping.
-var pinned = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+//
+// FROZEN AT THE START OF THE RUN rather than at a calendar date, because the
+// rows a delivery writes are stamped with this clock and read back through the
+// event store, whose read floor ([store.EventHistory]) is measured from the
+// REAL clock. A fixed date is a test that passes until the machine's calendar
+// is that many days past it, and then finds no rows at all.
+var pinned = time.Now().UTC().Truncate(time.Second)
 
 // recorder is a queue.Publisher that keeps what it was given, and can be made
 // to fail.
