@@ -452,6 +452,27 @@ digest can be computed is the one where somebody presents their password. A
 verifier written under an older cost verifies under *its own* parameters and is
 reported stale, and the record that records the successful sign-in rewrites it.
 
+### A code is spent when it is used
+
+Either second factor works at a sign-in or a step-up, whichever the person
+holds: an app code, or one of their recovery codes when the phone is not to
+hand. Both are **spent by the sign-in they complete**, as a write to the
+person's own credentials decided in the same snapshot that checked them:
+
+- an **app code** records the time step it was accepted at, and a code at or
+  before that step is refused. Without it, the drift tolerance — the code
+  before and after the current one are also accepted, because clocks disagree —
+  is a ninety-second window in which one code read over somebody's shoulder
+  works as often as it is typed;
+- a **recovery code** is removed. It is a one-time value by definition, and one
+  that stayed would be a second password written on paper.
+
+Two sign-ins presenting the same code at once are arbitrated like any other
+write to the same person: one lands, the other finds the code already spent and
+is refused with the same generic error as a wrong code. A sign-in whose spend
+cannot be recorded — the identity log is unreachable — is answered 503 rather
+than opening a session on a code that would still work afterwards.
+
 ### A sign-in endpoint is not a roster
 
 The failure that shapes this whole surface is not a guessed password — it is an
@@ -955,6 +976,108 @@ One authority concern *does* live outside: a request whose path is not already
 canonical is refused, because `/work/items/../config` matches one pattern and
 reads to a person as another. It has to be outside, because Go's router cleans
 the path and redirects before it matches at all.
+
+---
+
+## The audit feed: what is said, and what never is
+
+Identity has **two trails**, and they answer different questions.
+
+- **`iam_history`** is the *record*. The identity applier writes a row for
+  every identity write on every node, from the log, so it is the same on all of
+  them and survives any node — see [Two retention horizons](#two-retention-horizons-and-one).
+- **The `auth` category** of the ordinary event feed is what *this node saw*:
+  who signed in here and how, what ended a session, which token was used, how
+  many attempts failed and from where. Each row is published through the
+  node's event queue like every other event, so it lands in that node's event
+  store, on every dashboard's activity feed under the **auth** chip, and at an
+  OpenTelemetry collector. It is the live half, and it is per node — a fleet's
+  feeds read side by side, with the source node on each row.
+
+| Event | Published by | How often |
+|---|---|---|
+| `iam_session_started` | The sign-in surface, on a password, app-code, identity-provider, invitation, bootstrap-code or token sign-in | Once per session |
+| `iam_stepup_completed` | The sign-in surface, when a signed-in person confirms who they are | Once per step-up |
+| `iam_session_ended` | A logout (`logout`, `logout_all`), an administrator (`revoked`, `person_removed`), the deactivation probe (`idp_revoked`), or the request guard noticing a deadline (`idle`, `absolute`) | Once per ending; a deadline once per session per node, when the cookie is next presented |
+| `iam_session_reuse_detected` | The request guard, for a cookie presented past its rotation overlap | Once per session per node — and the sessions the person held are ended once, however often the replay repeats |
+| `iam_login_failures` | The engine's own flush loop | One row per client per minute; see below |
+| `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
+| `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
+| `iam_mfa_reset` | The directory, when an administrator clears somebody's second factor | Once per reset |
+| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed |
+| `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
+| `iam_token_first_use` | The request guard, for a Tier A token | Once per token per hour per node — or every request, for a token whose entry sets `audit_every_use` |
+| `iam_token_overreach` | The request guard, for a Tier A token a route refused with 403 | Coalesced like its use |
+| `statelog_record_unverifiable`, `statelog_record_tampered` | Any domain's applier, for a record signed under a key this node lacks, or failing under one it holds | Once per domain and key id per node process, capped at sixteen ids |
+
+### A failed attempt is a count, never a row
+
+Anybody who can reach the API can fail to sign in as often as they like, for
+free, with no credential to revoke and no identity on the row. A row per
+attempt would hand the size of every node's event store — and of every backup
+and snapshot taken from it — to whoever is making the attempts. So a failed
+sign-in, a refused second factor, an identity-provider round trip that did not
+verify, a wrong bootstrap or invitation code and a refused bearer credential
+each do two things and publish nothing:
+
+- add one to the `crewlet.auth.attempts.failed` counter, by `method` and
+  whether the throttle turned it away — the per-attempt number, for a
+  dashboard or an alert (see [Metrics](../reference/metrics.md));
+- fold into a tally keyed on the client and the minute.
+
+When the minute has closed, the engine publishes **one `iam_login_failures`
+row per client** carrying the number of attempts, how many the throttle turned
+away, the methods tried, how many *different* names were tried, and the ids of
+any people the engine itself resolved an attempt to. A node that stops
+publishes the minute it is still holding on the way down.
+
+**It never carries what was typed.** Not the login, not the password somebody
+typed into the login box, not a token, and not an unsalted hash of any of them,
+which would reverse against the company's own roster in one pass. The count of
+different names is taken over digests under a key the process generates at
+start and never writes anywhere, and the digests are discarded with the
+minute.
+
+Every size here is bounded rather than chosen by the caller: at most 64
+clients are named in one minute and the rest fold into a single `*` row that
+says how many there were, a distinct-name count saturates at 256, and a row
+names at most 16 people. A count at its cap reads "at least", never less than
+happened.
+
+### A token's use is one row an hour
+
+A Tier A token driving the operator MCP surface makes a request per tool call,
+and a row per request turns one assistant session into thousands of rows that
+bury the one worth finding. So a token's use is `iam_token_first_use`, once per
+token per hour on each node, naming the route class and the client; and a
+request a route **refused** with 403 is `iam_token_overreach`, coalesced the
+same way — a credential being pointed at something it was not given is the
+signal an audit is for.
+
+A token whose entry in `api.auth.tokens` sets **`audit_every_use: true`** gets
+both rows on every request instead. It is off by default and meant for the
+credential a company has decided to watch individually: break-glass. See
+[Configuration § Auth](../getting-started/configuration.md).
+
+A dashboard socket re-checking the credential it was opened with is not a use;
+only a request is.
+
+### What has no event at all
+
+Two facts happen on every request and are deliberately not events, rather than
+events filtered out of the store:
+
+- **the authorization decision** — the answer is the response the caller got,
+  and the question is the route they asked; a refusal worth auditing is already
+  the overreach row, or the failure count;
+- **a session being used** — rotation is derived from the session's age, so an
+  hour of use writes nothing, and a touch event would be the one row per request
+  the rest of this design exists to avoid.
+
+And there is no linking event: this build has no gesture that binds an
+identity-provider subject to a person as a step of its own (see [Linking is
+explicit](#linking-is-explicit-and-an-email-match-is-never-a-link)), so there
+is nothing for one to announce.
 
 ---
 
