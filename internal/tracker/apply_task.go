@@ -850,6 +850,17 @@ func (a *Applier) maintainReferences(ctx context.Context, tx *sql.Tx, task Task)
 // for its life and the row is claimed by the first task to hold the key. A
 // key another task already holds is LEFT AS IT IS, because taking it would
 // silently re-point every reference anybody ever wrote.
+//
+// # And the task that could not claim it carries `key_collision`
+//
+// Two tasks holding one key is a shape the broker cannot refuse: the counter
+// and the task are different subjects, so a counter restored beside tasks
+// minted after it mints numbers those tasks already hold, and each create
+// arbitrates only against itself. The applier writes what the record says —
+// refusing would stall the log on every node over one duplicate — and the
+// attention set is where somebody finds it. The flag is DERIVED from the
+// directory rather than carried, so it is identical on every node and follows
+// the claim wherever a purge hands it.
 func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task) (int, error) {
 	if task.Key == "" {
 		return 0, nil
@@ -859,6 +870,35 @@ func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task) (int,
 		ON CONFLICT (key) DO NOTHING`, task.Key, task.ID)
 	if err != nil {
 		return 0, fmt.Errorf("tracker: claim the key of %s: %w", task.ID, err)
+	}
+	claimed, err := affected(res)
+	if err != nil {
+		return 0, err
+	}
+	flagged, err := flagKeyCollisions(ctx, tx, task.Key)
+	if err != nil {
+		return 0, err
+	}
+	return claimed + flagged, nil
+}
+
+// flagKeyCollisions re-derives `key_collision` for every task holding a key:
+// set on each one the directory does not name, clear on the one it does.
+//
+// ONLY THE ROWS WHOSE FLAG DISAGREES ARE WRITTEN, so an ordinary apply of a
+// task that holds its key alone touches no row here and reports none.
+func flagKeyCollisions(ctx context.Context, tx *sql.Tx, key string) (int, error) {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_tasks
+		SET key_collision = NOT EXISTS (
+			SELECT 1 FROM tracker_task_keys k
+			WHERE k.key = tracker_tasks.key AND k.task_id = tracker_tasks.id)
+		WHERE key = ? AND key_collision = EXISTS (
+			SELECT 1 FROM tracker_task_keys k
+			WHERE k.key = tracker_tasks.key AND k.task_id = tracker_tasks.id)`,
+		key)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: flag the holders of key %s: %w", key, err)
 	}
 	return affected(res)
 }
@@ -1024,6 +1064,10 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
+	handed, err := handOnKey(ctx, tx, task.Key)
+	if err != nil {
+		return 0, err
+	}
 	// A PURGE MOVES NO FIELD — the row is gone, and a delta naming what
 	// it used to hold would be the content the purge exists to destroy.
 	history, err := a.writeHistory(ctx, tx, c,
@@ -1031,7 +1075,36 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	return written + marker + moved + history, nil
+	return written + marker + moved + handed + history, nil
+}
+
+// handOnKey gives a purged task's key to whoever else holds it.
+//
+// A PURGED CLAIMANT WOULD OTHERWISE LEAVE THE KEY UNCLAIMED and the task that
+// collided with it flagged, although it now holds the key alone — until its
+// own next write, which may never come. The lowest id among the holders takes
+// it, because every node has to pick the same one without a clock or an
+// arrival order to consult.
+func handOnKey(ctx context.Context, tx *sql.Tx, key string) (int, error) {
+	if key == "" {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO tracker_task_keys (key, task_id)
+		SELECT key, id FROM tracker_tasks WHERE key = ? ORDER BY id LIMIT 1
+		ON CONFLICT (key) DO NOTHING`, key)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: hand on key %s: %w", key, err)
+	}
+	claimed, err := affected(res)
+	if err != nil {
+		return 0, err
+	}
+	flagged, err := flagKeyCollisions(ctx, tx, key)
+	if err != nil {
+		return 0, err
+	}
+	return claimed + flagged, nil
 }
 
 // reparent moves each child onto parent and rebuilds its subtree's ancestry.

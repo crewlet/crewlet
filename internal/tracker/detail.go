@@ -337,14 +337,22 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 }
 
 // resolveTaskID turns an id or a key into an id.
+//
+// A KEY RESOLVES THROUGH THE DIRECTORY FIRST, so a key two tasks hold opens the
+// one that claimed it — the task every earlier reference was written against —
+// on every node, rather than whichever row an index happened to return first.
+// The task row is the fallback for a key whose claim has not been written yet.
 func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, error) {
 	var id string
+	key := strings.ToUpper(idOrKey)
 	err := tx.QueryRowContext(ctx, `
 		SELECT id FROM tracker_tasks WHERE id = ?
 		UNION ALL
+		SELECT task_id FROM tracker_task_keys WHERE key = ?
+		UNION ALL
 		SELECT id FROM tracker_tasks WHERE key = ?
 		LIMIT 1`,
-		idOrKey, strings.ToUpper(idOrKey)).Scan(&id)
+		idOrKey, key, key).Scan(&id)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", fmt.Errorf("%w: %s", ErrNoTask, idOrKey)
