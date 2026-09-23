@@ -1688,10 +1688,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// else reached from here creates a context.
 	app, err := api.New(api.Options{ //nolint:contextcheck // see the paragraph above
 		Bootstrap: boot,
-		// THE CHART'S HALF OF EVERY PRINCIPAL the guard resolves: which
-		// credential a human seat claims, so somebody at the dashboard
-		// acts as themselves rather than as the token they hold.
-		BoundSeat: e.BoundSeat,
+		// THE COMPANY'S HALF OF A TIER A PRINCIPAL: the identity
+		// directory's binding for a token's login, resolved through the
+		// SAME chart view a signed-in person's seat is — so a token bound
+		// to a removed seat is refused it exactly as a cookie is, and one
+		// bound to a renamed seat follows the rename. The zero SeatView
+		// on a node with no chart domain answers 503, never seatless.
+		SeatBindings: auth.SeatBindings{
+			Directory: e, Chart: engine.SeatViewOf(e),
+		},
 		// NIL ON EVERY ORDINARY RUN — `-dev-principal` is what builds
 		// one, and it was refused at boot on anything but a loopback
 		// bind of a development build.

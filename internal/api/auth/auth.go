@@ -261,20 +261,17 @@ type Guard struct {
 	// freshness is measured against.
 	now func() time.Time
 
-	// boundSeat maps a Tier A token's LOGIN to the seat the identity
-	// directory binds it to, and answers empty for a credential nobody in
-	// the directory holds.
+	// bindings is where a Tier A token's seat binding is read and
+	// resolved. See [SeatBindings] and resolve.go.
 	//
 	// THE COMPANY'S HALF OF A PRINCIPAL, handed in rather than read here,
-	// because it comes from the identity estate and this package resolves
-	// a CREDENTIAL. Carrying it is what makes a LEAD relation reachable
-	// for a token at all: without the seat handle every authority rule
-	// asking "do you lead this" falls through to the admin grant, and a
-	// founder is indistinguishable from a CI pipeline in every audit row.
-	//
-	// Nil is an ordinary wiring — a guard built before any company is
-	// active — and answers as an unbound credential does.
-	boundSeat func(login string) string
+	// because it comes from the identity estate and the chart while this
+	// package resolves a CREDENTIAL. Carrying it is what makes a LEAD
+	// relation reachable for a token at all: without the seat handle every
+	// authority rule asking "do you lead this" falls through to the admin
+	// grant, and a founder is indistinguishable from a CI pipeline in every
+	// audit row.
+	bindings SeatBindings
 
 	// dev is the development principal an unauthenticated request resolves
 	// to, or nil. Installed by [Guard.WithDevPrincipal], refused at
@@ -291,14 +288,14 @@ type Guard struct {
 	sessions *Sessions
 }
 
-// BindSeats installs the chart lookup that lets a bound credential act as its
-// seat, and returns the guard for chaining.
+// BindSeats installs the seams that let a bound credential act as its seat, and
+// returns the guard for chaining.
 //
-// CALLED ONCE, AT WIRING TIME, before this guard serves anything: the lookup
-// is read on every request and a guard whose seam moved under a request in
+// CALLED ONCE, AT WIRING TIME, before this guard serves anything: the seams
+// are read on every request and a guard whose seam moved under a request in
 // flight would attribute one write two ways.
-func (g *Guard) BindSeats(lookup func(login string) string) *Guard {
-	g.boundSeat = lookup
+func (g *Guard) BindSeats(bindings SeatBindings) *Guard {
+	g.bindings = bindings
 	return g
 }
 
@@ -542,7 +539,8 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		principal, how := iam.From(r.Context())
 		if Unguarded(path) {
 			// THE REFUSAL IS DISCARDED HERE ON PURPOSE. It is only
-			// ever a person whose SEAT is gone, and the routes that
+			// ever a credential whose SEAT is gone — a signed-in
+			// person or a bound Tier A token — and the routes that
 			// are unguarded are how somebody signs out and how the
 			// sign-in screen renders — locking a leaver out of those
 			// would leave them holding a live cookie with no way to

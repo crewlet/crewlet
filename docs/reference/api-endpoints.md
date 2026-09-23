@@ -241,8 +241,10 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > lowering it takes effect on this node's next request — including for
 > somebody already signed in.
 >
-> **A person whose seat is gone is `403 seat_unavailable`, naming the seat.**
-> Their session is perfectly valid and signing in again changes nothing, so
+> **A person whose seat is gone is `403 seat_unavailable`, naming the seat** —
+> and so is a Tier A token the identity directory binds to one, since both
+> bindings are resolved through the same chart lookup. Their credential is
+> perfectly valid and signing in again changes nothing, so
 > `401` would loop a browser through the sign-in page for ever. The one surface
 > it does not cover is `/auth/*`, whose subject is a person's own credential
 > rather than the seat they hold: ending a session, re-proving identity and

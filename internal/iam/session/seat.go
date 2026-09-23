@@ -205,6 +205,11 @@ func (b Binding) Handle() string {
 // A FREE FUNCTION AND NOT A METHOD ON [Signer], because nothing here is about
 // signing: it reads a chart view and a person's row, and a signer that owned
 // it would be a key holder with a reason to be on the chart's read path.
+//
+// It is also what resolves a Tier A token's directory binding
+// (internal/api/auth's SeatBindings), handed the machine row a token binds
+// through: one seat, held by a cookie or by a token, must be one answer, and a
+// second resolution beside this one is where the two would drift.
 func ResolveSeat(ctx context.Context, chart Chart, person PersonRow) Binding {
 	if person.Seat == "" {
 		return Binding{Row: SeatRowSeatless}

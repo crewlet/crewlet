@@ -189,9 +189,10 @@ type chartMounter interface {
 // on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
 // unset environment variable), and the defaults a test injects.
 type Options struct {
-	// BoundSeat maps a Tier A token's LOGIN to the seat the identity
-	// directory binds it to, and answers empty for a credential nobody in
-	// the directory holds.
+	// SeatBindings is where a Tier A token's seat binding is read — the
+	// identity directory's row for its login — and resolved, through the
+	// SAME chart seam a signed-in person's binding is. See
+	// [auth.SeatBindings].
 	//
 	// THE COMPANY'S HALF OF A PRINCIPAL: it is what makes somebody acting
 	// through a token act as THEMSELVES rather than as the credential —
@@ -201,11 +202,10 @@ type Options struct {
 	// arbitrated on `iam.seat.<handle>` so two holders cannot claim one
 	// seat.
 	//
-	// OPTIONAL, and its absence is an ordinary wiring rather than a
-	// mistake: an API built before the identity domain runs has no
-	// directory to ask, and every credential is then unbound — which is
-	// exactly what an unbound one already means.
-	BoundSeat func(login string) string
+	// THE ZERO VALUE BINDS NOTHING, which is what an API stood up in a
+	// suite has: every credential then acts as itself. `crewlet run`
+	// always wires both halves over its engine.
+	SeatBindings auth.SeatBindings
 
 	// SeatHeld reports whether a seat is one somebody in the identity
 	// directory is bound to, or nil on a node that cannot tell.
@@ -431,7 +431,7 @@ func New(opts Options) (*App, error) {
 	}
 
 	a := &App{
-		guard: auth.New(opts.Bootstrap).BindSeats(opts.BoundSeat).
+		guard: auth.New(opts.Bootstrap).BindSeats(opts.SeatBindings).
 			WithDevPrincipal(opts.DevPrincipal).WithSessions(opts.Sessions),
 		csrf:         auth.NewCSRF(opts.Bootstrap),
 		secure:       servedOverHTTPS(opts.Bootstrap),

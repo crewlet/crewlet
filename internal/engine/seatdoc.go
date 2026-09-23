@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -22,7 +21,7 @@ import (
 // A per-seat write used to go through /config's entity route, addressing a
 // seat by its handle inside the stored revision — because a merge patch
 // replaces an array wholesale, so patching `roles` to change one seat would
-// delete every other one. A revision carries no seats any anymore: the org
+// delete every other one. A revision carries no seats any more: the org
 // chart is a domain of its own, with its own records and its own per-object
 // arbitration, which is exactly the property that route was approximating.
 //
@@ -190,62 +189,3 @@ func (e *Engine) ImportReady(ctx context.Context) (string, error) {
 		"— under its own reading of what a placement means. Finish the upgrade "+
 		"and import again.", who, floor, coord.ProtocolVersion), nil
 }
-
-// BoundSeat resolves a Tier A credential to the seat its holder is bound to.
-//
-// # The binding moved out of the org chart
-//
-// It used to be a field on a human seat's contact block naming one of Tier A's
-// token ids. That field is gone, and with it the whole
-// idea that the COMPANY DOCUMENT says who a credential is — a seat's contact
-// block is how to reach a person, and a credential is something they hold.
-// The identity estate says it instead: a person or a machine is a ROW with a
-// login and a seat binding, arbitrated on `iam.seat.<handle>` so two people
-// cannot claim one seat.
-//
-// # Empty is an ordinary answer and an ERROR is not
-//
-// A credential nobody in the directory holds is not bound to a seat, which is
-// what every Tier A token on a fresh estate is: an operator rather than a
-// colleague. That answers empty.
-//
-// A directory this node CANNOT READ also answers empty, and that is the one
-// judgement here. The alternative is failing the request, which would make
-// every API call on a node whose iam applier is behind a 503 — including the
-// calls an operator makes to fix it. What is lost by answering empty is the
-// LEAD relation: the caller acts as the credential rather than as their seat,
-// so an authority rule asking "do you lead this" falls through to the grant.
-// A narrower surface for a moment is the safe direction; a locked-out
-// operator is not.
-func (e *Engine) BoundSeat(login string) string {
-	if e == nil || login == "" {
-		return ""
-	}
-	reader := e.IAM()
-	if reader == nil {
-		return ""
-	}
-	// THE PROCESS'S OWN CONTEXT, because this runs inside a request whose
-	// cancellation is the caller's: a browser that navigated away would
-	// otherwise turn the binding into an empty answer for the request
-	// still being served beside it.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()),
-		boundSeatBudget)
-	defer cancel()
-	seen, err := reader.PersonByLogin(ctx, login)
-	if err != nil {
-		log.Debug("bound_seat_unreadable", "login", login, "error", err)
-		return ""
-	}
-	return seen.Seat
-}
-
-// boundSeatBudget bounds the directory read one request's seat binding costs.
-//
-// TWO SECONDS, which is the same budget [seatExists] takes for the same shape
-// of question and for the same reason: it is a local read of a replicated
-// table on this node's own store, so anything approaching a second means the
-// store is in trouble rather than that the answer is slow — and this sits in
-// front of every guarded request, so a longer one would hold the whole surface
-// behind one sick file handle.
-const boundSeatBudget = 2 * time.Second

@@ -91,16 +91,32 @@ func ActsAsThemselves(path string) bool {
 // Refusal is an answer the guard writes itself, rather than one a route
 // derives from the resolution it was handed.
 //
-// IT EXISTS FOR EXACTLY ONE CASE and is not a fourth resolution arm: a person
-// whose session validated and whose SEAT did not. Every other outcome is one
-// of [iam.Resolution]'s three, which is what every surface downstream already
-// reads.
+// IT EXISTS FOR EXACTLY ONE CASE and is not a fourth resolution arm: a
+// credential that validated and whose SEAT did not — a person whose session is
+// live, or a Tier A token the directory binds, bound to a seat the chart will
+// not let them act as. Every other outcome is one of [iam.Resolution]'s three,
+// which is what every surface downstream already reads.
 type Refusal struct {
 	// Status is the HTTP status, Code the machine-readable reason, and
 	// Detail the sentence that names the seat.
 	Status int
 	Code   httpjson.Code
 	Detail string
+}
+
+// seatRefusal is the answer to a credential resolved to a seat the chart will
+// not let it act as: 403 NAMING THE SEAT, which is [session.Binding]'s rule.
+//
+// ONE CONSTRUCTOR FOR BOTH CREDENTIAL ARMS, because a signed-in person and a
+// Tier A token bound to one removed seat must be refused in one set of bytes —
+// a second spelling is where a code or a status comes to differ, and the
+// dashboard branches on the code.
+func seatRefusal(binding session.Binding) *Refusal {
+	return &Refusal{
+		Status: http.StatusForbidden,
+		Code:   httpjson.CodeSeatUnavailable,
+		Detail: binding.Detail,
+	}
 }
 
 // RetryIdentitySeconds is the `Retry-After` on an identity 503.
@@ -309,11 +325,8 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// bearer is live and works the moment somebody rebinds them,
 		// and discarding it would sign out a person whose only problem
 		// is a chart edit.
-		return s.principal(v, binding, ceiling), iam.Resolved, &Refusal{
-			Status: http.StatusForbidden,
-			Code:   httpjson.CodeSeatUnavailable,
-			Detail: binding.Detail,
-		}, true
+		return s.principal(v, binding, ceiling), iam.Resolved,
+			seatRefusal(binding), true
 	}
 
 	if v.Reissue != "" {

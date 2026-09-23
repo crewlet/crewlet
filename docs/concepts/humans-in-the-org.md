@@ -200,9 +200,21 @@ company document. Tier A is the root of trust and may never read Tier B — it
 holds the keys to the secret store — so a `seat:` field on an
 `api.auth.tokens[]` entry would have the trusted tier depending on the
 untrusted one; and a seat's `contact` block says how to reach a person, not
-which credential they hold. A node that cannot read the directory when a
-token's request arrives treats that token as unbound for the request rather
-than failing it — it keeps its grants and loses only the seat's lead relations.
+which credential they hold.
+
+**A bound token is held to the chart exactly as a signed-in person is.** Only
+an active **machine** row under the token's login binds it — a person can
+never hold `token:<id>`, and a suspended machine binds nothing — and the seat
+it names is resolved through the same chart lookup a session's is. A renamed
+seat is followed to its new handle; a seat that was removed, or is an agent's,
+answers `403 seat_unavailable` naming it; a node that has not yet applied the
+chart as far as the binding, or cannot read the directory or the chart,
+answers `503 identity_unavailable` and is retried. It never quietly acts as
+the bare credential instead, because one credential writing under a seat on
+one node and under its own name on the next is one actor appearing as two in
+the audit trail. An **unbound** token is the exception that keeps break-glass
+working: a node whose identity applier is behind still serves it as itself,
+since acting as the bare credential is the narrower surface.
 
 ---
 

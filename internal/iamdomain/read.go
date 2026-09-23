@@ -128,7 +128,6 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 
 	out := session.Identity{
 		Applied: uint64(r.committed().Packed()),
-		Lag:     r.lag(),
 	}
 	// THE DEFERRAL IS READ FIRST and from the RUNNER rather than from a
 	// row, because it is the framework's own coverage answer: this node
@@ -136,9 +135,7 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 	// bucket. The read that follows SUCCEEDS and its rows are simply not
 	// known to be complete, which is why this is a field rather than an
 	// error.
-	if deferral, held := r.deferred(); held {
-		out.Deferred = coversPerson(deferral, person)
-	}
+	out.Lag, out.Deferred = r.Staleness(person)
 
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		if err := readSessionRow(ctx, tx, lineage, &out.Session); err != nil {
@@ -153,6 +150,27 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 		return session.Identity{}, err
 	}
 	return out, nil
+}
+
+// Staleness is how far this node can vouch for one person's rows: how far its
+// applier is behind the log, and whether it holds a record it could not decode
+// whose scope covers that person's bucket.
+//
+// FACTS AND NOT A VERDICT. What a lag or a deferral MEANS is the caller's
+// table — internal/iam/session's for a session, the engine's for a Tier A
+// token's binding — and a threshold chosen here would be a second opinion
+// about the one event [statelog.StallGrace] already names. It is one method
+// rather than two so that a caller cannot ask about the lag and forget the
+// deferral, which reads as a caught-up node while it holds a newer peer's
+// record about exactly this person.
+//
+// An EMPTY person is covered by every deferral, because nothing can say which
+// bucket a record it could not decode is about.
+func (r *Reader) Staleness(person string) (lag time.Duration, deferred bool) {
+	if held, ok := r.deferred(); ok {
+		deferred = coversPerson(held, person)
+	}
+	return r.lag(), deferred
 }
 
 // coversPerson reports whether a deferred record's scope covers this person's

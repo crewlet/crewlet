@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -190,7 +191,7 @@ func wireAPI(
 
 	opts := api.Options{
 		Bootstrap:    boot,
-		BoundSeat:    e.BoundSeat,
+		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
 		Runtime:      runtime,
 		Chart:        chartSurface,
 		QueueBackend: backends.Queue.Backend(),

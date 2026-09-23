@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -8,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
 // HOW A TIER A TOKEN BECOMES A PRINCIPAL, and why the conversion lives here
@@ -51,7 +54,68 @@ const TokenLoginPrefix = "token:"
 // TokenLogin is the login a Tier A token acts under.
 func TokenLogin(id string) string { return TokenLoginPrefix + id }
 
-// principalFor composes the principal a Tier A token acts as.
+// SeatBindings is what a Tier A token's seat binding is resolved through.
+//
+// # Two halves, and the second is the SESSION's
+//
+// Directory answers what the identity directory says about the token's login:
+// the seat its row is bound to and the chart position that binding was decided
+// at. Chart answers whether that seat is one the credential may act as NOW —
+// and it is the same [session.Chart] a signed-in person's binding is resolved
+// through, by the same [session.ResolveSeat], so a token and a cookie bound to
+// one seat are told the same thing about it: served under the handle the chart
+// answers to after a rename, refused 403 `seat_unavailable` NAMING the seat
+// once it is removed, tombstoned or not a human seat, and 503 while this node
+// has not applied the chart as far as the binding or has stalled past the
+// grace.
+//
+// That is the whole reason this is not a lookup returning a handle. The one it
+// replaced was, and a token then went on acting as whatever handle a row
+// held: a seat the chart had removed, a seat renamed out from under it, an
+// agent's seat, and — since a key is not an identity — a handle the chart had
+// since given to somebody else, whose lead relations the token then carried.
+//
+// # Zero means no binding source
+//
+// The zero value binds nothing, and every token acts as the bare credential,
+// which is what an API built without an identity directory — a suite standing
+// a handler up — honestly has. A Directory with no Chart is not that: it is a
+// binding that cannot be resolved, and every bound token answers 503, which is
+// [session.ResolveSeat]'s own reading of a missing chart.
+type SeatBindings struct {
+	// Directory reads the identity directory's row for a login. Nil binds
+	// nothing.
+	Directory BindingDirectory
+
+	// Chart is the org chart view a binding is resolved in.
+	Chart session.Chart
+}
+
+// BindingDirectory is the one read a Tier A token's seat binding needs.
+//
+// DEFINED HERE, by the caller, and one method wide.
+type BindingDirectory interface {
+	// BoundSeat answers the row a machine credential's login binds through,
+	// as the seat table reads a holder: `Found` with a seat and the chart
+	// position it was decided at, or the zero row for a credential nobody
+	// binds. AN ERROR IS THE UNKNOWN ARM — this node could not say — and
+	// never "not bound", which would have a bound credential act as itself
+	// here and as its seat on the next node: one actor under two names in
+	// one audit trail.
+	BoundSeat(ctx context.Context, login string) (session.PersonRow, error)
+}
+
+// errBindingUnavailable is the reason attached to a request whose Tier A
+// token's seat binding this node could not resolve.
+//
+// A SENTENCE AND NOT A BARE SENTINEL, for [errIdentityUnavailable]'s reason:
+// the gate downstream chooses a status from it, and it must read as an estate
+// that could not be read rather than as a route nobody wired.
+var errBindingUnavailable = errors.New("auth: this node could not resolve " +
+	"which seat this credential is bound to")
+
+// principalFor composes the principal a Tier A token acts as, three-valued
+// exactly as a session is: resolved, resolved and refused its seat, or unknown.
 //
 // THE CEILING IS APPLIED HERE, at the moment the request is resolved, which is
 // what `api.auth.max_grants` being a decision-time bound means: nothing was
@@ -60,7 +124,9 @@ func TokenLogin(id string) string { return TokenLoginPrefix + id }
 // by `crewlet validate` — this is the second half, for the node whose ceiling
 // is lower than the one the document was validated against, which is every
 // node mid-rollout.
-func (g *Guard) principalFor(entry config.APIToken, now time.Time) iam.Principal {
+func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
+	now time.Time) (iam.Principal, iam.Resolution, *Refusal) {
+
 	p := iam.Principal{
 		ID:        uuid.NewSHA1(TokenNamespace, []byte(entry.ID)),
 		Login:     TokenLogin(entry.ID),
@@ -88,15 +154,44 @@ func (g *Guard) principalFor(entry config.APIToken, now time.Time) iam.Principal
 	// such split — a write from a bound credential lands under the seat.
 	//
 	// KEYED ON THE LOGIN, never the bare token id: the login is what the
-	// directory claims arbitrate on (`iam.login.<login>`), and a bare id
-	// could collide with a person's login where the colon-joined machine
-	// grammar cannot.
-	if g.boundSeat != nil {
-		if handle := g.boundSeat(p.Login); handle != "" {
-			p.Kind, p.Seat = iam.KindPerson, handle
-		}
+	// directory claims arbitrate on (`iam.login.<login>`), and only a
+	// MACHINE may hold `token:<id>`, which internal/iam's per-kind grammar
+	// holds — so the row a token binds through is never one a person
+	// chose.
+	if g.bindings.Directory == nil {
+		return p, iam.Resolved, nil
 	}
-	return p
+	row, err := g.bindings.Directory.BoundSeat(ctx, p.Login)
+	if err != nil {
+		log.WarnContext(ctx, "api_token_binding_unavailable",
+			"login", p.Login, "error", err)
+		return iam.Principal{}, iam.Unknown, nil
+	}
+	if !row.Found || row.Seat == "" {
+		return p, iam.Resolved, nil
+	}
+	// THE SESSION'S OWN TABLE, through the session's own chart seam — see
+	// [SeatBindings] for what a second resolution cost.
+	binding := session.ResolveSeat(ctx, g.bindings.Chart, row)
+	switch binding.Answer() {
+	case session.AnswerUnavailable:
+		log.WarnContext(ctx, "api_token_seat_unavailable",
+			"login", p.Login, "seat", row.Seat,
+			"detail", binding.Detail, "error", errText(binding.Err))
+		return iam.Principal{}, iam.Unknown, nil
+	case session.AnswerServe:
+		p.Kind, p.Seat = iam.KindPerson, binding.Handle()
+		p.SeatAt, p.Position = row.SeatAt, binding.Seat.Unit
+		return p, iam.Resolved, nil
+	}
+	// RESOLVED AND REFUSED, as a signed-in person bound to a gone seat is:
+	// this node knows exactly which credential this is and will not say
+	// what it acts as. It stays the MACHINE it is, with SeatAt beside an
+	// empty seat — the pair that says "a binding was decided and this node
+	// will not honour it" — and the guard writes the 403 everywhere but
+	// the one surface that never reads a seat.
+	p.SeatAt = row.SeatAt
+	return p, iam.Resolved, seatRefusal(binding)
 }
 
 // intersect is the ceiling applied to a declared grant set.
@@ -129,12 +224,12 @@ func intersect(declared, ceiling []iam.Grant) []iam.Grant {
 //   - a credential that names somebody is [iam.Resolved];
 //   - no credential at all, or one this node refuses, is [iam.Anonymous] — a
 //     finding, and the arm a guarded route answers 401 to;
-//   - a credential this node could not CHECK is [iam.Unknown], which no
-//     path reaches yet because a Tier A token is a map in memory. It exists
-//     because the session lookup that arrives next can fail, and a caller
-//     written against two arms would then read "the store is down" as "you
-//     are nobody" — and go on reading it that way for as long as the outage
-//     lasted, teaching everybody to go and check their password.
+//   - a credential this node could not CHECK is [iam.Unknown]: a session
+//     whose rows it cannot read, or a Tier A token — itself a map in memory
+//     — whose seat binding it cannot resolve. A caller written against two
+//     arms would read "the store is down" as "you are nobody", and go on
+//     reading it that way for as long as the outage lasted, teaching
+//     everybody to go and check their password.
 //
 // It attaches the answer to the context rather than returning it, because
 // [iam.From] is what every surface downstream reads and a second channel would
@@ -167,8 +262,16 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 			// reserved for the question it could not ask.
 			return r.WithContext(iam.WithAnonymous(r.Context())), nil
 		}
-		return r.WithContext(
-			iam.WithPrincipal(r.Context(), g.principalFor(entry, g.now()))), nil
+		principal, how, refusal := g.principalFor(r.Context(), entry, g.now())
+		if how == iam.Unknown {
+			// THE CREDENTIAL IS GOOD AND ITS SEAT CANNOT BE SAID, which
+			// is 503 and never the bare credential: served as itself
+			// here and as its seat on the next node, one actor would
+			// author under two names in one audit trail.
+			return r.WithContext(
+				iam.WithUnresolved(r.Context(), errBindingUnavailable)), nil
+		}
+		return r.WithContext(iam.WithPrincipal(r.Context(), principal)), refusal
 	}
 	if g.sessions != nil {
 		principal, how, refusal, presented := g.sessions.resolve(w, r, g.ceiling)

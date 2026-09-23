@@ -54,10 +54,15 @@ each act as themselves and are never refused for it. What you cannot do, in
 either direction, is *choose* a seat to act as: a tracker whose author field is
 picked by the writer is not an audit trail.
 
-A node that cannot read the directory at the moment a token's request arrives
-treats that token as unbound for that request rather than failing it: the
-caller keeps every grant the token carries and loses only the lead relations
-of the seat, which is the narrower surface rather than a locked-out operator.
+A token's binding is held to the chart **exactly as a session's is**: only an
+active machine row under its login binds it, and the seat it names goes
+through the same lookup a signed-in person's does — followed through a rename,
+refused `403 seat_unavailable` naming the seat once it is removed or is an
+agent's, and `503` on a node that cannot say (behind the binding on the chart,
+past the stall grace, or unable to read the directory). A token answered as the
+bare credential there would author under its seat on one node and under its own
+name on the next. A token nobody binds is served as itself even by a node whose
+identity applier is behind, which is what keeps break-glass working.
 
 ### Names can never collide
 
