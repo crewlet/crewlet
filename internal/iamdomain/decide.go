@@ -1049,6 +1049,45 @@ type BootstrapSpend struct {
 	Reason string
 }
 
+// heldPerson is one person's document as a read-modify-write forms the next
+// one from, read inside the caller's snapshot — carrying the stage the ROW
+// holds.
+//
+// # Why the stage is taken from the column
+//
+// The status op moves a stage without authoring a document, so the column is
+// the authority and the document is the copy. A decide that re-published the
+// document's own stage would put back whatever it said when it was last
+// authored — which after a suspension written by an applier that moved the
+// column alone is `active`, so an administrator correcting a suspended
+// person's grants would silently let them back in. Taking the column is what
+// makes the copy unable to outvote the fact.
+//
+// forming names what the caller is building, for the refusal.
+func heldPerson(ctx context.Context, tx *sql.Tx, personID, forming string) (
+	Person, error) {
+
+	var (
+		document []byte
+		stage    string
+	)
+	err := tx.QueryRowContext(ctx,
+		`SELECT document, stage FROM iam_people WHERE id = ?`, personID).
+		Scan(&document, &stage)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Person{}, fmt.Errorf("iamdomain: person %q is not held on this "+
+			"node, so %s cannot be formed here", personID, forming)
+	} else if err != nil {
+		return Person{}, fmt.Errorf("iamdomain: read person %q: %w", personID, err)
+	}
+	person, err := DecodePerson(document)
+	if err != nil {
+		return Person{}, fmt.Errorf("iamdomain: open person %q: %w", personID, err)
+	}
+	person.Stage = iam.Stage(stage)
+	return person, nil
+}
+
 // SetCredentials replaces a person's credential set, reading their own row
 // inside the snapshot to form the new whole.
 //
@@ -1076,19 +1115,9 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 	}
 	var mutation []byte
 	decide := func(tx *sql.Tx) error {
-		var document []byte
-		err := tx.QueryRowContext(ctx,
-			`SELECT document FROM iam_people WHERE id = ?`, in.PersonID).
-			Scan(&document)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("iamdomain: person %q is not held on this node, "+
-				"so their credential set cannot be formed here", in.PersonID)
-		} else if err != nil {
-			return fmt.Errorf("iamdomain: read person %q: %w", in.PersonID, err)
-		}
-		person, err := DecodePerson(document)
+		person, err := heldPerson(ctx, tx, in.PersonID, "their credential set")
 		if err != nil {
-			return fmt.Errorf("iamdomain: open person %q: %w", in.PersonID, err)
+			return err
 		}
 		person.Credentials = in.Apply(person.Credentials)
 		mutation, err = EncodePerson(person)
@@ -1356,19 +1385,9 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	// actually carries: a decide may run again against a fresh snapshot.
 	var before, after []iam.Grant
 	decide := func(tx *sql.Tx) error {
-		var document []byte
-		err := tx.QueryRowContext(ctx,
-			`SELECT document FROM iam_people WHERE id = ?`, in.PersonID).
-			Scan(&document)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("iamdomain: person %q is not held on this node, "+
-				"so their row cannot be formed here", in.PersonID)
-		} else if err != nil {
-			return fmt.Errorf("iamdomain: read person %q: %w", in.PersonID, err)
-		}
-		person, err := DecodePerson(document)
+		person, err := heldPerson(ctx, tx, in.PersonID, "their row")
 		if err != nil {
-			return fmt.Errorf("iamdomain: open person %q: %w", in.PersonID, err)
+			return err
 		}
 		if in.Name != nil {
 			person.NameSealed = sealedName

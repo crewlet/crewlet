@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // THE PERSON'S OWN SUBJECT, and the five ops that arbitrate on it.
@@ -155,6 +157,21 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 // their whole document — which matters because the op an operator reads the
 // log for is this one, and a full post-state would make every suspension look
 // like an edit.
+//
+// # The stage lives in two places on the row, and this moves BOTH
+//
+// The `stage` column is what every predicate reads — the stage index, the
+// seat-holder checks, the directory listing — and the document is the full
+// post-state a content record authors and a read-modify-write re-reads. This
+// op used to move the column alone, so the document went on saying `active`
+// after a suspension: every reader that decided from the document signed the
+// suspended person in and validated their sessions, and the next edit of their
+// grants re-published the document's `active` and quietly reactivated them.
+// One fact in two places is only safe while every writer moves both.
+//
+// The document is re-derived from the row this transaction reads and the stage
+// the record states, which is still a pure function of the log: every node
+// holds the same row at this position and writes the same bytes.
 func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 	id string) (int, error) {
 
@@ -163,22 +180,58 @@ func (a *Applier) writeStage(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, fmt.Errorf("iamdomain: the status record at %s: %w",
 			at.position, err)
 	}
-	// SCOPED_THROUGH RATHER THAN VERSION, because this record arbitrates
-	// on the person's own subject and so DOES move their version — but the
-	// document it leaves is the one the last content record wrote. Stamping
-	// version alone would make the row's broker expectation match while the
-	// document lagged; stamping both keeps the expectation honest and the
-	// guard comparable.
+	var document []byte
+	err = tx.QueryRowContext(ctx, `
+		SELECT document FROM iam_people WHERE id = ? AND version < ?`,
+		id, at.packed).Scan(&document)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// NOBODY TO MOVE, or a record this row is already past — a
+		// redelivery, or a status a later content record superseded. The
+		// guard is a SKIP, for the reason every guard here is.
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("iamdomain: read person %s to move their stage: %w",
+			id, err)
+	}
+	restaged, err := restage(document, change.Stage)
+	if err != nil {
+		// A DOCUMENT THIS BUILD CANNOT OPEN IS LEFT AS IT IS and the
+		// column still moves. Failing here would stall the log on every
+		// node holding the same bytes, over a stage the column already
+		// states — and the column is what every reader decides from, and
+		// what [heldPerson] hands a read-modify-write, so the stale copy
+		// can neither admit the person nor be re-published over them.
+		restaged = document
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE iam_people
-		SET stage = ?, updated_at = ?, version = ?
+		SET stage = ?, document = ?, updated_at = ?, version = ?
 		WHERE id = ? AND version < ?`,
-		string(change.Stage), at.unix(), at.packed, id, at.packed)
+		string(change.Stage), restaged, at.unix(), at.packed, id, at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: set person %s's stage: %w", id, err)
 	}
 	written, _ := result.RowsAffected()
 	return int(written), nil
+}
+
+// restage is a stored person document with its stage replaced.
+//
+// AN EMPTY DOCUMENT IS A RESERVATION — the half of an enrolment a claim
+// writes before the content record fills it in — and stays empty: there is
+// no post-state to amend, and the content record that follows states its own
+// stage.
+func restage(document []byte, stage iam.Stage) ([]byte, error) {
+	if len(document) == 0 {
+		return document, nil
+	}
+	person, err := DecodePerson(document)
+	if err != nil {
+		return nil, err
+	}
+	person.Stage = stage
+	return EncodePerson(person)
 }
 
 // writeRevocation bumps a person's revocation epoch, which ends every session

@@ -253,10 +253,12 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 		return fmt.Errorf("iamdomain: open person %q: %w", person, err)
 	}
 	out.Found = true
-	out.Stage = doc.Stage
-	if out.Stage == "" {
-		out.Stage = iam.Stage(stage)
-	}
+	// THE COLUMN AND NOT THE DOCUMENT. The column is what every predicate
+	// in this estate reads, and the status op is the one write that moves
+	// a stage without authoring a whole document — so a reader deciding
+	// from the document answered a different question from the rows beside
+	// it, and a suspended person's session validated as `active`.
+	out.Stage = iam.Stage(stage)
 	out.Login = login
 	out.Colleague = doc.Colleague
 	out.Grants = doc.Grants
@@ -386,10 +388,9 @@ func (r *Reader) sighting(ctx context.Context, column, token string) (Sighting, 
 			return fmt.Errorf("iamdomain: open person %q: %w", out.ID, err)
 		}
 		out.Kind = doc.Kind
-		out.Stage = doc.Stage
-		if out.Stage == "" {
-			out.Stage = iam.Stage(stage)
-		}
+		// THE COLUMN, for [readPersonRow]'s reason: a sign-in decided
+		// from the document admitted a suspended person.
+		out.Stage = iam.Stage(stage)
 		out.Login = login
 		out.Credentials = doc.Credentials
 		out.Grants = doc.Grants
