@@ -2946,6 +2946,7 @@ is three per-node facts attributed to a fleet.
       "bytes": 67108864,
       "max_bytes": 4294967296,
       "headroom_fraction": 0.984,
+      "bytes_per_day": 23068672,
       "trim_floor": 918100000,
       "blocked_by": "backup_floor",
       "blocked_since": "2031-03-30T02:00:00Z",
@@ -2978,6 +2979,15 @@ a renderer prints the impossible one.
 `headroom_fraction` is a **pointer** and is absent when the broker could not be
 asked. A fraction of an unknown ceiling is not zero headroom, and zero is what
 the one alarm an operator cannot ignore fires on.
+
+`bytes_per_day` is what the log took in over the trailing day, as this node's
+last trim tick measured it from the log's own records — the rate the
+`log_ceiling_short` alarm holds `max_bytes` against `min_age` of. It is a
+pointer too, for the opposite reason: `0` is a log that took in nothing, the
+most benign reading there is, and the field is **absent** where nothing was
+measured — a compacted log (whose size follows its subjects, not its age), a
+log younger than a day, and every log on a node whose trim has not ticked yet.
+See [Retention](../guides/retention.md#the-one-number-to-watch).
 
 `crewlet retention status` renders exactly these bytes.
 

@@ -16,24 +16,68 @@ sometimes will not run.
 crewlet retention status
 ```
 
-Three figures per domain, and no others:
+Four figures per domain, and no others:
 
 | Figure | What it is |
 |---|---|
 | `bytes` | what the log holds now |
 | `max_bytes` | the ceiling the **broker** is enforcing |
 | `headroom_fraction` | how much of the ceiling is unused |
+| `bytes_per_day` | what the log took in over the trailing day (`PER DAY` in the table) |
 
 `max_bytes` is read from the stream's own configuration and never from the
 Tier A field, because Tier A is per node and is only the value a stream is
 created with: once the stream exists, an edit to the field names a ceiling
 nothing is applying, restart or not, and this is the number you divide by.
 
-There is deliberately **no growth rate and no projected-full date.** A
-24-hour rate false-pages on the one excursion this system is designed for — a
-full re-embedding, which is a step rather than a trend — and on the mutation
-log a blocked term is the only path to the ceiling at all, and `blocked_by`
-names it years ahead of it.
+### The one rate, and what it is held against
+
+The trim never removes a record younger than `min_age`, so a log's ceiling has
+to hold `min_age` of its own intake. A log whose ceiling is smaller fills and
+refuses appends **with every trim term satisfied** — nothing is blocked, so
+`blocked_by` says nothing, and unblocking a term could not help anyway. That is
+the one path to a full log the six terms cannot name, and `log_ceiling_short`
+is the alarm for it: at boot and on every trim tick, each node compares each
+log's `max_bytes` against `min_age` × `bytes_per_day`, and fires when the
+window no longer fits. Its detail says how long the ceiling holds at that rate;
+the remedy is a bigger ceiling (see [Changing a log's
+ceiling](#changing-a-logs-ceiling)) or a shorter `min_age`.
+
+It matters most on the **identity log**. The mutation log and the knowledge
+base grow with a corpus you can forecast, and the chart with headcount; the
+identity log grows with how often people sign in, which is the rate an
+operator cannot predict — and its ceiling is not derived from the disk.
+
+The rate is **measured from the log itself**, not sampled: every record of the
+last day is still in the log (`min_age` is at least a day), each carries the
+broker's own stored instant, so the day's intake is the records at or after
+now − 24 h — found by the same binary search the age term runs — at the log's
+own average record size. Every node reading the same stream derives the same
+number, and a node that has just restarted measures on its first tick.
+
+It is deliberately absent — and the alarm silent — in three places, and absent
+is not zero:
+
+- **A compacted log**, which is the vector log. Its size follows how many
+  subjects it holds rather than how long it has been written, and a full
+  re-embedding — the one excursion this system is designed for — republishes
+  every vector in a day while replacing what the log held rather than adding
+  to it. Holding its ceiling against a week of that day would page for a log
+  that is not growing.
+- **A log younger than a day** — a fresh deployment, or one re-anchored under
+  a running fleet. Its first hours are the ones a company imports into, and a
+  day extrapolated from an import is an alarm for a log that settles an order
+  of magnitude lower.
+- **A node whose trim has not ticked yet.**
+
+A measured `0` is a log that took in nothing yesterday, which holds any window.
+
+There is still **no projected-full date.** The comparison is against the
+window the operator set, not a date extrapolated from a trend. One day busy
+enough that a window of such days would not fit — a login storm on the
+identity log — raises the alarm while it is inside the trailing day, because
+its first day is indistinguishable from a new steady state; if it was a step,
+it clears the day after.
 
 **`crewlet retention status` exits non-zero when any alarm is active** and
 prints each one's measurement and remedy on stderr. That is the alarm hook:
@@ -704,7 +748,8 @@ Two excursions are designed for and do not alarm:
 
 1. **A full re-embedding.** A width change republishes every vector, which at
    year five bottoms the vector log's headroom at about 51 %. The alarm
-   threshold is 10 %, which is the first decile clear of it.
+   threshold is 10 %, which is the first decile clear of it — and the vector
+   log is compacted, so `log_ceiling_short` measures no rate for it at all.
 2. **A bulk gesture.** One maximal bulk update is 16 seconds of applier
    occupancy on every peer; see [Replication](replication.md).
 

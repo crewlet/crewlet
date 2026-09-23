@@ -59,6 +59,7 @@ const (
 const (
 	UnitMilliseconds = "ms"
 	UnitBytes        = "By"
+	UnitBytesPerDay  = "By/d"
 	UnitSeconds      = "s"
 	UnitCount        = "1"
 )
@@ -352,6 +353,16 @@ func Catalogue() []Instrument {
 			Name: StatelogLogBytes, Kind: KindGauge, Unit: UnitBytes,
 			Attributes: []string{"domain"},
 			Shows:      "What the log actually holds, against its ceiling below.",
+		},
+		{
+			Name: StatelogLogBytesPerDay, Kind: KindGauge, Unit: UnitBytesPerDay,
+			Attributes: []string{"domain"},
+			Shows: "What the log took in over the trailing day, measured from " +
+				"its own records at each trim tick. The ceiling has to hold " +
+				"`min_age` of this, because the trim never removes a record " +
+				"younger than that — a log whose ceiling is smaller fills with " +
+				"every trim term satisfied, which is what `log_ceiling_short` " +
+				"fires on. Absent for a compacted log and one younger than a day.",
 		},
 		{
 			Name: StatelogLogMaxBytes, Kind: KindGauge, Unit: UnitBytes,

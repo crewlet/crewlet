@@ -140,6 +140,7 @@ type retentionDomain struct {
 	Bytes             uint64          `json:"bytes"`
 	MaxBytes          uint64          `json:"max_bytes"`
 	HeadroomFraction  *float64        `json:"headroom_fraction"`
+	BytesPerDay       *uint64         `json:"bytes_per_day"`
 	TrimFloor         uint64          `json:"trim_floor"`
 	TrimTo            uint64          `json:"trim_to"`
 	BlockedBy         string          `json:"blocked_by"`
@@ -318,15 +319,16 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 // apply to a domain prints `n/a` rather than `0`, because an absent term and a
 // term that permits nothing are different facts.
 func retentionDomains(w io.Writer, report retentionReport, only string) {
-	fmt.Fprintln(w, "\nDOMAIN\tSTREAM\tGEN\tREPLAY\tFIRST\tLAST\tBYTES\tCEILING\tHEADROOM\tTRIM FLOOR")
+	fmt.Fprintln(w, "\nDOMAIN\tSTREAM\tGEN\tREPLAY\tFIRST\tLAST\tBYTES\tPER DAY\tCEILING\tHEADROOM\tTRIM FLOOR")
 	for _, d := range report.Domains {
 		if only != "" && d.Domain != only {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\t%s\t%s\t%d\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%d\n",
 			d.Domain, d.Stream, d.Generation, d.Replay, d.FirstSeq, d.LastSeq,
-			humanBytes(int64(d.Bytes)), ceilingOrDash(d.MaxBytes),
-			headroomOrDash(d.HeadroomFraction), d.TrimFloor)
+			humanBytes(int64(d.Bytes)), perDayOrDash(d.BytesPerDay),
+			ceilingOrDash(d.MaxBytes), headroomOrDash(d.HeadroomFraction),
+			d.TrimFloor)
 	}
 }
 
@@ -601,6 +603,17 @@ func headroomOrDash(fraction *float64) string {
 		return "-"
 	}
 	return fmt.Sprintf("%.0f%%", *fraction*100)
+}
+
+func perDayOrDash(perDay *uint64) string {
+	if perDay == nil {
+		// NOT ZERO. A log nobody has measured — compacted, younger
+		// than a day, or on a node that has not ticked — is not a log
+		// that took in nothing, and `0 B` is the value that says it
+		// did.
+		return "-"
+	}
+	return humanBytes(int64(*perDay))
 }
 
 func yesNo(v bool) string {

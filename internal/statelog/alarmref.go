@@ -73,6 +73,10 @@ var alarmMeaning = map[Kind]string{
 		"their query starts.",
 	KindCensusDrift: "This company is doing more than twice the reads its " +
 		"log was sized for, so every sizing decision under it is stale.",
+	KindLogCeilingShort: "At the rate this log took in over the last day, " +
+		"its byte ceiling holds less than the `min_age` window the trim " +
+		"keeps, so it will fill and refuse writes with every trim term " +
+		"satisfied.",
 }
 
 const alarmHeader = `# Alarms

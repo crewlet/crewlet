@@ -334,3 +334,53 @@ func TestAGateGestureRequiresTheNodeIdTwice(t *testing.T) {
 		t.Errorf("the eviction never says the node stays counted:\n%s", stdout)
 	}
 }
+
+// A LOG'S DAILY INTAKE PRINTS AS MEASURED, AND AN UNMEASURED ONE AS A DASH.
+//
+// The column is what `log_ceiling_short` holds a ceiling against, so an
+// operator reading the alarm needs to see it beside the ceiling. A measured
+// zero is a log that took in nothing; a dash is a log nobody could measure —
+// compacted, younger than a day, or on a node that has not ticked — and
+// printing the second as `0 B` would claim the first.
+func TestRetentionStatusPrintsEachLogsDailyIntake(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	domains := report["domains"].([]map[string]any)
+	domains[0]["bytes_per_day"] = 3 << 20
+	idle := map[string]any{}
+	for k, v := range domains[0] {
+		idle[k] = v
+	}
+	idle["domain"], idle["stream"], idle["bytes_per_day"] = "chart", "CREWLET_CHART_LOG", 0
+	unmeasured := map[string]any{}
+	for k, v := range domains[0] {
+		unmeasured[k] = v
+	}
+	delete(unmeasured, "bytes_per_day")
+	unmeasured["domain"], unmeasured["stream"] = "vectors", "CREWLET_VECTORS_LOG"
+	report["domains"] = []map[string]any{domains[0], idle, unmeasured}
+	node.report = report
+
+	stdout, _, _ := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if !strings.Contains(stdout, "PER DAY") {
+		t.Fatalf("the domain table has no daily intake column:\n%s", stdout)
+	}
+	for domain, want := range map[string]string{
+		"tracker": "3.0 MiB", "chart": "0 B", "vectors": " - ",
+	} {
+		row := lineStarting(stdout, domain+" ")
+		if !strings.Contains(row, want) {
+			t.Errorf("%s's row reads %q, want %q in it", domain, row, want)
+		}
+	}
+}
+
+// lineStarting is the first line of out that begins with prefix.
+func lineStarting(out, prefix string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return line
+		}
+	}
+	return ""
+}

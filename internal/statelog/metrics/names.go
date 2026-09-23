@@ -38,6 +38,7 @@ const (
 	StatelogDrainRowsPerSecond       = "crewlet.statelog.drain.rows_per_second"
 	StatelogLingerYields             = "crewlet.statelog.linger.yields"
 	StatelogLogBytes                 = "crewlet.statelog.log.bytes"
+	StatelogLogBytesPerDay           = "crewlet.statelog.log.bytes_per_day"
 	StatelogLogHeadroomFraction      = "crewlet.statelog.log.headroom_fraction"
 	StatelogLogMaxBytes              = "crewlet.statelog.log.max_bytes"
 	StatelogPublishConflicts         = "crewlet.statelog.publish.conflicts"

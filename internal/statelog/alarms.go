@@ -159,6 +159,7 @@ const (
 	KindWALLarge         Kind = "wal_large"
 	KindPoolStarved      Kind = "pool_starved"
 	KindCensusDrift      Kind = "census_drift"
+	KindLogCeilingShort  Kind = "log_ceiling_short"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -248,6 +249,25 @@ type Reading struct {
 	// LinearizableReads and LinearizableReadsExpected are the observed and
 	// designed-for daily read rates.
 	LinearizableReads, LinearizableReadsExpected int
+
+	// LogBytesPerDay is what one log took in over the trailing day,
+	// LogMaxBytes the ceiling its broker enforces and ReplayWindow the
+	// `min_age` the trim keeps — the window the log has to be able to
+	// hold. Per DOMAIN, like HeadroomFraction, and evaluated per domain
+	// by the report.
+	//
+	// A POINTER, and here zero is the BENIGN end rather than the alarming
+	// one, which is exactly why it needs one: a log that took in nothing
+	// yesterday is a measurement — it can hold any window — while a node
+	// that has not measured, or a log younger than the day the
+	// measurement spans, knows nothing. Given the zero's representation,
+	// the unmeasured log would be reported as idle on every screen, and
+	// any form of the rule that divides by the rate — how long the ceiling
+	// holds — reads it as a ceiling that holds nothing and fires on every
+	// boot.
+	LogBytesPerDay *uint64
+	LogMaxBytes    uint64
+	ReplayWindow   time.Duration
 }
 
 // Alarm is one condition currently true on this node.
@@ -345,6 +365,42 @@ var table = []rule{
 		remedy: "Raise the log's ceiling with `crewlet retention set-capacity` " +
 			"during a maintenance window, or find out why the trim is not " +
 			"advancing. A full log refuses writes; it does not drop records.",
+	},
+	{
+		// THE FORWARD-LOOKING HALF OF THE HEADROOM ALARM, and the one
+		// that names a different remedy. Headroom says the log is nearly
+		// full; this says it WILL be, with a trim that is working
+		// perfectly — the trim never removes a record younger than
+		// `min_age`, so a log whose ceiling is smaller than `min_age` of
+		// its own writing fills and refuses appends with every term
+		// satisfied. Unblocking a term cannot fix that; only the ceiling
+		// or the window can.
+		//
+		// NO THRESHOLD OF ITS OWN (ADR-0015): the two numbers compared
+		// are the ceiling the operator set and the window they set, and
+		// the alarm fires at the point where the second no longer fits
+		// in the first.
+		kind: KindLogCeilingShort,
+		fires: func(r Reading) (string, bool) {
+			if r.LogBytesPerDay == nil || r.LogMaxBytes == 0 || r.ReplayWindow <= 0 {
+				return "", false
+			}
+			rate := float64(*r.LogBytesPerDay)
+			need := rate * r.ReplayWindow.Hours() / 24
+			if need <= float64(r.LogMaxBytes) {
+				return "", false
+			}
+			holds := time.Duration(float64(r.LogMaxBytes) / rate * float64(24*time.Hour))
+			return fmt.Sprintf("at the %s a day this log took in over the last "+
+				"day, its %s ceiling holds %s of records, and the trim keeps %s",
+				bytesHuman(int64(*r.LogBytesPerDay)), bytesHuman(int64(r.LogMaxBytes)),
+				round(holds), round(r.ReplayWindow)), true
+		},
+		remedy: "Raise the log's ceiling with `crewlet retention set-capacity` " +
+			"during a maintenance window, to at least the window's worth at this " +
+			"rate, or shorten `stream.tracker_retention.min_age` if the " +
+			"deployment does not need that window. Unblocking the trim cannot " +
+			"help: it never removes a record younger than min_age.",
 	},
 	{
 		// ONE THRESHOLD. The form this replaces set a blocked flag once
@@ -551,6 +607,11 @@ func Evaluate(r Reading) []Alarm {
 // Frac is a measured fraction, for the two Reading fields whose zero value is
 // a real and alarming measurement rather than an absent one.
 func Frac(v float64) *float64 { return &v }
+
+// PerDay is a measured daily byte count, for the one Reading field whose zero
+// is a real and BENIGN measurement rather than an absent one — see
+// [Reading.LogBytesPerDay].
+func PerDay(v uint64) *uint64 { return &v }
 
 // Kinds is every alarm this engine can raise, sorted. For the reference doc
 // and for a surface that renders a row per kind.

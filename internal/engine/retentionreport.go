@@ -44,6 +44,10 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		At:          now,
 		BackupOwner: r.backupOwner,
 		Replica:     r.replica(),
+		// THE WINDOW EVERY LOG MUST HOLD, which is the age term's own
+		// input: the trim never removes a record younger than it, so a
+		// ceiling that cannot hold it is one no working trim can save.
+		ReplayWindow: r.cfg.MinAge(),
 	}
 
 	// FLEET-WIDE, and every failure is reported as UNREADABLE rather than
@@ -97,6 +101,9 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			d.Bytes, d.MaxBytes = stats.Bytes, stats.MaxBytes
 			d.StreamReadable = true
 		}
+		// THE TICK'S MEASUREMENT, read back rather than taken: see
+		// [retention.measureRates] for why a report never searches a log.
+		d.BytesPerDay = r.rateOf(name)
 		if floor, published := floors[name]; published {
 			d.TrimFloor = floor.TrimTo
 			d.BlockedSince = floor.BlockedSince

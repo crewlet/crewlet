@@ -127,6 +127,17 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{LinearizableReads: 5000, LinearizableReadsExpected: 1000},
 			"sized for",
 		},
+		"a ceiling smaller than the replay window at the measured rate": {
+			statelog.KindLogCeilingShort,
+			// 300 MiB a day for seven days is 2.05 GiB against a
+			// 1 GiB ceiling: the log fills in under four days with
+			// every trim term satisfied.
+			statelog.Reading{
+				LogBytesPerDay: statelog.PerDay(300 << 20),
+				LogMaxBytes:    1 << 30, ReplayWindow: 7 * 24 * time.Hour,
+			},
+			"holds 81h55m",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := statelog.Evaluate(tc.reading)
@@ -176,6 +187,75 @@ func TestAZeroReadingRaisesNothing(t *testing.T) {
 	got := statelog.Evaluate(measured)
 	if len(got) != 2 {
 		t.Errorf("a measured zero raised %v, want both fraction alarms", kindsOf(got))
+	}
+}
+
+// A NODE THAT HAS NEVER MEASURED ITS RATE DOES NOT ALARM — and that is the
+// pointer, not a zero.
+//
+// `log_ceiling_short` compares a log's ceiling against `min_age` of its own
+// measured intake. Every node boots having measured nothing: its trim has not
+// ticked, or the log is younger than the day the measurement spans, or the
+// log is compacted and has no rate that means anything. Each of those is "no
+// idea", and the rule must be silent on all of them — on every boot, on every
+// node, for as long as it takes.
+//
+// The zero is the other half, and it is why the field is a pointer rather
+// than a plain number: a log that took in NOTHING yesterday is a
+// measurement, the most benign one there is, and it must survive as a value
+// rather than collapse into "not measured". What cannot be allowed is either
+// meaning borrowing the other's representation.
+func TestANodeThatHasNeverMeasuredItsRateDoesNotAlarm(t *testing.T) {
+	t.Parallel()
+	const ceiling = 1 << 30
+	window := 7 * 24 * time.Hour
+
+	never := statelog.Reading{LogMaxBytes: ceiling, ReplayWindow: window}
+	if got := statelog.Evaluate(never); len(got) != 0 {
+		t.Errorf("a node that has never measured its rate raised %v", kindsOf(got))
+	}
+
+	// A MEASURED ZERO IS A VALUE, and it is silent because a log that
+	// takes in nothing holds any window — not because it was mistaken for
+	// the absent one.
+	idle := statelog.Reading{
+		LogBytesPerDay: statelog.PerDay(0), LogMaxBytes: ceiling, ReplayWindow: window,
+	}
+	if got := statelog.Evaluate(idle); len(got) != 0 {
+		t.Errorf("a log that took in nothing raised %v", kindsOf(got))
+	}
+
+	// THE CONTROL: the same ceiling and window with a MEASURED rate the
+	// ceiling cannot hold does fire, so the silences above are the pointer
+	// working and not a rule that can never fire.
+	short := statelog.Reading{
+		LogBytesPerDay: statelog.PerDay(ceiling / 3), LogMaxBytes: ceiling,
+		ReplayWindow: window,
+	}
+	if _, fired := find(statelog.Evaluate(short), statelog.KindLogCeilingShort); !fired {
+		t.Error("a third of the ceiling a day against a seven-day window did " +
+			"not fire, so the silences above prove nothing")
+	}
+
+	// AND AT EXACTLY THE CEILING it is silent: the window fits, just, and
+	// the headroom alarm is what speaks for a log that full. A second
+	// threshold here would be a second opinion (ADR-0015).
+	exact := statelog.Reading{
+		LogBytesPerDay: statelog.PerDay(ceiling / 8), LogMaxBytes: ceiling,
+		ReplayWindow: 8 * 24 * time.Hour,
+	}
+	if got := statelog.Evaluate(exact); len(got) != 0 {
+		t.Errorf("a window that exactly fits raised %v", kindsOf(got))
+	}
+
+	// AN UNKNOWN CEILING IS NOT A SMALL ONE, for the headroom alarm's
+	// reason: a measured rate against a ceiling nobody could read says
+	// nothing about whether the window fits.
+	unread := statelog.Reading{
+		LogBytesPerDay: statelog.PerDay(ceiling), ReplayWindow: window,
+	}
+	if got := statelog.Evaluate(unread); len(got) != 0 {
+		t.Errorf("a measured rate against an unread ceiling raised %v", kindsOf(got))
 	}
 }
 

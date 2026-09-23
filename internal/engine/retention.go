@@ -113,8 +113,8 @@ type retention struct {
 	// report" rather than as no coverage.
 	coverage func(context.Context) (float64, bool, error)
 
-	// mu guards the coverage cache below. The tick and every API request
-	// assemble a report, on different goroutines.
+	// mu guards the coverage cache and the log rates below. The tick and
+	// every API request assemble a report, on different goroutines.
 	mu sync.Mutex
 
 	// coverFraction and coverKnown are the last tick's coverage
@@ -135,6 +135,11 @@ type retention struct {
 	// so the histogram is fed the DELTA rather than the process's
 	// cumulative total. Keyed on the file, which is the attribute.
 	pooled map[string]poolCounters
+
+	// rates is each strict log's intake over the trailing day, as the last
+	// tick measured it — what `log_ceiling_short` holds a ceiling against.
+	// Guarded by mu, for the coverage cache's reason. See lograte.go.
+	rates map[string]*uint64
 
 	stop context.CancelFunc
 	done chan struct{}
@@ -272,16 +277,17 @@ func (r *retention) tick(ctx context.Context) {
 }
 
 // evaluate observes this node's alarms and records what one tick can measure
-// about its own hardware and its vector coverage.
+// about its own hardware, its vector coverage and its logs.
 //
 // THE MEASUREMENT COMES FIRST, because the reading the table is evaluated
 // against reads these back: a tick that observed before it measured would
 // evaluate the previous tick's disk against this tick's log. The vector
-// coverage is measured HERE and nowhere else — it is a scan of the whole
-// corpus, which a report assembled per dashboard poll must not repeat.
+// coverage and the logs' intake are measured HERE and nowhere else — each is
+// a scan a report assembled per dashboard poll must not repeat.
 func (r *retention) evaluate(ctx context.Context) {
 	r.capacity(ctx)
 	r.measureCoverage(ctx)
+	r.measureRates(ctx, time.Now().UTC())
 	if r.alarms == nil {
 		return
 	}

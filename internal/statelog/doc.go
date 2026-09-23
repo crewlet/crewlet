@@ -186,7 +186,8 @@
 // above it asks the same question. The rule is ADR-0015 and alarms.go is where
 // it is carried out: an alarm never invents a number, it fires at the one some
 // OTHER decision already made — the grace that sheds a node, the grace that
-// moves its seats, the budget a caller was promised — and ONE evaluation feeds
-// every surface, so a gauge, a log line and a screen cannot disagree about
-// whether something is wrong.
+// moves its seats, the budget a caller was promised, the replay window an
+// operator set a log's ceiling to hold — and ONE evaluation feeds every
+// surface, so a gauge, a log line and a screen cannot disagree about whether
+// something is wrong.
 package statelog

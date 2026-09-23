@@ -167,6 +167,17 @@ type DomainReport struct {
 	MaxBytes         uint64   `json:"max_bytes,omitempty"`
 	HeadroomFraction *float64 `json:"headroom_fraction,omitempty"`
 
+	// BytesPerDay is what the log took in over the trailing day, as this
+	// node last measured it — the rate `log_ceiling_short` holds the
+	// ceiling against.
+	//
+	// ABSENT RATHER THAN ZERO when nothing was measured, which is every
+	// compacted log, every log younger than the day the measurement
+	// spans and every node before its first trim tick: zero is a log that
+	// took in nothing, and rendering "not measured" as that would show an
+	// idle log where nobody knows.
+	BytesPerDay *uint64 `json:"bytes_per_day,omitempty"`
+
 	// TrimFloor is the floor the fleet has published — what has actually
 	// been removed. TrimTo is what THIS tick concluded may be removed.
 	// Two numbers because they answer different questions: the first is
@@ -358,6 +369,10 @@ type DomainInputs struct {
 	FirstSeq, LastSeq, Bytes, MaxBytes uint64
 	StreamReadable                     bool
 
+	// BytesPerDay is the log's measured daily intake, nil where nothing
+	// was measured. See [DomainReport.BytesPerDay].
+	BytesPerDay *uint64
+
 	// TrimFloor is the published floor, and Decision is what this tick
 	// concluded from the six terms.
 	TrimFloor uint64
@@ -388,6 +403,13 @@ type ReportInputs struct {
 	// domain here, from the domain rows, so a two-domain fleet reports
 	// which domain is full rather than that something is.
 	Reading Reading
+
+	// ReplayWindow is `stream.tracker_retention.min_age`: how much of its
+	// own history every log keeps, because the trim never removes a record
+	// younger than it. One value for every domain, since one age term
+	// governs every domain's trim — and it is what `log_ceiling_short`
+	// asks each log's ceiling to hold at that log's measured rate.
+	ReplayWindow time.Duration
 
 	Domains []DomainInputs
 
@@ -492,6 +514,7 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 		FirstSeq:          d.FirstSeq,
 		LastSeq:           d.LastSeq,
 		Bytes:             d.Bytes,
+		BytesPerDay:       d.BytesPerDay,
 		TrimFloor:         d.TrimFloor,
 		TrimTo:            d.Decision.To,
 		BlockedBy:         d.Decision.BlockedBy,
@@ -746,18 +769,26 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 //
 // # Why the per-domain half is evaluated separately
 //
-// [Reading] describes ONE node, and two of its conditions — the log's
-// headroom and a blocked trim — are properties of a DOMAIN. Evaluating the
-// node-wide reading once and each domain's own fields once per domain is what
-// lets a two-domain fleet say WHICH log is filling. Folding them into one
-// reading would report the worst of the two with no name on it, which is the
-// number an operator then has to go and find by hand.
+// [Reading] describes ONE node, and three of its conditions — the log's
+// headroom, a ceiling too small for the log's own replay window, and a blocked
+// trim — are properties of a DOMAIN. Evaluating the node-wide reading once and
+// each domain's own fields once per domain is what lets a two-domain fleet say
+// WHICH log is filling. Folding them into one reading would report the worst
+// of the two with no name on it, which is the number an operator then has to
+// go and find by hand.
 func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 	out := Evaluate(in.Reading)
 	for _, d := range domains {
 		perDomain := Reading{
 			HeadroomFraction: d.HeadroomFraction,
 			TrimBlockedBy:    string(d.BlockedBy),
+			// THE CEILING THE DOMAIN ROW CARRIES, which is set only
+			// where the stream answered and declares one: an unknown
+			// ceiling is not a small one, so the rule is silent
+			// rather than comparing a rate against zero.
+			LogBytesPerDay: d.BytesPerDay,
+			LogMaxBytes:    d.MaxBytes,
+			ReplayWindow:   in.ReplayWindow,
 		}
 		if d.BlockedBy != "" && !d.BlockedSince.IsZero() {
 			perDomain.TrimBlockedFor = in.At.Sub(d.BlockedSince)

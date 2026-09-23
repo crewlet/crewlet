@@ -191,6 +191,87 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 	}
 }
 
+// A LOG TOO SMALL FOR ITS OWN REPLAY WINDOW IS NAMED, and only that log.
+//
+// Each domain has its own ceiling and its own rate, so the comparison is per
+// domain exactly as headroom is — an alarm that said only "a ceiling is too
+// small" would send an operator to resize every log they have.
+func TestTheCeilingShortAlarmNamesItsDomain(t *testing.T) {
+	t.Parallel()
+	busy := healthyDomain("iam", true)
+	// A GIBIBYTE CEILING taking in 200 MiB a day holds five days of a
+	// seven-day window.
+	busy.MaxBytes, busy.BytesPerDay = 1<<30, statelog.PerDay(200<<20)
+	quiet := healthyDomain("tracker", true)
+	quiet.BytesPerDay = statelog.PerDay(10 << 20)
+
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, ReplayWindow: 7 * 24 * time.Hour,
+		Domains: []statelog.DomainInputs{quiet, busy},
+	})
+	var fired []statelog.Alarm
+	for _, a := range rep.Alarms {
+		if a.Kind == statelog.KindLogCeilingShort {
+			fired = append(fired, a)
+		}
+	}
+	if len(fired) != 1 {
+		t.Fatalf("one log is short of its window and %d alarm(s) fired: %v",
+			len(fired), rep.Alarms)
+	}
+	if !strings.HasPrefix(fired[0].Detail, "iam: ") {
+		t.Errorf("the alarm reads %q and does not name the log that is short",
+			fired[0].Detail)
+	}
+
+	// AND THE WINDOW IS WHAT IT IS COMPARED AGAINST: the same log under a
+	// three-day min_age fits, so a report that dropped the window would
+	// fire on every log with any rate at all or on none.
+	rep = statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, ReplayWindow: 3 * 24 * time.Hour,
+		Domains: []statelog.DomainInputs{quiet, busy},
+	})
+	for _, a := range rep.Alarms {
+		if a.Kind == statelog.KindLogCeilingShort {
+			t.Errorf("a window the ceiling holds fired: %s", a.Detail)
+		}
+	}
+}
+
+// A MEASURED ZERO GOES ON THE WIRE AS ZERO, AND AN UNMEASURED RATE AS
+// NOTHING.
+//
+// The two are opposite facts — a log that took in nothing, and a node that
+// cannot say — and every surface downstream renders from the JSON. Collapsed
+// into one representation, a dashboard would show an idle log on every node
+// that has not ticked yet.
+func TestAMeasuredZeroRateSurvivesTheWireAndAnUnmeasuredOneIsAbsent(t *testing.T) {
+	t.Parallel()
+	idle := healthyDomain("chart", true)
+	idle.BytesPerDay = statelog.PerDay(0)
+	unmeasured := healthyDomain("iam", true)
+
+	raw, err := json.Marshal(statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt,
+		Domains: []statelog.DomainInputs{idle, unmeasured},
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var doc struct {
+		Domains []map[string]any `json:"domains"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, present := doc.Domains[0]["bytes_per_day"]; !present || got != float64(0) {
+		t.Errorf("a measured zero went out as %v (present %v), want 0", got, present)
+	}
+	if got, present := doc.Domains[1]["bytes_per_day"]; present {
+		t.Errorf("an unmeasured rate went out as %v, want the field absent", got)
+	}
+}
+
 // THE REPORT'S COUNTED SET IS THE GATE'S OWN, TO THE INSTANT.
 //
 // An eviction takes effect one fence window after the gesture. A screen that
