@@ -1623,6 +1623,18 @@ Two consequences worth knowing before you see them:
   and `crewlet iam check` names every one still waiting as
   `removal_key_live`. The duty needs no keyring — finding a key and deleting
   it both work on a node that can decrypt nothing.
+- **A key is minted before anything owns it.** An enrolment mints the
+  person's key and seals their address under it before it claims the
+  address, and an invitation mints its own before it publishes itself — so
+  two administrators adding one joiner leave the loser a key for somebody
+  who never existed, and an invitation the sweep collects leaves its key
+  behind. The same duty destroys a key **nobody owns** — no person, no
+  reservation, no invitation, no removal — once it is an hour old and only
+  on a node that has applied the whole identity log, because on a node that
+  is behind, somebody whose enrolment has not arrived yet owns nothing
+  either. `crewlet iam check` names each one past the hour as `key_unowned`.
+  A refused enrolment does not destroy its own key: the id it was handed may
+  be a live person's, and only a pass that has proved nobody owns it may.
 - **A value that will not decrypt is not the same as an outage.** A removed
   person's row reports itself as *shredded*; a decryption failure on somebody
   who has not been removed is a key-store problem. Rendering the second as the

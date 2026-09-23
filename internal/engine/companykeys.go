@@ -266,16 +266,16 @@ func (e *Engine) mayMintPersonBlindKey(ctx context.Context) error {
 			"cannot tell whether %s was ever in use", iamdomain.ErrNoBlindKey,
 			iamdomain.BlindKeyName)
 	}
-	return judgeBlindKeyMint(ctx, e.identityCaughtUp, e.native.iamReader.HoldsBlinds)
+	return judgeBlindKeyMint(ctx, e.IdentityCaughtUp, e.native.iamReader.HoldsBlinds)
 }
 
-// identityCaughtUp answers whether this node has applied everything the
+// IdentityCaughtUp answers whether this node has applied everything the
 // identity log held when it was asked, and [errIdentityBehind] when it has not.
 //
 // THE LOG'S END IS READ FIRST and this node's position after it, so a record
 // that lands between the two can only make the answer "behind" — never let a
 // node that missed it answer as though it had not.
-func (e *Engine) identityCaughtUp(ctx context.Context) error {
+func (e *Engine) IdentityCaughtUp(ctx context.Context) error {
 	if e.native == nil || e.native.log == nil {
 		return fmt.Errorf("%w: this node runs no identity domain", errIdentityBehind)
 	}

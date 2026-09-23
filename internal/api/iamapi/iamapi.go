@@ -65,13 +65,13 @@ type Directory interface {
 	History(ctx context.Context, q iamdomain.HistoryQuery) (iamdomain.HistoryPage, error)
 	PositionAt(ctx context.Context, at time.Time) (uint64, error)
 
-	// Claims and KeysOutlivingRemovals are the two identity duties' own
-	// readings, which the report shows on demand: a duplicate or an orphan
-	// the claim duty warns about, and a removed person whose key the key
-	// duty has not yet destroyed.
+	// Claims and KeyCensus are the two identity duties' own readings,
+	// which the report shows on demand: a duplicate or an orphan the claim
+	// duty warns about, and a key the key duty has not yet destroyed — a
+	// removed person's, or one nobody owns.
 	Claims(ctx context.Context, now time.Time) (iamdomain.ClaimReport, error)
-	KeysOutlivingRemovals(ctx context.Context, keys iamdomain.KeyIndex) (
-		int, []string, error)
+	KeyCensus(ctx context.Context, keys iamdomain.KeyIndex) (
+		iamdomain.KeyCensus, error)
 }
 
 // Writer is one party's authority to change the identity estate, as this
@@ -206,9 +206,18 @@ type Options struct {
 	Audit Audit
 
 	// Keys lists the person keys the company's secret store holds, for
-	// the report's removed-but-still-readable arm. NIL-ABLE, and the
-	// absence is the third value — see [Keys].
+	// the report's two key arms. NIL-ABLE, and the absence is the third
+	// value — see [Keys].
 	Keys Keys
+
+	// Current answers whether this node has applied everything the
+	// identity log held when it was asked — the engine's
+	// `IdentityCaughtUp` — and gates the report's UNOWNED-KEY arm, because
+	// on a node behind the log a person whose enrolment has not arrived
+	// owns nothing here and their key reads as nobody's. NIL-ABLE: absent,
+	// or answering an error, the arm is counted as unchecked rather than
+	// answered.
+	Current func(ctx context.Context) error
 
 	// Now is the clock, injectable so a case can pin an expiry.
 	Now func() time.Time
@@ -225,6 +234,7 @@ type Service struct {
 	ceiling   []iam.Grant
 	audit     Audit
 	keys      Keys
+	current   func(ctx context.Context) error
 	now       func() time.Time
 }
 
@@ -249,7 +259,8 @@ func New(opts Options) (*Service, error) {
 		opener: opts.Opener, bootstrap: opts.Bootstrap,
 		external: opts.ExternalBase, bindings: opts.Bindings,
 		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit, keys: opts.Keys,
-		now: opts.Now,
+		current: opts.Current,
+		now:     opts.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }

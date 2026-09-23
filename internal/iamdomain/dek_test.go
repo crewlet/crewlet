@@ -32,6 +32,9 @@ type keyStore struct {
 	// for a hazard the production seam does not have.
 	mu     sync.Mutex
 	values map[string]string
+	// written is when each value was last written, which is what the key
+	// duty ages a key nobody owns by.
+	written map[string]time.Time
 	// fail, when set, is what every call answers. It is what stands in for
 	// a coordination store this node cannot reach.
 	fail error
@@ -55,23 +58,26 @@ func (k *keyStore) blip(err error) {
 	k.failUnset = err
 }
 
-// Names is the store's listing by prefix, which the key duty reads.
-func (k *keyStore) Names(_ context.Context, prefix string) ([]string, error) {
+// Keys is the store's listing by prefix, which the key duty reads: names and
+// write times, never a value.
+func (k *keyStore) Keys(_ context.Context, prefix string) ([]secrets.Record, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.fail != nil {
 		return nil, k.fail
 	}
-	var out []string
+	var out []secrets.Record
 	for name := range k.values {
 		if strings.HasPrefix(name, prefix) {
-			out = append(out, name)
+			out = append(out, secrets.Record{Name: name, UpdatedAt: k.written[name]})
 		}
 	}
 	return out, nil
 }
 
-func newKeyStore() *keyStore { return &keyStore{values: map[string]string{}} }
+func newKeyStore() *keyStore {
+	return &keyStore{values: map[string]string{}, written: map[string]time.Time{}}
+}
 
 // value and put are how a case reaches inside the fake, under its own lock.
 func (k *keyStore) value(name string) string {
@@ -110,13 +116,14 @@ func (k *keyStore) Get(_ context.Context, name string) (string, error) {
 	return value, nil
 }
 
-func (k *keyStore) Set(_ context.Context, name, value, _, _ string, _ time.Time) error {
+func (k *keyStore) Set(_ context.Context, name, value, _, _ string, now time.Time) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.fail != nil {
 		return k.fail
 	}
 	k.values[name] = value
+	k.written[name] = now
 	return nil
 }
 
@@ -131,6 +138,7 @@ func (k *keyStore) Unset(_ context.Context, name string) (bool, error) {
 	}
 	_, had := k.values[name]
 	delete(k.values, name)
+	delete(k.written, name)
 	return had, nil
 }
 

@@ -569,12 +569,18 @@ repairs: each finding is somebody's decision.
 | `claim_duplicated` | An address, a login or a seat more than one person holds. `WHO` is the claim and every holder; an address is named by its kind alone, because the report carries no form of it | Decide who keeps it, and release it from the others |
 | `claim_orphaned` | Claims an enrolment took before it stopped, held for over an hour by nobody who can use them | `remove` the id, which releases them |
 | `removal_key_live` | Somebody removed whose key still exists, so their name and address are readable from every backup taken before the removal | Nothing — the key duty retries every fifteen minutes; a finding that stands says the company's secret store is refusing the delete |
+| `key_unowned` | A key no person, reservation, invitation or removal owns, over an hour old: minted for an enrolment or an invitation refused after the mint, or left by an invitation the sweep collected. `WHO` is the id it was minted for | Nothing — the key duty destroys it on its next pass; a finding that stands says the company's secret store is refusing the delete |
 
 A duplicate cannot come from ordinary traffic — the broker arbitrates every
 claim — and **can** come from a restore or a reanchor. A report that could not
 read the claims answers 503 rather than a clean bill, because it is the only
-place a duplicate is ever named. `removal_key_live` is left out on a node with
-no company secret store, which cannot tell a surviving key from no key.
+place a duplicate is ever named. `removal_key_live` and `key_unowned` are left
+out on a node with no company secret store, which cannot tell a surviving key
+from no key. `key_unowned` is also left out on a node that has not applied the
+whole identity log — somebody whose enrolment has not arrived there owns
+nothing there either — and the report's `keys_unchecked` counts the keys it
+could therefore not judge, so a node that could not tell never reads as a
+clean one.
 
 ## `crewlet secrets`
 

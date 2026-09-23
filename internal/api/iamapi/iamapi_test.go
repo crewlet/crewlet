@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -155,10 +156,11 @@ type fakeDirectory struct {
 
 	// claims is what the claim report reads, and claimsErr a report this
 	// node could not read. liveKeys are the removed people whose key the
-	// key duty has not yet destroyed.
+	// key duty has not yet destroyed, and unowned the keys nobody owns.
 	claims    iamdomain.ClaimReport
 	claimsErr error
 	liveKeys  []string
+	unowned   []iamdomain.UnownedKey
 }
 
 func (d *fakeDirectory) People(_ context.Context, q iamdomain.PeopleQuery) (
@@ -228,15 +230,18 @@ func (d *fakeDirectory) Claims(context.Context, time.Time) (iamdomain.ClaimRepor
 	return d.claims, d.err
 }
 
-func (d *fakeDirectory) KeysOutlivingRemovals(_ context.Context, keys iamdomain.KeyIndex) (
-	int, []string, error) {
+func (d *fakeDirectory) KeyCensus(_ context.Context, keys iamdomain.KeyIndex) (
+	iamdomain.KeyCensus, error) {
 
 	if keys == nil {
 		// A REPORT THAT ASKS WITHOUT A STORE is the bug this fake names:
 		// the arm is meant to be skipped when there is nothing to ask.
-		return 0, nil, errors.New("asked with no key index")
+		return iamdomain.KeyCensus{}, errors.New("asked with no key index")
 	}
-	return len(d.liveKeys), d.liveKeys, d.err
+	return iamdomain.KeyCensus{
+		Keys:            len(d.liveKeys) + len(d.unowned),
+		OutlivedRemoval: d.liveKeys, Unowned: d.unowned,
+	}, d.err
 }
 
 // fakeWriter records what the surface asked of it.
@@ -855,10 +860,74 @@ func TestTheReportNamesALiveKeyOfARemovedPersonWhereItCanAsk(t *testing.T) {
 	}
 }
 
+// A KEY NOBODY OWNS IS NAMED ONLY BY A NODE THAT CAN TELL.
+//
+// A key no row owns is either a refused gesture's residue — its sealed value
+// readable from every backup until the key duty destroys it — or the key of
+// somebody whose enrolment this node has not applied yet. Only a node that has
+// applied the whole log can tell those apart, so the report names one only
+// there, and only past the grace a running gesture needs; everywhere else it
+// COUNTS what it could not judge rather than printing a clean report, and it
+// never calls a young key a finding.
+func TestTheReportNamesAnUnownedKeyOnlyWhereTheNodeIsCurrent(t *testing.T) {
+	t.Parallel()
+	const (
+		old   = "018f3a9c-0000-7000-8000-0000000000e1"
+		young = "018f3a9c-0000-7000-8000-0000000000e2"
+	)
+	unowned := []iamdomain.UnownedKey{
+		{ID: old, WrittenAt: at.Add(-2 * iamdomain.OrphanKeyGrace)},
+		{ID: young, WrittenAt: at.Add(-iamdomain.OrphanKeyGrace / 4)},
+	}
+	for _, tc := range []struct {
+		name      string
+		current   func(context.Context) error
+		wantNamed bool
+		unchecked float64
+	}{
+		{"a node given no way to tell", nil, false, 2},
+		{"a node behind the log", func(context.Context) error {
+			return errors.New("applied 4 of 9")
+		}, false, 2},
+		{"a node that is current", func(context.Context) error { return nil },
+			true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, func(o *iamapi.Options) {
+				o.Keys = listedKeys{}
+				o.Current = tc.current
+			})
+			r.directory.unowned = unowned
+			got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
+			if got.status != http.StatusOK {
+				t.Fatalf("status %d: %v", got.status, got.body)
+			}
+			var named []string
+			for _, f := range findingsOf(got.body, string(iamapi.KindKeyUnowned)) {
+				named = append(named, f["person"].(string))
+			}
+			switch {
+			case tc.wantNamed && (len(named) != 1 || named[0] != old):
+				t.Errorf("named %v, want exactly the key past the grace", named)
+			case !tc.wantNamed && len(named) != 0:
+				t.Errorf("named %v on a node that cannot tell an absent "+
+					"owner from one that has not arrived", named)
+			}
+			if got.body["keys_unchecked"] != tc.unchecked {
+				t.Errorf("keys_unchecked = %v, want %v", got.body["keys_unchecked"],
+					tc.unchecked)
+			}
+		})
+	}
+}
+
 // listedKeys is a key index the fake directory is asked with.
 type listedKeys struct{}
 
-func (listedKeys) Names(context.Context, string) ([]string, error) { return nil, nil }
+func (listedKeys) Keys(context.Context, string) ([]secrets.Record, error) {
+	return nil, nil
+}
 
 func hasFinding(body map[string]any, kind string) bool {
 	return findingOf(body, kind) != nil
@@ -874,6 +943,19 @@ func findingOf(body map[string]any, kind string) map[string]any {
 		}
 	}
 	return nil
+}
+
+// findingsOf is every finding of a kind, in the order the report gave them.
+func findingsOf(body map[string]any, kind string) []map[string]any {
+	var out []map[string]any
+	rows, _ := body["findings"].([]any)
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		if held, _ := row["kind"].(string); held == kind {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 // --- the table ----------------------------------------------------------- //

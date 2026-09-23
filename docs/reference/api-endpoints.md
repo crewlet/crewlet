@@ -728,14 +728,25 @@ somebody still has — and neither is an outage.
   ],
   "position": "CREWLET_IAM_LOG@0:1840",
   "people_with_people_manage": 2,
-  "bindings_unchecked": 0
+  "bindings_unchecked": 0,
+  "keys_unchecked": 0
 }
 ```
 
 `kind` is one of `no_people_manage_holder` (listed first: nobody left who can
 administer the company except through a Tier A token),
-`person_without_credential`, `binding_dangling`, `identity_shredded` and
-`grant_clamped_by_ceiling`.
+`person_without_credential`, `binding_dangling`, `identity_shredded`,
+`grant_clamped_by_ceiling`, `claim_duplicated`, `claim_orphaned`,
+`removal_key_live` and `key_unowned`. The last two read the company's secret
+store and are left out on a node without one; the table in
+[`crewlet iam check`](cli.md#crewlet-iam-check) says what each one means and
+what to do.
+
+`keys_unchecked` counts the keys no row on this node owns that it **could not
+judge**, because it has not applied the whole identity log: somebody whose
+enrolment has not arrived here owns nothing here either, so such a node names
+no `key_unowned` and counts instead, and a report from it does not read as a
+clean one.
 
 `binding_dangling` is decided by the **request path's own seat table**, so it
 names exactly the people a request would refuse or hold off for want of their

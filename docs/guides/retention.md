@@ -753,7 +753,7 @@ than an hour later — and then on its interval.
 |---|---|---|
 | `iam_sweep` | 1 hour | Resolves `api.auth.audit.changes` (400 days) and `api.auth.audit.sessions` (90 days) to positions and publishes one sweep record for each bucket that is **due** — one holding something at least a day past its horizon. The day of slack is what bounds the log: a bucket is swept at most about once a day, so the sweep adds at most 64 records a day however often it runs. |
 | `iam_deactivation_probe` | `oidc.deactivation_probe` (1 hour) | Asks the identity provider about every live provider session, with the refresh token kept when the person signed in. Only on a deployment with an `oidc` block. |
-| `iam_key_shred` | 15 minutes | Destroys the key of anybody removed whose key outlived the removal. |
+| `iam_key_shred` | 15 minutes | Destroys the key of anybody removed whose key outlived the removal, and every key nobody owns once it is an hour old; collects the refresh token of every provider session that is over. |
 | `iam_claims` | 1 hour | Logs every duplicated claim and every orphaned reservation at WARN, every tick it stands. |
 
 The fifth is the operation ledger's sweep, which runs in the ordinary
@@ -769,6 +769,30 @@ exists only because a write failed, so the useful retry is "soon after the store
 is back", and every minute is a minute somebody off-boarded is still readable.
 `crewlet iam check` names each one as `removal_key_live` while it waits.
 
+**It also destroys a key nobody owns.** An enrolment mints a person's key before
+it claims their address, and an invitation mints its own before it publishes —
+so an enrolment or an invitation refused on its address leaves a key for
+somebody who never existed, and an invitation the sweep collects leaves its
+key behind. Nothing else would ever name those keys, and what they sealed would
+stay readable from every backup for the life of the deployment. The duty
+destroys one only once it is **an hour old** — the gestures that mint a key
+finish within one request, so an hour is long past any of them — and only on a
+node that has applied **everything the identity log held** when it asked, because
+on a node that is behind, somebody whose enrolment has not arrived owns nothing
+there either, and destroying their key would be an irreversible shred of a
+person nobody removed. A node that is behind says so (`iam_keys_unjudged`) and
+leaves them for the next pass; a removal's key does not wait for that, because
+a removal is definitive wherever it has been applied. `crewlet iam check` names
+each unowned key past the hour as `key_unowned`.
+
+**And it collects every refresh token whose session is over** — by logout,
+expiry, a revocation or a session invalidation — whether or not a provider is
+still configured. That used to be the probe's, and the probe runs only while an
+`oidc` block does: a deployment that dropped its provider kept every token, a
+live credential at that provider, for ever. A token whose session this node has
+not applied yet is kept, because its row is missing only because it has not
+arrived.
+
 **The probe needs the refresh token, so a provider sign-in keeps it.** It is
 sealed into the company's secret store beside the session it belongs to, and a
 sign-in whose token cannot be kept there is refused with a 503 rather than
@@ -778,15 +802,14 @@ provider before its absolute deadline. `invalid_grant` ends the session as
 — is *unknown* and ends nothing, because reading an outage as a deactivation
 would sign the whole company out during somebody else's incident. A rotated
 refresh token is recorded, or the next pass would present one the provider had
-retired and read the refusal as an off-boarding. A token whose session has
-ended — by logout, expiry, a revocation or a session invalidation — is dropped
-on the next pass.
+retired and read the refusal as an off-boarding. The probe drops the token of
+a session it ended itself; a token whose session ended any other way is the key
+duty's to collect.
 
 **One session the probe cannot handle is one session, not the pass.** A token
-it cannot read — one a newer node wrote in the middle of a rolling upgrade —
-and one whose ended session it could not tidy away are each logged by name
-(`oidc_probe_session_skipped`) and left alone, and every other session is still
-asked about; a close that did not land, or a rotated token that could not be
+it cannot read — one a newer node wrote in the middle of a rolling upgrade — is
+logged by name (`oidc_probe_session_skipped`) and left alone, and every other
+session is still asked about; a close that did not land, or a rotated token that could not be
 recorded, is logged the same way and tried again next pass. Such a pass ends
 with `iam_probe_pass_partial` at WARN, counting what it checked, ended,
 skipped and failed. Only a pass that could do nothing at all — no provider

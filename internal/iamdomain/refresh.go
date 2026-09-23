@@ -22,8 +22,9 @@ import (
 // A refresh token is a credential at somebody else's identity provider, so it
 // is sealed in the company's secret store under the session's own lineage
 // ([SessionRefreshName]) and nowhere else: not on a record, not in a row, not
-// in a snapshot. Nothing on the request path reads it — the only reader is the
-// probe, one node, once an interval. The design this replaced re-sealed the
+// in a snapshot. Nothing on the request path reads it — the readers are the
+// probe and the key duty's collection ([Refreshes.CollectEnded]), one node
+// each, once an interval. The design this replaced re-sealed the
 // token into the log on every hourly cookie rotation, an eleven-fold amplifier
 // on the log's bytes for a value that changes only at an exchange.
 //
@@ -123,11 +124,12 @@ func (r *Refreshes) Hold(ctx context.Context, grant RefreshGrant, now time.Time)
 func (r *Refreshes) Held(ctx context.Context) (grants []RefreshGrant,
 	unreadable []error, err error) {
 
-	names, err := r.keys.Names(ctx, sessionRefreshPrefix)
+	listed, err := r.keys.Keys(ctx, sessionRefreshPrefix)
 	if err != nil {
 		return nil, nil, fmt.Errorf("iamdomain: list the refresh grants: %w", err)
 	}
-	for _, name := range names {
+	for _, key := range listed {
+		name := key.Name
 		if !strings.HasSuffix(name, sessionRefreshSuffix) {
 			continue
 		}
@@ -190,6 +192,53 @@ func (r *Refreshes) Rotate(ctx context.Context, lineage, token string, now time.
 // Drop destroys one session's grant, reporting whether it was there.
 func (r *Refreshes) Drop(ctx context.Context, lineage string) (bool, error) {
 	return r.keys.Unset(ctx, SessionRefreshName(lineage))
+}
+
+// CollectEnded destroys every grant whose session is over, by whichever lever
+// ended it, and reports what it collected and every grant it could not judge
+// or drop — one error each, beside the rest.
+//
+// # One collector, and it is the key duty rather than the probe
+//
+// A sign-out ends one lineage, but a revocation, a company-wide invalidation,
+// an expiry and a removal end sessions with no per-lineage write at all, so
+// only a pass over every grant sees all of them end. That pass used to be the
+// deactivation PROBE's — and the probe is armed only while a provider is
+// configured, so a deployment that dropped its `oidc` block kept every
+// session's refresh token, a live credential at that provider, for ever. The
+// key duty is armed wherever the company's secret store is, which is wherever a
+// grant can exist.
+//
+// AN UNSEEN SESSION IS KEPT: its row is missing because it has not arrived on
+// this node, and collecting its grant would blind the probe to a live session
+// until it expired. See the file's header.
+func (r *Refreshes) CollectEnded(ctx context.Context, reader *Reader,
+	now time.Time) (collected []string, skipped []error, err error) {
+
+	if reader == nil {
+		return nil, nil, errors.New("iamdomain: collecting ended grants needs " +
+			"the directory their sessions are judged in")
+	}
+	grants, skipped, err := r.Held(ctx)
+	if err != nil || len(grants) == 0 {
+		return nil, skipped, err
+	}
+	states, err := reader.SessionStates(ctx, grants, now)
+	if err != nil {
+		return nil, skipped, err
+	}
+	for _, grant := range grants {
+		if states[grant.Lineage] != SessionOver {
+			continue
+		}
+		if _, err := r.Drop(ctx, grant.Lineage); err != nil {
+			skipped = append(skipped, fmt.Errorf("iamdomain: collect session "+
+				"%s's grant: %w", grant.Lineage, err))
+			continue
+		}
+		collected = append(collected, grant.Lineage)
+	}
+	return collected, skipped, nil
 }
 
 // SessionState is what this node can say about one session, three ways.
@@ -330,18 +379,16 @@ func NewProbeSessions(reader *Reader, writer *Writer, custody *Refreshes,
 
 var _ oidc.Sessions = (*ProbeSessions)(nil)
 
-// LiveOIDC lists the sessions the probe may ask about, and COLLECTS every
-// grant whose session is over.
+// LiveOIDC lists the sessions the probe may ask about: open, this provider's,
+// and holding a refresh token.
 //
-// COLLECTING HERE rather than on every path that ends a session is what makes
-// custody complete: a sign-out ends one lineage, but a revocation, a company-
-// wide invalidation, an expiry and a removal end sessions with no per-lineage
-// write at all — so the pass that already reads every grant is the one place
-// that sees all of them end.
+// IT COLLECTS NOTHING. A grant whose session is over is left for the key duty
+// ([Refreshes.CollectEnded]), which is armed wherever a grant can exist — the
+// probe is armed only while a provider is configured, and a collector that
+// lived here stopped collecting the day a deployment dropped its `oidc` block.
 //
-// ONE GRANT'S FAILURE IS ONE SESSION'S: a grant that will not read and a grant
-// whose ended session could not be collected are each carried in
-// [oidc.Listing.Skipped], and the rest are handed over. The error is for a
+// ONE GRANT'S FAILURE IS ONE SESSION'S: a grant that will not read is carried
+// in [oidc.Listing.Skipped], and the rest are handed over. The error is for a
 // pass that could establish nothing — no listing, or no snapshot to judge the
 // sessions in.
 func (p *ProbeSessions) LiveOIDC(ctx context.Context) (oidc.Listing, error) {
@@ -358,25 +405,19 @@ func (p *ProbeSessions) LiveOIDC(ctx context.Context) (oidc.Listing, error) {
 		return oidc.Listing{}, err
 	}
 	for _, grant := range grants {
-		switch states[grant.Lineage] {
-		case SessionOver:
-			if _, err := p.custody.Drop(ctx, grant.Lineage); err != nil {
-				listing.Skipped = append(listing.Skipped, fmt.Errorf(
-					"iamdomain: collect session %s's grant: %w",
-					grant.Lineage, err))
-			}
-		case SessionLive:
-			if grant.Issuer != p.issuer {
-				// ANOTHER PROVIDER'S TOKEN, from before the deployment
-				// changed issuer: asking this one would answer
-				// invalid_grant and end a session nobody deactivated.
-				continue
-			}
-			listing.Sessions = append(listing.Sessions, oidc.LiveSession{
-				Lineage: grant.Lineage, Person: grant.Person,
-				Refresh: grant.Token,
-			})
+		if states[grant.Lineage] != SessionLive {
+			continue
 		}
+		if grant.Issuer != p.issuer {
+			// ANOTHER PROVIDER'S TOKEN, from before the deployment
+			// changed issuer: asking this one would answer
+			// invalid_grant and end a session nobody deactivated.
+			continue
+		}
+		listing.Sessions = append(listing.Sessions, oidc.LiveSession{
+			Lineage: grant.Lineage, Person: grant.Person,
+			Refresh: grant.Token,
+		})
 	}
 	return listing, nil
 }
@@ -402,13 +443,13 @@ func (p *ProbeSessions) End(ctx context.Context, session oidc.LiveSession,
 	}
 	// THE GRANT GOES AFTER THE CLOSE, and a failure here is SAID rather
 	// than returned: the session did end, which is what the probe counts,
-	// and the next pass collects the grant because it will find the
-	// session over.
+	// and the key duty's next pass collects the grant because it will find
+	// the session over ([Refreshes.CollectEnded]).
 	if _, err := p.custody.Drop(ctx, lineage); err != nil {
 		dutyLog.WarnContext(ctx, "iam_refresh_grant_kept",
 			"lineage", lineage, "error", err.Error(),
 			"detail", "the session ended and its refresh token is still in "+
-				"custody; the next probe pass collects it")
+				"custody; the key duty's next pass collects it")
 	}
 	return nil
 }

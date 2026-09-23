@@ -28,9 +28,14 @@ import (
 //     disabled, so this is the only thing that ends their session before its
 //     absolute deadline.
 //   - THE KEY DUTY destroys a removed person's key when the removal's own
-//     post-commit shred failed, and retries until it lands
-//     ([iamdomain.ShredRemoved]). Until it does, their name is readable from
-//     every backup taken before the removal.
+//     post-commit shred failed, and retries until it lands; destroys a key
+//     NOBODY owns — minted for an enrolment or an invitation refused after
+//     the mint, or left by an invitation the sweep collected — once it is past
+//     the grace on a node that has applied the whole log
+//     ([iamdomain.ShredKeys]); and collects the refresh token of every OIDC
+//     session that is over ([iamdomain.Refreshes.CollectEnded]). Until each
+//     lands, what the key sealed is readable from every backup, and a grant
+//     is a live credential at somebody else's provider.
 //   - THE CLAIM REPORT names a duplicate a restore produced and a reservation
 //     an enrolment left behind ([iamdomain.Reader.Claims]). It reports and
 //     never repairs: which of two people keeps an address is a decision.
@@ -77,15 +82,18 @@ const (
 // and no records.
 const IdentitySweepInterval = time.Hour
 
-// IdentityKeysInterval is how often the key duty looks for a removal whose key
-// outlived it.
+// IdentityKeysInterval is how often the key duty looks for a key that outlived
+// its owner and a refresh grant that outlived its session.
 //
-// THE MAINTENANCE SWEEP'S FIFTEEN MINUTES. A pending key exists only because a
-// coordination write failed at the instant of a removal, so the useful retry
-// cadence is "soon after the store is back" — and every minute of delay is a
-// minute a removed person's name is readable from a backup. A pass that finds
-// nothing is one secret-store listing and one indexed read, so a shorter
-// interval would buy almost nothing but load on the coordination store.
+// THE MAINTENANCE SWEEP'S FIFTEEN MINUTES. A removal's pending key exists only
+// because a coordination write failed at the instant of a removal, so the
+// useful retry cadence is "soon after the store is back" — and every minute of
+// delay is a minute a removed person's name is readable from a backup. A key
+// nobody owns waits out [iamdomain.OrphanKeyGrace]'s hour first, so fifteen
+// minutes collects it within a quarter of that past it. A pass that finds
+// nothing is two secret-store listings, one read of each held refresh grant and
+// two local reads, so a shorter interval would buy almost nothing but load on
+// the coordination store.
 const IdentityKeysInterval = maintenance.Interval
 
 // IdentityClaimsInterval is how often the claim report runs.
@@ -241,8 +249,16 @@ func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
 			identityLog.Error("iam_duty_unarmed", "duty", identityKeysDuty,
 				"error", err.Error())
 		} else {
+			// AND REFRESH CUSTODY WHERE THERE IS A KEYRING: collecting a
+			// grant whose session is over is this duty's, because this
+			// duty is armed wherever a grant can exist and the probe only
+			// while a provider is configured. Nil on a node with no
+			// keyring, which holds no grant to collect.
+			custody := e.RefreshCustody()
 			out = append(out, duty(identityKeysDuty, IdentityKeysInterval,
-				func(ctx context.Context) { keysPass(ctx, reader, store, sealer) }))
+				func(ctx context.Context) {
+					keysPass(ctx, reader, store, sealer, e.IdentityCaughtUp, custody)
+				}))
 		}
 	}
 	if provider, custody := e.identityProvider, e.RefreshCustody(); provider != nil &&
@@ -368,23 +384,60 @@ func claimsPass(ctx context.Context, reader *iamdomain.Reader) {
 	}
 }
 
-// keysPass destroys every key a removal left behind.
+// keysPass destroys every key a removal left behind and every key nobody owns,
+// and collects every refresh grant whose session is over.
+//
+// NO PERSON'S ID REACHES A WARNING about a key nobody owns: such a key is by
+// definition not a person's, and the count is what an operator acts on.
 func keysPass(ctx context.Context, reader *iamdomain.Reader, keys iamdomain.KeyIndex,
-	shredder iamdomain.Shredder) {
+	shredder iamdomain.Shredder, caughtUp func(context.Context) error,
+	custody *iamdomain.Refreshes) {
 
-	report, err := iamdomain.ShredRemoved(ctx, reader, keys, shredder)
+	report, err := iamdomain.ShredKeys(ctx, reader, keys, shredder, time.Now(),
+		caughtUp)
 	if len(report.Destroyed) > 0 {
 		identityLog.InfoContext(ctx, "iam_keys_shredded",
 			"people", report.Destroyed,
 			"detail", "each was removed with a key that outlived the removal; "+
 				"their names and addresses are now unrecoverable everywhere")
 	}
+	if len(report.Collected) > 0 {
+		identityLog.InfoContext(ctx, "iam_keys_collected",
+			"keys", len(report.Collected),
+			"detail", "each was minted for an enrolment that was refused before "+
+				"it claimed anything, or for an invitation the sweep collected, "+
+				"and no row owned it")
+	}
+	if report.Unjudged != nil && report.Waiting > 0 {
+		// INFO AND NOT A WARNING: a node behind the log is the ordinary
+		// state of one that has just booted, and the next pass judges.
+		identityLog.InfoContext(ctx, "iam_keys_unjudged",
+			"unowned", report.Waiting, "reason", report.Unjudged.Error())
+	}
 	if err != nil {
 		identityLog.WarnContext(ctx, "iam_keys_pending", "error", err.Error(),
 			"pending", len(report.Pending)-len(report.Destroyed),
-			"detail", "a removed person's key could not be destroyed, so their "+
-				"name is still readable from backups taken before the removal; "+
-				"the duty retries every interval")
+			"detail", "a key could not be destroyed, so a name it seals is "+
+				"still readable from backups taken before its removal; the "+
+				"duty retries every interval")
+	}
+	if custody == nil {
+		return
+	}
+	collected, skipped, err := custody.CollectEnded(ctx, reader, time.Now())
+	if len(collected) > 0 {
+		identityLog.InfoContext(ctx, "iam_refresh_grants_collected",
+			"grants", len(collected))
+	}
+	for _, reason := range skipped {
+		identityLog.WarnContext(ctx, "iam_refresh_grant_kept",
+			"error", reason.Error(),
+			"detail", "this grant was not collected this pass; every other "+
+				"one was judged, and the next pass tries it again")
+	}
+	if err != nil {
+		identityLog.WarnContext(ctx, "iam_refresh_grants_unjudged",
+			"error", err.Error())
 	}
 }
 

@@ -233,6 +233,33 @@ func TestAnUncheckedBindingIsSaidBeforeNothingToReport(t *testing.T) {
 	}
 }
 
+// A KEY NOBODY COULD JUDGE IS SAID BEFORE NOTHING TO REPORT, for the binding
+// rule's reason: a node behind the identity log names no unowned key and
+// counts them instead, and printing "nothing to report" over that count would
+// read as a company with no key outliving its owner.
+func TestAnUnjudgedKeyIsSaidBeforeNothingToReport(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	p := &iamPrinter{w: &out}
+	if err := p.check(map[string]any{
+		"findings": []any{}, "position": "1:40", "keys_unchecked": float64(3),
+	}, nil); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !strings.Contains(out.String(), "3 key(s) no row here owns could not be judged") {
+		t.Errorf("the unjudged keys went unsaid:\n%s", out.String())
+	}
+	out.Reset()
+	if err := p.check(map[string]any{
+		"findings": []any{}, "position": "1:40", "keys_unchecked": float64(0),
+	}, nil); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if strings.Contains(out.String(), "could not be judged") {
+		t.Errorf("a node that judged every key carried the caveat:\n%s", out.String())
+	}
+}
+
 // A DUPLICATED CLAIM NAMES EVERYBODY HOLDING IT, because the report exists so
 // an operator can decide who keeps it — and a row naming one holder, or none,
 // leaves them to find the rest by hand. An address is named by its kind alone:

@@ -97,8 +97,8 @@ type Listing struct {
 	// Sessions are the live sessions the probe may ask about.
 	Sessions []LiveSession
 
-	// Skipped is one error per session this pass could not ask about or
-	// could not tidy up after, each naming which.
+	// Skipped is one error per session this pass could not ask about,
+	// each naming which.
 	Skipped []error
 }
 
@@ -133,9 +133,11 @@ type Sessions interface {
 	// every one it could not.
 	//
 	// THE ERROR IS FOR A LISTING THAT FAILED WHOLE, and nothing else: a
-	// grant that would not read, or one whose ended session could not be
-	// collected, is ONE session this pass cannot ask about and belongs in
-	// [Listing.Skipped] beside the rest.
+	// grant that would not read is ONE session this pass cannot ask about
+	// and belongs in [Listing.Skipped] beside the rest. Tidying away the
+	// grant of a session that ended some other way is NOT the listing's —
+	// the probe runs only while a provider is configured, and a grant must
+	// not outlive its session on a deployment that dropped one.
 	LiveOIDC(ctx context.Context) (Listing, error)
 
 	// End closes one session as `idp_revoked`. It takes the SESSION rather

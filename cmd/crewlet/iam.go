@@ -632,6 +632,14 @@ func (p *iamPrinter) check(answer map[string]any, err error) error {
 			"node's org chart could not say whether their seats exist — ask "+
 			"a node whose chart applier is current\n", int(unchecked))
 	}
+	// AND A KEY IT COULD NOT JUDGE, for the same reason: a node behind the
+	// identity log cannot tell a key nobody owns from one whose owner has
+	// not arrived there.
+	if unchecked, _ := answer["keys_unchecked"].(float64); unchecked > 0 {
+		fmt.Fprintf(p.w, "%d key(s) no row here owns could not be judged: "+
+			"this node has not applied the whole identity log — ask a node "+
+			"that has\n", int(unchecked))
+	}
 	if len(rows) == 0 {
 		fmt.Fprintf(p.w, "nothing to report, as of %s\n",
 			str(answer["position"]))

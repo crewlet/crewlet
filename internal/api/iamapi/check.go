@@ -2,6 +2,7 @@ package iamapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 
@@ -69,13 +70,23 @@ const (
 	// before the removal — which is the answer to "is that person gone"
 	// that an operator needs to be told is "not yet".
 	KindKeyOutlivedRemoval FindingKind = "removal_key_live"
+
+	// KindKeyUnowned is a key no person, reservation, invitation or
+	// removal owns, older than [iamdomain.OrphanKeyGrace]: minted for an
+	// enrolment or an invitation refused after the mint, or left by an
+	// invitation the sweep collected. Whatever it sealed is readable from
+	// every backup until the key duty destroys it, which its next pass on
+	// a node that has applied the whole log does. Reported only by such a
+	// node, because on one behind the log a person whose enrolment has not
+	// arrived owns nothing yet.
+	KindKeyUnowned FindingKind = "key_unowned"
 )
 
-// FindingKinds are the eight, in the order the report renders them.
+// FindingKinds are the nine, in the order the report renders them.
 var FindingKinds = []FindingKind{
 	KindNoManageHolder, KindNoCredential, KindDanglingBinding,
 	KindShredded, KindClampedGrant, KindDuplicateClaim, KindOrphanedClaim,
-	KindKeyOutlivedRemoval,
+	KindKeyOutlivedRemoval, KindKeyUnowned,
 }
 
 // Finding is one row of the report.
@@ -180,13 +191,15 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	findings = append(findings, claims...)
+	keysUnchecked := 0
 	if s.keys != nil {
-		keys, err := s.keyFindings(r)
+		keys, notJudged, err := s.keyFindings(r)
 		if err != nil {
-			s.unavailable(w, r, "read which removed people's keys live", err)
+			s.unavailable(w, r, "read which keys outlive their owners", err)
 			return
 		}
 		findings = append(findings, keys...)
+		keysUnchecked = notJudged
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"findings":                  findings,
@@ -198,6 +211,10 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		// "nothing to report" during exactly the chart stall that
 		// hides a residue.
 		"bindings_unchecked": unchecked,
+		// THE SAME FOR A KEY NOBODY OWNS: this node holds keys no row
+		// here owns and cannot say whether that is because nobody does
+		// or because their owner has not arrived.
+		"keys_unchecked": keysUnchecked,
 	})
 }
 
@@ -292,14 +309,30 @@ func (s *Service) claimFindings(r *http.Request) ([]Finding, error) {
 	return out, nil
 }
 
-// keyFindings is every removed person whose key outlived the removal.
-func (s *Service) keyFindings(r *http.Request) ([]Finding, error) {
-	_, pending, err := s.directory.KeysOutlivingRemovals(r.Context(), s.keys)
-	if err != nil {
-		return nil, err
+// keyFindings is every removed person whose key outlived the removal and every
+// key nobody owns past the grace, and how many keys nobody owns this node could
+// not judge.
+//
+// THE UNOWNED ARM IS THE KEY DUTY'S OWN RULE, stated by [iamdomain.ShredKeys]:
+// past [iamdomain.OrphanKeyGrace], on a node that has applied everything the
+// log held when it was asked — asked BEFORE the census, so a key older than
+// the grace was minted before the question and its owner's record is inside
+// what the answer covers. A key inside the grace is a gesture that may be
+// running and is no finding at all. A key with no recorded write time has no
+// provable age and is counted as unchecked with the rest, for the duty's reason.
+func (s *Service) keyFindings(r *http.Request) (out []Finding, unchecked int,
+	err error) {
+
+	current := errors.New("this surface was given no way to tell whether " +
+		"this node is current")
+	if s.current != nil {
+		current = s.current(r.Context())
 	}
-	out := make([]Finding, 0, len(pending))
-	for _, id := range pending {
+	census, err := s.directory.KeyCensus(r.Context(), s.keys)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, id := range census.OutlivedRemoval {
 		out = append(out, Finding{
 			Kind: KindKeyOutlivedRemoval, Person: id,
 			Detail: "this person was removed and their key still exists, so " +
@@ -307,7 +340,27 @@ func (s *Service) keyFindings(r *http.Request) ([]Finding, error) {
 				"before the removal; the key duty retries until it is destroyed",
 		})
 	}
-	return out, nil
+	cutoff := s.now().Add(-iamdomain.OrphanKeyGrace)
+	for _, key := range census.Unowned {
+		switch {
+		case key.WrittenAt.IsZero() || current != nil:
+			unchecked++
+		case key.WrittenAt.Before(cutoff):
+			out = append(out, Finding{
+				Kind: KindKeyUnowned, Person: key.ID,
+				Detail: "no person, reservation, invitation or removal owns " +
+					"this key — an enrolment or an invitation refused after " +
+					"it was minted, or an invitation the sweep collected — so " +
+					"what it sealed is readable from every backup; the key " +
+					"duty destroys it on its next pass",
+			})
+		}
+	}
+	if current != nil && len(census.Unowned) > 0 {
+		log.DebugContext(r.Context(), "api_iam_check_keys_unjudged",
+			"unowned", len(census.Unowned), "reason", current.Error())
+	}
+	return out, unchecked, nil
 }
 
 // hasCredential reports whether somebody can prove themselves at all.

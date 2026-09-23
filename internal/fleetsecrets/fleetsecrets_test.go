@@ -143,29 +143,47 @@ func TestAListingCarriesNoValueAndNeedsNoKey(t *testing.T) {
 	}
 }
 
-// THE ENGINE'S NAMES UNDER A PREFIX NEED NO KEYRING EITHER, because what reads
-// them is the duty that finishes a removal: destroying a removed person's key
-// is an Unset, which a node with no keyring can perform, so finding the key
-// must not be the half that needs one. Only the prefix's names come back, in
-// order, and only through the engine's own view.
-func TestTheEnginesNamesUnderAPrefixNeedNoKey(t *testing.T) {
+// THE ENGINE'S KEYS UNDER A PREFIX NEED NO KEYRING EITHER, because what reads
+// them is the duty that finishes a removal and collects a key nobody owns:
+// destroying one is an Unset, which a node with no keyring can perform, so
+// finding the key must not be the half that needs one. Only the prefix's rows
+// come back, in name order, each with WHEN it was written — which is what a key
+// nobody owns is aged by — and never with its envelope, and only through the
+// engine's own view.
+func TestTheEnginesKeysUnderAPrefixNeedNoKeyring(t *testing.T) {
 	t.Parallel()
 	s, fleet := fleetStore(t, ring(t, "k1"))
 	estate := s.Estate()
-	for name, value := range map[string]string{
-		"iam/person/b/dek": "b", "iam/person/a/dek": "a",
-		"iam/session/l1/refresh": "r",
-	} {
-		if err := estate.Set(t.Context(), name, value, "node-a", "iam", clock); err != nil {
+	minted := map[string]time.Time{
+		"iam/person/b/dek":       clock.Add(time.Minute),
+		"iam/person/a/dek":       clock,
+		"iam/session/l1/refresh": clock,
+	}
+	for name, at := range minted {
+		if err := estate.Set(t.Context(), name, "value-"+name, "node-a", "iam",
+			at); err != nil {
 			t.Fatalf("Set(%s): %v", name, err)
 		}
 	}
 	mustSet(t, s, "GITLAB_TOKEN", "glpat")
 
 	keyless := fleetsecrets.New(fleet, nil).Estate()
-	names, err := keyless.Names(t.Context(), "iam/person/")
+	keys, err := keyless.Keys(t.Context(), "iam/person/")
 	if err != nil {
 		t.Fatalf("a node with no keyring could not find what a removal left: %v", err)
+	}
+	var names []string
+	for _, key := range keys {
+		names = append(names, key.Name)
+		if key.Value != "" {
+			t.Errorf("%s carried its envelope into a listing", key.Name)
+		}
+		if !key.UpdatedAt.Equal(minted[key.Name]) {
+			t.Errorf("%s reads as written at %v, want %v — a key nobody owns "+
+				"is aged by this, and a wrong one destroys a key a running "+
+				"enrolment is about to claim with", key.Name, key.UpdatedAt,
+				minted[key.Name])
+		}
 	}
 	if strings.Join(names, ",") != "iam/person/a/dek,iam/person/b/dek" {
 		t.Fatalf("names = %v, want exactly the prefix's, name-ordered", names)
@@ -177,7 +195,7 @@ func TestTheEnginesNamesUnderAPrefixNeedNoKey(t *testing.T) {
 	}
 	// A PREFIX OUTSIDE THE ENGINE'S NAMESPACE IS REFUSED: the engine's view
 	// never lists the operator's credentials either.
-	if _, err := keyless.Names(t.Context(), "GITLAB"); !errors.Is(err,
+	if _, err := keyless.Keys(t.Context(), "GITLAB"); !errors.Is(err,
 		secrets.ErrInvalidName) {
 		t.Errorf("the engine's view listed an operator prefix (%v)", err)
 	}

@@ -425,14 +425,18 @@ func (e *Estate) Unset(ctx context.Context, name string) (bool, error) {
 	return e.store.unset(ctx, name)
 }
 
-// Names reports every engine row under prefix, sorted, without opening
+// Keys reports every engine row under prefix — its name, its sealing key and
+// when and by whom it was last written — sorted by name, without opening
 // anything.
 //
 // NO KEYRING NEEDED, for [Estate.Unset]'s reason: what reads this is the duty
-// that finishes a removal, and the finding half must not be the one thing a
-// node with no keyring cannot do. NAMES ONLY, never the record: a caller that
-// needs a value asks for it by name.
-func (e *Estate) Names(ctx context.Context, prefix string) ([]string, error) {
+// that finishes a removal and collects a key nobody owns, and the finding half
+// must not be the one thing a node with no keyring cannot do. The WRITE TIME
+// is what that duty ages a key by — a key nobody owns yet may be one an
+// enrolment minted a second ago — and it rides beside every envelope, so it
+// costs nothing to hand over. NEVER THE ENVELOPE: a caller that needs a value
+// asks for it by name.
+func (e *Estate) Keys(ctx context.Context, prefix string) ([]secrets.Record, error) {
 	if e == nil {
 		return nil, secrets.ErrNoKeyring
 	}
@@ -445,12 +449,12 @@ func (e *Estate) Names(ctx context.Context, prefix string) ([]string, error) {
 		return nil, fmt.Errorf("fleetsecrets: list the engine's keys under %q: %w",
 			prefix, err)
 	}
-	var out []string
+	var out []secrets.Record
 	for _, row := range rows {
 		if strings.HasPrefix(row.Name, prefix) {
-			out = append(out, row.Name)
+			out = append(out, record(row))
 		}
 	}
-	slices.Sort(out)
+	slices.SortFunc(out, func(a, b secrets.Record) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -25,8 +26,10 @@ import (
 // is a close record on the session's subject, reason `idp_revoked`, written by
 // the node and applied like any other; every other answer ends nothing; a
 // rotated token is recorded in custody so the next pass presents it. And the
-// pass is also what collects custody for sessions that ended some other way —
-// without ever collecting one this node simply has not applied yet.
+// probe COLLECTS NOTHING it did not end itself: a session that ended some other
+// way is the key duty's to collect ([Refreshes.CollectEnded]), because that duty
+// runs whether or not a provider is configured — and it collects without ever
+// taking one this node simply has not applied yet.
 func TestTheProbeEndsRevokesRotatesAndCollectsThroughTheEstate(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -129,27 +132,123 @@ func TestTheProbeEndsRevokesRotatesAndCollectsThroughTheEstate(t *testing.T) {
 			"replacement — the next pass would present a retired token and end "+
 			"the session of somebody perfectly employed", held[rotating])
 	}
-	// COLLECTED: the deactivated one (ended here) and the signed-out one
-	// (ended elsewhere, found over by the pass).
-	for _, lineage := range []string{deactivated, signedOut} {
-		if _, kept := held[lineage]; kept {
-			t.Errorf("custody still holds %s's refresh token after its session "+
-				"ended", lineage)
-		}
+	// DROPPED BY THE PROBE: only the session it ended itself.
+	if _, kept := held[deactivated]; kept {
+		t.Error("custody still holds the deactivated session's refresh token " +
+			"after the probe ended it")
 	}
-	// KEPT: the unknown answer, another provider's token, and a session
-	// this node has not applied yet.
+	// KEPT BY THE PROBE: the unknown answer, another provider's token, a
+	// session this node has not applied yet, and the signed-out one — which
+	// the key duty collects below, whether or not a probe runs at all.
 	for name, lineage := range map[string]string{
 		"an unknown answer's":         flaky,
 		"another provider's":          elsewhere,
 		"a not-yet-applied session's": unseen,
+		"a signed-out session's":      signedOut,
 	} {
 		if _, kept := held[lineage]; !kept {
-			t.Errorf("%s grant was collected", name)
+			t.Errorf("the probe collected %s grant", name)
 		}
 	}
 	if idp.asked("previous-provider-token") {
 		t.Error("another provider's token was presented to this one")
+	}
+
+	// THE KEY DUTY'S COLLECTION: the signed-out session's grant, and not
+	// one this node has not applied.
+	collected, skipped, err := custody.CollectEnded(t.Context(), reader, time.Now())
+	if err != nil || len(skipped) != 0 {
+		t.Fatalf("CollectEnded: %v %v", err, skipped)
+	}
+	if len(collected) != 1 || collected[0] != signedOut {
+		t.Errorf("the collection took %v, want exactly the signed-out "+
+			"session's grant", collected)
+	}
+}
+
+// A GRANT OUTLIVES NO SESSION, WITH OR WITHOUT A PROVIDER.
+//
+// Collecting the refresh token of a session that is over used to be the
+// deactivation probe's — which is armed only while an `oidc` block is
+// configured, so a deployment that dropped its provider kept every session's
+// token, a live credential at that provider, for ever. The collection is the
+// key duty's now, and this case builds no provider and no probe at all: a
+// sign-out and a revocation are collected, and an open session and one this
+// node has not applied are kept.
+func TestAnEndedSessionsGrantIsCollectedWithNoProviderConfigured(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	custody, err := iamdomain.NewRefreshes(rig.keys, "node-a")
+	if err != nil {
+		t.Fatalf("NewRefreshes: %v", err)
+	}
+	enrol := func(login string) string {
+		t.Helper()
+		id := uuid.Must(uuid.NewV7()).String()
+		if err := rig.enrol(iamdomain.Enrolment{
+			PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
+			Name: login, Email: login + "@example.com", Login: login,
+			OpID: "enrol-" + login, Reason: "a joiner",
+		}); err != nil {
+			t.Fatalf("enrol %s: %v", login, err)
+		}
+		return id
+	}
+	kept, revoked := enrol("kim.kept"), enrol("sam.revoked")
+	later := time.Now().Add(24 * time.Hour)
+	hold := func(person string) string {
+		t.Helper()
+		lineage, at := rig.openSessionAt(person, later)
+		if err := custody.Hold(t.Context(), iamdomain.RefreshGrant{
+			Lineage: lineage, Person: person,
+			Issuer: "https://idp.example.com", Token: "refresh-" + lineage,
+			Start: uint64(at.Packed()),
+		}, time.Now()); err != nil {
+			t.Fatalf("Hold: %v", err)
+		}
+		return lineage
+	}
+	live := hold(kept)
+	signedOut := hold(kept)
+	rig.closeSession(kept, signedOut, "logout")
+	byEpoch := hold(revoked)
+	if err := rig.during(func() error {
+		_, err := rig.writer.Revoke(t.Context(), revoked, "revoke-sam", "left")
+		return err
+	}); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	unseen := uuid.Must(uuid.NewV7()).String()
+	if err := custody.Hold(t.Context(), iamdomain.RefreshGrant{
+		Lineage: unseen, Person: kept, Issuer: "https://idp.example.com",
+		Token: "refresh-unseen", Start: 1 << 50,
+	}, time.Now()); err != nil {
+		t.Fatalf("Hold: %v", err)
+	}
+
+	collected, skipped, err := custody.CollectEnded(t.Context(), reader, time.Now())
+	if err != nil || len(skipped) != 0 {
+		t.Fatalf("CollectEnded: %v %v", err, skipped)
+	}
+	slices.Sort(collected)
+	want := []string{signedOut, byEpoch}
+	slices.Sort(want)
+	if !slices.Equal(collected, want) {
+		t.Errorf("the collection took %v, want the signed-out and the revoked "+
+			"sessions' grants %v", collected, want)
+	}
+	grants, _, err := custody.Held(t.Context())
+	if err != nil {
+		t.Fatalf("Held: %v", err)
+	}
+	left := map[string]bool{}
+	for _, g := range grants {
+		left[g.Lineage] = true
+	}
+	if !left[live] || !left[unseen] || len(left) != 2 {
+		t.Errorf("custody holds %v after the collection, want exactly the open "+
+			"session's and the unapplied one's", left)
 	}
 }
 

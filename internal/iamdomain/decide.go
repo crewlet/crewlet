@@ -85,6 +85,17 @@ func (e *ErrClaimed) Error() string {
 // The node's own writer holds fleet:operate and people:manage and nothing
 // else, so on its own authority it may confer those two; everything the
 // bootstrap and a redemption hand out comes from the basis they name.
+//
+// # A refused enrolment leaves its key, and the key duty collects it
+//
+// The key is minted before the first claim, because the claim carries the
+// address sealed under it — so an enrolment refused on its address has minted a
+// key for somebody who never existed. It is NOT destroyed here, and the reason
+// is [Sealer.Mint]'s: a mint that finds a key keeps it, so the id this call was
+// handed may be a LIVE person's (a retry, or a caller that reused an id), and a
+// refusal that shredded "its" key would destroy theirs. Only a pass that has
+// proved nobody owns the id may destroy it, which is [ShredKeys]: past
+// [OrphanKeyGrace], on a node that has applied everything the log held.
 func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, error) {
 	if err := w.mayAdminister(OpEnrol); err != nil {
 		return statelog.Position{}, err
@@ -1996,10 +2007,12 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 			"invitation's address: %w", err)
 	}
 	// SEALED UNDER THE INVITATION'S OWN ID rather than a person's, because
-	// there is no person yet. The key is minted here and shredded when the
-	// invitation is collected, so an address somebody typed and never sent
-	// leaves no cleartext anywhere — which is the same promise a removal
-	// makes, one object earlier.
+	// there is no person yet. The key is minted here and destroyed by the
+	// key duty once no invitation row owns it ([ShredKeys]) — a refused
+	// invitation's past the grace, a collected one's after the sweep deletes
+	// its row — so an address somebody typed and never sent leaves no
+	// cleartext anywhere, which is the same promise a removal makes, one
+	// object earlier.
 	if err := w.sealer.Mint(ctx, in.ID, w.Actor, w.Now()); err != nil {
 		return statelog.Position{}, fmt.Errorf("iamdomain: mint an "+
 			"invitation's key: %w", err)
