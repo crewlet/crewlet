@@ -616,14 +616,19 @@ every human seat is withheld (`directory_unread`) until the net's first
 successful read — people are briefly unreachable through the engine rather
 than a suspended person's accounts being routed to their seat.
 
-**A node that does not run the identity domain routes by the chart alone.**
-A seats-only satellite holds an empty copy of the directory, and an empty
-copy is not "nobody holds any seat", so it consults nothing and withholds
-nothing — exactly the routing every node had before the directory existed.
-Every node consumes inbound deliveries, so in a fleet with seats-only nodes a
-delivery one of them consumes still attributes a suspended person's message
-to their seat. A fleet that must not have that gap runs `ingress` or
-`workers` on every node.
+**A node that does not run the identity domain asks the fleet.** A seats-only
+satellite holds an empty copy of the directory, and an empty copy is not
+"nobody holds any seat" — but neither may it route by the chart, because it
+consumes inbound deliveries and runs seats like every other node. So it asks:
+every node that runs the identity domain (`ingress`, `workers`) answers who
+holds each seat from its own rows, over the broker's request-and-reply, and
+the satellite builds its registry from the most caught-up answer. It has no
+applier to signal it, so it asks on the thirty-second re-read, and a suspension
+reaches it within that interval rather than within one apply. If nobody
+answers, the log decides: a log nothing was ever written to is a company with
+nobody bound (an all-seats fleet, which has no sign-in surface), and a log with
+records is a directory the satellite cannot read — it keeps its last reading,
+or withholds every human seat if it has never had one.
 
 **What it does not withdraw** is what agents are *shown*: the roster in a
 seat's prompt and `lookup_colleague` read the seat's `contact` block, which is

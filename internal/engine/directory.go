@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -36,13 +37,18 @@ import (
 // it relays a record to one node, and the rest would go on attributing a
 // suspended person's messages to their seat.
 //
-// # A node that runs no identity domain keeps the chart-only behaviour
+// # A node that runs no identity domain asks the fleet
 //
-// A seats-only satellite does not apply this domain, so it has no directory to
-// read — and its empty copy of the tables must never be read as "nobody holds
-// any seat", which would route every human seat by the chart whatever its
-// holder's standing ELSEWHERE claimed. It supplies no directory, its registry
-// takes the chart-only reading, and nothing here starts.
+// A seats-only satellite does not apply this domain, so it has no rows to read
+// — and its empty copy of the tables must never be read as "nobody holds any
+// seat", which would route every human seat by the chart whatever its holder's
+// standing ELSEWHERE claimed. Nor may it route by the chart alone: it consumes
+// inbound deliveries and runs seats like every other node, so a chart-only
+// registry there attributed a suspended person's messages to their seat for
+// every delivery it happened to win. It reads the FLEET's directory instead,
+// over the broker — see fleetdirectory.go — on the periodic net, since it has
+// no applier to signal it. The chart-only reading is left to an engine with no
+// native runtime at all, which is `crewlet validate` and a test.
 //
 // # Serialised, because two triggers now rebuild one pointer
 //
@@ -81,11 +87,53 @@ func (d iamDirectory) SeatHolders(ctx context.Context) ([]notify.Holder, error) 
 	return out, nil
 }
 
-// useDirectory hands the party registry this node's identity directory, and
+// directoryFor is the directory a native runtime's party registry reads, and
 // the position its readings are taken at.
 //
-// Called once, by the native runtime, on a node that runs the identity domain.
-// A node that never calls it keeps the chart-only behaviour.
+// THE NODE'S ROLES DECIDE, through what they made of the runtime: a node that
+// runs the identity domain reads its own rows, gated on its own applier's
+// position; one that does not asks the fleet, with no position to gate on —
+// its reading is the fleet's, and a question costs a scatter only every
+// [DirectoryRefresh].
+func (e *Engine) directoryFor(ctx context.Context, n *native) (
+	notify.Directory, func() statelog.Position, error) {
+
+	if n.iamReader != nil {
+		return iamDirectory{reader: n.iamReader}, n.iamReader.At, nil
+	}
+	host, ok := e.backends.Queue.(domainHost)
+	if !ok {
+		return nil, nil, fmt.Errorf("engine: the stream is %T, which cannot say "+
+			"whether the identity log has records, so this node runs no identity "+
+			"domain and has no way to read the fleet's", e.backends.Queue)
+	}
+	iamLog, err := host.DomainLog(ctx, iamdomain.Domain{}.Stream().Name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("engine: open the identity log to read the "+
+			"fleet's directory through: %w", err)
+	}
+	return &fleetDirectory{
+		ask: e.backends.Queue,
+		answerers: func(ctx context.Context) (int, error) {
+			return directoryAnswerers(ctx, e.backends.Coord)
+		},
+		quiet: func(ctx context.Context) (bool, error) {
+			stats, err := iamLog.Stats(ctx)
+			if err != nil {
+				return false, err
+			}
+			return stats.LastSeq == 0, nil
+		},
+	}, nil, nil
+}
+
+// useDirectory hands the party registry this node's identity directory, and
+// the position its readings are taken at — nil for a directory that has none
+// to gate on, which the periodic net then reads on every tick.
+//
+// Called once, by the native runtime, with what [Engine.directoryFor] chose. An
+// engine with no native runtime never calls it and keeps the chart-only
+// behaviour.
 func (e *Engine) useDirectory(dir notify.Directory, at func() statelog.Position) {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
@@ -253,8 +301,11 @@ func (e *Engine) nudgeDirectory() {
 // seconds, because that is what the alarm table already calls a stall: a
 // registry behind its own directory for longer than that is a fault an
 // operator is being told about, so a slower net would report what it was not
-// fixing. It costs nothing when idle — the identity applier's position is
-// compared first, and the directory is read only when it moved.
+// fixing. It costs nothing when idle on a node that runs the domain — the
+// identity applier's position is compared first, and the directory is read
+// only when it moved. On a node that runs none it is the ONLY trigger, and each
+// tick costs one presence listing and one scatter the answering nodes serve
+// from a local read: that is how long a suspension takes to reach a satellite.
 const DirectoryRefresh = ViewRefresh
 
 // watchDirectory is the directory trigger's loop: the committed hook's signal,

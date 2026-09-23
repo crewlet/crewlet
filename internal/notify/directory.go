@@ -37,13 +37,17 @@ import (
 // registry swapped in by the engine. A registry that patched itself from a
 // second source would answer "whose standing is this?" with "one of two".
 //
-// # Chart-only is the zero value, and a real posture
+// # Chart-only is the zero value, and it belongs to no running node
 //
 // A node that does not run the identity domain — a seats-only satellite —
 // holds an empty copy of it, and an empty copy read as "nobody holds any seat"
-// is correct only by accident. So such a node supplies NO directory, and the
-// zero [Standing] it gets withholds nothing: exactly the routing the chart
-// declares, which is what every node did before the directory existed.
+// is correct only by accident. Nor may it route by the chart: it consumes
+// deliveries and runs seats like any other node, so a chart-only registry there
+// attributed a suspended person's word to their seat for every delivery it
+// won. So the engine hands such a node the FLEET's directory, asked of the
+// nodes that hold one; see internal/engine's fleetdirectory.go. The zero
+// [Standing] — exactly the routing the chart declares — is what an engine with
+// no directory at all builds from, which is `crewlet validate` and a test.
 
 // Holder is one seat binding, as the identity directory states it.
 //
@@ -71,7 +75,8 @@ type Holder struct {
 // CONSUMER-DEFINED and one method wide, for the package-wide reason: the
 // registry needs this one fact and nothing else the estate knows, and a seam
 // this narrow is what lets a test hand it a directory with no store behind it.
-// The engine satisfies it over internal/iamdomain's reader.
+// The engine satisfies it over internal/iamdomain's reader on a node that runs
+// the identity domain, and over the fleet's answer on one that does not.
 //
 // AN ERROR IS THE UNKNOWN ARM and never "nobody holds anything": an empty
 // answer is a real one, and reading an outage as it would hand every
@@ -236,8 +241,8 @@ func Unread() Standing { return Standing{consulted: true, unread: true} }
 
 // ReadStanding reads the directory once and applies the rule.
 //
-// A NIL DIRECTORY IS CHART-ONLY and no error: it is a node that does not run
-// the identity domain, which is a posture rather than a fault. An error from
+// A NIL DIRECTORY IS CHART-ONLY and no error: it is an engine wired with no
+// directory at all, which is a posture rather than a fault. An error from
 // the directory is returned as the unknown arm — the caller decides what an
 // unreadable directory means for the registry it is building, and the one
 // answer this function must never give for it is "nobody is withheld".

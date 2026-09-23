@@ -561,7 +561,8 @@ live one. It is within one apply on every node that runs the identity domain
 (`ingress`, `workers`), with a thirty-second re-read as the net — the chart
 view's own figure, for the chart view's own reasons — and it never appears in
 `applied_subsystems`, because no apply ran. A node that runs no identity domain
-consults nothing here and routes by the chart alone.
+has no applier to signal it: it asks the nodes that do on the thirty-second
+re-read, and builds from the most caught-up answer.
 
 **The order is not arbitrary.** A released inbox runs a turn immediately, and
 that turn resolves parties, loads its tool surface and files work into a

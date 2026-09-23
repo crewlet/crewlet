@@ -233,6 +233,14 @@ directory of your people that it authenticates nobody against.
 > and if you are querying the database directly, that distinction is yours
 > to make.
 
+**A satellite still honours a suspension.** Whose contact identities route —
+which Slack member is a colleague, which Jira account is a seat — depends on
+the directory, and a satellite consumes inbound deliveries and runs seats like
+every other node. So it asks the nodes that run the estate who holds each seat,
+every thirty seconds, over the broker's request-and-reply; they answer from
+their own rows, naming seats and stages and never a person. A suspended
+holder's accounts stop being attributed on a satellite within that interval.
+
 So narrowing a satellite to `roles: [seats]` now changes something real:
 it stops replicating people, credentials and sessions to a host you put
 somewhere else on purpose. If that host also needs to serve the API, give

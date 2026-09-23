@@ -118,17 +118,27 @@ const (
 
 	// SearchPrefix prefixes the search fan-out's subjects.
 	//
-	// THE ONLY SUBJECTS IN THIS FILE THAT ARE NOT EVENTS. Nothing
-	// publishes here and nothing subscribes: these carry the ephemeral
-	// request and reply of [queue.EventQueue.Ask], which leave no stream,
-	// no consumer and no record. They live in this file anyway because a
-	// subject is a subject — two subsystems minting one namespace out of
-	// each other's sight is how a wildcard starts capturing traffic
-	// somebody else owns.
+	// ONE OF THE TWO SUBJECT SPACES IN THIS FILE THAT ARE NOT EVENTS —
+	// [IamHolders] is the other. Nothing publishes here and nothing
+	// subscribes: these carry the ephemeral request and reply of
+	// [queue.EventQueue.Ask], which leave no stream, no consumer and no
+	// record. They live in this file anyway because a subject is a subject
+	// — two subsystems minting one namespace out of each other's sight is
+	// how a wildcard starts capturing traffic somebody else owns.
 	SearchPrefix = "crewlet.search."
 	// SearchSlice is where one query's assignment table is scattered.
 	// Every node serves it and answers only for its own row.
 	SearchSlice = SearchPrefix + "slice"
+
+	// IamHolders is where a node that runs no identity domain asks the
+	// fleet who holds each seat: the second ephemeral scatter, on
+	// [SearchPrefix]'s terms. Every node that runs the domain serves it.
+	//
+	// OUTSIDE THE IDENTITY LOG'S OWN WILDCARD ([IamLogWildcard]), which is
+	// the one thing its spelling must get right: a question landing inside
+	// that stream would be retained as a record the applier has no case
+	// for, and would stall the log on every node.
+	IamHolders = "crewlet.iam.holders"
 )
 
 // AgentInbox returns the inbox subject for the seat with this id.

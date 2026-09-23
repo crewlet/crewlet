@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -16,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -90,44 +91,89 @@ func TestUnsuspendingRestoresThem(t *testing.T) {
 	}
 }
 
-// A NODE THAT DOES NOT RUN THE IDENTITY DOMAIN KEEPS EXACTLY THE CHART-ONLY
-// BEHAVIOUR.
+// EVERY NODE READS THE DIRECTORY ITS ROLES GIVE IT — decided by the wiring a
+// running node goes through, not asserted of a hand-built engine.
 //
-// A seats-only satellite does not apply the domain, so it has no directory
-// and its empty copy of the tables must never be read as "nobody holds any
-// seat". Its registry is the one the org view alone builds — the same
-// identities, a reading that says it consulted nothing — and the directory
-// trigger, if anything signalled it, has nothing to rebuild from.
-func TestANodeNotRunningTheIamDomainKeepsTheChartOnlyBehaviour(t *testing.T) {
+// A node that runs the identity domain reads its OWN rows, gated on its own
+// applier's position, and answers the fleet's question for the nodes that
+// cannot. A seats-only satellite runs no identity domain, so its copy of the
+// tables is empty: it must neither read that copy ("nobody holds any seat") nor
+// fall back to the chart, since it consumes deliveries and runs seats like
+// every other node. It asks the fleet. Alone in its fleet, with nobody running
+// the domain and nothing ever written to its log, the fleet's answer is the
+// empty directory — a CONSULTED reading that withholds nothing.
+func TestEachNodeReadsTheDirectoryItsRolesGiveIt(t *testing.T) {
 	t.Parallel()
-	if participationOf(placement.RoleSet{placement.RoleSeats: {}}).Runs(iamdomain.Domain{}.Name()) {
-		t.Fatal("a seats-only node runs the identity domain, so this case is " +
-			"not about the node it names")
-	}
 
+	t.Run("a node running the identity domain reads its own rows", func(t *testing.T) {
+		t.Parallel()
+		e := bootDirectoryNode(t, nil)
+		dir, at := e.partyDirectory()
+		if _, own := dir.(iamDirectory); !own || at == nil {
+			t.Fatalf("the directory is %T (position gate %v), want this node's "+
+				"own rows gated on its own applier", dir, at != nil)
+		}
+		// AND IT ANSWERS FOR THE NODES THAT HOLD NONE.
+		request, err := json.Marshal(holdersRequest{Version: holdersProtocol})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		replies, err := e.backends.Queue.Ask(ctx, topics.IamHolders, request, 1)
+		if err != nil || len(replies) != 1 {
+			t.Fatalf("asked the fleet's directory: %d replies, %v — a node "+
+				"running the domain must answer it", len(replies), err)
+		}
+	})
+
+	t.Run("a seats-only node asks the fleet", func(t *testing.T) {
+		t.Parallel()
+		e := bootDirectoryNode(t, []string{"seats"})
+		if e.IAM() != nil {
+			t.Fatal("a seats-only node opened the identity domain, so this case " +
+				"is not about the node it names")
+		}
+		dir, at := e.partyDirectory()
+		if _, fleet := dir.(*fleetDirectory); !fleet || at != nil {
+			t.Fatalf("the directory is %T (position gate %v), want the fleet's, "+
+				"asked on every net tick", dir, at != nil)
+		}
+		reg := e.Registry()
+		if !reg.Standing().Consulted() || reg.Standing().Unread() {
+			t.Errorf("the registry was built from %+v, want the fleet's reading",
+				reg.Standing())
+		}
+		if _, ok := reg.ByExternalID("slack", founderSlack); !ok {
+			t.Error("a fleet whose directory has nobody bound withheld a seat")
+		}
+	})
+}
+
+// AN ENGINE WITH NO NATIVE RUNTIME IS CHART-ONLY, and a signal changes nothing.
+//
+// That is `crewlet validate`, and a test: nothing started a directory, so the
+// registry consults none and the trigger has nothing to rebuild from — not
+// even the pointer, which is what a reader holding the live registry compares.
+func TestAnEngineWithNoNativeRuntimeIsChartOnly(t *testing.T) {
+	t.Parallel()
 	e := &Engine{directoryNudge: make(chan struct{}, 1)}
 	company := directoryCompany(t, e)
 	e.refreshParties(t.Context(), company)
 	reg := e.Registry()
 	if reg.Standing().Consulted() {
-		t.Error("a node with no directory built its registry from a reading")
+		t.Error("an engine with no directory built its registry from a reading")
 	}
-
 	chartOnly := notify.NewRegistry(company.Org)
 	chartOnly.ReconcileHumanContacts(company.Org, e.resolver().LookupOK, notify.Standing{})
-	for _, ns := range []string{"slack"} {
-		want, got := chartOnly.Identities(ns), reg.Identities(ns)
-		if len(want) == 0 || fmt.Sprint(want) != fmt.Sprint(got) {
-			t.Errorf("%s identities = %v, want the chart-only set %v", ns, got, want)
-		}
+	want, got := chartOnly.Identities("slack"), reg.Identities("slack")
+	if len(want) == 0 || fmt.Sprint(want) != fmt.Sprint(got) {
+		t.Errorf("slack identities = %v, want the chart-only set %v", got, want)
 	}
-
-	// A SIGNAL WITH NO DIRECTORY BEHIND IT changes nothing — not even the
-	// pointer, which is what a reader holding the live registry compares.
 	e.nudgeDirectory()
 	e.refreshDirectory(t.Context(), true)
 	if e.Registry() != reg {
-		t.Error("the directory trigger rebuilt a registry on a node with no directory")
+		t.Error("the directory trigger rebuilt a registry on an engine with no directory")
 	}
 }
 
@@ -328,6 +374,32 @@ const (
 // Slack account.
 func directoryCompany(t *testing.T, e *Engine) *Company {
 	t.Helper()
+	company, err := NewCompanyWith(directoryConfig(t), e.resolver())
+	if err != nil {
+		t.Fatalf("company: %v", err)
+	}
+	return company
+}
+
+// bootDirectoryNode is a whole node — [New] and every stage of its boot — with
+// the directory company, under the roles given (nil for all three).
+func bootDirectoryNode(t *testing.T, roles []string) *Engine {
+	t.Helper()
+	b := testBootstrap(t)
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	b.Node.Roles = roles
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: directoryConfig(t)})
+	if err != nil {
+		t.Fatalf("boot a node with roles %v: %v", roles, err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	return e
+}
+
+// directoryConfig is the company document behind [directoryCompany].
+func directoryConfig(t *testing.T) *config.Company {
+	t.Helper()
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
@@ -352,11 +424,7 @@ roles:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	company, err := NewCompanyWith(cfg, e.resolver())
-	if err != nil {
-		t.Fatalf("company: %v", err)
-	}
-	return company
+	return cfg
 }
 
 // directoryFunc adapts a function to the notify seam.

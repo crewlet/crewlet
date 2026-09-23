@@ -295,11 +295,11 @@ suspended can quietly reinstate them.
   the roster in an agent's prompt and `lookup_colleague` read it as written,
   so an agent may still address the person at their own vendor account. Edit
   the `contact` block to stop that.
-- **A node that runs no identity domain.** A seats-only satellite has no
-  directory to read and routes inbound deliveries by the chart alone, so a
-  delivery it consumes still attributes the person's messages to their seat.
-  Run `ingress` or `workers` on every node that consumes deliveries if that
-  gap matters.
+- **Instantly, on a node that runs no identity domain.** A seats-only
+  satellite holds no directory of its own, so it asks the nodes that do on its
+  thirty-second re-read: its contact routing withdraws the person within that
+  interval rather than within one apply. See [Humans in the Org
+  Chart](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-chart-record).
 
 ---
 

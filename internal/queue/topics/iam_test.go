@@ -109,3 +109,20 @@ func TestTheIamWildcardCoversItsOwnGrammar(t *testing.T) {
 		}
 	}
 }
+
+// THE DIRECTORY'S SCATTER SUBJECT IS OUTSIDE THE IDENTITY LOG.
+//
+// A question asked on a subject the log's stream captures would be RETAINED:
+// a record with no kind the applier knows, which stops that log on every node.
+// The two share the `crewlet.iam` namespace deliberately — they are the same
+// domain's — so this is the one spelling mistake that costs an outage.
+func TestTheDirectoryScatterIsNotARecordOnTheIdentityLog(t *testing.T) {
+	t.Parallel()
+	if topics.Match(topics.IamLogWildcard, topics.IamHolders) {
+		t.Fatalf("%q is inside the identity log's %q", topics.IamHolders,
+			topics.IamLogWildcard)
+	}
+	if _, _, ok := topics.IamLogPath(topics.IamHolders); ok {
+		t.Fatalf("%q parses as a subject on the identity log", topics.IamHolders)
+	}
+}

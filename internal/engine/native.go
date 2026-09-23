@@ -132,6 +132,11 @@ type native struct {
 	// every embedded engine and every test.
 	stopSlices queue.Unsubscribe
 
+	// stopHolders withdraws this node as an answerer for the fleet's
+	// identity directory — see fleetdirectory.go. Nil on a node that runs
+	// no identity domain, which asks rather than answers.
+	stopHolders queue.Unsubscribe
+
 	// run is the context every goroutine this node started runs under, and
 	// stop is what ends it.
 	//
@@ -337,6 +342,18 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if err := n.openIAM(e, sl, nodeID); err != nil {
 		return err
 	}
+	// AND THIS NODE ANSWERS FOR THE NODES THAT HOLD NO DIRECTORY. A
+	// seats-only satellite asks the fleet who holds each seat (see
+	// fleetdirectory.go), and every node that runs the domain answers, on
+	// the search slices' terms: registered here, withdrawn first on the
+	// way down.
+	if n.iamReader != nil && e.backends.Queue != nil {
+		stop, err := serveHolders(runCtx, e.backends.Queue, nodeID, n.iamReader)
+		if err != nil {
+			return fmt.Errorf("engine: serve the identity directory: %w", err)
+		}
+		n.stopHolders = stop
+	}
 	if err := n.openChart(e, sl, nodeID); err != nil {
 		return err
 	}
@@ -423,20 +440,22 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		defer n.done.Done()
 		e.watchChart(runCtx)
 	}()
-	// AND THE PARTY REGISTRY'S DIRECTORY TRIGGER, on a node that runs the
-	// identity domain and on no other: a node that does not keeps the
-	// chart-only behaviour, because its empty copy of the directory would
-	// read as "nobody holds any seat". Handed over BEFORE the loop starts,
-	// so the first rebuild it runs already reads the directory — and before
-	// the boot publish, so the first registry does too.
-	if n.iamReader != nil {
-		e.useDirectory(iamDirectory{reader: n.iamReader}, n.iamReader.At)
-		n.done.Add(1)
-		go func() {
-			defer n.done.Done()
-			e.watchDirectory(runCtx)
-		}()
+	// AND THE PARTY REGISTRY'S DIRECTORY TRIGGER, on EVERY node: one that
+	// runs the identity domain reads its own rows, and one that does not
+	// asks the fleet — never its own empty copy, which would read as
+	// "nobody holds any seat". Handed over BEFORE the loop starts, so the
+	// first rebuild it runs already reads the directory — and before the
+	// boot publish, so the first registry does too.
+	dir, at, err := e.directoryFor(ctx, n)
+	if err != nil {
+		return err
 	}
+	e.useDirectory(dir, at)
+	n.done.Add(1)
+	go func() {
+		defer n.done.Done()
+		e.watchDirectory(runCtx)
+	}()
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopNative] — the same shutdown — is what ends it.
 	// Set before the two calls below because both reach through e.native:
@@ -499,6 +518,14 @@ func (n *native) shutdown(ctx context.Context) {
 		// that outlived the scan costs it a silent empty slice it
 		// counts as answered.
 		_ = n.stopSlices(context.WithoutCancel(ctx))
+	}
+	if n.stopHolders != nil {
+		// AND THE DIRECTORY'S ANSWERER, for the same reason: an answer
+		// cut off mid-read is a reply that never arrives, which a
+		// satellite already reads correctly as a node that did not
+		// answer — but only if the registration is gone before the
+		// context that ends the read.
+		_ = n.stopHolders(context.WithoutCancel(ctx))
 	}
 	n.stop()
 	n.done.Wait()
