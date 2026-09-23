@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -132,7 +133,7 @@ func identifiersReferencedInTheTree(t *testing.T) map[string]bool {
 		t.Fatalf("resolve this package: %v", err)
 	}
 	out := map[string]bool{}
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err = sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

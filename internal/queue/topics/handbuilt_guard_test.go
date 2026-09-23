@@ -12,6 +12,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // TestNoPackageBuildsASubjectByHand fails the build when any package outside
@@ -235,7 +237,7 @@ func walkForLiterals(t *testing.T, root string, markers map[string]bool, tests b
 
 	for _, tree := range []string{"internal", "cmd"} {
 		treeRoot := filepath.Join(root, tree)
-		err := filepath.WalkDir(treeRoot, func(path string, d fs.DirEntry, err error) error {
+		err := sourcetree.Walk(treeRoot, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // THE WIDTH IS A PROPERTY OF THE MODEL, and this is the inversion: an unset
@@ -136,7 +137,7 @@ func TestNoDefaultWidthConstantSurvives(t *testing.T) {
 	t.Parallel()
 	root := moduleRootFor(t)
 	var found []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

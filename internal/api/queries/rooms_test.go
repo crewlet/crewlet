@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -48,7 +49,7 @@ func declaration(t *testing.T, pattern string) string {
 	t.Helper()
 	re := regexp.MustCompile(pattern)
 	var found []string
-	err := filepath.WalkDir(dashboardTree, func(path string, d os.DirEntry, err error) error {
+	err := sourcetree.Walk(dashboardTree, func(path string, d os.DirEntry, err error) error {
 		switch {
 		case err != nil:
 			return err
@@ -107,7 +108,7 @@ func roomQueries(t *testing.T) map[string][]string {
 	// fits on a line. Without it the sweep reported a live reader as missing.
 	calls := regexp.MustCompile(`\b(?:useQuery|query)\(\s*"([a-z0-9_]+)"`)
 	out := map[string][]string{}
-	err := filepath.WalkDir(dashboardTree, func(path string, d os.DirEntry, err error) error {
+	err := sourcetree.Walk(dashboardTree, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() ||
 			(!strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx")) ||
 			strings.HasSuffix(path, ".test.ts") || strings.HasSuffix(path, ".test.tsx") {

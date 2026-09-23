@@ -24,6 +24,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // docsOrigin is where the documentation is published, and therefore both what
@@ -96,7 +98,7 @@ func TestDocumentationLinksCarryTheTrailingSlash(t *testing.T) {
 			t.Fatalf("expected the published tree %s at %s: %v", tree, dir, err)
 		}
 
-		err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		err := sourcetree.Walk(dir, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}

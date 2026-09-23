@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // dutyTTLs is every TTL expression a duty claim site in this package passes,
@@ -97,7 +98,7 @@ func TestEveryDutyClaimSiteIsInTheTTLTable(t *testing.T) {
 	}
 	var sites []string
 	for _, dir := range []string{"internal", "cmd"} {
-		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
+		err := sourcetree.Walk(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}

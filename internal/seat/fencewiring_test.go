@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // carriers are the configuration types the seat fence travels through, from
@@ -148,7 +150,7 @@ func hasKey(lit *ast.CompositeLit, key string) bool {
 func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
 	t.Helper()
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

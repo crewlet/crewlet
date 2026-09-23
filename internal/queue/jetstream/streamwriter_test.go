@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // TestOnlyOnePlaceWritesARunningStreamsConfiguration fails the build when a
@@ -87,7 +89,7 @@ func TestOnlyOnePlaceWritesARunningStreamsConfiguration(t *testing.T) {
 
 	var found []string
 	files := 0
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

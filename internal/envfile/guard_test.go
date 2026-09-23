@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // THE GUARD: nobody builds an assignment line by hand.
@@ -44,7 +46,7 @@ func TestNobodyBuildsAnAssignmentByHand(t *testing.T) {
 	root := repoRoot(t)
 	var offenders []string
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

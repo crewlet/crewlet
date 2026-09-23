@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // TestNoClientSitsOnTheProcessGlobalPool fails the build when any package in
@@ -166,7 +168,7 @@ func walkForGlobalPool(t *testing.T, root string) poolWalk {
 	var out poolWalk
 
 	for _, tree := range []string{"internal", "cmd"} {
-		err := filepath.WalkDir(filepath.Join(root, tree), func(path string, d fs.DirEntry, err error) error {
+		err := sourcetree.Walk(filepath.Join(root, tree), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}

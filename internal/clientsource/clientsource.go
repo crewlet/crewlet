@@ -41,9 +41,10 @@ package clientsource
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // Tree is the dashboard's SOURCE, relative to a package directory under
@@ -74,7 +75,7 @@ func Declaration(tree, pattern string) (string, error) {
 		return "", fmt.Errorf("clientsource: %q is not a pattern: %w", pattern, err)
 	}
 	var found []string
-	err = filepath.WalkDir(tree, func(path string, entry os.DirEntry, err error) error {
+	err = sourcetree.Walk(tree, func(path string, entry os.DirEntry, err error) error {
 		switch {
 		case err != nil:
 			return err

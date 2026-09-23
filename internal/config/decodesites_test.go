@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // WHICH READER A STORED REVISION GOES THROUGH IS A DECISION PER CALL SITE, AND
@@ -67,7 +69,7 @@ func TestEveryStoredDecodeSiteIsDeclared(t *testing.T) {
 	sawRead := map[string]bool{}
 	sawApply := map[string]bool{}
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
 			return err

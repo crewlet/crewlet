@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // tierALoaders are the functions that produce a Tier A document.
@@ -112,7 +114,7 @@ func calleeName(call *ast.CallExpr) (string, bool) {
 func walkSources(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
 	t.Helper()
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

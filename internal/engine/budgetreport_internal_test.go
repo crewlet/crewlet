@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // EVERY REGISTERED EVENT TYPE HAS A PUBLISHER.
@@ -131,7 +132,7 @@ func guardKinds(t *testing.T, dir string) []string {
 func sourceMatches(t *testing.T, root string, pattern *regexp.Regexp) map[string]bool {
 	t.Helper()
 	found := map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
 			return err

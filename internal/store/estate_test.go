@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // NOTHING REACHES THE REPLICATED ESTATE'S POOL DIRECTLY.
@@ -61,7 +63,7 @@ func TestNothingIssuesAStatementOnTheReplicatedPool(t *testing.T) {
 		t.Fatalf("resolve the module root: %v", err)
 	}
 	var found []string
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err = sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

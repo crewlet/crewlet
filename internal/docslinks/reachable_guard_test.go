@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // EVERY PUBLISHED PAGE IS REACHABLE FROM THE INDEX.
@@ -139,7 +141,7 @@ func TestAnUnreachablePageIsDetected(t *testing.T) {
 func docsPages(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

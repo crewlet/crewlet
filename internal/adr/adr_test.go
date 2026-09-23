@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/adr"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // EVERY RECORD IS WELL FORMED AND CARRIES THE FIELDS THAT MAKE IT USABLE.
@@ -277,7 +278,7 @@ var testNameRE = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 func testFunctions(t *testing.T, root string) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -331,7 +332,7 @@ type citation struct {
 func citations(t *testing.T, root string) []citation {
 	t.Helper()
 	var out []citation
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -451,7 +452,7 @@ func TestEveryDocLinkNamesAPackageThatExists(t *testing.T) {
 	}
 
 	files := 0
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

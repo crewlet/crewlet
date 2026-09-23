@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -219,7 +220,7 @@ func ddlStatements(body string) []ddlStatement {
 func walkGoFiles(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
 	t.Helper()
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

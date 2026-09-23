@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // TestNoWithdrawnIdentifierSurvives fails the build when a name or a sentence
@@ -128,7 +130,7 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 	files, scanned := 0, 0
 	var offences []string
 	seen := map[withdrawalKey]bool{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
