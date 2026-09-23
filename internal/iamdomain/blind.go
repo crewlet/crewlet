@@ -62,7 +62,12 @@ import (
 // whole directory rather than a re-encryption of it. That is an operation
 // somebody plans, not a sweep that runs, so there is no second name for a
 // previous key to live under and no arm here that tries both.
-const BlindKeyName = "iam/blind/index"
+//
+// IN THE STORE'S NAME GRAMMAR, beside the chart's `CREWLET_CHART_BLIND_INDEX_KEY`:
+// the company's secret store is keyed by environment-variable name and refuses
+// any other at the write, so the path-shaped `iam/blind/index` this used to be
+// could be neither minted by the engine nor set by an operator.
+const BlindKeyName = "CREWLET_IAM_BLIND_INDEX_KEY"
 
 // blindDomain separates this HMAC's inputs from every other use of the same
 // key, in the shape internal/runtoken established: a key is only ever safe in

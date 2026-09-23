@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -68,8 +69,16 @@ type Keys interface {
 // their login and their seat keeps the key their existing ciphertext was
 // sealed under. Keyed on anything mutable, a rename would orphan every value
 // already written and read as a shredded person.
+//
+// IN THE STORE'S OWN NAME GRAMMAR — `IAM_PERSON_<ID>_DEK`, the id folded to
+// what a variable name may hold — and that is not cosmetic. The company's
+// secret store is keyed by environment-variable name and refuses anything
+// else at the write ([secrets.CheckName]), so the path-shaped
+// `iam/person/<id>/dek` this used to be was refused on every real deployment:
+// no person's key could be minted, and nothing that tested against an
+// in-memory fake could see it.
 func PersonDEKName(personID string) string {
-	return "iam/person/" + personID + "/dek"
+	return personKeyPrefix + secretToken(personID) + personKeySuffix
 }
 
 // SessionRefreshName is where one session lineage's refresh material lives.
@@ -78,8 +87,43 @@ func PersonDEKName(personID string) string {
 // the others: a delete here is what makes a single sign-out irreversible for
 // that session and leaves every other one alone. The person's own revocation
 // epoch is the other lever, and it is the one that ends all of them at once.
+//
+// `IAM_SESSION_<LINEAGE>_REFRESH`, in the store's grammar for
+// [PersonDEKName]'s reason.
 func SessionRefreshName(lineage string) string {
-	return "iam/session/" + lineage + "/refresh"
+	return sessionRefreshPrefix + secretToken(lineage) + sessionRefreshSuffix
+}
+
+// The fixed halves of the two per-object names, which is also what a duty
+// lists the store by: the DEK duty finds every person key by its prefix, and
+// the deactivation probe every session's refresh material by its own.
+const (
+	personKeyPrefix      = "IAM_PERSON_"
+	personKeySuffix      = "_DEK"
+	sessionRefreshPrefix = "IAM_SESSION_"
+	sessionRefreshSuffix = "_REFRESH"
+)
+
+// secretToken folds an id into what a secret name may hold: upper case, and
+// every character a variable name cannot take as `_`.
+//
+// NOT REVERSIBLE IN GENERAL AND NOT READ BACK: every reader here derives the
+// name from the id it already holds, or carries the id inside the value,
+// rather than parsing one out of a name. For the uuids this estate mints it is
+// injective anyway — the hex digits keep their identity and the hyphens sit
+// at fixed offsets — which is the property that matters: two people never
+// share a key.
+func secretToken(id string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(id) {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
 }
 
 // ErrShredded reports a person whose key has been destroyed.
@@ -278,7 +322,7 @@ func (s *Sealer) cipherFor(ctx context.Context, personID string) (secrets.Cipher
 // check refuses a call that names nobody.
 //
 // A PERSON ID IS THE WHOLE ADDRESS of a key and the whole of its associated
-// data, so an empty one would name `iam/person//dek` — one key every
+// data, so an empty one would name `IAM_PERSON__DEK` — one key every
 // unidentified caller would share, with an AAD they would all match.
 func (s *Sealer) check(personID string) error {
 	if s == nil || s.keys == nil {

@@ -9,6 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -353,7 +357,7 @@ func TestNoKeyIsCachedAcrossOpens(t *testing.T) {
 
 // A SEALER WITH NO KEY STORE, AND A CALL THAT NAMES NOBODY, ARE BOTH REFUSED.
 //
-// An empty id would name `iam/person//dek`: one key every unidentified caller
+// An empty id would name `IAM_PERSON__DEK`: one key every unidentified caller
 // shares, under associated data they all match.
 func TestASealerRefusesWhatWouldSharOneKeyBetweenEverybody(t *testing.T) {
 	t.Parallel()
@@ -394,11 +398,19 @@ func TestAnEmptySealedValueNeedsNoKeyAtAll(t *testing.T) {
 // THE TWO SECRET NAMES ARE ADDRESSED BY WHAT NOTHING RENAMES.
 func TestTheSecretNamesAreKeyedOnWhatNothingRenames(t *testing.T) {
 	t.Parallel()
-	if got := iamdomain.PersonDEKName(who); got != "iam/person/"+who+"/dek" {
-		t.Errorf("a person's key lives at %q", got)
+	if got, want := iamdomain.PersonDEKName(who),
+		"IAM_PERSON_018F3A9C_0000_7000_8000_000000000001_DEK"; got != want {
+		t.Errorf("a person's key lives at %q, want %q", got, want)
 	}
-	if got := iamdomain.SessionRefreshName("lin1"); got != "iam/session/lin1/refresh" {
+	if got := iamdomain.SessionRefreshName("lin1"); got != "IAM_SESSION_LIN1_REFRESH" {
 		t.Errorf("a session's refresh material lives at %q", got)
+	}
+	// TWO PEOPLE NEVER SHARE A KEY: the fold keeps every hex digit and
+	// puts the hyphens at fixed offsets, so two distinct ids stay two
+	// distinct names.
+	other := "018f3a9c-0000-7000-8000-000000000002"
+	if iamdomain.PersonDEKName(who) == iamdomain.PersonDEKName(other) {
+		t.Error("two people fold to one key name — removing either destroys both")
 	}
 	// PER LINEAGE, not per person: ending one session must not end the
 	// others, so two lineages must never share a name.
@@ -406,4 +418,76 @@ func TestTheSecretNamesAreKeyedOnWhatNothingRenames(t *testing.T) {
 		t.Error("two session lineages share one secret name — signing out of " +
 			"one would end the other")
 	}
+}
+
+// EVERY SECRET THIS ESTATE STORES IS NAMED IN THE STORE'S OWN GRAMMAR.
+//
+// The company's secret store is keyed by environment-variable name and refuses
+// any other at the write, so a name outside that grammar is not a style
+// question: it is a key nothing can mint. The three used to be path-shaped
+// (`iam/person/<id>/dek`), every one was refused on a real deployment, and the
+// fake above — which accepts any name — is why no case noticed.
+func TestEverySecretNameIsOneTheCompanyStoreAccepts(t *testing.T) {
+	t.Parallel()
+	id := uuid.Must(uuid.NewV7()).String()
+	for _, name := range []string{
+		iamdomain.PersonDEKName(id),
+		iamdomain.SessionRefreshName(id),
+		iamdomain.BlindKeyName,
+	} {
+		if err := secrets.CheckName(name); err != nil {
+			t.Errorf("%q is refused by the company's secret store: %v", name, err)
+		}
+	}
+}
+
+// AND A PERSON'S KEY LIVES AND DIES IN THE REAL STORE, not only in the fake.
+//
+// Mint, seal, open, shred, and the open after the shred answering
+// [iamdomain.ErrShredded] — over internal/fleetsecrets on an in-memory
+// coordination backend, which is the store every deployment runs. It is the
+// case the grammar above protects end to end.
+func TestAPersonsKeyLivesAndDiesInTheRealSecretStore(t *testing.T) {
+	t.Parallel()
+	store := fleetsecrets.New(coordmem.NewFleet(), realCipher(t))
+	sealer, err := iamdomain.NewSealer(store)
+	if err != nil {
+		t.Fatalf("NewSealer: %v", err)
+	}
+	ctx := t.Context()
+	id := uuid.Must(uuid.NewV7()).String()
+	if err := sealer.Mint(ctx, id, "node-a", time.Now()); err != nil {
+		t.Fatalf("the real store refused a person's key: %v", err)
+	}
+	sealed, err := sealer.Seal(ctx, id, iamdomain.FieldName, "Sarah Chen")
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if plain, err := sealer.Open(ctx, id, iamdomain.FieldName, sealed); err != nil ||
+		plain != "Sarah Chen" {
+		t.Fatalf("Open = (%q, %v)", plain, err)
+	}
+	if destroyed, err := sealer.Shred(ctx, id); err != nil || !destroyed {
+		t.Fatalf("Shred = (%v, %v), want the key destroyed", destroyed, err)
+	}
+	if _, err := sealer.Open(ctx, id, iamdomain.FieldName, sealed); !errors.Is(err,
+		iamdomain.ErrShredded) {
+		t.Fatalf("a shredded person's name opened (err %v)", err)
+	}
+}
+
+// realCipher is a one-key keyring, which is what the company store seals under.
+func realCipher(t *testing.T) secrets.Cipher {
+	t.Helper()
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": key},
+	})
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	return cipher
 }
