@@ -734,11 +734,17 @@ credential:
 
 `/ws/stream` follows the same rule as every other route, and browsers cannot
 set headers on a `WebSocket` — so it accepts `?token=…` as well as the
-`Authorization` header. Prefer the header where a client can send one, since
-query strings tend to land in proxy access logs. A handshake presenting nothing
-is refused before the upgrade, which the dashboard learns by re-asking over
-plain HTTP: `401` means the credential is the problem, `426` means the engine
-is fine and the protocol was wrong.
+`Authorization` header, and the session cookie a signed-in browser sends on its
+own. Prefer the header where a client can send one, since query strings tend to
+land in proxy access logs. The socket takes **the guard's own answer** for who
+is calling rather than re-reading the credential itself, so it can never accept
+a narrower set than the REST routes beside it — it used to read the token arm
+alone, and refused every browser signed in with a cookie. A handshake
+presenting nothing is refused before the upgrade, which the dashboard learns by
+re-asking over plain HTTP: `401` means the credential is the problem, `426`
+means the engine is fine and the protocol was wrong. A node that cannot read
+its identity estate answers `503` rather than `401`, and a person whose seat
+the chart no longer holds gets the guard's `403` naming the seat.
 
 **The guard is mounted whether or not `api.auth` is configured.** It applies one
 rule (`auth.Guard.Requires`), and what Tier A supplies is the *posture*, not the

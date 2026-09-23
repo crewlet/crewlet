@@ -503,7 +503,7 @@ machine token with `crewlet iam token`.
 | `show ID` | One person, in full, with their name and address opened |
 | `invite EMAIL` | Issue an invitation. Prints the link **once** — nothing stores it and no route reads one back |
 | `create` | Create somebody directly, with `-login`, `-email`, `-name` and `-kind`. No password: a person arrives with one by redeeming an invitation, and a machine gets a token from `iam token` |
-| `bind ID SEAT` | Bind a person to a chart seat |
+| `bind ID SEAT` | Bind a person to a chart seat, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. A Tier A token acts under the login `token:<id>`, so binding one is `create -kind machine -login token:<id>` and then `bind` on the id it prints. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take the binding back |
 | `grant ID` | Change what somebody carries: `-grants`, `-colleague` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way |

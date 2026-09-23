@@ -39,7 +39,6 @@ units:
           atlassian_account_id: 5b10ac8d-...   # one ID covers Jira + Confluence
           github_login: sarahchen
           gitlab_username: sarahchen
-          crewlet_operator_id: sarah            # her api.auth.tokens[] id (Tier A)
         availability: "CET business hours; replies within ~4h"
       - name: Engineer            # AI agent, unchanged
         goal: "Implement features and ship quality code"
@@ -55,7 +54,6 @@ units:
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
 | `contact.github_login` | one identity | GitHub username: review requests, sender attribution. Lowercased |
 | `contact.gitlab_username` | one identity | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
-| `contact.crewlet_operator_id` | one identity | One of Tier A's `api.auth.tokens[].id`. Binds that credential to this seat, so a person writing through the dashboard, the REST API or the operator tool server acts as **themselves** — the item they file carries their name and wakes their colleagues. An **attribution, never an address**: the engine never sends as itself, so this id is left out of rosters and `lookup_colleague`, and a seat carrying only this one is reached through their dashboard queue rather than by an @-mention. Leaving a token unbound is ordinary — an operator outside the org chart, a pipeline — and it acts as `operator:<id>` under its own label rather than being refused |
 | `email` | no | Indexed so a notification addressed to the address resolves to the seat. **Not** a delivery channel: no agent has an email tool by default |
 | `availability` | no | Free text rendered into a lead's roster (timezone, hours, response expectations) |
 
@@ -70,36 +68,14 @@ rejected at validation because it does not fail loudly on its own: inbound
 routing keys a map on the identity, so the *last* seat in the chart takes it,
 while every walk of the chart answers the *first*. One of the two people
 silently stops receiving their own mail, with both entries looking perfectly
-ordinary — and with `crewlet_operator_id` the two directions disagree outright,
-so a token opens one person's dashboard while their wakes go to another seat.
-The comparison ignores case and surrounding whitespace, because the lookups do.
+ordinary — an inbound message resolves to one seat while the same person's
+wakes go to the other. The comparison ignores case and surrounding whitespace,
+because the lookups do.
 
-`crewlet_operator_id` satisfies that requirement on its own, and the seat is
-still reachable: their queue is the dashboard, not a chat mention. The roster
-an agent reads says so explicitly rather than telling it to @-mention somebody
-it cannot — a message addressed to a handle that resolves to nobody reads to
-everyone else as work handed over.
-
-**The queue is `#/inbox`**, and it is the dashboard's landing screen. Opening it
-with an API token resolves that token's id against every seat's
-`crewlet_operator_id` and shows the person it names: their notices, the one
-reason of eighteen that routed each one, and what is waiting on a decision. A
-token bound to no seat is not an error — it is an operator outside the org
-chart — and the screen says so rather than showing somebody else's queue or an
-empty one, naming the line of company configuration that would give it a
-person. `#/me` is the same person's own work, and it is absent for the same
-reason when the token names nobody.
-
-Read and snooze marks are the assistant's to write, not the screen's: the
-dashboard is read-only, and every write in this engine is attributed to
-somebody. What it shows is what the engine recorded.
-
-**The binding is written on the seat, not on the token.** Tier A is the root of
-trust and may never read Tier B — it holds the keys to the secret store — so a
-`seat:` field on an `api.auth.tokens[]` entry would have the trusted tier
-depending on the untrusted one. Naming the token id from the company document
-inverts that: Tier A keeps a bare list of credentials, and the org chart says
-which of them is a person.
+Each of these is a place a message can actually be sent. None of them says who
+a person is on the engine's *own* surface — that is the identity directory's,
+[below](#acting-as-your-seat-on-the-dashboard-and-the-api) — so nothing a roster
+or a colleague card renders is an identity an agent cannot @-mention.
 
 Every `contact` field accepts either a literal ID or exactly one
 whole-value `${VAR}` reference, for example
@@ -156,6 +132,77 @@ configured something validation would have refused.
 Handles are validated for format (`[a-z0-9][a-z0-9-]*`) and org-wide
 uniqueness. They are the canonical seat identity, and an agent and a human
 sharing one would misattribute the person's activity to the agent.
+
+---
+
+## Acting as your seat on the dashboard and the API
+
+The engine's own surface — the dashboard, the REST API, and the operator tool
+server your assistant reaches — takes no `contact` identity, because nothing is
+ever sent there. A person acts **as their seat** on it through the [identity
+directory](identity-and-access.md#the-binding-has-two-ends-and-only-one-of-them-arbitrates):
+their row is bound to the seat, and every request they make resolves to it.
+
+```
+crewlet iam bind <person-id> sarah-chen
+```
+
+```mermaid
+flowchart LR
+    SESSION["signed in<br/>(session cookie)"]
+    TOKEN["Tier A token<br/>acts under the login token:its-id"]
+    ROW["identity directory<br/>the row for that person or login"]
+    SEAT["seat sarah-chen<br/>in the org chart"]
+    NONE["no seat<br/>acts as the credential"]
+    SESSION --> ROW
+    TOKEN --> ROW
+    ROW -->|"crewlet iam bind"| SEAT
+    ROW -->|"unbound"| NONE
+```
+
+A person who signs in is a row already, and binding it is the one command
+above. A **Tier A token** acts under the login `token:<id>`, so it acts as a
+seat when the directory holds a row under that login bound to one: enrol it as
+a machine (`crewlet iam create -kind machine -login token:<id>`) and bind that
+row. The bind is a claim on the seat itself, so two people can never be bound
+to one seat — they contend and exactly one wins.
+
+What the binding buys:
+
+- **The personal screens are yours.** `#/inbox` — the dashboard's landing
+  screen — shows your notices, the one reason of eighteen that routed each one,
+  and what is waiting on a decision; `#/me` is your own work. Both ask the
+  engine who is looking, and the answer is the seat the directory binds you
+  to.
+- **Your seat's lead relations are yours.** Every authority rule that asks "do
+  you lead this" is asked about the bound seat — so the person holding a unit's
+  lead seat may re-route that unit's project's work, declare its fields and set
+  a report's priorities, where an unbound credential reaches those only through
+  `fleet:operate`. See [the authority
+  table](identity-and-access.md#the-authority-table-one-function-decides).
+
+It does not change **attribution** through your assistant: a write made over
+the operator tool server carries your own login (or the token's id) and the
+author kind `operator`, bound or not, and there is no way for a caller to name
+a seat to act as.
+
+**Unbound is ordinary.** An operator outside the org chart, a pipeline, an
+automation — each acts as itself under its own login, decided by its grants
+alone, and is never refused for it. The screens say so, and name `crewlet iam
+bind`, rather than guessing whose queue to show.
+
+Read and snooze marks are the assistant's to write, not the screen's: the
+dashboard is read-only, and every write in this engine is attributed to
+somebody. What it shows is what the engine recorded.
+
+**The binding lives in the directory**, not on the token and not in the
+company document. Tier A is the root of trust and may never read Tier B — it
+holds the keys to the secret store — so a `seat:` field on an
+`api.auth.tokens[]` entry would have the trusted tier depending on the
+untrusted one; and a seat's `contact` block says how to reach a person, not
+which credential they hold. A node that cannot read the directory when a
+token's request arrives treats that token as unbound for the request rather
+than failing it — it keeps its grants and loses only the seat's lead relations.
 
 ---
 
@@ -329,8 +376,10 @@ Two boundaries to keep in mind:
 
 - **The seat is the colleague hat, not the operator hat.** Config
   ownership (`PUT /config`, API auth tokens, the dashboard) stays an
-  API-auth concern: the seat makes agents know you; the token makes
-  the engine obey you. Different hats, deliberately separate.
+  API-auth concern: the seat makes agents know you, and — once the
+  identity directory binds you to it — carries its lead relations onto
+  the engine's own surface; your grants make the engine obey you.
+  Different hats, deliberately separate.
 - **Scope `manages` to the top roles.** A founder managing every unit
   by name lists every seat in those units, and root seats are searched
   first when a seat's manager is resolved, so the founder becomes the

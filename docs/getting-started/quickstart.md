@@ -96,7 +96,8 @@ api:
     max_grants:     # THE CEILING on what this deployment will ever let a
                     #   directory record confer. Required once a port is set.
       [state:read, audit:read, config:read, secrets:read, work:write,
-       knowledge:write, config:write, secrets:write, fleet:operate, sandbox:run]
+       knowledge:write, config:write, secrets:write, fleet:operate,
+       people:manage, sandbox:run]
     tokens:         # at least one is REQUIRED once a port is set: every route
                     #   needs a credential, and this is also what creates the
                     #   first person on a fresh deployment.
@@ -104,7 +105,8 @@ api:
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
         grants:     # what this credential may do — required and non-empty.
           [state:read, audit:read, config:read, secrets:read, work:write,
-           knowledge:write, config:write, secrets:write, fleet:operate, sandbox:run]
+           knowledge:write, config:write, secrets:write, fleet:operate,
+           people:manage, sandbox:run]
 
 secrets:                  # REQUIRED. Every record on every state log — the
                           #   tracker's, the knowledge base's — is signed
@@ -429,11 +431,24 @@ has a tracker and a wiki from its first minute with nothing to set up. A seat
 files with `create_work_item` and writes with `write_page`; a board row opens
 the item beside the board, and ⌘-click opens its page.
 
-**Bind your token to your seat** and the personal screens become yours: give a
-human seat `contact.crewlet_operator_id` matching one of your
-`api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
-person. Until then the dashboard says so rather than guessing — an unbound
-token is an ordinary state, not a fault.
+**Bind your token to your seat** and the personal screens become yours. The
+binding lives in the engine's identity directory rather than in either config
+file: your token acts under the login `token:founder`, so enrol that login as a
+machine and bind it to the human seat above (`your-name`, the handle derived
+from `name: Your Name`):
+
+```bash
+export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # what `crewlet iam` authenticates with
+crewlet iam create -kind machine -login token:founder   # prints the new row's id
+crewlet iam bind <that id> your-name
+```
+
+**My work** and the **Inbox** then answer for that person, and every rule that
+asks "do you lead this" is asked about your seat. Until then the dashboard says
+so rather than guessing — an unbound token is an ordinary state, not a fault.
+Both commands take `people:manage`, which is why the token above carries it.
+See [Humans in the Org
+Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 ### When people sign in rather than share a token
 

@@ -174,16 +174,19 @@ the word the company uses.
 
 Read it at `GET /work/catalogue`, or with `get_work_catalogue`, which every
 seat holds: a model that cannot read the catalogue can only guess at a type.
-Writing it is an **operator** gesture — `write_work_catalogue` — because a seat
-adding a type to make its own create succeed is a seat editing the rules it is
-judged by, and the refusal it was working around is the signal a person needs
-to see.
+Writing it — `write_work_catalogue`, on the operator's assistant — takes
+**`config:write`**, the grant that edits the company's own document. The
+catalogue is declared once for the whole workspace and names no project, so
+there is no container whose lead could own it: it is configuration. No seat
+holds `config:write` or the tool, because a seat adding a type to make its own
+create succeed is a seat editing the rules it is judged by, and the refusal it
+was working around is the signal a person needs to see.
 
-A **project's own** field declarations are the project **lead's**, written with
-`write_project(fields: [...])`. That list REPLACES the project's declarations
-and leaves the workspace's alone — the two are separate scopes and a task's
-effective set is their union — so send the whole set, and read
-`describe_project` first. A project declaration sharing a workspace field's id
+A **project's own** field declarations are the project **lead's** (or a caller
+holding `fleet:operate`), written with `write_project(fields: [...])`. That
+list REPLACES the project's declarations and leaves the workspace's alone —
+the two are separate scopes and a task's effective set is their union — so
+send the whole set, and read `describe_project` first. A project declaration sharing a workspace field's id
 **shadows** it, which `describe_project` names so a reader can see which
 definition is in force.
 
@@ -220,13 +223,15 @@ A **label** that collides with another tag's label or slug, case-insensitively,
 *is* refused: two tags a person cannot tell apart split the work between them
 at random.
 
-**Renaming and archiving are the lead's.** A rename changes the word on every
-task already filed under the tag, and an archive takes a filter off everybody's
-board — both are decisions about how the company groups its work rather than
-about one task. An archive is **one-way**, like a field's: the tasks keep the
-tag and every filter on it still answers, and what the archive buys is a tag
-that takes no *new* work. Bringing one back means declaring it again under its
-own name.
+**Renaming and archiving are the project lead's**, or a caller holding
+`fleet:operate`. A rename changes the word on every task already filed under
+the tag, and an archive takes a filter off everybody's board — both are
+decisions about how the company groups its work rather than about one task.
+Adding a tag stays open to every colleague: it needs nothing beyond the
+ordinary `work:write` that `write_project` itself takes. An archive is
+**one-way**, like a field's: the tasks keep the tag and every filter on it
+still answers, and what the archive buys is a tag that takes no *new* work.
+Bringing one back means declaring it again under its own name.
 
 A task carries at most **40** tags, and a project declares at most **512**.
 
@@ -392,6 +397,22 @@ Views are read at `GET /work/views?container=project:ENG`, and written through
 the operator MCP surface with `save_work_view` — **not** by a seat. A view is
 furniture, and a seat's job is the work rather than the furniture around it.
 
+**Who may save one follows what the view is**, never who is asking — the
+payload decides, so there is no second verb a caller could pick to ask the
+easier question:
+
+| The view | Who may save it |
+|---|---|
+| **Personal** — it names an `owner` | that owner, or a caller holding `fleet:operate`. Not their lead: it is a strip only its owner sees, and rearranging it is not a gesture anybody asked a lead to make |
+| **Shared on a project** (`project:ENG`) | the project's lead, or `fleet:operate` |
+| **Shared on a unit** (`unit:engineering`) | whoever leads that unit, directly or from anywhere above it, or `fleet:operate` |
+| **Shared on a person's page** (`person:ana`) | that person, whoever leads them, or `fleet:operate` — it is a tab on a page other people read |
+| **Shared on the workspace** | `fleet:operate` alone: it is a tab every person in the company lands on |
+
+`default: true` takes the container's landing tab from whichever view held it,
+which is why a shared view is its container's decision rather than whoever
+happened to write it first.
+
 ### Manual order
 
 A board is drag-ordered, and the order is a real value on the task rather than
@@ -415,7 +436,7 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `list_work_items` | the query surface above, filtered any way a view can be — and every row filtered **on its own**, whatever a named view's own shape says: the grammar's `collapsed` default makes the filter a predicate on the ROOT and lets its whole subtree ride along unfiltered, which draws a board and misreports a list. An item's subtasks are asked for with `parent`, which that mode never applied to — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
 | `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out. It also takes the four **scheduling** arguments below |
-| `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
+| `update_work_item` | change any field, with an optional `if_match`. **`routing_unit`** — pointing the item at a different team — is the one field that is not every caller's to set: it belongs to the lead of the project the item is filed in, because it decides which team hears about somebody else's work. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration. It takes the four **scheduling** arguments too, where `null` on any of them CLEARS it |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
 | `comment_on_work_item` | add to the thread, optionally as a **question** somebody owes an answer to (`ask`) or as the **answer** that closes one (`answers`) |
 | `search_work_items` | find an item by what it **says** — ranked over every item's title *and description*, which no filter reaches. `list_work_items`' own `text` is a substring of the key or title and cannot see a description at all, so the two are different questions: one narrows a board, the other ranks a corpus. A node still building its index says so rather than answering empty, because "there is nothing" is what gets a duplicate filed |
@@ -423,7 +444,7 @@ that container a seat owns, and one about CHANGE rather than about state:
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much open work each holds and who leads it |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
-| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
+| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields and setting the default assignee are the project **lead's**; archiving the project is the lead's too, and is never an agent's — see [Who may do what](#who-may-do-what) |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
 
@@ -481,18 +502,21 @@ declared and a required field left empty, and a model that cannot **read** any
 of that can only guess. A refusal that names the valid values is only half an
 answer if there was no way to look them up first.
 
-`write_project` is the one project **write** a seat holds, and it holds it for
-one facet: declaring a tag. A project's name, purpose and owning unit are
-**chart-owned** — written by the epoch apply from the org chart and by nothing
-else — so nothing writes them here at all; its field declarations and its
-default assignee are the **lead's**, and archiving the project
-itself takes a person's own credential. Every one of those is gated inside the
-verb, and each refusal names who can.
+`write_project` is the one project **write** a seat holds, and every seat holds
+it for one facet: declaring a tag. A project's name, purpose and owning unit
+are **chart-owned** — written by the epoch apply from the org chart and by
+nothing else — so nothing writes them here at all; its field declarations, its
+default assignee and renaming or archiving a tag are the **lead's**, and
+archiving the project itself is the lead's and **never an agent's** — a seat
+that leads the project is still refused it. Each facet is decided inside the
+verb once the call is read, and each refusal names what it needed.
 
 An operator holds the same thirteen and more that no seat does, including the
 two below. `remove_work_item` puts an item
-in the **trash** and `restore_work_item` takes it out again, at any age. A
-removal hides an item from every list and board and destroys nothing — its
+in the **trash** and `restore_work_item` takes it out again, at any age. On the
+assistant both take `fleet:operate`: the tool names an item rather than the
+project it is filed in, so the project-lead half of the rule that governs them
+has no project to ask about. A removal hides an item from every list and board and destroys nothing — its
 history is untouched and `list_work_items` with `removed: true` is the only
 thing that shows it. No seat holds either, because a seat that could hide work
 it did not want to do would be marking its own homework in the one way that
@@ -591,14 +615,67 @@ given — `list_work_views`, `save_work_view`,
 `set_priorities`, `remove_work_item` and `restore_work_item`
 — the five page tools beside them and knowledge
 search — the seat's own implementations, with one
-field different: a write carries the **token's** own name as its author and the
-author kind `operator`. There is deliberately no way for the caller to name a seat to act
+field different: a write carries the **caller's** own name as its author — a
+token's id, or a signed-in person's login — and the author kind `operator`.
+There is deliberately no way for the caller to name a seat to act
 as — a tracker whose author field is chosen by the writer is not an audit
 trail.
 
+**Whether the call is allowed is decided exactly as a seat's is**: every tool
+on that surface goes through the same authority table, over the same chart,
+and a refusal names the rule that refused it. What differs is only who is
+asking. A caller's grants come from their credential, and the **lead
+relations** come from the seat the [identity
+directory](../concepts/identity-and-access.md#the-binding-has-two-ends-and-only-one-of-them-arbitrates)
+binds them to — so a person bound to the seat that leads `ENG` may re-route
+`ENG`'s work and declare its fields, and an unbound caller reaches those only
+through `fleet:operate`.
+
 **The REST API** serves the read side at `/work`, `/work/{id}` and
 `/work/views`. Writes go through a seat's tools or the operator MCP, both of
-which are attributed to somebody.
+which are attributed to somebody. `/work` and `/work/views` answer their
+personal parts — `preset=my_queue`, `preset=priorities`, the pins and personal
+views that order a strip — for the **caller's own seat**, and take no
+parameter naming anybody else's: the engine already knows who is asking, and a
+caller bound to no seat gets the shared strip. The questions that are *about*
+one person — their record, their day, their inbox — do take a handle, and
+naming somebody else's is decided as reading their record is: that person,
+whoever leads them, or `fleet:operate`, with a `503` rather than a refusal
+from a node that cannot read its chart.
+
+## Who may do what
+
+One table decides every gesture above, for a seat's own tools and for the
+operator's assistant alike. "`fleet:operate`" below is the deployment's own
+grant, which overrides every relation; no seat carries it. A **lead** is
+whoever the org chart says leads the thing: a unit's effective lead (inherited
+from above when the unit names nobody), the seat whose own project it is, or —
+for a person — anybody above them in the management chain.
+
+| Gesture | Who may |
+|---|---|
+| Read the board, a task, a project, the catalogue, the views | `state:read` — every seat holds it |
+| File, update, comment on, merge and relate tasks; ask a colleague | `work:write` — every seat holds it |
+| Declare a tag on a project | `work:write` — any colleague |
+| Point a task at another team (`routing_unit`) | the lead of the project the task is filed in, or `fleet:operate` |
+| Declare a project's fields, set its default assignee, rename or archive a tag | the project's lead, or `fleet:operate` |
+| Archive the project | the project's lead or `fleet:operate` — **and never an agent**, whatever it leads or holds |
+| Declare task types and workspace fields (`write_work_catalogue`) | `config:write` |
+| Save a view | see [Views](#views): a personal view is its owner's, a shared one its container's |
+| Set somebody's priorities | that person, whoever leads them, or `fleet:operate` — and a **seat** never sets anybody's but its own |
+| Mark an inbox, set pins | the person whose record it is, or `fleet:operate`; never a lead. The two tools take no handle at all, so a caller only ever writes their own |
+| Remove and restore a task | the operator's assistant only — see [What a seat can do](#what-a-seat-can-do) |
+| Purge a task | a person or an operator token — see [below](#removing-deleting-and-purging) |
+
+**A node that cannot read its chart does not say no.** Every relation above is
+asked of the chart this node is running, and a node that is booting, applying a
+revision or behind the chart log cannot answer it. That is reported as
+*cannot tell* — a tool's refusal says this node could not decide, and a route
+answers `503` — rather than "you do not lead this", which would send a lead
+off to ask for an authority they already hold. `fleet:operate` is checked before the chart is
+asked, so the deployment's own grant never waits on it. The whole table, and
+the rules outside the tracker, are in [Identity and
+Access](../concepts/identity-and-access.md#the-authority-table-one-function-decides).
 
 ## A handle is checked before it is stored
 
@@ -770,20 +847,26 @@ authorities over them — which is why they are three separate writes.
 
 | Part | Who may write it |
 |---|---|
-| **inbox** — read, unread, snoozed, and how far you have read | only on behalf of the person whose it is |
+| **inbox** — read, unread, snoozed, and how far you have read | only on behalf of the person whose it is — or `fleet:operate`, which exists so a departed person's queue can be unstuck |
 | **pins** — pinned views and starred things | the same |
-| **queue** — the order you mean to work in | yours, **or** a lead's for somebody in their line, a human's, or an operator's |
+| **queue** — the order you mean to work in | yours, **or** whoever leads you, or `fleet:operate` — and never a seat's for anybody but itself |
 
 Somebody else marking your work read is the one thing an inbox must never
 allow: the item is then gone from the only place you would have looked for it,
 and nothing anywhere says who removed it. A pin is the same rule for the
-plainer reason — one somebody else can set is one that moves under you.
+plainer reason — one somebody else can set is one that moves under you. A lead
+gets no way in to either: re-ordering what a report works on is a lead's job,
+and marking their mail read is not. `mark_inbox` and `set_pins` take no handle
+at all, so through them a caller only ever writes their own.
 
 The **queue is the exception**, and deliberately: telling somebody what to do
 next is what a lead is for. A **seat** is the one party that may not write
-somebody else's — an agent re-ordering a colleague's list is a hand-off in
-disguise, and it bypasses the guarded take and the reassignment budget that a
-real hand-off goes through.
+somebody else's — not even a seat that leads them, because an agent
+re-ordering a colleague's list is a hand-off in disguise, and it bypasses the
+guarded take and the reassignment budget that a real hand-off goes through. A
+person who is neither the owner nor a lead is refused too, unless they hold
+`fleet:operate`: being a human is not, on its own, authority over somebody
+else's day.
 
 Somebody else's write is **stamped** with who made it, so a person who starts
 the day on work they did not choose can see who chose it, and their own next
@@ -829,12 +912,15 @@ whose primary half is blank.
 
 **A person reads theirs at `#/inbox`**, which is the dashboard's landing
 screen: the notices `work_inbox` returns, each labelled with the one reason of
-twenty that routed it, beside what is waiting on a decision. Which person is
-decided by the API token — it is matched against every seat's
-`contact.crewlet_operator_id`, so the queue is theirs rather than the
-alphabetically first seat's — and `#/me` is that same person's own work, their
-priorities, asks and checklists. See [Humans in the
-org](../concepts/humans-in-the-org.md) for the binding.
+eighteen that routed it, beside what is waiting on a decision. Which person is
+decided by **who signed in**: the engine resolves the browser's session — or
+the token it presented — to a principal, and the seat the identity directory
+binds that principal to (`crewlet iam bind`) is whose queue it is. `#/me` is
+that same person's own work, their priorities, asks and checklists. A caller
+the directory binds to no seat is an ordinary state, and both screens say what
+to bind rather than guessing whose queue to show. See [Humans
+in the org](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)
+for the binding.
 
 The marks are the ASSISTANT'S. The dashboard is read-only, because every write
 here is attributed to somebody and a button in a browser would write as "the
@@ -907,9 +993,12 @@ Three different gestures, and the difference matters:
 - **Purge** removes the rows. Its report comes back in **three groups**: what
   was purged, what could not be reached, and what is stale.
 
-Only the first two are a seat's. A purge is an **operator gesture** — a person
-or an operator token, never an agent and never the engine — because it is the
-one operation with no inverse and nothing else can be asked to confirm it:
+None of the three is a seat's. Removing and restoring are the operator's
+assistant's, as [above](#what-a-seat-can-do); the deletion marker is written by
+the purge itself, in the same apply that removes the rows; and a purge is an
+**operator gesture** — a person or an operator token, never an agent and never
+the engine — because it is the one operation with no inverse and nothing else
+can be asked to confirm it:
 
 ```
 crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>

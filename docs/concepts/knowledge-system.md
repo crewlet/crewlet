@@ -356,6 +356,16 @@ Two properties differ from the vendor path and both are visible:
 
 The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
 
+#### Who may write where
+
+Authoring a page — `write_page`, `save_page`, `comment_on_page` — is an ordinary colleague write, decided by `knowledge:write`, which every seat carries. Three rules sit beside it.
+
+**Two containers are reserved, and an agent never writes into them.** The tool-skills container (`knowledge.skills_container`) holds the pages the engine injects into a phase, and the org root (`knowledge.root_space`) holds the onboarding tree. A page written there by a seat is excluded from knowledge search and from routing, so it is silently unreadable — and an agent cannot know that from anything it holds. So the knowledge base's own **store** refuses an agent every write into either one: creating a page, saving one, renaming one, and commenting — adding, editing or removing a remark. The rule lives in the store rather than beside one tool because it was once one check on `write_page`, and a seat that could not create a page there could still save over one, rename it and comment on it. It is a rule about the **actor**, not about capability: a person publishing into those containers on purpose — through their own assistant over [`/operator/mcp`](#on-the-native-backend-your-own-assistant) — is what the containers are for, and is not refused. The container keys are read off the configuration current at each write, so an apply that moves `skills_container` moves the rule with it.
+
+**A remark is its author's.** Editing a comment is the author's alone — nobody puts words in somebody else's mouth, on a record that outlives the page's body. Removing one is the author's, or a caller holding the deployment's own `fleet:operate`: a lead is not automatically a moderator of what is said on their team's pages.
+
+**A page container is led through a unit's `space:`.** The rules that are a container's lead's — a container's own settings, trashing and restoring a page — ask who leads the unit whose `space:` names the container (or the seat whose own container it is). That is its own question of the org chart rather than the project one: a unit declares its tracker project and its page container in two separate fields, and asking one with the other's key would refuse the lead of every company that spells them differently. See [the authority table](identity-and-access.md#the-authority-table-one-function-decides).
+
 ### Confluence backend — the Confluence searcher
 
 `internal/confluence` (`confluence.Searcher`). The query text is wrapped into a Confluence CQL `text ~ "..."` clause (`confluence.BuildCQL`), optionally narrowed by `space IN (...)` from the [read scope](#accessible-containers), and run against the Confluence REST API (`/rest/api/content/search`), so Confluence's own search backend does the matching and the relevance ranking. Authentication is **as the agent's own Atlassian user**, using the seat's Confluence credential from its `mcp_env` (the `atlassian` or `confluence` server entry, read by `atlassian.CredentialOf`, which accepts `CONFLUENCE_API_TOKEN`, `CONFLUENCE_PERSONAL_TOKEN`, `CONFLUENCE_TOKEN` or `ATLASSIAN_API_TOKEN`, and a `JIRA_API_TOKEN` on the shared `atlassian` entry). Confluence enforces its page permissions natively: a restricted page the agent's user cannot see simply doesn't come back, and there is no engine-side restricted-page handling. Seats without their own credential fall back to the **org token** (`integrations.confluence.token`); an agent on the org token sees whatever that account sees, subject to the empty-scope rule below. Hits carry the full ancestor-title chain, so the auto-draft exclusion filters on any depth.
@@ -422,9 +432,13 @@ author. That handles the parts a flag-driven CLI handles badly: the parent
 chain, a title that already exists (`save_page` with the version it read), and
 a file that turns out to be a [tool skill](tool-skills.md) rather than prose.
 
-The [reserved containers](#accessible-containers) are refused to it, exactly as
-they are to a seat — a page written into the tool-skills container would be
-injected into a phase as an instruction rather than read as knowledge.
+The [reserved containers](#who-may-write-where) are **not** refused to it, which
+is the difference from a seat: they are refused to an agent, and publishing the
+tool skills and the onboarding tree on purpose is exactly what a person does
+there. It is also why this is the native way to seed [tool
+skills](tool-skills.md) — a file with a `trigger:` in its frontmatter belongs in
+the skills container, where it is injected into a phase as an instruction
+rather than read as knowledge, and every other file belongs anywhere else.
 
 ### On Confluence: the import CLI
 
@@ -497,7 +511,7 @@ Key properties:
 
 There is no orchestrator object to construct. The two reads are wired independently by engine start:
 
-- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. (It does not fuse the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) today — see the note under [the native backend](#native-backend): the vectors are written but nothing queries them.) Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
+- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. (It does not fuse the [semantic half](#semantic-search-two-stages-no-index-no-new-dependency) today — see the note under [the native backend](#native-backend--the-engines-own-pages): the vectors are written but nothing queries them.) Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
 - **`learning.Diary`** is built over the node's store (`learning.NewDiary`), so a node with no store has no diary and the `## Personal memory` block stays empty without error. Writes are embedded when `providers.embeddings` is configured; without it the diary degrades to a pure recency list (vector candidate selection becomes a no-op) but writes and recency reads still work.
 
 The two are independent: an org can have knowledge search without reflection, or reflection without knowledge search.

@@ -760,7 +760,7 @@ api:
     max_grants:         # THE CEILING. Required once port is set
       [state:read, audit:read, config:read, secrets:read,
        work:write, knowledge:write, config:write, secrets:write,
-       fleet:operate, sandbox:run]
+       fleet:operate, people:manage, sandbox:run]
     session:
       absolute: 168h          # 1h..720h (default 168h)
       rotate_after: 1h        # 5m..24h  (default 1h)
@@ -868,10 +868,20 @@ what the `${VAR}` resolves to.
 session cookie and derives the key that verifies each per-run token, so an API
 served without one accepts nobody.
 
-Binding a person to a credential crosses the tiers the other way: an
-`api.auth.tokens[].id` is named from the company document's
-`roles[].contact.crewlet_operator_id`, never from a `seat:` field on the token,
-because Tier A holds the keys to the secret store and may never read Tier B.
+Binding a credential to a seat is in neither tier. A token acts under the
+login `token:<id>`, and it acts **as a seat** when the identity directory holds
+a row under that login bound to one — `crewlet iam create -kind machine -login
+token:<id>`, then `crewlet iam bind`, both of which take `people:manage`. Never
+a `seat:` field on the token, because Tier A holds the keys to the secret store
+and may never read Tier B; and never a field on the seat's `contact` block,
+which says how to reach a person rather than which credential they hold. See
+[Humans in the Org
+Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
+
+**Leave `people:manage` out of the ceiling and nobody can ever hold it.** The
+first person a fresh estate enrols receives every grant the ceiling permits and
+may confer only what they hold, so a ceiling without it is a deployment in
+which nobody can invite, bind, suspend or remove anybody.
 
 The event store (LLM observability) is a table in that same file, created by
 the engine's own migrations on first start — there is nothing to configure
@@ -1000,7 +1010,7 @@ units:
 |-------|------|----------|-------------|
 | `name` | string | yes | The seat's display name — what people read. It is NOT how anything refers to this seat: `manages:` and a unit's `lead:` both take the `handle` below |
 | `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below and requires at least one `contact` identity |
-| `contact` | dict | human seats | External identities: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`, `crewlet_operator_id`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. `crewlet_operator_id` is the odd one: it names one of Tier A's `api.auth.tokens[].id`, binding that credential to this seat so a person writing through the dashboard or the API acts as **themselves** rather than as a token. It is an attribution and never an address — the engine never sends as itself — so it is left out of rosters and colleague cards, and a seat carrying only this one is reachable through their dashboard queue rather than by an @-mention |
+| `contact` | dict | human seats | External identities: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. Every one is a place a message can be sent; who a person is on the engine's own surface — the dashboard, the API, the operator tool server — is not here but in the identity directory, bound with `crewlet iam bind` (see [Acting as your seat](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)) |
 | `availability` | string | no | Human seats only — free-text availability rendered into rosters and `lookup_colleague` results |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |
@@ -1227,7 +1237,7 @@ tracker:
                                          #   answered by the history either way
 ```
 
-Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), or a decision the engine makes once for everybody.
+Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#tier-a), or a decision the engine makes once for everybody.
 
 **Every company needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory — so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it when given both documents, and so does the engine at boot.
 

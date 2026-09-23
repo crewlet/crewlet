@@ -38,13 +38,67 @@ creates the project, on every node, with no gesture from anybody.
 What it does carry is what an agent company actually uses — a key, a type from
 a per-project catalogue, a status from a closed set of six in four groups, an
 assignee, a thread, a history, subtasks, tags, typed custom fields,
-and saved views in three shapes. The line is between **structure a
+and saved views in five shapes. The line is between **structure a
 company records** and **process a tool enforces**: the first is here, the
 second is not. There is no gate that refuses a transition, no scheme that
 hides a field from a role, and no configuration screen standing between a
 founder and their first task.
 
 The whole surface is in **[The Work Tracker](../guides/work-tracker.md)**.
+
+### Who may change what
+
+There is no permission scheme to configure, and there is still an answer to
+"may this caller do that": **one authority table**, fixed in the engine, that
+every surface asks — a seat's own tools and the operator's assistant decide a
+call through the same function over the same chart. The inputs are the ones
+a company already has: the grants a caller carries, and the lead relations
+the org chart draws.
+
+```mermaid
+flowchart LR
+    CALL["a tool call<br/>(a seat's turn, or the operator's assistant)"]
+    TABLE["<b>the authority table</b><br/>one rule per verb"]
+    GRANT["the caller's grants<br/>work:write · config:write · fleet:operate"]
+    CHART["the org chart<br/>who leads this project, unit or person"]
+    YES["allowed"]
+    NO["refused, naming the rule"]
+    UNK["cannot tell<br/>(this node cannot read its chart)"]
+    CALL --> TABLE
+    GRANT --> TABLE
+    CHART --> TABLE
+    TABLE --> YES
+    TABLE --> NO
+    TABLE --> UNK
+```
+
+What it says about the work, in short:
+
+- **Filing, updating, commenting and declaring a tag** are any colleague's —
+  the ordinary `work:write` every seat holds.
+- **A project's policy** — its field declarations, its default assignee,
+  renaming or archiving a tag — and **re-routing a task** at another team are
+  the project **lead's**, because each decides something for everybody who
+  files work there.
+- **Archiving a project** is the lead's as well, and **never an agent's**: a
+  project nobody can file into again is a company decision, whatever the seat
+  asking leads.
+- **Saved views** follow what the view is. A personal view is its owner's; a
+  shared one is its container's lead's — a project's, a unit's, or the person
+  whose page it sits on.
+- **The workspace catalogue** — task types and workspace fields — takes
+  `config:write`, because it is the company's configuration rather than any
+  container's.
+- **Somebody's queue** is theirs and their lead's; their inbox and pins are
+  theirs alone.
+
+The deployment's own `fleet:operate` overrides every relation, and no seat
+carries it. A node that cannot read its chart answers **cannot tell** rather
+than no, so a lead is never told they lead nothing because a node was behind.
+The full table is in [The Work Tracker § Who may do
+what](../guides/work-tracker.md#who-may-do-what), and the rules beyond the
+tracker in [Identity and
+Access](identity-and-access.md#the-authority-table-one-function-decides).
 
 ### Why the engine grew one
 

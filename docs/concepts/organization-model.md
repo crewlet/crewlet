@@ -149,8 +149,10 @@ Role (a SEAT: can live at root level OR inside a unit)
 ├── Responsibilities, BehavioralGuidelines []string
 ├── Contact *HumanContact              (human seats: slack_user_id,
 │                                       mattermost_user_id, atlassian_account_id,
-│                                       github_login, gitlab_username,
-│                                       crewlet_operator_id)
+│                                       github_login, gitlab_username — where a
+│                                       message can be sent. Who holds the seat
+│                                       on the engine's own surface is the
+│                                       identity directory's, not a field here)
 ├── Availability string                (human seats: rendered into rosters)
 ├── Backstory string                   (personality, background, expertise)
 ├── Goal string                        (individual mission)
@@ -194,6 +196,8 @@ Roles can live in two places:
 - **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `project` identity. Knowledge **read** scope for every agent is the org-wide `org.Organization.KnowledgeScope` only.
 
 > Every one of these identities is consulted. The tracker routes an item that names nobody to the lead of the unit that owns the project, and the knowledge base does the same for a page change nobody was mentioned in — whichever backend serves each, which is why the keys name neither. Neither narrows what an agent can READ: knowledge scope is the org-wide `knowledge.scope` only, because letting a unit's identity double as a read scope is how an agent ends up unable to read the page it was told to follow. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
+
+> **They also decide who leads what.** On the engine's own tracker and knowledge base, the unit's effective lead leads the project its `project:` names and the page container its `space:` names, and a root seat leads its own — which is what the [authority table](identity-and-access.md#the-authority-table-one-function-decides) asks when a write is a lead's to make: a project's field declarations, re-routing its work, a page container's own settings. The two keys are separate relations, asked separately: a unit whose project and space are spelled differently has a lead for each all the same.
 
 ---
 

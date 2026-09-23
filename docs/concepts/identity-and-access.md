@@ -32,23 +32,32 @@ revision, and they are what an audit filter selects on.
 
 ### A person with a seat acts as themselves
 
-A person is the one kind that splits. Bind a teammate's login to their seat in
-the company document and their work lands under **their own seat handle**:
+A person is the one kind that splits. Bind somebody in the identity directory
+to their seat and their work lands under **their own seat handle**, and every
+authority rule that asks "do you lead this" is asked about that seat:
 
-```yaml
-roles:
-  - name: "Jane Founder"
-    kind: human
-    handle: founder
-    contact:
-      crewlet_operator_id: founder      # an id from api.auth.tokens
+```
+crewlet iam bind <person-id> founder
 ```
 
-Without that binding they act as the credential, under its own login. Both are
+The binding is a directory row, not a line of the company document — see [The
+binding has two ends](#the-binding-has-two-ends-and-only-one-of-them-arbitrates).
+A person signed in with a session acts as the seat their row is bound to. A
+**Tier A token** acts under the login `token:<id>`, and it acts as a seat the
+same way: when the directory holds a row under that login bound to one —
+enrolled as a machine (`crewlet iam create -kind machine -login token:<id>`)
+and then bound with `crewlet iam bind`.
+
+Without a binding they act as the credential, under its own login. Both are
 ordinary — an operator who is not in the org chart, a pipeline, an automation
 each act as themselves and are never refused for it. What you cannot do, in
 either direction, is *choose* a seat to act as: a tracker whose author field is
 picked by the writer is not an audit trail.
+
+A node that cannot read the directory at the moment a token's request arrives
+treats that token as unbound for that request rather than failing it: the
+caller keeps every grant the token carries and loses only the lead relations
+of the seat, which is the narrower surface rather than a locked-out operator.
 
 ### Names can never collide
 
@@ -71,14 +80,14 @@ colon, is refused when it is written rather than discovered later.
 
 ## Grants: the eleven things there are to allow
 
-A grant is one capability. There are ten, each covering a surface the engine
+A grant is one capability. There are eleven, each covering a surface the engine
 actually serves, and each is either a **read** or a **write**. The class is
 declared rather than derived from the HTTP method, and it is what lets a
 narrow service account be cut down to reading: the public read posture
 `allow_anonymous_read` used to open is now a credential holding read grants and
 nothing else.
 
-**`api.auth.max_grants` bounds all ten.** A person's grants live in the
+**`api.auth.max_grants` bounds all eleven.** A person's grants live in the
 replicated store and an identity provider's group mapping is written at the
 provider; the ceiling is the operator's statement, in the tier that holds the
 keyring, of what either may ever confer. It is required once the API is served.
@@ -96,7 +105,7 @@ with nothing anywhere saying why. So each node publishes a **digest of its own
 resolved ceiling** on its presence lease, and `GET /query/fleet` renders it as
 `grant_ceiling` per node — two different values on that view is the
 disagreement being said out loud. It is a hash rather than the list because
-every node reads every other node's lease on every heartbeat, and ten strings
+every node reads every other node's lease on every heartbeat, and eleven strings
 per node is a payload that grows with the fleet to answer one question. It is
 derived from the **sorted, deduplicated** set, so a fleet whose config is
 assembled by a template does not report a disagreement it does not have, and it
@@ -132,7 +141,7 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 |---|---|
 | `work:write` | Filing and moving work: create, update, comment, merge, and the project facets a writer may declare |
 | `knowledge:write` | Authoring the company's own pages: write, save, comment |
-| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children |
+| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children — and the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's |
 | `secrets:write` | Sealing, rotating, deleting and re-keying the fleet's credentials |
 | `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, `POST /budgets/reset`, a work item's purge, and `POST /iam/invalidate-all` |
 | `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them |
@@ -787,26 +796,59 @@ showed up as a support question:
   revision or behind the chart log therefore told every lead in the company
   that they lead nothing — while reporting itself healthy.
 
-### The ten rules
+And none of those lookups consulted a grant, so the deployment's own
+administrator was refused by a tool where every HTTP route let them through.
+The tracker still takes an authority value on the writes that need one, but it
+states what the table **decided** — never the inputs a caller resolved — and
+keeps only the half a chart cannot know: which facet of a write each answer
+unlocks.
+
+### The thirteen rules
 
 | Rule | Covers | Decided by |
 |---|---|---|
 | **Read** | The board, pages, the org chart, the roster, the fleet, spend | `state:read` |
 | **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even the admin grant |
-| **Colleague write** | Filing, commenting, updating, ranking; authoring a page; asking a colleague | `work:write` for work, `knowledge:write` for pages |
+| **Colleague write** | Filing, commenting, updating, merging; declaring a project's tags; authoring a page; asking a colleague | `work:write` for work, `knowledge:write` for pages |
 | **Own record** | Marking an inbox, pinned views | The owner, or `fleet:operate` |
 | **Own or lead** | Priorities, a person's day, reading their queue | The owner, whoever leads them, or `fleet:operate` |
-| **Container** | A project's fields, default assignee, routing unit, tag renames | The project's lead, or `fleet:operate` |
+| **Saved view** | Saving a view | A **personal** view (one naming an owner): its owner, or `fleet:operate`. A **shared** one: its container's lead — a project's, a unit's, or the person whose page it sits on and whoever leads them — or `fleet:operate`, which is the only way to a workspace-wide tab |
+| **Container** | A project's policy — its fields, default assignee, tag renames and archives, archiving the project — re-routing a task to another team, and a page container's own settings | The project's lead or, for pages, the lead of the unit whose `space:` the container is; or `fleet:operate` |
+| **Chart object** | The public half of the org chart: a unit's name and purpose, a seat's goal and responsibilities | Whoever leads that unit or seat, or `fleet:operate` — a seat never edits its own |
 | **Destructive** | Removing and restoring a task; trashing and restoring a page | The **container's** lead, or `fleet:operate` |
-| **Purge** | Anything beyond recovery | `fleet:operate` **and** a principal that is not an agent |
 | **Authored** | Editing and removing a page comment | Whoever wrote it, or `fleet:operate` |
-| **Operator** | Configuration, secrets, integrations, the node itself | The grant the verb names |
+| **Operator** | Configuration, secrets, integrations, the node itself, the tracker's workspace catalogue | The grant the verb names |
+| **Directory read** | Who can reach the company: the directory, one person's row, their credentials and sessions | The person the row is about, `people:manage`, or `audit:read` |
+| **Directory self** | Minting and revoking a credential, ending sessions | The person themselves, or `people:manage` |
+
+**Some verbs are no agent's, whatever their rule says.** Purging a task or a
+page, and archiving a project, carry a mark beside their rule rather than a
+rule of their own: no seat takes them, whatever it holds or leads, because an
+irreversible delete or a project nobody can file into again is not something
+a model decides inside a turn. The mark composes with the rule rather than
+replacing it — archiving is still the project lead's, and a purge still needs
+`fleet:operate` — and it is checked **first**, so an agent is told it is a seat
+rather than that it lacks a capability it may well hold.
 
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. A colleague may file
-work in a project and may not take it out again. An agent holding the
-deployment's own grant still cannot purge — an irreversible delete decided
-inside a turn is not something a model reaches for.
+work in a project and may not take it out again. Adding a tag and renaming one
+are two rules for the same reason: the first files work, the second changes the
+word on everybody's board.
+
+**A view's rule is chosen by the view, not by the caller.** The table is keyed
+on the verb, so two verbs — one for personal views, one for shared — would let
+a caller writing a shared view ask the personal question instead. There is one
+verb, and the payload decides: naming an owner makes it that person's strip,
+naming none makes it a tab on its container.
+
+**Four relations, and none is asked with another's key.** A unit declares its
+tracker project in `project:` and its page container in `space:`, and those are
+unrelated strings; a unit is a third key of its own. So the chart is asked four
+different questions — who is above this person, who leads this project, who
+leads this page container, who leads this unit. Asking one relation with
+another's key answers correctly only for a company that happened to spell its
+keys the same, and refuses a lead everywhere else with no error to notice.
 
 **Self has no admin path, and that is why it is its own rule.** A seat's memory
 tools take no handle at all, because an agent recalling another's episodes
@@ -819,6 +861,29 @@ one question.
 it belongs nowhere — but it spends somebody else's turn and somebody else's
 budget, so a credential with no write capability at all must not be able to
 make every seat in the company think.
+
+### Every tool call goes through it
+
+A seat's own tools and the operator's assistant serve the same tool
+implementations, and every one of them is wrapped once, where it is
+registered, by the same decision over the same chart. The verb *is* the tool's
+name, so there is exactly one place the check could be forgotten, and a
+surface that wired no decision refuses every call rather than allowing it.
+What each tool is *about* — which argument names the project, the container or
+the person — is read out of the tool's own arguments; a personal tool that
+takes no handle is about the caller.
+
+A few checks cannot be taken before the tool runs, because the object is not
+in the arguments: which project a task is filed under comes out of the stored
+row. Those ask the same table from inside the tool once it has read, under a
+verb of their own — re-routing a task, a project's policy facets, archiving it,
+setting somebody's priorities. And two rules the table cannot state stay with
+the domain that owns them, because they are about the gesture rather than
+anybody's authority: an agent never re-orders a colleague's queue even when it
+leads them, which the tracker enforces on top of the table's answer, and an
+agent never writes into a [reserved page
+container](knowledge-system.md#who-may-write-where), which the knowledge base's
+own store refuses on every write path.
 
 **A verb with no row is refused.** Not defaulted, not passed through: a default
 is how a new verb ships ungated, and it ships looking correct. A walk over the
@@ -834,6 +899,14 @@ build actually registers, over both surfaces — a seat's own and the operator's
 assistant — in both directions. It earned its place twice on its first run: two
 rows had outlived the goal verbs being removed from the tracker, and seven
 tools a seat uses every turn had no rule at all.
+
+A fifth goes one level further down, to the **argument names**. Which argument
+a tool's object is read from is data, and each name is checked against the
+tool's own schema. It exists because four of them named arguments their tools
+do not have: the owner read empty on every call, every personal rule refuses an
+empty owner, and so `my_work`, `mark_inbox`, `set_pins` and `save_work_view`
+were refused to everybody but an administrator — with nothing to show for it
+but a refusal naming a grant the caller already held.
 
 ### Cannot-tell is not no
 
@@ -1104,10 +1177,14 @@ today is smaller, and lives in two places:
   `session`, `audit`, `local` and `oidc` blocks under it. `allow_anonymous_read`
   and `disabled` are both retired and refused by name — see
   [Configuration § Auth](configuration.md#auth) for what replaced each.
-- **The company document, `contact.crewlet_operator_id`** — which of those
-  token ids is a *person*, and which seat they hold. The binding is written
-  here rather than on the token because Tier A is the root of trust and may
-  never read Tier B. See [Humans in the Org Chart](humans-in-the-org.md).
+- **The identity directory** — who is a *person*, who is a machine, and which
+  seat each is bound to, written with `crewlet iam` or through `/iam` rather
+  than in a file. A token acts as a seat when the directory holds a row under
+  its login (`token:<id>`) bound to one. The binding lives there rather than on
+  the token because Tier A is the root of trust and may never read Tier B, and
+  rather than in the company document because a seat's `contact` block says how
+  to reach a person, not which credential they hold. See [Humans in the Org
+  Chart](humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 Which surfaces always need a credential — reads included — is covered in
 [Configuration § Auth](configuration.md), and the operator MCP surface an
