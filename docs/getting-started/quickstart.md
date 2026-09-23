@@ -259,10 +259,14 @@ via `base_url`.
 
 ### Token budgets (optional)
 
-Control costs with hard caps at the org and/or per-agent level:
+Control costs with ceilings at the org and/or per-agent level, one per
+calendar window on the company's clock — `day`, `week` and `month`, each
+optional:
 
 ```yaml
-token_budget: 500000  # org-wide limit (0 or omit = unlimited)
+token_budget:          # org-wide, every seat together
+  day: 500000          #   a runaway loop burns at most a day's allowance
+  month: 8000000       #   the bill
 
 units:
   - name: Core
@@ -270,22 +274,26 @@ units:
     lead: CTO
     roles:
       - name: CTO
-        token_budget: 100000  # per-agent limit
+        token_budget: {day: 100000}     # this seat alone, on top of the org's
       - name: Engineer
-        token_budget: 50000
+        token_budget: {week: 250000}
 ```
 
-When a budget is exceeded, the agent's turn stops immediately and a
-`BudgetExhausted` event is emitted.
+A day runs from local midnight to midnight, a week is the ISO week from
+Monday, a month the calendar month, and each window opens again on its own
+when it turns over. Leave a key out for no ceiling on that window — `0` is
+refused rather than read as unlimited. When a round would take a window past
+its ceiling, the agent's turn stops immediately and a `budget_exhausted` event
+is emitted.
 
 Usage is **durable** — it lives in the fleet's
 [coordination store](../concepts/coordination.md), so it survives restarts and
-is one number for the whole company however many nodes run it. Reset it
-deliberately, against a running node:
+is one number for the whole company however many nodes run it. Read it
+against a running node, and raise a ceiling to make room before a window
+turns over:
 
 ```bash
 crewlet budgets show     # usage per scope, read from the running node
-crewlet budgets reset    # zero everything (or -scope agent:<id>)
 ```
 
 (Usage used to reset on every engine start, which made a cap advisory in

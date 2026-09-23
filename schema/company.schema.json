@@ -1395,9 +1395,8 @@
           "type": "string"
         },
         "token_budget": {
-          "description": "Per-seat token ceiling; 0 = unlimited.",
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/TokenBudget",
+          "description": "This seat's own token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = only the company's ceilings apply."
         },
         "unit": {
           "description": "Home unit for a root-level seat; the seat is moved into it.",
@@ -1974,6 +1973,27 @@
       },
       "type": "object"
     },
+    "TokenBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "day": {
+          "description": "Most tokens one day may spend, local midnight to midnight on the company clock. Absent = no daily ceiling; 0 is refused.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "month": {
+          "description": "Most tokens one calendar month (on the company clock) may spend. Absent = no monthly ceiling; 0 is refused.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "week": {
+          "description": "Most tokens one ISO week (from Monday, on the company clock) may spend. Absent = no weekly ceiling; 0 is refused.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "Tracker": {
       "additionalProperties": false,
       "properties": {
@@ -2267,9 +2287,8 @@
       "type": "string"
     },
     "token_budget": {
-      "description": "Org-wide token ceiling across all seats; 0 = unlimited.",
-      "minimum": 0,
-      "type": "integer"
+      "$ref": "#/$defs/TokenBudget",
+      "description": "Org-wide token ceilings across all seats, per calendar window on the company clock: day, week and month, each optional. Absent = uncapped."
     },
     "tracker": {
       "$ref": "#/$defs/Tracker"

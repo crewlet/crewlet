@@ -274,7 +274,7 @@ const doc: CompanyDocument = {
   name: "Acme",
   roles: [
     { name: "Jane Founder", kind: "human", contact: { slack_user_id: "U0FOUNDER" } },
-    { name: "CEO", handle: "ceo", email: "ceo@example.com", token_budget: 250000 },
+    { name: "CEO", handle: "ceo", email: "ceo@example.com", token_budget: { week: 250000 } },
   ],
   units: [
     {
@@ -302,7 +302,7 @@ describe("what only the company document says", () => {
     const found = seatSettings(doc, index.byName.get("CEO")!);
     expect(found.state).toBe("found");
     expect(found.state === "found" && found.role.email).toBe("ceo@example.com");
-    expect(found.state === "found" && found.role.token_budget).toBe(250000);
+    expect(found.state === "found" && found.role.token_budget).toEqual({ week: 250000 });
   });
 
   // THE PROJECTION AND THE DOCUMENT CAN DISAGREE for a moment either side of

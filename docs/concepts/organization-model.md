@@ -13,7 +13,9 @@ The runtime tree the engine builds from a revision (`org.Organization`, with the
 ```
 Organization
 ├── Name, Mission, Vision string; Policies []string
-├── TokenBudget int                        (org-wide ceiling; 0 = unlimited)
+├── TokenBudget TokenCeilings              (org-wide ceiling per calendar window
+│                                           — day, week, month — on the company
+│                                           clock; an absent window is uncapped)
 ├── KnowledgeScope []string                (knowledge.scope: the one org-wide
 │                                           knowledge read scope)
 ├── Roles []*Role                          (root-level org-wide seats)
@@ -72,7 +74,8 @@ Role (a SEAT: can live at root level OR inside a unit)
 ├── Space string                       (likewise, the seat's own knowledge
 │                                       container. Does NOT scope knowledge reads,
 │                                       that is the org-wide knowledge.scope only)
-├── TokenBudget int                    (0 = unlimited)
+├── TokenBudget TokenCeilings          (this seat's own ceiling per window, on
+│                                       top of the company's; absent = uncapped)
 ├── LLM, LLMReview, LLMSubagent,
 │   LLMAuxiliary, LLMJudge,
 │   LLMSandbox ProviderKeys            (the executor's chain and the per-phase

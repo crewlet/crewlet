@@ -118,7 +118,7 @@ const document_: CompanyDocument = {
       name: "CEO",
       handle: "ceo",
       email: "ceo@example.com",
-      token_budget: 250000,
+      token_budget: { day: 250000, month: 5000000 },
       llm: { default: ["fast", "backup"], review: "big" },
       schedules: [{ name: "weekly-review", cron: "0 9 * * 1", task: "Review the week" }],
     },
@@ -247,6 +247,22 @@ test("the settings the projection does not carry are read from the document", as
   expect(screen.getByText("backup")).toBeDefined();
 });
 
+// A TILE HOLDS ONE NUMBER, AND IT IS THE TIGHTEST WINDOW: the day here, not
+// the month the seat also caps, because the day is what stops it first and
+// the one the counter holds it to. The caption says there is more than one,
+// rather than listing them on a line that ellipsizes.
+test("the configured budget tile shows the tightest window it caps", async () => {
+  mount("#/company/people/ceo", answering);
+  expect(await screen.findByText("ceo@example.com")).toBeDefined();
+
+  fireEvent.click(screen.getByRole("tab", { name: "Cost" }));
+  expect(screen.getByText(`${fmtCount(250000)} a day`)).toBeDefined();
+  expect(screen.queryByText(new RegExp(`${fmtCount(5000000)} a month`))).toBeNull();
+  expect(
+    screen.getByText("the tightest of 2 windows token_budget caps on this role"),
+  ).toBeDefined();
+});
+
 // A REFUSAL CLEARS WHAT THE TOKEN HAD READ.
 test("a refused re-read takes the guarded settings off the page", async () => {
   let refuse = false;
@@ -270,7 +286,7 @@ test("a refused re-read takes the guarded settings off the page", async () => {
   expect(screen.getByText("weekly-review")).toBeDefined();
 
   fireEvent.click(screen.getByRole("tab", { name: "Cost" }));
-  expect(screen.queryByText(fmtCount(250000))).toBeNull();
+  expect(screen.queryByText(`${fmtCount(250000)} a day`)).toBeNull();
   // AND SAYS SO. "Unknown" is not "unlimited": a cap nobody was allowed to
   // read and a company with no cap are different facts.
   expect(screen.getByText("Unknown")).toBeDefined();

@@ -92,10 +92,11 @@ type Company struct {
 	// server from one.
 	MCPServers []MCPServer `yaml:"mcp_servers,omitempty" json:"mcp_servers,omitempty" desc:"Tool servers, stdio or http. Per-agent credentials live in role.mcp_env."`
 
-	// TokenBudget is the org-wide LLM token ceiling across every seat;
-	// 0 is unlimited. Charged before the per-seat budget, so the first
-	// completion that would cross it stops that turn.
-	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty" js:"min=0" desc:"Org-wide token ceiling across all seats; 0 = unlimited."`
+	// TokenBudget is the org-wide LLM token ceiling per calendar window,
+	// across every seat; a window it does not name is uncapped. Charged
+	// before a seat's own budget, so the first completion that would cross
+	// it stops that turn. See [TokenBudget].
+	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"Org-wide token ceilings across all seats, per calendar window on the company clock: day, week and month, each optional. Absent = uncapped."`
 
 	// NotificationRateLimit caps how many INBOUND notifications may wake one
 	// seat per second; 0, the default, is unlimited.
@@ -480,9 +481,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		}
 	}
 
-	if c.TokenBudget < 0 {
-		p.add(field("token_budget"), ErrOutOfRange, "must not be negative, got %d", c.TokenBudget)
-	}
+	p.wrap(c.TokenBudget.validate(field("token_budget")))
 	if c.NotificationRateLimit < 0 {
 		p.add(field("notification_rate_limit"), ErrOutOfRange,
 			"must not be negative, got %d", c.NotificationRateLimit)

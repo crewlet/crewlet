@@ -326,9 +326,10 @@ type Budgets interface {
 	// token, so a counter that cannot be reached must not un-cap a
 	// company.
 	//
-	// A limit of 0 is UNLIMITED, matching the config: `token_budget: 0` is
-	// how an operator says "no ceiling", and reading it as "no allowance"
-	// would stop every company that never set one.
+	// A limit of 0 is UNLIMITED: it is what a scope whose budget caps no
+	// window is held to, and reading it as "no allowance" would stop every
+	// company that never set one. No author's ceiling can collide with it,
+	// because the config refuses a ceiling of 0 rather than storing one.
 	//
 	// A refusal stamps the refusing scope's [Usage.RefusedAt], and an
 	// admitted charge clears the stamp on both scopes it charged. See

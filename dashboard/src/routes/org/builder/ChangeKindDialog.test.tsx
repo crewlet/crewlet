@@ -42,7 +42,7 @@ function withFields(): CompanyDocument {
     name: "Dev",
     goal: "Build",
     llm: "fast",
-    token_budget: 10,
+    token_budget: { day: 10 },
     behavioral_guidelines: ["Be kind"],
     mcp_env: { tracker: { TOKEN: "__redacted__" } },
     integrations: {

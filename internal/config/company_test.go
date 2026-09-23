@@ -519,7 +519,7 @@ roles:
   - name: Founder
     kind: human
     contact: {slack_user_id: U0FOUNDER}
-    token_budget: 100
+    token_budget: {day: 100}
 `, "Founder")
 		if !strings.Contains(err.Error(), "token_budget") {
 			t.Fatalf("the error should name the offending field; got %v", err)

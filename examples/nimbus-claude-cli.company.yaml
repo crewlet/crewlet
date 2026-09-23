@@ -73,28 +73,35 @@ policies:
 # twice a year.  See docs/getting-started/configuration.md.
 timezone: "Europe/Berlin"
 
-# Company-wide token budget — a single hard cap on total LLM tokens across
-# EVERY agent (CEO, CTO, PM, DevRel, the three engineers, their workers,
-# and the learning/aux passes).  The engine charges this org budget on
-# every LLM completion BEFORE the per-agent budget; the first completion
-# that would push the running total past the cap stops that turn
-# immediately and emits a ``BudgetExhausted`` event (budget_type="org").
-# 0 (or omitting the field) means unlimited.  No per-agent ``token_budget``
-# is set below, so this 10M ceiling is the only budget in force and the
-# whole company shares it.
+# Company-wide token budget — ceilings on total LLM tokens across EVERY
+# agent (CEO, CTO, PM, DevRel, the three engineers, their workers, and the
+# learning/aux passes), one per calendar WINDOW on the company clock above.
+# Every model round is charged against the company's ceilings BEFORE a
+# seat's own; the first completion that would push a window past its
+# ceiling stops that turn and emits a ``budget_exhausted`` event
+# (budget_type="org").
 #
-# IT STILL APPLIES ON A SUBSCRIPTION.  A cli-agent provider is not metered
+# Each key is optional and a window with no key has no ceiling: ``day``
+# runs Berlin midnight to midnight, ``week`` is the ISO week from Monday,
+# ``month`` the calendar month, and each opens again on its own when it
+# turns over.  0 is refused rather than read as "unlimited" — leave the key
+# out instead.  No per-agent ``token_budget`` is set below, so these two are
+# the only ceilings in force and the whole company shares them.
+#
+# THEY STILL APPLY ON A SUBSCRIPTION.  A cli-agent provider is not metered
 # by Crewlet, but the CLI reports its usage and the engine counts it — so
-# this cap is what stops a scheduling loop burning a whole plan window
-# overnight.  10M is roughly a week of the schedules below plus ordinary
-# chat traffic for seven seats.
+# the day ceiling is what stops a scheduling loop burning a whole plan
+# window overnight, and the week ceiling tracks the plan itself: 10M is
+# roughly a week of the schedules below plus ordinary chat traffic for
+# seven seats.
 #
-# NOTE: usage is durable — the counter lives in the fleet's coordination
-# store, so it survives engine restarts and is one number for the whole
-# company however many nodes run it.  Reset it deliberately, against a
-# running node: ``crewlet budgets reset``.  See
-# docs/guides/deployment.md § Token Budgets.
-token_budget: 10000000                          # 10M tokens, org-wide (all agents combined)
+# Usage is durable — the counter lives in the fleet's coordination store,
+# so it survives engine restarts and is one number for the whole company
+# however many nodes run it.  See docs/getting-started/configuration.md
+# § Token budgets and docs/guides/deployment.md § Token Budgets.
+token_budget:
+  day: 3000000                                  # 3M tokens per Berlin day, org-wide
+  week: 10000000                                # 10M tokens per ISO week, org-wide
 
 providers:
   llm:

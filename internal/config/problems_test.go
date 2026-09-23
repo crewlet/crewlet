@@ -256,7 +256,7 @@ func TestEveryOrgRuleHasTheKindTheContractNames(t *testing.T) {
 		{"duplicate unit key", "name: Acme\nunits:\n  - name: Platform\n  - name: Product\n    id: platform\n",
 			"conflict"},
 		{"agent-only field set on a human seat",
-			"name: Acme\nroles:\n  - name: Sarah\n    " + human + "    token_budget: 5\n", "conflict"},
+			"name: Acme\nroles:\n  - name: Sarah\n    " + human + "    token_budget: {day: 5}\n", "conflict"},
 		{"human-only field set on an agent seat",
 			"name: Acme\nroles:\n  - name: Dev\n    availability: mornings\n", "conflict"},
 		{"schedule has no runner",

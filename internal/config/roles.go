@@ -80,8 +80,10 @@ type Role struct {
 	// there.
 	Workers []string `yaml:"workers,omitempty" json:"workers,omitempty" desc:"Delegate templates this seat may use; empty = every one."`
 
-	// TokenBudget is this seat's own ceiling; 0 is unlimited.
-	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty" js:"min=0" desc:"Per-seat token ceiling; 0 = unlimited."`
+	// TokenBudget is this seat's own ceiling per calendar window, on top
+	// of the company's; a window it does not name is capped only by the
+	// company. See [TokenBudget].
+	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"This seat's own token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = only the company's ceilings apply."`
 
 	// LLM points the seat at providers.llm — one key, a fallback chain, or
 	// a per-phase mapping.
@@ -507,6 +509,7 @@ func (m *RoleMattermost) validate(path Path) error {
 
 func (r *Role) validate(path Path) error {
 	var p problems
+	p.wrap(r.TokenBudget.validate(at(path, "token_budget")))
 	if g := r.Integrations.GitHub; g != nil {
 		p.wrap(g.validate(at(path, "integrations.github")))
 	}
@@ -555,7 +558,7 @@ func (r *Role) Seat() *org.Role {
 		Responsibilities:     append([]string(nil), r.Responsibilities...),
 		Manages:              append([]string(nil), r.Manages...),
 		BehavioralGuidelines: append([]string(nil), r.BehavioralGuidelines...),
-		TokenBudget:          r.TokenBudget,
+		TokenBudget:          r.TokenBudget.Ceilings(),
 		LLM:                  r.LLM.Default,
 		LLMReview:            pick(r.LLMReview, r.LLM.Review),
 		LLMSubagent:          pick(r.LLMSubagent, r.LLM.Subagent),

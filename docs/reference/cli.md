@@ -536,7 +536,9 @@ log that echoes the command.
 
 The **caps** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process
-derives the same numbers without coordinating. Only the usage is shared.
+derives the same numbers without coordinating. Only the usage is shared. The
+`CAP` column is the tightest window a scope's `token_budget` caps, the one its
+counter is held to, and `unlimited` for a scope that caps no window.
 
 `show` prints a `REFUSING SINCE` column: when that scope's cap last turned a
 charge away, or `-` while it is not refusing. Read it rather than `USED`

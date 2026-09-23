@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // leaves flattens a joined error into its leaves.
@@ -82,7 +84,7 @@ func TestASeatErrorCarriesItsSeatAndField(t *testing.T) {
 			r.Slack = SlackIdentity{BotToken: "xoxb-1"}
 		}), ErrHumanSeatField, []any{"integrations", "slack"}},
 		{"several agent-only fields on a person", human(func(r *Role) {
-			r.TokenBudget = 10
+			r.TokenBudget = TokenCeilings{period.Month: 10}
 			r.Workers = []string{"researcher"}
 		}), ErrHumanSeatField, nil},
 		{"no contact", human(func(r *Role) { r.Contact = nil }), ErrNoContact, []any{"contact"}},

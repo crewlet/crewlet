@@ -121,6 +121,7 @@ import type {
   ConversationEntry,
   EventRecord,
 } from "~/protocol/index.ts";
+import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import type { CounterpartyProfile } from "~/contract/memory.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -680,8 +681,27 @@ export function SeatScreen({ handle }: { handle: string }) {
     () => (settings && seat ? mcpEnvOf(settings, seat.kind) : {}),
     [settings, seat],
   );
-  /** The seat's configured cap. 0 or absent is unlimited; no document at all is unknown. */
-  const budget = configured?.token_budget ?? 0;
+  /**
+   * The seat's configured ceilings, one per capped window, in window order.
+   * An absent window is uncapped, so a seat naming none is unlimited; no
+   * document at all is unknown, which `reading` says rather than this.
+   */
+  const ceilings = useMemo(() => {
+    const budget = configured?.token_budget ?? {};
+    return BUDGET_WINDOWS.flatMap(({ period }) => {
+      const limit = budget[period];
+      return typeof limit === "number" ? [{ period, limit }] : [];
+    });
+  }, [configured]);
+  /**
+   * The TIGHTEST of them, which is the one number a tile has room for and the
+   * one the fleet's counter holds this seat to (the live meter's cap below).
+   * The others are the org builder's to show, one box per window.
+   */
+  const tightest = ceilings.reduce<(typeof ceilings)[number] | undefined>(
+    (low, c) => (low === undefined || c.limit < low.limit ? c : low),
+    undefined,
+  );
   // THIS SEAT'S RECURRING WORK, FROM THE RESOLVED ROWS.
   //
   // It was `schedulesOf(settings)`, which reads the `schedules:` a seat
@@ -1988,13 +2008,19 @@ export function SeatScreen({ handle }: { handle: string }) {
                 // may already hold is that same wrong statement aimed at them
                 // instead.
                 value={
-                  reading.state === "read" ? (budget ? fmtCount(budget) : "unlimited") : "Unknown"
+                  reading.state === "read"
+                    ? tightest
+                      ? `${fmtCount(tightest.limit)} a ${tightest.period}`
+                      : "unlimited"
+                    : "Unknown"
                 }
                 sub={
                   reading.state === "read"
-                    ? budget
-                      ? "token_budget on this role in the company config"
-                      : "token_budget is 0 or unset on this role"
+                    ? ceilings.length > 1
+                      ? `the tightest of ${ceilings.length} windows token_budget caps on this role`
+                      : tightest
+                        ? "token_budget on this role, on the company clock"
+                        : "token_budget caps no window on this role"
                     : `token_budget could not be read: ${capNote(reading)}`
                 }
               />
@@ -2050,7 +2076,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             ) : (
               <Callout variant="neutral">
                 {reading.state === "read"
-                  ? budget
+                  ? ceilings.length > 0
                     ? "This role has a token_budget in the config, but no engine is currently reporting a meter for it, so there is nothing measured to draw."
                     : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."
                   : `No engine is reporting a meter for this seat, and its configured cap could not be read: ${capNote(reading)}.`}

@@ -26,6 +26,7 @@
 // file composes them into the answers and frames it declares. RELATIVE, like
 // every contract import in this directory: it is also built alone as
 // `protocol.js`, where the `~` alias does not exist.
+import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type {
   IntegrationsAnswer,
@@ -573,6 +574,16 @@ export interface CompanyDocument {
   [key: string]: unknown;
 }
 
+/**
+ * A `token_budget:` mapping, as `config.TokenBudget` writes it: the most one
+ * scope may spend in each calendar window on the company clock. A window with
+ * no key has no ceiling; the engine refuses a 0 rather than reading it as
+ * unlimited.
+ */
+export type TokenBudget = {
+  readonly [P in (typeof BUDGET_WINDOWS)[number]["period"]]?: number;
+};
+
 /** One seat in the company document, as `config.Role` writes it. */
 export interface ConfigRole {
   name: string;
@@ -587,8 +598,8 @@ export interface ConfigRole {
   behavioral_guidelines?: string[];
   manages?: string[];
   workers?: string[];
-  /** 0 or absent is unlimited. */
-  token_budget?: number;
+  /** This seat's own ceilings, per calendar window; absent is uncapped. */
+  token_budget?: TokenBudget;
   llm?: PhaseLLM;
   llm_review?: ProviderKeys;
   llm_subagent?: ProviderKeys;

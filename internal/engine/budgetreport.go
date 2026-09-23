@@ -151,7 +151,7 @@ func (r *budgetReporter) publish(ctx context.Context) {
 // node and a fleet: the reading of the counter is the whole of what can be
 // wrong with it, and it was the half nothing exercised.
 func budgetSnapshot(company *Company, usage []coord.Usage) (types.BudgetReported, bool) {
-	report := types.BudgetReported{OrgMaxTokens: company.Config.TokenBudget}
+	report := types.BudgetReported{OrgMaxTokens: companyBudget(company.Org)}
 	// ONLY METERED SEATS, which is what the payload promises: absence
 	// means "no cap and no meter", and a seat listed at a cap of zero
 	// would be drawn as an empty bar rather than as no bar at all.

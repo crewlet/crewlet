@@ -1546,7 +1546,9 @@ Two refusals, both **400** rather than a smaller answer:
 
 `budget` carries the fleet's **shared token counter** as the budget gate
 enforces it: every node's spend since the last deliberate reset
-(`POST /budgets/reset`), beside the cap in the active revision. It is the only
+(`POST /budgets/reset`), beside the cap in the active revision — the tightest
+window the scope's `token_budget` caps, which is the one the counter is held
+to. It is the only
 figure that can honestly be divided into a configured cap, because both cover
 the same span. The dashboard's other token figures are spend rollups over a
 window of time; dividing one of those into a cap produces a percentage that is
@@ -1576,7 +1578,7 @@ one in as it arrives. A company with no cap anywhere publishes none.
   one, and it clears on the scope's next admitted charge (or a reset).
 - `{}` means no report has arrived yet. Per-agent, `budget: null` means the
   same, or that the seat has no per-agent cap at all: the engine meters a seat
-  only for a non-zero `token_budget`.
+  only when its `token_budget` caps a window.
 
 It is deliberately never persisted: a report is a reading of a counter that
 moves every round, so a copy replayed from history would show figures the
@@ -2557,7 +2559,10 @@ claim and a store blip is not evidence for it.
 Backs the dashboard's **Spend & budgets** screen. A token budget is described by
 two numbers that share a span, and one stamp:
 
-- the **cap** is configuration, from the active company revision;
+- the **cap** is configuration, from the active company revision: the
+  tightest window the scope's `token_budget` caps (`max_tokens`), because the
+  counter keeps one figure per scope and that is the ceiling it is held to,
+  and `0` when the scope caps no window;
 - **durable usage** is the fleet's shared counter, in the
   [coordination store](../concepts/coordination.md), written by every node
   running the company and surviving restarts, until an operator resets it. It

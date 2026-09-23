@@ -65,9 +65,15 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		out["durable"] = true
 	}
 
+	// THE CEILING THE COUNTER IS HELD TO, which is the tightest window the
+	// scope caps: the counter keeps one figure per scope and knows no
+	// calendar, so that is the number the gate refuses against, and 0 —
+	// no window capped — is unlimited, as it always was on this answer.
+	// See engine.counterCeiling.
+	orgCap, _ := organization.TokenBudget.Tightest()
 	orgRow := used[coord.OrgScope]
 	out["org"] = map[string]any{
-		"max_tokens":         company.TokenBudget,
+		"max_tokens":         orgCap,
 		"durable_used":       orgRow.Used,
 		"durable_updated_at": isoOrEmpty(orgRow.UpdatedAt),
 		"refused_at":         isoOrEmpty(orgRow.RefusedAt),
@@ -83,11 +89,12 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 			continue
 		}
 		row := used[coord.AgentScope(id.String())]
+		seatCap, _ := role.TokenBudget.Tightest()
 		seats = append(seats, map[string]any{
 			"agent_id":           id.String(),
 			"role":               role.Name,
 			"handle":             role.Handle(),
-			"max_tokens":         role.TokenBudget,
+			"max_tokens":         seatCap,
 			"durable_used":       row.Used,
 			"durable_updated_at": isoOrEmpty(row.UpdatedAt),
 			"refused_at":         isoOrEmpty(row.RefusedAt),

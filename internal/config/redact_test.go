@@ -497,7 +497,8 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	// The exemptions, each of which is a NAME rather than a credential.
 	// Listed here so adding one is a decision somebody wrote down.
 	exempt := map[string]bool{
-		// Numeric caps that merely count tokens.
+		// Numeric caps that merely count tokens (a token budget is a
+		// mapping of them, one per calendar window).
 		"TokenBudget": true, "BudgetTokens": true, "SummarizeMaxTokens": true,
 		"CompactionBudgetTokens": true, "MaxTokens": true, "TokenExpiryDays": true,
 		"ReasoningBudgetTokens": true, "MinTokensPerTask": true,

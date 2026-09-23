@@ -2,12 +2,15 @@ package org
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
+
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // normalized builds and wires an org in one step, which is the only state
@@ -1040,7 +1043,7 @@ func TestValidateWalksTheWholeTree(t *testing.T) {
 		Name:  "T",
 		Roles: []*Role{{Name: "CEO", DeclaredHandle: "CEO"}},
 		Units: []*Unit{{Name: "Eng", Children: []*Unit{{
-			Name: "Backend", Roles: []*Role{human(func(r *Role) { r.TokenBudget = 5 })},
+			Name: "Backend", Roles: []*Role{human(func(r *Role) { r.TokenBudget = TokenCeilings{period.Day: 5} })},
 		}}}},
 	})
 	err := o.Validate()
@@ -1101,7 +1104,7 @@ units:
     roles:
       - name: CEO
         handle: chief
-        token_budget: 100000
+        token_budget: {day: 100000, month: 2000000}
         llm: [claude-sonnet, gpt-4o]
         llm_judge: claude-haiku
         learning_enabled: false
@@ -1142,8 +1145,9 @@ units:
 	if !slices.Equal(ceo.LLM, ProviderKeys{"claude-sonnet", "gpt-4o"}) || !slices.Equal(ceo.LLMJudge, ProviderKeys{"claude-haiku"}) {
 		t.Errorf("llm = %v, llm_judge = %v", ceo.LLM, ceo.LLMJudge)
 	}
-	if ceo.TokenBudget != 100000 || ceo.LearningEnabled.Or(true) {
-		t.Errorf("token_budget = %d, learning_enabled = %v", ceo.TokenBudget, ceo.LearningEnabled)
+	if want := (TokenCeilings{period.Day: 100000, period.Month: 2000000}); !maps.Equal(ceo.TokenBudget, want) ||
+		ceo.LearningEnabled.Or(true) {
+		t.Errorf("token_budget = %v, learning_enabled = %v", ceo.TokenBudget, ceo.LearningEnabled)
 	}
 	if ceo.Placement.Node != "node-a" || ceo.Placement.Labels["zone"] != "eu-west" {
 		t.Errorf("placement = %+v", ceo.Placement)

@@ -719,7 +719,7 @@ describe("changing kind", () => {
     base.units![0]!.roles![1] = {
       name: "Dev",
       llm: "default",
-      token_budget: 10,
+      token_budget: { day: 10, month: 200 },
       mcp_env: { git: { TOKEN: "__redacted__" } },
       behavioral_guidelines: ["Be kind"],
       integrations: {

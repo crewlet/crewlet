@@ -957,7 +957,7 @@ const testSeat = "agent:11111111-1111-1111-1111-111111111111"
 
 var budgetCases = []fleetCase{{
 	// The reason this moved off the node's own database. Four nodes on one
-	// company each kept their own counter, so `token_budget: 500000` was
+	// company each kept their own counter, so a ceiling of 500 000 was
 	// silently four times that — and the config number was decoration.
 	name: "one counter however many callers share it",
 	fn: func(h *fleetHarness) {
@@ -983,9 +983,9 @@ var budgetCases = []fleetCase{{
 }, {
 	name: "a limit of zero is unlimited, not an empty allowance",
 	fn: func(h *fleetHarness) {
-		// `token_budget: 0` is how an operator says "no ceiling".
-		// Reading it as "no allowance" stops every company that never
-		// set one — which is most of them.
+		// A scope whose budget caps no window is held to 0. Reading it
+		// as "no allowance" stops every company that never set one —
+		// which is most of them.
 		if got := h.charge(testSeat, 1_000_000, 0, 0); !got.OK {
 			h.t.Fatalf("an unlimited budget refused a charge: %+v", got)
 		}

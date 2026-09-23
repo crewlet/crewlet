@@ -31,7 +31,9 @@ mission: "Build intelligent products"   # optional — company mission
 vision: "Lead the AI industry"          # optional — company vision
 timezone: Europe/Berlin                 # optional — the company's ONE clock, an IANA zone
                                         #   (default UTC). See "The company's clock" below.
-token_budget: 1000000                   # optional — org-wide token limit (0 = unlimited)
+token_budget:                           # optional — org-wide token ceilings, one per calendar
+  day: 3000000                          #   window on the company clock, each optional; an
+  month: 40000000                       #   absent window is uncapped. See "Token budgets" below.
 notification_rate_limit: 10             # optional — inbound notifications one seat may be woken by
                                         #   per second. 0 (the DEFAULT) is unlimited, so the valve is
                                         #   off unless you set it. Drop-based safety valve against
@@ -214,6 +216,51 @@ timezone: America/Los_Angeles            # an IANA zone name; absent is UTC
 It is a clock for **authored instants and calendar boundaries only**. No duration — a lease, a timeout, a retention horizon — is measured against it, because a duration measured on a wall clock changes length twice a year. And there is only one: the tracker and the scheduler take no zone of their own, because a company whose board, whose people's days and whose standups each kept a clock had one "today" per subsystem. A schedule's own `timezone` is that one piece of work's wall clock — the Tokyo team's 09:30 standup — and nothing else is cut on it.
 
 The value must be a real IANA name (`Europe/Berlin`, `America/New_York`, `UTC`), and `Local` and `localtime` are refused: each is whatever zone the host reading it is set to, so two nodes would cut two different days from it. The anonymous [`org` projection](../reference/api-endpoints.md) carries the resolved clock — `UTC` where none is written — so the dashboard cuts its days where the engine does. An apply that changes it moves the next answer, the next scheduler tick and the next tool call; a turn already running keeps the clock of the epoch it started on.
+
+### Token budgets
+
+```yaml
+token_budget:                            # on the company, and on any agent seat
+  day: 3000000                           # one local day, midnight to midnight
+  week: 10000000                         # one ISO week, from Monday
+  month: 40000000                        # one calendar month
+```
+
+A token budget is a **ceiling per calendar window**, and every window is cut on the
+[company's clock](#the-companys-clock): a day runs from local midnight to the next, a week
+is the ISO week from Monday, a month is the calendar month. Each key is optional and the
+windows are independent — a model round is admitted only while **every** capped window has
+room for it, and each window opens again on its own when it turns over. There is no single
+number any more: one number was a ceiling for the life of the deployment, which nothing
+reset but an operator zeroing a counter, and `token_budget: 10000000` is refused with the
+mapping to write instead.
+
+The company's `token_budget` caps every seat's spend together. A seat's own caps that seat
+alone, **on top of** the company's: every round is charged to both, so a seat is stopped by
+whichever ceiling it reaches first. A human seat spends nothing, so a `token_budget` on one
+is refused.
+
+An **absent key is the only way to leave a window uncapped.** A ceiling of `0` or less is
+refused (`must be at least 1 token … remove token_budget.day for no daily ceiling`): `0`
+used to mean "unlimited", and it is also what a ceiling of nothing would be, so it means
+neither. Stopping a seat on purpose is not a budget's job.
+
+[`crewlet validate`](../reference/cli.md) **warns** — it never refuses — about a ceiling that
+can never refuse a turn, because another ceiling is always reached first:
+
+- a day ceiling at or above the week's or the month's (a day lies inside both);
+- a week ceiling that seven days at the daily ceiling already reach, or a month ceiling that
+  31 days at the daily one, or six weeks at the weekly one, already reach;
+- a week ceiling at or above the month's, which can then bind only in a week that straddles
+  two months;
+- a seat's ceiling at or above the company's for the same window, or for a longer window
+  that holds it (a seat's day against the company's month) — everything a seat spends is
+  the company's spend too.
+
+Spend is counted in the fleet's [coordination store](../concepts/coordination.md), so it
+survives restarts and is one number for the whole company however many nodes run it; see
+[Deployment § Token Budgets](../guides/deployment.md#token-budgets) for how a refusal is
+recorded and reported.
 
 ### Scheduling
 
@@ -861,7 +908,7 @@ units:
             goal: "..."                 # optional — individual mission
             backstory: "..."            # optional — personality, background, expertise
             llm: default                # optional — named LLM provider
-            token_budget: 200000        # optional — per-agent token limit
+            token_budget: {day: 200000} # optional — this seat's own ceilings per window
             handle: tl                   # optional — custom handle (default: auto-slugified)
             email: tl@company.com       # optional — agent email
             manages: [Engineer A, Engineer B]  # optional — hierarchy links
@@ -898,7 +945,7 @@ units:
 | `llm_review` / `llm_subagent` / `llm_sandbox` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
 | `llm_auxiliary` | string | no | Cheap/fast model used by reflection workers (PersistDecider, episode summariser) |
 | `llm_judge` | string | no | Cheap/fast model used by the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge); falls back to `llm` |
-| `token_budget` | int | no | Per-agent token limit (0 = unlimited) |
+| `token_budget` | dict | no | This seat's own token ceilings per calendar window — `day`, `week`, `month`, each optional — on top of the company's. See [Token budgets](#token-budgets) |
 | `handle` | string | no | Custom identity slug (default: auto-derived) |
 | `email` | string | no | Agent email address |
 | `manages` | list[string] | no | Names of roles this agent manages |

@@ -7,16 +7,21 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
-// meteredCompany is an epoch with an org cap and the given seats, which is all
-// a budget frame reads.
-func meteredCompany(orgCap int, seats ...*org.Role) *Company {
+// meteredCompany is an epoch with an org budget and the given seats, which is
+// all a budget frame reads. Built through the config's own transform, so the
+// org model carries exactly what an authored `token_budget:` would give it.
+func meteredCompany(orgBudget config.TokenBudget, seats ...*org.Role) *Company {
 	return &Company{
-		Config: &config.Company{TokenBudget: orgCap},
-		Org:    &org.Organization{Name: "Acme", Roles: seats},
+		Config: &config.Company{TokenBudget: orgBudget},
+		Org:    &org.Organization{Name: "Acme", Roles: seats, TokenBudget: orgBudget.Ceilings()},
 	}
 }
+
+// ceiling is one authored window's ceiling.
+func ceiling(n int) *int { return &n }
 
 func scopeOf(t *testing.T, c *Company, seat *org.Role) string {
 	t.Helper()
@@ -35,10 +40,13 @@ func scopeOf(t *testing.T, c *Company, seat *org.Role) string {
 // surfaces unreachable while the gate was turning turns away.
 func TestABudgetFrameCarriesEachScopesRefusal(t *testing.T) {
 	t.Parallel()
-	lead := &org.Role{Name: "Lead", TokenBudget: 400}
-	dev := &org.Role{Name: "Dev", TokenBudget: 400}
+	// The TIGHTEST window is the meter's cap: the counter holds a scope to
+	// it, so a frame drawn against the month would show headroom the gate
+	// does not grant.
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 400, period.Month: 9000}}
+	dev := &org.Role{Name: "Dev", TokenBudget: org.TokenCeilings{period.Week: 400}}
 	ops := &org.Role{Name: "Ops"}
-	c := meteredCompany(1000, lead, dev, ops)
+	c := meteredCompany(config.TokenBudget{Week: ceiling(1000), Month: ceiling(30000)}, lead, dev, ops)
 	orgRefused := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 	leadRefused := time.Date(2026, 6, 14, 12, 0, 5, 250_000_000, time.FixedZone("CEST", 2*3600))
 
@@ -85,8 +93,8 @@ func TestABudgetFrameCarriesEachScopesRefusal(t *testing.T) {
 // zero time would list every capped seat as refusing charges.
 func TestAScopeNotRefusingCarriesNoStamp(t *testing.T) {
 	t.Parallel()
-	lead := &org.Role{Name: "Lead", TokenBudget: 400}
-	c := meteredCompany(1000, lead)
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 400}}
+	c := meteredCompany(config.TokenBudget{Month: ceiling(1000)}, lead)
 	// Lead has never been charged at all, so it has no usage row.
 	report, metered := budgetSnapshot(c, []coord.Usage{{Scope: coord.OrgScope, Used: 10}})
 	if !metered {
@@ -104,7 +112,8 @@ func TestAScopeNotRefusingCarriesNoStamp(t *testing.T) {
 // claim nobody measured. A human seat is never metered, whatever it declares.
 func TestAnUncappedCompanyPublishesNoFrame(t *testing.T) {
 	t.Parallel()
-	c := meteredCompany(0, &org.Role{Name: "Lead"}, &org.Role{Name: "Founder", Kind: org.KindHuman, TokenBudget: 500})
+	c := meteredCompany(config.TokenBudget{}, &org.Role{Name: "Lead"},
+		&org.Role{Name: "Founder", Kind: org.KindHuman, TokenBudget: org.TokenCeilings{period.Day: 500}})
 	if report, metered := budgetSnapshot(c, []coord.Usage{{Scope: coord.OrgScope, Used: 10}}); metered {
 		t.Errorf("an uncapped company produced a frame: %+v", report)
 	}

@@ -663,13 +663,13 @@ func TestAToolActsForTheSeatThatCalledIt(t *testing.T) {
 func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	t.Parallel()
 	// THE SEAM WAS NEVER SUPPLIED. runner.Config.Budget existed and every
-	// turn passed nil, so a company with `token_budget: 100000` spent
+	// turn passed nil, so a company with a `token_budget:` ceiling spent
 	// without limit and the number in its config was decoration. Money
 	// leaves the building for every token, so this is the one counter that
 	// fails CLOSED — a charge that cannot be made stops the round rather
 	// than silently un-capping the company.
 	n := startWith(t, func(doc string) string {
-		return doc + "\ntoken_budget: 200\n"
+		return doc + "\ntoken_budget: {day: 200}\n"
 	})
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "ceo")

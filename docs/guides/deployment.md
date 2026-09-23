@@ -1315,10 +1315,20 @@ config on the command line.
 
 ### Token Budgets
 
-Set budgets at two levels:
+Set budgets at two levels, each a mapping of ceilings per calendar window —
+`day`, `week` and `month`, each optional — cut on the company's
+[clock](../getting-started/configuration.md#the-companys-clock):
 
 - **Org-wide** — `token_budget` in the top-level YAML config
 - **Per-agent** — `token_budget` on each Role definition
+
+```yaml
+token_budget: {day: 3000000, month: 40000000}
+```
+
+An absent window is uncapped, and a ceiling of `0` is refused rather than read
+as unlimited. See [Configuration § Token budgets](../getting-started/configuration.md#token-budgets)
+for the rules and for the ceilings `crewlet validate` warns can never bind.
 
 Every model round is charged against both before it runs. A charge that does
 not fit is refused: the turn stops and the engine publishes a

@@ -546,7 +546,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 		w.Unit = u.Name
 		out = append(out, w)
 	}
-	return out
+	return append(out, c.budgetWarnings()...)
 }
 
 // Warnings is everything valid about this bootstrap that its author should

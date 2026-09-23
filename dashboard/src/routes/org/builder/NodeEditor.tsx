@@ -48,6 +48,7 @@ import { useLeaveGuard } from "~/app/router.tsx";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { formatPhaseLLM, plural } from "~/lib/format.ts";
 import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
+import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import {
   keepsTheLens,
   useBuilder,
@@ -63,9 +64,11 @@ import {
   schedulesOf,
   seatForm,
   seatParts,
-  tokenBudgetError,
+  tokenBudgetErrors,
   unitForm,
   unitParts,
+  type BudgetForm,
+  type BudgetWindow,
   type CompanyForm,
   type SeatForm,
   type UnitForm,
@@ -816,7 +819,10 @@ function seatFieldPaths(
       : [
           ["behavioral_guidelines"] as Segment[],
           ["llm"] as Segment[],
+          // The block, for a problem about its shape, and each window, so a
+          // refused ceiling is drawn under the box it was typed in.
           ["token_budget"] as Segment[],
+          ...BUDGET_WINDOWS.map(({ period }) => ["token_budget", period] as Segment[]),
           ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
           ...(isConnected(company, "github") ? [GITHUB_TIER, GITHUB_REPOS] : []),
           ...(seatBlock("slack") ? [SLACK_CHANNEL] : []),
@@ -864,11 +870,11 @@ function SeatEditor({
   // while it declares none of its own.
   const derivedHandle = declaredHandle(data) === undefined ? handle : undefined;
 
-  const budgetError = human ? undefined : tokenBudgetError(form.tokenBudget);
+  const budgetErrors = human ? {} : tokenBudgetErrors(form.tokenBudget);
   const blocked =
     form.name.trim() === ""
       ? "A seat needs a name."
-      : budgetError
+      : Object.keys(budgetErrors).length > 0
         ? "Correct the token budget first."
         : null;
 
@@ -1018,8 +1024,16 @@ function SeatEditor({
             chain={form.llm}
             onChain={(llm) => set({ llm })}
             budget={form.tokenBudget}
-            onBudget={(tokenBudget) => set({ tokenBudget })}
-            budgetError={budgetError ?? errorFor(["token_budget"])}
+            onBudget={(window, typed) =>
+              set({ tokenBudget: { ...form.tokenBudget, [window]: typed } })
+            }
+            budgetError={(window) =>
+              budgetErrors[window] ??
+              errorFor(["token_budget", window]) ??
+              // A problem with the block as a whole — its shape — belongs
+              // to every box, and is drawn under the first.
+              (window === BUDGET_WINDOWS[0].period ? errorFor(["token_budget"]) : undefined)
+            }
             chainError={errorFor(["llm"])}
             disabled={disabled}
           />
@@ -1207,9 +1221,9 @@ function ModelSection({
   data: ConfigRole;
   chain: readonly string[] | null;
   onChain: (next: string[]) => void;
-  budget: string;
-  onBudget: (next: string) => void;
-  budgetError: string | undefined;
+  budget: BudgetForm;
+  onBudget: (window: BudgetWindow, typed: string) => void;
+  budgetError: (window: BudgetWindow) => string | undefined;
   chainError: string | undefined;
   disabled: boolean;
 }) {
@@ -1267,16 +1281,22 @@ function ModelSection({
           )}
         </FormField>
       )}
-      <ConfigField
-        label="Token budget"
-        kind="id"
-        value={budget}
-        onChange={onBudget}
-        required={false}
-        disabled={disabled}
-        help="Tokens this seat may spend. Empty or 0 is unlimited."
-        error={budgetError}
-      />
+      {/* ONE BOX PER WINDOW, each optional: a seat may cap its day, its
+          week and its month independently, and a turn runs only while every
+          capped window has room. The company's own ceilings apply on top. */}
+      {BUDGET_WINDOWS.map(({ period, label, none }) => (
+        <ConfigField
+          key={period}
+          label={label}
+          kind="id"
+          value={budget[period]}
+          onChange={(typed) => onBudget(period, typed)}
+          required={false}
+          disabled={disabled}
+          help={`Tokens this seat may spend in one ${period} on the company clock. Empty is ${none.toLowerCase()}.`}
+          error={budgetError(period)}
+        />
+      ))}
     </EditorSection>
   );
 }
