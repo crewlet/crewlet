@@ -168,12 +168,17 @@ type Resume struct {
 	// from the run's own durable log.
 	//
 	// It is the whole record for that shape — every call the run made, in
-	// order — with ONE EXCEPTION, which BridgedDropped states: a launch
-	// recorded by an older build on the same coordination store, whose log
-	// kept only the ends of a long run. It has to come from the log rather
-	// than from memory: the process resuming may not be the one that
-	// launched, so its surface is fresh and has executed nothing. Ignored by
-	// a native resume, which replays the conversation instead.
+	// order — and each call arrives WHOLE: the sandbox store reassembles a
+	// call too large for one coordination record from the parts filed under
+	// it. A call whose whole was not kept, or whose parts could not be read
+	// back whole, arrives as its record's fitted form and says so in its own
+	// texts, with the marks [github.com/crewlet/crewlet/internal/sandbox.BridgeLog]
+	// names. There is ONE EXCEPTION to "every call", which BridgedDropped
+	// states: a launch recorded by an older build on the same coordination
+	// store, whose log kept only the ends of a long run. It has to come from
+	// the log rather than from memory: the process resuming may not be the
+	// one that launched, so its surface is fresh and has executed nothing.
+	// Ignored by a native resume, which replays the conversation instead.
 	Bridged []ledger.Call
 
 	// BridgedDropped is the stretch of the run's calls that Bridged does not

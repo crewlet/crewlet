@@ -29,7 +29,7 @@ rather than by how much work your company has done.
 
 ## Histograms
 
-A distribution, exported with the engine's own bucket boundaries: twenty-one powers of two from 64 µs to 64 s, which resolves a percentile to within a factor of two at every scale here — from a 40 µs index probe to a 16-second bulk apply. The SDK's default boundaries stop at 10 s, so a slow apply would land in an overflow bucket and read as "at least 10 s" for ever.
+A distribution, exported with the engine's own bucket boundaries: twenty-one powers of two from 1/16 to 65 536 in the instrument's own unit — 62.5 µs to about 65.5 s for a duration in milliseconds — so a percentile read from them is within a factor of two anywhere in that range. The SDK's default boundaries stop at 10 000, which for a duration in milliseconds is 10 s: anything slower would land in the overflow bucket and read only as "more than 10 s".
 
 | Metric | Unit | Attributes | What it makes visible |
 |---|---|---|---|
@@ -39,11 +39,11 @@ A distribution, exported with the engine's own bucket boundaries: twenty-one pow
 | `crewlet.statelog.barrier.duration` | `ms` | `domain` | The broker round trip under every linearizable read, and the first number a drifting fsync or a degrading quorum moves. It was a benchmark's p50 on an idle loopback cluster and nothing in production. |
 | `crewlet.statelog.read.wait` | `ms` | `domain`, `level` | How much of the read budget a barrier or session wait actually spends. A p95 approaching the budget is reads about to start refusing, which is the warning the refusal itself is too late to be. |
 | `crewlet.statelog.apply.latency` | `ms` | `domain` | THE COMMIT-TO-APPLY GAP: from the broker's own timestamp on a record to this node committing it. Every read level is a policy about this quantity and nothing measured it. |
-| `crewlet.statelog.apply.tx.duration` | `ms` | `domain`, `bound_by` | How long one apply transaction holds the store's writer, and which budget ended it. A transaction is what every waiter behind it pays, and rows were only ever a proxy for the duration. |
+| `crewlet.statelog.apply.tx.duration` | `ms` | `domain`, `bound_by` | How long one apply run takes, and which budget ended it: from asking for the store's writer to acknowledging the run's records, so the wait for the writer before the transaction and the work between its commit and the acknowledgement are inside the figure. A transaction is what every waiter behind it pays, and rows were only ever a proxy for the duration. |
 | `crewlet.statelog.apply.record.duration` | `ms` | `domain`, `kind` | One record's apply. A single record past the time budget is still one transaction, so this is the real ceiling on how long a read can be delayed — a sentence in a design document until it was measured. |
-| `crewlet.statelog.apply.batch.rows` | `1` | `domain` | Rows per apply transaction, which is what the row budget bounds and what the drain rate divides. |
+| `crewlet.statelog.apply.batch.rows` | `1` | `domain` | Rows per apply transaction, as the domain's applier reports writing them, which is what the row budget bounds. Rows, not records: the drain gauge counts records. |
 | `crewlet.backup.duration` | `ms` | — | How long a backup took, which is the window the trim hold covers and the I/O the copy spends competing with the applier's own commits. It is what turns the retention guide's worked example into a number for THIS hardware. |
-| `crewlet.store.pool.wait` | `ms` | `file` | How long a reader waited for a connection. It is what says the reader pool is too small on this node, which nothing could say before. |
+| `crewlet.store.pool.wait` | `ms` | `file` | How long callers queued for one of this file's pooled connections, as one observation per reporting tick holding that tick's mean wait: the pool reports a total and a count, not each wait. It is what says the reader pool is too small on this node, which nothing could say before. |
 | `crewlet.tracker.search.scan.duration` | `ms` | `path`, `rung` | The semantic scan, split by whether it ran for a turn's prefetch or for somebody's deliberate search. Only the prefetch had a published percentile, and the interactive path is the one with a target. |
 
 ## Gauges
@@ -52,14 +52,14 @@ A value that goes both ways, sampled at each export.
 
 | Metric | Unit | Attributes | What it makes visible |
 |---|---|---|---|
-| `crewlet.statelog.drain.rows_per_second` | `1` | `domain` | The applier's observed drain, which every retry hint divides by. Seeded from a benchmark and then measured, so a hint on real hardware stops being an extrapolation from somebody else's. |
-| `crewlet.statelog.drain.commits_per_second` | `1` | `domain` | Commits per second, which is the fsync rate under `synchronous = FULL` and the number a device budget is spent by. |
+| `crewlet.statelog.drain.records_per_second` | `{record}/s` | `domain` | The applier's measured drain in RECORDS a second: every record an apply run moves over, applied or not, over the run's own duration, smoothed across runs. It is the rate this node turns a record backlog into a time with — the apply lag in seconds and a refused read's retry hint among them — so a falling rate is an applier slowing down. Zero until this process has consumed a batch: nothing seeds it, and the first batch's rate is the first reading. |
+| `crewlet.statelog.drain.commits_per_second` | `{commit}/s` | `domain` | Commits per second, which is the fsync rate under `synchronous = FULL` and the number a device budget is spent by. |
 | `crewlet.statelog.apply.lag.seq` | `1` | `domain` | How many records this node is behind the log's head. |
-| `crewlet.statelog.apply.lag.seconds` | `s` | `domain` | How OLD the oldest unapplied record is. Seconds are what a stall grace, a pending outcome and a seat move all turn on; sequences are not, and a lag of 4 000 says nothing about whether anything is wrong. |
+| `crewlet.statelog.apply.lag.seconds` | `s` | `domain` | How long this node would take to apply its backlog at its measured drain: the record lag beside it over the drain gauge, with a rate below one record a second — or none measured yet — taken as one. Seconds are what a stall grace, a pending outcome and a seat move all turn on; sequences are not, and a lag of 4 000 says nothing about whether anything is wrong. It is a projection, not an age: an applier that has stopped keeps its last drain, so this stays as small as its backlog does. |
 | `crewlet.statelog.applied_through` | `1` | `domain` | The prefix this node has actually applied, which is lower than its checkpoint whenever a record was retained. |
-| `crewlet.statelog.deferred.count` | `1` | `domain` | Records this build could not read and kept. Non-zero is a rolling upgrade in progress; non-zero and not falling is one that stopped. |
+| `crewlet.statelog.deferred.count` | `1` | `domain` | Whether this node holds a record its build could not read and kept, as 1 or 0 — not how many. Non-zero is a rolling upgrade in progress; the oldest one's age beside it says whether the upgrade has stopped. |
 | `crewlet.statelog.deferred.oldest_age_seconds` | `s` | `domain` | How long the oldest retained record has been retained, which is what decides whether this node's seats move. |
-| `crewlet.statelog.waiters` | `1` | `domain` | Callers blocked on the applier right now. It is the depth of the queue a slow apply is making. |
+| `crewlet.statelog.waiters` | `1` | `domain` | Callers blocked on the applier, sampled as each apply run ends. It is the depth of the queue a slow apply is making — and nothing refreshes it between runs, so an applier that has stopped keeps the count its last run saw. |
 | `crewlet.statelog.log.bytes` | `By` | `domain` | What the log actually holds, against its ceiling below. |
 | `crewlet.statelog.log.max_bytes` | `By` | `domain` | The ceiling, read from the running stream rather than from this node's own configuration — the two differ, and the running one is what refuses the append. |
 | `crewlet.statelog.log.headroom_fraction` | `1` | `domain` | How much of the ceiling is left. A full log refuses every write AND every linearizable read, and the remedy is a fleet-wide maintenance cycle, so this is the one number worth alarming on long before it is small. |

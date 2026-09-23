@@ -380,11 +380,11 @@ type AgentPhaseCompleted struct {
 	Model       string  `json:"model"`
 	ProviderKey string  `json:"provider_key"`
 	Trigger     Trigger `json:"trigger"`
-	// The prompts, the response and every tool call are VERBATIM on a record
-	// published whole: this telemetry is what shows the operator what the model
-	// actually saw. Error is bounded at events.MaxDiagnosticBytes. A record
-	// past what one event carries is published CUT, and [AgentPhaseCompleted.WholeBytes]
-	// and [AgentPhaseCompleted.WholeParts] say so and where its whole is.
+	// The prompts, the response, every tool call and the error are VERBATIM
+	// on a record published whole: this telemetry is what shows the operator
+	// what the model actually saw. A record past what one event carries is
+	// published CUT, and [AgentPhaseCompleted.WholeBytes] and
+	// [AgentPhaseCompleted.WholeParts] say so and where its whole is.
 	SystemPrompt   string          `json:"system_prompt"`
 	UserPrompt     string          `json:"user_prompt"`
 	Response       string          `json:"response"`
@@ -483,10 +483,15 @@ type AgentPhaseCompleted struct {
 	// Response, ToolExecutions and the token counts are PARTIAL on a failed
 	// event rather than absent.
 	Failed bool `json:"failed"`
-	// Error is the failure's message, truncated. Empty unless Failed.
+	// Error is the failure's message, whole on a record published whole.
+	// On a record published cut it is the LAST text the cut shortens —
+	// only once every other text is at its mark — and the record's whole
+	// carries it as the phase returned it. Empty unless Failed.
 	Error string `json:"error"`
-	// ErrorKind is the classified LLM error for an exhausted provider chain,
-	// otherwise the exception's type name.
+	// ErrorKind is the failure's class, one word a dashboard prints beside
+	// it: on a phase the provider's error kind (a deadline reads as
+	// `timeout`), `budget_exhausted`, `canceled`, or `error` for anything
+	// unclassified; on a delegated worker the task's own status.
 	ErrorKind string `json:"error_kind"`
 	// ConversationKey is which conversation this phase's turn served.
 	//

@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -65,6 +67,22 @@ type turnTelemetry struct {
 	// skills is the synthesized-skill ids offered to this turn's prompt.
 	// Set after the prefetch, which is the only thing that knows them.
 	skills []string
+
+	// log is where this turn's telemetry logs what its events could not
+	// carry (see [turnTelemetry.failureTexts]). Nil is the engine's own
+	// component logger, which is what every turn runs with. A field rather
+	// than the package logger alone for the reason [ReconcilerOptions.Log]
+	// gives: a test asserting the line through the process-wide logger would
+	// be racing every parallel test that logs.
+	log *slog.Logger
+}
+
+// logger is where this turn's telemetry logs; see the field.
+func (t turnTelemetry) logger() *slog.Logger {
+	if t.log != nil {
+		return t.log
+	}
+	return log
 }
 
 // newRunID mints the identity of ONE EXECUTION of a turn.
@@ -177,6 +195,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	ended := time.Now().UTC()
 	failed := err != nil || res.Decision == phase.Failed
 	decision := string(res.Decision)
+	// Cut ONCE, for every event below that carries one of them, so a text
+	// two events share is logged whole once rather than once per event.
+	texts := t.failureTexts(ctx, res, err)
 
 	summary := types.AgentTurnCompleted{
 		Agent:    t.agentID,
@@ -214,9 +235,11 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	if err != nil {
 		// Bounded only so the event is publishable at all; see
 		// events.MaxDiagnosticBytes. An event refused by the queue is
-		// logged and dropped, so an unbounded failure text costs the
-		// operator the whole record rather than its tail.
-		summary.Error = events.ClipDiagnostic(err.Error())
+		// logged and dropped, so an unbounded failure text would cost the
+		// operator the whole record rather than its tail. The event
+		// carries the head, and this node's log the whole: see
+		// [turnTelemetry.failureTexts].
+		summary.Error = texts.err
 		summary.ErrorKind = "error"
 	}
 	if res.Breach != nil {
@@ -230,14 +253,15 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// guard. Read the other way round, the one kind that says the
 		// engine itself is at fault reached the Turn screen as the generic
 		// "error". The error's own text is kept, since it names the phase
-		// and round the breach detail does not.
+		// and round the breach detail does not. Either is the head of what
+		// this node's log carries whole ([turnTelemetry.failureTexts]).
 		if summary.Error == "" {
-			summary.Error = events.ClipDiagnostic(res.Breach.Detail)
+			summary.Error = texts.breach
 		}
 		summary.ErrorKind = string(res.Breach.Kind)
 	}
 	e.publishEvent(ctx, events.New(summary, t.trace), t.role)
-	e.publishFailure(ctx, t, res, err)
+	e.publishFailure(ctx, t, res, err, texts)
 
 	e.publishEvent(ctx, events.New(types.TurnCompleted{
 		Agent:       t.agentID,
@@ -297,8 +321,12 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 // copy to keep in step: it is the ONE-LINE reason on a row about the turn,
 // where these are the failure itself, with the chain that was tried, the
 // ceiling that refused and the guard that fired.
+//
+// texts is [turnTelemetry.failureTexts] for this res and err: the texts these
+// events carry, cut to what an event can hold, with their whole in this
+// node's log.
 func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
-	res turn.Result, err error,
+	res turn.Result, err error, texts failureTexts,
 ) {
 	// A breach and an error are not exclusive: an unhandled exception is
 	// both, and reporting only one would drop the guard that named it.
@@ -307,9 +335,11 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			Agent:    t.agentID,
 			RoleName: t.role,
 			Kind:     res.Breach.Kind,
-			Detail:   events.ClipDiagnostic(res.Breach.Detail),
-			TurnID:   t.runID,
-			WorkKey:  t.workKey,
+			// Past the bound, its head, and the whole in this node's log
+			// (texts).
+			Detail:  texts.breach,
+			TurnID:  t.runID,
+			WorkKey: t.workKey,
 		}, t.trace), t.role)
 	}
 	if err == nil {
@@ -346,11 +376,82 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 			ProviderChain: exhausted.Attempted,
 			AttemptCount:  len(exhausted.Attempted),
 			LastErrorKind: llm.KindOf(exhausted.Err).String(),
-			LastError:     events.ClipDiagnostic(exhausted.Error()),
-			TurnID:        t.runID,
-			WorkKey:       t.workKey,
+			// Past the bound, its head, and the whole in this node's log
+			// (texts).
+			LastError: texts.chain,
+			TurnID:    t.runID,
+			WorkKey:   t.workKey,
 		}, t.trace), t.role)
 	}
+}
+
+// failureTexts is what a failed turn's events say about why it failed, each
+// text as those events carry it: bounded at [events.MaxDiagnosticBytes], so
+// that the event carrying it can be published at all.
+type failureTexts struct {
+	// err is the turn's error, as agent_turn_completed carries it.
+	err string
+	// breach is the guard breach's detail, as turn.guard_breach carries it
+	// and as the summary does for a turn that broke a guard with no error.
+	breach string
+	// chain is the exhausted provider chain's error, as llm_unavailable
+	// carries it.
+	chain string
+}
+
+// failureTexts cuts the texts a failed turn's events carry, and logs what
+// they cannot.
+//
+// THE EVENTS CARRY THE HEAD, AND THIS NODE'S LOG THE WHOLE. When the bound cuts
+// any of them, one line — turn_failure_cut, at WARN — carries the whole of
+// every text it cut, beside the run's identity, which is what joins the line
+// to the events and is the place the cut's own marker sends a reader. The
+// frames that settle a failed turn's delivery log its error in their own ways
+// — at INFO for a seat that moved, and from the queue, which does not know the
+// run, for a delivery handed back — so the line that is certain to hold a cut
+// text's whole, and to name its run, is written here, where the texts are cut.
+//
+// ONCE PER TEXT: a cut text already inside one the line carries whole is not
+// repeated — a panic's breach detail inside a turn error whose text quotes the
+// panic, say, or an exhausted chain's error inside one that quotes the chain.
+func (t turnTelemetry) failureTexts(ctx context.Context, res turn.Result, err error) failureTexts {
+	var (
+		out    failureTexts
+		logged []string
+		attrs  []any
+	)
+	cut := func(field, text string) string {
+		head := events.ClipDiagnostic(text)
+		if head == text {
+			return text
+		}
+		for _, whole := range logged {
+			if strings.Contains(whole, text) {
+				return head
+			}
+		}
+		logged = append(logged, text)
+		attrs = append(attrs, field, text, field+"_bytes", len(text))
+		return head
+	}
+	if err != nil {
+		out.err = cut("error", err.Error())
+	}
+	if res.Breach != nil {
+		out.breach = cut("breach_detail", res.Breach.Detail)
+	}
+	var exhausted *chain.Error
+	if errors.As(err, &exhausted) {
+		out.chain = cut("last_error", exhausted.Error())
+	}
+	if len(attrs) > 0 {
+		t.logger().WarnContext(ctx, "turn_failure_cut", append([]any{
+			"turn_id", t.runID, "work_key", t.workKey, "seat", t.handle, "role", t.role,
+			"detail", "this turn's failure events carry these texts cut to what one event can " +
+				"hold; this line carries them whole",
+		}, attrs...)...)
+	}
+	return out
 }
 
 // lastModel names the model that served the last phase to run.

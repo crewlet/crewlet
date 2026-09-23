@@ -596,6 +596,76 @@ func TestACallAServerBelowTheFloorRefusesSaysItsWholeWasNotKept(t *testing.T) {
 	}
 }
 
+// A LARGE CALL AGAINST A SERVER BELOW THE CEILING IS KEPT WHOLE, BESIDE ITS
+// LEAST FORM.
+//
+// A call past the ceiling files its whole in parts before its record, and a
+// server set below the contract refuses the large parts and then the fitted
+// record too. The parts are split until that server takes them — down to the
+// floor, which halving alone from the ceiling steps past — and the refused
+// record gives way to the least form beside the reference, so the resume still
+// reads every byte of the call.
+func TestALargeCallAgainstALowServerIsKeptWholeBesideItsLeastForm(t *testing.T) {
+	t.Parallel()
+	for name, limit := range map[string]int{
+		// Halving from the ceiling reaches 130,048 bytes and then 65,024,
+		// below the floor: only a split that stops AT the floor offers this
+		// server a part it takes.
+		"a server between the floor and twice it": 100 << 10,
+		// The parts land at the first halving below it; it is the fitted
+		// record the server then refuses.
+		"a server at a quarter of a mebibyte": 256 << 10,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fleet := memory.NewFleet()
+			logs := &logLines{}
+			store := sandbox.NewCoordStore(lowServer{Fleet: fleet, limit: limit}).WithLogger(logs.logger())
+			run := begun(t, store, "t-large-low")
+			sent := sandbox.BridgeCall{
+				Name: "read_file", Args: `{"path":"big.txt"}`,
+				Output: strings.Repeat("z", sandbox.MaxBridgeCallBytes),
+				At:     time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
+			}
+			if ok, err := store.AppendBridgeCall(t.Context(), "t-large-low", sent); err != nil || !ok {
+				t.Fatalf("a call past the ceiling was not recorded against a low server: %v, %v", ok, err)
+			}
+
+			record := mustBridgeCallPage(t, store, run)[0]
+			if record.Args != sandbox.ArgsInParts(len(sent.Args)) || record.Output != "…" {
+				t.Errorf("the record = args %.60q, output %.40q; want its least form, both texts marked "+
+					"as filed in its parts", record.Args, record.Output)
+			}
+			if record.WholeParts == 0 {
+				t.Fatalf("the record names no parts: its whole was not kept, although the server takes "+
+					"parts of %d bytes", limit)
+			}
+			records, err := fleet.BridgeCalls(t.Context(), run.TurnID, run.LaunchID)
+			if err != nil || len(records) != 1 {
+				t.Fatalf("the fleet holds %d records, %v", len(records), err)
+			}
+			for _, part := range records[0].Parts {
+				if len(part.Value) > limit {
+					t.Errorf("part %d is %d bytes, past the %d the server takes", part.Part, len(part.Value), limit)
+				}
+			}
+			if got := mustBridgeCalls(t, store, run); len(got) != 1 || got[0].Output != sent.Output ||
+				got[0].Args != sent.Args || got[0].WholeParts != 0 {
+				t.Errorf("the call read back is not the call made, byte for byte")
+			}
+
+			// THE LINES SAY WHAT LANDED: the server's refusal of the fitted
+			// record, and no line describing a fitted record, which never did.
+			if n := len(logs.named(t, "sandbox_bridge_call_refused_within_ceiling")); n != 1 {
+				t.Errorf("the refusal was logged %d times, want once", n)
+			}
+			if fitted := logs.named(t, "sandbox_bridge_call_fitted"); len(fitted) != 0 {
+				t.Errorf("a fitted record the server refused was reported as the call's record: %v", fitted)
+			}
+		})
+	}
+}
+
 // partsFail is a coordination store that takes the first `take` parts it is
 // asked to file and then cannot be reached.
 type partsFail struct {
@@ -625,7 +695,8 @@ func (p *partsFail) CreateBridgeCallPart(ctx context.Context, turnID, launchID s
 func TestAPartWriteFailureLeavesNoDanglingReference(t *testing.T) {
 	t.Parallel()
 	fleet := &partsFail{Fleet: memory.NewFleet(), take: 1}
-	store := sandbox.NewCoordStore(fleet)
+	logs := &logLines{}
+	store := sandbox.NewCoordStore(fleet).WithLogger(logs.logger())
 	run := begun(t, store, "t-parts-fail")
 	sent := sandbox.BridgeCall{
 		Name: "read_file", Output: strings.Repeat("z", sandbox.MaxBridgeCallBytes*2),
@@ -659,6 +730,107 @@ func TestAPartWriteFailureLeavesNoDanglingReference(t *testing.T) {
 	if got := mustBridgeCalls(t, store, run); len(got) != 1 || got[0].Output != record.Output {
 		t.Errorf("the log read whole = %d calls; want the one call, as its record holds it", len(got))
 	}
+	// And the operator is told, once, with how far the parts got.
+	lost := logs.named(t, "sandbox_bridge_call_whole_not_kept")
+	if len(lost) != 1 || lost[0]["parts_written"] != float64(1) || lost[0]["seq"] != float64(record.Seq) {
+		t.Errorf("the loss was logged as %v; want one line, for the call's record, naming the one part "+
+			"written", lost)
+	}
+}
+
+// partsThenRecordFail is a coordination store that cannot be reached for a
+// part or a record.
+type partsThenRecordFail struct{ *memory.Fleet }
+
+func (partsThenRecordFail) CreateBridgeCallPart(context.Context, string, string, uint64, int, []byte) (bool, error) {
+	return false, coord.ErrUnavailable
+}
+
+func (partsThenRecordFail) CreateBridgeCall(context.Context, string, string, uint64, []byte) (bool, error) {
+	return false, coord.ErrUnavailable
+}
+
+// strayAfterABlip is a coordination store whose first part write cannot reach
+// the store and whose first record write finds its address taken: a call that
+// met a blip on a number a stray holds.
+type strayAfterABlip struct {
+	*memory.Fleet
+	part, record atomic.Bool
+}
+
+func (s *strayAfterABlip) CreateBridgeCallPart(ctx context.Context, turnID, launchID string, seq uint64, part int, value []byte) (bool, error) {
+	if s.part.CompareAndSwap(false, true) {
+		return false, coord.ErrUnavailable
+	}
+	return s.Fleet.CreateBridgeCallPart(ctx, turnID, launchID, seq, part, value)
+}
+
+func (s *strayAfterABlip) CreateBridgeCall(ctx context.Context, turnID, launchID string, seq uint64, value []byte) (bool, error) {
+	if s.record.CompareAndSwap(false, true) {
+		return false, nil
+	}
+	return s.Fleet.CreateBridgeCall(ctx, turnID, launchID, seq, value)
+}
+
+// WHAT A CALL'S RECORD HOLDS IS REPORTED ONCE IT HAS LANDED, AND ONLY THEN.
+//
+// The parts are filed before the record, so their failure is known first —
+// but a line saying the record holds its cut form with its whole not kept is a
+// claim about a record that does not exist yet. The record may fail to land
+// at all, and then the append fails and says so; or its number may turn out to
+// be a stray's, and the next number keep the whole after all. Either way that
+// line, logged early, would tell an operator a loss that did not happen.
+func TestAWholeNotKeptIsReportedOnlyOnceItsRecordHasLanded(t *testing.T) {
+	t.Parallel()
+	sent := sandbox.BridgeCall{
+		Name: "read_file", Output: strings.Repeat("z", sandbox.MaxBridgeCallBytes+10),
+		At: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
+	}
+
+	t.Run("the record cannot land either", func(t *testing.T) {
+		t.Parallel()
+		logs := &logLines{}
+		store := sandbox.NewCoordStore(partsThenRecordFail{memory.NewFleet()}).WithLogger(logs.logger())
+		begun(t, store, "t-nothing-landed")
+		_, err := store.AppendBridgeCall(t.Context(), "t-nothing-landed", sent)
+		if !errors.Is(err, coord.ErrUnavailable) {
+			t.Fatalf("an append whose record could not land = %v, want the store's failure", err)
+		}
+		if !strings.Contains(err.Error(), "had not been kept in parts") {
+			t.Errorf("the append's error drops the parts' failure before it: %v", err)
+		}
+		for _, msg := range []string{"sandbox_bridge_call_whole_not_kept", "sandbox_bridge_call_fitted"} {
+			if got := logs.named(t, msg); len(got) != 0 {
+				t.Errorf("%s was logged about a record that never landed: %v", msg, got)
+			}
+		}
+	})
+
+	t.Run("a stray's number, then the whole kept at the next", func(t *testing.T) {
+		t.Parallel()
+		logs := &logLines{}
+		fleet := &strayAfterABlip{Fleet: memory.NewFleet()}
+		store := sandbox.NewCoordStore(fleet).WithLogger(logs.logger())
+		run := begun(t, store, "t-kept-after-all")
+		if ok, err := store.AppendBridgeCall(t.Context(), "t-kept-after-all", sent); err != nil || !ok {
+			t.Fatalf("append: %v, %v", ok, err)
+		}
+		if !fleet.part.Load() || !fleet.record.Load() {
+			t.Fatal("the first pass met neither the blip nor the stray; the case tests nothing")
+		}
+		got := mustBridgeCalls(t, store, run)
+		if len(got) != 1 || got[0].Output != sent.Output || got[0].Seq != 2 {
+			t.Fatalf("the log = %d calls; want the call whole, at the number after the stray's", len(got))
+		}
+		if lost := logs.named(t, "sandbox_bridge_call_whole_not_kept"); len(lost) != 0 {
+			t.Errorf("a whole that was kept was reported lost: %v", lost)
+		}
+		fitted := logs.named(t, "sandbox_bridge_call_fitted")
+		if len(fitted) != 1 || fitted[0]["seq"] != float64(2) || fitted[0]["whole_parts"] == float64(0) {
+			t.Errorf("the fitted record was reported as %v; want one line, for the record that landed, "+
+				"naming its parts", fitted)
+		}
+	})
 }
 
 // changesParts is a coordination store whose whole-log read hands back what
@@ -743,6 +915,138 @@ func TestAWholeThatDoesNotReassembleIsReadAsItsRecordWithANote(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A CALL WHOSE PARTS DO NOT REASSEMBLE NEVER POINTS AT THEM FOR ITS ARGUMENTS.
+//
+// A record that set its arguments aside says they went into its parts. When
+// those parts do not reassemble, the call read back whole is the record's
+// fitted form — and that is what the resume carries into the phase's durable
+// record and the reviewer's evidence, while the run's end purges the parts. So
+// its arguments' marker says they could not be read back, with the same count,
+// and its output ends in the note saying why: the read hands over no mark
+// sending a reader to a place it could not reach itself.
+func TestACallWhosePartsDoNotReassembleSaysItsArgumentsCouldNotBeReadBack(t *testing.T) {
+	t.Parallel()
+	args := `{"text":"` + strings.Repeat("x", sandbox.MaxBridgeCallBytes) + `"}`
+	for name, tc := range map[string]struct {
+		// limit is what the server takes, zero for the contract's ceiling.
+		limit  int
+		output string
+	}{
+		"arguments the fit set aside":  {output: "posted"},
+		"a call that returned nothing": {output: ""},
+		// Output enough that the fitted record is still too large for the
+		// server, so what it keeps is the least form, whose marker is the
+		// same one.
+		"the least form a server below the ceiling left": {limit: 256 << 10, output: strings.Repeat("y", 4<<20)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fleet := memory.NewFleet()
+			var records sandbox.RunRecords = fleet
+			if tc.limit > 0 {
+				records = lowServer{Fleet: fleet, limit: tc.limit}
+			}
+			store := sandbox.NewCoordStore(records)
+			run := begun(t, store, "t-unreadable-args")
+			sent := sandbox.BridgeCall{
+				Name: "slack_post", Args: args, Output: tc.output,
+				At: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
+			}
+			if ok, err := store.AppendBridgeCall(t.Context(), "t-unreadable-args", sent); err != nil || !ok {
+				t.Fatalf("append: %v, %v", ok, err)
+			}
+			record := mustBridgeCallPage(t, store, run)[0]
+			if record.Args != sandbox.ArgsInParts(len(args)) || record.WholeParts < 2 {
+				t.Fatalf("the record = args %.60q in %d parts; the case needs arguments set aside and a "+
+					"whole of several parts", record.Args, record.WholeParts)
+			}
+
+			reader := sandbox.NewCoordStore(changesParts{Fleet: fleet, change: func(r []coord.BridgeCallRecord) {
+				r[0].Parts = r[0].Parts[1:]
+			}})
+			got := mustBridgeCalls(t, reader, run)[0]
+			if got.Args != sandbox.ArgsUnreadable(len(args)) {
+				t.Errorf("the arguments read back = %.120q; want the marker saying the %d bytes could "+
+					"not be read back", got.Args, len(args))
+			}
+			var marker map[string]any
+			if err := json.Unmarshal([]byte(got.Args), &marker); err != nil || len(marker) != 1 {
+				t.Errorf("the marker is not the one-member JSON object a reader decodes: %q (%v)", got.Args, err)
+			}
+			if !strings.HasPrefix(got.Output, record.Output) || !strings.Contains(got.Output, "could not be read back") ||
+				!strings.Contains(got.Output, "part 1 of") {
+				t.Errorf("the output read back ends %q; want the record's own and the note saying why",
+					got.Output[max(0, len(got.Output)-200):])
+			}
+			if tc.output == "" && strings.HasPrefix(got.Output, "\n") {
+				t.Errorf("a call that returned nothing reads back as a note after an empty line: %q", got.Output)
+			}
+		})
+	}
+
+	// ARGUMENTS A CALL WAS MADE WITH ARE NEVER TAKEN FOR THE MARKER. Only the
+	// marker byte for byte gives way; arguments shaped like it but naming
+	// another count, or spelled differently, are the call's own.
+	for _, own := range []string{
+		strings.Replace(sandbox.ArgsInParts(12), "12", "012", 1),
+		strings.Replace(sandbox.ArgsInParts(12), "filed", "kept", 1),
+		`{"…":"12"}`,
+	} {
+		fleet := memory.NewFleet()
+		store := sandbox.NewCoordStore(fleet)
+		run := begun(t, store, "t-own-args")
+		sent := sandbox.BridgeCall{
+			Name: "read_file", Args: own, Output: strings.Repeat("z", sandbox.MaxBridgeCallBytes),
+			At: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
+		}
+		if ok, err := store.AppendBridgeCall(t.Context(), "t-own-args", sent); err != nil || !ok {
+			t.Fatalf("append: %v, %v", ok, err)
+		}
+		reader := sandbox.NewCoordStore(changesParts{Fleet: fleet, change: func(r []coord.BridgeCallRecord) {
+			r[0].Parts = r[0].Parts[1:]
+		}})
+		if got := mustBridgeCalls(t, reader, run)[0]; got.Args != own {
+			t.Errorf("arguments the call was made with, %q, were read back as %q", own, got.Args)
+		}
+	}
+}
+
+// logLines is a logger a test reads back: every line the store logs, as the
+// JSON its handler wrote. Handed to one store with WithLogger, so no test
+// points the process-wide sink at a buffer the parallel suite would share.
+type logLines struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *logLines) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *logLines) logger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(l, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// named returns every line logged as msg, in order.
+func (l *logLines) named(t *testing.T, msg string) []map[string]any {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []map[string]any
+	for line := range strings.Lines(l.buf.String()) {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("a log line is not JSON: %q (%v)", line, err)
+		}
+		if rec["msg"] == msg {
+			out = append(out, rec)
+		}
+	}
+	return out
 }
 
 func mustBridgeCallPage(t *testing.T, store *sandbox.CoordStore, run sandbox.PendingRun) []sandbox.BridgeCall {

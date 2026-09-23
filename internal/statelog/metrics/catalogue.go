@@ -17,13 +17,13 @@
 //
 // # One recorder, two readers
 //
-// Everything records HERE — through [Recorder] — and exactly two things read
-// it: the OpenTelemetry instruments, and the rolling 24-hour window the
-// operator record renders. That is deliberate and it is the lesson
-// internal/tokens records for the token rollup: that aggregation had three
-// copies once, and a refresh routinely disagreed with the page it replaced. A
-// number on a dashboard and a number on a collector's panel come from one
-// atomic add.
+// Everything records HERE — through [Recorder] — and it is read two ways: the
+// OpenTelemetry instruments export its cumulative series, and the operator
+// record's alarms read the measurements they need from its rolling 24-hour
+// [Window]. That is deliberate and it is the lesson internal/tokens records
+// for the token rollup: that aggregation had three copies once, and a refresh
+// routinely disagreed with the page it replaced. A number an alarm reads and a
+// number on a collector's panel come from the same write.
 //
 // # The catalogue is written once
 //
@@ -61,6 +61,14 @@ const (
 	UnitBytes        = "By"
 	UnitSeconds      = "s"
 	UnitCount        = "1"
+
+	// UnitRecordsPerSecond and UnitCommitsPerSecond are RATES, and UCUM
+	// writes a rate as a quantity over a second: "1" alone declares a
+	// number dimensionless, which a fraction is and a rate is not. The
+	// braces are UCUM's annotation — they name what is counted without
+	// changing the unit.
+	UnitRecordsPerSecond = "{record}/s"
+	UnitCommitsPerSecond = "{commit}/s"
 )
 
 // Instrument is one entry in the catalogue.
@@ -86,8 +94,8 @@ type Instrument struct {
 	// because the exporter fixes each instrument's number type when it
 	// registers it, before anything is recorded. A fractional counter
 	// exported as an integer would reach the collector without the fraction
-	// of its total — 0.9 seconds as 0 — while the operator record beside it
-	// showed the real one.
+	// of its total — 0.9 seconds as 0 — while the recorder's own reading of
+	// the same series kept it.
 	//
 	// Only a counter has the choice. A gauge and a histogram are
 	// floating-point already, and [Validate] refuses the mark on them
@@ -224,10 +232,13 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogApplyTxDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain", "bound_by"},
-			Shows: "How long one apply transaction holds the store's writer, " +
-				"and which budget ended it. A transaction is what every " +
-				"waiter behind it pays, and rows were only ever a proxy for " +
-				"the duration.",
+			Shows: "How long one apply run takes, and which budget ended it: " +
+				"from asking for the store's writer to acknowledging the " +
+				"run's records, so the wait for the writer before the " +
+				"transaction and the work between its commit and the " +
+				"acknowledgement are inside the figure. A transaction is what " +
+				"every waiter behind it pays, and rows were only ever a proxy " +
+				"for the duration.",
 		},
 		{
 			Name: StatelogApplyRecordDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
@@ -240,8 +251,9 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogApplyBatchRows, Kind: KindHistogram, Unit: UnitCount,
 			Attributes: []string{"domain"},
-			Shows: "Rows per apply transaction, which is what the row budget " +
-				"bounds and what the drain rate divides.",
+			Shows: "Rows per apply transaction, as the domain's applier " +
+				"reports writing them, which is what the row budget bounds. " +
+				"Rows, not records: the drain gauge counts records.",
 		},
 		{
 			Name: StatelogApplyRecords, Kind: KindCounter, Unit: UnitCount,
@@ -280,15 +292,19 @@ func Catalogue() []Instrument {
 				"would see that it happened.",
 		},
 		{
-			Name: StatelogDrainRowsPerSecond, Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogDrainRecordsPerSecond, Kind: KindGauge, Unit: UnitRecordsPerSecond,
 			Attributes: []string{"domain"},
-			Shows: "The applier's observed drain, which every retry hint " +
-				"divides by. Seeded from a benchmark and then measured, so a " +
-				"hint on real hardware stops being an extrapolation from " +
-				"somebody else's.",
+			Shows: "The applier's measured drain in RECORDS a second: every " +
+				"record an apply run moves over, applied or not, over the " +
+				"run's own duration, smoothed across runs. It is the rate this " +
+				"node turns a record backlog into a time with — the apply lag " +
+				"in seconds and a refused read's retry hint among them — so a " +
+				"falling rate is an applier slowing down. Zero until this " +
+				"process has consumed a batch: nothing seeds it, and the first " +
+				"batch's rate is the first reading.",
 		},
 		{
-			Name: StatelogDrainCommitsPerSecond, Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogDrainCommitsPerSecond, Kind: KindGauge, Unit: UnitCommitsPerSecond,
 			Attributes: []string{"domain"},
 			Shows: "Commits per second, which is the fsync rate under " +
 				"`synchronous = FULL` and the number a device budget is " +
@@ -304,10 +320,15 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogApplyLagSeconds, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: []string{"domain"},
-			Shows: "How OLD the oldest unapplied record is. Seconds are what " +
-				"a stall grace, a pending outcome and a seat move all turn " +
-				"on; sequences are not, and a lag of 4 000 says nothing about " +
-				"whether anything is wrong.",
+			Shows: "How long this node would take to apply its backlog at its " +
+				"measured drain: the record lag beside it over the drain " +
+				"gauge, with a rate below one record a second — or none " +
+				"measured yet — taken as one. Seconds are what a stall grace, " +
+				"a pending outcome and a seat move all turn on; sequences are " +
+				"not, and a lag of 4 000 says nothing about whether anything " +
+				"is wrong. It is a projection, not an age: an applier that has " +
+				"stopped keeps its last drain, so this stays as small as its " +
+				"backlog does.",
 		},
 		{
 			Name: StatelogAppliedThrough, Kind: KindGauge, Unit: UnitCount,
@@ -318,9 +339,10 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogDeferredCount, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
-			Shows: "Records this build could not read and kept. Non-zero is a " +
-				"rolling upgrade in progress; non-zero and not falling is one " +
-				"that stopped.",
+			Shows: "Whether this node holds a record its build could not read " +
+				"and kept, as 1 or 0 — not how many. Non-zero is a rolling " +
+				"upgrade in progress; the oldest one's age beside it says " +
+				"whether the upgrade has stopped.",
 		},
 		{
 			Name: StatelogDeferredOldestAgeSeconds, Kind: KindGauge, Unit: UnitSeconds,
@@ -331,8 +353,10 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogWaiters, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
-			Shows: "Callers blocked on the applier right now. It is the depth " +
-				"of the queue a slow apply is making.",
+			Shows: "Callers blocked on the applier, sampled as each apply run " +
+				"ends. It is the depth of the queue a slow apply is making — " +
+				"and nothing refreshes it between runs, so an applier that has " +
+				"stopped keeps the count its last run saw.",
 		},
 
 		// ---- retention and capacity -----------------------------------
@@ -396,9 +420,11 @@ func Catalogue() []Instrument {
 		{
 			Name: StorePoolWait, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"file"},
-			Shows: "How long a reader waited for a connection. It is what " +
-				"says the reader pool is too small on this node, which " +
-				"nothing could say before.",
+			Shows: "How long callers queued for one of this file's pooled " +
+				"connections, as one observation per reporting tick holding " +
+				"that tick's mean wait: the pool reports a total and a count, " +
+				"not each wait. It is what says the reader pool is too small " +
+				"on this node, which nothing could say before.",
 		},
 		{
 			Name: StoreWalBytes, Kind: KindGauge, Unit: UnitBytes,
@@ -468,10 +494,10 @@ func Catalogue() []Instrument {
 		},
 		{
 			Name: TrackerBulkApplySeconds, Kind: KindCounter, Unit: UnitSeconds,
-			// FRACTIONAL, because one bulk's projection is its rows over
-			// the applier's measured drain: any bulk smaller than one
-			// second's drain projects a fraction of a second, which an
-			// integer total adds as nothing.
+			// FRACTIONAL, because one bulk's projection is its records
+			// over the applier's drain in records a second: any bulk
+			// smaller than one second's drain projects a fraction of a
+			// second, and only a fractional counter keeps one.
 			Fractional: true,
 			Attributes: nil,
 			Shows: "Seconds of applier occupancy bulk edits projected, " +

@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // notYetVisibleJS answers `Stream` with "not found" for the first n calls and
@@ -359,5 +363,93 @@ func TestAHeldConsumerCreateIsReadBackRatherThanReported(t *testing.T) {
 	if js.lookups < 2 {
 		t.Errorf("the consumer was looked up %d time(s); the read-back after "+
 			"the timed-out create never ran", js.lookups)
+	}
+}
+
+// AN APPEND REFUSED FOR ITS SIZE IS queue.ErrTooLarge, AND NAMES max_payload.
+//
+// The refusal is permanent: the client measures a record against the
+// max_payload the server announced and sends nothing, so the same record is
+// refused the same way every time. Returned as the client's own error it reads
+// to the state log's write path as no answer at all. So it is the contract's
+// sentinel, with the client's words still inside it, and it names the limit
+// the server the connection is on announces, beside the setting to raise where
+// that server is set below the contract.
+//
+// The CONTROL is a record the same server takes, so every refusal below is
+// about a size rather than about a log that refuses everything.
+func TestAnAppendRefusedForItsSizeIsTooLargeAndNamesMaxPayload(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		ceiling int32
+		body    int
+		// msgID and expect are what the append sends as headers.
+		msgID  string
+		expect bool
+		// refused is whether the client refuses it; headers and remedy
+		// are what the refusal must say.
+		refused, headers, remedy bool
+	}{
+		{name: "a server set below the contract names the setting to raise",
+			ceiling: 64 << 10, body: 64<<10 + 1, refused: true, remedy: true},
+		{name: "a server at the contract's ceiling names no setting",
+			ceiling: queue.MaxPayloadBytes, body: queue.MaxPayloadBytes + 1, refused: true},
+		{name: "a record under the limit is refused for its headers, and says so",
+			ceiling: 64 << 10, body: 64<<10 - 8, msgID: "op-1", expect: true,
+			refused: true, headers: true, remedy: true},
+		{name: "the control: a record the server takes is appended",
+			ceiling: 64 << 10, body: 1 << 10, msgID: "op-1", expect: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			q := queueAtCeiling(t, tc.ceiling)
+			spec := probeDomain()
+			if err := q.EnsureDomainStream(t.Context(), spec); err != nil {
+				t.Fatalf("EnsureDomainStream: %v", err)
+			}
+			log, err := q.DomainLog(t.Context(), spec.Name)
+			if err != nil {
+				t.Fatalf("open the log: %v", err)
+			}
+			var expect *uint64
+			if tc.expect {
+				zero := uint64(0)
+				expect = &zero
+			}
+			_, _, err = log.Append(t.Context(), "crewlet.probe.log.object.a",
+				tc.msgID, expect, make([]byte, tc.body))
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("a %d-byte record under a %d-byte max_payload was "+
+						"refused: %v", tc.body, tc.ceiling, err)
+				}
+				return
+			}
+			if !errors.Is(err, queue.ErrTooLarge) {
+				t.Fatalf("an append the client refused for its size returned %v, "+
+					"want queue.ErrTooLarge", err)
+			}
+			if !errors.Is(err, nats.ErrMaxPayload) {
+				t.Errorf("the client's own refusal is gone from the error: %v", err)
+			}
+			msg := err.Error()
+			if want := strconv.Itoa(int(tc.ceiling)) + "-byte max_payload"; !strings.Contains(msg, want) {
+				t.Errorf("the refusal does not name the limit that refused it (%q): %v",
+					want, msg)
+			}
+			if want := "the record's " + strconv.Itoa(tc.body) + " bytes"; !strings.Contains(msg, want) {
+				t.Errorf("the refusal does not name the record's size (%q): %v", want, msg)
+			}
+			if got := strings.Contains(msg, "and its headers"); got != tc.headers {
+				t.Errorf("naming the headers the client measured = %v, want %v: %v",
+					got, tc.headers, msg)
+			}
+			if got := strings.Contains(msg, "set max_payload to at least "+
+				strconv.Itoa(queue.MaxPayloadBytes)); got != tc.remedy {
+				t.Errorf("naming max_payload as the setting to raise = %v, want %v: %v",
+					got, tc.remedy, msg)
+			}
+		})
 	}
 }

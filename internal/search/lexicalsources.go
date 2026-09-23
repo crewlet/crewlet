@@ -3,7 +3,6 @@ package search
 import (
 	"context"
 	"database/sql"
-	"fmt"
 )
 
 // WHAT THE LEXICAL INDEX COVERS, as a seam rather than as SQL in the walk.
@@ -59,8 +58,8 @@ import (
 // see, what a version is, what the body is — and owns no part of the walk: the
 // cursors, the batching, the estate boundary and the posting writes all stay in
 // [Indexer], so adding a corpus is four queries rather than a second indexer.
-// [PageSource] and [TaskSource] are the two this build ships, and
-// [DefaultLexicalSources] is what a node indexes.
+// [PageSource] and [TaskSource] are the two this build ships
+// ([DefaultLexicalSources]); a running node indexes the ones its backends name.
 type LexicalSource interface {
 	// Source is the value written into `kb_docs.source`, and it is what
 	// makes one index table serve corpora whose ids can collide.
@@ -94,12 +93,12 @@ type DocVersion struct {
 	Version uint64
 }
 
-// DefaultLexicalSources is what a node indexes.
+// DefaultLexicalSources is every corpus this build can index, which is what an
+// indexer covers when nothing narrower is asked for ([NewIndexer]).
 //
-// BOTH CORPORA, and the tracker's is not an addition so much as a repair: the
-// engine already embeds every task and already declares [SourceTask] beside
-// [SourcePage] in [Sources], so the lexical half was the one place that had
-// never heard of them.
+// NOT WHAT EVERY NODE INDEXES: a running node indexes the corpora its backends
+// name, and the engine decides that — a company on Jira has no `tracker_tasks`
+// worth walking.
 func DefaultLexicalSources() []LexicalSource {
 	return []LexicalSource{PageSource{}, TaskSource{}}
 }
@@ -113,10 +112,11 @@ func (PageSource) Source() string { return string(SourcePage) }
 // Versions implements [LexicalSource].
 //
 // PUBLISHED ONLY: a draft is somebody's unfinished thought and a trashed page
-// is deleted as far as a reader is concerned, and surfacing either in a
-// knowledge search would put content in front of an agent that no person
-// considers current. A page that LEAVES the published set is dropped by the
-// orphan pass, which asks [PageSource.Live] the same question.
+// is one somebody put in the trash — still read by its id or its address, and
+// out of search — and surfacing either in a knowledge search would put content
+// in front of an agent that no person considers current. A page that LEAVES
+// the published set is dropped by the orphan pass, which asks
+// [PageSource.Live] the same question.
 func (PageSource) Versions(ctx context.Context, tx *sql.Tx, after string,
 	limit int) ([]DocVersion, error) {
 
@@ -298,13 +298,4 @@ func liveIDs(ctx context.Context, tx *sql.Tx, query string,
 		out[id] = true
 	}
 	return out, rows.Err()
-}
-
-// sourceNames is every source name this indexer covers, for a message.
-func sourceNames(sources []LexicalSource) string {
-	names := make([]string, 0, len(sources))
-	for _, s := range sources {
-		names = append(names, s.Source())
-	}
-	return fmt.Sprint(names)
 }

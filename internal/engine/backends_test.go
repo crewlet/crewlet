@@ -112,7 +112,8 @@ func TestCoordinationRidesTheQueuesOwnConnection(t *testing.T) {
 		// branches, both with the KV holding the leases.
 		topology func(t *testing.T, b *config.Bootstrap)
 		// embedded is whether this node's own process runs the broker,
-		// which is the one case Backends.Conn names the connection in.
+		// which is the one case Backends.EmbeddedConn names the
+		// connection in.
 		embedded bool
 	}{
 		{
@@ -153,12 +154,12 @@ func TestCoordinationRidesTheQueuesOwnConnection(t *testing.T) {
 			// WHAT THE BACKUP IS HANDED. It snapshots the streams over
 			// this connection, and reads nil as "the stream estate is a
 			// cluster somebody else runs and backs up".
-			if got := back.Conn(); tc.embedded && got != conn {
-				t.Errorf("Backends.Conn() = %p on an embedded broker, want the "+
-					"queue's own connection %p", got, conn)
+			if got := back.EmbeddedConn(); tc.embedded && got != conn {
+				t.Errorf("Backends.EmbeddedConn() = %p on an embedded broker, "+
+					"want the queue's own connection %p", got, conn)
 			} else if !tc.embedded && got != nil {
-				t.Errorf("Backends.Conn() = %p on a dialled broker, want nil: "+
-					"the backup would snapshot a cluster it does not own", got)
+				t.Errorf("Backends.EmbeddedConn() = %p on a dialled broker, want "+
+					"nil: the backup would snapshot a cluster it does not own", got)
 			}
 
 			// A REAL LEASE STORE while the connection is open: a first
@@ -226,6 +227,69 @@ func externalBroker(t *testing.T) string {
 		ns.WaitForShutdown()
 	})
 	return ns.ClientURL()
+}
+
+// A SEAT KEEPS ITS MEMORY WHEN IT MOVES BETWEEN NODES ON AN EXTERNAL BROKER.
+//
+// The memory changelog is a stream on the broker every node shares, dialled
+// as much as embedded. Given a connection only where the broker is embedded,
+// a node on `stream.type: nats` would carry nothing: its seats would flush
+// nothing when released and hydrate nothing when claimed, so a seat would
+// arrive on its next node with an empty memory and nothing would say so.
+//
+// Observed the way it fails: a seat learns something on one node, that node
+// hands its seats back in a graceful stop, and a second node — its own store,
+// the same broker — claims the seat and must hold what the first one learned.
+func TestASeatsMemoryMovesWithItOnAnExternalBroker(t *testing.T) {
+	t.Parallel()
+	url := externalBroker(t)
+	onTheBroker := func(nodeID string) *engine.Engine {
+		t.Helper()
+		return newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Node.ID = nodeID
+			b.Stream.Type = config.StreamNATS
+			b.Stream.URL = url
+			b.Coordination.Type = config.CoordinationEmbeddedKV
+		})})
+	}
+
+	first := onTheBroker("node-first")
+	claimed(t, first, 2)
+	const episode = "episode-learned-on-the-first-node"
+	at := time.Now().UTC().UnixMicro()
+	if _, err := first.Backends().Store.SQL().ExecContext(t.Context(),
+		`INSERT INTO episodes (id, agent_handle, agent_role, turn_id, started_at,
+		     ended_at, plan_summary, task_summary, review_outcome, duration_ms)
+		 VALUES (?, 'ceo', 'CEO', 'turn-1', ?, ?, 'plan', 'the release train is thursdays',
+		     'done', 1)`, episode, at, at); err != nil {
+		t.Fatalf("seed the seat's memory on the first node: %v", err)
+	}
+	// A GRACEFUL STOP hands every seat back, and a seat's release is where
+	// what it learned since the last cycle reaches the changelog.
+	first.Stop(context.Background())
+
+	second := onTheBroker("node-second")
+	claimed(t, second, 2)
+	// POLLED, because a seat counts as held while its acquire hook — where
+	// it hydrates — is still running.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		var summary string
+		err := second.Backends().Store.SQL().QueryRowContext(t.Context(),
+			`SELECT task_summary FROM episodes WHERE id = ?`, episode).Scan(&summary)
+		if err == nil {
+			if summary != "the release train is thursdays" {
+				t.Errorf("the carried episode says %q", summary)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the seat moved to a second node on the same external broker "+
+				"and arrived without what it learned on the first (%v): its memory "+
+				"did not travel on this topology", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func TestLocalCoordinationNeedsNoBroker(t *testing.T) {
@@ -503,9 +567,9 @@ func TestAStoreThatCannotOpenTakesTheBrokerDownWithIt(t *testing.T) {
 	// without complaint (measured). That test passed with the cleanup
 	// removed, which makes it worse than no test.
 	//
-	// The margin here is not delicate: three failed opens leak about a
-	// hundred goroutines, against a residue of one when they are cleaned
-	// up. The threshold sits far from both.
+	// The margin here is not delicate: a broker left running keeps every
+	// goroutine it started, which is many times the threshold, and a broker
+	// that was shut down leaves the count where it began. See leakThreshold.
 	dir := t.TempDir()
 	before := settledGoroutines()
 	for i := range failedOpenAttempts {
@@ -529,10 +593,12 @@ const (
 	// leak becomes a multiple of itself and cannot be mistaken for noise.
 	failedOpenAttempts = 3
 
-	// leakThreshold sits between the two measured outcomes — a residue of
-	// one goroutine when the broker is closed, about a hundred when it is
-	// not — rather than at zero, which would make the test fail on any
-	// unrelated background goroutine that happens to still be settling.
+	// leakThreshold separates the two outcomes: every broker shut down,
+	// which leaves the goroutine count where it began, and a broker left
+	// running, which leaves its whole goroutine population behind — well
+	// past this for a single broker, before failedOpenAttempts multiplies
+	// it. Not zero, which would fail the test on any unrelated background
+	// goroutine that happens to still be settling.
 	leakThreshold = 10
 )
 

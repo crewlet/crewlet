@@ -78,8 +78,8 @@ provider the engine still runs; learning features degrade gracefully.
 ## Core infrastructure
 
 **There is none to choose.** The engine is one binary: its event stream is a
-NATS JetStream server it embeds, and its store is a local file it creates and
-owns exclusively. A single host runs a whole company with nothing else
+NATS JetStream server it embeds, and its store is two local files it creates
+and owns exclusively. A single host runs a whole company with nothing else
 installed, in development and in production alike.
 
 Two slots change once a deployment outgrows one node:
@@ -95,8 +95,8 @@ stream's **own** connection. Two connections to one broker fail independently,
 so a node could keep renewing leases over a link that still works while the one
 carrying its inbox has dropped — alive to its peers, deaf to its work.
 
-The **store** is never one of these: it stays one file per node, which is why
-everything genuinely shared lives in coordination instead. See
+The **store** is never one of these: it stays each node's own two files, which
+is why everything genuinely shared lives in coordination instead. See
 [Running a Fleet](../guides/fleet.md) and
 [Deployment](../guides/deployment.md) for sizing and broker authentication.
 

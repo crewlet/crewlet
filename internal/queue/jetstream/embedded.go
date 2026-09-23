@@ -133,19 +133,6 @@ func (s *Server) Client(ctx context.Context) (*Queue, error) {
 	return newQueueOn(ctx, s.cfg, s.embedded, false)
 }
 
-// Conn returns a NATS connection to this server, for subsystems that ride
-// the same broker without going through the queue contract — the KV
-// coordination backend is the one that matters, and sharing the broker is
-// what makes the single-binary topology one service rather than two.
-//
-// The caller owns the connection and must close it.
-func (s *Server) Conn() (*nats.Conn, error) {
-	if s.embedded == nil {
-		return nil, errors.New("jetstream: server is shut down")
-	}
-	return s.embedded.connect()
-}
-
 // RoutePeers names the cluster members this server currently holds a route
 // to, sorted, and never itself.
 //
@@ -625,12 +612,6 @@ func joinURLs(urls []string) string {
 // Dial opens a NATS connection to an external server with this package's own
 // reconnect policy.
 //
-// Exported so a caller outside this package that needs a plain connection to
-// the same estate gets the same reconnect-forever behaviour. Reimplementing
-// the option list there would give two places to disagree about how long a
-// node survives a broker blip — and the whole point of that policy is that it
-// keeps its seats through one.
-//
 // The caller owns the connection and must close it.
 func Dial(cfg Config) (*nats.Conn, error) { return dial(cfg) }
 
@@ -674,8 +655,8 @@ func dialOptions(cfg Config) ([]nats.Option, error) {
 	// own failure for an unreadable certificate arrives as a dial error,
 	// which reads as "the broker is unreachable" — so an operator goes
 	// looking at the network for a path that is simply not there. The
-	// caller names which estate this was (engine: stream / engine:
-	// coordination), so this only has to name the file and the field.
+	// caller wraps this with what it was connecting for, so this only has
+	// to name the file and the field.
 	if cfg.TLS.CA != "" {
 		if _, err := os.Stat(cfg.TLS.CA); err != nil {
 			return nil, fmt.Errorf("tls.ca %s: %w", cfg.TLS.CA, err)

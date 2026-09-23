@@ -57,7 +57,7 @@ func docKey(source, id string) string { return source + ":" + id }
 // 60 ms, so a batch is a little over a second of work — long enough to
 // amortise the transaction, short enough that the writer's own applies are
 // never behind an index batch for a noticeable time. A 5,000-page company
-// therefore takes about five minutes to build, which is why [Indexer.Ready]
+// therefore takes about five minutes to build, which is why [Indexer.ReadyFor]
 // exists and reports false meanwhile.
 const IndexBatch = 20
 
@@ -91,7 +91,7 @@ type Indexer struct {
 	db *store.DB
 
 	// built is which sources have completed at least one lap since this
-	// process started, which is what [Indexer.Ready] answers.
+	// process started, which is what [Indexer.ReadyFor] answers.
 	//
 	// IN MEMORY, beside the cursors and for the same reason: it is a fact
 	// about THIS process's walk rather than about the index, and a
@@ -641,101 +641,95 @@ func (x *Indexer) indexedAfter(ctx context.Context, source, after string) ([]str
 	return out, nil
 }
 
-// Pending is how many documents are waiting to be indexed.
+// Pending is how many documents the sources offer that the index holds no row
+// for. No names means every source this index covers, and a name it does not
+// cover counts nothing.
 //
-// A REPORTING NUMBER rather than the gate — see [Indexer.Ready] for why it
-// stopped being one. It is what a fleet screen renders beside the index's
-// size, and it is one count per source per call.
-// TWO COUNTS AND A SUBTRACTION, because the sources and the index are in
-// different estates and no read joins them. It answers how many published
-// pages are NOT represented in the index — which is what the gate below needs
-// — and deliberately not how many are STALE: a page whose body moved is
-// already searchable, just by its previous text, where a page with no row at
-// all is a page a search reports as not existing.
-func (x *Indexer) Pending(ctx context.Context) (int, error) {
-	var published, indexed int
-	// SUMMED ACROSS SOURCES, because the gate is about the whole index: a
-	// seat whose company has pages indexed and items not is one that would
-	// be told its own tracker holds nothing.
+// A REPORTING NUMBER rather than the gate — see [Indexer.ReadyFor] for why the
+// gate is the first lap instead. [Indexer.Run] logs it beside each corpus's
+// first lap.
+//
+// TWO COUNTS AND A SUBTRACTION PER SOURCE, because the sources and the index
+// are in different estates and no read joins them. It counts documents with no
+// index row at all, and deliberately not STALE ones: a page whose body moved
+// is already searchable, just by its previous text, where a page with no row
+// is one a search reports as not existing.
+//
+// IT CAN ONLY UNDERCOUNT. The index can legitimately hold rows its source no
+// longer offers — a page trashed between the two reads, an orphan the next
+// sweep removes — and each one offsets a missing document of the same source.
+// So the subtraction is clamped PER SOURCE: summed first, one corpus's orphans
+// would hide another corpus's missing documents, and a negative total would
+// read as an index that is more than caught up.
+func (x *Indexer) Pending(ctx context.Context, sources ...string) (int, error) {
+	covered := x.covering(sources)
+	offered := make([]int, len(covered))
 	// THROUGH THE HANDLE, for [Indexer.staleIn]'s reason.
 	if err := x.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		for _, source := range x.sources {
+		for i, source := range covered {
 			n, err := source.Count(ctx, tx)
 			if err != nil {
-				return err
+				return fmt.Errorf("count the documents %s offers: %w",
+					source.Source(), err)
 			}
-			published += n
+			offered[i] = n
 		}
 		return nil
 	}); err != nil {
-		return 0, fmt.Errorf("search: count the documents %s offers: %w",
-			sourceNames(x.sources), err)
+		return 0, fmt.Errorf("search: %w", err)
 	}
-	for _, source := range x.sources {
-		var n int
+	pending := 0
+	for i, source := range covered {
+		var indexed int
 		if err := x.db.SQL().QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM kb_docs WHERE source = ?`,
-			source.Source()).Scan(&n); err != nil {
+			source.Source()).Scan(&indexed); err != nil {
 			return 0, fmt.Errorf("search: count the indexed %s documents: %w",
 				source.Source(), err)
 		}
-		indexed += n
+		pending += max(offered[i]-indexed, 0)
 	}
-	// NEVER NEGATIVE. The index can legitimately hold rows the sources no
-	// longer have — a page trashed between the two reads, an orphan the
-	// next sweep removes — and a negative "pending" would read as a gate
-	// that is more than ready.
-	return max(published-indexed, 0), nil
+	return pending, nil
 }
 
-// Ready reports whether this node's FIRST INDEX BUILD has finished.
+// ReadyFor reports whether this node's FIRST INDEX BUILD has finished for the
+// sources a query asks for. No names means every source this index covers.
 //
 // THE SEARCH GATE, and it exists because "no results" and "not indexed yet"
 // are different answers a person acts on differently. A seat on a freshly
-// joined node would otherwise be told the company has written nothing down,
-// for the five minutes the first build takes — so the knowledge block renders
-// "index building" instead, and the searcher declines rather than answering
-// empty.
+// joined node would otherwise be told the company has written nothing down
+// for as long as the first build takes — so a search over a corpus that has
+// not finished its first lap reports itself as building instead: the scan
+// counts its range missing ([NodeScanner.Scan]), and the knowledge and work
+// searches say "still building" where they would have said "nothing matched".
 //
 // # Why it is the first LAP and not "nothing is pending"
 //
 // Because "nothing is pending" is a state a company with people in it is
-// almost never in. It was read from [Indexer.Pending] — published documents
-// minus indexed ones — so a single page saved a moment ago made it false,
-// and every empty search on the whole node then answered "the index is still
-// building, try again" rather than "nothing matched". On a company writing
-// continuously it never recovered, and the turn-start knowledge block was
-// suppressed on every turn.
+// almost never in. Read from [Indexer.Pending], a single page saved a moment
+// ago would make it false, and every empty search on the node would answer
+// "the index is still building, try again" rather than "nothing matched" — on
+// a company writing continuously, for ever. After the first lap an index a few
+// documents behind is ordinary staleness: a search over it is a true answer
+// about slightly older rows, which is strictly better than refusing, and a
+// document not indexed yet is exactly the one the caller would not have found
+// anyway.
 //
-// The gate's own doc says what it is for: the FIRST build. After that, an
-// index a few documents behind is ordinary staleness — a search over it is a
-// true answer about slightly older rows, which is strictly better than
-// refusing — and a document that has not been indexed yet is exactly the
-// thing the caller is about to search for and would not have found anyway.
+// # Why per source
 //
-// NO I/O, which is the other half: it was one count per empty search, on a
-// path taken by every turn's knowledge block.
-func (x *Indexer) Ready() bool { return x.ReadyFor() }
-
-// ReadyFor is [Indexer.Ready] narrowed to the sources a query actually asks
-// for. No names means every source this index covers.
+// The corpora build independently, and a query that names one of them must not
+// be held back by the other's lap. A name this index does not cover is ignored
+// rather than refused: the source filter crosses the broker, and a peer running
+// a build that knows a corpus this one does not must narrow to what it can
+// answer — the reasoning [sourcesOf] states for the same value.
 //
-// PER SOURCE, because the corpora build independently and a query that names
-// one of them must not be held back by the other's lap. A name this index does
-// not cover is ignored rather than refused: the source filter crosses the
-// broker, and a peer running a build that knows a corpus this one does not
-// must narrow to what it can answer — the reasoning [sourcesOf] states for the
-// same value.
+// NO I/O: every scan asks it, so it reads the flags this node's own walk sets.
 func (x *Indexer) ReadyFor(sources ...string) bool {
 	if x == nil {
 		return false
 	}
-	for _, source := range x.sources {
-		name := source.Source()
-		if len(sources) > 0 && !slices.Contains(sources, name) {
-			continue
-		}
-		flag := x.built[name]
+	for _, source := range x.covering(sources) {
+		flag := x.built[source.Source()]
 		if flag == nil || !flag.Load() {
 			return false
 		}
@@ -743,36 +737,42 @@ func (x *Indexer) ReadyFor(sources ...string) bool {
 	return true
 }
 
+// covering is the sources a filter names, in this index's order, or every
+// source for an empty filter. A name this index does not cover selects nothing
+// — see [Indexer.ReadyFor] for why that is not an error.
+func (x *Indexer) covering(names []string) []LexicalSource {
+	if len(names) == 0 {
+		return x.sources
+	}
+	var out []LexicalSource
+	for _, source := range x.sources {
+		if slices.Contains(names, source.Source()) {
+			out = append(out, source)
+		}
+	}
+	return out
+}
+
 // Run indexes in batches until the context ends.
 //
 // It sleeps only when it finds nothing, so a catch-up runs flat out and a
 // steady state costs one indexed count per idle tick.
 func (x *Indexer) Run(ctx context.Context) {
-	announced := false
+	announced := make(map[string]bool, len(x.sources))
 	for {
 		worked, err := x.Sweep(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		// THE FIRST LAP IS ANNOUNCED ONCE, because it is the moment
-		// search on this node stops saying "still building" — which is
-		// otherwise a state an operator can only observe by asking a
-		// seat and reading its answer. The pending count rides it: zero
-		// is the healthy reading, and anything else names how far
-		// behind this node started serving.
-		if !announced && x.Ready() {
-			announced = true
-			pending, _ := x.Pending(ctx)
-			log.InfoContext(ctx, "lexical_index_built",
-				"sources", sourceNames(x.sources), "pending", pending)
-		}
+		x.announceBuilt(ctx, announced)
 		switch {
 		case err != nil:
 			log.WarnContext(ctx, "lexical_index_step_failed",
 				"error", err.Error(),
 				"detail", "the lexical index is behind this node's own rows; "+
-					"search reports itself as building until its first lap "+
-					"finishes, and answers over slightly older rows after that")
+					"a search over a corpus reports itself as building until "+
+					"that corpus's first lap finishes, and answers over "+
+					"slightly older rows after that")
 		case worked:
 			continue
 		}
@@ -782,6 +782,47 @@ func (x *Indexer) Run(ctx context.Context) {
 		case <-time.After(indexIdle):
 		}
 	}
+}
+
+// announceBuilt logs each corpus's first lap, once, as it finishes.
+//
+// PER CORPUS, because that is the moment a search over it stops saying "still
+// building": a knowledge search waits on the pages' lap and a work search on
+// the work items', each alone ([Indexer.ReadyFor]) — so one line for the whole
+// index would name a moment neither search observes. Without the line, that
+// moment is a state an operator can only observe by asking a seat and reading
+// its answer.
+//
+// The corpus's pending count rides it: zero is the healthy reading, and
+// anything else names how far behind that corpus started serving. A count that
+// could not be read says so rather than reporting zero, which is the healthy
+// reading and would be a claim nobody made.
+func (x *Indexer) announceBuilt(ctx context.Context, announced map[string]bool) {
+	for _, name := range x.newlyBuilt(announced) {
+		attrs := []any{"source", name}
+		if pending, err := x.Pending(ctx, name); err != nil {
+			attrs = append(attrs, "pending_error", err.Error())
+		} else {
+			attrs = append(attrs, "pending", pending)
+		}
+		log.InfoContext(ctx, "lexical_index_built", attrs...)
+	}
+}
+
+// newlyBuilt is each source whose first lap has finished and that announced
+// does not name yet, in this index's order — and it marks them, so each
+// source is named once.
+func (x *Indexer) newlyBuilt(announced map[string]bool) []string {
+	var out []string
+	for _, source := range x.sources {
+		name := source.Source()
+		if announced[name] || !x.ReadyFor(name) {
+			continue
+		}
+		announced[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 // indexIdle is how long the indexer waits when it found nothing to do.
@@ -818,9 +859,8 @@ const indexIdle = 2 * time.Second
 // EXPORTED because two callers need exactly this and neither should reach past
 // it: [Indexer.Run] is the loop, and a test drives the index to a fixed point
 // by calling this until it stops finding work. The alternative — a test that
-// waited on [Indexer.Ready] — waits on the FIRST-BUILD gate, which counts rows
-// the index is missing and is deliberately blind to a row that is merely
-// stale.
+// waited on [Indexer.ReadyFor] — waits on the FIRST-BUILD gate, which closes
+// once per process and is deliberately blind to a row that is merely stale.
 func (x *Indexer) Sweep(ctx context.Context) (bool, error) {
 	stale, err := x.Stale(ctx, IndexBatch)
 	if err != nil {

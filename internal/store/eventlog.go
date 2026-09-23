@@ -45,15 +45,38 @@ const (
 	// the floor were unreachable and permanent.
 	EventRetention = EventHistory + 24*time.Hour
 
-	// EventPurgeBatch bounds how many rows one purge statement deletes, so
-	// no single statement holds the writer for a whole backlog — see Purge
-	// for why that matters to the inline event Append. Five hundred rows at
-	// the fat end of real payloads (tens of KB of phase prompts each) is
-	// 10–25 MB of pages per statement, tens of milliseconds of writer hold,
-	// while a week-long overhang still clears in a couple hundred
-	// statements within one maintenance tick. Exported for the contract
-	// suite, which proves the sweep drains a backlog wider than one batch.
+	// EventPurgeBatch bounds how many rows one purge statement deletes, and
+	// EventPurgeBytes how many bytes of payload, whichever is reached first —
+	// so no single statement holds the writer for long; see Purge for why
+	// that matters to the inline event Append.
+	//
+	// TWO BOUNDS, because a row's cost has two parts. Every row is an entry
+	// in each of the table's indexes, which is what the row bound prices:
+	// measured, five hundred rows of twenty kilobytes deleted in 30–50 ms.
+	// And a row's payload is pages to free, which the row bound cannot see:
+	// a row is up to one whole event — a phase record published whole, or
+	// a part of one published cut — and parts of about 8.3 MB measured at
+	// 5–10 ms each, so five hundred of them in one statement would hold the
+	// writer for seconds, past the busy timeout an inline Append waits
+	// under. Thirty-two MiB of payload is four such parts, the same tens of
+	// milliseconds the row bound buys. A row larger than the byte bound is
+	// deleted in a statement of its own, since a statement takes one row at
+	// least. Exported for the contract suite, which proves the sweep drains
+	// a backlog wider than one batch.
 	EventPurgeBatch = 500
+
+	// EventPurgeBytes is the byte half of the purge's bound: the payload one
+	// statement deletes, however few rows it takes. See EventPurgeBatch for
+	// both halves and what each was measured at.
+	EventPurgeBytes = 32 << 20
+
+	// eventPartyPurgeBatch bounds how many rows of the party index one purge
+	// statement deletes. Those rows are a party name and a key and nothing
+	// else, so the row bound is the whole of their cost: ten thousand of them
+	// measured at 45–55 ms, the same tens of milliseconds as an event batch,
+	// and a multi-day overhang — several party rows for every event — still
+	// goes in bounded statements.
+	eventPartyPurgeBatch = 10_000
 
 	// MaxTraceEvents caps one trace's rows. A trace is unbounded in
 	// principle — a long turn with sub-agents accumulates thousands of
@@ -336,8 +359,9 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	// write path.
 	//
 	// [RecordFor] sets it from the one decode it already makes, and the
-	// engine's writer builds every row through RecordFor, so this branch
-	// runs for a record assembled by hand.
+	// event writer builds every row it writes through RecordFor, so this
+	// branch runs for a record assembled by hand: the webhook receiver's
+	// (see RecordFor for why it builds its own), or a test's.
 	//
 	// The zero value writes the same empty strings and zeroes the column
 	// defaults would, so every non-phase row is unaffected.
@@ -944,14 +968,13 @@ func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([
 // ByID returns one event WITH its payload, or ErrNotFound.
 //
 // The identity is (event_time, event_id) and a caller holding only an id — a
-// link, a line pasted from a log — has no time to seek with, so this reads the
-// id index and takes the newest match. That is a guess whenever the id is
-// shared: the primary key is the pair, and nothing in the schema constrains
-// the id alone. A caller that got the row from a listing holds both halves and
-// reads it with [EventLog.ByKey] instead.
+// link, a line pasted from a log — has no time to seek with, so this reads
+// every row carrying the id and answers the newest. That is a guess whenever
+// the id is shared: the primary key is the pair, and nothing in the schema
+// constrains the id alone. A caller that got the row from a listing holds both
+// halves and reads it with [EventLog.ByKey] instead.
 func (l *EventLog) ByID(ctx context.Context, id string) (EventRecord, error) {
-	return l.one(ctx, "event "+id,
-		"WHERE event_id = ? ORDER BY event_time DESC LIMIT 1", id)
+	return l.one(ctx, "event "+id, byIDWhere, id)
 }
 
 // ByKey returns the one event at (at, id) WITH its payload, or ErrNotFound.
@@ -960,35 +983,60 @@ func (l *EventLog) ByID(ctx context.Context, id string) (EventRecord, error) {
 // the id and answers the newest row carrying it, so a caller that took the id
 // off a listing row is handed ANOTHER row's payload whenever an id is shared.
 // Every row a listing returns carries its [EventRecord.Time] and
-// [EventRecord.ID], and this seeks the primary key with both.
+// [EventRecord.ID], and this reads by both.
 //
 // No history window, like ByID: both read a row the caller already names.
 func (l *EventLog) ByKey(ctx context.Context, at time.Time, id string) (EventRecord, error) {
 	return l.one(ctx, "event "+id+" at "+at.UTC().Format(time.RFC3339Nano),
-		"WHERE event_time = ? AND event_id = ?", EncodeTime(at), id)
+		byKeyWhere, EncodeTime(at), id)
 }
 
-// one is the point read ByID and ByKey share: a WHERE naming at most one row,
-// with its payload.
+// pointReadSQL is the select [EventLog.one] reads a row through, before its
+// WHERE.
+const pointReadSQL = "SELECT " + listColumns + ", payload FROM crewlet_events "
+
+// byIDWhere and byKeyWhere are the point reads' WHEREs.
+//
+// NEITHER ORDERS, and that is what keeps a point read a point read. Measured
+// with EXPLAIN QUERY PLAN, `WHERE event_id = ?` is a SEARCH on
+// crewlet_events_id_idx (event_id=?), and so is the key read, whose instant
+// is then checked on the id's rows. The same read ordered by event_time DESC
+// and limited to one — the obvious way to ask for the newest — planned as a
+// SCAN of the primary key's own index, walked newest first until a row
+// matched: linear in the table, 0.34 ms at three thousand rows and 1.8 ms at
+// twenty thousand, against about 0.1 ms for the search at either.
+// [EventLog.one] picks the newest of an id's rows instead.
+// TestAPointReadIsAnIndexSearch holds both plans.
+const (
+	byIDWhere  = "WHERE event_id = ?"
+	byKeyWhere = "WHERE event_time = ? AND event_id = ?"
+)
+
+// one is the point read ByID and ByKey share: the NEWEST of the rows a WHERE
+// names, with its payload.
 //
 // THROUGH THE SHARED SCANNER although it wants one row, which is what
-// QueryRow would give it more directly. A second hand-written Scan is a second
-// copy of the agreement between `listColumns` and the destination list, and
-// that is precisely the drift [EventLog.scanPayloads] exists to prevent: the
-// `work_key` promotion added a column to the list, every listing picked it up,
-// and ByID, holding its own twelve-argument Scan, failed at RUNTIME — on the
-// one read a person reaches by pasting an id. Each caller's WHERE names at most
-// one row, so the cost is one allocation on a path that serves a link.
+// QueryRow would give it more directly. A second hand-written Scan would be a
+// second copy of the agreement between `listColumns` and the destination
+// list, which is the drift [EventLog.scanPayloads] exists to prevent: a column
+// added to the list reaches every read through it, and a read holding its own
+// Scan fails at run time. A WHERE here names one row unless an id is shared,
+// so the cost is one allocation on a path that serves a link.
 func (l *EventLog) one(ctx context.Context, what, where string, args ...any) (EventRecord, error) {
-	recs, err := l.scanPayloads(ctx,
-		"SELECT "+listColumns+", payload FROM crewlet_events "+where, args...)
+	recs, err := l.scanPayloads(ctx, pointReadSQL+where, args...)
 	if err != nil {
 		return EventRecord{}, fmt.Errorf("store: read %s: %w", what, err)
 	}
 	if len(recs) == 0 {
 		return EventRecord{}, fmt.Errorf("%w: %s", ErrNotFound, what)
 	}
-	return recs[0], nil
+	newest := recs[0]
+	for _, rec := range recs[1:] {
+		if rec.Time.After(newest.Time) {
+			newest = rec
+		}
+	}
+	return newest, nil
 }
 
 // PhaseWhole is one phase record whole, as [EventLog.PhaseRecordWhole] reads it.
@@ -1057,33 +1105,80 @@ func (e *MissingWholeError) Error() string {
 	}
 }
 
-// phaseRecordRowSQL is the record's own row and what it says about its whole.
+// phaseRecordRowSQL is the record's own rows and what each says about its
+// whole: every row carrying the id, the newest of which [newestRow] keeps,
+// for the reason [EventLog.ByID] answers the newest. The two integers
+// are read in SQL so the payload is decoded only by the reader it is handed
+// to.
 //
-// Through the id index, like [EventLog.ByID], and newest first for the reason
-// ByID gives. The two integers are read in SQL so the payload is decoded only
-// by the reader it is handed to.
+// NO ORDER BY, for the reason [byIDWhere] gives. Measured with EXPLAIN QUERY
+// PLAN, this is a SEARCH on crewlet_events_id_idx (event_id=?), the type
+// checked on the id's rows. Ordered by event_time DESC and limited to one, it
+// planned as a MULTI-INDEX AND over that index and
+// crewlet_events_type_time_idx with a sorter behind it, linear in the rows of
+// the type: 0.43 ms at three thousand phase records and 2.3 ms at twenty
+// thousand, against about 0.1 ms for the search at either.
+// TestAPointReadIsAnIndexSearch holds the plan.
 const phaseRecordRowSQL = `
-SELECT payload,
+SELECT event_time, payload,
        COALESCE(json_extract(payload, '$.whole_bytes'), 0),
        COALESCE(json_extract(payload, '$.whole_parts'), 0)
   FROM crewlet_events
- WHERE event_id = ? AND event_type = ?
- ORDER BY event_time DESC
- LIMIT 1`
+ WHERE event_id = ? AND event_type = ?`
 
 // phasePart is a part's wire type, taken from the payload type itself for the
 // reason [phaseCompleted] is.
 var phasePart = types.AgentPhaseRecordPart{}.EventType()
 
-// phaseRecordPartSQL is one part's row, through the id index too: a part's id
-// is derived from the record's ([types.PhaseRecordPartID]), which is what lets
-// this read need no index of its own.
+// phaseRecordPartSQL is one part's rows, the newest of which [newestRow]
+// keeps. Measured with EXPLAIN QUERY PLAN, a SEARCH on the id index too;
+// ordered and limited to one, it planned the MULTI-INDEX AND and the sorter
+// [phaseRecordRowSQL] did, linear in the rows of the part type. A part's id
+// is derived from the record's ([types.PhaseRecordPartID]), which is what
+// lets this read need no index of its own.
 const phaseRecordPartSQL = `
-SELECT payload
+SELECT event_time, payload
   FROM crewlet_events
- WHERE event_id = ? AND event_type = ?
- ORDER BY event_time DESC
- LIMIT 1`
+ WHERE event_id = ? AND event_type = ?`
+
+// newestRow runs a point read and keeps the newest of its rows, reporting
+// false when there is none. scan reads one row into a value of its own and
+// returns the row's event_time beside it.
+//
+// ONE ROW KEPT AT A TIME: each row is scanned into a fresh value, and a row
+// older than the one kept is dropped as soon as it is read, so at most two
+// rows' payloads are held at once — a part's is up to nearly as large as one
+// event may be.
+func newestRow[T any](ctx context.Context, db *sql.DB, query string, args []any,
+	scan func(*sql.Rows) (int64, T, error),
+) (T, bool, error) {
+	var (
+		kept  T
+		at    int64
+		found bool
+	)
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return kept, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		when, v, err := scan(rows)
+		if err != nil {
+			return kept, false, err
+		}
+		if !found || when > at {
+			kept, at, found = v, when, true
+		}
+	}
+	return kept, found, rows.Err()
+}
+
+// phaseRow is a phase record's own row, as [phaseRecordRowSQL] reads it.
+type phaseRow struct {
+	payload                []byte
+	wholeBytes, wholeParts int
+}
 
 // PhaseRecordWhole returns one phase record WHOLE.
 //
@@ -1109,35 +1204,42 @@ SELECT payload
 // it; [*MissingWholeError] when it holds a cut record, or parts, that do not
 // reach the whole.
 func (l *EventLog) PhaseRecordWhole(ctx context.Context, id string) (PhaseWhole, error) {
-	var (
-		payload                []byte
-		wholeBytes, wholeParts int
-	)
-	err := l.db.sql.QueryRowContext(ctx, phaseRecordRowSQL, id, phaseCompleted).
-		Scan(&payload, &wholeBytes, &wholeParts)
-	recorded := err == nil
+	row, recorded, err := newestRow(ctx, l.db.sql, phaseRecordRowSQL, []any{id, phaseCompleted},
+		func(rows *sql.Rows) (int64, phaseRow, error) {
+			var (
+				at int64
+				r  phaseRow
+			)
+			err := rows.Scan(&at, &r.payload, &r.wholeBytes, &r.wholeParts)
+			return at, r, err
+		})
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return PhaseWhole{}, fmt.Errorf("store: read phase record %s: %w", id, err)
-	case wholeBytes == 0:
-		return PhaseWhole{Payload: payload}, nil
+	case recorded && row.wholeBytes == 0:
+		return PhaseWhole{Payload: row.payload}, nil
 	}
 	record, err := uuid.Parse(id)
-	if err != nil {
-		// Every event id this engine mints is a UUID, and a part's id is
-		// derived from its record's, so an id that is not one names no
-		// parts at all.
-		if recorded {
-			return PhaseWhole{}, &MissingWholeError{ID: id, WholeBytes: wholeBytes,
-				Kept: wholeParts > 0, Recorded: true}
-		}
+	switch {
+	case err != nil && !recorded:
+		// A part's id is derived from its record's UUID, so an id that is
+		// not one names no part, and with no row it names nothing here.
 		return PhaseWhole{}, fmt.Errorf("%w: phase record %s", ErrNotFound, id)
+	case err != nil:
+		// A ROW THAT STATES A WHOLE IN PARTS UNDER AN ID NO PART CAN BE
+		// DERIVED FROM. No build of this engine writes one — every event id
+		// it mints is a UUID — but the row is data this read did not write,
+		// so it is answered as what it is: a record whose parts cannot be
+		// named, which says nothing about whether they were published.
+		return PhaseWhole{}, fmt.Errorf("store: phase record %s states a whole of %d bytes in "+
+			"parts, and its parts' ids are derived from a record id that is a UUID, which "+
+			"%q is not: %w", id, row.wholeBytes, id, err)
 	}
-	whole, parts, stated, err := l.phaseRecordParts(ctx, record, wholeBytes)
+	whole, parts, stated, err := l.phaseRecordParts(ctx, record, row.wholeBytes)
 	if err != nil {
 		return PhaseWhole{}, err
 	}
+	wholeBytes := row.wholeBytes
 	if wholeBytes == 0 {
 		wholeBytes = stated
 	}
@@ -1146,7 +1248,7 @@ func (l *EventLog) PhaseRecordWhole(ctx context.Context, id string) (PhaseWhole,
 		return PhaseWhole{}, fmt.Errorf("%w: phase record %s", ErrNotFound, id)
 	case parts == 0 || len(whole) < wholeBytes:
 		return PhaseWhole{}, &MissingWholeError{ID: id, FoundBytes: len(whole), Parts: parts,
-			WholeBytes: wholeBytes, Kept: wholeParts > 0, Recorded: recorded}
+			WholeBytes: wholeBytes, Kept: row.wholeParts > 0, Recorded: recorded}
 	}
 	return PhaseWhole{Payload: whole, Parts: parts}, nil
 }
@@ -1169,14 +1271,21 @@ func (l *EventLog) phaseRecordParts(ctx context.Context, record uuid.UUID, want 
 		if want > 0 && len(whole) == want {
 			return whole, index, want, nil
 		}
-		var raw []byte
-		err := l.db.sql.QueryRowContext(ctx, phaseRecordPartSQL,
-			types.PhaseRecordPartID(record, index).String(), phasePart).Scan(&raw)
-		if errors.Is(err, sql.ErrNoRows) {
-			return whole, index, want, nil
-		}
+		raw, found, err := newestRow(ctx, l.db.sql, phaseRecordPartSQL,
+			[]any{types.PhaseRecordPartID(record, index).String(), phasePart},
+			func(rows *sql.Rows) (int64, []byte, error) {
+				var (
+					at   int64
+					data []byte
+				)
+				err := rows.Scan(&at, &data)
+				return at, data, err
+			})
 		if err != nil {
 			return nil, 0, 0, fmt.Errorf("store: read part %d of phase record %s: %w", index, record, err)
+		}
+		if !found {
+			return whole, index, want, nil
 		}
 		var part types.AgentPhaseRecordPart
 		if err := json.Unmarshal(raw, &part); err != nil {
@@ -1210,14 +1319,15 @@ func (l *EventLog) phaseRecordParts(ctx context.Context, record uuid.UUID, want 
 // Offering the choice would only make both mistakes possible.
 //
 // It deletes in batches, each its own autocommit statement, because this is
-// the highest-volume table in the deployment and its rows carry whole phase
-// payloads: one DELETE over a multi-day overhang — a fleet that was down, a
-// singleton duty that lapsed — holds the single writer for the whole
-// statement, and the event Append runs INLINE in the publishing goroutine,
-// which drops the event with a warning once busy_timeout runs out. Batching
-// releases the writer between statements, so live appends interleave with the
-// catch-up instead of losing to it. On the steady-state tick the overhang is
-// one batch and the loop runs once.
+// the highest-volume table in the deployment and its rows carry whole event
+// payloads: one DELETE over a multi-day overhang — a node that was down for
+// days comes back to one — holds the single writer for the whole statement,
+// and the event Append runs INLINE in the publishing goroutine, which drops
+// the event with a warning once busy_timeout runs out. Batching releases the
+// writer between statements, so live appends interleave with the catch-up
+// instead of losing to it. A batch is bounded by rows and by payload bytes
+// (see EventPurgeBatch), and the party index it keeps in step is deleted in
+// batches of its own.
 func (l *EventLog) Purge(ctx context.Context) (int64, error) {
 	cutoff := EncodeTime(now().Add(-EventRetention))
 	// THE PARTY INDEX GOES FIRST, and on its own horizon rather than per
@@ -1228,29 +1338,113 @@ func (l *EventLog) Purge(ctx context.Context) (int64, error) {
 	// party row has no event is the short one, rather than the reverse,
 	// where an event would briefly be invisible to the filter that reads
 	// them. See schema/0016.
-	if _, err := l.db.sql.ExecContext(ctx,
-		"DELETE FROM crewlet_event_parties WHERE event_time < ?", cutoff,
-	); err != nil {
-		return 0, fmt.Errorf("store: purge event parties: %w", err)
-	}
-	var total int64
 	for {
-		res, err := l.db.sql.ExecContext(ctx,
-			`DELETE FROM crewlet_events WHERE rowid IN (
-				SELECT rowid FROM crewlet_events WHERE event_time < ? LIMIT ?)`,
-			cutoff, EventPurgeBatch)
+		res, err := l.db.sql.ExecContext(ctx, partyPurgeSQL, cutoff, eventPartyPurgeBatch)
 		if err != nil {
-			return total, fmt.Errorf("store: purge events: %w", err)
+			return 0, fmt.Errorf("store: purge event parties: %w", err)
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
-			return total, fmt.Errorf("store: purge events count: %w", err)
+			return 0, fmt.Errorf("store: purge event parties count: %w", err)
 		}
+		if n < eventPartyPurgeBatch {
+			break
+		}
+	}
+	var total int64
+	for {
+		batch, more, err := l.nextPurgeBatch(ctx, cutoff, EventPurgeBatch, EventPurgeBytes)
+		if err != nil {
+			return total, fmt.Errorf("store: purge events: %w", err)
+		}
+		if len(batch.rowids) == 0 {
+			return total, nil
+		}
+		n, err := l.deleteBatch(ctx, cutoff, batch)
 		total += n
-		if n < EventPurgeBatch {
+		if err != nil {
+			return total, fmt.Errorf("store: purge events: %w", err)
+		}
+		if !more {
 			return total, nil
 		}
 	}
+}
+
+// partyPurgeSQL deletes one batch of the party index's rows past the cutoff.
+const partyPurgeSQL = `DELETE FROM crewlet_event_parties WHERE rowid IN (
+	SELECT rowid FROM crewlet_event_parties WHERE event_time < ? LIMIT ?)`
+
+// purgeCandidatesSQL is the oldest rows past the cutoff, in key order, with
+// the size of each one's payload.
+//
+// READ OUTSIDE THE WRITE, as a statement of its own: a payload's size is read
+// off its bytes — measured at about as long as deleting the row takes — and a
+// read holds no writer. The sizes are computed as the rows are stepped
+// through (measured: stepping four of twelve 8.3 MB rows cost what four do),
+// so a batch that stops at its byte bound has read no further than the row
+// that would have crossed it.
+const purgeCandidatesSQL = `SELECT rowid, octet_length(payload) FROM crewlet_events
+	WHERE event_time < ? ORDER BY event_time, event_id LIMIT ?`
+
+// purgeBatch is one purge statement's rows.
+type purgeBatch struct {
+	rowids []any
+	// bytes is what their payloads weigh together.
+	bytes int64
+}
+
+// nextPurgeBatch reads the next batch past cutoff: the oldest rows, in key
+// order, as many as fit maxRows rows and maxBytes of payload — and one at
+// least, so a row larger than maxBytes goes in a statement of its own rather
+// than never. more is false when the rows past the cutoff ran out before
+// either bound, so the sweep is over once this batch goes.
+func (l *EventLog) nextPurgeBatch(ctx context.Context, cutoff int64, maxRows int, maxBytes int64) (purgeBatch, bool, error) {
+	var batch purgeBatch
+	rows, err := l.db.sql.QueryContext(ctx, purgeCandidatesSQL, cutoff, maxRows)
+	if err != nil {
+		return batch, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var rowid, size int64
+		if err := rows.Scan(&rowid, &size); err != nil {
+			return batch, false, err
+		}
+		if len(batch.rowids) > 0 && batch.bytes+size > maxBytes {
+			// This row starts the next batch.
+			return batch, true, nil
+		}
+		batch.rowids = append(batch.rowids, rowid)
+		batch.bytes += size
+	}
+	if err := rows.Err(); err != nil {
+		return batch, false, err
+	}
+	return batch, len(batch.rowids) == maxRows, nil
+}
+
+// deleteBatch deletes one batch's rows.
+//
+// THE CUTOFF IS CHECKED AGAIN, on the rows the batch names. A rowid is the
+// table's own and not the event's identity, nothing in the table's schema
+// reserves one once its row is gone (it has no AUTOINCREMENT), and the read
+// that chose these rows ran as a statement of its own: the check is what
+// makes a rowid that names a newer row by the time this runs a row it leaves
+// alone.
+func (l *EventLog) deleteBatch(ctx context.Context, cutoff int64, batch purgeBatch) (int64, error) {
+	res, err := l.db.sql.ExecContext(ctx, deleteBatchSQL(len(batch.rowids)),
+		append([]any{cutoff}, batch.rowids...)...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// deleteBatchSQL deletes the rows of a batch of n, by rowid, past the cutoff.
+func deleteBatchSQL(n int) string {
+	return "DELETE FROM crewlet_events WHERE event_time < ? AND rowid IN (" +
+		strings.TrimSuffix(strings.Repeat("?, ", n), ", ") + ")"
 }
 
 func (l *EventLog) scanRows(ctx context.Context, query string, args ...any) ([]EventRecord, error) {

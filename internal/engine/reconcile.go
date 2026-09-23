@@ -708,6 +708,12 @@ func (r *Reconciler) record(ctx context.Context, target coord.Activation,
 // queue's payload ceiling is refused, and the publisher below logs and moves
 // on, so an unbounded failure text would cost the operator the whole record
 // rather than its tail.
+//
+// THE EVENT CARRIES THE HEAD, AND THIS NODE'S LOG THE WHOLE. message is the
+// error [Reconciler.Tick] returns for this apply, and each caller of Tick logs
+// a failed tick's error whole at WARN: [Reconciler.Run] as
+// reconcile_tick_failed, and the boot's first tick (cmd/crewlet) as
+// initial_reconcile_failed.
 func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation,
 	status configplane.ApplyStatus, applied []string, message string,
 ) {

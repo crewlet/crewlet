@@ -122,6 +122,10 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 }
 
 // hits filters and renders what came back.
+//
+// THE EXCLUSION IS [knowledge.Excludes], the rule the native backend applies
+// too, so a page is kept or dropped the same way whichever backend a company
+// runs. What this backend contributes is how much of the chain it knows.
 func (s *Searcher) hits(pages []Page, q knowledge.Query) []knowledge.Hit {
 	excluded := q.Excluded()
 	out := make([]knowledge.Hit, 0, q.Hits())
@@ -132,38 +136,25 @@ func (s *Searcher) hits(pages []Page, q knowledge.Query) []knowledge.Hit {
 		if s.skillsSpace != "" && strings.EqualFold(page.Space, s.skillsSpace) {
 			continue
 		}
-		if hidden(page, excluded) {
-			continue
-		}
-		out = append(out, knowledge.Hit{
+		hit := knowledge.Hit{
 			Title: page.Title, URL: s.link(page), Container: page.Space,
 			PageID: page.ID, Ancestors: page.Ancestors,
-			Snippet: knowledge.Snippet(Flatten(page.Body), knowledge.SnippetLimit),
-		})
+			// KNOWN ONLY WHEN IT CAME BACK NON-EMPTY. The chain is the
+			// search's `ancestors` expand, and an empty one is either a
+			// page at the top of its space or an answer that lost the
+			// expand — which [Page] does not tell apart. Claimed as
+			// known, the second would publish every draft whose parent
+			// the site left out; left unknown, a draft at the top of its
+			// space is judged by its title prefix, which fails closed.
+			AncestorsKnown: len(page.Ancestors) > 0,
+		}
+		if knowledge.Excludes(hit, excluded) {
+			continue
+		}
+		hit.Snippet = knowledge.Snippet(Flatten(page.Body), knowledge.SnippetLimit)
+		out = append(out, hit)
 	}
 	return out
-}
-
-// hidden reports a page the caller asked not to see.
-//
-// TWO TESTS, and the second is the backstop the first needs. The ancestor
-// chain is the real mechanism; the TITLE PREFIX covers the case where the
-// chain did not come back — a search that lost its `ancestors` expand, an
-// instance that answered without it — because an exclusion that silently
-// matches nothing looks exactly like a knowledge base with no drafts in it,
-// and the consequence is an agent following an unreviewed procedure.
-func hidden(page Page, excluded []string) bool {
-	for _, ancestor := range page.Ancestors {
-		for _, drop := range excluded {
-			if strings.EqualFold(strings.TrimSpace(ancestor), strings.TrimSpace(drop)) {
-				return true
-			}
-		}
-	}
-	if len(excluded) > 0 && strings.HasPrefix(page.Title, knowledge.AutoDraftTitlePrefix) {
-		return true
-	}
-	return false
 }
 
 // link is the address a person opens, or empty.

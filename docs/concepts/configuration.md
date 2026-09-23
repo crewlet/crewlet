@@ -8,7 +8,7 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
-| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
+| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | Where the store's two files live, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging (level, shape and an optional rotating log file) |
 | **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
@@ -37,7 +37,9 @@ stream:
   store_dir: "./crewlet-data/stream"
 
 store:
-  path: "./crewlet-data/company.db"   # ONE file, owned exclusively
+  path: "./crewlet-data/company.db"   # this node's own records; the replicated
+                                      #   estate goes beside it. Both owned
+                                      #   exclusively by this process
 
 coordination:
   type: local           # one node; a fleet needs `embedded-kv`
@@ -89,7 +91,7 @@ node:
 |---|---|---|
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep's fleet jobs (removed-seat mailbox retirement among them), the sandbox waiter, the integration reconcile loop, the embedding pass, the state log's trim, and the learning background passes (episode lifecycle, skill curation, clustering and promotion). The retention sweeps of the tables each node keeps its own copy of are not duties: they run on every node, whatever its roles | Nothing fires on a schedule, no sandbox run is collected, no fleet-wide record is swept, no integration is reconciled, nothing new is embedded for semantic search, and no state log is trimmed |
 
 Subtracting a role subtracts it from **this node, never from the
 company**, so the fleet as a whole still needs every role somewhere. That
@@ -143,24 +145,21 @@ The engine boots in this order:
    pointing at why. The same ordering has a corollary — a boot that fails on
    the Tier A document itself never reaches this step, so stderr is the only
    record of it, `logging.stderr` notwithstanding
-4. Open the store file and start or dial the stream
-5. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
-6. Start the API inside this process, bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
-7. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
-8. `SELECT payload FROM company_config WHERE is_active <> 0`
-   - **Row present**: apply the payload, which spawns the full company
-   - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`
+4. Choose the company the engine is built on: the Tier B file when one is given, otherwise the revision this node's store has marked active, read by opening the store on its own and closing it again. With neither, the engine is built in the **unconfigured** state
+5. Start or dial the stream, attach the coordination store to its connection, then open the store's two files — the node estate at `store.path` and the replicated estate beside it (`store.replicated_path`) — each under an exclusive lock this process holds until it stops. Opening a file runs its estate's migrations, every file in one pass. They need no lock of their own and no phase ordering: the open already holds the file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
+6. Build the engine on that company — its epoch and its seat host, with no seat claimed yet
+7. Reconcile with the fleet: a Tier B file is imported when the store holds no company yet (and, when it holds a different one, ignored with a warning unless `-import-company` named the file), and one tick of the [control plane](control-plane.md) moves the node onto the epoch the activation pointer names — before any seat is claimed, so seats are claimed under the epoch this node will serve
+8. Start the API inside this process, bound to `api.host:api.port`, with its auth middleware and `/config/*` routes — before the engine starts, so the inbound edge is not dark while seats are claimed. An unconfigured node serves it too, so an operator can push the first revision via `PUT /config` or `crewlet config import`
+9. Start the engine, which claims this node's seats, and then the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
 
 **A boot that fails leaves nothing running.** Any step above can fail — an
 unreachable broker, a keyring the node cannot open, a provider whose model is a
 `${VAR}` nothing sets — and when one does the node unwinds everything the steps
 before it started, in the order a shutdown uses: the state log's apply loops and
 its snapshot donor, the shared MCP child processes, every duty loop, this node's
-publish admission, and the store file and stream it opened itself. So a
-supervised `crewlet run` retries onto a clean host rather than contending with
-its own previous attempt — which matters most for the store, since one process
-owns that file exclusively and a second open behind a leaked handle fails with
-a message about locking that names neither the original failure nor the file.
+publish admission, and the stream and store files it opened itself. So a failed
+boot leaves no MCP process tree holding the company's credentials, and no
+admission telling a capacity operation that this node may still be publishing.
 The `engine_boot_abandoned` line is what says the unwind finished.
 
 ### Two equivalent bootstrap entry points
@@ -214,7 +213,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 
 **What stays running:**
 
-- The Tier A resources — the stream, the store file, the API socket — all up.
+- The Tier A resources — the stream, the store's two files, the API socket — all up.
 - The API's `/config/*` routes and the node's [reconcile loop](control-plane.md) — which is exactly what wakes an unconfigured node when the first revision lands.
 - A structured log line carrying `state=unconfigured`, so the unconfigured posture is obvious in logs and on the dashboard.
 
@@ -678,6 +677,6 @@ The untyped maps (`mcp_servers[].env` and `.headers`, `cli.env`, a sandbox step'
 
 ## One company per engine
 
-An engine runs exactly one company. It opens one store file, that file holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no tenant column and no row-level scoping: the revision you activate is simply the company the engine runs. The same rule governs the [secret store](secret-store.md): one company per coordination estate, so a variable name alone is the key.
+An engine runs exactly one company. Its node estate — the store file at `store.path` — holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no tenant column and no row-level scoping: the revision you activate is simply the company the engine runs. The same rule governs the [secret store](secret-store.md): one company per coordination estate, so a variable name alone is the key.
 
 To run a second company, run a second engine with its own database.

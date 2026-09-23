@@ -108,7 +108,8 @@ type SearcherOptions struct {
 	// REQUIRED. Each hit's parent chain is read from it, as titles
 	// outermost first, and [knowledge.Query.ExcludeAncestors] drops a hit
 	// whose chain carries an excluded title — which is how a page under
-	// [knowledge.AutoDraftedParent] stays out of every seat's search.
+	// [knowledge.AutoDraftedParent] stays out of every seat's search. The
+	// same read says whether the page is still there and still published.
 	DB *store.DB
 }
 
@@ -250,12 +251,24 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 		if s.isExcluded(hit.Container) {
 			continue
 		}
+		chain, held := chains[hit.ID]
+		if !held || !chain.published {
+			// INDEXED AND GONE, or no longer published. The index is
+			// behind this node's own rows by design and drops such a
+			// page on its next orphan pass; until then the chain read,
+			// which is the later of the two, is what knows. A purged
+			// page is one nobody can open, and a draft or a trashed one
+			// is not what a knowledge search answers with — the rule
+			// [search.PageSource] indexes by.
+			continue
+		}
 		found := knowledge.Hit{
-			Title:     hit.Title,
-			Container: hit.Container,
-			PageID:    hit.ID,
-			Snippet:   hit.Snippet,
-			Ancestors: chains[hit.ID],
+			Title:          hit.Title,
+			Container:      hit.Container,
+			PageID:         hit.ID,
+			Snippet:        hit.Snippet,
+			Ancestors:      chain.titles,
+			AncestorsKnown: chain.whole,
 		}
 		if knowledge.Excludes(found, excluded) {
 			continue
@@ -268,14 +281,31 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 	return out
 }
 
+// hitChain is what one hit's own row said when its parent chain was read.
+type hitChain struct {
+	// titles is the parent chain, outermost first — empty for a page at the
+	// top of its container.
+	titles []string
+
+	// whole says the walk ended where the chain does: at a page with no
+	// parent, or back at a page it had already visited. False when it ran
+	// into a parent this node holds no page for, which leaves everything
+	// above that point unknown — see [knowledge.Hit.AncestorsKnown].
+	whole bool
+
+	// published is the page's status at the read, which can be later than
+	// the index's.
+	published bool
+}
+
 // ancestry is each hit's parent chain as titles, outermost first, read in one
 // transaction by the same walk a page's breadcrumb is ([parentChains]). A page
-// with no parent has no entry, and neither does one this node no longer holds.
-func (s *Searcher) ancestry(ctx context.Context, ids []string) (map[string][]string, error) {
+// this node no longer holds has no entry.
+func (s *Searcher) ancestry(ctx context.Context, ids []string) (map[string]hitChain, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	out := make(map[string][]string, len(ids))
+	out := make(map[string]hitChain, len(ids))
 	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		chains := newParentChains(tx)
 		for _, id := range ids {
@@ -286,13 +316,27 @@ func (s *Searcher) ancestry(ctx context.Context, ids []string) (map[string][]str
 			if !held {
 				continue
 			}
-			above, _, err := chains.above(ctx, id, page.ParentID)
+			above, looped, err := chains.above(ctx, id, page.ParentID)
 			if err != nil {
 				return err
 			}
-			for _, ancestor := range above {
-				out[id] = append(out[id], ancestor.Title)
+			// THE TOP OF THE WALK is the parent of the outermost page it
+			// reached — the page's own parent when it reached none. Empty
+			// there is the top of the container; anything else is a
+			// parent the walk could not read, unless the walk stopped on
+			// a loop, which names every page it can.
+			top := page.ParentID
+			if len(above) > 0 {
+				top = above[0].ParentID
 			}
+			chain := hitChain{
+				whole:     looped || top == "",
+				published: page.Status == StatusPublished,
+			}
+			for _, ancestor := range above {
+				chain.titles = append(chain.titles, ancestor.Title)
+			}
+			out[id] = chain
 		}
 		return nil
 	})

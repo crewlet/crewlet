@@ -51,13 +51,19 @@ import (
 // no cursor.
 //
 // Each call is AS ITS RECORD HOLDS IT. A call too large for one record is its
-// record's fitted form — its output ending in "…", arguments that did not fit
-// replaced by a one-member object keyed "…" — and says where the rest is: it
-// carries `whole_bytes` and `whole_parts`, the length of its whole and the
-// number of parts it is kept in under the call's record, which is what the
-// run's resume reads it back whole from. A fitted call without them is one
-// whose whole was not kept, and its output's note says so. The answer never
-// carries a part, nor counts one.
+// record's fitted form, marked in whichever field was cut: an output that did
+// not fit ends in "…", and arguments that did not fit are replaced by a
+// one-member object keyed "…". One whose whole was filed in parts carries
+// `whole_bytes` and `whole_parts`, the length of its whole and how many parts
+// hold it under the call's record, which is what the run's resume reads it
+// back whole from. One that carries neither and whose whole could not be kept
+// says so in the field that was cut: the arguments' object says they were not
+// kept, and a cut output ends in a note after its "…". A record an older build
+// fitted, before parts, carries neither the reference nor a note: its cut
+// output ends in "…" alone, and arguments it set aside are the object saying
+// they were not kept. A call that a server set below the ceiling refused is its
+// least form: its name and outcome, with each text it had replaced by its
+// mark. The answer never carries a part, nor counts one.
 
 // PendingRuns is the durable record a sandbox-runs answer reads.
 //

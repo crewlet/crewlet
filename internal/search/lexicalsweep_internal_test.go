@@ -3,7 +3,9 @@ package search
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -57,6 +59,116 @@ func TestABusySweepTakesOneOrphanStep(t *testing.T) {
 			"check(s) over an index a lap of which is two", src.checks)
 	}
 }
+
+// EACH CORPUS IS ANNOUNCED BUILT ON ITS OWN FIRST LAP, AND ONCE.
+//
+// `lexical_index_built` marks the moment a search stops saying "still
+// building", and a knowledge search waits on the pages' lap alone while a work
+// search waits on the work items'. So the line is per corpus: announced only
+// when the whole index had lapped, it would name a moment neither search
+// observes, and stay silent while one corpus served and the other built.
+func TestEachCorpusIsAnnouncedBuiltOnItsOwnLap(t *testing.T) {
+	t.Parallel()
+	db := openInternalStore(t)
+	x := NewIndexerOver(db, []LexicalSource{PageSource{}, stuckSource{}})
+	announced := map[string]bool{}
+
+	if got := x.newlyBuilt(announced); len(got) != 0 {
+		t.Fatalf("before any lap %v was announced built", got)
+	}
+	// The pages come first, so their lap finishes before the sweep reaches
+	// the corpus that never does — which then fails every sweep.
+	for sweeps := 0; !x.ReadyFor(string(SourcePage)); sweeps++ {
+		if sweeps == 100 {
+			t.Fatal("the page corpus never finished its first lap")
+		}
+		if _, err := x.Sweep(t.Context()); err != nil && !errors.Is(err, errStuck) {
+			t.Fatalf("sweep: %v", err)
+		}
+	}
+	if got := x.newlyBuilt(announced); !slices.Equal(got, []string{string(SourcePage)}) {
+		t.Errorf("with the pages built and the other corpus not, %v was announced, "+
+			"want the pages alone", got)
+	}
+	if got := x.newlyBuilt(announced); len(got) != 0 {
+		t.Errorf("the pages were announced a second time: %v", got)
+	}
+	// AND ITS PENDING COUNT IS ITS OWN, read without the corpus that cannot
+	// be read at all — the line would otherwise carry an error for a corpus
+	// it is not about.
+	if n, err := x.Pending(t.Context(), string(SourcePage)); err != nil || n != 0 {
+		t.Errorf("the built pages report %d pending (%v), want 0", n, err)
+	}
+	if _, err := x.Pending(t.Context()); !errors.Is(err, errStuck) {
+		t.Errorf("the whole index's pending count read past a corpus it cannot "+
+			"count: %v", err)
+	}
+}
+
+// ONE CORPUS'S ORPHANS DO NOT HIDE ANOTHER CORPUS'S MISSING DOCUMENTS.
+//
+// Pending is two counts and a subtraction, and an index row whose source is
+// gone offsets a document with no row. Within one corpus that is the price of
+// not joining across estates; across corpora it is a wrong answer, so the
+// subtraction is clamped per source before anything is summed.
+func TestPendingIsClampedPerCorpus(t *testing.T) {
+	t.Parallel()
+	db := openInternalStore(t)
+	// A PAGE ROW WITH NO PAGE BEHIND IT: an orphan the next sweep removes.
+	writeCapCorpus(t, db, []capDoc{{id: "p.gone", length: 3,
+		terms: map[string]int{"word": 1}}})
+	// AND A WORK ITEM THE INDEX HAS NO ROW FOR.
+	if _, err := db.Replicated().SQL().ExecContext(t.Context(), `
+		INSERT INTO tracker_tasks (id, key, project_key, root_id, type, title,
+		                           status, status_group, rank, document,
+		                           version, created_at, updated_at)
+		VALUES ('t.1', 'ENG-1', 'ENG', 't.1', 'task', 'Rotate the key',
+		        'todo', 'not_started', 'a0', json_object('body', ''), 1, 0, 0)`); err != nil {
+		t.Fatalf("insert a work item: %v", err)
+	}
+	x := NewIndexerOver(db, []LexicalSource{PageSource{}, TaskSource{}})
+
+	for _, tc := range []struct {
+		sources []string
+		want    int
+	}{
+		{nil, 1},
+		{[]string{string(SourceTask)}, 1},
+		{[]string{string(SourcePage)}, 0},
+		{[]string{"a-corpus-this-build-has-never-heard-of"}, 0},
+	} {
+		n, err := x.Pending(t.Context(), tc.sources...)
+		if err != nil {
+			t.Fatalf("Pending(%v): %v", tc.sources, err)
+		}
+		if n != tc.want {
+			t.Errorf("Pending(%v) = %d, want %d", tc.sources, n, tc.want)
+		}
+	}
+}
+
+// errStuck is what [stuckSource] answers every read with.
+var errStuck = errors.New("this corpus cannot be read")
+
+// stuckSource is a corpus this node cannot read, so its first lap never
+// finishes.
+type stuckSource struct{}
+
+func (stuckSource) Source() string { return string(SourceTask) }
+
+func (stuckSource) Versions(context.Context, *sql.Tx, string, int) ([]DocVersion, error) {
+	return nil, errStuck
+}
+
+func (stuckSource) Fetch(context.Context, *sql.Tx, []string) ([]Doc, error) {
+	return nil, errStuck
+}
+
+func (stuckSource) Live(context.Context, *sql.Tx, []string) (map[string]bool, error) {
+	return nil, errStuck
+}
+
+func (stuckSource) Count(context.Context, *sql.Tx) (int, error) { return 0, errStuck }
 
 // countedSource offers one page to index, calls every indexed id live, and
 // counts the existence checks it is asked.

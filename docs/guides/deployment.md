@@ -28,7 +28,10 @@ stream:
   store_dir: "/var/lib/crewlet/stream"   # empty = in-memory, nothing survives a restart
 
 store:
-  path: "/var/lib/crewlet/company.db"    # ONE file, this process only
+  path: "/var/lib/crewlet/company.db"    # this node's own records; the replicated
+                                         #   estate goes beside it, in
+                                         #   crewlet-replicated.db. Both are this
+                                         #   process's only
 
 coordination:
   type: local                 # one node holding its own seat leases
@@ -332,21 +335,28 @@ coordination:
 > moves to another server when that one goes away, and a server set lower
 > that it reaches then refuses the engine's large messages there. Its refusal
 > of an event names that server's own `max_payload`, the 8 MiB the engine
-> sizes against, and the setting to raise. A phase record
-> larger than that server accepts is published cut to what the server takes:
-> the node halves what it cuts the record to on each such refusal, splits each
-> refused part of the record's whole in two while the halves stay at least
-> 64 KiB, and logs `phase_record_refused_within_ceiling`. If the server
-> refuses a part too small to split again, the record goes out with no whole
-> behind it (`phase_record_whole_not_kept`), and if it refuses even the
-> record's smallest form the phase has no record at all
-> (`phase_record_not_published`). A coding run's bridged call larger than that
-> server accepts keeps its record in its least form — its name and outcome,
-> both texts replaced by their marks — and its whole in parts split the same
-> way (`sandbox_bridge_call_refused_within_ceiling`, and
-> `sandbox_bridge_call_whole_not_kept` when a part is refused too small to
-> split again). The two `…_refused_within_ceiling` lines name `max_payload`,
-> and so does a `…_whole_not_kept` line whose part was refused for its size.
+> sizes against, and the setting to raise. A phase record larger than that
+> server accepts is published cut to what the server takes: the node retries
+> each refused part of the record's whole at half its size, or at 64 KiB of
+> data when half would be smaller; it cuts the record itself to half the
+> smallest message the server has refused, a part or the record, halving again
+> on each further refusal; and it logs `phase_record_refused_within_ceiling`.
+> If the server refuses a part of 64 KiB of data or less, the record goes out
+> with no whole behind it (`phase_record_whole_not_kept`), and if it refuses
+> even the record's smallest form the phase has no record at all
+> (`phase_record_not_published`). A coding run's bridged call whose record
+> that server refuses is filed in its least form instead — its name and
+> outcome, each text it had replaced by its mark — with its whole in parts
+> split the same way (`sandbox_bridge_call_refused_within_ceiling`, and
+> `sandbox_bridge_call_whole_not_kept` when a part of 64 KiB or less is
+> refused). The two `…_refused_within_ceiling` lines name `max_payload`, and
+> so does a `…_whole_not_kept` line whose part was refused for its size; a
+> bridged call's refusal, in the `error` either line carries, also names the
+> `max_payload` the server this node is connected to announces, beside the
+> 8 MiB the engine sizes against. A write to the engine's own tracker, knowledge
+> base or vector index that the server refuses for its size is refused at once
+> as `too_large`, naming the `max_payload` that server announces and, where it
+> is below 8 MiB, the setting to raise, and the engine does not retry it.
 > A payload limit on the NATS account or user the engine connects as caps the
 > same messages, so where one is set (`max_payload` in an account's `limits`,
 > or `payload` in an account or user JWT's limits) it must be at least 8 MiB
@@ -678,8 +688,8 @@ injects a pod name without templating the config. Two nodes sharing an id
 miscount the fleet and each compute too small a share.
 
 Each node migrates its **own** store files at boot; there is no shared schema
-to bring up first, and no migration lock, because no two processes share a
-file. [`crewlet migrate`](../reference/cli.md#crewlet-migrate) applies them
+to bring up first, and nothing to coordinate between nodes, because no two
+processes share a file. [`crewlet migrate`](../reference/cli.md#crewlet-migrate) applies them
 ahead of time when you would rather not do it on the startup path.
 
 What a fleet gets right, each of which was a real defect before:
@@ -747,12 +757,19 @@ re-extracts a cache entry that will not verify. Two consequences worth knowing:
   exactly this reason — or run the engine on a glibc host. macOS is
   unaffected.
 
-**The engine owns both files exclusively.** A second process pointed at either
-path is not a degraded configuration, it is corruption waiting for a schedule
-to collide — so nothing that genuinely needs to be shared between nodes lives
-here. Seat leases, the activation pointer and per-node apply status, the
-completion ledger, webhook dedupe, the rate valve and credential cooldowns are
-all in the [coordination slot](../concepts/coordination.md) instead.
+**The engine owns both files exclusively, and enforces it.** Opening the store
+takes an operating-system lock on each file, held in a `.lock` file beside it
+for as long as the process has the store open. A second crewlet process
+pointed at either path — a second engine, or a command such as `crewlet
+migrate` that opens the store itself — is refused before it touches the
+database, with an error naming the file and the process holding it (`pid 4127
+on host-a since 2026-09-23T08:00:00Z`). A crashed engine leaves nothing to clear:
+the kernel releases the lock when its holder exits, however it exits. The lock
+is advisory, so a tool that is not crewlet is not stopped by it. Nothing that
+genuinely needs to be shared between nodes lives here: seat leases, the
+activation pointer and per-node apply status, the completion ledger, webhook
+dedupe, the rate valve and credential cooldowns are all in the [coordination
+slot](../concepts/coordination.md) instead.
 
 The load-bearing tables of the node estate:
 
@@ -767,7 +784,7 @@ The load-bearing tables of the node estate:
 - **`company_config`** — the revision payloads. Which one is *current* is the fleet's business, and lives in coordination; see the [control plane](../concepts/control-plane.md).
 - **`secret_values`** — the bootstrap half of the [secret store](../concepts/secret-store.md). The company's credentials live on the coordination KV; rows written here while the engine was stopped are migrated there at its next start.
 
-Migrations are **forward-only**: each estate has its own sequence, `internal/store/schema/node/` and `internal/store/schema/replicated/`, and each file in it is applied once and recorded by filename, with no downgrade scripts. Downgrading the binary below the schema it already migrated is not supported; restore a [backup](backup.md) instead. There is no migration lock and no advisory-lock protocol, because one process owns each file — the whole idiom disappears.
+Migrations are **forward-only**: each estate has its own sequence, `internal/store/schema/node/` and `internal/store/schema/replicated/`, and each file in it is applied once and recorded by filename, with no downgrade scripts. Downgrading the binary below the schema it already migrated is not supported; restore a [backup](backup.md) instead. Migrations need no lock of their own: one process owns each file, and the store's own lock, above, is what makes that true.
 
 Everything else is either:
 
@@ -849,7 +866,10 @@ type by name, so no listing, count or series returns one; the activity feed
 never shows one and no dashboard socket carries one. A point read by its own id
 returns it as it does any row. An operator reading the events table with SQL
 meets them, each up to about 8 MiB, and the retention sweep removes them on the
-same horizon as every row.
+same horizon as every row, in statements bounded by payload bytes (32 MiB,
+about four parts) as well as rows, so the node's single writer is released
+between a few parts rather than held for a whole backlog while an event write
+waits on it.
 
 #### Querying events
 
@@ -884,9 +904,10 @@ flowchart TD
     C -.->|"suspend, then resume"| G
 ```
 
-**Five span names, and that is the whole set.** `webhook.receive`,
-`agent.turn` (plus `agent.turn.resume`), `agent.turn.<phase>`, `llm.round` and
-`tool.call`, alongside `schedule.fire` for cron-started work.
+**These span names are the whole set:** `webhook.receive`, `agent.turn` and
+`agent.turn.resume`, `agent.turn.<phase>` (with `agent.turn.judge` for each
+round-cap extension judgement, nested under its phase), `llm.round`,
+`tool.call`, and `schedule.fire` for cron-started work.
 
 Span attributes are deliberately thin: the seat, the phase, the model, the
 round, the tool and its outcome, and token counts. Everything about what a turn
@@ -1188,8 +1209,8 @@ the previous incarnation's last lines are the evidence, and rotating on every
 boot would push the first failure off the end of the stack by morning.
 
 Missing directories are created, `0700`, and the file is `0600`. A log line is
-redacted but it is not a public document, so a shipper running as another user
-needs a `chmod` you make deliberately.
+not a public document, so a shipper running as another user needs a `chmod`
+you make deliberately.
 
 Already running `logrotate(8)`? Point it at the same path with
 `copytruncate` — which keeps the descriptor this process holds — and give

@@ -92,6 +92,9 @@ find out why a revision did not apply, and a 2 000-byte cut removes exactly the
 end of a wrapped chain where the cause sits. It is bounded at all only so the
 event can be published: one over the queue's payload ceiling is refused and
 dropped, which would cost the operator the whole record rather than its tail.
+Past 64 KiB the event keeps the start and says where the rest is: the node logs
+the whole error at WARN as `reconcile_tick_failed` (or
+`initial_reconcile_failed` on its first tick at boot).
 
 ---
 
@@ -167,7 +170,7 @@ The **scheduler** is gated too, and differently: a tick on a shedding node is sk
 
 The **integration reconcile loop** is gated the same way and for the same reason, and it is the one where the stale document reaches *outside* the deployment. Every reconciler reads the live company config on each pass, so a shedding node would converge a third-party app to the revision the fleet has already replaced: an account a removed seat should no longer hold is kept, a webhook is re-registered at the previous public base, and the status row says `ready`. It declines **before claiming the duty**, so its lease lapses and a peer holding the current revision takes the loop over rather than waiting behind a holder that does nothing, and it logs `integration_reconcile_shed` going in and `integration_reconcile_resumed` coming out.
 
-The gate stops there rather than being folded into every worker duty, and that is a decision rather than an omission. Posture and `node.roles` are decided by subsystems that do not consult each other — the shed rule counts any peer with a fresh `ok` row as somewhere the work can go, including an ingress-only node that will never claim a singleton. Applied to all of them, an `ingress` + `seats,workers` fleet whose worker node fails a single apply would end with nobody running the scheduler, the retention sweep, the sandbox waiter or the curator, `/ready` green on the node that is fine, and not one log line to say so.
+The gate stops there rather than being folded into every worker duty, and that is a decision rather than an omission. Posture and `node.roles` are decided by subsystems that do not consult each other — the shed rule counts any peer with a fresh `ok` row as somewhere the work can go, including an ingress-only node that will never claim a singleton. Applied to all of them, an `ingress` + `seats,workers` fleet whose worker node fails a single apply would end with nobody running the scheduler, the retention sweep's fleet-wide jobs, the sandbox waiter or the curator, `/ready` green on the node that is fine, and not one log line to say so.
 
 ---
 

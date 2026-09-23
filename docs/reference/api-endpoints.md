@@ -1700,9 +1700,11 @@ and nothing lists (see `phase_record` below); a part that cannot be published
 ends them, and the whole is then not kept (`phase_record_whole_not_kept` in
 the log). Then the **record**, in the
 largest form the transport accepts: its longest texts cut to a common level,
-the tool results first; failing that, every text reduced to its mark; failing
-that, its first rows carried and the rest counted. A cut text ends in `…`, a
-cut tool call or round carries its whole length beside it as
+the tool results first, then the tool arguments, then the prose and the
+prompts, and the phase's own `error` last — it is cut only when every other
+text is already at its mark; failing that, every text reduced to its mark;
+failing that, its first rows carried and the rest counted. A cut text ends in
+`…`, a cut tool call or round carries its whole length beside it as
 `<field>_bytes`, and the record carries:
 
 | Field | What it says |
@@ -1716,8 +1718,12 @@ decision, the phase — so a cut phase is still in every spend total. A record
 refused although it is within 8 MiB was refused by a NATS server whose
 `max_payload` is set lower (see
 [Deployment § An external NATS server](../guides/deployment.md#an-external-nats-server)):
-the node halves what it cuts to on each such refusal, splits a part the server
-refuses in two, and logs `phase_record_refused_within_ceiling`. Only when the
+the node splits each part the server refuses in two, never below 64 KiB of
+data — a part larger than that is asked for at 64 KiB before the whole is
+given up — and cuts the record to half the smallest message the server has
+refused, part or record, halving again on each further refusal; it logs
+`phase_record_refused_within_ceiling`. A part refused at 64 KiB ends the
+parts, and the record goes out with no whole behind it. Only when the
 server refuses even the smallest form — every text at its mark, every row
 counted — is the phase left with no record, logged as
 `phase_record_not_published`; its whole, if its parts landed, still reads
@@ -1830,7 +1836,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `turns` | `{days, role, agent_id, model, work_key, failed, before_time, before_id, limit}` | `GET /turns`. ONE ROW PER RUN of a turn — a wake, a decision, its rounds and its reply — which is the view of a working company that did not exist anywhere. A turn that broke before reaching outside the engine is redelivered, so one TRIGGER is legitimately several rows; each carries the `work_key` they share and `work_key=` narrows to every attempt at one (see [a turn's two identities](../concepts/turn-engine.md#a-turns-two-identities)). A turn is what this engine DOES and every other surface is a projection of one: the spend rollup groups them, the seat page shows one seat's, an item's history links to the ones that touched it, and none of them is a list of them. The dashboard faked one by paging the raw event feed sixty-one times and folding in the browser — slow, capped at whatever the caller gave up on, and wrong at the page boundary, where a turn straddling two pages appeared twice. The aggregates are over PROMOTED COLUMNS (migration 0015) rather than payloads; only the duration, the summary and the task come from the completion record's own payload, read from the one row per turn that carries it. `complete` says whether a completion record exists — a turn with none is running or died mid-flight — and `duration_ms` is the turn's OWN measurement, which is not the span of its events: the span covers the reflection pass that publishes afterwards. `failed` is THREE-VALUED and absent means every turn, because folding it into `false` would hide every failing turn from an unparameterised list. Answers `{turns, truncated, next}`. The cursor is on the turn's START, which is what the listing is ordered by — a keyset on any one event pages a turn twice — AND on its `turn_id`, because a start is not unique and a cursor on it alone steps over every other turn that began at the same instant: `next` is `{before_time, before_id}`, sent back as those two parameters, and half of one is `400`. `truncated` says the window holds turns past this page, read as one turn past it rather than inferred from a page that filled, and `next` is offered exactly when it is set — so anything drawn from the page (a count, a histogram) describes the newest `limit` turns when it is `true`, and the rest is the next page (`limit` defaults to 50, at most 200) |
 | `turn` | `{turn_id}` | Every event of ONE RUN of a turn, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Rows written before migration `0014` carry no `turn_id` and do not answer this. Answers `{turn_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-turn cap (500) rather than at the end of the turn. A cut answer is the turn's **opening and its ending**, not its opening alone: a turn is read oldest first, so a head-only read would drop `agent_turn_completed` and `turn_completed` — the two records a reader takes the outcome, the duration and the plan summary from — and a turn cut at the cap would be indistinguishable from one that never finished. The last rows are recovered beside the first (up to 20 more, merged on the store's own identity, `(event_time, event_id)`, so the two reads cannot overlap into duplicates — the id alone is not unique, and a narrower key would drop a row the two reads legitimately both carry and then report a gap over a page holding the whole turn), so what `truncated` names is a gap in the **middle** — and it is **counted, not inferred** from the row count, because a turn between the cap and the cap plus twenty ends up whole on the page and must not carry a truncation warning. It also answers `work_key` and `attempts`: the unit of work this run was an attempt at, and every run of it the store holds, OLDEST FIRST — over the SAME thirty-day horizon the events above come from, not the turns list's own default week, so a turn between eight and thirty days old names its attempts rather than reporting none while displaying one — so the screen a deep link lands on can say "attempt 2 of 2" and link the other, rather than leaving a reader to conclude the company did the work twice. One element is the ordinary case; an empty `work_key` means the trigger had none to collapse on, and `attempts` is then empty too. `attempts` holds at most 200 runs; `attempts_truncated` is `true` when the store holds more, and `attempts` is then the NEWEST 200, oldest first — so its first element is not the first attempt. Every run is `turns` with `work_key=` **and `days=30`**, paged by its `next` cursor: the runs left out are the OLDEST, and `turns` without `days` reads only the last week. A phase record published cut is here as the row it was published as, with `whole_bytes` set; its whole is `phase_record` |
 | `phases` | `{role, limit, before_time, before_id}` | `GET /phases`. The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged (30 by default, at most 60). Answers `{phases, next, exhausted}`: `next` is `{before_time, before_id}` when older phases exist — read as one record past the page, never inferred from a page that filled — and empty with `exhausted: true` at the end of the record. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision. A record published cut is listed as it was published, with `whole_bytes` set, and `phase_record` answers it whole |
-| `phase_record` | `{id}` | `GET /phases/{id}`. ONE phase record WHOLE. A record too large for one event was published cut, and its whole — the record exactly as it would have been stored — was published first as parts under ids derived from the record's own; this reassembles them, verified contiguous from the first byte to the whole's length. Any other record is answered with its own row, so a reader asks for the whole of a phase record without first working out whether it was cut. Answers `{id, whole, whole_bytes, found_bytes, parts, payload}`: `payload` is the record's event as the event store holds a record published whole (the shape an `event` answer's `payload` has), and `parts` is how many it was reassembled from — zero for a record that is its own row. A WHOLE NOT ALL HERE IS ANSWERED, NOT FAILED: `whole` is `false`, `payload` is absent in favour of `note`, `found_bytes` says how much of `whole_bytes` this node holds contiguous from the start, and `note` says why the rest is not here, as far as this node can tell — the record says every part was published, so the rest is not in this node's store (a part write that failed here, logged as `event_write_failed`, or the retention sweep, which removes parts on the same horizon as every row); or the record says its whole was not kept, and its own `notes` say why; or this node holds no row for the record, and nothing says which of those it was, so the note names both (a part that failed to publish is logged as `phase_record_whole_not_kept`). Parts that do not continue the whole — out of order, overlapping, past its end or naming another record — fail the read as an error rather than being answered, because assembled bytes that are not the whole would read as it. Like every event read it answers from THIS node's event store, where the node that published the record wrote its parts. An id nothing here holds is `not_found` |
+| `phase_record` | `{id}` | `GET /phases/{id}`. ONE phase record WHOLE. A record too large for one event was published cut, and its whole — the record exactly as it would have been stored — was published first as parts under ids derived from the record's own; this reassembles them, verified contiguous from the first byte to the whole's length. Any other record is answered with its own row, so a reader asks for the whole of a phase record without first working out whether it was cut. Answers `{id, whole, whole_bytes, found_bytes, parts, payload}`: `payload` is the record's event as the event store holds a record published whole (the shape an `event` answer's `payload` has), and `parts` is how many it was reassembled from — zero for a record that is its own row. A WHOLE NOT ALL HERE IS ANSWERED, NOT FAILED: `whole` is `false`, `payload` is absent in favour of `note`, `found_bytes` says how much of `whole_bytes` this node holds contiguous from the start, and `note` says why the rest is not here, as far as this node can tell — the record says every part was published, so the rest is not in this node's store (a part write that failed here, logged as `event_write_failed`, or the retention sweep, which removes parts on the same horizon as every row); or the record says its whole was not kept, and its own `notes` say why; or this node holds no row for the record, and nothing says which of those it was, so the note names both (a part that failed to publish is logged as `phase_record_whole_not_kept`). Parts that do not continue the whole — out of order, overlapping, past its end or naming another record — fail the read as an error rather than being answered, because assembled bytes that are not the whole would read as it; so does a record stating its whole in parts under an id that is not a UUID, since a part's id is derived from its record's. Like every event read it answers from THIS node's event store, where the node that published the record wrote its parts. An id nothing here holds is `not_found` |
 | `tokens` | `{since, until, since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `token_series` | `{group, bucket, since, until, previous, groups, agent_role, since_days}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE — the browser holds at most the live window's records, so an axis folded client-side would be right for a day and absent for every other range. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error |
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the fifty most recent fires across EVERY schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the ledger holds older fires of this schedule than the page — read as one row past it, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times. Those older fires are not served: this question takes no cursor, and the ledger — this node's own record of the fires it ran — keeps a week |
@@ -2658,7 +2664,7 @@ those runs stored a key no chat message can reproduce. Telling somebody to
 the [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box),
 and its row carries those calls as `bridge_calls`, each
 `{seq, name, args, output, failed, at}` — plus `whole_bytes` and `whole_parts`
-on a call whose whole is kept in parts — in the order the run made them (the
+on a call whose whole was filed in parts — in the order the run made them (the
 example shows one from each end). A long run makes thousands, each carrying
 its output, so an answer does not carry them all, and it says what it left
 out:
@@ -2691,19 +2697,24 @@ out:
   `bridge_calls_elided_after`, but carries no `bridge_calls_next`, because no
   copy of them exists.
 - A call too large for one coordination record is shown as that record holds
-  it: fitted to it, with a mark wherever a text did not fit — a cut `output`
+  it: fitted to it, and marked in whichever field was cut — a cut `output`
   ends in `…`, and arguments that did not fit are replaced by a one-member
-  object keyed `…`. Its whole is kept in parts filed under that record, which
-  the call names with `whole_bytes`, the length of its whole, and
-  `whole_parts`, how many parts hold it; the whole reassembled from them, not
-  the fitted form shown here, is what the run's resume reads. No answer
-  carries a part, and `bridge_calls_total` counts none. A fitted call without
-  `whole_bytes` is one whose whole could not be kept, and its marks say so:
-  arguments set aside are replaced by an object saying they were not kept, and
-  a cut `output` ends in a note after its `…`. A call a NATS server set below
-  the engine's ceiling refused is kept with its name and outcome only, both
-  texts replaced by those marks, and its whole in parts that server takes,
-  when it takes them.
+  object keyed `…` saying how many bytes they were and what became of them. A
+  call whose whole was filed in parts under that record names them with
+  `whole_bytes`, the length of its whole, and `whole_parts`, how many parts
+  hold it; the whole reassembled from them, not the fitted form shown here, is
+  what the run's resume reads. No answer carries a part, and
+  `bridge_calls_total` counts none. A fitted call that carries neither and
+  whose whole could not be kept says so in whichever field was cut: arguments
+  set aside are an object saying they were not kept, and a cut `output` ends
+  in a note after its `…`. A call an older build fitted, before parts, has
+  neither the reference nor the note: its cut `output` ends in `…` alone. A
+  call a NATS server set below the engine's ceiling refused is shown in its
+  least form — its name and outcome, each text it had replaced by its mark —
+  beside `whole_bytes` and `whole_parts` when that server took the parts, and
+  saying its whole was not kept when it did not. A refused part is retried at
+  half its size, or at 64 KiB when half would be smaller, and only a refused
+  part of 64 KiB or less ends the split.
 
 `execute_state` — the serialised Execute-loop conversation — is
 deliberately not returned: it is the largest column in the row and every

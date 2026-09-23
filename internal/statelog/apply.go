@@ -194,15 +194,22 @@ type Runner struct {
 
 	// drain is this loop's measured records per second, smoothed.
 	//
+	// RECORDS, not rows: every record a run moves over — applied, retained,
+	// gated or skipped as a redelivery — over the run's own duration, from
+	// asking for the store's writer to acknowledging the run. A backlog is
+	// counted in records, so records are what it is divided by.
+	//
 	// # Why it is measured rather than a constant
 	//
-	// Three answers divide a record backlog by it and report the result as
-	// a TIME: a bounded stale read's "am I within the caller's staleness",
-	// a refusal's `retry_after_seconds`, and the apply-lag alarm. Without a
-	// measurement all three fall back to one record per second — so a node
-	// two thousand records behind, which is one second of real work,
-	// reports itself half an hour behind, refuses reads that should have
-	// been served and fires an alarm nobody can act on.
+	// A record backlog divided by it is how this node states how far behind
+	// it is as a TIME: against a stale read's staleness bound, in a
+	// refusal's `retry_after_seconds`, on the apply-lag gauge and alarm, and
+	// in a bulk edit's projected occupancy. Divided by a constant instead,
+	// every one of those is wrong wherever the real rate differs from it: at
+	// [DrainFloor], a node two thousand records behind reports itself over
+	// half an hour behind whatever its real rate — refusing a stale read
+	// whose bound that rate would meet, and firing an alarm nobody can act
+	// on.
 	//
 	// SMOOTHED rather than last-batch, because a single small batch at the
 	// tail of a burst is not this loop's rate: an exponentially weighted
@@ -213,15 +220,15 @@ type Runner struct {
 	// commits is the same measurement over TRANSACTIONS rather than
 	// records, smoothed identically.
 	//
-	// A SECOND RATE BECAUSE IT IS A SECOND RESOURCE. Rows per second is
+	// A SECOND RATE BECAUSE IT IS A SECOND RESOURCE. Records per second is
 	// what a backlog is divided by; commits per second is the FSYNC rate,
 	// and under `synchronous = FULL` that is the number a device's write
 	// budget is actually spent by. The two move independently by design —
-	// [Runner.nextRun] fills a run toward the transaction budget precisely
-	// so that a barrier-heavy stream commits once per two dozen records
-	// rather than once per record — so a node whose rows/s is healthy and
-	// whose commits/s has doubled is a node whose disk is doing twice the
-	// work for the same progress, which neither number alone can say.
+	// [Runner.nextRun] fills a run toward the transaction budget while
+	// records are pending, so one commit carries many records rather than
+	// one — so a node whose records/s is healthy and whose commits/s has
+	// doubled is a node whose disk is doing twice the work for the same
+	// progress, which neither number alone can say.
 	commits float64
 }
 
@@ -232,6 +239,18 @@ type Runner struct {
 // of the way, so a real slowdown is visible within seconds of applying while
 // one anomalous batch moves it by a quarter of its own error.
 const DrainSmoothing = 0.25
+
+// DrainFloor is the lowest rate, in records a second, that a record backlog is
+// divided by when it is stated as a time.
+//
+// It exists for the rate nobody has measured: [Runner.Drain] is zero until the
+// loop has consumed a batch, and a backlog divided by zero is infinite. ONE A
+// SECOND, deliberately low, so that before the loop has measured its own rate
+// a backlog reads long rather than short: at the floor a backlog of n records
+// reads as n seconds. A measured rate below the floor is floored too, which
+// reads an applier slower than one record a second as further ahead than it
+// is.
+const DrainFloor = 1.0
 
 // NewRunner builds a domain's apply loop, refusing a dependency set that
 // cannot produce a correct apply rather than discovering it mid-stream.
@@ -1206,12 +1225,12 @@ func (r *Runner) measureDrain(started time.Time, records int) {
 }
 
 // Drain is this loop's measured records per second, and 0 before it has
-// applied anything.
+// consumed anything.
 //
-// ZERO MEANS UNMEASURED, and every caller reads it that way: dividing a
-// backlog by it would be a division by zero, so each one falls back to a floor
-// rather than to a guess. A node that has applied nothing has no rate, which
-// is a different fact from a node applying nothing per second.
+// ZERO MEANS UNMEASURED, and a caller that divides a backlog by it must not
+// divide by zero: it floors the rate at [DrainFloor], or gives an answer that
+// does not depend on the rate at all. A node that has consumed nothing has no
+// rate, which is a different fact from a node applying nothing per second.
 func (r *Runner) Drain() float64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()

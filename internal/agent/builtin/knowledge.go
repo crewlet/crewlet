@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
@@ -50,6 +51,17 @@ const searchQueryMax = 400
 type KnowledgeSearcher interface {
 	CanSearch(seat *org.Role, o *org.Organization) bool
 	Search(ctx context.Context, q knowledge.Query) []knowledge.Hit
+}
+
+// knowledgeBuilding is the optional half of a searcher that keeps an index of
+// its own: whether this node's index has yet to finish its first build.
+//
+// OPTIONAL, on the turn-start prefetch's terms: a live vendor search has no
+// index and nothing to report, so requiring it of every backend would be
+// implementations of "false". A searcher that does not have it is never
+// building.
+type knowledgeBuilding interface {
+	Building(ctx context.Context) bool
 }
 
 // searchKnowledge searches the team knowledge base on demand.
@@ -176,6 +188,20 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
 	if len(hits) == 0 {
+		// "NOT INDEXED YET" IS NOT "NOTHING MATCHED", and the two send a
+		// seat to opposite places: this answer invites different keywords,
+		// which on an index still on its first build find nothing either,
+		// and a seat that concludes nothing was written down acts on it by
+		// writing a page that already exists. So a node still building
+		// says so, in the turn-start block's own sentence — one text for
+		// both, because the seat reads both.
+		//
+		// ASKED ONLY ON AN EMPTY ANSWER, because that is the only answer
+		// it changes: a search that found something has found it whether
+		// or not this node's own index is still catching up.
+		if builder, ok := t.search.(knowledgeBuilding); ok && builder.Building(ctx) {
+			return tools.Result{Output: prefetch.BuildingKnowledgeHint}, nil
+		}
 		return tools.Result{Output: fmt.Sprintf(
 			"No team documents match %q. Try different keywords, or work from what "+
 				"you have — not everything is written down.", clip(query))}, nil

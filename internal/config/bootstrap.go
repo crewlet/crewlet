@@ -38,7 +38,7 @@ type Bootstrap struct {
 	// Node is this process's identity within the fleet.
 	Node Node `yaml:"node,omitempty" json:"node"`
 
-	// Store is the local database file this node materializes into.
+	// Store is where this node's two local databases live.
 	Store Store `yaml:"store,omitempty" json:"store"`
 
 	// Stream is the durable event log — the source of truth every node
@@ -353,8 +353,8 @@ func (b *Bootstrap) LogSettings() (slog.Level, logging.Format) {
 }
 
 // DefaultBootstrap is a Tier A config with every default applied: one node
-// doing everything, an embedded in-process stream, local coordination, a
-// store file beside the binary, and no API socket.
+// doing everything, an embedded in-process stream, local coordination, the
+// store's two files in the working directory, and no API socket.
 //
 // Defaults live in a constructor rather than in per-field tags because the
 // loader decodes INTO this value: a key absent from the file leaves the
@@ -433,8 +433,8 @@ func (b *Bootstrap) validateTopology() error {
 	// unlucky.
 	//
 	// Counted over the STREAM's members, because that is where the leases
-	// live: the coordination store rides the stream's own connection on
-	// every topology, so the KV's quorum is the stream cluster's quorum.
+	// live: every coordination bucket is a JetStream stream on that same
+	// broker, so the KV's quorum is the stream cluster's quorum.
 	if b.Coordination.Type == CoordinationEmbeddedKV {
 		if members := peers + 1; members == 2 {
 			p.add(field("stream.cluster.peers"), ErrConflict,
@@ -666,18 +666,20 @@ func NewIncarnation(nodeID string) string {
 
 // ---- store ----------------------------------------------------------- //
 
-// DefaultStorePath is where a company with nothing configured keeps its
-// database: one file, relative to the working directory, so `crewlet run`
-// in an empty directory works.
+// DefaultStorePath is where a company with nothing configured keeps its node
+// estate: a file relative to the working directory, with the replicated
+// estate beside it, so `crewlet run` in an empty directory works.
 const DefaultStorePath = "crewlet.db"
 
-// Store is the local database this node materializes the stream into.
+// Store is where this node's two local databases live: the node estate at
+// Path, and the replicated estate a state log's applier writes, at
+// ReplicatedPath or beside Path.
 //
-// It is a FILE, owned exclusively by this process for the life of the
-// process. It is not a shared database and there is no DSN: two engines
-// pointed at one file corrupt it, and a fleet's nodes each keep their own
-// rebuildable copy: the store is the synchronous truth and the index an
-// asynchronous cache of it.
+// They are FILES, each owned exclusively by the process that opens it for as
+// long as it holds it open: the store takes an operating-system lock on each
+// and refuses a second crewlet process, naming the one that holds it. Neither
+// is a shared database and there is no DSN: a fleet's nodes each keep their
+// own.
 //
 // # There is no driver field
 //
@@ -687,7 +689,8 @@ const DefaultStorePath = "crewlet.db"
 // carries it is answered by name rather than as a misspelling; see
 // retiredBootstrapFields in load.go.
 type Store struct {
-	// Path is the database file. Created if absent, along with its parent.
+	// Path is the node estate's file. Created if absent, along with its
+	// parent.
 	Path string `yaml:"path,omitempty" json:"path,omitempty" desc:"Local database file this node owns exclusively."`
 
 	// SnapshotDir is where this node keeps its own snapshots of the

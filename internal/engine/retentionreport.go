@@ -267,7 +267,7 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		// THE WORST OF THE DOMAINS, because the reading describes one
 		// NODE: a two-domain node whose second applier is wedged is a
 		// node that is behind, and averaging would hide it.
-		out.ApplyLag = max(out.ApplyLag, applyLagOf(health, running))
+		out.ApplyLag = max(out.ApplyLag, applyLagOf(health, running.runner.Drain()))
 		if health.Deferred > 0 {
 			out.DeferredAge = max(out.DeferredAge, statelog.DeferralGrace)
 		}
@@ -311,17 +311,22 @@ func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelo
 }
 
 // applyLagOf converts a health's record backlog into the time the alarm table
-// is written in.
+// is written in, at drain records a second.
 //
 // AT THE MEASURED DRAIN, so the number an alarm fires on is a duration rather
 // than a count: "this node is 4m12s behind" is actionable and "this node is
 // 500 000 records behind" is a number an operator has to divide.
-func applyLagOf(health statelog.Health, running *runningDomain) time.Duration {
+//
+// DIVIDED AS A FLOAT, because the drain is one: a rate of 1.5 records a second
+// truncated to a whole one before the division reads the backlog half as long
+// again as it is. The rate is floored at [statelog.DrainFloor], which is also
+// what an unmeasured drain — zero — reads as.
+func applyLagOf(health statelog.Health, drain float64) time.Duration {
 	if health.Lag == nil || *health.Lag == 0 {
 		return 0
 	}
-	return time.Duration(*health.Lag) * time.Second /
-		time.Duration(max(int64(running.runner.Drain()), 1))
+	seconds := float64(*health.Lag) / max(drain, statelog.DrainFloor)
+	return time.Duration(seconds * float64(time.Second))
 }
 
 // observed fills the fields that come from this process's own recorder.
@@ -340,11 +345,10 @@ func (r *retention) observed(out *statelog.Reading) {
 	// that only grows LATCHES: `search_degraded` fires on a fraction being
 	// above zero, so one degraded search after boot lights it for the life
 	// of the process and it can never go out; `search_slow` and
-	// `barrier_slow` take a maximum, so one slow observation ever is
-	// permanent. `crewlet retention status` derives its exit code from
-	// these, so a cron watching it then fires for ever too. That is what
-	// [metrics.Window] was written for, and reading Read() here is what
-	// left it with no caller at all.
+	// `barrier_slow` take a p95, which over a cumulative distribution only
+	// ever dilutes a bad hour and never forgets it. `crewlet retention
+	// status` derives its exit code from these, so a cron watching it then
+	// fires for ever too. That is what [metrics.Window] is for.
 	reading := r.metrics.ReadWindow()
 
 	// THE ANSWER COUNTERS FIRST, because two alarms are FRACTIONS of them

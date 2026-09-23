@@ -60,9 +60,12 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"AWholeNotAllHereIsNamedWithHowMuchIs", testPhaseRecordWholeNamesWhatIsMissing},
 		{"PartsThatDoNotContinueTheWholeAreRefused", testPhaseRecordWholeRefusesPartsThatDoNotContinueIt},
 		{"APartIsNeverListedCountedOrFolded", testPartsAreNeverListed},
+		{"APhaseRecordReadsItsNewestRow", testPhaseRecordWholeReadsTheNewestRow},
+		{"ARecordWhosePartsCannotBeNamedIsAnError", testPhaseRecordWholeUnderAnIDNoPartDerivesFrom},
 		{"ReadFloor", testReadFloor},
 		{"RetentionSweep", testRetention},
 		{"RetentionSweepDrainsABacklogWiderThanOneBatch", testRetentionBacklog},
+		{"RetentionSweepDrainsABacklogOfWholeEvents", testRetentionBacklogOfWholeEvents},
 		{"RelatedAgentIsAnIndexSeekNotAScan", testRelatedIndexed},
 		{"RelatedAgentIndexIsSweptWithTheLog", testRelatedSwept},
 		{"SpendFoldsTheWholeWindowNotACappedPrefix", testSpendUncapped},
@@ -921,6 +924,42 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 	}
 	if n != int64(stale) {
 		t.Fatalf("purged %d rows, want the whole %d-row backlog", n, stale)
+	}
+	if _, err := log.ByID(ctx, "keep"); err != nil {
+		t.Fatalf("sweep took a row inside retention: %v", err)
+	}
+}
+
+// testRetentionBacklogOfWholeEvents: a backlog of rows each as large as one
+// event may be — what a phase record's parts are — drains completely. The
+// sweep bounds a statement by payload bytes as well as rows, so such a backlog
+// goes in statements of a few rows each, and a sweep that took a statement
+// with fewer rows than the row bound for the end of the backlog would stop
+// after the first of them.
+func testRetentionBacklogOfWholeEvents(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	when := time.Now().UTC().Add(-store.EventRetention - time.Hour)
+	// Past what one statement may delete, so the sweep takes more than one.
+	const rows = 2*store.EventPurgeBytes/(8<<20) + 1
+	whole := `{"data":"` + strings.Repeat("A", 8<<20-11) + `"}`
+	for i := range rows {
+		write(t, log, store.EventRecord{
+			ID: fmt.Sprintf("part-%02d", i), Type: "agent_phase_record_part",
+			Time: when.Add(time.Duration(i) * time.Millisecond), Payload: json.RawMessage(whole),
+		})
+	}
+	write(t, log, store.EventRecord{
+		ID: "keep", Type: "task_assigned", Source: "pm",
+		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
+	})
+
+	n, err := log.Purge(ctx)
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if n != rows {
+		t.Fatalf("purged %d rows, want the whole %d-row backlog", n, rows)
 	}
 	if _, err := log.ByID(ctx, "keep"); err != nil {
 		t.Fatalf("sweep took a row inside retention: %v", err)

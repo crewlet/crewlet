@@ -436,6 +436,13 @@ const (
 	dispRetake
 )
 
+// ReasonTooLarge — the record is larger than the transport carries: the NATS
+// client refused it against the max_payload its server announced, or the
+// broker against the stream's max_msg_size. Nothing was stored, and the same
+// record is refused the same way on every attempt, so nothing retries it. The
+// detail names the setting that refused it.
+const ReasonTooLarge Reason = "too_large"
+
 // attempt publishes once and reads the answer.
 func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect *uint64, gen uint32, round int) (Result, disposition, error) {
 	seq, _, err := p.append(ctx, req, snap, expect)
@@ -463,6 +470,17 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 				"full log refuses appends rather than dropping records, so raise "+
 				"the stream's byte ceiling or unblock the trim (`crewlet "+
 				"retention status` names the term holding it)", detail),
+			OpID: req.OpID,
+		}
+
+	case faultTooLarge:
+		// ANSWERED AT ONCE, never retried: another round would decide the
+		// same record and be refused the same way, and neither a probe of
+		// the subject nor a wait for a peer changes a size.
+		return Result{Rounds: round}, dispDone, &Unavailable{
+			Reason: ReasonTooLarge,
+			Detail: fmt.Sprintf("the record for %s was refused for its size, and "+
+				"nothing was stored: %s", req.Subject, detail),
 			OpID: req.OpID,
 		}
 

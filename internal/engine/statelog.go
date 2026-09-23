@@ -2311,13 +2311,17 @@ func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) 
 		if running == nil {
 			continue
 		}
-		s.metrics.Set(metrics.StatelogDrainRowsPerSecond, running.runner.Drain(), attrs)
+		// ONE READING OF THE DRAIN for this beat, so the lag in seconds
+		// below is computed from the same sample this beat publishes
+		// rather than from one the applier moved in between.
+		drain := running.runner.Drain()
+		s.metrics.Set(metrics.StatelogDrainRecordsPerSecond, drain, attrs)
 		// AND THE COMMIT RATE BESIDE IT, because the two are different
-		// resources: rows/s is progress and commits/s is the fsync rate
-		// a device's write budget is spent by. A node whose rows/s is
-		// healthy and whose commits/s has doubled is doing twice the
-		// disk work for the same progress, which neither figure alone
-		// can say.
+		// resources: records/s is progress and commits/s is the fsync
+		// rate a device's write budget is spent by. A node whose
+		// records/s is healthy and whose commits/s has doubled is doing
+		// twice the disk work for the same progress, which neither figure
+		// alone can say.
 		s.metrics.Set(metrics.StatelogDrainCommitsPerSecond,
 			running.runner.Commits(), attrs)
 		health, err := s.health(ctx, running)
@@ -2331,7 +2335,7 @@ func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) 
 		}
 		s.metrics.Set(metrics.StatelogApplyLagSeq, float64(*health.Lag), attrs)
 		s.metrics.Set(metrics.StatelogApplyLagSeconds,
-			applyLagOf(health, running).Seconds(), attrs)
+			applyLagOf(health, drain).Seconds(), attrs)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // ---- the bridged-call log ---------------------------------------------- //
@@ -130,7 +131,7 @@ func (f *FleetStore) AppendBridgeCall(ctx context.Context, turnID, launchID stri
 		if err != nil {
 			return 0, err
 		}
-		created, err := f.createBridgeKey(ctx, bridgeCallKey(turnID, launchID, seq), value)
+		created, err := f.createBridgeKey(ctx, "a bridged call", bridgeCallKey(turnID, launchID, seq), value)
 		if err != nil {
 			return 0, err
 		}
@@ -157,7 +158,7 @@ func (f *FleetStore) CreateBridgeCall(ctx context.Context, turnID, launchID stri
 	if err := withinCeiling("a bridged call", value); err != nil {
 		return false, err
 	}
-	return f.createBridgeKey(ctx, bridgeCallKey(turnID, launchID, seq), value)
+	return f.createBridgeKey(ctx, "a bridged call", bridgeCallKey(turnID, launchID, seq), value)
 }
 
 // CreateBridgeCallPart files one part of a call's whole under the call.
@@ -168,13 +169,14 @@ func (f *FleetStore) CreateBridgeCallPart(ctx context.Context, turnID, launchID 
 	if err := withinCeiling("a part of a bridged call", value); err != nil {
 		return false, err
 	}
-	return f.createBridgeKey(ctx, bridgePartKey(turnID, launchID, seq, part), value)
+	return f.createBridgeKey(ctx, "a part of a bridged call", bridgePartKey(turnID, launchID, seq, part), value)
 }
 
 // createBridgeKey creates one key of the log, reporting false when it is
 // already there: every key here is written once, and one that is taken is a
-// record or a part a purge missed, which is never overwritten.
-func (f *FleetStore) createBridgeKey(ctx context.Context, key string, value []byte) (bool, error) {
+// record or a part a purge missed, which is never overwritten. what names the
+// value for an error, as [withinCeiling] does.
+func (f *FleetStore) createBridgeKey(ctx context.Context, what, key string, value []byte) (bool, error) {
 	_, err := f.calls.Create(ctx, key, value)
 	switch {
 	case err == nil:
@@ -182,7 +184,9 @@ func (f *FleetStore) createBridgeKey(ctx context.Context, key string, value []by
 	case errors.Is(err, jetstream.ErrKeyExists):
 		return false, nil
 	default:
-		return false, createRefusal(err)
+		// The limit is read off the LIVE connection, after the refusal: a
+		// reconnect in between names the server the connection is on now.
+		return false, createRefusal(err, what, len(value), f.js.Conn().MaxPayload())
 	}
 }
 
@@ -200,7 +204,9 @@ func withinCeiling(what string, value []byte) error {
 	return nil
 }
 
-// createRefusal classifies a call record or part the broker did not take.
+// createRefusal classifies a call record or part the broker did not take:
+// what names it, size is its value's length, and accepts is the max_payload the
+// server this connection is on announces.
 //
 // THE CLIENT'S SIZE REFUSAL IS PERMANENT. It measures a message against the
 // max_payload the server announced, and [OpenFleet] refuses a server that
@@ -209,13 +215,34 @@ func withinCeiling(what string, value []byte) error {
 // met at run time, not at boot. Answered as [coord.ErrUnavailable] it would
 // read as a blip worth retrying; the same bytes are refused the same way every
 // time, so it is [coord.ErrTooLarge], naming the setting that caused it.
-func createRefusal(err error) error {
-	if errors.Is(err, nats.ErrMaxPayload) {
-		return fmt.Errorf("coord/kv: record the bridged call: the server this node is connected "+
-			"to accepts less than the %d bytes a record may hold, so its max_payload is below "+
-			"queue.MaxPayloadBytes: %w: %w", coord.MaxBridgeCallBytes, coord.ErrTooLarge, err)
+//
+// IT NAMES THE SERVER'S OWN LIMIT, beside the contract's, because the limit
+// the client enforced is the server's: a refusal that named only the contract
+// would send a reader looking for an oversized value, when a value within the
+// contract's ceiling was refused and the fault is a server's setting.
+//
+// Read after the refusal, off the live connection, so it is what the server
+// the connection is on NOW announces, and the error says so rather than that
+// the value exceeds it: a reconnect in between replaces the announcement the
+// value was measured against. A limit at or above the contract's is always
+// such a replacement, since no value within the contract's ceiling reaches it
+// with the headers a create carries.
+func createRefusal(err error, what string, size int, accepts int64) error {
+	if !errors.Is(err, nats.ErrMaxPayload) {
+		return unavailable("record "+what, err)
 	}
-	return unavailable("record the bridged call", err)
+	limit := fmt.Sprintf("the server this connection is on announces %d bytes, below the %d bytes "+
+		"a coordination record is sized against (queue.MaxPayloadBytes)", accepts, queue.MaxPayloadBytes)
+	if accepts >= queue.MaxPayloadBytes {
+		limit = fmt.Sprintf("the server this connection is on announces %d bytes, at least the %d "+
+			"bytes a coordination record is sized against (queue.MaxPayloadBytes), so the value was "+
+			"measured against an announcement the connection has since replaced, from a server set "+
+			"lower", accepts, queue.MaxPayloadBytes)
+	}
+	return fmt.Errorf("coord/kv: %s of %d bytes was refused by the NATS client, which measures a "+
+		"value and the headers its create carries against the max_payload the server announces; "+
+		"%s: set max_payload to at least %d on every server of the cluster: %w: %w",
+		what, size, limit, queue.MaxPayloadBytes, coord.ErrTooLarge, err)
 }
 
 // nextBridgeSeq takes the launch's next number.

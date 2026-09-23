@@ -210,6 +210,69 @@ func testPhaseRecordWholeRefusesPartsThatDoNotContinueIt(t *testing.T, db *store
 	}
 }
 
+// testPhaseRecordWholeReadsTheNewestRow: an id names more than one row only
+// when it is shared — the key is (event_time, event_id) — and then the read
+// answers the newest, as ByID does: here a whole record written after a cut
+// one under the same id, and a part written twice.
+func testPhaseRecordWholeReadsTheNewestRow(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	c := newCutRecord(t, base, 2000, 0)
+	for _, rec := range append(c.parts, c.row) {
+		write(t, log, rec)
+	}
+	// The first part again, later, carrying the same bytes: the parts still
+	// reassemble, from whichever row of it the read keeps.
+	again := c.parts[0]
+	again.Time = base.Add(time.Second)
+	write(t, log, again)
+	if got, err := log.PhaseRecordWhole(ctx, c.id.String()); err != nil || !bytes.Equal(got.Payload, c.whole) {
+		t.Fatalf("a part written twice reads back as %d bytes (%v); want the whole", len(got.Payload), err)
+	}
+
+	// A NEWER ROW UNDER THE RECORD'S ID, this one whole: it is the answer.
+	newer := store.EventRecord{
+		ID: c.id.String(), Type: "agent_phase_completed", Time: base.Add(time.Minute),
+		Category: "llm", Payload: json.RawMessage(`{"phase":"execute","response":"the newer row"}`),
+	}
+	write(t, log, newer)
+	got, err := log.PhaseRecordWhole(ctx, c.id.String())
+	if err != nil || !bytes.Equal(got.Payload, newer.Payload) || got.Parts != 0 {
+		t.Fatalf("the record reads back as %d bytes from %d parts (%v); want its newest row, %q",
+			len(got.Payload), got.Parts, err, newer.Payload)
+	}
+}
+
+// testPhaseRecordWholeUnderAnIDNoPartDerivesFrom: a part's id is derived from
+// its record's UUID, so a row stating a whole in parts under an id that is not
+// one names parts nothing can find. No build of the engine writes one; a row
+// that says it anyway is answered as what it is, a record whose parts cannot
+// be named — neither a whole not all here, which would blame the parts, nor
+// nothing at all, which the row plainly is not.
+func testPhaseRecordWholeUnderAnIDNoPartDerivesFrom(t *testing.T, db *store.DB) {
+	log := db.Events()
+	write(t, log, store.EventRecord{
+		ID: "not-a-uuid", Type: "agent_phase_completed", Time: base, Category: "llm",
+		Payload: json.RawMessage(`{"phase":"execute","whole_bytes":90000,"whole_parts":2}`),
+	})
+	_, err := log.PhaseRecordWhole(t.Context(), "not-a-uuid")
+	var missing *store.MissingWholeError
+	switch {
+	case err == nil:
+		t.Fatal("a record whose parts cannot be named read back as a whole")
+	case errors.As(err, &missing):
+		t.Fatalf("answered %v: a whole not all here blames parts for an id no part derives from", err)
+	case errors.Is(err, store.ErrNotFound):
+		t.Fatalf("answered %v: the record's row is here", err)
+	case !strings.Contains(err.Error(), "not-a-uuid") || !strings.Contains(err.Error(), "UUID"):
+		t.Errorf("error = %v, want it to name the id and why no part derives from it", err)
+	}
+	// With no row, an id that is not a UUID names nothing here.
+	if _, err := log.PhaseRecordWhole(t.Context(), "nothing-by-this-name"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("an id with no row and no parts answered %v, want ErrNotFound", err)
+	}
+}
+
 // testPartsAreNeverListed: a part is storage for another row, up to nearly as
 // large as one event may be — so no read that lists, counts or folds events
 // returns one, whatever it is filtered by, while the record it belongs to reads

@@ -99,11 +99,19 @@ func failing(t *testing.T) (*Engine, *pub, turnTelemetry) {
 	return e, p, turnTelemetry{role: "CEO", agentID: "a-1", handle: "ceo", runID: "t-1", workKey: "wk-1"}
 }
 
+// publishFailure publishes what closing a turn would for res and err: the
+// texts cut once, as publishTurnCompleted cuts them, and the failure events
+// built from them.
+func publishFailure(e *Engine, tel turnTelemetry, res turn.Result, err error) {
+	ctx := context.Background()
+	e.publishFailure(ctx, tel, res, err, tel.failureTexts(ctx, res, err))
+}
+
 func TestAGuardBreachIsItsOwnEventNotJustAFieldOnTheSummary(t *testing.T) {
 	t.Parallel()
 	e, p, tel := failing(t)
 
-	e.publishFailure(context.Background(), tel, turn.Result{
+	publishFailure(e, tel, turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: types.GuardStall, Detail: "two rounds, one artifact"},
 	}, nil)
@@ -137,7 +145,7 @@ func TestAnExhaustedProviderChainSaysWhatItTried(t *testing.T) {
 			Err: fmt.Errorf("rate limited"),
 		},
 	}
-	e.publishFailure(context.Background(), tel,
+	publishFailure(e, tel,
 		turn.Result{Decision: phase.Failed}, fmt.Errorf("runner: execute: %w", exhausted))
 
 	got := only[*types.LLMUnavailable](t, p, "llm_unavailable")
@@ -169,7 +177,7 @@ func TestARefusedChargeIsABudgetEventNotAProviderOne(t *testing.T) {
 	t.Parallel()
 	e, p, tel := failing(t)
 
-	e.publishFailure(context.Background(), tel, turn.Result{Decision: phase.Failed},
+	publishFailure(e, tel, turn.Result{Decision: phase.Failed},
 		fmt.Errorf("execute: %w", &toolloop.BudgetError{
 			Scope: string(types.BudgetScopeOrg), Used: 1_000_000, Limit: 900_000,
 		}))
@@ -194,7 +202,7 @@ func TestAnUnhandledExceptionIsBothABreachAndItsCause(t *testing.T) {
 	// The two are not exclusive: the guard names WHICH invariant ended the
 	// turn, the error says what broke. Reporting only one drops half the
 	// answer, and this is the case where a reader needs both.
-	e.publishFailure(context.Background(), tel, turn.Result{
+	publishFailure(e, tel, turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: "unhandled_exception", Detail: "nil map write"},
 	}, errors.New("nil map write"))
@@ -214,7 +222,7 @@ func TestATurnThatDidNotFailPublishesNoFailure(t *testing.T) {
 	t.Parallel()
 	e, p, tel := failing(t)
 
-	e.publishFailure(context.Background(), tel,
+	publishFailure(e, tel,
 		turn.Result{Decision: phase.Done}, nil)
 
 	// Every one of these types is in FailureEventTypes, so a spurious publish

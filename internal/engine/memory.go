@@ -44,10 +44,10 @@ type memorySync struct {
 
 // startMemorySync carries the memory of the seats this node holds.
 //
-// A PER-NODE LOOP rather than a fleet singleton, which is the opposite of the
-// retention sweep beside it: a singleton is right when N nodes would do the
-// same work, and here they would each do DIFFERENT work — every node has its
-// own store holding its own seats' memory, and only that node can read it.
+// A PER-NODE LOOP rather than a fleet singleton. A singleton is right when N
+// nodes would do the same work, and here they would each do DIFFERENT work:
+// every node has its own store holding its own seats' memory, and only that
+// node can read it.
 //
 // Nothing here fails a turn or a seat. A publish that does not land leaves the
 // changelog behind by one cycle, which the next cycle repairs and a release

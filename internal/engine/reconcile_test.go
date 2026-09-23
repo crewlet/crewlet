@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -791,6 +792,60 @@ func TestARefusedApplySaysHowFarItGot(t *testing.T) {
 	if len(got.AppliedSubsystems) != 0 {
 		t.Errorf("subsystems = %v, want none — the revision never reached Apply",
 			got.AppliedSubsystems)
+	}
+}
+
+// AN APPLY ERROR PAST WHAT ONE EVENT CARRIES IS WHOLE IN THE NODE'S LOG.
+//
+// The durable trail is bounded so it can be published, and past the bound the
+// event keeps the head of the error. The rest is not lost: the event's text is
+// the error the tick returned, and the loop logs a failed tick's error whole —
+// so the head on the event and the whole in the log are one failure.
+func TestAnApplyErrorPastTheBoundIsWholeInTheNodesLog(t *testing.T) {
+	t.Parallel()
+	logs := &logBuffer{}
+	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Log = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	})
+	if err := p.engine.Backends().Queue.Start(t.Context()); err != nil {
+		t.Fatalf("queue start: %v", err)
+	}
+	applies := subscribeApplied(t, p)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); p.recon.Run(ctx) }()
+
+	// A seat naming a provider the revision does not configure, by a name
+	// long enough that the refusal naming it is past the bound.
+	provider := strings.Repeat("nonexistent-", events.MaxDiagnosticBytes/12+1)
+	p.activatePayload(t, "broken", json.RawMessage(`{"name":"Acme",
+	  "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},
+	  "roles":[{"name":"CEO","handle":"ceo","llm":"`+provider+`"}]}`))
+	nudge := events.New(types.ConfigRevisionActivated{RevisionID: "any", RevisionSummary: "x"},
+		events.NewTrace())
+	var failed []map[string]any
+	deadline := time.Now().Add(configplane.ReconcileInterval / 2)
+	for failed = logs.records(t, "reconcile_tick_failed"); len(failed) == 0; failed = logs.records(t, "reconcile_tick_failed") {
+		if time.Now().After(deadline) {
+			t.Fatal("the loop logged no failed tick for a revision that cannot be built")
+		}
+		// Republished each round: the loop subscribes inside Run.
+		_ = p.engine.Backends().Queue.Publish(ctx, topics.ConfigRevisionActivated, nudge)
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	whole, _ := failed[0]["error"].(string)
+	if !strings.Contains(whole, provider) {
+		t.Fatalf("the failed tick's error does not name the provider whole (%d bytes)", len(whole))
+	}
+	got := appliedPayload(t, waitForApplied(t, applies))
+	if got.Error != events.ClipDiagnostic(whole) || got.Error == whole {
+		t.Errorf("the event's error is %d bytes; want the marked head of the %d-byte error "+
+			"the loop logged whole", len(got.Error), len(whole))
 	}
 }
 
