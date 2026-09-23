@@ -535,6 +535,7 @@ the apply, the chart view's rebuild, and the last step of boot. In order:
 | `mailboxes` | A durable subscription per seat | Until one exists, every event published to that seat is **dropped** rather than retained. A convergence rather than a walk: it asks the broker what is missing and writes only that, so a company whose mailboxes all exist costs a comparison and no consumer proposals at all |
 | `scheduler` | The cron loop, armed or disarmed | A seat's `schedules:` ride the chart, so a founder giving somebody their first standup is a chart write — and a loop armed only on an apply fires nothing until the next one, which on a company nobody is reconfiguring is never |
 | `published` | The socket push that re-sends the roster, org tree, tool catalogue and schedules **whole** | The dashboard's company-derived screens come from the company, so no event will ever correct them and an overlay merge cannot express a seat going away. Wired to the apply alone, a founder hiring somebody watched the screen not change |
+| *the directory* — not a step of this list | The party index again, rebuilt **for the same company** when the [identity directory](identity-and-access.md#what-a-suspension-reaches-and-how-fast) moved | Not a chart write at all, which is the point: suspending, reinstating, binding or removing the person who holds a seat is a record on the identity log, and a registry rebuilt only on a published company went on attributing a suspended person's Slack messages to their seat until somebody edited the chart. See below |
 
 **Every step notices for itself that there is nothing to do**, which is what
 makes running the list cheap enough to do on every committed chart record and
@@ -545,6 +546,22 @@ compare the row against what the chart says, and the scheduler arms or disarms
 rather than rebuilding. A gate in front of the whole list skips it outright
 when this exact company has already been through it, so a refresh that finds
 the view current costs one comparison.
+
+**The party index has a second trigger, and it follows the same rule.** Who
+holds a seat, and at what stage, is the identity directory's answer rather than
+the company's: a seat whose holder is suspended, retired or removed registers
+no contact identity (see [Humans in the Org
+Chart](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-chart-record)).
+So the identity applier signals after every committed batch that moved a seat's
+standing, and the node reads the directory once and — if the answer moved —
+builds a whole new registry for the company it already serves and swaps it in,
+exactly as `parties` does. Both triggers take one lock, so they cannot swap a
+half-built registry past each other, and neither is ever a diff against the
+live one. It is within one apply on every node that runs the identity domain
+(`ingress`, `workers`), with a thirty-second re-read as the net — the chart
+view's own figure, for the chart view's own reasons — and it never appears in
+`applied_subsystems`, because no apply ran. A node that runs no identity domain
+consults nothing here and routes by the chart alone.
 
 **The order is not arbitrary.** A released inbox runs a turn immediately, and
 that turn resolves parties, loads its tool surface and files work into a

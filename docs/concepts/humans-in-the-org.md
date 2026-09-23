@@ -302,17 +302,77 @@ flowchart TD
 
 Two consequences:
 
-1. **The engine never pushes to humans.** A seat's inbox exists to wake
-   an *agent* into a turn, and a human has no turn to wake. An inbound
+1. **The engine never wakes a human seat.** A seat's mailbox exists to
+   wake an *agent* into a turn, and a human has no turn to wake. An inbound
    notification whose recipient resolves to a human seat is skipped at
    info level (`notification_skipped`, reason `human seat`) rather than
    warned about as undeliverable: the person is already notified natively
    by the tool where the work lives (a Jira assignment emails the
    assignee; a Slack mention pings them). A schedule never fires into a
-   human seat either (see the table below).
+   human seat either (see the table below). What the engine does tell a
+   person about is its OWN tracker — see
+   [How a person learns they have work](#how-a-person-learns-they-have-work).
 2. **Agents must never wait.** The turn model is already asynchronous:
    the prompts and tool errors steer the LLM to leave state on the
    surface and end the turn.
+
+---
+
+## How a person learns they have work
+
+A person hears about work from three places, and which ones they have depends
+on where the work lives:
+
+- **The vendor where the work lives.** A Jira assignment emails the assignee,
+  a Slack mention pings them, a GitHub review request lands in their GitHub
+  inbox. The engine forwards none of it — see the loop above.
+- **The engine's own inbox.** Every change to the
+  [native tracker](task-engine.md) writes a notice to each person it concerns,
+  under the one reason that routed it to them (`assignee`, `mention`,
+  `blocking`, …). It is the `work_inbox` question, and the dashboard's landing
+  screen.
+- **The dashboard, the moment that inbox moves.** For somebody with no Slack or
+  Jira account — a person who works in Crewlet only — this is the delivery
+  surface.
+
+The third is a **push**, not a poll:
+
+```mermaid
+sequenceDiagram
+    participant W as Writer (a seat, a person)
+    participant L as Tracker log
+    participant N as Every node's tracker applier
+    participant S as That node's sockets
+    participant D as Sarah's dashboard
+    D->>S: watch sarah-chen (on every socket open)
+    Note over S: allowed, because Sarah holds that seat — nothing is sent back
+    W->>L: assign ENG-12 to sarah-chen
+    L->>N: the record, in log order
+    N->>N: apply, write Sarah's notice, commit
+    N->>S: inbox_changed {handle, unread_delta, subject, reason}
+    S->>D: only to the sockets watching sarah-chen
+    D->>S: work_inbox (within half a second)
+```
+
+- **Every node applies every tracker record**, so every node that serves
+  sockets hears every movement from its own applier, after the batch commits,
+  and tells the sockets it holds. Nothing is forwarded between nodes, and a
+  person's browser can be connected to any of them.
+- **The dashboard watches your own seat** as soon as its socket opens, and
+  again on every reconnect: the rail's inbox badge, the Inbox screen and My
+  work re-ask within half a second of the frame. The frame carries identifiers
+  and a count — the seat, the task, the reason — and never what the notice
+  says, which is read through `work_inbox` as before.
+- **A watch is decided like the inbox itself.** You may watch your own seat;
+  a lead may watch a seat they lead; the admin grant may watch any. A watch
+  this node cannot decide because its chart view is behind is not installed,
+  and the dashboard asks again a few seconds later.
+- **The poll is still there** — a minute for the rail, thirty seconds for the
+  screens — and it is the fallback, not the mechanism: a frame dropped under
+  backpressure or lost to a reconnect is never re-sent.
+
+A person who is not bound to a seat has no inbox, so there is nothing to
+watch. See [Acting as your seat](#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 ---
 
@@ -451,6 +511,10 @@ A seat's kind is ordinary configuration, applied like any other change
   company**, which for a seat's own fields means the chart write that carried
   them: every publish builds a new party registry and reconciles the human
   contact IDs into it.
+- **Who holds the seat, and at what stage, takes effect with the next
+  identity apply**, with no chart write at all: suspending the person bound
+  to a seat withdraws its contact IDs, and reinstating them restores them. See
+  [A suspended holder is withdrawn](#a-suspended-holder-is-withdrawn-with-no-chart-record).
 
 ## Identity Resolution (party registry)
 
@@ -489,6 +553,58 @@ holds two kinds of entry:
   resolved against the live server at connect, are carried across into the
   new registry instead: they are facts about a server rather than about the
   company.
+
+### A suspended holder is withdrawn with no chart record
+
+A human seat's `contact` block is org-chart content, but whether the person
+holding the seat may still be reached through it is not: it is a fact about
+the **person**, and it lives in the [identity
+directory](identity-and-access.md#what-a-suspension-reaches-and-how-fast). So
+every registry is built from TWO readings — the org view, and one read of the
+directory saying who holds each seat and at what stage — and a seat whose
+holder may not be reached registers **no contact identity at all**:
+
+| Holder's standing | Contact IDs |
+|---|---|
+| `active`, `invited`, `enrolling`, or a binding still being enrolled | registered — each is somebody the company has put in the seat |
+| `suspended` | withheld |
+| `retired` | withheld |
+| removed while holding the seat, and nobody bound since | withheld until the next holder is bound |
+| a stage this build cannot name (a newer peer wrote it) | withheld — briefly unreachable is the safe way to be wrong during an upgrade |
+| nobody bound | registered — an unheld seat is routed by the chart, as before the directory existed |
+
+A seat with two holders — a duplicate only a restore can produce — is withheld
+if either may not be reached, because one contact map cannot say which of them
+it belongs to.
+
+**Two triggers rebuild the registry, and both rebuild it whole.** A published
+company is the first; the second is the identity applier, which signals after
+every committed batch that moved a seat's standing (a suspension, a
+reinstatement, a bind, an unbind, a removal). The node then reads the
+directory once and, if the answer moved, builds a new registry for the same
+company and swaps it in — never a diff against the live one, so a reader
+always sees one reading of each source. That is **within one apply** of the
+record on every node that runs the identity domain, and a thirty-second
+re-read is the safety net behind the signal. The log line `parties_indexed`
+reports `withheld_seats` and whether a `directory` was consulted.
+
+**A directory this node cannot read keeps the last reading** rather than
+falling back to the chart, which would hand every suspended person's seat
+back: it logs `party_directory_unreadable` and retries on the net.
+
+**A node that does not run the identity domain routes by the chart alone.**
+A seats-only satellite holds an empty copy of the directory, and an empty
+copy is not "nobody holds any seat", so it consults nothing and withholds
+nothing — exactly the routing every node had before the directory existed.
+Every node consumes inbound deliveries, so in a fleet with seats-only nodes a
+delivery one of them consumes still attributes a suspended person's message
+to their seat. A fleet that must not have that gap runs `ingress` or
+`workers` on every node.
+
+**What it does not withdraw** is what agents are *shown*: the roster in a
+seat's prompt and `lookup_colleague` read the seat's `contact` block, which is
+chart content, so an agent can still address the person on their own vendor
+account. To stop that too, edit or remove the seat's `contact` block.
 
 External-ID resolution is plain index lookups, because it runs on every
 inbound notification for sender attribution. On each surface it consults

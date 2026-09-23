@@ -227,6 +227,49 @@ stage this build does not recognise may not act either.
 Seats and the engine are always `active` — neither enrols, and neither can be
 suspended by anything but the org chart and the process.
 
+### What a suspension reaches, and how fast
+
+A suspension is ONE record on the identity log — `crewlet iam suspend`, or a
+`PATCH /iam/people/{id}` naming the stage — and no chart write. Every node that runs the
+identity domain (`ingress` and `workers`) applies it, and what follows is
+decided on each of them from that node's own rows:
+
+| What | When | How |
+|---|---|---|
+| Signing in | refused from the apply on | the stage is read from the row, and only `active` may act |
+| Every session they hold | refused at the next request, `401 session_revoked` | the same stage check, on every request |
+| An open dashboard tab | closed `4401` within a minute | the socket re-checks its credential every 60 seconds |
+| Their seat's contact identities — the Slack member, the Jira account, the GitHub login | withdrawn within one apply, with a 30-second re-read behind it | the identity applier signals after the commit, and the node rebuilds its party registry for the same company from a fresh read of the directory |
+| Their `inbox_changed` watch | gone with the socket | a watch needs a resolved caller |
+
+So a message the person sends from Slack stops being attributed to their
+seat — a suspended lead's DM to an agent no longer arrives as "your lead
+says" — and nothing about the seat has to be edited to make that true.
+Reinstating them (`crewlet iam activate`) restores all of it on the same terms. See
+[Humans in the Org Chart: A suspended holder is
+withdrawn](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-chart-record)
+for the routing rule for every stage, removal included.
+
+**The stage sticks through every edit.** It has one writer — the status
+record — and a later rename, grant change or credential change forms its
+document from the stage the row holds, so no edit made while somebody is
+suspended can quietly reinstate them.
+
+**What it does not reach:**
+
+- **The seat.** It stays in the chart, work can still be assigned to it, and
+  the tracker still writes its notices; whoever is bound to it next reads
+  them. Suspending a person is not removing a seat.
+- **What agents are shown.** A seat's `contact` block is chart content, and
+  the roster in an agent's prompt and `lookup_colleague` read it as written,
+  so an agent may still address the person at their own vendor account. Edit
+  the `contact` block to stop that.
+- **A node that runs no identity domain.** A seats-only satellite has no
+  directory to read and routes inbound deliveries by the chart alone, so a
+  delivery it consumes still attributes the person's messages to their seat.
+  Run `ingress` or `workers` on every node that consumes deliveries if that
+  gap matters.
+
 ---
 
 ## Anonymous is not unknown

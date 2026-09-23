@@ -25,6 +25,15 @@
 // possible for a record that failed to decode at all, because such a record
 // yields no id, no kind and no subject to file it under. A rolling upgrade
 // puts exactly that record on the wire.
+//
+// # What the applier says after a commit
+//
+// Beside the rows, the applier reports WHOSE INBOX each committed batch moved
+// ([InboxMovement], inboxmove.go) — the one fact a person's dashboard needs to
+// learn about their work without polling, and one only the apply sees on every
+// node. It is announced after the commit and never inside the transaction,
+// whose body can re-run, and it carries identifiers and a count rather than
+// the notice, which is read through the question that decides who may read it.
 package tracker
 
 import (

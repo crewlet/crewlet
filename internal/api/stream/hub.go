@@ -16,6 +16,16 @@
 // posture — and the seat decides the AUDIENCE for the kinds routed by seat.
 // Everything else about the fan-out follows from those two and from the total
 // route table below.
+//
+// # Who may be a recipient for a seat
+//
+// The hub INDEXES a watch and decides nothing about it; the socket decides it
+// ([watching]), the way the `work_inbox` question decides a read of the same
+// seat's inbox — its holder, whoever leads it, the admin grant — through the
+// same three-valued chart seam, and re-decides it on every credential re-check.
+// The one seat-routed kind, `inbox_changed`, says whose inbox moved, when and
+// why; an index anyone could write to would be a way to follow somebody else's
+// inbox that the question itself refuses.
 package stream
 
 import (
@@ -586,11 +596,10 @@ func (h *Hub) Unregister(c *Client) {
 
 // Watch makes c a recipient for seat, replacing whatever it watched before.
 //
-// ONE SEAT AT A TIME, because one screen is open at a time: a dashboard
-// showing a seat's inbox has navigated to that seat, and a client that
-// accumulated every seat it ever visited would keep receiving frames for
-// screens nobody is looking at. An empty seat clears the subscription, which
-// is what navigating away asks for.
+// ONE SEAT AT A TIME, because a tab keeps one inbox current — the dashboard
+// watches the viewer's own seat for as long as the tab is open — and a client
+// that accumulated every seat it was ever pointed at would keep receiving
+// frames nobody is reading. An empty seat clears the subscription.
 //
 // A client that is not registered is not indexed: the index is a subset of the
 // fan-out, and a bucket holding a client the hub has already let go of would
