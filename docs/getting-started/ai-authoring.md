@@ -167,8 +167,12 @@ types the engine parses with, a schema-only check catches:
 - unknown keys, at every level including roles, units, and MCP servers
 - wrong types, and bad enums (`kind: robot`, `type: openaii`)
 - malformed handles, and cron expressions with the wrong field count
-- a human seat with no `contact` identity
 - a `knowledge.*` scope list naming a backend the config does not configure
+
+A human seat with no `contact` identity passes both checks, because it is a
+legitimate seat: a person who works only through the dashboard has no chat
+account to name. The running engine's chart check reports it as
+`seat_unreachable`, so nobody is surprised that it cannot be @-mentioned.
 
 Three things still need the binary, and the skill tells the assistant to
 check them by reading:

@@ -663,10 +663,14 @@ silently validate the defaults instead and print a success line about files it
 never opened.
 
 Validation is **deep**: it builds the `Organization`, so duplicate seat and
-unit names, bad cron expressions, invalid timezones, human seats missing a
+unit names, bad cron expressions, invalid timezones, two seats declaring one
 contact identity, and a knowledge scope with no backend behind it all fail here
-rather than at run time. It reads **no environment**: Tier B keeps `${VAR}`
-references verbatim, so a config validates fully before any secret exists.
+rather than at run time. A human seat with **no** contact identity is not among
+them: a person who works only through the dashboard has no chat account to
+name, so validation admits the seat and the chart check reports it as
+`seat_unreachable` (see [`crewlet chart check`](#crewlet-chart)). It reads
+**no environment**: Tier B keeps `${VAR}` references verbatim, so a config
+validates fully before any secret exists.
 For the same reason a company with no `providers.llm` at all validates, and
 its summary reports `0 LLM providers`: every node applies it, and its seats
 hold their work until a provider is added (see
