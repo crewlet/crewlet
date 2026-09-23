@@ -1576,6 +1576,134 @@ func TestARecordFromALaterGenerationStopsTheApplier(t *testing.T) {
 	}
 }
 
+// A PASSED GENERATION NAMES THE REMEDY THAT EXISTS.
+//
+// Every refusal over a passed generation said this node would adopt a peer's
+// snapshot on its own. Twice that was false: a generation only an evicted node
+// opened has no snapshot to adopt — the join never asks, and the node waited
+// for a repair that could not come — and a record this node's own reanchor
+// appended before failing has no peer behind it at all. Each now names its own
+// remedy, and the one that moves while the verdict holds — an operator evicting
+// the peer, or readmitting it — is judged again on every beat.
+func TestAPassedGenerationNamesTheRemedyThatExists(t *testing.T) {
+	t.Parallel()
+	const self = "node-self"
+	passedBy := func(t *testing.T, writer string, evicted func(string) bool) *applyHarness {
+		t.Helper()
+		h := newApplyHarness(t, probeDomain{})
+		runner, err := statelog.NewRunner(statelog.RunnerDeps{
+			Domain: probeDomain{}, Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
+			Node: h.db, DB: h.db.Replicated(), Metrics: h.metrics,
+			Checkpoint: statelog.Position{Generation: 1},
+			NodeID:     self,
+			Evicted: func(_ context.Context, node string) (bool, error) {
+				return evicted(node), nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewRunner: %v", err)
+		}
+		h.runner = runner
+		h.fetch.offer(1, env(1, "edit", "a", "op-a", 1))
+		opened := env(2, "edit", "b", "op-b", 1)
+		opened.Gen, opened.Writer = 2, writer
+		h.fetch.offer(2, opened)
+		if err := h.run(2); !errors.Is(err, statelog.ErrGenerationPassed) {
+			t.Fatalf("run = %v, want the stop over the passed generation", err)
+		}
+		return h
+	}
+	says := func(t *testing.T, err error, want []string, not []string) {
+		t.Helper()
+		if !errors.Is(err, statelog.ErrGenerationPassed) {
+			t.Fatalf("the refusal is %v, want the passed generation", err)
+		}
+		for _, w := range want {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("the refusal does not say %q: %v", w, err)
+			}
+		}
+		for _, n := range not {
+			if strings.Contains(err.Error(), n) {
+				t.Errorf("the refusal says %q, which is false here: %v", n, err)
+			}
+		}
+	}
+	adopt := []string{"adopts a snapshot", "evicts that peer", "re-anchors this stream"}
+	nothingToAdopt := []string{"only nodes the fleet has evicted", "re-anchors this stream"}
+	nobody := func(string) bool { return false }
+
+	t.Run("a live peer's record is adopted from", func(t *testing.T) {
+		t.Parallel()
+		h := passedBy(t, "node-peer", nobody)
+		says(t, h.runner.StreamIdentity(), append(adopt, "node-peer"), []string{"re-runs"})
+	})
+
+	t.Run("an evicted node's record is re-anchored past", func(t *testing.T) {
+		t.Parallel()
+		h := passedBy(t, "node-gone", func(n string) bool { return n == "node-gone" })
+		says(t, h.runner.Stopped(), nothingToAdopt, []string{"adopts a snapshot"})
+		says(t, h.runner.StreamIdentity(), nothingToAdopt, []string{"adopts a snapshot"})
+	})
+
+	t.Run("this node's own failed attempt is run again", func(t *testing.T) {
+		t.Parallel()
+		h := passedBy(t, self, nobody)
+		own := []string{"this node's own record", "re-runs the reanchor"}
+		says(t, h.runner.Stopped(), own, []string{"adopts a snapshot", "peer"})
+		// AND ONLY THE REANCHOR ENDS IT: no reading of the register makes
+		// this node's own record somebody else's.
+		if changed, err := h.runner.RecheckPassed(t.Context(), 5); err != nil || changed {
+			t.Fatalf("RecheckPassed on this node's own attempt = (%v, %v), want nothing", changed, err)
+		}
+		says(t, h.runner.StreamIdentity(), own, []string{"adopts a snapshot"})
+	})
+
+	t.Run("an eviction after the verdict moves the remedy, and a readmission back", func(t *testing.T) {
+		t.Parallel()
+		gone := false
+		h := passedBy(t, "node-peer", func(string) bool { return gone })
+		says(t, h.runner.StreamIdentity(), adopt, nil)
+		gone = true
+		if changed, err := h.runner.RecheckPassed(t.Context(), 1); err != nil || !changed {
+			t.Fatalf("RecheckPassed after the peer's eviction = (%v, %v), want the remedy moved",
+				changed, err)
+		}
+		says(t, h.runner.StreamIdentity(), nothingToAdopt, []string{"adopts a snapshot"})
+		gone = false
+		if changed, err := h.runner.RecheckPassed(t.Context(), 1); err != nil || !changed {
+			t.Fatalf("RecheckPassed after the readmission = (%v, %v), want it moved back",
+				changed, err)
+		}
+		says(t, h.runner.StreamIdentity(), adopt, nil)
+	})
+
+	t.Run("the register's verdict follows its holders", func(t *testing.T) {
+		t.Parallel()
+		h := newApplyHarness(t, probeDomain{})
+		h.fetch.offer(1, env(1, "edit", "a", "op-a", 1))
+		if err := h.run(1); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if !h.runner.ObserveFleetGeneration(2) {
+			t.Fatal("the register's generation 2 established nothing")
+		}
+		says(t, h.runner.StreamIdentity(), adopt, nil)
+		// EVERY UN-EVICTED PEER NOW STANDS BELOW IT: the ones that held it
+		// were evicted, since a published row is withdrawn by nothing else.
+		if changed, err := h.runner.RecheckPassed(t.Context(), 1); err != nil || !changed {
+			t.Fatalf("RecheckPassed with no live holder = (%v, %v), want the remedy moved",
+				changed, err)
+		}
+		says(t, h.runner.StreamIdentity(), nothingToAdopt, []string{"adopts a snapshot"})
+		if changed, err := h.runner.RecheckPassed(t.Context(), 2); err != nil || !changed {
+			t.Fatalf("RecheckPassed with a live peer at 2 = (%v, %v), want an adoption again",
+				changed, err)
+		}
+		says(t, h.runner.StreamIdentity(), adopt, nil)
+	})
+}
+
 // A JOIN RE-KEYS THE RUNNER TO THE FLEET'S HISTORY, AND ONLY TO IT.
 //
 // Both verdicts used to outlive the adoption that answers them — the runner

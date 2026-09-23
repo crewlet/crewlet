@@ -216,9 +216,11 @@ const (
 	// sequence from a history the broker does not hold, and whatever it
 	// appends lands where its own applier will never apply it. Waiting
 	// does not clear it, and the remedy is an operator's re-anchor — or,
-	// for a passed generation, this node's own adoption. The same word as
-	// the read refusal for the same facts, so a surface that meets both
-	// reads one.
+	// for a passed generation, whichever the refusal names: this node's own
+	// adoption where a live peer holds the generation, a re-anchor where
+	// only evicted nodes do, and a re-run of this node's own reanchor where
+	// that is what opened it. The same word as the read refusal for the
+	// same facts, so a surface that meets both reads one.
 	ReasonWrongStream Reason = "wrong_stream"
 
 	// ReasonSuperseded — this operation's record landed, and a later record

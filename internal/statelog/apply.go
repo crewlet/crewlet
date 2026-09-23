@@ -197,6 +197,16 @@ type RunnerDeps struct {
 	// logger, never silence: see loggerOr for what silence cost.
 	Logger *slog.Logger
 
+	// NodeID is this node's own id, and Evicted answers whether the fleet has
+	// evicted a node. Both name the remedy a record from a generation these
+	// rows never entered calls for ([passedGeneration.err]): a record this
+	// node's own failed reanchor appended is finished by running it again,
+	// and a generation only an evicted node opened has no snapshot to adopt.
+	// An empty id matches no writer, and a nil Evicted answers that nobody
+	// is — either leaves the peer's sentence, which names both remedies.
+	NodeID  string
+	Evicted func(ctx context.Context, node string) (bool, error)
+
 	// Now is the clock, injectable so a test can drive the time budget.
 	Now func() time.Time
 }
@@ -229,6 +239,8 @@ type Runner struct {
 	logger  *slog.Logger
 	now     func() time.Time
 	opts    ApplyOptions
+	nodeID  string
+	evicted func(ctx context.Context, node string) (bool, error)
 
 	waiters waiters
 
@@ -515,6 +527,8 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		logger:  logger,
 		now:     now,
 		created: d.StreamCreatedAt,
+		nodeID:  d.NodeID,
+		evicted: d.Evicted,
 		opts: ApplyOptions{
 			ArbitratedKinds: spec.ArbitratedKinds,
 			Epoch:           d.Epoch,
@@ -1399,26 +1413,109 @@ func (r *Runner) ObserveFleetGeneration(fleet uint32) bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.passedLocked(fleet)
+	return r.passedLocked(passedGeneration{fleet: fleet})
 }
 
-// passedLocked records that the fleet is on generation fleet, answering true
-// the one time that establishes the verdict. The caller holds mu.
-func (r *Runner) passedLocked(fleet uint32) bool {
-	if fleet <= r.cursor.Generation {
+// passedLocked records that the log is on generation p.fleet — by p.writer's
+// record, or by the register where that is empty — answering true the one time
+// that establishes the verdict. The caller holds mu.
+func (r *Runner) passedLocked(p passedGeneration) bool {
+	if p.fleet <= r.cursor.Generation {
 		return false
 	}
 	if r.passed != nil {
-		if fleet > r.passed.fleet {
-			// A NEW VALUE, never a write through the shared pointer:
-			// [Runner.StreamIdentity] reads it after the lock is
-			// released.
-			r.passed = &passedGeneration{at: r.passed.at, fleet: fleet}
+		// A LATER GENERATION replaces what is held, and the SAME one gains
+		// the writer the register could not name — which is what a later
+		// eviction of that writer is judged by ([Runner.RecheckPassed]).
+		switch {
+		case p.fleet > r.passed.fleet:
+		case p.fleet == r.passed.fleet && r.passed.writer == "" && p.writer != "":
+			p.holder = r.passed.holder
+		default:
+			return false
 		}
+		// A NEW VALUE, never a write through the shared pointer:
+		// [Runner.StreamIdentity] reads it after the lock is released.
+		p.at = r.passed.at
+		r.passed = &p
 		return false
 	}
-	r.passed = &passedGeneration{at: r.cursor, fleet: fleet}
+	p.at = r.cursor
+	r.passed = &p
 	return true
+}
+
+// holderOf is who holds the generation a record by writer opened: this node's
+// own failed reanchor, a node the fleet has evicted, or a peer.
+//
+// A PEER WHEREVER IT CANNOT TELL — no writer, no way to ask, or a question that
+// could not be answered — because that sentence names both remedies, the
+// adoption and the eviction beside it, where the other two name one each.
+func (r *Runner) holderOf(ctx context.Context, writer string) passedHolder {
+	switch {
+	case writer == "":
+		return passedByPeer
+	case writer == r.nodeID:
+		return passedByOwnAttempt
+	case r.evicted == nil:
+		return passedByPeer
+	}
+	evicted, err := r.evicted(ctx, writer)
+	if err != nil || !evicted {
+		return passedByPeer
+	}
+	return passedByEvicted
+}
+
+// RecheckPassed re-derives who holds the generation a passed verdict names —
+// given fleet, the generation the live, un-evicted peers stand at as the
+// positions register reads now — and reports whether that changed it.
+//
+// # Why it is asked again, and not only when the verdict is reached
+//
+// Because the remedy moves while the verdict holds. The operator's own answer to
+// a peer that re-anchored and vanished is to evict it, after which there is no
+// snapshot to adopt and the sentence telling this node to wait for one is false;
+// a readmission turns it back. A live peer standing at the generation is an
+// adoption whoever wrote the record; a record's writer is otherwise judged by
+// its eviction; and a verdict the register alone established, whose generation
+// no un-evicted peer holds any more, lost its holders to eviction — a row, once
+// published, is never withdrawn by anything else. This node's own failed
+// attempt is its own for good: only the reanchor it started ends it.
+func (r *Runner) RecheckPassed(ctx context.Context, fleet uint32) (bool, error) {
+	r.mu.Lock()
+	held := r.passed
+	r.mu.Unlock()
+	if held == nil || held.holder == passedByOwnAttempt {
+		return false, nil
+	}
+	holder := passedByEvicted
+	switch {
+	case fleet >= held.fleet:
+		holder = passedByPeer
+	case held.writer != "":
+		if r.evicted == nil {
+			return false, nil
+		}
+		evicted, err := r.evicted(ctx, held.writer)
+		if err != nil {
+			return false, fmt.Errorf("statelog: read whether %s, which opened "+
+				"generation %d of %s, is evicted: %w", held.writer, held.fleet,
+				r.spec.Name, err)
+		}
+		if !evicted {
+			holder = passedByPeer
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.passed != held || held.holder == holder {
+		return false, nil
+	}
+	next := *held
+	next.holder = holder
+	r.passed = &next
+	return true, nil
 }
 
 // Rejoined re-derives what this runner knows about its positions from the
@@ -2405,8 +2502,15 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 		// node adopts the peer's snapshot; the verdict is what refuses its
 		// reads and writes until it has.
 		if passed || (env.Gen > gen && r.domain.ClaimsIdentity()) {
+			// WHO HOLDS IT decides the remedy the stop names, and it is asked
+			// before the stop is written, which is the one line an operator
+			// is sure to read.
+			observed := passedGeneration{fleet: env.Gen, writer: env.Writer}
+			if env.Gen > gen && r.domain.ClaimsIdentity() {
+				observed.holder = r.holderOf(ctx, env.Writer)
+			}
 			r.mu.Lock()
-			r.passedLocked(env.Gen)
+			r.passedLocked(observed)
 			verdict := *r.passed
 			r.mu.Unlock()
 			return nil, r.stop(ctx, fmt.Errorf("%w: the record at sequence %d, "+

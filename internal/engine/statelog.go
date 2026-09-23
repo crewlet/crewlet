@@ -827,6 +827,15 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		// there before it applies anything past it.
 		Log:             appendTo,
 		StreamCreatedAt: created, Epoch: epoch, Metrics: s.metrics,
+		// WHO THIS NODE IS, AND WHOM THE FLEET HAS EVICTED: what names the
+		// remedy for a record from a generation these rows never entered —
+		// this node's own failed reanchor, run again; a generation only an
+		// evicted node opened, re-anchored past; or a peer's, adopted.
+		NodeID: s.nodeID,
+		Evicted: func(ctx context.Context, node string) (bool, error) {
+			evicted, readErr := s.evictedOn(ctx, domain, appendTo, []string{node})
+			return evicted[node], readErr
+		},
 		// NO LOGGER, here or at any other statelog constructor: an absent
 		// one is the framework's own `component=statelog` logger. The
 		// engine's own labelled those lines `component=engine`, and the
@@ -3205,6 +3214,21 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 						"generation")
 			}
 			below = true
+		}
+		// AND WHO HOLDS THE GENERATION A VERDICT NAMES, from the same
+		// reading: the remedy its refusals name moves while it holds — an
+		// operator evicting the peer that opened it leaves nothing to adopt
+		// ([statelog.Runner.RecheckPassed]).
+		if genErr == nil {
+			if _, err := running.runner.RecheckPassed(ctx, generations[name]); err != nil &&
+				ctx.Err() == nil {
+				log.WarnContext(ctx, "statelog_generation_holder_unread",
+					"node", s.nodeID, "domain", name, "error", err.Error(),
+					"detail", "whether the node that opened the generation this "+
+						"node's rows were passed by is evicted could not be read, "+
+						"so the remedy its refusals name stays as it was until a "+
+						"beat can")
+			}
 		}
 		// THE INSTANT THE ROWS ARE KEYED TO rides beside the generation,
 		// because a generation alone cannot say which stream a sequence is

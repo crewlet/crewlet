@@ -437,6 +437,20 @@ What the evicted peer applied that nobody else did — the tail it re-anchored
 from, and anything written in its generation — is lost with its disk; the
 reanchor keeps everything else.
 
+**The refusal says which remedy applies**, and says it again as that changes.
+While a live peer holds the new generation, or nothing yet shows that none does,
+it names the adoption and, beside it, the eviction and reanchor above for a peer
+that is gone. Once the only nodes that held that generation are evicted — the
+record's writer is, or no un-evicted peer's row or trim floor stands at it any
+more — it names the reanchor alone, since there is no snapshot left to adopt;
+every heartbeat judges this again, so a peer evicted after the refusal began, or
+readmitted, moves it (a beat that could not read whether the writer is evicted
+logs `statelog_generation_holder_unread` and leaves it as it was). And a record
+opening the next generation that **this node's own** reanchor appended before it
+failed — the command gave up, or the node restarted part-way — is refused
+naming that: nothing is adopted, and running the same `reanchor` again completes
+it from that record.
+
 **`rejoin_window`** (default 30 m) is your budget for a node to become a
 complete replica. `crewlet retention status` prints this node's store size, the
 projected join against a conservative profile, and the window — so a fleet

@@ -166,7 +166,12 @@ var ErrAheadOfLog = errors.New("statelog: this node's checkpoint is past the log
 // copy. The remedy is not an operator's verb either, because the history this
 // node needs exists — on the peer that re-anchored — so the node ADOPTS that
 // peer's snapshot, on its own, through the ordinary join.
-var ErrGenerationPassed = errors.New("statelog: a peer re-anchored this log past this node's generation")
+//
+// EXCEPT WHERE NO PEER HOLDS IT, which is why the sentinel's own words name no
+// peer: a generation only an evicted node opened has no snapshot to adopt, and
+// one this node's own failed reanchor opened is finished by running it again.
+// The sentence each refusal carries names which ([passedGeneration.err]).
+var ErrGenerationPassed = errors.New("statelog: the log moved past this node's generation")
 
 // ErrLogDiverged reports a log whose record at this node's checkpoint is not the
 // record this node consumed there: the log continues a history these rows are
@@ -288,24 +293,81 @@ func sameRecord(a, b time.Time) bool {
 	return a.Truncate(identityResolution).Equal(b.Truncate(identityResolution))
 }
 
-// passedGeneration is what established that a peer re-anchored a domain past
-// this applier's rows: the checkpoint the rows stand at, and the generation the
-// fleet is on.
+// passedGeneration is what established that the log moved past this applier's
+// rows' generation: the checkpoint the rows stand at, the generation the log is
+// on, the node whose record showed it (empty where the positions register did),
+// and who holds that generation — which is what decides the remedy.
 type passedGeneration struct {
-	at    Position
-	fleet uint32
+	at     Position
+	fleet  uint32
+	writer string
+	holder passedHolder
 }
+
+// passedHolder is who holds the generation a log moved to past this node's
+// rows, as far as this node can tell — the one fact the remedy turns on.
+type passedHolder int
+
+const (
+	// passedByPeer: a peer re-anchored the log, and a live one holds the
+	// generation — or nothing yet says it does not. This node adopts its
+	// snapshot on its own.
+	passedByPeer passedHolder = iota
+
+	// passedByEvicted: only nodes the fleet has evicted ever held it, so no
+	// snapshot exists to adopt, and the remedy is a reanchor of this node's
+	// own — the abandoned case, which makes that generation void.
+	passedByEvicted
+
+	// passedByOwnAttempt: the record opening it is this node's own, appended
+	// by a reanchor that did not complete. The remedy is running it again,
+	// which completes it from that very record.
+	passedByOwnAttempt
+)
 
 // err is the one sentence every refusal over a passed generation carries — the
 // applier's stop, a read's `wrong_stream` and a write's.
+//
+// THE REMEDY FOLLOWS WHO HOLDS THE GENERATION. The one sentence there used to be
+// — this node adopts a peer's snapshot on its own — was false twice over: for a
+// generation only an evicted node held, there is no peer to adopt from and the
+// join never asks, so a node waited for ever on a repair that could not come;
+// and for this node's own reanchor that appended its record and then failed,
+// there was no peer at all, and the one thing that finishes it is the reanchor
+// run again.
 func (p passedGeneration) err(domain, stream string) error {
-	return fmt.Errorf("%w: %s's rows are at generation %d of %s and a peer has "+
-		"re-anchored it to generation %d, so the history the log now continues "+
-		"is that peer's rows rather than these — neither a read nor a write can be "+
-		"answered from them, and nothing on the log can bring them level; this "+
-		"node adopts a snapshot from a peer at generation %d, which it asks the "+
-		"fleet for on its own",
-		ErrGenerationPassed, domain, p.at.Generation, stream, p.fleet, p.fleet)
+	lead := fmt.Sprintf("%s's rows are at generation %d of %s", domain, p.at.Generation, stream)
+	who := "a peer"
+	if p.writer != "" {
+		who = "peer " + p.writer
+	}
+	switch p.holder {
+	case passedByOwnAttempt:
+		return fmt.Errorf("%w: %s and the log carries this node's own record opening "+
+			"generation %d, appended by a reanchor of it that did not complete — the "+
+			"log continues in that generation while these rows' checkpoint is still in "+
+			"the one before, so neither a read nor a write can be answered from them "+
+			"until an operator re-runs the reanchor (`crewlet retention reanchor "+
+			"-stream %s`), which completes it from that record",
+			ErrGenerationPassed, lead, p.fleet, stream)
+	case passedByEvicted:
+		return fmt.Errorf("%w: %s and the log continues in generation %d, which %s "+
+			"opened and only nodes the fleet has evicted hold — there is no snapshot "+
+			"at that generation to adopt, so neither a read nor a write can be answered "+
+			"from these rows until an operator re-anchors this stream (`crewlet "+
+			"retention reanchor -stream %s`), which follows it from this node's own "+
+			"checkpoint with that generation void",
+			ErrGenerationPassed, lead, p.fleet, who, stream)
+	}
+	return fmt.Errorf("%w: %s and %s has re-anchored it to generation %d, so the "+
+		"history the log now continues is that peer's rows rather than these — "+
+		"neither a read nor a write can be answered from them, and nothing on the log "+
+		"can bring them level; this node adopts a snapshot from a peer at generation "+
+		"%d, which it asks the fleet for on its own — and if no live node holds that "+
+		"generation because the peer that opened it is gone for good, an operator "+
+		"evicts that peer (`crewlet retention evict`) and re-anchors this stream "+
+		"(`crewlet retention reanchor -stream %s`)",
+		ErrGenerationPassed, lead, who, p.fleet, p.fleet, stream)
 }
 
 // pastEnd reports a checkpoint past a log's last sequence — [Health.AheadOfLog],

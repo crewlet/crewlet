@@ -30,7 +30,10 @@ import (
 // and the reanchor is the ABANDONED case — the generation after the peer's,
 // from this node's own checkpoint — which voids the peer's records while
 // keeping a live peer's record written in this node's generation after the
-// peer's move, and the eviction itself.
+// peer's move, and the eviction itself. The refusals say so as it happens:
+// before the eviction they name the adoption and, beside it, the eviction and
+// reanchor for a peer that is gone; after it, only the reanchor — there is no
+// snapshot at that generation left to adopt.
 func TestEvictingAPeerThatReanchoredAndVanishedReleasesTheFleet(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -107,6 +110,12 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	waitUntil(t, 10*time.Second, "the tracker to stop on the peer's generation", func() bool {
 		return errors.Is(running.runner.Stopped(), statelog.ErrGenerationPassed)
 	})
+	refusal := running.runner.StreamIdentity()
+	for _, says := range []string{"adopts a snapshot", "evicts that peer"} {
+		if refusal == nil || !strings.Contains(refusal.Error(), says) {
+			t.Fatalf("before the eviction the refusal is %v, want it to say %q", refusal, says)
+		}
+	}
 	confirm := statelog.ConfirmationOf(live)
 	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
 		Stream: spec.Name, Confirm: confirm, By: "ops-1", Force: true,
@@ -137,6 +146,16 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 		t.Fatalf("the fleet is on generation %d of the tracker after node-x's eviction, "+
 			"want this node's %d — an evicted peer's generation is not the fleet's",
 			gens[name], own.Generation)
+	}
+	// AND THE REFUSAL NO LONGER SENDS THIS NODE TO WAIT FOR A DONOR.
+	s.publishPositions(t.Context())
+	refusal = running.runner.StreamIdentity()
+	if !errors.Is(refusal, statelog.ErrGenerationPassed) ||
+		strings.Contains(refusal.Error(), "adopts a snapshot") ||
+		!strings.Contains(refusal.Error(), "only nodes the fleet has evicted") ||
+		!strings.Contains(refusal.Error(), "re-anchors this stream") {
+		t.Fatalf("after node-x's eviction the refusal is %v, want it to name the "+
+			"reanchor as the one remedy — no live node holds that generation", refusal)
 	}
 
 	// THE REANCHOR: the abandoned case, into the generation after the peer's,

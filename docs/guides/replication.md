@@ -538,13 +538,16 @@ replication:
 The snapshotter, the donor and the adopter write under the same component. The
 lines the engine writes *around* those loops — `statelog_stream_recreated` and
 `statelog_below_the_floor` among them — carry `component=engine`, because the
-component names the code that wrote a line rather than what it is about. Three
+component names the code that wrote a line rather than what it is about. Four
 of them are about a peer's reanchor: `statelog_generation_passed` (`WARN`) is
 the heartbeat finding a log re-anchored past this node's generation, naming
 both (`generation`, `fleet_generation`), from which point the domain refuses;
 `statelog_behind_a_reanchor` (`WARN`) is the join asking the fleet for a
 snapshot at the new generation, naming the domains and the generations it asks
-at; and `statelog_generations_unread` (`WARN`) is a beat that read the
+at; `statelog_generation_holder_unread` (`WARN`) is a beat that could not read
+whether the node that opened that generation is evicted, which decides whether
+the refusal names the adoption or a reanchor, and leaves it naming what it did;
+and `statelog_generations_unread` (`WARN`) is a beat that read the
 positions register but could not establish which generation the fleet is on —
 the trim floors unread, or an eviction record unreadable. Such a beat judges
 neither that nor the truncation below, and leaves both verdicts where they
