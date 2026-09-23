@@ -1010,8 +1010,9 @@ Three different gestures, and the difference matters:
   removes the wrong subtree is to see what was removed.
 - **Delete** writes a marker. Every node drops every record about that task for
   ever, which is what stops a redelivery months later resurrecting it.
-- **Purge** removes the rows. Its report comes back in **three groups**: what
-  was purged, what could not be reached, and what is stale.
+- **Purge** removes the rows, and answers the same three-valued outcome every
+  write here has: `applied`, `pending` (the record is durable and this node has
+  not reached it yet — do not run it again) or `unknown`, the one to retry.
 
 None of the three is a seat's. Removing and restoring are the operator's
 assistant's, as [above](#what-a-seat-can-do); the deletion marker is written by
@@ -1021,8 +1022,15 @@ the engine — because it is the one operation with no inverse and nothing else
 can be asked to confirm it:
 
 ```
-crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
+crewlet work purge <item> -reason "why" -confirm <item-key> [-op-id ID]
 ```
+
+`<item>` is the task's key or its id, and `-confirm` repeats its **key**, which
+the node checks against the task `<item>` resolves to — a mismatch destroys
+nothing. There is no project to name: the task's own row says which project the
+record is filed under. On `unknown` the command prints an operation id, and that
+id goes back in `-op-id` so the retry is the same operation rather than a second
+purge. See [the CLI reference](../reference/cli.md#crewlet-work-purge).
 
 Its **children move rather than being destroyed**: each direct child
 re-parents onto the purged task's own parent, or becomes a root when the purged
@@ -1034,7 +1042,7 @@ a copy of exactly the content the purge exists to remove, kept on the log for
 its whole retention window. What survives is that it happened, to which key,
 by whom, and the reason the operator gave.
 
-The purge report gives no time guarantee, and that is honest rather than
+What the purge prints gives no time guarantee, and that is honest rather than
 evasive: an offline or evicted disk keeps its copy until it replays, adopts a
 snapshot, is replaced, or is destroyed. There is no duration to state. See
 [Retention](retention.md).

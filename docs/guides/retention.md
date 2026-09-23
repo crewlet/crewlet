@@ -506,16 +506,18 @@ Three different things:
 - **Removing** a task hides it. The rows stay; a restore brings it back.
 - **Deleting** writes a marker. Every node drops every record about that task,
   for ever — which is what stops a redelivery months later resurrecting it.
-- **Purging** removes the rows. Its report has **three groups**: what was
-  purged, what could not be reached, and what is stale.
+- **Purging** removes the rows, on every node as each one reaches the record.
 
 ```
-crewlet work purge <task-id> -project KEY -reason "why" -confirm <task-key>
+crewlet work purge <item> -reason "why" -confirm <item-key> [-op-id ID]
 ```
 
-The confirmation is the task's **key**, not its id: the id is already on the
-command line, so repeating it confirms nothing, while the key has to be looked
-up — which is the point of asking. The **reason is required** because it is the
+`<item>` is the task's key or its id. The confirmation is the task's **key**,
+and the node checks it against the task `<item>` resolves to, destroying
+nothing on a mismatch: the id may be what is on the command line, so repeating
+it would confirm nothing, while the key has to be looked up — which is the point
+of asking. There is no project to name: the task's own row says which project
+the record is filed under. The **reason is required** because it is the
 only thing that survives: the rows are destroyed, and the deletion marker's
 reason is the entire account of what used to be at that key. A purge is an
 **operator gesture** — a person or an operator token, never an agent and never
@@ -534,7 +536,7 @@ rebuilt with it. Destroying the subtree would destroy work nobody confirmed,
 and leaving it alone would leave every child pointing at an id that resolves to
 nothing.
 
-The report deliberately gives **no time guarantee**. An offline or evicted
+What it prints deliberately gives **no time guarantee**. An offline or evicted
 disk retains its copy until replay, adoption, replacement or destruction, and
 there is no duration to state. Saying "within 24 hours" would be a promise the
 architecture cannot keep.
