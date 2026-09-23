@@ -352,6 +352,87 @@ func TestARekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 	}
 }
 
+// interleavedFleet runs one gesture between a rekey's read of every row and its
+// first write — the window in which the pass holds values it read and has not
+// yet re-sealed.
+type interleavedFleet struct {
+	coord.Fleet
+	between func()
+}
+
+func (f *interleavedFleet) SecretValues(ctx context.Context) ([]coord.SecretRecord, error) {
+	rows, err := f.Fleet.SecretValues(ctx)
+	if f.between != nil {
+		between := f.between
+		f.between = nil
+		between()
+	}
+	return rows, err
+}
+
+// A REKEY NEVER UNDOES A WRITE THAT LANDED WHILE IT RAN.
+//
+// It reads every row and re-seals each afterwards. Written back with a plain
+// put, what it READ replaced whatever landed in between, and two of those are
+// irreversible in the wrong direction:
+//
+//   - an operator's rotation was reverted to the credential they had just
+//     replaced — the vendor had already been told to refuse it;
+//   - a person's key a removal destroyed came back, and with it every copy of
+//     their name in every backup, which is the one thing a removal promises
+//     cannot happen.
+//
+// The control is the row nobody touched, which still moves.
+func TestARekeyNeverUndoesAWriteThatLandedWhileItRan(t *testing.T) {
+	t.Parallel()
+	old := ring(t, "k1", "k2")
+	f := &interleavedFleet{Fleet: coordmem.NewFleet()}
+	s := fleetsecrets.New(f, old)
+	const personKey = "iam/person/p1/dek"
+	mustSet(t, s, "ROTATED", "the-old-credential")
+	mustSet(t, s, "UNTOUCHED", "still-here")
+	if err := s.Estate().Set(t.Context(), personKey, "the-person-key", "node-a",
+		"iam", clock); err != nil {
+		t.Fatalf("Estate().Set: %v", err)
+	}
+
+	rotated := fleetsecrets.New(f, ring(t, "k2", "k1"))
+	f.between = func() {
+		// UNDER THE OLD KEY, so the pass still judges the row stale when
+		// it reads it again: what the rekey must not do is put back the
+		// value it read before this.
+		if err := s.Set(t.Context(), "ROTATED", "the-new-credential", "sam",
+			"cli", clock); err != nil {
+			t.Errorf("rotate mid-pass: %v", err)
+		}
+		if _, err := s.Estate().Unset(t.Context(), personKey); err != nil {
+			t.Errorf("remove mid-pass: %v", err)
+		}
+	}
+	moved, err := rotated.Rekey(t.Context(), "k2", "sam", clock)
+	if err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+	if got, err := rotated.Get(t.Context(), "ROTATED"); err != nil ||
+		got != "the-new-credential" {
+		t.Fatalf("after the rekey the rotated credential reads %q (%v) — the "+
+			"pass put back the value it read before the rotation", got, err)
+	}
+	if _, err := rotated.Estate().Get(t.Context(), personKey); !errors.Is(err,
+		secrets.ErrNotFound) {
+		t.Fatalf("after the rekey the destroyed person key answers %v — the "+
+			"pass resurrected a key a removal destroyed", err)
+	}
+	if strings.Join(moved.Moved, ",") != "ROTATED,UNTOUCHED" || moved.EngineKeys != 0 {
+		t.Errorf("the rekey reported %+v, want both operator rows moved (the "+
+			"rotated one judged again on what it holds now) and no engine key", moved)
+	}
+	if row, _, err := f.Secret(t.Context(), "ROTATED"); err != nil || row.KeyID != "k2" {
+		t.Errorf("the rotated row is under %q (%v), want it re-sealed onto k2",
+			row.KeyID, err)
+	}
+}
+
 // A REKEY ABORTS ON A ROW IT CANNOT OPEN, rather than reporting success over
 // a secret that is now unreadable for ever — which is the state the operator
 // is about to retire the old key on the strength of.

@@ -104,18 +104,32 @@ func (s *Store) Set(ctx context.Context, name, value, by, source string, now tim
 // put seals a value under its own name and writes it, once the caller's view
 // has established the name is one it may write.
 func (s *Store) put(ctx context.Context, name, value, by, source string, now time.Time) error {
+	rec, err := s.seal(name, value, by, source, now)
+	if err != nil {
+		return err
+	}
+	return s.fleet.PutSecret(ctx, rec)
+}
+
+// seal is one value as the row every write hands coordination: sealed under
+// its own name, with the key id denormalised beside it.
+func (s *Store) seal(name, value, by, source string, now time.Time) (
+	coord.SecretRecord, error) {
+
 	sealed, err := s.cipher.Encrypt(value, secrets.AADForVar(name))
 	if err != nil {
-		return fmt.Errorf("fleetsecrets: seal %s: %w", name, err)
+		return coord.SecretRecord{}, fmt.Errorf("fleetsecrets: seal %s: %w",
+			displayName(name), err)
 	}
 	keyID, ok := secrets.EnvelopeKeyID(sealed)
 	if !ok {
-		return fmt.Errorf("fleetsecrets: seal %s: the cipher produced no key id", name)
+		return coord.SecretRecord{}, fmt.Errorf("fleetsecrets: seal %s: the "+
+			"cipher produced no key id", displayName(name))
 	}
-	return s.fleet.PutSecret(ctx, coord.SecretRecord{
+	return coord.SecretRecord{
 		Name: name, Value: sealed, KeyID: keyID,
 		UpdatedAt: now.UTC(), UpdatedBy: by, Source: source,
-	})
+	}, nil
 }
 
 // Get unseals one value.
@@ -319,8 +333,54 @@ func (s *Store) Rekey(ctx context.Context, activeKeyID, by string, now time.Time
 		return out, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
 	}
 	for _, row := range rows {
+		moved, err := s.rekeyRow(ctx, row, activeKeyID, by, now)
+		if err != nil {
+			// The names moved so far come back WITH the error: a
+			// partial rekey is a fact an operator has to act on, and
+			// discarding the list would leave them re-running a pass
+			// with no idea which rows already moved.
+			slices.Sort(out.Moved)
+			return out, err
+		}
+		switch {
+		case !moved:
+		case secrets.Reserved(row.Name):
+			out.EngineKeys++
+		default:
+			out.Moved = append(out.Moved, row.Name)
+		}
+	}
+	slices.Sort(out.Moved)
+	return out, nil
+}
+
+// rekeyAttempts bounds how many times one row is judged again after a write
+// moved it between this pass's read and its re-seal.
+//
+// THREE, because the writers a row can meet mid-pass are few and each lands
+// once: an operator rotating it, a removal destroying it, a mint or a retry
+// touching it. Two re-reads cover any of them landing between each read and
+// write; a row still moving after that is being rewritten in a loop, which is
+// worth an error naming it rather than a pass that spins on it.
+const rekeyAttempts = 3
+
+// rekeyRow re-seals one row under the active key, reporting whether it moved
+// it.
+//
+// AT THE VERSION IT READ, and judged again when that lost. The pass reads every
+// row first and writes each afterwards, and a plain put of the value it READ
+// undoes whatever landed in between: an operator's rotation is reverted to the
+// credential it replaced, and a person's key a removal destroyed comes back —
+// and with it every copy of the name it sealed, which is the one thing a
+// removal promises cannot happen. So a row that moved is read again and judged
+// on what it holds now (a writer on the active key already has nothing to
+// move), and a row that went is left gone.
+func (s *Store) rekeyRow(ctx context.Context, row coord.SecretRecord, activeKeyID,
+	by string, now time.Time) (bool, error) {
+
+	for attempt := 1; ; attempt++ {
 		if row.KeyID == activeKeyID {
-			continue
+			return false, nil
 		}
 		value, err := s.cipher.Decrypt(row.Value, secrets.AADForVar(row.Name))
 		if err != nil {
@@ -332,26 +392,36 @@ func (s *Store) Rekey(ctx context.Context, activeKeyID, by string, now time.Time
 			// operator is about to retire the old key on the strength
 			// of. An engine row is NAMED by its owner rather than in
 			// full, for the listing's reason.
-			slices.Sort(out.Moved)
-			return out, fmt.Errorf("fleetsecrets: open %s for rekey: %w",
+			return false, fmt.Errorf("fleetsecrets: open %s for rekey: %w",
 				displayName(row.Name), err)
 		}
-		if err := s.put(ctx, row.Name, value, by, "rekey", now); err != nil {
-			// The names moved so far come back WITH the error: a
-			// partial rekey is a fact an operator has to act on, and
-			// discarding the list would leave them re-running a pass
-			// with no idea which rows already moved.
-			slices.Sort(out.Moved)
-			return out, err
+		resealed, err := s.seal(row.Name, value, by, "rekey", now)
+		if err != nil {
+			return false, err
 		}
-		if secrets.Reserved(row.Name) {
-			out.EngineKeys++
-			continue
+		wrote, err := s.fleet.UpdateSecret(ctx, resealed, row.Version)
+		if err != nil {
+			return false, fmt.Errorf("fleetsecrets: re-seal %s: %w",
+				displayName(row.Name), err)
 		}
-		out.Moved = append(out.Moved, row.Name)
+		if wrote {
+			return true, nil
+		}
+		if attempt == rekeyAttempts {
+			return false, fmt.Errorf("fleetsecrets: %s was rewritten %d times "+
+				"while the rekey moved it; run the rekey again", displayName(row.Name),
+				rekeyAttempts)
+		}
+		current, found, err := s.fleet.Secret(ctx, row.Name)
+		if err != nil {
+			return false, fmt.Errorf("fleetsecrets: re-read %s for rekey: %w",
+				displayName(row.Name), err)
+		}
+		if !found {
+			return false, nil
+		}
+		row = current
 	}
-	slices.Sort(out.Moved)
-	return out, nil
 }
 
 // displayName is a row's name as an operator surface may print it: the whole
