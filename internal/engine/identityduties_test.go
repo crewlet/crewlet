@@ -1,9 +1,11 @@
 package engine_test
 
 import (
+	"context"
 	"maps"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -139,5 +141,65 @@ func TestEveryIdentityDutyIsALeaseClaimedSingleton(t *testing.T) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+	}
+}
+
+// THE DUTY ROSTER IS READ WHILE THE NODE STOPS, and never raced.
+//
+// `/health` serves [engine.Engine.IdentityDuties] from the socket's health
+// tick, which keeps running while a node is torn down under an open dashboard
+// — and the stop cleared the roster through a plain pointer that tick was
+// reading. The fleet suite's race detector caught it on a restart. Here a
+// reader loops over the roster while the node stops, which the detector
+// reports against a plain pointer, and a stopped node names no duties.
+//
+// Mutation: store the roster in a plain pointer again and -race fails this.
+func TestTheDutyRosterIsReadableWhileTheNodeStops(t *testing.T) {
+	t.Parallel()
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		}),
+		Company: parsedCompany(t, companyDoc),
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	if len(e.IdentityDuties()) == 0 {
+		t.Fatal("precondition: the node armed no identity duties to take down")
+	}
+	// SEVERAL READERS, each already reading before the stop begins, as a
+	// health tick per open dashboard would be: the detector reports a race
+	// only between accesses it saw, so a reader that had not started yet
+	// would let the plain pointer pass.
+	const readers = 4
+	stop := make(chan struct{})
+	var started, done sync.WaitGroup
+	for range readers {
+		started.Add(1)
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			first := true
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = e.IdentityDuties()
+					if first {
+						first = false
+						started.Done()
+					}
+				}
+			}
+		}()
+	}
+	started.Wait()
+	e.Stop(context.Background())
+	close(stop)
+	done.Wait()
+	if got := e.IdentityDuties(); got != nil {
+		t.Errorf("a stopped node still names %v as armed", got)
 	}
 }

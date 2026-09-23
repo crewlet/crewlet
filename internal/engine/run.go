@@ -106,8 +106,11 @@ type Engine struct {
 	identityProvider *oidc.Provider
 
 	// identity is the four identity duties' loops, or nil on a node that
-	// arms none of them. See identityduties.go.
-	identity *identityDuties
+	// arms none of them. See identityduties.go. ATOMIC because `/health`
+	// reads the roster from the socket's health tick while a stop clears
+	// it: a plain pointer there was a data race the race detector caught
+	// on a node torn down under an open dashboard.
+	identity atomic.Pointer[identityDuties]
 
 	// configWriter is how a disconnect removes a block, installed by the
 	// wiring that builds the config surface. Atomic because the loop

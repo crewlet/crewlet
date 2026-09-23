@@ -177,7 +177,7 @@ func (e *Engine) startIdentityDuties(ctx context.Context, boot *config.Bootstrap
 			runIdentityDuty(loop, duty)
 		}()
 	}
-	e.identity = d
+	e.identity.Store(d)
 	names := make([]string, 0, len(duties))
 	for _, duty := range duties {
 		names = append(names, duty.name)
@@ -194,24 +194,31 @@ func (e *Engine) startIdentityDuties(ctx context.Context, boot *config.Bootstrap
 // quietly finding nothing to do. It says what this node WILL run when it holds
 // the lease; which node holds each lease is the coordination store's answer.
 func (e *Engine) IdentityDuties() map[string]time.Duration {
-	if e == nil || e.identity == nil {
+	if e == nil {
 		return nil
 	}
-	out := make(map[string]time.Duration, len(e.identity.duties))
-	for _, duty := range e.identity.duties {
+	armed := e.identity.Load()
+	if armed == nil {
+		return nil
+	}
+	out := make(map[string]time.Duration, len(armed.duties))
+	for _, duty := range armed.duties {
 		out[duty.name] = duty.interval
 	}
 	return out
 }
 
 // stopIdentityDuties ends every loop, waiting for a tick in flight.
+//
+// THE ROSTER IS TAKEN DOWN FIRST, so `/health` stops naming duties that are
+// ending, and it is a Swap so two stops never both wait on one set of loops.
 func (e *Engine) stopIdentityDuties() {
-	if e.identity == nil {
+	armed := e.identity.Swap(nil)
+	if armed == nil {
 		return
 	}
-	e.identity.stop()
-	e.identity.done.Wait()
-	e.identity = nil
+	armed.stop()
+	armed.done.Wait()
 }
 
 // identityDutiesFor declares the duties this node runs, without starting them.
