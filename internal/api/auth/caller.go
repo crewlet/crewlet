@@ -52,18 +52,7 @@ func Caller(w http.ResponseWriter, r *http.Request) (iam.Principal, bool) {
 		logging.Get("api.auth").WarnContext(r.Context(), "api_identity_unavailable",
 			"route", r.URL.Path, "reason", iam.Reason(r.Context()),
 			"remote", remoteHost(r))
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, RetryIdentitySeconds)
 		return iam.Principal{}, false
 	}
 }
-
-// retryIdentity is what a caller refused with [iam.Unknown] is told to wait.
-//
-// TWO SECONDS, and it is a property of what the caller is waiting FOR rather
-// than a number chosen for politeness: the thing that could not answer is this
-// node's own identity read, and what clears it is a coordination or store blip
-// on the order of one lease renewal. A longer value would make a dashboard
-// that lost one request sit idle through an outage that had already ended; a
-// shorter one turns every such blip into a retry storm from every open tab,
-// against the estate that is already struggling.
-const retryIdentity = 2

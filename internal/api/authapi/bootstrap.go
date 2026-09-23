@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -96,7 +97,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	open, err := s.bootstrapOpen(r)
 	if err != nil {
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	if !open {
@@ -151,7 +152,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	code, found, err := s.outstandingCode(r.Context(), bootstrapCodeID(held))
 	if err != nil {
 		log.WarnContext(r.Context(), "api_bootstrap_codes_unreadable", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	if !found {

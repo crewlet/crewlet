@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -80,7 +81,7 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	email, err := s.openSealed(r, held)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, inviteView{
@@ -144,7 +145,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.WarnContext(r.Context(), "api_invite_holder_unreadable",
 			"error", err, "invitation", held.ID)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	if holder.ID != "" && !holder.Reserved {
@@ -159,7 +160,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	email, err := s.openSealed(r, held)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	verifier, err := s.hasher.Hash(in.Password)
@@ -256,7 +257,7 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err e
 			map[string]string{"detail": detail})
 	default:
 		log.ErrorContext(r.Context(), event, "error", err)
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 	}
 }
 
@@ -273,7 +274,7 @@ func (s *Service) invitation(w http.ResponseWriter, r *http.Request,
 	held, err := s.directory.InvitationByID(r.Context(), r.PathValue("id"))
 	if err != nil {
 		log.WarnContext(r.Context(), "api_invite_lookup_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return iamdomain.InvitationRow{}, false
 	}
 	if held.ID == "" || held.Spent(s.now()) {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -466,7 +467,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		// honest answer is that this node cannot finish the sign-in now.
 		log.ErrorContext(r.Context(), "api_second_factor_unspent",
 			"person", held.ID, "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return factorUse{}, false
 	}
 	if use.factor == types.FactorRecovery {
@@ -540,7 +541,7 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 			"replaced by a step-up", "step-up:"+how.replaces); err != nil {
 			log.WarnContext(r.Context(), "api_step_up_close_failed",
 				"error", err, "lineage", how.replaces)
-			httpjson.Unavailable(w, httpjson.CodeUnavailable, retryIdentity)
+			httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 			return
 		}
 	}
@@ -563,12 +564,12 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	})
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_sign_in_session_failed", "error", err)
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	at := opened.Position
 	if how.refresh != "" && !s.keep(r, lineage.String(), held.ID, how.refresh, at) {
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
@@ -36,14 +37,21 @@ func (s *Service) OIDCStart(w http.ResponseWriter, r *http.Request) {
 	metadata, err := s.provider.Metadata(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_discovery_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	redirect, sealed, err := s.provider.Config().Start(
 		s.cipher, metadata.AuthorizationEndpoint, s.returnTo(r), s.now())
 	if err != nil {
-		log.WarnContext(r.Context(), "api_oidc_start_failed", "error", err)
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		// A FAULT AND NOT AN OUTAGE, so a 500 rather than a 503 asking to
+		// be retried: what fails here is this node's own configuration
+		// (no keyring, a provider block that does not validate, a
+		// discovery document naming an authorization endpoint that is not
+		// a url) or its own randomness and cipher — none of which clears
+		// by waiting two seconds. What does clear by waiting, the
+		// provider's discovery being unreachable, answered above.
+		log.ErrorContext(r.Context(), "api_oidc_start_failed", "error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
 	http.SetCookie(w, s.flightCookie(sealed, s.now().Add(oidc.FlightTTL)))
@@ -106,7 +114,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	metadata, err := s.provider.Metadata(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_discovery_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	tokens, err := s.provider.Exchange(r.Context(),
@@ -119,7 +127,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	keys, err := s.provider.Keys(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_keys_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	claims, err := s.provider.Config().Verify(r.Context(), keys,
@@ -132,7 +140,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	held, err := s.personForSubject(r, claims)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	attempt.Subject, attempt.Person = claims.Issuer+"|"+claims.Subject, held.ID

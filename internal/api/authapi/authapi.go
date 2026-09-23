@@ -479,7 +479,7 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request, source string,
 	}
 	log.WarnContext(r.Context(), "api_sign_in_admission_failed",
 		"error", err, "source", source)
-	httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+	httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 	return false
 }
 

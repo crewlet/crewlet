@@ -123,14 +123,23 @@ func seatRefusal(binding session.Binding) *Refusal {
 	}
 }
 
-// RetryIdentitySeconds is the `Retry-After` on an identity 503.
+// RetryIdentitySeconds is the `Retry-After` on an identity 503 — the guard's,
+// a route refusing a caller it could not resolve, and every 503 the sign-in
+// surface answers.
 //
 // TWO SECONDS, which is an apply loop's own scale rather than a round number:
 // what a caller is waiting for is this node's identity applier to commit one
-// more batch, and a longer hint would park a signed-in browser on an error
-// screen long after the answer changed. It is a hint and never a promise —
-// [statelog.StallGrace] is what says a node is behind ENOUGH to be alarmed
-// about, and nothing here is a second opinion about that.
+// more batch, or a coordination or store blip on the order of one lease
+// renewal. A longer hint would park a signed-in browser on an error screen
+// long after the answer changed; a shorter one turns every blip into a retry
+// storm from every open tab, against the estate that is already struggling.
+// It is a hint and never a promise — [statelog.StallGrace] is what says a node
+// is behind ENOUGH to be alarmed about, and nothing here is a second opinion
+// about that.
+//
+// ONE NUMBER, declared once: internal/api/auth and internal/api/authapi each
+// carried a private copy beside this one, which is how three spellings of one
+// hint come to disagree.
 const RetryIdentitySeconds = 2
 
 // Sessions is the guard's session arm: everything needed to turn a cookie into

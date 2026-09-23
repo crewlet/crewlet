@@ -149,7 +149,7 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		// discards the cookie, so answering it during an identity
 		// outage signs the whole company out and stampedes the provider
 		// with re-authentications.
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -193,15 +193,6 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 func (s *Service) stepUpDue(p iam.Principal) bool {
 	return !p.Fresh(s.now())
 }
-
-// retryIdentity is the Retry-After an identity answer this node could not give
-// carries, in seconds.
-//
-// TWO, and it is the same number internal/api's own caller shape uses: an
-// identity read is a keyed lookup of a replicated row, so what a caller is
-// waiting out is an applier catching up or a store blip rather than anything
-// that takes a person's attention.
-const retryIdentity = 2
 
 // Logout ends THIS session.
 //
@@ -287,7 +278,7 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 		// again.
 		log.WarnContext(r.Context(), "api_sign_out_all_failed",
 			"error", err, "person", person)
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	s.audit.Emit(r.Context(), types.IAMSessionEnded{
@@ -356,7 +347,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	switch resolution {
 	case iam.Resolved:
 	case iam.Unknown:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -370,7 +361,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 
 	owner, err := s.directory.SessionOwner(r.Context(), lineage)
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	if owner == "" {
@@ -392,7 +383,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		"signed out from another session", "logout-one:"+lineage); err != nil {
 		log.WarnContext(r.Context(), "api_sign_out_one_failed",
 			"error", err, "lineage", lineage)
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	// A PERSON ENDING THEIR OWN is a logout; an operator ending somebody

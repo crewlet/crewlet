@@ -147,7 +147,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 		Reason: reason,
 	}); err != nil {
 		log.ErrorContext(r.Context(), "api_totp_enrol_failed", "error", err)
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
@@ -187,7 +187,7 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 		Reason: reason,
 	}); err != nil {
 		log.ErrorContext(r.Context(), "api_recovery_store_failed", "error", err)
-		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
 	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
@@ -213,7 +213,7 @@ func (s *Service) steppedUp(w http.ResponseWriter, r *http.Request) (iam.Princip
 	switch resolution {
 	case iam.Resolved:
 	case iam.Unknown:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return iam.Principal{}, false
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
