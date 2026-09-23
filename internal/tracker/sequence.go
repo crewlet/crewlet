@@ -383,8 +383,7 @@ func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
 	}
 
 	var settled settledCreate
-	n, minted, err := w.mintKey(ctx,
-		stepID(statelog.NewOpID(time.Now(), "remint"), "counter"), task.Project, 1,
+	n, minted, err := w.mintFresh(ctx, task.Project, 1,
 		w.settleCreate(ctx, task, &settled))
 	if err != nil {
 		return WriteResult{Result: minted}, err
@@ -599,6 +598,52 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 	}
 	return base, result, nil
 }
+
+// mintFresh takes k numbers under an operation minted for this call alone — the
+// mint a create resumes on, and a cross-project move's re-mint for what its
+// first range could not carry.
+//
+// AN ANSWER IT CANNOT PROVE ITS OWN IS MINTED AGAIN. No earlier copy of a
+// fresh operation exists, but a mint whose acknowledgement was lost is
+// resolved from the ledger, and the ledger cannot say whose copy of the
+// operation it names, so the publisher reports it collapsed ([errMintLanded])
+// and the number it took cannot be built on. Another fresh operation takes
+// another number and leaves that one as a gap, which is what every other
+// crash residue here costs.
+//
+// BOUNDED at [freshMintAttempts], because each such answer needs a lost
+// acknowledgement, and the attempts after the first are spent on a broker
+// that is dropping them.
+func (w *Writer) mintFresh(ctx context.Context, project string, k int,
+	guard func(*sql.Tx) error) (uint64, statelog.Result, error) {
+
+	var (
+		n      uint64
+		minted statelog.Result
+		err    error
+	)
+	for range freshMintAttempts {
+		n, minted, err = w.mintKey(ctx,
+			stepID(statelog.NewOpID(time.Now(), "remint"), "counter"),
+			project, k, guard)
+		if !errors.Is(err, errMintLanded) {
+			return n, minted, err
+		}
+	}
+	return 0, minted, fmt.Errorf("tracker: %d fresh key mints for %s in a row "+
+		"were answered from a copy nobody can prove was theirs — each is a lost "+
+		"acknowledgement, which is a broker that is dropping them: %w",
+		freshMintAttempts, project, err)
+}
+
+// freshMintAttempts is how many fresh mints [Writer.mintFresh] makes before it
+// gives up.
+//
+// THREE, because only a lost acknowledgement makes one fail, and one of those
+// is the broker's ordinary weather: a second in a row on the same subject is
+// already unusual, and a third is a broker failing in a way a fourth mint does
+// not fix — while every attempt spends a number the project never gets back.
+const freshMintAttempts = 3
 
 // errMintLanded is a key mint answered from an earlier copy of its operation.
 // Unavailable, because to a caller that cannot resume it is exactly that: the
@@ -1281,9 +1326,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		// not moved — this node read it in its old project — so the range
 		// that copy took is on the log and not here. This run takes one
 		// of its own, and the earlier one is the gap.
-		base, _, err = w.mintKey(ctx,
-			stepID(statelog.NewOpID(time.Now(), "remint"), "counter"),
-			target, 1+len(subtree), nil)
+		base, _, err = w.mintFresh(ctx, target, 1+len(subtree), nil)
 	}
 	if err != nil {
 		return WriteResult{}, err
@@ -1453,9 +1496,7 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 			"and a move carries at most %d", root.ID, len(left), MaxDescendants)
 	}
 	if len(left) > 0 {
-		base, _, err := w.mintKey(ctx,
-			stepID(statelog.NewOpID(time.Now(), "remint"), "counter"),
-			root.Project, len(left), nil)
+		base, _, err := w.mintFresh(ctx, root.Project, len(left), nil)
 		if err != nil {
 			return err
 		}

@@ -94,7 +94,10 @@
 // duplicate acknowledgement from layer 2 is marked the same way, because its
 // position is equally not one this call's decision produced, and a caller
 // whose answer is computed inside the decision (a minted key) must not report
-// it.
+// it. So is a lost acknowledgement the ledger resolves, unless the broker
+// acknowledged this call's append at the very position the ledger names: the
+// row may be an earlier copy's, which a node that was behind decided against
+// other rows than this call did.
 //
 // # An operation id carries the instant it was minted
 //

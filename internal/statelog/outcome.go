@@ -82,9 +82,15 @@ type Result struct {
 
 	// Collapsed says this call was a RETRY of an operation that had
 	// already landed under the same op id, and THIS call's decision was
-	// never stored: Position is the earlier copy's, found either in this
-	// node's ledger before a decision was taken ([Snap.Held]) or in the
-	// broker's duplicate acknowledgement.
+	// never stored: Position is the earlier copy's, found in this node's
+	// ledger before a decision was taken ([Snap.Held]), in the broker's
+	// duplicate acknowledgement, or in the ledger when the publish is
+	// resolved — wherever the row the ledger names cannot be proven to be
+	// this call's own record. Only an acknowledged append whose position
+	// the ledger names is; an ambiguous publish answered from the ledger
+	// is collapsed even when the record happens to be this call's, since
+	// nothing here can tell the two apart and building on another copy's
+	// answer is the failure this field exists to prevent.
 	//
 	// The outcome is still the operation's own — it did apply — and a
 	// caller that only reports it needs nothing more. A caller whose

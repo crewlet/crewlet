@@ -80,6 +80,15 @@ create that took its key number and never filed its task is finished on a
 fresh number, which leaves a gap in the project's numbering (ENG-8 is skipped)
 rather than two items sharing a key.
 
+The same holds for a write whose acknowledgement was lost and which the ledger
+then answers: unless the broker acknowledged this very attempt at the position
+the ledger names, the record there may be an earlier copy's — decided on another
+node, against other rows — so the write is answered as that copy, and anything
+the attempt computed in its own decision is not used. A key is then read from
+the item's row, or minted again on a fresh number. A retried create on a node
+that was behind used to be answered as its own stale decision, and filed its
+item under the number another item already held.
+
 An operation id names **one** write, and a ledger row answers only for a write
 to the object it landed on. The same id sent with a write to a different object
 is refused **`op_reused`**, naming where it landed — whether the ledger finds

@@ -53,6 +53,10 @@ type roundTrip struct {
 	// about the order of instants somebody typed. It defaults to
 	// `wednesday` so every case that is not about time sees one instant.
 	at time.Time
+
+	// nodeID is which node this harness is, for the second writer a case
+	// builds over the same store ([roundTrip.lossyWriter]).
+	nodeID string
 }
 
 func newRoundTrip(t *testing.T) *roundTrip {
@@ -132,7 +136,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
 	// THE HARNESS EXISTS BEFORE THE WRITER, because the writer's authored
 	// clock reads a field on it that a case may move.
 	r := &roundTrip{t: t, broker: q, db: db, log: log, at: wednesday,
-		claims: memory.New()}
+		claims: memory.New(), nodeID: nodeID}
 
 	fence := tracker.NewFence(db, nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,

@@ -891,7 +891,12 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		// window: `at` is that copy's, and this call's decision was never
 		// stored — which a caller computing its answer inside the
 		// decision has to be told. See [Result.Collapsed].
-		res.Collapsed = duplicate && res.Outcome != ""
+		//
+		// ADDED TO what the resolution concluded, never in place of it:
+		// a clean acknowledgement whose ledger row names another position
+		// is collapsed too, and assigning the duplicate flag over it
+		// would say otherwise.
+		res.Collapsed = res.Collapsed || (duplicate && res.Outcome != "")
 		return res, dispDone, err
 
 	case faultFull:
@@ -1281,11 +1286,25 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 			if err := p.heldHere(req, entry); err != nil {
 				return Result{}, err
 			}
+			// COLLAPSED UNLESS THE ROW IS PROVABLY THIS CALL'S OWN
+			// RECORD, which is one case: the broker acknowledged this
+			// call's append at `at` and the ledger names that very
+			// position. Anything else is a copy of the operation this
+			// call did not decide — the ambiguous path found a record
+			// above its anchor and cannot say whose, and a row at
+			// another position than an acknowledged one is an earlier
+			// copy this call's append arrived after. A retry on a node
+			// that was behind decided on stale rows, lost the race to
+			// that earlier copy with its acknowledgement lost, and was
+			// answered here as the application of ITS decision: a key
+			// mint handed back the number its stale counter implied,
+			// and two tasks were filed under one key.
 			return Result{
-				Outcome:  OutcomeApplied,
-				Position: entry.Position,
-				OpID:     req.OpID,
-				Version:  entry.Position.Packed(),
+				Outcome:   OutcomeApplied,
+				Position:  entry.Position,
+				OpID:      req.OpID,
+				Version:   entry.Position.Packed(),
+				Collapsed: !mine || entry.Position != at,
 			}, nil
 		}
 	}

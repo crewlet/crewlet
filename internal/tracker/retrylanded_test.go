@@ -206,7 +206,7 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	fence := tracker.NewFence(r.db, "node-a")
+	fence := tracker.NewFence(r.db, r.nodeID)
 	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
 	fence.Ends = func(ctx context.Context) (statelog.LogEnds, error) {
 		first, last, err := r.log.Bounds(ctx)
@@ -217,7 +217,7 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Log: lost, Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(r.db), Waiter: r.waiter, Identity: r.waiter,
-		NodeID: "node-a", Admission: r.reserve,
+		NodeID: r.nodeID, Admission: r.reserve,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
@@ -225,7 +225,7 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 		t.Fatalf("build the publisher: %v", err)
 	}
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: publisher, DB: r.db, NodeID: "node-a", Claims: memory.New(),
+		Publisher: publisher, DB: r.db, NodeID: r.nodeID, Claims: memory.New(),
 		Actor: "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})
@@ -307,6 +307,12 @@ type lossyLog struct {
 	// answered as usual.
 	dropOn    string
 	dropStage int
+	// dropAckOnly ends a targeted drop at the acknowledgement: the probe
+	// that follows is answered, so the publisher resolves the lost answer
+	// from what the log holds rather than calling it unknown. dropAcks is
+	// how many appends in a row lose theirs.
+	dropAckOnly bool
+	dropAcks    int
 }
 
 // The stages of a targeted drop.
@@ -322,7 +328,19 @@ const (
 func (l *lossyLog) dropFor(suffix string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.dropOn, l.dropStage = suffix, dropNextAppend
+	l.dropOn, l.dropStage, l.dropAckOnly = suffix, dropNextAppend, false
+}
+
+// dropAck loses the answer to the next append on a subject ending in suffix —
+// whatever that answer was, a refusal included — and nothing after it, so the
+// publisher probes the log and resolves the write from what it finds.
+func (l *lossyLog) dropAck(suffix string) { l.dropAcksFor(suffix, 1) }
+
+// dropAcksFor is [lossyLog.dropAck] for the next n appends on the subject.
+func (l *lossyLog) dropAcksFor(suffix string, n int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.dropOn, l.dropStage, l.dropAckOnly, l.dropAcks = suffix, dropNextAppend, true, n
 }
 
 // loseFor reports whether this answer about subject is the one a targeted drop
@@ -334,6 +352,11 @@ func (l *lossyLog) loseFor(subject string, probe bool) bool {
 		return false
 	}
 	switch {
+	case !probe && l.dropStage == dropNextAppend && l.dropAckOnly:
+		if l.dropAcks--; l.dropAcks <= 0 {
+			l.dropStage, l.dropOn = dropIdle, ""
+		}
+		return true
 	case !probe && l.dropStage == dropNextAppend:
 		l.dropStage = dropNextProbe
 		return true
@@ -411,7 +434,12 @@ func (l *lossyLog) Append(ctx context.Context, subject, msgID string, expect *ui
 			fn()
 		}
 	}
-	if err == nil && (l.lose() || l.loseFor(subject, false)) {
+	// A TARGETED DROP LOSES THE ANSWER WHATEVER IT WAS, a refusal's
+	// included: the broker decided, and the client never heard which way.
+	if l.loseFor(subject, false) {
+		return 0, false, errAnswerLost
+	}
+	if err == nil && l.lose() {
 		return 0, false, errAnswerLost
 	}
 	return seq, dup, err
