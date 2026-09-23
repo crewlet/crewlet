@@ -204,26 +204,31 @@ export default defineConfig({
   server: {
     port: 5173,
     // `npm run dev` proxies the data plane to a locally running engine, so
-    // the dev loop is the real API rather than a fixture. Every prefix the
-    // dashboard calls has to be listed: an unlisted one is served by Vite
-    // itself, which answers 404 for a path it has no file for, so the screen
-    // sees a refusal that looks like the engine's and is not.
+    // the dev loop is the real API rather than a fixture. EXACTLY the prefixes
+    // the dashboard reaches, both ways, and src/protocol/proxy.test.ts reads
+    // every URL in the source and the shell's markup to hold it: an unlisted
+    // prefix is served by Vite itself, which answers 404 for a path it has no
+    // file for, so the screen sees a refusal that looks like the engine's and
+    // is not; a listed prefix nothing reaches is a dependency nobody has, which
+    // outlives the screen that once needed it.
     proxy: {
+      // The live socket, and the plain GET the socket makes to diagnose a
+      // handshake the engine refused.
       "/ws/stream": { target: "ws://localhost:8000", ws: true },
-      "/api": { target: "http://localhost:8000" },
-      "/health": { target: "http://localhost:8000" },
-      "/org": { target: "http://localhost:8000" },
-      "/agents": { target: "http://localhost:8000" },
-      "/events": { target: "http://localhost:8000" },
-      "/tools": { target: "http://localhost:8000" },
-      "/schedules": { target: "http://localhost:8000" },
+      // The degraded-mode snapshot poll, for a browser that cannot upgrade.
+      "/stream": { target: "http://localhost:8000" },
       "/config": { target: "http://localhost:8000" },
       "/secrets": { target: "http://localhost:8000" },
       "/setup": { target: "http://localhost:8000" },
-      "/stream": { target: "http://localhost:8000" },
-      // The state log's retention document and its two operator gates, which
-      // the Fleet screen's replication panels read and write.
+      // The state log's two operator gates, evict and readmit, which the
+      // Fleet screen's replication panels write. The retention document they
+      // sit beside is read over the socket.
       "/work": { target: "http://localhost:8000" },
+      // The brand mark the shell's tab icon and the rail name, which the
+      // engine serves beside the dashboard's tree rather than inside it. The
+      // one file, never `/static`: that prefix covers `base` above, and the
+      // dev server would hand the dashboard's own modules to the engine.
+      "/static/crewlet-icon.svg": { target: "http://localhost:8000" },
     },
   },
 });

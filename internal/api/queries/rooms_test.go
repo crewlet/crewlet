@@ -48,6 +48,12 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 // alike collapsed into one. `internal/api/queries` is one level deeper than
 // the directory [clientsource.Tree] is written against, so it joins the extra
 // step itself.
+//
+// A kind handed over in anything but a string literal is invisible here —
+// [clientsource.Calls] can read nothing else — and that is safe only because
+// the dashboard refuses one: `app/source.test.ts`'s "every read names its
+// question" requires a literal at every `useQuery(` and `query(` call, bare or
+// as a method, which is every call Calls is asked for below.
 func roomQueries(t *testing.T) map[string][]string {
 	t.Helper()
 	calls, err := clientsource.Calls("../"+clientsource.Tree, "useQuery", "query")

@@ -1,8 +1,7 @@
 // @vitest-environment node
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
+
+import { type Lang, type Node, lineOf, modules, parse, stringValue, walk } from "../test/source.ts";
 
 /**
  * A query whose parameter is not chosen yet must not be ASKED.
@@ -38,8 +37,6 @@ import { describe, expect, test } from "vitest";
  * is the shape that is wrong without `enabled`.
  */
 
-const SRC = fileURLToPath(new URL("..", import.meta.url));
-
 interface Call {
   what: string;
   where: string;
@@ -49,60 +46,93 @@ interface Call {
 /**
  * Every `useQuery` call whose params may be `undefined`.
  *
- * The call text is taken by COUNTING BRACKETS from `useQuery(` to its own
- * close, rather than by one regex over the whole call. Two reasons, and the
- * second is the one that matters: prettier breaks exactly these calls over
- * several lines, so a line-at-a-time scan sees none of them — and a regex has
- * to be told how far to look, which means deciding in advance that the options
- * object is there. It is optional on the hook, and a conditional params
- * argument passed with NO options at all is the shape that cannot possibly be
- * guarded. Bounding the match would have skipped exactly that one.
+ * READ FROM THE SYNTAX TREE (`test/source.ts`), not the text. Prettier breaks
+ * exactly these calls over several lines, and the options object is optional
+ * on the hook — a conditional params argument passed with NO options at all is
+ * the shape that cannot possibly be guarded, and it is the one a scan that had
+ * to be told how far to look skipped. It was a bracket count over the text
+ * once, and the text could not say WHICH argument anything was in: it read a
+ * kind only in double quotes, took a `: undefined` anywhere in the call as a
+ * conditional params argument (an option's `pollMs: waiting ? … : undefined`
+ * put a params-less call in the list), and took an `enabled` anywhere as the
+ * guard, the params object included — where `{ enabled: key }` guards
+ * nothing, since the engine receives it as a parameter. A call's arguments in
+ * the tree are its arguments, whatever their layout and whichever quote the
+ * kind is written in, and the guard is the option.
+ *
+ * A kind that is not a constant string is not read here; `app/source.test.ts`
+ * refuses one anywhere in the tree.
  */
-function conditionalCalls(file: string, text: string): Call[] {
+function conditionalCalls(file: string, text: string, lang: Lang = "tsx"): Call[] {
+  const line = lineOf(text);
   const found: Call[] = [];
-  const opens = /useQuery\(\s*"([a-z_0-9]+)"\s*,/g;
-  for (const m of text.matchAll(opens)) {
-    const from = m.index + m[0].length;
-    const body = callBody(text, from);
-    // The body stops before the call's own `)`, so a conditional params
-    // argument with no options after it ends AT `undefined`.
-    if (body === null || !/:\s*undefined\s*(?:,|$)/.test(body.trim())) continue;
+  walk(parse(text, lang), (node) => {
+    if (node.type !== "CallExpression") return;
+    const callee = node.callee as Node;
+    if (callee.type !== "Identifier" || callee.name !== "useQuery") return;
+    const [kind, params, options] = node.arguments as (Node | undefined)[];
+    const what = stringValue(kind);
+    if (what === null || !params || !mayBeUndefined(params)) return;
     found.push({
-      what: m[1] ?? "",
-      where: `${file}:${text.slice(0, m.index).split("\n").length}`,
-      guarded: /\benabled\s*:/.test(body),
+      what,
+      where: `${file}:${line(node.start)}`,
+      guarded:
+        options?.type === "ObjectExpression" &&
+        (options.properties as Node[]).some(
+          (p) =>
+            p.type === "Property" &&
+            !p.computed &&
+            (p.key as Node).type === "Identifier" &&
+            (p.key as Node).name === "enabled",
+        ),
     });
-  }
+  });
   return found;
 }
 
-/** Everything from `from` up to the `)` that closes the call it is inside. */
-function callBody(text: string, from: number): string | null {
-  let depth = 1;
-  for (let i = from; i < text.length; i++) {
-    const c = text[i];
-    if (c === "(" || c === "{" || c === "[") depth++;
-    else if (c === ")" || c === "}" || c === "]") {
-      depth--;
-      if (depth === 0) return text.slice(from, i);
-    }
-  }
-  return null;
+/** The expressions TypeScript wraps a value in without changing it. */
+const WRAPPERS = new Set([
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSNonNullExpression",
+  "TSTypeAssertion",
+  "ParenthesizedExpression",
+]);
+
+/** A node with every type-only wrapper taken off: `x as T`, `x satisfies T`, `x!`. */
+function unwrapped(node: Node): Node {
+  let at = node;
+  while (WRAPPERS.has(at.type)) at = at.expression as Node;
+  return at;
 }
 
-function sources(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    const p = join(dir, entry);
-    if (statSync(p).isDirectory()) sources(p, out);
-    else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) out.push(p);
-  }
-  return out;
+/** `undefined`, however it is written: the identifier, or `void` anything. */
+function isUndefined(node: Node): boolean {
+  const at = unwrapped(node);
+  return (
+    (at.type === "Identifier" && at.name === "undefined") ||
+    (at.type === "UnaryExpression" && at.operator === "void")
+  );
+}
+
+/**
+ * Whether a params argument is a CHOICE that may come out `undefined`: a
+ * ternary with an `undefined` branch AT ANY DEPTH, since `a ? {a} : b ? {b} :
+ * undefined` is as empty when neither is chosen as the one-level form is, and
+ * through a cast, since `(… : undefined) as Params` sends what it wraps.
+ *
+ * A bare `undefined` is not a choice: that call asks with no parameters every
+ * time, which is a decision rather than a guard somebody forgot.
+ */
+function mayBeUndefined(params: Node): boolean {
+  const at = unwrapped(params);
+  if (at.type !== "ConditionalExpression") return false;
+  const branch = (node: Node) => isUndefined(node) || mayBeUndefined(node);
+  return branch(at.consequent as Node) || branch(at.alternate as Node);
 }
 
 describe("a query that may have no parameters", () => {
-  const all = sources(SRC).flatMap((p) =>
-    conditionalCalls(p.slice(SRC.length), readFileSync(p, "utf8")),
-  );
+  const all = modules().flatMap(({ path, text, lang }) => conditionalCalls(path, text, lang));
 
   test("passes `enabled` so it is skipped rather than refused", () => {
     const unguarded = all.filter((c) => !c.guarded);
@@ -137,5 +167,67 @@ describe("a query that may have no parameters", () => {
        });`,
     );
     expect(wrapped.map((c) => c.guarded)).toEqual([true]);
+  });
+
+  test("and a kind in backticks is read like one in quotes", () => {
+    // A constant template is as much a literal as a quoted string, and the
+    // engine's own reader takes it as one; the text scan this replaced read
+    // double quotes only, so a backticked kind was never checked at all.
+    const ticked = conditionalCalls(
+      "x.tsx",
+      "const a = useQuery(`work_project`, key ? { key } : undefined);",
+    );
+    expect(ticked.map((c) => ({ what: c.what, guarded: c.guarded }))).toEqual([
+      { what: "work_project", guarded: false },
+    ]);
+  });
+
+  test("and a ternary among the options is not a conditional question", () => {
+    // What the text scan read as one: the params are absent outright, so the
+    // question is always asked with none, and `enabled` is there anyway.
+    const optionOnly = conditionalCalls(
+      "x.tsx",
+      'const a = useQuery("stream", undefined, { enabled: waiting, pollMs: waiting ? MS : undefined });',
+    );
+    expect(optionOnly).toEqual([]);
+  });
+
+  test.each([
+    ["nested in a second ternary", "a ? { a } : b ? { b } : undefined"],
+    ["on the consequent side", "key ? undefined : { key }"],
+    ["cast", "key ? { key } : (undefined as unknown as Params)"],
+    ["as `void`", "key ? { key } : void 0"],
+    [
+      "behind a cast of the whole choice",
+      "(key ? { key } : undefined) satisfies Params | undefined",
+    ],
+    ["behind a non-null assertion", "(key ? { key } : undefined)!"],
+  ])("and an `undefined` %s is still a choice that may be empty", (_name, params) => {
+    // What the text scan caught by accident — it took any params ending in
+    // `: undefined` — and a one-level syntax check would lose: the shape is
+    // still a question asked with nothing when no branch is chosen.
+    const found = conditionalCalls("x.tsx", `const a = useQuery("work_project", ${params});`);
+    expect(found.map((c) => ({ what: c.what, guarded: c.guarded }))).toEqual([
+      { what: "work_project", guarded: false },
+    ]);
+  });
+
+  test.each([
+    ["an object on both sides", "key ? { key } : { key: DEFAULT }"],
+    ["always none", "undefined"],
+    ["a plain object", "{ key }"],
+  ])("and params that are %s are not a conditional question", (_name, params) => {
+    expect(conditionalCalls("x.tsx", `const a = useQuery("work_project", ${params});`)).toEqual([]);
+  });
+
+  test("and `enabled` among the parameters is not the guard", () => {
+    // The params object is sent to the engine as the question's parameters; an
+    // `enabled` inside it asks with a parameter nobody reads and skips
+    // nothing. Only the option is the guard.
+    const inParams = conditionalCalls(
+      "x.tsx",
+      'const a = useQuery("work_project", key ? { key, enabled: true } : undefined);',
+    );
+    expect(inParams.map((c) => c.guarded)).toEqual([false]);
   });
 });

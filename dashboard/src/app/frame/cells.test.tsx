@@ -29,6 +29,7 @@ import { EMPTY_VALUE } from "@crewlethq/ui";
 
 import { DurationCell, NumberCell, SeatCell, TokenCell } from "./cells.tsx";
 import { fmtCount, fmtDuration } from "~/lib/format.ts";
+import { SRC, modules } from "~/test/source.ts";
 
 afterEach(cleanup);
 
@@ -124,28 +125,14 @@ test("an absent value renders a dash that says which absence it is", () => {
  * and friends have nothing to say about a glyph, and a custom ESLint plugin for
  * one string is a plugin nobody maintains.
  */
-test("no module spells an absent value with a dash of its own", async () => {
-  const { readFileSync, readdirSync } = await import("node:fs");
-  const { join } = await import("node:path");
-
-  // `process.cwd()`, not `import.meta.url`: under the jsdom environment this
-  // file runs in, `import.meta.url` is an `http://localhost/` URL and
-  // `fileURLToPath` refuses it. Vitest's cwd is the package root.
-  const root = join(process.cwd(), "src");
-  const walk = (dir: string): string[] =>
-    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-      const at = join(dir, e.name);
-      if (e.isDirectory()) return walk(at);
-      return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [at] : [];
-    });
-
+test("no module spells an absent value with a dash of its own", () => {
   const offenders: string[] = [];
-  const files = walk(root);
+  const files = modules();
   // A scan that walked nothing would pass silently, which is the one failure a
   // gate of this shape has.
   expect(files.length).toBeGreaterThan(50);
-  for (const file of files) {
-    const src = readFileSync(file, "utf8")
+  for (const { path, text } of files) {
+    const src = text
       // Comments first, and BLANKED RATHER THAN DELETED so the line numbers a
       // failure prints are the file's own. The house style is full of em
       // dashes and every one of them is prose about the code.
@@ -157,7 +144,7 @@ test("no module spells an absent value with a dash of its own", async () => {
       .replace(/\bkey[={:]\s*\{?[^\n}]*\}?/g, "");
     src.split("\n").forEach((line, i) => {
       if (/(["'`])—\1/.test(line) || />\s*—\s*</.test(line)) {
-        offenders.push(`${file.slice(root.length + 1)}:${i + 1}: ${line.trim()}`);
+        offenders.push(`${path}:${i + 1}: ${line.trim()}`);
       }
     });
   }
@@ -213,24 +200,30 @@ test("a human seat keeps the drawn edge an agent does not have", () => {
  */
 test("no module draws an identity badge of its own", async () => {
   const { readFileSync, readdirSync } = await import("node:fs");
-  const { join } = await import("node:path");
+  const { join, relative } = await import("node:path");
 
-  const root = join(process.cwd(), "src");
-  const walk = (dir: string): string[] =>
+  // The modules are the tree's one walk; a stylesheet is not a module, and
+  // the class is DECLARED in one, so the sheets are listed here beside them.
+  const sheets = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const at = join(dir, e.name);
-      return e.isDirectory() ? walk(at) : /\.(tsx?|css)$/.test(e.name) ? [at] : [];
+      return e.isDirectory() ? sheets(at) : e.name.endsWith(".css") ? [at] : [];
     });
-
-  const files = walk(root);
-  expect(files.length).toBeGreaterThan(50);
+  const css = sheets(SRC).map((at) => ({
+    path: relative(SRC, at).split("\\").join("/"),
+    text: readFileSync(at, "utf8"),
+  }));
+  const code = modules();
+  // Either half reading nothing would pass silently.
+  expect(code.length).toBeGreaterThan(50);
+  expect(css.length).toBeGreaterThan(0);
   // COMMENTS BLANKED FIRST, or this gate catches the paragraphs above it — and
   // a gate that forbids its own explanation is a gate somebody deletes.
   const bare = (src: string) =>
     src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-  const offenders = files.filter((f) => /\bseat-mark\b/.test(bare(readFileSync(f, "utf8"))));
+  const offenders = [...code, ...css].filter(({ text }) => /\bseat-mark\b/.test(bare(text)));
   expect(
-    offenders.map((f) => f.slice(root.length + 1)),
+    offenders.map(({ path }) => path),
     "a seat's identity badge is @crewlethq/ui's Avatar — its initials are what " +
       'make one seat tellable from another, and `variant="dashed"` is what ' +
       "makes a human seat tellable from an agent one",

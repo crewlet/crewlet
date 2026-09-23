@@ -247,6 +247,18 @@ What follows are the prerequisites that legitimately vary by machine.
   `TestTheDashboardRendersNoPrice` in `internal/api` scans every module the
   engine serves from the committed bundle.
 
+  **The dashboard reaches the engine through `src/protocol/` and nowhere
+  else**, and three suites hold it from the parsed source:
+  `protocol/transport.test.ts` refuses a module outside that directory that
+  reads `fetch` or any other network primitive itself; `app/source.test.ts`
+  requires the query kind a `useQuery(` or `query(` call asks — bare or as a
+  method — to be a string literal, because the engine's registry gates read
+  the kinds there and cannot read a variable; and `protocol/proxy.test.ts`
+  holds the dev server's proxy table in `vite.config.ts` to exactly the paths
+  the source reaches, calls and markup alike, both ways. A new REST route the
+  dashboard calls is a new proxy entry in the same change, and a route it
+  stops calling takes its entry with it.
+
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit
   `static/dashboard` with your source change — `git add -A`, so the new

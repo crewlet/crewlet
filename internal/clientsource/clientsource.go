@@ -546,8 +546,11 @@ func startsName(t token) bool {
 // added to it — names no kind this package can read, and is not in the
 // answer. That is what a hook's own definition looks like
 // (`useQuery(what, …)`), and it is why a screen passing a kind through a
-// variable is invisible here: the dashboard's own suites are where that is
-// refused.
+// variable is invisible here: the dashboard's own `app/source.test.ts` is
+// where that is refused. It reads the calls this does — `useQuery` and
+// `query` by spelling, bare or as a method, whatever they are bound to — and
+// the literal this does, a quoted string or a template with nothing
+// substituted into it, so a call it passes is one this reads.
 func Calls(tree string, callees ...string) (map[string][]string, error) {
 	files, err := scan(tree)
 	if err != nil {

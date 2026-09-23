@@ -3142,6 +3142,22 @@ emitted name is content-hashed, so a changed chunk is a new path, which
 | run its suites | `make dashboard-test` |
 | check the committed bundle is current | `make dashboard-check` |
 
+**The dev server forwards exactly what the source reaches.** `make
+dashboard-dev` proxies to an engine on `localhost:8000`, and
+`protocol/proxy.test.ts` reads every URL the tree hands `rest`, `fetch`, a
+socket or a beacon, and every path a JSX `src`, `href` or `poster` names, the
+shell's `index.html` included — parsed, up to its first substitution — against
+the proxy table in `vite.config.ts`. The markup is read because the browser
+fetches it with no call to read: the tab icon and the rail's brand mark both
+answered 404 in the dev loop while every call was forwarded. It fails five
+ways: a path no entry forwards, which Vite would answer with a 404 of its own
+that a screen cannot tell from the engine's refusal; a socket whose entry does
+not upgrade; an entry nothing reaches, which reads as a dependency somebody
+relies on and outlives the screen that once did; an entry whose prefix covers
+the dev server's own `base`, which would hand the dashboard's modules to the
+engine; and a call whose path it cannot read, unless it is the REST transport
+forwarding its caller's path, which is named with its reason.
+
 **What the engine owns is declared once, in `src/contract/`.** Several lists
 exist on both sides by necessity — the dashboard is a separate build in a
 separate language and cannot import a Go identifier — so where a screen must
@@ -3238,6 +3254,31 @@ reaches, a lazy one included, is also held to the Content-Security-Policy.
   engine keeps the last answer with the error beside it; and an answer belongs
   to its path, so a read whose path changed reports nothing until the new path
   answers.
+- **Nothing outside `src/protocol/` reaches the network.** A screen that called
+  `fetch` itself would work on the happy path and be the one request in the
+  product with no operator token, no deadline and no refusal it could branch
+  on. `protocol/transport.test.ts` parses every module and refuses, outside
+  that directory, any READ of `fetch`, `XMLHttpRequest`, `WebSocket`,
+  `EventSource` or `WebTransport` — bare, or off `window`, `globalThis` or
+  `self` — of `navigator.sendBeacon`, and a form that posts to a URL of its own.
+  A read rather than a call, because `const send = fetch` is how a call escapes
+  a scan of calls; `refetch()`, a type, a member that shares the name and a
+  test kit assigning a stub are not reads, and the suite certifies both
+  halves.
+- **A read names its question.** The first argument of `useQuery(` and
+  `query(` — bare or as a method, like the socket's `.query(` — is a string
+  literal: never a variable, an expression or a template with something
+  substituted in. The engine's registry gates
+  (`TestEveryQueryARoomMakesIsAnswered` and
+  `TestEveryQueryThisServerAnswersHasAReader` in `internal/api/queries`) read
+  the kinds this tree asks at those calls, by the name alone, and can read only
+  a constant, so a kind passed through a variable is a question neither can
+  hold the registry to. `app/source.test.ts` reads the same calls the same
+  way — both names by spelling, whatever they are bound to — and refuses a
+  non-literal kind, a method named by a computed key (`socket["query"](`),
+  which the Go reader cannot see, and an aliased import. The two calls that
+  forward a kind — the hook's own body and the builder test kit's stub socket
+  — are named there with their reasons.
 - **Subscriptions are per-slice.** `agents` is pushed twice per tool-loop
   round; a store that woke every listener on every envelope would re-render the
   application several times a second for the length of a turn.
@@ -3672,9 +3713,10 @@ to.
 6. **Every empty state says why it is empty** and what would fill it, and
    distinguishes "nothing happened" from "nothing could be read".
 7. **A write says what happened.** Every write goes through
-   `protocol/rest.ts` and reports its outcome: a toast on success, and the
-   engine's own refusal beside the field it names. A button whose result is
-   invisible is a button an operator presses twice.
+   `protocol/rest.ts` — nothing outside `src/protocol/` reaches the network,
+   which `protocol/transport.test.ts` holds — and reports its outcome: a toast
+   on success, and the engine's own refusal beside the field it names. A
+   button whose result is invisible is a button an operator presses twice.
 8. **No screen renders a credential.** The setup dialog shows the `${VAR}` a
    field points at, or — for a hand-written literal — an empty box whose
    PLACEHOLDER is dots saying one is held. Never a value, because no route

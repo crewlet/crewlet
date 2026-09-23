@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
+import { modules } from "../test/source.ts";
+
 /**
  * How this product cuts text, and the two rules that are not the same rule.
  *
@@ -47,6 +49,14 @@ function everySheet(): { name: string; css: string }[] {
   return readdirSync(STYLES)
     .filter((f) => f.endsWith(".css"))
     .map((name) => ({ name, css: sheet(name).replace(/\/\*[\s\S]*?\*\//g, "") }));
+}
+
+/** Where a class list starts: a `className=` holding a string or a template. */
+const CLASSES = /className=\{?(["'`])/;
+
+/** Whether a line's class list carries both `.truncate` and `.clamp`, in either order. */
+function wearsBoth(line: string): boolean {
+  return /className=\{?(["'`])(?=[^"'`]*\btruncate\b)(?=[^"'`]*\bclamp\b)/.test(line);
 }
 
 describe("how this product cuts text", () => {
@@ -96,22 +106,26 @@ describe("how this product cuts text", () => {
   // so an element carrying both gets one line with no ellipsis, which is
   // strictly worse than either.
   test("nothing carries both .truncate and .clamp", () => {
-    const src = fileURLToPath(new URL("..", import.meta.url));
-    const walk = (dir: string): string[] =>
-      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-        e.isDirectory()
-          ? walk(join(dir, e.name))
-          : /\.tsx?$/.test(e.name) && !e.name.includes(".test.")
-            ? [join(dir, e.name)]
-            : [],
-      );
-    const both = walk(src).flatMap((file) =>
-      readFileSync(file, "utf8")
-        .split("\n")
-        .map((line, i) => ({ line, at: `${file.slice(src.length)}:${i + 1}` }))
-        .filter(({ line }) => /className=(["`])[^"`]*\btruncate\b[^"`]*\bclamp\b/.test(line))
-        .map(({ at, line }) => `${at} — ${line.trim()}`),
+    const lines = modules().flatMap(({ path, text }) =>
+      text.split("\n").map((line, i) => ({ line, at: `${path}:${i + 1}` })),
     );
+    const both = lines
+      .filter(({ line }) => wearsBoth(line))
+      .map(({ at, line }) => `${at} — ${line.trim()}`);
     expect(both, "a pixel cut and a line cut are different rules").toEqual([]);
+    // THE OTHER SIDE: a scan reading nothing passes, and so does one whose
+    // pattern stopped matching the way the tree writes a class list.
+    expect(lines.filter(({ line }) => CLASSES.test(line)).length).toBeGreaterThan(100);
+  });
+
+  test.each([
+    ["in one order", 'className="truncate clamp"', true],
+    ["in the other", 'className="clamp muted truncate"', true],
+    ["in a template", "className={`clamp ${tone} truncate`}", true],
+    ["one of them", 'className="truncate muted"', false],
+    ["a longer name", 'className="truncate clamped"', false],
+  ])("a class list carrying both %s is found", (_name, line, found) => {
+    // It read `truncate` before `clamp` only, so the other order passed.
+    expect(wearsBoth(line)).toBe(found);
   });
 });

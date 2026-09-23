@@ -1,9 +1,11 @@
 // @vitest-environment node
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
+
+import { modules } from "../test/source.ts";
 
 /**
  * The stylesheets and the tree agree about every class name, in BOTH
@@ -630,21 +632,9 @@ export function orphans(
   return out.sort();
 }
 
-function sources(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    const p = join(dir, entry);
-    if (statSync(p).isDirectory()) sources(p, out);
-    else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) out.push(p);
-  }
-  return out;
-}
-
 describe("every class the dashboard names", () => {
   const css = declaredIn(sheets());
-  const files = sources(SRC).map((p) => ({
-    name: p.slice(SRC.length),
-    text: readFileSync(p, "utf8"),
-  }));
+  const files = modules().map(({ path, text }) => ({ name: path, text }));
   const all = files.flatMap((f) => usesIn(f.name, f.text));
 
   test("is declared by a stylesheet, or is a handle that says it is not", () => {
