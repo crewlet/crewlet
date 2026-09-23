@@ -72,11 +72,12 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 				"quantity nothing can move, and what retires a request the " +
 				"broker already queued is the broker process restarting")
 	}
-	if e.backends == nil || e.backends.Fleet == nil || e.native == nil || e.native.log == nil {
+	n := e.native.Load()
+	if e.backends == nil || e.backends.Fleet == nil || n == nil || n.log == nil {
 		return coord.MaintenanceOperation{}, errors.New(
 			"engine: this node runs no state log, so it has no stream to resize")
 	}
-	running := e.native.log.domains[e.native.log.domainOf(req.Stream)]
+	running := n.log.domains[n.log.domainOf(req.Stream)]
 	if running == nil {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: %q is not a domain log this build runs — the streams a "+
@@ -447,10 +448,11 @@ func (e *Engine) applyFailure(ctx context.Context, op coord.MaintenanceOperation
 // which [limitSource] names where that volume is what bounds the broker. Empty
 // on a node with no state log, where no such limit can be the answer either.
 func (e *Engine) streamVolume() string {
-	if e.native == nil || e.native.log == nil {
+	n := e.native.Load()
+	if n == nil || n.log == nil {
 		return ""
 	}
-	return e.native.log.volume
+	return n.log.volume
 }
 
 // capacityHost is the broker a capacity question is put to, or nil on a node
@@ -468,7 +470,7 @@ func (e *Engine) streamVolume() string {
 // stream to resize, and the assertion cannot fail behind that guard, since
 // startStateLog refuses to build one on a broker that does not satisfy this.
 func (e *Engine) capacityHost() domainHost {
-	if e.native == nil || e.native.log == nil || e.backends == nil {
+	if n := e.native.Load(); n == nil || n.log == nil || e.backends == nil {
 		return nil
 	}
 	host, _ := e.backends.Queue.(domainHost)

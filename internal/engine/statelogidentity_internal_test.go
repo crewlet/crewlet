@@ -69,7 +69,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if stats.CreatedAt.IsZero() {
 		t.Fatal("the broker reports no creation instant, so nothing below can be checked")
 	}
-	running := e.native.log.Domain(tracker.Domain{}.Name())
+	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -121,7 +121,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 		t.Fatalf("New again: %v", err)
 	}
 	t.Cleanup(func() { e2.Stop(context.Background()) })
-	running = e2.native.log.Domain(tracker.Domain{}.Name())
+	running = e2.native.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running after the second boot")
 	}
@@ -148,7 +148,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the new stream's end: %v", err)
 	}
-	_, err = e2.native.writer.EvictNode(t.Context(), "op-after-recreation", "node-x")
+	_, err = e2.native.Load().writer.EvictNode(t.Context(), "op-after-recreation", "node-x")
 	requireRebuiltLogRefusal(t, err)
 	if end, err := running.log.End(t.Context()); err != nil || end != before {
 		t.Fatalf("the new stream ends at %d (err %v), want %d — a write from a "+
@@ -187,7 +187,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.log
+	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -247,12 +247,12 @@ func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.log
+	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
-	writer := e.native.writer
+	writer := e.native.Load().writer
 	if writer == nil {
 		t.Fatal("the node runs no tracker writer")
 	}
@@ -374,13 +374,13 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
-	if res, err := e.native.writer.EvictNode(t.Context(), "op-evict-x", "node-x"); err != nil ||
+	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-evict-x", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		e.Stop(context.Background())
 		back.Close(context.Background())
 		t.Fatalf("the write before the restore: %+v, %v", res, err)
 	}
-	end := endOf(t, e.native.log.Domain(tracker.Domain{}.Name()))
+	end := endOf(t, e.native.Load().log.Domain(tracker.Domain{}.Name()))
 	e.Stop(context.Background())
 
 	// THE CHECKPOINT MOVES PAST THE LOG'S END, and nothing else does: the
@@ -409,7 +409,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		t.Fatalf("New again: %v", err)
 	}
 	t.Cleanup(func() { e2.Stop(context.Background()) })
-	running := e2.native.log.Domain(tracker.Domain{}.Name())
+	running := e2.native.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running after the second boot")
 	}
@@ -433,7 +433,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	// AN ORDINARY EXPECTATION the log would accept: node-x's last record is
 	// one the restored log holds, at exactly the sequence this node's row
 	// names.
-	_, err = e2.native.writer.EvictNode(t.Context(), "op-evict-x-again", "node-x")
+	_, err = e2.native.Load().writer.EvictNode(t.Context(), "op-evict-x-again", "node-x")
 	requireAheadOfLogRefusal(t, err)
 	if got := endOf(t, running); got != end {
 		t.Fatalf("the log ends at %d, want %d — an ordinary write from a node "+
@@ -448,7 +448,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	if err := running.runner.StreamIdentity(); err != nil {
 		t.Fatalf("the verdict did not clear for the zero case: %v", err)
 	}
-	_, err = e2.native.writer.EvictNode(t.Context(), "op-evict-z", "node-z")
+	_, err = e2.native.Load().writer.EvictNode(t.Context(), "op-evict-z", "node-z")
 	requireAheadOfLogRefusal(t, err)
 	if got := endOf(t, running); got != end {
 		t.Fatalf("the log ends at %d, want %d — a retry at zero was cleared by a "+
@@ -456,7 +456,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	}
 
 	// AND THE READS, FROM THE SAME FACT, and the operator surface with them.
-	health, err := e2.native.log.health(t.Context(), running)
+	health, err := e2.native.Load().log.health(t.Context(), running)
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}

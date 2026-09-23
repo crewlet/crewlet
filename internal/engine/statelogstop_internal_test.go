@@ -64,7 +64,7 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend", back.Queue)
 	}
-	created := e.native.log.Domain(tracker.Domain{}.Name()).runner.StreamCreatedAt()
+	created := e.native.Load().log.Domain(tracker.Domain{}.Name()).runner.StreamCreatedAt()
 	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
@@ -103,12 +103,12 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 		t.Fatalf("New again: %v", err)
 	}
 	t.Cleanup(func() { e2.Stop(context.Background()) })
-	running := e2.native.log.Domain(tracker.Domain{}.Name())
+	running := e2.native.Load().log.Domain(tracker.Domain{}.Name())
 	waitUntil(t, 10*time.Second, "the tracker's applier to stop on the recreated log",
 		func() bool { return running.runner.Stopped() != nil })
 	// EVERY APPLY LOOP ENDED AND WAITED FOR, so whatever the engine writes
 	// once a loop returns has been written by now.
-	e2.native.log.haltAppliers()
+	e2.native.Load().log.haltAppliers()
 
 	var stops []map[string]any
 	for _, record := range logs.records(t) {

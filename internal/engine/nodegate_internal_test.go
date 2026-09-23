@@ -29,7 +29,7 @@ import (
 func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.log
+	s := e.native.Load().log
 	self := s.nodeID
 	const away = "node-away"
 	r := &retention{fleet: back.Fleet, state: s, db: back.Store, nodeID: self,
@@ -58,7 +58,7 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		return rows
 	}
 
-	res, err := e.native.gate.Evict(t.Context(), GateRequest{
+	res, err := e.native.Load().gate.Evict(t.Context(), GateRequest{
 		Node: away, OpID: "op-evict", By: "operator"})
 	if err != nil || !res.Complete() {
 		t.Fatalf("evict %s: %v (%+v)", away, err, res)
@@ -192,8 +192,8 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.log
-	gate := e.native.gate
+	s := e.native.Load().log
+	gate := e.native.Load().gate
 	const away = "node-away"
 	identity := identityLogs(t, s)
 
@@ -253,15 +253,15 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			e, back, _ := trimmedTracker(t)
-			s := e.native.log
+			s := e.native.Load().log
 			const away = "node-away"
 			identity := identityLogs(t, s)
 
 			// THE ENGINE'S OWN GATE, with the pages log's write made to
 			// answer `unknown` once — the one fault a real broker hands a
 			// caller that nothing on this side can resolve.
-			flaky := *e.native.gate
-			flaky.logs = slices.Clone(e.native.gate.logs)
+			flaky := *e.native.Load().gate
+			flaky.logs = slices.Clone(e.native.Load().gate.logs)
 			faulted := false
 			trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
 			for i := range flaky.logs {
@@ -377,8 +377,8 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.log
-	gate := e.native.gate
+	s := e.native.Load().log
+	gate := e.native.Load().gate
 	identity := identityLogs(t, s)
 	const live = "node-live"
 	if _, err := back.Coord.TryAcquire(t.Context(), coord.NodeResource(live),

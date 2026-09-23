@@ -232,7 +232,7 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
 | `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
 
-Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes, including the reflect dispatcher and the inbound edge that boot starts only for a company it already has (see the `learning` and `integrations` stages below) → the engine is fully alive. The dashboard carries the unconfigured state in always-on chrome (a caution banner saying inbound webhooks are being refused, an engine pill that says so, and the first row of the overview's attention queue), and it clears automatically on the next health tick once `/health` reports `configured: true`. See [the attention queue](../reference/dashboard-design.md#the-attention-queue).
+Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes, including everything boot starts only for a company it already has: the native tracker and knowledge base with their tools and their chart, the reflect dispatcher and the inbound edge (see the `native`, `learning`, `integrations` and `maintenance` stages below) → the engine is fully alive, with no restart. The one exception is the code sandbox's coordinator, which is still built only at boot; see `providers.sandbox` below. The dashboard carries the unconfigured state in always-on chrome (a caution banner saying inbound webhooks are being refused, an engine pill that says so, and the first row of the overview's attention queue), and it clears automatically on the next health tick once `/health` reports `configured: true`. See [the attention queue](../reference/dashboard-design.md#the-attention-queue).
 
 ---
 
@@ -294,22 +294,31 @@ There is **no leader**, so any node's API may write. What keeps two operators fr
 Converging applies the payload. `Engine.Apply` is a **straight line with no
 comparison and no early return** — there is no apply lock, no payload
 short-circuit and no rollback of captured state. It rebuilds the whole epoch,
-in a fixed order, and names each stage it got through:
+in a fixed order, and names each stage it got through.
+
+Before the first stage it checks the rules that need both configuration tiers
+— the one today is that a native tracker or knowledge base may not keep its log
+on an in-memory stream — exactly as a boot does. A revision that breaks one is
+refused with nothing touched and an empty stage list; before this ran at every
+apply, a node that booted unconfigured accepted such a company and started the
+log whose first restart leaves the node unable to serve.
 
 1. **`secrets`** — re-read the secret store and install a fresh resolver snapshot. **First**, because re-activating an unchanged revision is the documented [rotation gesture](secret-store.md): the payload has not moved, so the only thing that can have is what its `${VAR}` references resolve to.
 2. **`company`** — validate and build the new epoch, resolving `${VAR}` where each provider is *constructed*. A refusal here changes nothing: this node keeps serving the previous epoch.
    A company with no `providers.llm` is not refused: it builds with no model registry (see [A Company With No Model Provider](#a-company-with-no-model-provider)).
-3. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change.
-4. **`learning`**: rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting. The one exception is a node's **first** company: a node that booted with none has no reflect dispatcher to swap workers into, so this stage attaches it, and an attach that fails refuses the apply for the reason it fails a boot (a company served without it learns nothing while looking healthy).
-5. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. **Conditional:** only where this node booted with a sandbox coordinator (see below).
-6. **`parties`** — rebuild the party index *before* the epoch is published, so a seat the revision **adds** is addressable the instant the epoch carrying it is current.
-7. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
+3. **`native`** — bring up the native tracker and knowledge base on a node running neither, for its first company on them: the state log (joining the fleet by snapshot first when the node is behind), the read and write sides, the lexical index, and — on a node that publishes — the trim, the embedding duty and the change feeds. **Before** `tools`, because the native tools are registered only where the runtime exists, and before `integrations`, whose inbound edge includes the native parsers. A start that fails refuses the apply. **Conditional:** reported only on the apply that started it — once per process, and never at all on a node that met its company at boot. The runtime follows the fleet's logs rather than a revision, so a later refusal of the same apply does not take it down, and which halves it runs are the ones that first company declared: changing `tracker.backend` or `knowledge.backend` after that still takes a restart.
+4. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change.
+5. **`learning`**: rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting. The one exception is a node's **first** company: a node that booted with none has no reflect dispatcher to swap workers into, so this stage attaches it, and an attach that fails refuses the apply for the reason it fails a boot (a company served without it learns nothing while looking healthy).
+6. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. **Conditional:** only where this node booted with a sandbox coordinator (see below).
+7. **`parties`** — rebuild the party index *before* the epoch is published, so a seat the revision **adds** is addressable the instant the epoch carrying it is current.
+8. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
    On a node that booted with **no company** there is no inbound edge to rebuild: boot starts one only for a company it already has, because the inbound consumer group is fleet-wide and a node with no parsers would take deliveries its peers can route. So the node's first apply **starts** the edge here, through the same function boot runs, and every later apply reconciles it. A start that fails (the broker refuses the subscription) refuses the apply like a refused build, before the epoch is published, and takes down whatever it had brought up, so the retry starts from nothing.
-8. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
-9. **`seat_tools`**: rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched (they belong to the seat's lease, not to the epoch; see below), so what is rebuilt is the catalogue a turn is built against, never a process. Reported on every apply, including one where this node holds no seat with per-role children and there is nothing to rebuild.
-10. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. When the new epoch has a model provider, this stage also releases every seat inbox the node paused while the company had none, after the seat tools are rebuilt, because the first thing a released inbox does is run a turn. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
-11. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to.
-12. **`scheduler`**: re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
+9. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
+10. **`maintenance`** — rebuild the retention sweep, on a node's **first** company (or the apply that started the native runtime). Its job list is read once, and on a node that booted unconfigured once was before there was a runtime to contribute the operation ledgers, the tracker's repairs and the inbox sweep, or a company to state the conversation horizon — so it swept none of those until a restart. **After** the swap, because it reads those horizons off the current company. The old sweep stops, its in-flight tick waited out, before the new one starts. **Conditional:** only on that first apply, and only on a node that publishes.
+11. **`seat_tools`**: rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched (they belong to the seat's lease, not to the epoch; see below), so what is rebuilt is the catalogue a turn is built against, never a process. Reported on every apply, including one where this node holds no seat with per-role children and there is nothing to rebuild.
+12. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. When the new epoch has a model provider, this stage also releases every seat inbox the node paused while the company had none, after the seat tools are rebuilt, because the first thing a released inbox does is run a turn. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
+13. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to.
+14. **`scheduler`**: re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
 
 Then a `config_revision_applied` event is published on
 `crewlet.config.revision_applied` with `status`, the `applied_subsystems` list
@@ -327,9 +336,9 @@ detail lives on the event rather than on the operator surfaces reading the
 bucket. The active row stays active either way; the control plane records
 the outcome so peers can see it (see [Control Plane](control-plane.md)).
 
-**Read that list by name, never by number.** Two of the twelve stages are
-conditional, so a successful apply on a node that booted without a sandbox
-reports eleven names and the swap is the seventh of them. The numbering above is the order the code runs, not an index
+**Read that list by name, never by number.** Four of the fourteen stages are
+conditional, so an ordinary apply on a node already serving a company, booted
+without a sandbox, reports eleven names and the swap is the seventh of them. The numbering above is the order the code runs, not an index
 into what a node reports.
 
 **A stopping node applies nothing.** Stopping waits for an apply already
@@ -343,20 +352,22 @@ background learning passes, and on a node's first company the inbound edge.
 > validates, resolves the org and constructs the providers without reaching the
 > network, so stage 2 is the cheapest place to refuse and the one that costs
 > nothing at all. Past it the guarantee narrows. On a node that already serves
-> a company, **stage 5 is the last stage that can refuse**: stages 6 and 7
-> return no error there, and stage 8 is the swap. By the time it runs, three
-> things are already mutated: the resolver snapshot (stage 1), any shared MCP
-> child whose spec moved plus the skill variables (stage 3), and the reflection
-> workers (stage 4). So a sandbox-build refusal leaves this node's tool surface
+> a company, **`sandbox` is the last stage that can refuse**: `parties` and
+> `integrations` return no error there, and `epoch` is the swap. By the time it
+> runs, three things are already mutated: the resolver snapshot (`secrets`), any
+> shared MCP child whose spec moved plus the skill variables (`tools`), and the
+> reflection workers (`learning`). So a sandbox-build refusal leaves this node's tool surface
 > and learning workers on the new company while it still *serves* the previous
 > epoch, and reports `error`. The party index and the trackers are not among
 > them: they are rebuilt after the last failure point, which is why they are
 > ordered there. A node's **first** company is the one exception, on both sides
-> of stage 5: stage 4 refuses it when the reflect dispatcher cannot attach, and
-> stage 7 when the inbound edge cannot start. Neither refusal has a previous
-> epoch to protect, so what it leaves behind (the shared MCP children, an
-> attached dispatcher, the party index) serves nothing until the retry the
-> refusal earns rebuilds it. Widening that window is what would make `degraded`
+> of `sandbox`: `native` refuses it when the runtime cannot start, `learning`
+> when the reflect dispatcher cannot attach, and `integrations` when the
+> inbound edge cannot start. None of those refusals has a previous epoch to
+> protect, so what it leaves behind (the shared MCP children, an attached
+> dispatcher, the party index, a native runtime catching up on the fleet's
+> logs) serves nothing until the retry the refusal earns, which finds it
+> already there. Widening that window is what would make `degraded`
 > reachable, which is why everything an apply cannot un-apply stays behind the
 > swap.
 

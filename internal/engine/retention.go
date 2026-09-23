@@ -178,18 +178,18 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	// is trimming behind for no reason a reader could find.
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 	r.stop = stop
-	e.retention = r
+	e.retention.Store(r)
 	go r.run(loop)
 }
 
 // stopRetention ends the trim, waiting for an in-flight tick.
 func (e *Engine) stopRetention() {
-	if e.retention == nil {
+	r := e.retention.Swap(nil)
+	if r == nil {
 		return
 	}
-	e.retention.stop()
-	<-e.retention.done
-	e.retention = nil
+	r.stop()
+	<-r.done
 }
 
 // RetentionReport answers "is the log being trimmed, and what is stopping it"
@@ -198,10 +198,11 @@ func (e *Engine) stopRetention() {
 // deployment and NOT a report of zeros: a document full of zeros would claim a
 // fleet whose log is perfectly trimmed.
 func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
-	if e.retention == nil {
+	r := e.retention.Load()
+	if r == nil {
 		return statelog.Report{}, false
 	}
-	return e.retention.Report(ctx), true
+	return r.Report(ctx), true
 }
 
 // run ticks until the context ends.

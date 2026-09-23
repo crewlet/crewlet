@@ -236,17 +236,33 @@ type Engine struct {
 	reflector *learning.Reflector
 
 	// native is this node's copy of the company's own tracker and
-	// knowledge base: the projectors, their index, and the read and write
-	// sides over them. Nil on a company running the vendor backends, which
-	// is the whole switch — see native.go.
+	// knowledge base: the state log, its index, and the read and write
+	// sides over them. Nil on a node that has not run a company on the
+	// native backends, which is the whole switch — see native.go.
 	//
-	// On the ENGINE rather than on an epoch, because a projector follows a
-	// coordination FAMILY and a family does not change when a company
-	// revision does. Rebuilding it on an apply would drop the projection
-	// and re-run a boot reconcile on every configuration change, which for
-	// a company that edits its org chart twice a day is a projection that
-	// is never hydrated.
-	native *native
+	// On the ENGINE rather than on an epoch, because the runtime follows
+	// the fleet's LOGS and a log does not change when a company revision
+	// does. Rebuilding it on an apply would drop the applied rows' runtime
+	// and re-run a boot bring-up on every configuration change, which for
+	// a company that edits its org chart twice a day is a runtime that is
+	// never hydrated.
+	//
+	// ATOMIC, AND WRITTEN AT MOST ONCE: nil until the first company that
+	// runs a native backend is met — at boot, or by the apply that brings a
+	// node its first such company ([Engine.startNativeFor]) — and never
+	// cleared after, not even by the teardown. A plain field was correct
+	// only while boot was the one writer, before any goroutine could read
+	// it; a node that booted unconfigured and met its company later wrote
+	// it with the seat host, the API and every tool already reading. The
+	// monotonic nil-to-runtime transition is what lets a caller that reads
+	// it more than once rely on the later reads.
+	native atomic.Pointer[native]
+
+	// boot is the operator's Tier A configuration this engine was built
+	// from. Immutable; kept because a node that meets its first native
+	// company at an apply brings the state log up then, and the log's
+	// ceilings, volume and snapshot policy are Tier A's.
+	boot *config.Bootstrap
 
 	// env is this node's ${VAR} resolver: the secret store in front of the
 	// process environment, refreshed on every apply. One per node rather
@@ -347,9 +363,18 @@ type Engine struct {
 
 	// maintenance is the retention sweep for the short-horizon tables. On
 	// the engine for the same reason the sandbox machinery is: it is a
-	// loop this process runs, and rebuilding it on an apply would start a
-	// second one against the same rows.
-	maintenance  *maintenance.Worker
+	// loop this process runs, and rebuilding it on every apply would churn
+	// a duty that has nothing new to sweep.
+	//
+	// REBUILT ONCE MORE on a node's FIRST company, the one time its job
+	// list changes after boot: a node that booted unconfigured built it
+	// with no native runtime and no company, so it swept no operation
+	// ledger, ran none of the tracker's repairs and read the conversation
+	// horizon's floor. The old worker is stopped — its in-flight tick
+	// waited out — before the new one starts, so there is never a second
+	// loop. Atomic because that write happens while the process runs. See
+	// [Engine.rebuildMaintenance].
+	maintenance  atomic.Pointer[maintenance.Worker]
 	integrations *integration.Worker
 
 	// mailboxes registers each seat's mailbox with the fleet and retires
@@ -376,7 +401,11 @@ type Engine struct {
 	// concluded. On the ENGINE for the reason maintenance is — it is a
 	// loop this process runs, and rebuilding it on an apply would leave
 	// two loops publishing one fleet's floor.
-	retention *retention
+	//
+	// ATOMIC because it is armed with the native runtime, which a node
+	// that booted unconfigured meets at an apply — while the API is
+	// already reading it for `crewlet retention status`.
+	retention atomic.Pointer[retention]
 
 	// budgetReports is the live token-meter loop. Every node runs one —
 	// the counters are shared, so this is a frame rather than a duty.
@@ -599,6 +628,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 
 	e := &Engine{
+		boot:     opts.Bootstrap,
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
 		mcp:         mcp.NewBridge(nil),
@@ -719,11 +749,15 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			return nil, err
 		}
 	}
-	// SKIPPED ENTIRELY WHEN THERE IS NO EPOCH. Both of these are derived
-	// from a company — the sandbox backends it configures, the tools its
-	// seats are given — and an unconfigured node has neither to build. The
-	// apply that brings it its first revision runs both then, on the same
-	// path every later apply takes.
+	// SKIPPED ENTIRELY WHEN THERE IS NO EPOCH. Everything here is derived
+	// from a company — the sandbox backends it configures, the native
+	// runtime its backends ask for, the tools its seats are given — and an
+	// unconfigured node has none of them to build. The apply that brings it
+	// its first revision equips it and starts the native runtime then
+	// ([Engine.startNativeFor]). The sandbox coordinator is the exception:
+	// it is built here or not at all, so a first company that configures
+	// `providers.sandbox` is served without `run_sandbox` until a restart —
+	// the limitation docs/concepts/code-sandbox.md states.
 	if company != nil {
 		// BEFORE equip, because equip registers run_sandbox and only a
 		// node with a coordinator can offer it: a tool whose dependency is
@@ -745,9 +779,20 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// probe and run no duty until it finished. Seat acquisition is
 		// what waits; see [Engine.NativeHydrated].
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := e.startNative(ctx, opts.Bootstrap, company, opts.ActivatedAt); err != nil {
+		if err := e.startNative(ctx, opts.Bootstrap, company); err != nil {
 			return nil, err
 		}
+		// AND THE CHART, so the projects this company's units name are
+		// objects before any seat files into one. A create takes its key
+		// from its project's own counter, so a project that does not
+		// exist refuses every write into it — and the first thing a fresh
+		// company does is file work. Best effort for the reason
+		// [Engine.applyChart] gives: a failure costs the projects that
+		// did not land and nothing else, and the next apply retries them.
+		e.applyChart(ctx, company, opts.ActivatedAt)
+		// AND THE CONTAINERS, for the same reason and on the same terms —
+		// see [Engine.applyContainers], and the bug it fixes.
+		e.applyContainers(ctx, company, opts.ActivatedAt)
 		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the
 		// epoch is current, and one that found an empty registry would run
 		// a seat with no tools at all — a company that boots cleanly and
@@ -912,14 +957,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// before the native backends, because it needs neither: the counters
 	// are coordination's and the company's caps are the epoch's.
 	e.startBudgetReports(ctx)
-	if e.native != nil {
-		e.startRetention(ctx, opts.Bootstrap, e.native.log)
-		// AND THE VECTOR DOMAIN'S ONE WRITER. Without it every other
-		// half of semantic search is present and correct over an empty
-		// corpus — which reports as a healthy domain rather than as a
-		// missing one.
-		e.startEmbedding(ctx, e.native.log)
-	}
+	// The native runtime's own duties, where there is one. An unconfigured
+	// node has none yet, and the apply that brings its first native company
+	// arms them then — see [Engine.startNativeFor].
+	e.startNativeDuties(ctx)
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
 	// for one seat, and no later pass can detect or repair that.

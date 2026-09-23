@@ -439,7 +439,7 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningDomain) {
 	// THE NODE'S OWN TRIM IS THE OTHER WRITER of both the floor and the
 	// log's first sequence; stopped, it waits out an in-flight tick.
 	e.stopRetention()
-	running := e.native.log.Domain(tracker.Domain{}.Name())
+	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -581,10 +581,10 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 	// written and the tick is decided by the other five. Set on the loop
 	// rather than through validated config: the 24-hour floor exists for
 	// an operator, and this case is about a different term.
-	r := &retention{fleet: back.Fleet, state: e.native.log, nodeID: "node-a",
+	r := &retention{fleet: back.Fleet, state: e.native.Load().log, nodeID: "node-a",
 		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
-	for _, name := range e.native.log.order {
-		running := e.native.log.Domain(name)
+	for _, name := range e.native.Load().log.order {
+		running := e.native.Load().log.Domain(name)
 		t.Run(name, func(t *testing.T) {
 			group := running.domain.FeedGroup()
 			if group == "" {
@@ -1017,7 +1017,7 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.log
+	s := e.native.Load().log
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
 	trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
 

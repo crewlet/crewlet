@@ -93,8 +93,8 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// per-node job list: the duty is a singleton, so exactly one
 		// node's list runs per tick, and a node with no backend
 		// contributes nothing rather than an empty sweep.
-		if e.native != nil {
-			if e.native.writer != nil {
+		if n := e.native.Load(); n != nil {
+			if n.writer != nil {
 				// THE TRACKER'S OWN JOBS, and they are a different
 				// kind of thing from a sweep: its records are a log
 				// and nothing deletes them here. They finish work a
@@ -104,8 +104,8 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 				// so a tick with nothing to do costs one indexed
 				// read.
 				jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
-					DB: e.backends.Store, Writer: e.native.writer,
-					NodeID: e.native.nodeID,
+					DB: e.backends.Store, Writer: n.writer,
+					NodeID: n.nodeID,
 					// AND THE LEAD MAP, for the one repair whose
 					// commit carries a wake. Read per call against
 					// the epoch current when the job runs, for the
@@ -132,9 +132,9 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 			// kept for ever, on every node. PER NODE rather than under
 			// the singleton, because each node owns its own copy —
 			// see [maintenance.StatelogJobs].
-			if e.native.log != nil {
+			if n.log != nil {
 				jobs = append(jobs, maintenance.StatelogJobs(
-					e.native.log.opsLedgers(), statelog.OpsRetention)...)
+					n.log.opsLedgers(), statelog.OpsRetention)...)
 			}
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
 			// absence is a consequence rather than an omission. Its
@@ -173,12 +173,36 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		log.ErrorContext(ctx, "maintenance_worker_not_started", "error", err.Error())
 		return
 	}
-	e.maintenance = w
+	e.maintenance.Store(w)
 	// Detached, for the same reason the node's loops are: a sweep loop
 	// bound to a signal context stops at SIGTERM, which is harmless here
 	// but would make the worker's lifetime differ from every other loop's
 	// for no reason a reader could find.
-	e.maintenance.Start(context.WithoutCancel(ctx))
+	w.Start(context.WithoutCancel(ctx))
+}
+
+// rebuildMaintenance replaces the sweep with one built against what the node
+// runs now.
+//
+// FOR A NODE'S FIRST COMPANY, and nothing else: [Engine.startMaintenance]
+// reads its job list once, and on a node that booted unconfigured "once" was
+// before there was a native runtime to contribute the operation ledgers, the
+// tracker's repairs and the inbox sweep, or a company to state the
+// conversation horizon. The old worker stops — its in-flight tick waited out
+// — before the new one is built, so two sweeps never run at once.
+//
+// A node that does not publish never started a sweep, and does not start one
+// here either.
+func (e *Engine) rebuildMaintenance(ctx context.Context) {
+	if !e.mode.Publishes() {
+		return
+	}
+	e.stopMaintenance()
+	e.startMaintenance(ctx)
+	if w := e.maintenance.Load(); w != nil {
+		log.InfoContext(ctx, "maintenance_rebuilt", "jobs", w.Jobs(),
+			"detail", "the sweep was rebuilt for this node's first company")
+	}
 }
 
 // ConversationRetention reads the operator's horizon for the conversation
@@ -332,12 +356,12 @@ func (e *Engine) activeSeatHandles(ctx context.Context) ([]string, error) {
 // Exported because "is housekeeping running, and over what?" is a question
 // an operator has to be able to ask: the failure this whole package fixes
 // was invisible precisely because nothing anywhere could answer it.
-func (e *Engine) Maintenance() *maintenance.Worker { return e.maintenance }
+func (e *Engine) Maintenance() *maintenance.Worker { return e.maintenance.Load() }
 
 // stopMaintenance ends the sweep, waiting for an in-flight tick.
 func (e *Engine) stopMaintenance() {
-	if e.maintenance != nil {
-		e.maintenance.Stop()
+	if w := e.maintenance.Swap(nil); w != nil {
+		w.Stop()
 	}
 }
 

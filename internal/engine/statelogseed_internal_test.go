@@ -49,7 +49,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	s := e.native.log
+	s := e.native.Load().log
 	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
 
 	// THE TRIM IS QUIESCED FIRST, because it is the other writer of the

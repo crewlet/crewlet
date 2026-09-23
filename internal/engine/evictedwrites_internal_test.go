@@ -33,9 +33,9 @@ import (
 func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.log
+	s := e.native.Load().log
 	self := s.nodeID
-	if e.native.writer == nil || e.native.pages == nil {
+	if e.native.Load().writer == nil || e.native.Load().pages == nil {
 		t.Fatal("the node runs no tracker writer or no page store")
 	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: halted appliers look
@@ -50,11 +50,11 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	// THE CONTROL: the same two writes, made before any eviction, apply.
 	// Without it a harness that applied nothing of this node's would pass
 	// the case below.
-	if _, err := e.native.writer.WriteView(t.Context(), "op-view-before",
+	if _, err := e.native.Load().writer.WriteView(t.Context(), "op-view-before",
 		evictedView("v-before")); err != nil {
 		t.Fatalf("the control view write: %v", err)
 	}
-	if _, _, err := e.native.pages.EnsureContainer(t.Context(), testActivation, "BEFORE",
+	if _, _, err := e.native.Load().pages.EnsureContainer(t.Context(), testActivation, "BEFORE",
 		"Before", ""); err != nil {
 		t.Fatalf("the control container write: %v", err)
 	}
@@ -72,14 +72,14 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	// applied rows, which do not hold the eviction yet, so both land.
 	// Neither can resolve — the appliers are halted — so each answers
 	// pending, which is the honest answer and the one asserted.
-	res, err := e.native.writer.WriteView(t.Context(), "op-view-evicted", evictedView("v-evicted"))
+	res, err := e.native.Load().writer.WriteView(t.Context(), "op-view-evicted", evictedView("v-evicted"))
 	if err != nil || res.Outcome != statelog.OutcomePending {
 		t.Fatalf("the evicted node's view write answered %q (err %v), want "+
 			"pending — it has to LAND for the gate to have anything to drop",
 			res.Outcome, err)
 	}
 	viewAt := res.Position
-	if _, _, err := e.native.pages.EnsureContainer(t.Context(), testActivation, "EVICTED",
+	if _, _, err := e.native.Load().pages.EnsureContainer(t.Context(), testActivation, "EVICTED",
 		"Evicted", ""); err != nil {
 		t.Fatalf("the evicted node's container write: %v", err)
 	}

@@ -102,7 +102,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	s := e.native.log
+	s := e.native.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -239,12 +239,12 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 // and requires the fence's refusal under want, with nothing appended.
 func requireZeroRefused(t *testing.T, e *Engine, opID, nodeID string, want statelog.Reason) {
 	t.Helper()
-	running := e.native.log.Domain(tracker.Domain{}.Name())
+	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
 	_, before, err := running.log.Bounds(t.Context())
 	if err != nil {
 		t.Fatalf("read the log's end: %v", err)
 	}
-	_, err = e.native.writer.EvictNode(t.Context(), opID, nodeID)
+	_, err = e.native.Load().writer.EvictNode(t.Context(), opID, nodeID)
 	var refusal *statelog.Unavailable
 	if !errors.As(err, &refusal) || refusal.Reason != want {
 		t.Fatalf("a write at an expectation of zero answered %v, want an "+
@@ -293,7 +293,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	// purge below is this test's own.
 	e.stopRetention()
 
-	s := e.native.log
+	s := e.native.Load().log
 	name := tracker.Domain{}.Name()
 	spec := tracker.Domain{}.Stream()
 	running := s.Domain(name)
@@ -483,8 +483,8 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T) {
 	t.Parallel()
 	e, _, running := trimmedTracker(t)
-	s := e.native.log
-	writer := e.native.writer
+	s := e.native.Load().log
+	writer := e.native.Load().writer
 	if writer == nil {
 		t.Fatal("the node runs no tracker writer")
 	}
@@ -553,8 +553,8 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
-	s := e.native.log
-	gate := e.native.gate
+	s := e.native.Load().log
+	gate := e.native.Load().gate
 	if gate == nil {
 		t.Fatal("the node runs no node gate")
 	}
@@ -746,8 +746,8 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.log
-	if e.native.writer == nil || e.native.pages == nil {
+	s := e.native.Load().log
+	if e.native.Load().writer == nil || e.native.Load().pages == nil {
 		t.Fatal("the node runs no tracker writer or no page store")
 	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a
@@ -764,11 +764,11 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 		zero func(ctx context.Context, key string) error
 	}{
 		{domain: tracker.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, err := e.native.writer.EvictNode(ctx, "op-"+key, "node-"+key)
+			_, err := e.native.Load().writer.EvictNode(ctx, "op-"+key, "node-"+key)
 			return err
 		}},
 		{domain: pages.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, _, err := e.native.pages.EnsureContainer(ctx, testActivation, key, key, "")
+			_, _, err := e.native.Load().pages.EnsureContainer(ctx, testActivation, key, key, "")
 			return err
 		}},
 	} {

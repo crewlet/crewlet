@@ -99,7 +99,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	if err != nil {
 		return statelog.ReanchorPlan{}, err
 	}
-	s := e.native.log
+	s := e.native.Load().log
 	record, err := generationEncoder(running.domain)
 	if err != nil {
 		return statelog.ReanchorPlan{}, err
@@ -139,14 +139,14 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		Evicted:  running.evicted,
 		DB:       replicatedEstate{node: s.db},
 		By:       req.By,
-		NodeID:   e.native.nodeID,
+		NodeID:   e.native.Load().nodeID,
 		Now:      time.Now,
 	}, in, statelog.ReanchorGuard{Confirm: req.Confirm, Force: req.Force})
 	if err != nil {
 		if in.PeersReanchored > 0 && running.domain.ClaimsIdentity() {
 			rows, _ := e.backends.Fleet.Positions(ctx)
 			return statelog.ReanchorPlan{}, fmt.Errorf("%w (re-anchored peers: %v)", err,
-				reanchoredPeers(rows, name, in.Generation, e.native.nodeID))
+				reanchoredPeers(rows, name, in.Generation, e.native.Load().nodeID))
 		}
 		return statelog.ReanchorPlan{}, err
 	}
@@ -266,7 +266,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	in.RegisterReadable = true
 	domain := running.domain.Name()
 	for _, row := range rows {
-		if row.NodeID == e.native.nodeID {
+		if row.NodeID == e.native.Load().nodeID {
 			continue
 		}
 		// THE SAME GENERATION AND THE SAME STREAM ONLY: a sequence at
@@ -281,7 +281,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			in.Highest = at.Seq
 		}
 	}
-	in.PeersReanchored = len(reanchoredPeers(rows, domain, in.Generation, e.native.nodeID))
+	in.PeersReanchored = len(reanchoredPeers(rows, domain, in.Generation, e.native.Load().nodeID))
 	return in, nil
 }
 
@@ -310,11 +310,12 @@ var ErrUnknownStream = errors.New("engine: not a domain log this node runs")
 // runningStream is the running domain whose log is stream, or
 // [ErrUnknownStream] naming the streams there are.
 func (e *Engine) runningStream(stream string) (*runningDomain, error) {
-	if e.native == nil || e.native.log == nil {
+	n := e.native.Load()
+	if n == nil || n.log == nil {
 		return nil, fmt.Errorf("%w: this node runs no state log, so %q is not "+
 			"one of its logs", ErrUnknownStream, stream)
 	}
-	running := e.native.log.Domain(e.native.log.domainOf(stream))
+	running := n.log.Domain(n.log.domainOf(stream))
 	if running == nil {
 		return nil, fmt.Errorf("%w: %q — the streams this build runs are %v",
 			ErrUnknownStream, stream, maintenanceStreams())

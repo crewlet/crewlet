@@ -283,7 +283,7 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
 }
 ```
 
-`applied_subsystems` is the ordered list of what this node had already rebuilt when it stopped, out of `secrets`, `company`, `tools`, `learning`, `sandbox`, `parties`, `integrations`, `epoch`, `seat_tools`, `mailboxes`, `learning_passes`, `scheduler` (the example above refused the revision's `providers.sandbox` after rebuilding its learning workers). That is the difference between "refused before anything changed" and "torn down halfway", which is precisely what decides whether the node needs a restart. An `error` with an **empty** list never reached the apply at all: the revision could not be read, opened or parsed.
+`applied_subsystems` is the ordered list of what this node had already rebuilt when it stopped, out of `secrets`, `company`, `native`, `tools`, `learning`, `sandbox`, `parties`, `integrations`, `epoch`, `maintenance`, `seat_tools`, `mailboxes`, `learning_passes`, `scheduler` (the example above refused the revision's `providers.sandbox` after rebuilding its learning workers). That is the difference between "refused before anything changed" and "torn down halfway", which is precisely what decides whether the node needs a restart. An `error` with an **empty** list never reached the apply at all: the revision could not be read, opened or parsed.
 
 Like every other event this lives in each node's own log, so a node whose disk is gone took its rows with it — but a node that merely stopped reporting, or was replaced, still has them.
 

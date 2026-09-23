@@ -129,20 +129,25 @@ type native struct {
 	done sync.WaitGroup
 }
 
-// startNative opens this node's native backends, once.
+// startNative opens this node's native backends, once per process.
 //
-// PER NODE, called from [Engine.New] before anything claims a seat, and NOT
-// re-run on an apply. It returns without waiting for hydration: the reconcile
-// is O(keys) and a node that blocked here would not serve its dashboard,
-// answer a probe or run a duty until it finished.
+// ONCE, by whichever meets the node's first company on a native backend:
+// [Engine.New] for the company a node boots with, or the apply that hands a
+// node that booted without one its first ([Engine.startNativeFor]). Never
+// re-run for a later revision — the runtime follows the fleet's logs rather
+// than a revision — and it returns without waiting for hydration: the
+// reconcile is O(keys) and a node that blocked here would not serve its
+// dashboard, answer a probe or run a duty until it finished.
+//
+// IT DOES NOT APPLY THE CHART. Its callers do, each with the activation it
+// holds, because the two meet it at different moments: a boot applies the
+// chart straight after, and an apply leaves it to [Engine.reconcileNative],
+// which every apply already runs — applying it here as well would write
+// every project and container twice on a node's first company.
 //
 // The store and the fleet are not nil-checked: [New] refuses a Backends
 // without either, so every engine that reaches this holds both.
-//
-// activatedAt is when c was activated, zero for a company no activation has
-// named yet — see [Options.ActivatedAt] and [Engine.applyChart].
-func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Company,
-	activatedAt time.Time) error {
+func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Company) error {
 	// AN IN-MEMORY STREAM NEVER GETS THIS FAR. [Engine.New] refused a
 	// company that runs the log on one ([config.CheckTiers]): its first
 	// restart recreates the log empty and the node never serves again, so
@@ -278,7 +283,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// Confluence for its knowledge indexed none of its own work items,
 	// served no `search_work_items`, and went on paying the embedding
 	// duty for a vector on every one of them — because that duty is armed
-	// on `e.native != nil`, which is either backend.
+	// on the runtime existing, which is either backend.
 	//
 	// BEFORE the block, because the searcher built there takes it.
 	n.indexer = search.NewIndexerOver(e.backends.Store,
@@ -361,32 +366,89 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}()
 	}
 
-	e.native = n
+	// PUBLISHED LAST, whole: every field above is written before the
+	// store, which is what lets every reader load it without a lock.
+	e.native.Store(n)
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopNative] — the same shutdown — is what ends it.
-	// Set before the two calls below because both reach through e.native:
-	// a failure cleanup that ran after they had started would stop loops
-	// the engine is about to be asked to stop again.
 	started = true
-	// AND THE CHART, so the projects this company's units name are objects
-	// before any seat files into one. A create takes its key from its
-	// project's own counter, so a project that does not exist refuses
-	// every write into it — and the first thing a fresh company does is
-	// file work. Best effort here for the reason [Engine.applyChart]
-	// gives: a failure costs the projects that did not land and nothing
-	// else, and the next apply retries them.
-	e.applyChart(ctx, c, activatedAt)
-	// AND THE CONTAINERS, for the same reason and on the same terms — see
-	// [Engine.applyContainers], and the bug it fixes.
-	e.applyContainers(ctx, c, activatedAt)
 	log.InfoContext(ctx, "native_backends_started",
 		"tracker", runTracker, "knowledge", wiki)
 	return nil
 }
 
+// startNativeFor brings the native runtime up for a company an APPLY hands a
+// node that is not running one, reporting whether it did.
+//
+// # The bug it fixes
+//
+// [Engine.startNative] was reachable from [Engine.New] alone. A node that
+// booted with no company — the documented way to start one and then `PUT
+// /config`, or create the company from the dashboard — skipped it, and no
+// apply ever ran it: the tracker, the knowledge base, their tools and the
+// chart were missing for the life of the process. Every tool call answered
+// that the backend was not wired, no project existed for a task to be filed
+// into, and the quickstart's "bootstrap live without restarting" held for
+// everything but the company's own records. A restart brought them, because
+// then the company arrived at boot.
+//
+// # Where it runs in an apply, and why there
+//
+// BEFORE the tools are equipped, because the native tools are registered only
+// where their halves exist, and before the inbound edge is started, whose
+// parsers include the native ones — both read the runtime this brings up. It
+// comes after the revision is BUILT, so a revision that cannot be built never
+// starts anything.
+//
+// The loops [Engine.New] starts beside the runtime once the node publishes —
+// the trim, the embedding duty and the change feeds — start here too, on the
+// same condition, so a runtime met at an apply is the runtime a boot would
+// have built. Nothing waits for hydration: seat acquisition does, through
+// [Engine.NativeHydrated], which reads the runtime this publishes before the
+// epoch that gives the node any seat is current.
+//
+// # What a later refusal leaves
+//
+// The runtime is NOT taken down if the apply is refused after this. It
+// follows the fleet's logs rather than the revision, so a node running it
+// with the previous epoch still serves that epoch correctly — and the retry
+// finds it already up. Which halves it has (the tracker, the knowledge base)
+// are the ones this company declared; a later revision that changes them
+// takes effect on restart, as switching a backend always has.
+func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
+	if e.native.Load() != nil || c == nil || !c.Config.RunsStateLog() {
+		return false, nil
+	}
+	if err := e.startNative(ctx, e.boot, c); err != nil {
+		return false, err
+	}
+	if e.mode.Publishes() {
+		e.startNativeDuties(ctx)
+		e.startNativeFeeds(ctx)
+	}
+	return true, nil
+}
+
+// startNativeDuties arms the native runtime's two fleet-singleton duties: the
+// log's trim, without which a domain's log only grows to its ceiling, and the
+// vector domain's one writer. ONE CALL FOR BOTH CALLERS — [New] and
+// [Engine.startNativeFor] — so a runtime met at an apply cannot be missing a
+// duty a boot would have armed.
+func (e *Engine) startNativeDuties(ctx context.Context) {
+	n := e.native.Load()
+	if n == nil {
+		return
+	}
+	e.startRetention(ctx, e.boot, n.log)
+	// AND THE VECTOR DOMAIN'S ONE WRITER. Without it every other half of
+	// semantic search is present and correct over an empty corpus — which
+	// reports as a healthy domain rather than as a missing one.
+	e.startEmbedding(ctx, n.log)
+}
+
 // stopNative ends this node's native backends. Nil-safe, which is the node
 // that runs none.
-func (e *Engine) stopNative(ctx context.Context) { e.native.shutdown(ctx) }
+func (e *Engine) stopNative(ctx context.Context) { e.native.Load().shutdown(ctx) }
 
 // shutdown ends everything this runtime started and WAITS for it.
 //
@@ -443,15 +505,16 @@ func (n *native) shutdown(ctx context.Context) {
 // native backend is trivially hydrated, which is what a company on Jira and
 // Confluence has.
 func (e *Engine) NativeHydrated() bool {
-	if e.native == nil {
+	n := e.native.Load()
+	if n == nil {
 		return true
 	}
 	// STRICT, because this is seat admission rather than a read: a node
 	// that is merely inside the trim floor still serves rows that are
 	// behind, and a seat attaching to one acts on them.
-	ok, refusal := e.native.log.Established(e.native.run, true)
+	ok, refusal := n.log.Established(n.run, true)
 	if !ok && refusal != "" {
-		log.DebugContext(e.native.run, "seat_admission_withheld",
+		log.DebugContext(n.run, "seat_admission_withheld",
 			"reason", string(refusal))
 	}
 	return ok
@@ -480,12 +543,13 @@ func (e *Engine) NativeHydrated() bool {
 // A node with no native backend is trivially serviceable, which is what a
 // company on Jira and Confluence has.
 func (e *Engine) SeatsServiceable() (bool, string) {
-	if e.native == nil {
+	n := e.native.Load()
+	if n == nil {
 		return true, ""
 	}
-	ok, domain := e.native.log.Healthy(e.native.run)
+	ok, domain := n.log.Healthy(n.run)
 	if !ok {
-		log.WarnContext(e.native.run, "seats_unserviceable",
+		log.WarnContext(n.run, "seats_unserviceable",
 			"domain", domain,
 			"hint", "this node's copy of that domain is wrong rather than "+
 				"behind; its seats move to a peer until it recovers")
@@ -544,15 +608,15 @@ type ReplicationStatus struct {
 // advertising itself at all, reported by nothing, because it was assembling a
 // report about being behind.
 func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
-	if e.native == nil {
+	n := e.native.Load()
+	if n == nil {
 		return nil
 	}
 	// EVERY ROW IS A DOMAIN'S NOW. The wiki's projection row went with the
 	// projector: a row that could only say hydrated or not has been
 	// replaced by a position on a log, which is the same question answered
 	// with a distance.
-	out := e.native.log.Status(ctx)
-	return out
+	return n.log.Status(ctx)
 }
 
 // Domains is every state-log domain this build runs, in the fixed order
@@ -566,51 +630,57 @@ func (e *Engine) Domains() []statelog.Domain { return registeredDomains() }
 
 // Tracker is this node's tracker read side, or nil.
 func (e *Engine) Tracker() *tracker.Reader {
-	if e.native == nil {
+	n := e.native.Load()
+	if n == nil {
 		return nil
 	}
-	return e.native.trackerReader
+	return n.trackerReader
 }
 
 // TrackerWriter is this node's tracker write side, or nil.
 func (e *Engine) TrackerWriter() *tracker.Writer {
-	if e.native == nil {
+	n := e.native.Load()
+	if n == nil {
 		return nil
 	}
-	return e.native.writer
+	return n.writer
 }
 
 // NodeGate is eviction and readmission over every identity-claiming log, or
 // nil on a node running no state log.
 func (e *Engine) NodeGate() *NodeGate {
-	if e.native == nil {
+	n := e.native.Load()
+	if n == nil {
 		return nil
 	}
-	return e.native.gate
+	return n.gate
 }
 
 // Pages is this node's knowledge read side, or nil.
 func (e *Engine) Pages() *pages.Reader {
-	if e.native == nil {
+	n := e.native.Load()
+	if n == nil {
 		return nil
 	}
-	return e.native.pageReader
+	return n.pageReader
 }
 
 // PagesStore is this node's knowledge write side, or nil.
 func (e *Engine) PagesStore() *pages.Store {
-	if e.native == nil {
+	n := e.native.Load()
+	if n == nil {
 		return nil
 	}
-	return e.native.pages
+	return n.pages
 }
 
 // NativeSearcher is the native knowledge searcher, or nil.
 func (e *Engine) NativeSearcher() *pages.Searcher {
-	if e.native == nil {
+	n := e.native.Load()
+	if n == nil {
 		return nil
 	}
-	return e.native.searcher
+	return n.searcher
 }
 
 // WaitCommitted blocks until this node's tracker applier has consumed through
@@ -621,14 +691,15 @@ func (e *Engine) NativeSearcher() *pages.Searcher {
 // returns a revision on one family, and a log write returns a place on a
 // stream that only compares against the same stream and the same generation.
 func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error {
-	if e.native == nil || e.native.log == nil || at.Seq == 0 {
+	n := e.native.Load()
+	if n == nil || n.log == nil || at.Seq == 0 {
 		return nil
 	}
 	// THE POSITION NAMES ITS OWN STREAM, so this resolves the domain from
 	// it rather than taking one. That is what a bucket revision could never
 	// do — it was a number on a family, and the caller had to say which —
 	// and it is why both native backends now settle through one primitive.
-	running := e.native.log.Domain(e.native.log.domainOf(at.Stream))
+	running := n.log.Domain(n.log.domainOf(at.Stream))
 	if running == nil {
 		return nil
 	}
@@ -643,7 +714,8 @@ func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error 
 // because a feed follows a DOMAIN and a domain does not change when a company
 // revision does.
 func (e *Engine) startNativeFeeds(ctx context.Context) {
-	if e.native == nil || e.native.log == nil {
+	n := e.native.Load()
+	if n == nil || n.log == nil {
 		return
 	}
 
@@ -659,7 +731,7 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 	// and an error naming it, rather than a trim that silently waits for
 	// ever or silently waits for nothing.
 	for _, domain := range registeredDomains() {
-		running := e.native.log.Domain(domain.Name())
+		running := n.log.Domain(domain.Name())
 		if running == nil {
 			continue
 		}
@@ -684,15 +756,15 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 				"source", translator.Source().Name, "error", err.Error())
 			continue
 		}
-		e.native.done.Add(1)
+		n.done.Add(1)
 		go func() {
-			defer e.native.done.Done()
+			defer n.done.Done()
 			// THE NATIVE RUNTIME'S OWN CONTEXT, never the caller's: this
 			// goroutine is joined by stopNative, which ends that one.
-			//nolint:contextcheck // e.native.run is [context.WithoutCancel] of
+			//nolint:contextcheck // n.run is [context.WithoutCancel] of
 			// the boot context: a feed started under the CALLER's would be one
 			// [native.shutdown] can never end, and its wait would block for ever.
-			if err := feed.Run(e.native.run); err != nil {
+			if err := feed.Run(n.run); err != nil {
 				log.ErrorContext(ctx, "changefeed_stopped",
 					"source", translator.Source().Name, "error", err.Error(),
 					"detail", "native writes still land; nothing is woken by them "+
@@ -708,14 +780,15 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 // company-derived input is the LEAD MAP, and that is the org chart — which
 // is exactly what an apply changes. See [Engine.reconcileNative].
 func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
-	if e.native == nil || c == nil {
+	n := e.native.Load()
+	if n == nil || c == nil {
 		return nil, nil
 	}
 	var (
 		parsers []notify.Parser
 		prompts []notify.Prompt
 	)
-	if e.native.writer != nil {
+	if n.writer != nil {
 		// NO LEAD MAP AND NO BASE URL. The tracker's own parser reads a
 		// record's routing snapshot, which the WRITER resolved at commit
 		// — a mention resolved at read time names whoever holds the role
@@ -723,7 +796,7 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		parsers = append(parsers, tracker.NewParser(tracker.ParserOptions{}))
 		prompts = append(prompts, tracker.Prompt{})
 	}
-	if e.native.pages != nil {
+	if n.pages != nil {
 		parsers = append(parsers, pages.NewParser(pages.ParserOptions{
 			Leads: containerLeads(c.Org), BaseURL: e.publicBase(c),
 		}))
@@ -745,12 +818,13 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 // every configuration edit.
 //
 // There is no retirement branch. Switching `tracker.backend` away from
-// native is not a live gesture — the tools, the projector and the feed are
-// all built at boot — so a revision that changes it takes effect on
-// restart, and the parser staying registered until then is the honest
-// state: the records are still there and still reachable.
+// native is not a live gesture — the runtime, its halves and its feeds are
+// built once per process, with the first company that runs one — so a
+// revision that changes it takes effect on restart, and the parser staying
+// registered until then is the honest state: the records are still there
+// and still reachable.
 func (e *Engine) reconcileNative(ctx context.Context, c *Company, activatedAt time.Time) {
-	if e.native == nil {
+	if e.native.Load() == nil {
 		return
 	}
 	e.notify.mu.Lock()
@@ -1169,17 +1243,18 @@ func (skillDetector) IsSkill(body string) bool { return skills.IsSkill(body) }
 // the point: a seat offered a tool against a tracker its company does not
 // run would reach for it and fail at the call.
 func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
-	if e.native == nil || e.native.trackerReader == nil || e.native.writer == nil {
+	n := e.native.Load()
+	if n == nil || n.trackerReader == nil || n.writer == nil {
 		return builtin.WorkDeps{}
 	}
 	return builtin.WorkDeps{
-		Reader: e.native.trackerReader,
+		Reader: n.trackerReader,
 		// ONE WRITER PER ACTOR, derived from the turn's own seat: the
 		// tracker's rule is that a writer acts as exactly one party, and
 		// the party here is the immutable seat the tool surface bound
 		// rather than anything a model can name.
 		Writer: func(actor builtin.Actor) builtin.WorkWriter {
-			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
+			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
 				TurnID: actor.TurnID, Chain: actor.Chain,
 			})
 		},
@@ -1190,7 +1265,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// `labels` argument on the tools it already holds. The authority
 		// for every other facet is resolved per call.
 		ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
-			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
+			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
 				TurnID: actor.TurnID, Chain: actor.Chain,
 			})
 		},
@@ -1199,12 +1274,12 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// it needs the replicated estate to check its counterparties
 		// before the first of them — and this writer has one.
 		Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
-			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
+			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
 				TurnID: actor.TurnID, Chain: actor.Chain,
 			})
 		},
 		Merges: func(actor builtin.Actor) builtin.WorkMerger {
-			return e.native.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
+			return n.writer.As(actor.Handle, actor.Kind, tracker.Provenance{
 				TurnID: actor.TurnID, Chain: actor.Chain,
 			})
 		},
@@ -1407,12 +1482,13 @@ func UnitLeadOf(o *org.Organization, unit string) string {
 
 // pageDeps is the knowledge half, on the same terms.
 func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
-	if e.native == nil || e.native.pageReader == nil || e.native.pages == nil {
+	n := e.native.Load()
+	if n == nil || n.pageReader == nil || n.pages == nil {
 		return builtin.PageDeps{}
 	}
 	return builtin.PageDeps{
-		Reader:   e.native.pageReader,
-		Writer:   e.native.pages,
+		Reader:   n.pageReader,
+		Writer:   n.pages,
 		Mentions: seatMentions{org: c.Org},
 		DefaultContainer: func(handle string) string {
 			return scopeOfSeat(e.Company().Org, handle,
@@ -1553,7 +1629,7 @@ func (e *Engine) walkNativeSkills(ctx context.Context, container string) ([]skil
 	// runs, the record that woke it is already in this node's own committed
 	// prefix, which is exactly what a stale read serves. The causality is
 	// LOCAL, so no barrier and no high-water mark buys anything here.
-	found, err := e.native.pageReader.SkillPages(ctx, container,
+	found, err := e.native.Load().pageReader.SkillPages(ctx, container,
 		statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		return nil, err

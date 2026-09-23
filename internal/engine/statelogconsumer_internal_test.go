@@ -59,7 +59,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 	heads := map[string]uint64{}
 	waitUntil(t, 20*time.Second, "the first run to apply every log", func() bool {
 		for _, domain := range registeredDomains() {
-			running := first.native.log.Domain(domain.Name())
+			running := first.native.Load().log.Domain(domain.Name())
 			if running == nil {
 				return false
 			}
@@ -111,7 +111,7 @@ func TestANodeWhoseRowsWentBackwardsReplaysWhatItsReaderAcknowledged(t *testing.
 		"a consumer the broker was told is done never hands them over",
 		second.NativeHydrated)
 	for name, head := range heads {
-		running := second.native.log.Domain(name)
+		running := second.native.Load().log.Domain(name)
 		if got := running.runner.Committed().Seq; got < head {
 			t.Errorf("%s's rows are at %d after the replay, below the %d the "+
 				"first run had applied", name, got, head)

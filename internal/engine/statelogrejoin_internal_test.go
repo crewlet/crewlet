@@ -225,7 +225,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 	// flush, and a Stop inside that flush says nothing about the window.
 	// An in-process broker answers a flush in microseconds.
 	time.Sleep(200 * time.Millisecond)
-	s := e.native.log
+	s := e.native.Load().log
 	started := time.Now()
 	s.Stop()
 	took := time.Since(started)
@@ -308,7 +308,7 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	s := e.native.log
+	s := e.native.Load().log
 	running = s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -417,7 +417,7 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			e, back, q := bootRejoinNode(t)
-			s := e.native.log
+			s := e.native.Load().log
 			quietHeartbeat(s)
 			if c.below {
 				pushBelowTheFloor(t, e, q)
@@ -490,7 +490,7 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			e, back, q := bootRejoinNode(t)
-			s := e.native.log
+			s := e.native.Load().log
 			quietHeartbeat(s)
 			running, at, _, last := appendPastTheNode(t, e, q)
 			artefact := filepath.Join(t.TempDir(), "artefact.db")

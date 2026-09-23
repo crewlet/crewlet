@@ -765,11 +765,11 @@ func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, stri
 	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 	domain := tracker.Domain{}
 	e.backends.Queue = host
-	e.native = &native{log: &stateLog{
+	e.native.Store(&native{log: &stateLog{
 		order:   []string{domain.Name()},
 		domains: map[string]*runningDomain{domain.Name(): {domain: domain}},
 		volume:  t.TempDir(),
-	}}
+	}})
 	return e, fleet, domain.Stream().Name
 }
 

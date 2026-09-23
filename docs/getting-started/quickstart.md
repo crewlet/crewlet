@@ -444,7 +444,11 @@ dashboard prompts for the token on first load. See
 [Configuration § Auth](../concepts/configuration.md#auth) for the full rule.
 
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
-with the API still serving — you can then bootstrap live without restarting:
+with the API still serving — you can then bootstrap live without restarting.
+The first revision brings up everything the company needs, the engine's own
+tracker and knowledge base included, with their projects and spaces; only a
+`providers.sandbox` block waits for the next restart
+([Code Sandbox](../concepts/code-sandbox.md)):
 
 ```bash
 curl -X PUT http://localhost:8000/config \
