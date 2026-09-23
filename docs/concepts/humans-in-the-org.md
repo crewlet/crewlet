@@ -633,6 +633,21 @@ nobody bound (an all-seats fleet, which has no sign-in surface), and a log with
 records is a directory the satellite cannot read — it keeps its last reading,
 or withholds every human seat if it has never had one.
 
+**The satellite reads only what the fleet signed, and never goes backward.**
+The broker authenticates nothing, so an answer on that subject is signed under
+the fleet's own keyring (`secrets.keys`) exactly as every state-log record is,
+and a satellite ignores one the keyring does not open — an answer that could be
+forged would let anything on the broker route every suspended person's accounts
+back to their seats. A signed answer must also echo the question it answers
+(an answer captured from an earlier ask is ignored) and must not claim records
+the identity log does not hold. And a satellite remembers how far the last
+reading it took had got: an answer from a node still behind that — the node
+that had applied a suspension restarting, and a slower one answering instead —
+keeps the last reading rather than routing the suspended person again. The log
+lines are `directory_answer_refused` (an answer the keyring does not open),
+`directory_answer_implausible` (a signed answer past the log's head) and
+`party_directory_unreadable` for a reading kept.
+
 **What agents are shown follows the same reading.** Every turn pins the
 registry's reading beside the org it runs under, so a lead's roster renders a
 withheld seat with no identity at all — only that the person cannot be reached

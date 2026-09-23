@@ -112,18 +112,26 @@ func (e *Engine) directoryFor(ctx context.Context, n *native) (
 		return nil, nil, fmt.Errorf("engine: open the identity log to read the "+
 			"fleet's directory through: %w", err)
 	}
+	// THE FLEET'S OWN KEYRING, which is what the answers are signed under:
+	// see fleetdirectory.go for why an unsigned answer is an instruction.
+	verifier, err := statelog.NewVerifier(holdersSignatureLabel, n.log.ring)
+	if err != nil {
+		return nil, nil, fmt.Errorf("engine: build the verifier the fleet's "+
+			"directory answers are opened with: %w", err)
+	}
 	return &fleetDirectory{
 		ask: e.backends.Queue,
 		answerers: func(ctx context.Context) (int, error) {
 			return directoryAnswerers(ctx, e.backends.Coord)
 		},
-		quiet: func(ctx context.Context) (bool, error) {
+		head: func(ctx context.Context) (uint64, error) {
 			stats, err := iamLog.Stats(ctx)
 			if err != nil {
-				return false, err
+				return 0, err
 			}
-			return stats.LastSeq == 0, nil
+			return stats.LastSeq, nil
 		},
+		verifier: verifier,
 	}, nil, nil
 }
 

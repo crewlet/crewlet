@@ -348,7 +348,15 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// the search slices' terms: registered here, withdrawn first on the
 	// way down.
 	if n.iamReader != nil && e.backends.Queue != nil {
-		stop, err := serveHolders(runCtx, e.backends.Queue, nodeID, n.iamReader)
+		// SIGNED UNDER THE FLEET'S KEYRING, as every state-log record is:
+		// an unsigned answer is one anything on the broker could give.
+		signer, err := statelog.NewSigner(holdersSignatureLabel, sl.ring)
+		if err != nil {
+			return fmt.Errorf("engine: sign the identity directory's "+
+				"answers: %w", err)
+		}
+		stop, err := serveHolders(runCtx, e.backends.Queue, nodeID,
+			n.iamReader, signer)
 		if err != nil {
 			return fmt.Errorf("engine: serve the identity directory: %w", err)
 		}

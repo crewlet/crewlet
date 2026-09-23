@@ -562,7 +562,9 @@ live one. It is within one apply on every node that runs the identity domain
 view's own figure, for the chart view's own reasons — and it never appears in
 `applied_subsystems`, because no apply ran. A node that runs no identity domain
 has no applier to signal it: it asks the nodes that do on the thirty-second
-re-read, and builds from the most caught-up answer.
+re-read, and builds from the most caught-up answer the fleet signed — never one
+behind the reading it already has (see [Humans in the Org
+Chart](humans-in-the-org.md)).
 
 **The order is not arbitrary.** A released inbox runs a turn immediately, and
 that turn resolves parties, loads its tool surface and files work into a
