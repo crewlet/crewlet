@@ -271,16 +271,26 @@ func (s subject) objectFor(p iam.Principal, args map[string]any) authz.Object {
 	return o
 }
 
-// selfOf is the handle a personal class compares the caller against.
+// selfOf is the handle a personal verb that names nobody is about: the name
+// the caller's own record is WRITTEN under.
 //
-// THE SEAT, FALLING BACK TO THE LOGIN, which is [authz]'s own actorOf and for
-// the same reason: the classes compare both fields, and a seat writing its own
-// inbox is addressed by its handle.
+// DERIVED FROM [ActorOf], not written beside it. The gate decides a verb like
+// `mark_inbox` on this owner and the tool then writes the record under the
+// actor's handle, so the two must be ONE value — and as two functions they
+// already disagreed on a principal they could both be handed: this one read
+// the seat before the login, [iam.ActorFor] reads a machine's login and never
+// its seat, so a machine carrying a seat would have been decided on one
+// record and written into another. For every principal the engine mints today
+// they agree, which is exactly how two copies of one rule go on looking fine.
+//
+// A PRINCIPAL OF NO KNOWN KIND IS NOBODY, and answers empty rather than
+// [iam.AnonymousActor]: an empty owner is what every personal class refuses,
+// and a name would be one a caller could be decided as.
 func selfOf(p iam.Principal) string {
-	if p.Seat != "" {
-		return p.Seat
+	if !p.Kind.Valid() {
+		return ""
 	}
-	return p.Login
+	return ActorOf(p).Handle
 }
 
 // containerArg reads a container argument as its kind and its key.
