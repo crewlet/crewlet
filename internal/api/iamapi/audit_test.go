@@ -182,7 +182,7 @@ func TestTheDirectoryNeedsATrail(t *testing.T) {
 	t.Parallel()
 	_, err := iamapi.New(iamapi.Options{
 		Directory: &fakeDirectory{},
-		Authority: func(iam.Actor, iam.Kind, []iam.Grant) iamapi.Writer {
+		Authority: func(iam.Principal) iamapi.Writer {
 			return &fakeWriter{}
 		},
 	})

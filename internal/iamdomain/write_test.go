@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -57,6 +59,23 @@ type writeRig struct {
 	publisher *statelog.Publisher
 
 	drainMu sync.Mutex
+}
+
+// principalNamed is a principal a case's writer acts as: one called name — its
+// login, or a seat's handle for a seat — of the kind given, holding the grants
+// given, with an id derived from its name so two cases naming one party name
+// one principal.
+func principalNamed(name string, kind iam.Kind, grants []iam.Grant) iam.Principal {
+	p := iam.Principal{
+		ID:   uuid.NewSHA1(uuid.NameSpaceOID, []byte("principal:"+name)),
+		Kind: kind, Stage: iam.StageActive, Grants: grants,
+	}
+	if kind == iam.KindSeat {
+		p.Seat = name
+	} else {
+		p.Login = name
+	}
+	return p
 }
 
 func newWriteRig(t *testing.T) *writeRig {
@@ -827,7 +846,7 @@ func TestTwoInvalidationsContendAndLandAsTwoIncrements(t *testing.T) {
 func TestInvalidatingEverySessionIsRefusedWithoutTheGrant(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	ungranted := rig.writer.As("nobody", iam.KindPerson, nil)
+	ungranted := rig.writer.As(principalNamed("nobody", iam.KindPerson, nil))
 	if _, err := ungranted.InvalidateAll(rig.t.Context(), "op-1", ""); !errors.Is(
 		err, iamdomain.ErrRefused) {
 		t.Errorf("an ungranted party invalidating every session got %v, want "+
@@ -1046,15 +1065,15 @@ func TestAnAdministrativeRecordNeedsPeopleManageAndNotTheCompanysGrant(t *testin
 		})
 		return err
 	}
-	company := rig.writer.As("automation", iam.KindMachine,
-		[]iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate})
+	company := rig.writer.As(principalNamed("automation", iam.KindMachine,
+		[]iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate}))
 	if err := enrol(company, "op-company"); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("a party holding the company's own grants enrolled somebody "+
 			"(%v) — config:write rebuilds a company's tools and must not also "+
 			"decide who may do that tomorrow", err)
 	}
-	directory := rig.writer.As("ana.admin", iam.KindPerson,
-		[]iam.Grant{iamdomain.AdminGrant})
+	directory := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
+		[]iam.Grant{iamdomain.AdminGrant}))
 	if err := enrol(directory, "op-directory"); errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("a party holding %s was refused an enrolment: %v",
 			iamdomain.AdminGrant, err)
@@ -1084,8 +1103,8 @@ func TestACallerCannotConferAGrantTheyDoNotHold(t *testing.T) {
 	rig.drain()
 
 	// A narrow administrator: they manage people and hold nothing else.
-	narrow := rig.writer.As("ana.admin", iam.KindPerson,
-		[]iam.Grant{iamdomain.AdminGrant})
+	narrow := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
+		[]iam.Grant{iamdomain.AdminGrant}))
 	grant := func(w *iamdomain.Writer, op string, to []iam.Grant) error {
 		_, err := w.UpdatePerson(rig.t.Context(), iamdomain.PersonUpdate{
 			PersonID: person,

@@ -187,8 +187,8 @@ func TestTheSweepTakesTheDeploymentsGrant(t *testing.T) {
 	rig := newWriteRig(t)
 	// NARROWED to people:manage alone: the rig's own party holds every
 	// grant, so the gate is exercised by saying which one is missing.
-	administrator := rig.writer.As("ana.admin", iam.KindPerson,
-		[]iam.Grant{iam.GrantPeopleManage})
+	administrator := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
+		[]iam.Grant{iam.GrantPeopleManage}))
 	_, err := administrator.Sweep(t.Context(), defaultHorizons)
 	if !errors.Is(err, iamdomain.ErrRefused) {
 		t.Fatalf("a party holding only %s swept the trail (err %v) — whoever "+
@@ -222,7 +222,7 @@ func TestAZeroHorizonIsRefused(t *testing.T) {
 
 // sweeper is this rig's writer acting as the node, with its clock at `now`.
 func (r *writeRig) sweeper(now time.Time) *iamdomain.Writer {
-	w := r.writer.As("node-a", iam.KindMachine, []iam.Grant{iam.GrantFleetOperate})
+	w := r.writer.As(principalNamed("node-a", iam.KindMachine, []iam.Grant{iam.GrantFleetOperate}))
 	w.Now = func() time.Time { return now }
 	return w
 }

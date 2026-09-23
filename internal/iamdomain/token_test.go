@@ -66,12 +66,6 @@ func mintFor(t *testing.T, rig *writeRig, w *iamdomain.Writer,
 	if in.ExpiresAt.IsZero() {
 		in.ExpiresAt = brokerAt.Add(credential.DefaultTokenLifetime)
 	}
-	// THE OWNER MINTING THEIR OWN unless a case says who else is: every
-	// case but the one about WHO may mint is about what a token carries,
-	// and a person's token is theirs alone to mint.
-	if in.Minter == "" {
-		in.Minter = in.PersonID
-	}
 	in.Verifier = credential.TokenVerifier(in.ID, secret)
 	var minted iamdomain.TokenMinted
 	err = rig.draining(func() error {
@@ -82,6 +76,21 @@ func mintFor(t *testing.T, rig *writeRig, w *iamdomain.Writer,
 	rig.drain()
 	return minted, credential.Token{ID: in.ID,
 		Position: uint64(minted.Result.Position.Packed()), Secret: secret}, err
+}
+
+// asOwner is a person's own party — the principal a person minting their own
+// token signs in as — holding grants, or every grant when none are given.
+//
+// EVERY CASE BUT THE ONES ABOUT WHO MAY MINT mints through it: they are about
+// what a token carries, and a person's token is theirs alone to mint.
+func asOwner(rig *writeRig, owner string, grants ...iam.Grant) *iamdomain.Writer {
+	if len(grants) == 0 {
+		grants = iam.AllGrants
+	}
+	return rig.writer.As(iam.Principal{
+		ID: uuid.MustParse(owner), Kind: iam.KindPerson, Login: "token.owner",
+		Stage: iam.StageActive, Grants: grants,
+	})
 }
 
 // checked reads a presented token back and decides it as the guard does.
@@ -104,7 +113,7 @@ func TestATokenIsMintedFromItsOwnersCurrentGrantsAndVerifies(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	owner := tokenOwner(t, rig, "jane.doe")
-	minted, token, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{
+	minted, token, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{
 		PersonID: owner, Label: "Claude on my laptop", Reason: "a PAT",
 	})
 	if err != nil {
@@ -140,20 +149,25 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 		in    iamdomain.TokenMint
 		wants error
 	}{
-		{"a grant the owner does not hold", rig.writer, iamdomain.TokenMint{
+		{"a grant the owner does not hold", asOwner(rig, owner), iamdomain.TokenMint{
 			Grants: []iam.Grant{iam.GrantConfigWrite}}, iamdomain.ErrRefused},
-		{"secrets:read, which the owner holds", rig.writer, iamdomain.TokenMint{
+		{"secrets:read, which the owner holds", asOwner(rig, owner), iamdomain.TokenMint{
 			Grants: []iam.Grant{iam.GrantSecretRead}}, iamdomain.ErrRefused},
-		{"people:manage, which the owner holds", rig.writer, iamdomain.TokenMint{
+		{"people:manage, which the owner holds", asOwner(rig, owner), iamdomain.TokenMint{
 			Grants: []iam.Grant{iam.GrantPeopleManage}}, iamdomain.ErrRefused},
-		{"a reach that is no level at all", rig.writer, iamdomain.TokenMint{
+		{"a reach that is no level at all", asOwner(rig, owner), iamdomain.TokenMint{
 			Grants: []iam.Grant{}, Colleague: "admin"}, iamdomain.ErrInvalidToken},
-		{"a grant the MINTING party does not hold", narrowAdmin(rig),
+		// THE OWNER THEMSELVES, signed in holding less than their row
+		// declares — a session whose provider carried fewer grants, a
+		// node whose ceiling is lower: whoever mints a token sees its
+		// value, so it carries nothing the minting party does not hold.
+		{"a grant the MINTING party does not hold",
+			asOwner(rig, owner, iam.GrantStateRead),
 			iamdomain.TokenMint{Grants: []iam.Grant{iam.GrantWorkWrite}},
 			iamdomain.ErrRefused},
-		{"an expiry already past", rig.writer, iamdomain.TokenMint{
+		{"an expiry already past", asOwner(rig, owner), iamdomain.TokenMint{
 			ExpiresAt: brokerAt.Add(-time.Minute)}, iamdomain.ErrInvalidToken},
-		{"an expiry past a year", rig.writer, iamdomain.TokenMint{
+		{"an expiry past a year", asOwner(rig, owner), iamdomain.TokenMint{
 			ExpiresAt: brokerAt.Add(credential.MaxTokenLifetime + time.Hour)},
 			iamdomain.ErrInvalidToken},
 	} {
@@ -165,7 +179,7 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 
 	// MORE REACH THAN THE OWNER HAS: a token narrows and never widens.
 	reader := tokenOwnerAt(t, rig, "ravi.reader", iam.ColleagueRead)
-	if _, _, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{
+	if _, _, err := mintFor(t, rig, asOwner(rig, reader), iamdomain.TokenMint{
 		PersonID: reader, Colleague: iam.ColleagueWrite}); !errors.Is(err,
 		iamdomain.ErrRefused) {
 		t.Errorf("a token reaching the work at write was minted for an owner "+
@@ -182,7 +196,7 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 		t.Fatal(err)
 	}
 	rig.drain()
-	if _, _, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{
+	if _, _, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{
 		PersonID: owner}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("a token was minted for a suspended owner (%v)", err)
 	}
@@ -202,41 +216,71 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 }
 
 // A PERSON'S TOKEN IS THEIRS ALONE TO MINT, AND A SERVICE ACCOUNT'S IS WHOEVER
-// MANAGES PEOPLE'S.
+// MANAGES PEOPLE'S — DECIDED ON THE WRITER'S OWN PARTY.
 //
 // Whoever mints a token is shown its value, and the token acts as its owner —
 // so `people:manage` minting on a person's account was an administrator
 // holding a credential that acts as them, with nothing but the mint to say
 // so. The grant covers the accounts nobody can mint for as themselves: a
-// service account has no login page. Decided in the owner's snapshot, on the
-// minting party's id. Mutation: drop the person arm and the administrator's
-// mint lands; drop the machine arm and a party without the grant mints for a
-// pipeline.
+// service account has no login page.
+//
+// WHO IS MINTING IS THE PARTY'S, and a caller holding a writer cannot restate
+// it. It was a field of the mint the caller filled in, so any caller could
+// hand a writer acting as the deployment — the node's own, or a Tier A token
+// holding every grant — a mint naming the owner as its own minter, and the
+// domain's rule was only as strong as the one route that filled it honestly.
+// Now the id comes from the principal the writer was derived for. Mutations:
+// decide the person arm on anything but the party's id and the Tier A party
+// mints; drop the person arm and the administrator mints; drop the
+// machine-token refusal and jane's own token mints another; drop the machine
+// arm and a party without the grant mints for a pipeline.
 func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	owner := tokenOwner(t, rig, "jane.doe")
-	administrator := uuid.Must(uuid.NewV7()).String()
 
-	// AN ADMINISTRATOR HOLDING EVERY GRANT, minting on jane's account.
-	if _, _, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{
-		PersonID: owner, Minter: administrator}); !errors.Is(err, iamdomain.ErrRefused) {
-		t.Fatalf("an administrator minting a person's token answered %v, "+
-			"want a refusal", err)
+	// THE DEPLOYMENT, AND A TIER A TOKEN HOLDING EVERY GRANT, each minting
+	// on jane's account.
+	for name, w := range map[string]*iamdomain.Writer{
+		"the node's own writer": rig.writer,
+		"a Tier A token holding every grant": rig.writer.As(
+			principalNamed(iam.TokenLogin("ops"), iam.KindMachine, iam.AllGrants)),
+		"an administrator": rig.writer.As(
+			principalNamed("ana.admin", iam.KindPerson, iam.AllGrants)),
+	} {
+		if _, _, err := mintFor(t, rig, w, iamdomain.TokenMint{
+			PersonID: owner}); !errors.Is(err, iamdomain.ErrRefused) {
+			t.Fatalf("%s minting a person's token answered %v, want a "+
+				"refusal", name, err)
+		}
 	}
 	held, err := rig.reader(t).Credentials(t.Context(), owner)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(held) != 0 {
-		t.Errorf("the refused mint left %d credentials on jane's account", len(held))
+		t.Errorf("the refused mints left %d credentials on jane's account", len(held))
 	}
 	// JANE HERSELF.
-	if _, token, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{
-		PersonID: owner, Minter: owner}); err != nil {
+	if _, token, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{
+		PersonID: owner}); err != nil {
 		t.Fatalf("jane minting her own token: %v", err)
 	} else if got := checked(t, rig, token); got.Answer != credential.TokenValid {
 		t.Errorf("jane's own token answered %q (%s)", got.Answer, got.Detail)
+	}
+	// AND NOT THROUGH ONE OF HER OWN TOKENS: a party is composed as the
+	// token's owner, so without its own refusal this would pass the person
+	// arm as jane — a token minting the next, a year at a time, with nobody
+	// present.
+	throughToken := iam.Principal{
+		ID: uuid.MustParse(owner), Kind: iam.KindPerson, Login: "jane.doe",
+		Stage: iam.StageActive, Grants: iam.AllGrants,
+		Via: iam.MachineTokenName(uuid.Must(uuid.NewV7()).String()),
+	}
+	if _, _, err := mintFor(t, rig, rig.writer.As(throughToken),
+		iamdomain.TokenMint{PersonID: owner}); !errors.Is(err, iamdomain.ErrRefused) {
+		t.Errorf("jane's own machine token minting another answered %v, want "+
+			"a refusal", err)
 	}
 
 	// A SERVICE ACCOUNT: the administrator mints for it, and a party
@@ -251,15 +295,17 @@ func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	rig.drain()
-	if _, _, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{
-		PersonID: service, Minter: administrator}); err != nil {
+	administrator := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
+		[]iam.Grant{iam.GrantPeopleManage, iam.GrantStateRead, iam.GrantWorkWrite}))
+	if _, _, err := mintFor(t, rig, administrator, iamdomain.TokenMint{
+		PersonID: service}); err != nil {
 		t.Errorf("an administrator minting a service account's token: %v", err)
 	}
-	colleague := rig.writer.As("dana.sre", iam.KindPerson,
-		[]iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite})
+	colleague := rig.writer.As(principalNamed("dana.sre", iam.KindPerson,
+		[]iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}))
 	if _, _, err := mintFor(t, rig, colleague, iamdomain.TokenMint{
-		PersonID: service, Minter: uuid.Must(uuid.NewV7()).String(),
-		Grants: []iam.Grant{iam.GrantStateRead}}); !errors.Is(err, iamdomain.ErrRefused) {
+		PersonID: service,
+		Grants:   []iam.Grant{iam.GrantStateRead}}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("a party without %s minting for a service account answered "+
 			"%v, want a refusal", iam.GrantPeopleManage, err)
 	}
@@ -271,7 +317,7 @@ func TestSigningTheOwnerOutEverywhereEndsTheirTokens(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	owner := tokenOwner(t, rig, "jane.doe")
-	_, before, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{PersonID: owner})
+	_, before, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +332,7 @@ func TestSigningTheOwnerOutEverywhereEndsTheirTokens(t *testing.T) {
 		t.Errorf("a token minted before the owner was signed out everywhere "+
 			"answered %q (%s)", got.Answer, got.Detail)
 	}
-	_, after, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{PersonID: owner})
+	_, after, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +355,7 @@ func TestInvalidatingEverythingEndsTokensMintedBeforeIt(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	owner := tokenOwner(t, rig, "jane.doe")
-	_, before, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{PersonID: owner})
+	_, before, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +371,7 @@ func TestInvalidatingEverythingEndsTokensMintedBeforeIt(t *testing.T) {
 		t.Errorf("a token minted before every credential was invalidated "+
 			"answered %q (%s)", got.Answer, got.Detail)
 	}
-	_, after, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{PersonID: owner})
+	_, after, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +386,7 @@ func TestARevokedTokenIsRefusedAndItsRowStays(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	owner := tokenOwner(t, rig, "jane.doe")
-	_, token, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{PersonID: owner})
+	_, token, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +431,7 @@ func TestATokenFollowsItsOwnersStandingAfterTheMint(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	owner := tokenOwner(t, rig, "jane.doe")
-	_, token, err := mintFor(t, rig, rig.writer, iamdomain.TokenMint{PersonID: owner})
+	_, token, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{PersonID: owner})
 	if err != nil {
 		t.Fatal(err)
 	}

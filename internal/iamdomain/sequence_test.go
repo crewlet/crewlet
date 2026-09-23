@@ -81,8 +81,8 @@ func TestASharedWriterCarriesNoMarkBetweenConcurrentGestures(t *testing.T) {
 				for r := range rounds {
 					// A REQUEST'S OWN SEQUENCE, derived while the
 					// shared writer is publishing on the others.
-					seq := shared.As("ana.admin", iam.KindPerson,
-						[]iam.Grant{iam.GrantPeopleManage})
+					seq := shared.As(principalNamed("ana.admin", iam.KindPerson,
+						[]iam.Grant{iam.GrantPeopleManage}))
 					_, err := seq.CloseSession(t.Context(),
 						fmt.Sprintf("request-lineage-%d-%d", i, r), person,
 						"signed_out",

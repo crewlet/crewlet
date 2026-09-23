@@ -52,11 +52,12 @@ func TestATokenIsMintedForThePersonTheRouteNames(t *testing.T) {
 			"naming somebody else is not who the route decided on",
 			r.writer.minted.PersonID, caller.ID)
 	}
-	// AND THE DOMAIN IS TOLD WHO MINTED IT, off the resolved principal:
-	// that is what a person's own token is decided on.
-	if r.writer.minted.Minter != caller.ID.String() {
-		t.Errorf("the domain was told %q minted it, want the caller %s",
-			r.writer.minted.Minter, caller.ID)
+	// AND THE DOMAIN'S WRITER IS THE CALLER'S OWN PARTY, handed the
+	// resolved principal whole: that is what a person's own token is
+	// decided on, and nothing in the mint restates it.
+	if r.writer.principal != caller.ID.String() {
+		t.Errorf("the domain's writer acts as %q, want the caller %s",
+			r.writer.principal, caller.ID)
 	}
 	// AND NAMING SOMEBODY ELSE WHERE IT COUNTS is decided by the table:
 	// an ordinary caller may not mint on the administrator's account.
@@ -375,9 +376,11 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 		t.Fatalf("a person minting their own token answered %d: %s", rec.Code,
 			rec.Body.String())
 	}
-	if got := r.writer.minted; got.PersonID != bob.String() || got.Minter != bob.String() {
-		t.Errorf("the domain was asked for a token owned by %q minted by %q, "+
-			"want bob minting his own", got.PersonID, got.Minter)
+	if got := r.writer.minted; got.PersonID != bob.String() ||
+		r.writer.principal != bob.String() {
+		t.Errorf("the domain was asked for a token owned by %q by a writer "+
+			"acting as %q, want bob minting his own", got.PersonID,
+			r.writer.principal)
 	}
 }
 

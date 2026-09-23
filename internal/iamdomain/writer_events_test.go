@@ -100,10 +100,10 @@ func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 	}
 
 	// A WIDENING AND A NARROWING IN ONE WRITE, by a party holding both.
-	broad := rig.writer.As("ana.admin", iam.KindPerson, []iam.Grant{
+	broad := rig.writer.As(principalNamed("ana.admin", iam.KindPerson, []iam.Grant{
 		iamdomain.AdminGrant, iam.GrantSecretRead, iam.GrantSecretWrite,
 		iam.GrantWorkWrite,
-	})
+	}))
 	if err := update(broad, "op-swap", func(p iamdomain.Person) iamdomain.Person {
 		p.Grants = []iam.Grant{iam.GrantSecretWrite, iam.GrantSecretRead}
 		return p
@@ -132,8 +132,8 @@ func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 	}
 
 	// A WRITE REFUSED announces nothing.
-	narrow := rig.writer.As("ana.admin", iam.KindPerson,
-		[]iam.Grant{iamdomain.AdminGrant})
+	narrow := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
+		[]iam.Grant{iamdomain.AdminGrant}))
 	if err := update(narrow, "op-widen", func(p iamdomain.Person) iamdomain.Person {
 		p.Grants = append(p.Grants, iam.GrantWorkWrite)
 		return p
@@ -180,15 +180,21 @@ func TestInvalidatingEverySessionIsAnnouncedWithItsGeneration(t *testing.T) {
 //
 // A machine token acts as its owner, so the name on an announced event is the
 // owner's; the party's OperatorID is what says a token made it, and it is the
-// PARTY's — As clears it, so the next party derived from this writer never
+// PARTY's — derived from the principal's own credential by As, and replaced by
+// the next derivation, so the next party derived from this writer never
 // announces somebody else's token. Mutation: announce the actor alone, or
 // carry the operator through As, and one of the two rows is wrong.
 func TestAGestureMadeThroughATokenIsAnnouncedAsOne(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	const via = "pat:0192f00d-0000-7000-8000-00000000000a"
-	party := rig.writer.As("ana.admin", iam.KindPerson, iam.AllGrants)
-	party.OperatorID = via
+	owner := principalNamed("ana.admin", iam.KindPerson, iam.AllGrants)
+	owner.Via = via
+	party := rig.writer.As(owner)
+	if party.OperatorID != via {
+		t.Fatalf("a party acting through a token carries operator %q, want %q",
+			party.OperatorID, via)
+	}
 	if _, err := party.InvalidateAll(rig.t.Context(), "op-through-token",
 		"restored from a backup"); err != nil {
 		t.Fatalf("invalidate: %v", err)
@@ -203,8 +209,11 @@ func TestAGestureMadeThroughATokenIsAnnouncedAsOne(t *testing.T) {
 		t.Errorf("announced as by %q through %q, want the owner through %q",
 			row.By, row.OperatorID, via)
 	}
-	if next := party.As("dana.sre", iam.KindPerson, nil); next.OperatorID != "" {
+	// THE NEXT PARTY'S CREDENTIAL IS ITS OWN: dana acts as herself, so
+	// her operator is her login, and never the token the party before her
+	// acted through.
+	if next := party.As(principalNamed("dana.sre", iam.KindPerson, nil)); next.OperatorID != "dana.sre" {
 		t.Errorf("a party derived from one acting through a token carries "+
-			"its operator %q", next.OperatorID)
+			"operator %q, want its own login", next.OperatorID)
 	}
 }

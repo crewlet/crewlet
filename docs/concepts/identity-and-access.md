@@ -823,7 +823,11 @@ provider serves no password route, so the command cannot sign in there: the
 request has to be made from a session the provider's round trip opened in a
 browser, and the dashboard has no screen that makes it. The decision is made in the owner's own snapshot, on the
 **id** of the party minting rather than its login, because a login is a name a
-rename moves between people.
+rename moves between people — and that party is the one the identity writer was
+derived for from the signed-in principal, never a field of the request, so the
+rule holds for anything that publishes a mint, not only for the route. Nothing
+is minted through a machine token either, whoever it acts as: one minted from
+another would renew itself for ever with nobody present.
 
 The value is `cwl_pat_<credential id>_<log position>_<secret>` and is shown
 **once**. The prefix is what a secret scanner matches on; the id and the

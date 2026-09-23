@@ -132,11 +132,13 @@ type Writer interface {
 // conferring a grant the party does not hold, so a handler that somehow
 // skipped its own check still cannot make somebody an administrator.
 //
-// THE ACTOR IS [iam.ActorFor]'s WHOLE ANSWER — the name and the credential it
-// acted through — because the writer announces events beside its records, and
-// a gesture a machine token made has to say so there: the token acts as its
-// owner, so the name alone reads as the owner's own.
-type Authority func(actor iam.Actor, kind iam.Kind, grants []iam.Grant) Writer
+// THE PARTY IS THE PRINCIPAL, WHOLE — the engine's writer derives from it the
+// name records carry and the credential beside it ([iam.ActorFor]), the
+// grants, and the principal's own id, which is what a gesture decided on WHO
+// is making it asks: a person's token is theirs alone to mint. That id used
+// to travel as a field of the mint the handler filled in, which made the
+// domain's rule exactly as strong as this one route.
+type Authority func(principal iam.Principal) Writer
 
 // Opener opens one sealed value for the caller this surface is answering.
 //
@@ -335,7 +337,7 @@ func (s *Service) writerFor(ctx context.Context) (Writer, bool) {
 	if how != iam.Resolved {
 		return nil, false
 	}
-	return s.authority(iam.ActorFor(principal), principal.Kind, principal.Grants), true
+	return s.authority(principal), true
 }
 
 // open opens one sealed value into something a screen can render.

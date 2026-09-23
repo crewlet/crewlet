@@ -78,8 +78,8 @@ func TestTheProbeEndsRevokesRotatesAndCollectsThroughTheEstate(t *testing.T) {
 		t.Fatalf("Hold: %v", err)
 	}
 
-	sessions, err := iamdomain.NewProbeSessions(reader, rig.writer.As("node-a",
-		iam.KindMachine, []iam.Grant{iam.GrantFleetOperate}), custody, idp.URL, nil)
+	sessions, err := iamdomain.NewProbeSessions(reader, rig.writer.As(principalNamed("node-a",
+		iam.KindMachine, []iam.Grant{iam.GrantFleetOperate})), custody, idp.URL, nil)
 	if err != nil {
 		t.Fatalf("NewProbeSessions: %v", err)
 	}

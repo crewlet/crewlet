@@ -1986,15 +1986,12 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 // TokenMint is what minting a machine token needs.
 type TokenMint struct {
 	// PersonID is the owner: the person or machine the token acts as.
+	//
+	// WHO IS MINTING IS NOT HERE, and was: a field the caller filled in is
+	// a field the caller could fill in with anybody. It is the WRITER's
+	// party — [Writer.Principal] — which [Writer.As] derives from the
+	// principal itself. See [Writer.mayMintFor].
 	PersonID string
-
-	// Minter is the PRINCIPAL ID of the party minting — the resolved
-	// caller, from the surface, never a body — which is what a person's own
-	// token is decided on: it is theirs to mint and nobody else's. See
-	// [Writer.mayMintFor]. Empty for a party that is nobody in the
-	// directory, which may mint for a service account and never for a
-	// person.
-	Minter string
 
 	// ID is the credential's own id, minted by the caller because it is
 	// inside the verifier and the value — both formed before this runs.
@@ -2106,10 +2103,27 @@ func tokenOwnable(personID string, owner Person) error {
 //
 // A SERVICE ACCOUNT'S IS MINTED BY WHOEVER HOLDS `people:manage`: it has no
 // login page, so nobody could ever mint for it as itself.
+//
+// WHO IS MINTING IS THE WRITER'S PARTY ([Writer.Principal]), never a field of
+// the call: a rule decided on a value the caller states is exactly as strong
+// as the one route that states it correctly, and a record can be published by
+// a CLI, a duty or a migration none of which passes through that route.
+//
+// AND NOTHING IS MINTED THROUGH A MACHINE TOKEN, whoever it acts as: a token
+// minted from a token renews for ever, a year at a time, with nobody present —
+// the route refuses such a request, and the record refuses it again for the
+// route's reason, since a party is composed as the token's OWNER and would
+// otherwise pass the person arm below as that owner.
 func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
+	if iam.ValidMachineTokenName(w.OperatorID) {
+		return fmt.Errorf("%w: this party is acting through the machine "+
+			"token %s, and no token is minted from another — one would renew "+
+			"itself for ever with nobody present. Mint while signed in",
+			ErrRefused, w.OperatorID)
+	}
 	switch owner.Kind {
 	case iam.KindPerson:
-		if in.Minter == "" || in.Minter != in.PersonID {
+		if w.Principal == "" || w.Principal != in.PersonID {
 			return fmt.Errorf("%w: %s is a person, and a person's own access "+
 				"token is minted by that person alone — whoever mints one sees "+
 				"its value, and it acts as them. They mint their own while "+

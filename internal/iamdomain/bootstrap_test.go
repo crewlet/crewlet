@@ -1072,8 +1072,8 @@ func TestTwoReissuesAtOnceLeaveOneLiveCode(t *testing.T) {
 func TestAReissueTakesTheAdministrativeGrant(t *testing.T) {
 	t.Parallel()
 	rig := newBootstrapRig(t)
-	operator := rig.writer.As("svc:ops", iam.KindMachine,
-		[]iam.Grant{iam.GrantFleetOperate})
+	operator := rig.writer.As(iam.Principal{Login: "svc:ops", Kind: iam.KindMachine,
+		Grants: []iam.Grant{iam.GrantFleetOperate}})
 	err := rig.draining(func() error {
 		_, err := operator.ReissueBootstrap(t.Context(), iamdomain.BootstrapMint{
 			ID: "code", Verifier: "code", ExpiresAt: brokerAt.Add(time.Hour),

@@ -213,12 +213,12 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	const reason = "a machine token was minted"
+	// WHO IS MINTING is the writer's own party — the caller's principal,
+	// which [Service.writerFor] handed it whole — and never a field of the
+	// mint: a person's own token is theirs alone to mint, and the domain
+	// decides that on the party's id in the owner's snapshot.
 	minted, err := writer.MintToken(r.Context(), iamdomain.TokenMint{
 		PersonID: owner, ID: id,
-		// WHO IS MINTING, off the resolved principal: a person's own
-		// token is theirs alone to mint, which the domain decides on
-		// this id in the owner's snapshot.
-		Minter:    principal.ID.String(),
 		Verifier:  credential.TokenVerifier(id, secret),
 		Label:     strings.TrimSpace(in.Label),
 		Grants:    in.Grants,

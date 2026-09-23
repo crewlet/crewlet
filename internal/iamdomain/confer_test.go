@@ -24,14 +24,14 @@ import (
 // nodeWriter is the party a running node's own writer acts as: the grants
 // `internal/engine` gives it and nothing else.
 func nodeWriter(rig *writeRig) *iamdomain.Writer {
-	return rig.writer.As("node-a", iam.KindMachine,
-		[]iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant})
+	return rig.writer.As(principalNamed("node-a", iam.KindMachine,
+		[]iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant}))
 }
 
 // narrowAdmin manages people and holds nothing else.
 func narrowAdmin(rig *writeRig) *iamdomain.Writer {
-	return rig.writer.As("ana.admin", iam.KindPerson,
-		[]iam.Grant{iamdomain.AdminGrant})
+	return rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
+		[]iam.Grant{iamdomain.AdminGrant}))
 }
 
 func TestAnEnrolmentConfersOnlyWhatItsWriterHolds(t *testing.T) {

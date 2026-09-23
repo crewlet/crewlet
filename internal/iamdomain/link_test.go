@@ -278,7 +278,7 @@ func TestTwoPinsRacingOnOnePersonLeaveOneLink(t *testing.T) {
 		by   string
 		link iamdomain.Link
 	}{{"ana.admin", first}, {"bo.admin", second}} {
-		writer := rig.writer.As(pin.by, iam.KindPerson, iam.AllGrants)
+		writer := rig.writer.As(principalNamed(pin.by, iam.KindPerson, iam.AllGrants))
 		if _, err := writer.Link(t.Context(), iamdomain.LinkChange{
 			PersonID: ada, Link: pin.link, OpID: "race-" + pin.by,
 			Reason: "raced",

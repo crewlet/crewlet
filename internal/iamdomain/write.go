@@ -8,6 +8,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -91,6 +93,21 @@ type Writer struct {
 	// Set on a party [Writer.As] derived, and never carried by As from the
 	// writer it cloned: it is the party's, like the grants.
 	OperatorID string
+
+	// Principal is the id of the principal this writer's party IS — a
+	// person's or a machine's own id in this directory when the party is
+	// one of them — and empty for a party that is nobody here: the node's
+	// own writer.
+	//
+	// ON THE PARTY AND NEVER ON A CALL, for the actor's reason. A gesture
+	// decided on WHO is making it — a person's token is theirs alone to
+	// mint ([Writer.mayMintFor]) — used to be decided on a field of the
+	// call the caller filled in, so the domain's rule was exactly as strong
+	// as the one route that filled it correctly, and any other caller could
+	// state a minter of its choosing on a writer acting as anybody. It is
+	// the party's, derived with the rest of it from the principal
+	// ([Writer.As]), and a caller holding a writer cannot restate it.
+	Principal string
 
 	// Grants is what this writer's party is entitled to. A writer with
 	// none is a REAL PARTY rather than a misconfiguration — a person
@@ -216,28 +233,40 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 	}, nil
 }
 
-// As is a writer for another party, sharing this one's plumbing, whose calls
-// form ONE SEQUENCE.
+// As is a writer for the party a principal is, sharing this one's plumbing,
+// whose calls form ONE SEQUENCE.
 //
-// THE GRANTS REPLACE rather than accumulate, which is the whole point: a
-// surface serving many parties derives one writer per request, and grants that
-// carried forward would hand the next caller the last one's authority. The
-// [Writer.OperatorID] is CLEARED for the same reason — the last party's token
-// named on the next party's events — and the surface states this party's own.
+// THE PARTY IS THE PRINCIPAL, derived whole and in one place: the name its
+// records and events carry and the credential beside it ([iam.ActorFor]), its
+// kind, its grants and its id. A caller used to hand those over one argument
+// at a time and set the credential after, so a party was whatever combination
+// somebody assembled — and the one fact a gesture decides on who is making it,
+// the principal's id, was not on it at all.
+//
+// EVERYTHING IS REPLACED rather than carried from the writer this clones,
+// which is the whole point: a surface serving many parties derives one writer
+// per request, and grants, a credential or an id that carried forward would
+// hand the next caller the last one's authority — or the last one's name on
+// their events.
 //
 // THE SEQUENCE IS FRESH, and deriving one is safe from any goroutine: nothing
 // it copies is ever written after construction, so a sign-in publishing
 // through the shared writer and a request deriving its own from it at the same
 // instant touch no common state.
-func (w *Writer) As(actor string, kind iam.Kind, grants []iam.Grant) *Writer {
+func (w *Writer) As(p iam.Principal) *Writer {
 	if w == nil {
 		return nil
 	}
+	actor := iam.ActorFor(p)
 	next := *w
-	next.Actor = actor
-	next.ActorKind = kind
-	next.Grants = grants
-	next.OperatorID = ""
+	next.Actor = actor.Name
+	next.ActorKind = p.Kind
+	next.Grants = p.Grants
+	next.OperatorID = actor.OperatorID
+	next.Principal = ""
+	if p.ID != uuid.Nil {
+		next.Principal = p.ID.String()
+	}
 	next.seq = &sequence{}
 	return &next
 }

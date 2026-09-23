@@ -62,9 +62,11 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 	opts := iamapi.Options{
 		Audit:     audit,
 		Directory: directory,
-		Authority: func(actor iam.Actor, kind iam.Kind, grants []iam.Grant) iamapi.Writer {
+		Authority: func(principal iam.Principal) iamapi.Writer {
+			actor := iam.ActorFor(principal)
 			writer.actor, writer.operator = actor.Name, actor.OperatorID
-			writer.kind, writer.grants = kind, grants
+			writer.kind, writer.grants = principal.Kind, principal.Grants
+			writer.principal = principal.ID.String()
 			return writer
 		},
 		Opener:       fakeOpener{},
@@ -268,6 +270,11 @@ type fakeWriter struct {
 	operator string
 	kind     iam.Kind
 	grants   []iam.Grant
+
+	// principal is the id of the principal the surface handed the
+	// authority — who the domain decides a person's own mint on.
+	principal string
+
 	calls    []string
 	enrolled iamdomain.Enrolment
 	invited  iamdomain.InviteMint
@@ -1074,7 +1081,7 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 	t.Parallel()
 	service, err := iamapi.New(iamapi.Options{
 		Directory: &fakeDirectory{},
-		Authority: func(iam.Actor, iam.Kind, []iam.Grant) iamapi.Writer {
+		Authority: func(iam.Principal) iamapi.Writer {
 			return &fakeWriter{}
 		},
 		Audit:        &recordingAudit{},
