@@ -39,6 +39,7 @@ type writeRig struct {
 	waiter   *rigWaiter
 	verifier *statelog.Verifier
 	consumed uint64
+	events   *writerEvents
 
 	drainMu sync.Mutex
 }
@@ -111,9 +112,10 @@ func newWriteRig(t *testing.T) *writeRig {
 	if err != nil {
 		t.Fatalf("build the sealer: %v", err)
 	}
+	announced := &writerEvents{}
 	writer, err := iamdomain.NewWriter(iamdomain.WriterDeps{
 		Publisher: publisher, DB: db, Blinder: blinder, Sealer: sealer,
-		Actor: "ana.admin", ActorKind: iam.KindPerson,
+		Events: announced, Actor: "ana.admin", ActorKind: iam.KindPerson,
 		// THE RIG'S PARTY AUTHORS EVERYTHING, so every case here is
 		// about the rule it names rather than about the grant gate.
 		Grants: []iam.Grant{iam.GrantPeopleManage},
@@ -124,6 +126,7 @@ func newWriteRig(t *testing.T) *writeRig {
 	}
 	return &writeRig{
 		t: t, db: db, log: log, writer: writer, waiter: waiter,
+		events:   announced,
 		applier:  iamdomain.NewApplier("node-a", sealer),
 		verifier: testVerifier(t),
 	}

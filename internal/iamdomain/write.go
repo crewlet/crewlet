@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -87,6 +89,34 @@ type Writer struct {
 	// is the broker's, which is what makes one node's copy byte-identical
 	// to another's.
 	Now func() time.Time
+
+	// events is where a landed record's decision is announced. See
+	// [Events].
+	events Events
+}
+
+// Events is where this writer announces what a landed record DECIDED.
+//
+// # Why the writer, and only for what the decide forms
+//
+// Two facts on the audit trail are not the caller's to state, because the
+// caller does not hold them: which grants a person write ADDED and REMOVED —
+// the before is read inside the snapshot the record is formed in, and a caller
+// that read it separately would be describing a different transaction — and
+// which session GENERATION a company-wide invalidation moved to, which is read
+// and incremented in the same place. Everything else on the trail is known to
+// the surface that asked, and is announced there.
+//
+// ONLY ON A DEFINITE OUTCOME. An applied or a pending write is durable at its
+// position and every node will apply it; an `unknown` one may or may not have
+// landed, and the durable half of the trail — the `iam_history` row the
+// applier writes — is what answers that. A live row claiming a change that did
+// not happen would be the one false line in the feed.
+//
+// Consumer-defined, one method; the node's audit trail is what satisfies it.
+// Nil announces nothing, which is a writer in a test or a tool.
+type Events interface {
+	Emit(ctx context.Context, payload events.Payload)
 }
 
 // WriterDeps is what a writer is built from.
@@ -103,6 +133,10 @@ type WriterDeps struct {
 	ActorKind iam.Kind
 	Grants    []iam.Grant
 	Now       func() time.Time
+
+	// Events announces what a landed record decided. Optional; see
+	// [Events].
+	Events Events
 }
 
 // NewWriter builds one party's authority.
@@ -137,7 +171,7 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 		publisher: deps.Publisher, db: deps.DB,
 		blinder: deps.Blinder, sealer: deps.Sealer,
 		Actor: deps.Actor, ActorKind: deps.ActorKind,
-		Grants: deps.Grants, Now: now,
+		Grants: deps.Grants, Now: now, events: deps.Events,
 	}, nil
 }
 
@@ -156,6 +190,34 @@ func (w *Writer) As(actor string, kind iam.Kind, grants []iam.Grant) *Writer {
 	next.Grants = grants
 	next.after = statelog.Position{}
 	return &next
+}
+
+// announce publishes one decided fact once its record is known to have landed.
+func (w *Writer) announce(ctx context.Context, result statelog.Result, err error,
+	payload events.Payload) {
+
+	if w.events == nil || err != nil || result.Outcome == statelog.OutcomeUnknown {
+		return
+	}
+	w.events.Emit(ctx, payload)
+}
+
+// grantDelta is what one write added to a grant set and what it took away,
+// each sorted, so two nodes describing one write describe it identically.
+func grantDelta(before, after []iam.Grant) (added, removed []string) {
+	for _, g := range after {
+		if !slices.Contains(before, g) && !slices.Contains(added, string(g)) {
+			added = append(added, string(g))
+		}
+	}
+	for _, g := range before {
+		if !slices.Contains(after, g) && !slices.Contains(removed, string(g)) {
+			removed = append(removed, string(g))
+		}
+	}
+	slices.Sort(added)
+	slices.Sort(removed)
+	return added, removed
 }
 
 // After is this writer's own high-water mark, which a multi-step gesture hands

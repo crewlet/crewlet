@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -124,6 +125,16 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	// operation ledger, which is the mechanism for that anyway — the
 	// guarding row never was.
 	result, err := w.publish(ctx, w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
+	// AN ENROLMENT THAT CONFERS ANYTHING IS A GRANT CHANGE — from nothing
+	// to what it carries — and the first person a bootstrap code creates,
+	// holding the whole ceiling, is the one row of those an audit most
+	// needs to find.
+	if added, _ := grantDelta(nil, in.Grants); len(added) > 0 {
+		w.announce(ctx, result, err, types.IAMGrantsChanged{
+			Person: in.PersonID, Added: added, By: w.Actor,
+			Version: result.Position.Packed(),
+		})
+	}
 	return result.Position, err
 }
 
@@ -549,6 +560,7 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 	if err != nil {
 		return statelog.Position{}, err
 	}
+	var generation uint64
 	decide := func(tx *sql.Tx) error {
 		var current int64
 		err := tx.QueryRowContext(ctx,
@@ -564,14 +576,18 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 		case err != nil:
 			return fmt.Errorf("iamdomain: read the session generation: %w", err)
 		}
+		generation = uint64(current) + 1
 		rec.Mutation, err = EncodeInvalidation(Invalidation{
-			V: GateRecordVersion, Generation: uint64(current) + 1,
+			V: GateRecordVersion, Generation: generation,
 			By: w.Actor,
 		})
 		return err
 	}
 	result, err := w.publish(ctx,
 		w.request(&rec, opID, statelog.PatternArbitrated, decide))
+	w.announce(ctx, result, err, types.IAMSessionGenerationBumped{
+		Generation: generation, By: w.Actor, Reason: reason,
+	})
 	return result.Position, err
 }
 
@@ -1336,6 +1352,9 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		}
 	}
 	var mutation []byte
+	// THE LAST RUN'S BEFORE AND AFTER, which is the pair the landed record
+	// actually carries: a decide may run again against a fresh snapshot.
+	var before, after []iam.Grant
 	decide := func(tx *sql.Tx) error {
 		var document []byte
 		err := tx.QueryRowContext(ctx,
@@ -1361,6 +1380,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		if err := w.mayConfer(person.Grants, updated.Grants); err != nil {
 			return err
 		}
+		before, after = slices.Clone(person.Grants), slices.Clone(updated.Grants)
 		mutation, err = EncodePerson(updated)
 		return err
 	}
@@ -1377,6 +1397,15 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		return nil
 	})
 	result, err := w.publish(ctx, req)
+	// ONE ROW PER PERSON WRITE THAT MOVED A GRANT, and none for a write
+	// that changed a name or a colleague level: "who can do what to this
+	// deployment, and since when" is the question the row answers.
+	if added, removed := grantDelta(before, after); len(added)+len(removed) > 0 {
+		w.announce(ctx, result, err, types.IAMGrantsChanged{
+			Person: in.PersonID, Added: added, Removed: removed, By: w.Actor,
+			Version: result.Position.Packed(),
+		})
+	}
 	return result.Position, err
 }
 
