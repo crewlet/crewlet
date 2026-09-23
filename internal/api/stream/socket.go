@@ -23,18 +23,18 @@ import (
 // It cannot. A close code rides a close FRAME, so a handshake that never
 // completed has none — see [Handler], where a refused credential is answered
 // 401 BEFORE the upgrade and the browser reports 1006. These two are for the
-// opposite case: a socket that is OPEN, whose client then offers or omits a
-// credential on a frame. That channel exists because a browser cannot set a
-// header on a WebSocket constructor, so it is the only way an open socket's
-// identity is ever asserted — and it is the only place a close is the right
-// answer.
+// opposite case: a socket that is OPEN, whose credential stopped answering
+// while it was — which the socket's own revalidation finds (revalidate.go). A
+// handshake decision alone would leave a revoked session's tab receiving the
+// company's state for as long as it stayed open.
 //
 // TWO CODES RATHER THAN ONE, because they call for different repairs and the
 // dashboard's own recovery branches on exactly that difference: 4401 means
-// "become somebody" (a credential is needed and none was offered), 4403 means
-// "that credential is not one this node knows" (forget it and ask for
-// another). Collapsed into one, a reader who has never been asked for a token
-// and a reader holding a revoked one get the same dead end.
+// "this credential names nobody now" (re-dial with the cookie the browser
+// holds, and sign in if that is refused too), 4403 means "it names somebody
+// whose seat is gone" (stop — signing in again reaches the same person).
+// Collapsed into one, a tab whose cookie merely expired and a person who was
+// offboarded get the same dead end.
 //
 // In the 4000–4999 range, which the standard reserves for an application and
 // which no intermediary rewrites. They deliberately ECHO the HTTP statuses
@@ -44,12 +44,15 @@ import (
 // NOTHING ELSE CLOSES THIS SOCKET FOR A FAULT. A node that cannot serve keeps
 // its socket open and degrades it instead — see [FrameDegraded].
 const (
-	// CloseUnauthenticated is a client frame that requires an operator on
-	// a socket that has none and offered none.
+	// CloseUnauthenticated ends a socket whose credential no longer
+	// resolves to anybody: its session ended, expired or was revoked, or
+	// its token is not one this node accepts — found by the socket's own
+	// revalidation (see revalidate.go) — or a frame that needs a caller
+	// arrived on a socket that has none.
 	CloseUnauthenticated websocket.StatusCode = 4401
 
-	// CloseUnauthorized is a credential this node REFUSES, offered on a
-	// frame by a socket with no identity of its own.
+	// CloseUnauthorized ends a socket whose credential still resolves but
+	// may not act: the person's seat is gone from the chart.
 	CloseUnauthorized websocket.StatusCode = 4403
 )
 
@@ -151,7 +154,7 @@ type request struct {
 //
 // A `token` used to ride the FRAME rather than the handshake, so that a socket
 // opened for anonymous reads could ask one operator-only question without
-// reconnecting. Every socket now authenticates at the handshake — [authenticate]
+// reconnecting. Every socket now authenticates at the handshake — [Handler]
 // refuses one that presents nothing — so there is no socket for a frame
 // credential to upgrade, and the machinery around it (a refused token closing
 // an anonymous socket, a good one upgrading exactly one query, an authenticated
@@ -226,6 +229,8 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 		// request a credential makes where a principal's session id is
 		// not.
 		budgetKey := principal.Login
+		who := &asking{principal: principal}
+		check := checkerFor(guard, r)
 
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			// The dashboard is served by this same process, so the
@@ -237,7 +242,7 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			log.Debug("stream_accept_failed", "error", err)
 			return
 		}
-		serveSocket(r.Context(), conn, svc, query, budgetKey)
+		serveSocket(r.Context(), conn, svc, query, budgetKey, who, check)
 	})
 }
 
@@ -267,7 +272,7 @@ func resolved(guard *auth.Guard, w http.ResponseWriter,
 
 // serveSocket runs one connection until it closes.
 func serveSocket(ctx context.Context, conn *websocket.Conn,
-	svc *Service, query Query, budgetKey string,
+	svc *Service, query Query, budgetKey string, who *asking, check checkFunc,
 ) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -296,7 +301,18 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	})
 
 	client.Reply(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
-	code, reason := readLoop(ctx, conn, svc.Hub(), client, query, slots)
+
+	// THE CREDENTIAL IS CHECKED AGAIN FOR AS LONG AS THE SOCKET LIVES. See
+	// revalidate.go for why a handshake decision is not enough and what
+	// each answer does to this socket.
+	var checking sync.WaitGroup
+	checking.Go(func() {
+		revalidate(ctx, conn, client, check, who, svc.revalidateEvery,
+			svc.now, func() any { return svc.Snapshot() })
+	})
+	defer checking.Wait()
+
+	code, reason := readLoop(ctx, conn, svc.Hub(), client, query, who, slots)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -359,7 +375,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 // answered ON the socket and the socket stays open. See [CloseUnauthenticated]
 // and [FrameDegraded].
 func readLoop(ctx context.Context, conn *websocket.Conn,
-	hub *Hub, client *Client, query Query,
+	hub *Hub, client *Client, query Query, who *asking,
 	slots chan struct{},
 ) (websocket.StatusCode, string) {
 	// THE CONCURRENCY BOUND ARRIVES FROM THE SERVICE rather than being
@@ -393,7 +409,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// learns why its pushes stopped.
 			client.Reply(Envelope{Kind: KindPong})
 		case "watch":
-			if code, reason := watch(ctx, hub, client, req); code != 0 {
+			if code, reason := watch(who.context(ctx), hub, client, req); code != 0 {
 				return code, reason
 			}
 		case "query":
@@ -420,7 +436,10 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
-				runQuery(ctx, client, query, req)
+				// AS WHOEVER THE LAST CHECK SAID, not whoever opened
+				// the socket: a grant narrowed an hour ago must not
+				// still answer here. See revalidate.go.
+				runQuery(who.context(ctx), client, query, req)
 			}()
 		default:
 			// Unknown kinds are ignored, which is what makes new ones
@@ -438,10 +457,10 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 // node, on behalf of a caller, and it stays there until the socket goes away.
 //
 // THE CHECK IS KEPT THOUGH EVERY SOCKET IS NOW AUTHENTICATED, and it is not
-// belt-and-braces: [authenticate] is what decides a socket's operator, it asks
-// the auth package's exemption list, and that list is somebody else's to
-// change. A watch reaching this function with no operator would mean the
-// socket path had become exempt — and installing routing state for a caller
+// belt-and-braces: [resolved] is what decides a socket's caller, it asks the
+// auth package's exemption list, and that list is somebody else's to change. A
+// watch reaching this function with nobody resolved would mean the socket
+// path had become exempt — and installing routing state for a caller
 // nobody can name is the one outcome that must not follow silently from that.
 //
 // A close rather than an error frame, because a watch carries no correlation

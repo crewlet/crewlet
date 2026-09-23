@@ -57,9 +57,11 @@ const writeTimeout = 30 * time.Second
 // doing nothing.
 const QueueDepth = 512
 
-// The push kinds. Frozen — the dashboard ships unchanged and is the
+// The push kinds. Frozen against RENAMING — the dashboard is the
 // compatibility reference, so a renamed kind is a broken client, not a
-// refactor. Every one of them has an entry on [routes]; see
+// refactor. A NEW kind is additive: the client's dispatch ignores a kind it
+// does not know, which is what lets the engine add one before the screen
+// that renders it. Every one of them has an entry on [routes]; see
 // TestEveryPushKindHasARoute.
 const (
 	KindSnapshot  = "snapshot"
@@ -87,6 +89,16 @@ const (
 	// index exists, and no frame of this kind is ever built — which is why
 	// a grep for a publisher comes up empty and must.
 	KindInboxChanged = "inbox_changed"
+
+	// KindIdentity tells ONE client whether this node could verify the
+	// credential its socket was opened with, at the last revalidation
+	// (see [RevalidateEvery]). A DIRECT kind, because it is a fact about
+	// this socket and not about the company: a node that is perfectly
+	// healthy can hold one tab whose session it cannot check while its
+	// identity applier is behind, and the node-wide health frame would
+	// report that node as fine. Direct is also what lets it reach a client
+	// whose posture the hold itself has degraded.
+	KindIdentity = "identity"
 
 	// KindResult and KindError answer one query, correlated by the
 	// client-minted id it was asked under.
@@ -117,6 +129,9 @@ var routes = map[string]Route{
 
 	// One seat's audience.
 	KindInboxChanged: RouteSeat,
+
+	// This socket's own identity, to this socket alone.
+	KindIdentity: RouteDirect,
 
 	// The answers, to the one client that asked.
 	KindResult: RouteDirect,
@@ -193,6 +208,19 @@ type Client struct {
 	// writes it (a node changing posture) while a broadcast reads it.
 	posture FramePosture
 
+	// identityHeld marks a client whose credential this node could not
+	// CHECK at its last revalidation — the identity estate was unreadable,
+	// or the node was behind it. It degrades THIS client whatever the
+	// node's posture: the node may be perfectly healthy while one socket's
+	// session is unverifiable, and serving that socket live would push the
+	// company's state to somebody who may have been signed out.
+	//
+	// SEPARATE FROM posture rather than written into it, because the hub
+	// owns posture and rewrites it on every health tick — an identity hold
+	// stored there would be cleared five seconds later by a node that was
+	// never the thing that was wrong.
+	identityHeld bool
+
 	// seat is the seat this client asked to be a recipient for, empty
 	// while it has asked for none. The hub's index is the authority on
 	// which bucket the client is in; this is the same fact kept beside the
@@ -214,11 +242,35 @@ func NewClient() *Client {
 // Out is the channel a transport reads frames from. Closed by [Client.Close].
 func (c *Client) Out() <-chan *Frame { return c.out }
 
-// Posture is how this client is currently being served.
+// Posture is how this client is currently being served: the node's posture,
+// degraded further while the client's own identity is held.
 func (c *Client) Posture() FramePosture {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.identityHeld {
+		return FrameDegraded
+	}
 	return c.posture
+}
+
+// HoldIdentity degrades this client until [Client.ReleaseIdentity], reporting
+// whether the hold is new. See the identityHeld field for why it is not a
+// posture.
+func (c *Client) HoldIdentity() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	was := c.identityHeld
+	c.identityHeld = true
+	return !was
+}
+
+// ReleaseIdentity lifts a hold, reporting whether there was one.
+func (c *Client) ReleaseIdentity() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	was := c.identityHeld
+	c.identityHeld = false
+	return was
 }
 
 // SetPosture moves this client to p, reporting whether it took.

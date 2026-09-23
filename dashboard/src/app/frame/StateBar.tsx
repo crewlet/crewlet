@@ -52,12 +52,15 @@ export interface Degradation {
 export function degradationOf({
   authRejected,
   connected,
+  identityUnverifiable = false,
   configured,
   onSetToken,
   onConfig,
 }: {
   authRejected: boolean;
   connected: boolean;
+  /** The engine could not verify this socket's credential at its last check. */
+  identityUnverifiable?: boolean;
   configured: boolean | undefined;
   onSetToken: () => void;
   onConfig: () => void;
@@ -75,6 +78,14 @@ export function degradationOf({
       variant: "warning",
       icon: <RefreshGlyph size="md" />,
       message: "Reconnecting to the engine — showing the last state received, polling meanwhile.",
+    };
+  }
+  if (identityUnverifiable) {
+    return {
+      variant: "warning",
+      icon: <RefreshGlyph size="md" />,
+      message:
+        "The engine cannot verify your session right now, so live updates are paused and questions wait. It checks again every minute — nothing to do.",
     };
   }
   if (configured === false) {

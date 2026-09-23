@@ -2629,14 +2629,15 @@ rendered idle from the first phase to the last.
   reader acts on.
 - **Two close codes, and what each one asks of the reader.** A refused
   handshake cannot carry one (see the HTTP diagnosis above); these are for a
-  socket that is already open and whose client then offers or omits a credential
-  on a frame. `4401` means a frame needed an operator credential and none was
-  offered — collect a token and re-dial. `4403` means the credential on a frame
-  is not one this node accepts, on a socket with no identity of its own — forget
-  that token, ask for another, re-dial. An authenticated socket is never dropped
-  for a bad frame token: it has an identity to fall back on, and demoting it
-  silently answered an operator's question as anonymous. Nothing else closes
-  this socket for a fault.
+  socket that is already open, which the engine re-checks every minute against
+  the credential it was opened with. `4401` means that credential no longer
+  resolves to anybody — the session ended or was revoked — so re-dial with the
+  cookie the browser holds now and sign in only if the handshake then answers
+  `401`. `4403` means the person resolves and their seat is gone: stop and say
+  so. A re-check that cannot be answered is NOT a close: the tab receives an
+  `identity: unverifiable` frame, the state strip says live updates are paused,
+  and the engine's next successful check sends `identity: verified` with a
+  fresh snapshot. Nothing else closes this socket for a fault.
 - **One clock.** Every relative time on screen advances together and none of
   them is baked at render.
 

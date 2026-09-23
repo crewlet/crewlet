@@ -34,7 +34,8 @@ function emptyState() {
 		budget: {},
 		schedules: null,
 		connected: false,
-		authRejected: false
+		authRejected: false,
+		identityUnverifiable: false
 	};
 }
 var Store = class {
@@ -160,7 +161,14 @@ var Store = class {
 	}
 	setConnected(value) {
 		this.state.connected = value;
+		if (!value) this.state.identityUnverifiable = false;
 		if (!value) this.state.health = { status: "unknown" };
+		this.emit("health");
+	}
+	applyIdentity(state) {
+		const next = state?.state === "unverifiable";
+		if (this.state.identityUnverifiable === next) return;
+		this.state.identityUnverifiable = next;
 		this.emit("health");
 	}
 	setAuthRejected(value) {
@@ -650,6 +658,9 @@ var LiveSocket = class {
 				break;
 			case "health":
 				this.store.applyHealth(msg.data);
+				break;
+			case "identity":
+				this.store.applyIdentity(msg.data);
 				break;
 			case "result":
 				this.settle(msg.id, null, msg.data);

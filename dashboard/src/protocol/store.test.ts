@@ -219,6 +219,24 @@ describe("connection state", () => {
     store.setAuthRejected(true);
     expect(store.state.authRejected).toBe(true);
   });
+
+  test("an unverifiable identity is this socket's, and a new socket starts clear", () => {
+    // The engine degrades ONE socket whose credential it cannot check while
+    // the node itself stays healthy — so the hold arrives on its own frame and
+    // never rides the node's health, and it belongs to the socket that
+    // reported it: a reconnect's handshake resolved the credential afresh.
+    const store = new Store();
+    store.applyHealth({ status: "ok" });
+    store.applyIdentity({ state: "unverifiable" });
+    expect(store.state.identityUnverifiable).toBe(true);
+    expect(store.state.health.status).toBe("ok");
+    store.applyIdentity({ state: "verified" });
+    expect(store.state.identityUnverifiable).toBe(false);
+
+    store.applyIdentity({ state: "unverifiable" });
+    store.setConnected(false);
+    expect(store.state.identityUnverifiable).toBe(false);
+  });
 });
 
 describe("subscriptions", () => {

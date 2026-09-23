@@ -147,6 +147,7 @@ export function useConnection() {
   return useSlice(["health"], (s) => ({
     connected: s.connected,
     authRejected: s.authRejected,
+    identityUnverifiable: s.identityUnverifiable,
     health: s.health,
   }));
 }

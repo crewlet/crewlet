@@ -403,6 +403,9 @@ export class LiveSocket {
       case "health":
         this.store.applyHealth(msg.data as never);
         break;
+      case "identity":
+        this.store.applyIdentity(msg.data as never);
+        break;
       case "result":
         this.settle(msg.id, null, msg.data);
         break;

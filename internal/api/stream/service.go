@@ -95,6 +95,10 @@ type Service struct {
 	now      func() time.Time
 	interval time.Duration
 
+	// revalidateEvery is how often an open socket's credential is checked
+	// again. See [Options.RevalidateEvery].
+	revalidateEvery time.Duration
+
 	// tokensDirty means a phase completed since the last rollup went out.
 	// Set on the publish path and cleared on the tick — see flushTokens.
 	tokensDirty atomic.Bool
@@ -160,6 +164,14 @@ type Options struct {
 	// nothing about the tick at all — and the property worth asserting is
 	// that there is exactly ONE of them however many times it is started.
 	HealthInterval time.Duration
+
+	// RevalidateEvery overrides how often an open socket's credential is
+	// checked again. Zero takes [RevalidateEvery], which is the production
+	// value and is tied to the stall grace — see revalidate.go.
+	//
+	// Injectable for HealthInterval's reason: a revocation case that had
+	// to wait out a minute per assertion would be a case nobody runs.
+	RevalidateEvery time.Duration
 }
 
 // NewService builds the fan-out over a projection, or refuses a missing
@@ -200,12 +212,17 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		schedules: opts.Schedules,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
+
+		revalidateEvery: opts.RevalidateEvery,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
 	}
 	if s.interval <= 0 {
 		s.interval = HealthInterval
+	}
+	if s.revalidateEvery <= 0 {
+		s.revalidateEvery = RevalidateEvery
 	}
 	return s, nil
 }

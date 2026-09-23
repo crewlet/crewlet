@@ -99,6 +99,15 @@ export interface StoreState {
    * never does.
    */
   authRejected: boolean;
+  /**
+   * Whether the engine could NOT verify this socket's own credential at its
+   * last check. A fact about this tab, not the engine: the node may be
+   * serving every other socket normally while its identity estate is behind,
+   * and its health frame says so. While it holds, live pushes stop and
+   * questions are answered "unavailable"; the engine re-checks every minute
+   * and releases the hold with a fresh snapshot.
+   */
+  identityUnverifiable: boolean;
 }
 
 export type Slice = keyof StoreState;
@@ -132,6 +141,7 @@ function emptyState(): StoreState {
     schedules: null,
     connected: false,
     authRejected: false,
+    identityUnverifiable: false,
   };
 }
 
@@ -290,9 +300,19 @@ export class Store {
 
   setConnected(value: boolean): void {
     this.state.connected = value;
+    // A NEW SOCKET STARTS VERIFIED: the handshake itself resolved its
+    // credential, and a hold belongs to the socket that reported it.
+    if (!value) this.state.identityUnverifiable = false;
     // A dropped socket CLEARS the health slice rather than freezing it. A stale
     // "healthy" is a lie with a timestamp nobody can see.
     if (!value) this.state.health = { status: "unknown" };
+    this.emit("health");
+  }
+
+  applyIdentity(state: { state?: string } | null | undefined): void {
+    const next = state?.state === "unverifiable";
+    if (this.state.identityUnverifiable === next) return;
+    this.state.identityUnverifiable = next;
     this.emit("health");
   }
 

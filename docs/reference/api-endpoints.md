@@ -2058,6 +2058,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
 | `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
 | `pong`     | Reply to a client `ping`. | `null` |
+| `identity` | This socket's own credential, at its last re-check. **Direct** — a fact about one tab, not the company, which is why it never rides the node's `health`. | `{ state: "unverifiable" \| "verified", retry_after_seconds? }` |
 | `inbox_changed` | One watched seat's inbox moved. | `{ seat, … }`, and the frame itself carries `seat`. **Routed by seat**: it reaches only the clients that sent a `watch` for that seat, never every tab. **Nothing publishes it yet** — the route, the index and the `watch` frame ship now, the publisher lands with the change that derives an inbox movement from the durable record. |
 
 **Client → server kinds**
@@ -2065,7 +2066,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `kind` | Purpose |
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
-| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it, and one socket watches one seat at a time — a tab is looking at one screen. **It needs an operator credential**, which the handshake already carries: every socket authenticates before the upgrade, and a watch writes a row into this node's routing index. A watch with no operator behind it closes the socket with **4401**. The per-frame `token` this route used to accept is gone — it existed so a socket opened for anonymous reads could ask one credentialled question, and there is no such socket. |
+| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it, and one socket watches one seat at a time — a tab is looking at one screen. **It needs a resolved caller**, which the handshake already establishes: every socket authenticates before the upgrade, and a watch writes a row into this node's routing index. A watch with nobody resolved behind it closes the socket with **4401**. The per-frame `token` this route used to accept is gone — it existed so a socket opened for anonymous reads could ask one credentialled question, and there is no such socket. |
 | `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params, token? }` — `id` is any client-chosen value echoed back on the reply, and `token` carries the operator bearer token that the `config`-family queries require (validated with the same constant-time comparison the `/config` middleware performs). Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows. |
 
 **Queries** (`what`), each answered by the *same* function the matching
@@ -2257,21 +2258,24 @@ caused by one bad revision.
 A refused handshake **cannot** carry a close code: a close code rides a close
 frame, and a connection that never opened has none. That case is answered `401`
 before the upgrade and is covered under [`GET /ws/stream`](#ws-wsstream) above.
-These two are for a socket that is already open, whose client then offers or
-omits a credential on a frame — the only channel through which an open socket's
-identity is ever asserted, because a browser cannot set a header on a WebSocket
-constructor.
+These two are for a socket that is already open.
 
-| Code | Means | What a client does |
+**An open socket re-checks its credential every 60 seconds** — the same
+[stall grace](../concepts/identity-and-access.md) a node may serve identity it
+has not caught up on — by running the guard again over the credential it was
+opened with. A handshake decision alone would leave a revoked session's socket
+pushing the company's state for as long as the tab stayed open. Each answer
+does one thing:
+
+| Answer | Code | What a client does |
 |---|---|---|
-| `4401` | A frame needed an operator credential and none was offered. | Ask for a token and re-dial. |
-| `4403` | The credential on a frame is not one this node accepts, on a socket with no identity of its own. | Forget that token, ask for another, re-dial. |
+| The session ended, expired or was revoked; the token is no longer accepted | `4401` | Re-dial with the credential the browser holds now; if the handshake answers `401`, sign in. |
+| The person resolves but their seat is gone from the chart | `4403` | Stop reconnecting and show why: the credential is fine, what it acts as is not. |
+| This node cannot read its identity estate, or is behind it | *(no close)* | The socket is **degraded** and told so on an `identity` frame: pushes stop, questions answer `unavailable`, and the next check that can answer sends `identity: verified` and a fresh `snapshot`. |
+| Resolved | *(no close)* | Nothing — and later questions are asked as the principal just resolved, so a narrowed grant takes effect within one interval. |
 
 Both sit in the 4000–4999 range the standard reserves for applications, and
-both deliberately echo the HTTP status they mean. A socket that **is**
-authenticated keeps its own operator and ignores a bad frame token rather than
-being dropped: it has an identity to fall back on, and demoting it silently
-answered an operator's question as anonymous.
+both deliberately echo the HTTP status they mean.
 
 Nothing else closes this socket for a fault.
 

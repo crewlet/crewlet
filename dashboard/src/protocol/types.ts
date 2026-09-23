@@ -3021,6 +3021,7 @@ export type PushKind =
   | "org"
   | "tools"
   | "health"
+  | "identity"
   | "result"
   | "error"
   | "pong";
