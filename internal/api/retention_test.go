@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
@@ -288,8 +288,13 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 	if detail != refusal.Error() {
 		t.Errorf("detail = %q, want the refusal's own sentence %q", detail, refusal.Error())
 	}
-	if hint, _ := body["hint"].(string); hint != refusal.Remedy() {
+	if hint, _ := body["hint"].(string); hint != refusal.Remedy().Detail {
 		t.Errorf("hint = %q, want the refusal's remedy", hint)
+	}
+	// WHAT TO DO, AS A VALUE A SURFACE SWITCHES ON: waiting for the node to
+	// catch up — never forcing, which a readmission has no meaning for.
+	if got := actionsOf(body); len(got) != 1 || got[0] != string(statelog.GateWait) {
+		t.Errorf("actions = %v, want only wait", got)
 	}
 	for field, want := range map[string]any{
 		"node": "node-4", "domain": "tracker", "position": float64(1_200),
@@ -325,8 +330,13 @@ func TestAnEvictionOfALiveNodeIsRefusedAsAnAnswer(t *testing.T) {
 	if code != http.StatusConflict || body["error"] != "eviction_refused" {
 		t.Fatalf("a refused eviction answered %d %v, want 409 eviction_refused", code, body)
 	}
-	if hint, _ := body["hint"].(string); hint != refusal.Remedy() {
-		t.Errorf("hint = %q, want the refusal's remedy %q", hint, refusal.Remedy())
+	if hint, _ := body["hint"].(string); hint != refusal.Remedy().Detail {
+		t.Errorf("hint = %q, want the refusal's remedy %q", hint, refusal.Remedy().Detail)
+	}
+	// FORCE IS OFFERED AS AN ACTION, which is what lets a surface with no
+	// -force flag — the dashboard — show the control that sends force=true.
+	if got := actionsOf(body); !slices.Contains(got, string(statelog.GateForce)) {
+		t.Errorf("actions = %v, want force among them", got)
 	}
 	if len(gate.asked) != 1 || gate.asked[0].Force {
 		t.Fatalf("the engine was asked %+v, want one unforced eviction", gate.asked)
@@ -405,14 +415,14 @@ func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
 	}
 	// WHETHER THE SAME REQUEST AGAIN CAN FINISH A LOG, and what to do
 	// otherwise — on the log the gesture did not finish, and on no other.
-	if _, has := tracker["retry"]; has {
-		t.Errorf("the tracker's entry, which holds its record, carries retry: %v", tracker)
+	if _, has := tracker["actions"]; has {
+		t.Errorf("the tracker's entry, which holds its record, carries actions: %v", tracker)
 	}
-	if hint, _ := pages["hint"].(string); pages["retry"] != false ||
-		!strings.Contains(hint, "set-capacity") {
-		t.Errorf("the full pages log answered retry=%v hint=%q, want no retry and "+
-			"the capacity verb — the same request refuses the same way for ever",
-			pages["retry"], pages["hint"])
+	if got := actionsOf(pages); len(got) != 1 || got[0] != string(statelog.GateSetCapacity) ||
+		pages["hint"] == nil {
+		t.Errorf("the full pages log answered actions=%v hint=%v, want only "+
+			"set_capacity — the same request refuses the same way for ever",
+			pages["actions"], pages["hint"])
 	}
 
 	// AND WITHOUT ONE, A FRESH OPERATION — which it answers with, because a
@@ -456,10 +466,26 @@ func TestAGateTheEngineCouldNotJudgeSaysWhose(t *testing.T) {
 	if code != http.StatusServiceUnavailable || body["error"] != "eviction_unjudged" {
 		t.Fatalf("an unjudged eviction answered %d %v, want 503 eviction_unjudged", code, body)
 	}
-	if hint, _ := body["hint"].(string); hint != unjudged.Remedy() ||
-		!strings.Contains(hint, "-force") {
-		t.Errorf("hint = %q, want the remedy naming -force", hint)
+	if hint, _ := body["hint"].(string); hint != unjudged.Remedy().Detail {
+		t.Errorf("hint = %q, want the remedy %q", hint, unjudged.Remedy().Detail)
 	}
+	got := actionsOf(body)
+	if !slices.Contains(got, string(statelog.GateForce)) ||
+		!slices.Contains(got, string(statelog.GateRetrySameOp)) {
+		t.Errorf("actions = %v, want asking again and forcing — the way past a "+
+			"lease listing nobody could read", got)
+	}
+}
+
+// actionsOf is a refusal's or a log's `actions`, as strings.
+func actionsOf(body map[string]any) []string {
+	raw, _ := body["actions"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, a := range raw {
+		s, _ := a.(string)
+		out = append(out, s)
+	}
+	return out
 }
 
 // A NODE RUNNING NO STATE LOG ANSWERS 503 NAMING THAT, rather than 404 —

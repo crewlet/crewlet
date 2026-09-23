@@ -175,7 +175,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived \
+.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
@@ -543,6 +543,18 @@ alarms-doc: ## regenerate docs/reference/alarms.md from the alarm table
 derived: ## regenerate internal/config/testdata/derived/*.derived.json from the config models
 	CREWLET_REGENERATE_DERIVED=1 $(GO) test ./internal/config -count=1 \
 	  -run TestTheDerivedHierarchyMatchesItsGoldenFiles
+
+# internal/api/testdata/gate_answer.json is the eviction and readmission
+# routes' answer — every 200 shape and every refusal — rendered by the route's
+# own renderer and never hand-edited. internal/api regenerates it and compares,
+# and the dashboard's gate dialog suite loads the SAME file as its fixture, so a
+# change to the rendering is a failing Go test until this runs and a failing
+# Vitest suite until the dialog follows it. The dialog once read a top-level
+# outcome for as long as the route had stopped writing one, on fixtures it had
+# typed itself. Read the diff before committing it, as with `derived`.
+gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate routes' renderer
+	CREWLET_REGENERATE_GATE_ANSWER=1 $(GO) test ./internal/api -count=1 \
+	  -run TestTheGateAnswerMatchesItsGoldenFile
 
 # The whole release pipeline, without a tag and without touching GitHub —
 # the same two commands release.yml's snapshot job runs, in the same order.

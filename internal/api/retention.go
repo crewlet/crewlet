@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -329,14 +328,15 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 // is [statelog.NewOpID]'s, and the id a caller brings back is the one the route
 // answered with, instant and all.
 //
-// An id [checkCallerOpID] refuses is answered `400 op_id_invalid` and false is
-// returned with the response already written; nothing is judged or written.
+// An id [statelog.CheckCallerOpID] refuses is answered `400 op_id_invalid` and
+// false is returned with the response already written; nothing is judged or
+// written.
 func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
 	opID := r.URL.Query().Get("op_id")
 	if opID == "" {
 		return statelog.NewOpID(time.Now(), name), true
 	}
-	if err := checkCallerOpID(opID); err != nil {
+	if err := statelog.CheckCallerOpID(opID); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "op_id_invalid", "detail": err.Error(),
 		})
@@ -344,64 +344,6 @@ func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bo
 	}
 	return opID, true
 }
-
-// checkCallerOpID is the one rule an operation id a caller brings back is held
-// to: an id this engine minted, of at most [maxCallerOpIDBytes] bytes of
-// visible ASCII with no space. It is REFUSED rather than cleaned, because a
-// retry has to name the id the caller holds, byte for byte — and each clause
-// buys a failure that nothing downstream reports.
-//
-// MINTED BY THE ENGINE, because the id carries the instant it was minted and
-// the state log reads it to decide whether its ledger can vouch for the retry
-// ([statelog.OpMintedAt]). One with no instant is read as older than every
-// loss the ledger has had — a retention sweep that deleted anything, which
-// every deployment older than the ledger's retention has had, or a snapshot
-// adopted from a donor that scrubbed its ledger — and such a write is
-// answered `unknown` without being published, on the first attempt as on
-// every retry: a gesture that can never run and never says why.
-//
-// VISIBLE ASCII WITH NO SPACE, because only the id's first thirty-six bytes
-// are the minted uuid and the rest is free text nothing parses, while the
-// whole id travels as the broker's message-id header — and the client writing
-// that header trims its ends and turns a line break into a space. An id
-// carrying either was deduplicated at the broker as another id than the one
-// every ledger answers for, and the route's own trim answered with an id the
-// caller never sent.
-func checkCallerOpID(opID string) error {
-	const again = "send back the op_id an earlier answer returned, unchanged, " +
-		"or omit it to start the gesture afresh"
-	if len(opID) > maxCallerOpIDBytes {
-		return fmt.Errorf("?op_id= is %d bytes, and an operation id is at most "+
-			"%d: %s", len(opID), maxCallerOpIDBytes, again)
-	}
-	for i := 0; i < len(opID); i++ {
-		if c := opID[i]; c <= ' ' || c > '~' {
-			return fmt.Errorf("?op_id= %q holds %q at byte %d, and an operation "+
-				"id is visible ASCII with no space — the broker trims the ends "+
-				"of the header it travels in and rewrites a line break, so it "+
-				"would carry another id than the one every log answers for: %s",
-				opID, c, i, again)
-		}
-	}
-	if _, minted := statelog.OpMintedAt(opID); !minted {
-		return fmt.Errorf("?op_id= is for finishing a gesture that came back "+
-			"`unknown` or partial, and %q is not an id this engine minted, so "+
-			"no node could tell whether it already ran: %s", opID, again)
-	}
-	return nil
-}
-
-// maxCallerOpIDBytes bounds an operation id a caller brings back.
-//
-// A HUNDRED AND TWENTY-EIGHT BYTES, the longest id these routes mint rounded up
-// to a power of two: a gesture's id is a thirty-six-byte uuid, a dot and a name
-// ([statelog.NewOpID]) — `purge-` and a task's uuid is seventy-nine, and
-// `readmit-` and a node id at the sixty-four bytes one may be is a hundred and
-// nine — so every id an answer ever carried fits. And no more, because the gate
-// derives each log's own id from the caller's by appending its sign, the log
-// and the node, and every record, ledger row and message-id header of the
-// gesture carries the result.
-const maxCallerOpIDBytes = 128
 
 // gateVerb names a gate gesture in the fresh operation id it is minted under.
 func gateVerb(evict bool) string {
@@ -425,13 +367,17 @@ func gateVerb(evict bool) string {
 // nothing written anywhere: an eviction of a node still holding a live
 // presence lease (unless `force=true`), a readmission of one below a trim
 // floor it would be counted against, each carrying the numbers the refusal is
-// about. Past the judgement the answer is 200 and PER LOG — each with its own
-// three-valued outcome, or the refusal that stopped that log — and `complete`
-// says whether every log now holds the record. An incomplete answer is not a
-// failure to report as one: the logs that answered hold their record, and a
-// log the gesture did not finish carries `retry` — whether the same request
-// sent again with the `op_id` it answered with can finish it — and `hint`,
-// which says what to do where it cannot.
+// about, and every refusal carries its remedy as `actions` — what to do, in a
+// closed set ([statelog.GateAction]) each surface renders in its own words —
+// beside `hint`, the sentence saying why in none of them. Past the judgement
+// the answer is 200 and PER LOG ([GateAnswer], rendered by [RenderGate] and by
+// nothing else) — each with its own three-valued outcome, or the refusal that
+// stopped that log — and `complete` says whether every log now holds the
+// record. An incomplete answer is not a failure to report as one: the logs
+// that answered hold their record, and a log the gesture did not finish
+// carries `actions` and `hint` — `retry_same_op` where the same request sent
+// again with the `op_id` it answered with can finish it, something else where
+// it cannot.
 //
 // A dropped request does not stop a gesture half-way: once its first record is
 // about to be written the engine finishes it under its own budget
@@ -490,123 +436,27 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 		} else {
 			result, err = a.nodes.Readmit(r.Context(), req)
 		}
-		var readmission *statelog.ReadmissionRefusal
-		var eviction *statelog.EvictionRefusal
-		var unjudged *engine.GateUnjudged
-		switch {
-		case errors.Is(err, engine.ErrInvalidGate):
-			// A NODE ID NO NODE COULD RUN UNDER is a typo rather than a
-			// fault, and it is the caller's to fix: nothing was judged and
-			// nothing was written.
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "invalid_gate", "detail": err.Error(),
-			})
+		if refusal, ok := RenderGateRefusal(node, opID, err); ok {
+			// A REFUSAL IS AN ANSWER, NOT A FAULT: nothing was judged, or
+			// the judgement said no, and nothing was written anywhere. Its
+			// body is rendered in one place for the reason the 200 is; what
+			// is logged is this route's own.
+			logGateRefusal(operator, node, err)
+			writeJSON(w, refusal.Status, refusal.Body)
 			return
-		case errors.As(err, &unjudged):
-			// COORDINATION COULD NOT BE READ HERE, which is this node's
-			// condition rather than the target's — so a 503 carrying the
-			// way past it, not a 500 an operator reads as an engine bug.
-			log.Warn("retention_eviction_unjudged", "operator", operator,
-				"node", node, "error", unjudged.Err)
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"error":  "eviction_unjudged",
-				"detail": unjudged.Error(),
-				"hint":   unjudged.Remedy(),
-				"node":   node,
-			})
-			return
-		case errors.As(err, &readmission):
-			// A REFUSAL IS AN ANSWER, NOT A FAULT, and it is the one
-			// this route promises: the node the operator asked for is
-			// below a floor it would be counted against, and nothing
-			// was written. 409 with the numbers, because the inequality
-			// is the reason and the CLI prints the detail and the hint
-			// beneath the status — an operator told only "500
-			// gate_failed" would read an engine problem where there is
-			// a node still catching up.
-			log.Info("retention_readmission_refused", "operator", operator,
-				"node", node, "domain", readmission.Domain,
-				"position", readmission.Seq, "floor", readmission.Bound.Held())
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":  "readmission_refused",
-				"detail": readmission.Error(),
-				"hint":   readmission.Remedy(),
-				"node":   node, "domain": readmission.Domain,
-				"published":        readmission.Published,
-				"position":         readmission.Seq,
-				"generation":       readmission.Generation,
-				"floor":            readmission.Bound.Floor,
-				"first_seq":        readmission.Bound.First,
-				"floor_generation": readmission.Bound.Generation,
-			})
-			return
-		case errors.As(err, &eviction):
-			// THE SAME FOR AN EVICTION: a node still renewing its
-			// presence lease is still reaching the fleet, and nothing
-			// was written anywhere.
-			log.Info("retention_eviction_refused", "operator", operator,
-				"node", node, "detail", eviction.Detail)
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":  "eviction_refused",
-				"detail": eviction.Error(),
-				"hint":   eviction.Remedy(),
-				"node":   node,
-			})
-			return
-		case err != nil:
+		}
+		if err != nil {
 			log.Warn("api_retention_gate_failed", "node", node,
 				"evict", evict, "error", err)
 			writeJSON(w, http.StatusInternalServerError,
 				map[string]string{"error": "gate_failed", "detail": err.Error()})
 			return
 		}
-		domains := make([]map[string]any, 0, len(result.Domains))
-		for _, d := range result.Domains {
-			entry := map[string]any{
-				"domain": d.Domain, "stream": d.Stream, "op_id": d.OpID,
-			}
-			if d.Err != nil {
-				// NO OUTCOME, AND THE REASON WHY — a refusal names
-				// its reason in the vocabulary every write refusal
-				// uses, so a caller can tell `log_full` from
-				// `evicted` without reading the sentence.
-				entry["error"] = d.Err.Error()
-				var refused *statelog.Unavailable
-				if errors.As(d.Err, &refused) {
-					entry["reason"] = refused.Reason
-				}
-			} else {
-				// THE THREE-VALUED OUTCOME, whole. A gate the caller
-				// believes landed and which is only `pending` is the
-				// difference between a node that has stopped writing
-				// and one that is about to.
-				entry["outcome"] = d.Outcome
-				// NO POSITION FOR UNKNOWN, which is the whole content
-				// of unknown: a zero position reads as a record at the
-				// log's origin.
-				if d.Outcome != statelog.OutcomeUnknown {
-					entry["position"] = d.Position
-				}
-			}
-			// WHETHER THE SAME REQUEST AGAIN CAN FINISH THIS LOG, and
-			// what to do instead where it cannot — the engine's one
-			// judgement, so this route and the command never advise
-			// two different things. Present only on a log the gesture
-			// did not finish.
-			if hint := d.Remedy(); hint != "" {
-				entry["retry"] = d.Retry()
-				entry["hint"] = hint
-			}
-			domains = append(domains, entry)
-		}
-		complete := result.Complete()
+		answer := RenderGate(evict, result)
 		log.Info("retention_gate", "operator", operator, "node", node,
-			"evict", evict, "force", req.Force, "op_id", result.OpID,
-			"complete", complete)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"node": node, "evicted": evict, "op_id": result.OpID,
-			"complete": complete, "domains": domains,
-		})
+			"evict", evict, "force", req.Force, "op_id", answer.OpID,
+			"complete", answer.Complete)
+		writeJSON(w, http.StatusOK, answer)
 	}
 }
 

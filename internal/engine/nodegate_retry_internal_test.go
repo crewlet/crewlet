@@ -236,7 +236,7 @@ func TestAnEvictionRetriedAfterItsReadmissionIsSuperseded(t *testing.T) {
 			t.Fatalf("%s answered the retry %+v, want a superseded refusal", d.Domain, d)
 		}
 		if d.Retry() {
-			t.Fatalf("%s advises running a superseded operation again: %s",
+			t.Fatalf("%s advises running a superseded operation again: %+v",
 				d.Domain, d.Remedy())
 		}
 	}
@@ -488,44 +488,74 @@ func TestADomainOperationIDNamesOneOperation(t *testing.T) {
 	}
 }
 
-// A LOG IS ADVISED A RETRY ONLY WHERE RUNNING THE GESTURE AGAIN CAN FINISH IT.
+// A LOG IS ADVISED A RETRY ONLY WHERE RUNNING THE GESTURE AGAIN CAN FINISH IT,
+// AND THE ADVICE IS AN ACTION RATHER THAN A FLAG.
 //
 // Every incomplete answer told the operator to run the command again with
 // -op-id. For an evicted node, a log rebuilt under it, a full log or an
 // operation superseded since, the same command fails the same way for ever.
+// And the advice was a sentence in the command line's vocabulary, which the
+// dashboard rendered word for word beside a dialog with no -op-id, -url or
+// -force: the remedy is now a closed set of actions each surface renders in its
+// own words, and the sentence beside it names none of them.
 func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 	t.Parallel()
 	refused := func(reason statelog.Reason) DomainGate {
 		return DomainGate{Stream: "CREWLET_PAGES_LOG",
 			Err: &statelog.Unavailable{Reason: reason}}
 	}
+	retry, other := statelog.GateRetrySameOp, statelog.GateOtherNode
 	for name, tc := range map[string]struct {
-		gate  DomainGate
-		retry bool
-		hint  string
+		gate    DomainGate
+		actions []statelog.GateAction
+		detail  string
 	}{
-		"applied":      {gate: DomainGate{Outcome: statelog.OutcomeApplied}},
-		"pending":      {gate: DomainGate{Outcome: statelog.OutcomePending}},
-		"unknown":      {gate: DomainGate{Outcome: statelog.OutcomeUnknown}, retry: true, hint: "unknown"},
-		"conflict":     {gate: DomainGate{Err: statelog.ErrConflict}, retry: true, hint: "changing"},
-		"a failure":    {gate: DomainGate{Err: errors.New("broken pipe")}, retry: true, hint: "same operation id"},
-		"behind":       {gate: refused(statelog.ReasonBehind), retry: true, hint: "catching up"},
-		"below floor":  {gate: refused(statelog.ReasonBelowFloor), retry: true, hint: "snapshot"},
-		"evicted":      {gate: refused(statelog.ReasonEvicted), hint: "-url"},
-		"wrong stream": {gate: refused(statelog.ReasonWrongStream), hint: "reanchor"},
-		"log full":     {gate: refused(statelog.ReasonLogFull), hint: "set-capacity"},
-		"superseded":   {gate: refused(statelog.ReasonSuperseded), hint: "without -op-id"},
-		"op reused":    {gate: refused(statelog.ReasonOpReused), hint: "without -op-id"},
-		"skew":         {gate: refused(statelog.ReasonSkew), hint: "backup"},
+		"applied":     {gate: DomainGate{Outcome: statelog.OutcomeApplied}},
+		"pending":     {gate: DomainGate{Outcome: statelog.OutcomePending}},
+		"unknown":     {gate: DomainGate{Outcome: statelog.OutcomeUnknown}, actions: []statelog.GateAction{retry}, detail: "unknown"},
+		"conflict":    {gate: DomainGate{Err: statelog.ErrConflict}, actions: []statelog.GateAction{retry}, detail: "changing"},
+		"a failure":   {gate: DomainGate{Err: errors.New("broken pipe")}, actions: []statelog.GateAction{retry}, detail: "same operation id"},
+		"behind":      {gate: refused(statelog.ReasonBehind), actions: []statelog.GateAction{retry}, detail: "catching up"},
+		"deferred":    {gate: refused(statelog.ReasonDeferred), actions: []statelog.GateAction{retry, other}, detail: "newer build"},
+		"floor":       {gate: refused(statelog.ReasonFloorUnknown), actions: []statelog.GateAction{retry}, detail: "coordination"},
+		"below floor": {gate: refused(statelog.ReasonBelowFloor), actions: []statelog.GateAction{retry, other}, detail: "snapshot"},
+		"evicted":     {gate: refused(statelog.ReasonEvicted), actions: []statelog.GateAction{other}, detail: "still counts"},
+		"wrong stream": {gate: refused(statelog.ReasonWrongStream),
+			actions: []statelog.GateAction{statelog.GateReanchor}, detail: "re-anchor"},
+		"log full": {gate: refused(statelog.ReasonLogFull),
+			actions: []statelog.GateAction{statelog.GateSetCapacity}, detail: "raise its ceiling"},
+		"superseded": {gate: refused(statelog.ReasonSuperseded),
+			actions: []statelog.GateAction{statelog.GateNewGesture}, detail: "fresh operation id"},
+		"op reused": {gate: refused(statelog.ReasonOpReused),
+			actions: []statelog.GateAction{statelog.GateNewGesture}, detail: "fresh operation id"},
+		"skew": {gate: refused(statelog.ReasonSkew),
+			actions: []statelog.GateAction{statelog.GateRestore}, detail: "backup"},
+		"unnamed refusal": {gate: refused(statelog.Reason("from_a_newer_build")),
+			detail: "from_a_newer_build"},
 		"too large": {gate: DomainGate{Err: fmt.Errorf("statelog: record: %w",
-			queue.ErrTooLarge)}, hint: "max_payload"},
+			queue.ErrTooLarge)}, detail: "max_payload"},
 	} {
-		if got := tc.gate.Retry(); got != tc.retry {
-			t.Errorf("%s: Retry() = %v, want %v", name, got, tc.retry)
+		remedy := tc.gate.Remedy()
+		if !slices.Equal(remedy.Actions, tc.actions) {
+			t.Errorf("%s: actions = %v, want %v", name, remedy.Actions, tc.actions)
 		}
-		hint := tc.gate.Remedy()
-		if (hint == "") != (tc.hint == "") || !strings.Contains(hint, tc.hint) {
-			t.Errorf("%s: Remedy() = %q, want it to name %q", name, hint, tc.hint)
+		if got, want := tc.gate.Retry(), slices.Contains(tc.actions, retry); got != want {
+			t.Errorf("%s: Retry() = %v, want %v", name, got, want)
+		}
+		if (remedy.Detail == "") != (tc.detail == "") ||
+			!strings.Contains(remedy.Detail, tc.detail) {
+			t.Errorf("%s: detail = %q, want it to name %q", name, remedy.Detail, tc.detail)
+		}
+		for _, flag := range []string{"-op-id", "-url", "-force", "crewlet "} {
+			if strings.Contains(remedy.Detail, flag) {
+				t.Errorf("%s: detail %q names %q, which only the command line has",
+					name, remedy.Detail, flag)
+			}
+		}
+		for _, a := range remedy.Actions {
+			if !a.Valid() {
+				t.Errorf("%s: action %q is not one this build names", name, a)
+			}
 		}
 	}
 }

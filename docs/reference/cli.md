@@ -769,9 +769,11 @@ holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
 drop everything it writes and move its seats. Stop it and wait for its `LIVE`
 column in `crewlet retention status` to read `no`, or pass `-force` for a node
-wedged in a way that still renews its lease. A node that cannot read the
-presence leases at all answers `503 eviction_unjudged`; `-force` takes the
-eviction past that as well, since the leases are all the judgement reads. A
+wedged in a way that still renews its lease — the refusal prints both. A node
+that cannot read the presence leases at all answers `503 eviction_unjudged`;
+`-force` takes the eviction past that as well, since the leases are all the
+judgement reads, and the refusal says so. A run that already passed `-force`
+is never advised it again. A
 node id no node could run under is refused `400 invalid_gate` before anything
 is judged.
 
@@ -783,7 +785,7 @@ with `-force` carried over from a forced run:
 ```
   pages: unknown — the record may or may not be on the log
     its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not
-  The gesture has not reached every log. Run it again with -op-id 01a0cd85-… to finish it: a log that already holds the record answers from its own ledger and is not written twice.
+  The gesture has not reached every log. Run it again with -op-id 01a0cd85-… to finish it: a log that already holds the record answers from its own rows and is not written twice.
 ```
 
 Run it again with that `-op-id`. Each log's record is published under an id
@@ -791,24 +793,41 @@ derived from it, the sign, the log and the node, and each log's snapshot reads
 that id's ledger row before anything is decided — so a log whose record is
 already the gate in force answers at the position it has, and only the missing
 log is written, however long after the first run the retry comes. A fresh id
-would be a second eviction rather than this one finished, and an id the engine
-did not print is refused. Where the same
-command **cannot** finish a log it offers no `-op-id` and says what can: a
-`log_full` log — full past even the reserve its gate records may use, since a
-log full only for ordinary writes still takes them — needs
-[`crewlet retention set-capacity`](#crewlet-retention-set-capacity);
-a node that is itself `evicted` cannot write, so run it from another; a
-`wrong_stream` log needs a [reanchor](#crewlet-retention-reanchor); and a
-`superseded` operation — an eviction retried after a readmission took the node
-back — is a new gesture, without `-op-id`.
+would be a second eviction rather than this one finished, and an id that
+is not in the engine's grammar is refused. Where the same command **cannot**
+finish a log straight away it prints what has to happen first, and then the
+same `-op-id` that finishes the gesture once that is done: a `log_full` log —
+full past even the reserve its gate records may use, since a log full only for
+ordinary writes still takes them — needs
+[`crewlet retention set-capacity`](#crewlet-retention-set-capacity):
+
+```
+  pages: not written (log_full) — pages: statelog: unavailable (log_full): …
+    CREWLET_PAGES_LOG is full to its broker ceiling, past even the reserve kept there for gate records: raise its ceiling, which is the only thing that makes room for it — then the same gesture under the same operation id finishes it, where a fresh one would write every log that already holds the record again
+    crewlet retention set-capacity CREWLET_PAGES_LOG <bytes> -confirm <bytes>, then run this again with -op-id 01a0cd85-…
+```
+
+Not the same command now — it is refused the same way until the ceiling moves
+— and **not a fresh one afterwards**: once there is room, this gesture's own
+`-op-id` is what finishes it, because a fresh id is a second eviction that
+writes the tracker's log again and re-dates the eviction there. A node that is
+itself `evicted` cannot write, so it prints `-url <that node>` with the same
+`-op-id`; a `wrong_stream` log needs a [reanchor](#crewlet-retention-reanchor)
+first, and then the same `-op-id`; and a `superseded` operation — an eviction
+retried after a readmission took the node back — is a new gesture, without
+`-op-id`. The indented sentence is the node's own and names no flag,
+because the dashboard renders the same answer; the line under it is this
+command's rendering of the node's `actions` (see
+[the gate answer](api-endpoints.md#the-three-retention-gestures-that-write)).
 
 The command mints the operation id **before** it asks, and waits
 seventy-five seconds for the answer — past the minute the node allows a
 gesture, which it finishes even if the connection drops. So a gesture that got
 no answer at all still prints the `-op-id` that finishes it. Pass it back
-exactly as printed: the node refuses (`op_id_invalid`) an id it did not mint,
-and one over 128 bytes or holding anything but visible ASCII, since the broker
-would carry that as a different id.
+exactly as printed: the node refuses (`op_id_invalid`) an id that is not in
+the engine's grammar — a UUIDv7 carrying its mint instant — and one over 128
+bytes or holding anything but visible ASCII, since the broker would carry that
+as a different id.
 
 `readmit` is the inverse commit rather than a delete, so the eviction's whole
 history survives a replay. It is **refused** while the node is below a trim
@@ -820,6 +839,7 @@ $ crewlet retention readmit node-4 -confirm node-4
 crewlet: the node answered 409: readmission_refused
   statelog: node-4 may not be readmitted: its last position in tracker (reported 2031-04-02T03:14:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800) — it has to catch up before the fleet counts it again
   start node-4 if it is not running: it catches up on its own, …
+  its SEQ in `crewlet retention status` says when it has caught up, and `crewlet retention snapshots` whether a peer can donate one; then run this again
 ```
 
 The comparison is the one the node's own write fence makes: its **last

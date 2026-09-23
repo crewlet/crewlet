@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -207,6 +208,73 @@ func OpMintedAt(opID string) (time.Time, bool) {
 	copy(ms[2:], id[:6])
 	return time.UnixMilli(int64(binary.BigEndian.Uint64(ms[:]))).UTC(), true
 }
+
+// CheckCallerOpID is the one rule an operation id a caller brings BACK is held
+// to — an id a route or a tool answered with, sent again to finish the
+// operation it names: an id this engine minted, of at most
+// [MaxCallerOpIDBytes] bytes of visible ASCII with no space. It is REFUSED
+// rather than cleaned, because a retry has to name the id the caller holds,
+// byte for byte — and each clause buys a failure that nothing downstream
+// reports.
+//
+// ONE RULE FOR EVERY SURFACE THAT TAKES ONE — the gate and purge routes'
+// `?op_id=` and the operator tools' `op_id` argument — because an id one of
+// them accepts and another refuses is an operation finishable from one place
+// and not the other, and written twice the rule would drift.
+//
+// MINTED BY THE ENGINE, because the id carries the instant it was minted and
+// the publisher reads it to decide whether its ledger can vouch for the retry
+// ([OpMintedAt]). One with no instant is read as older than every loss the
+// ledger has had — a retention sweep that deleted anything, which every
+// deployment older than the ledger's retention has had, or a snapshot adopted
+// from a donor that scrubbed its ledger — and such a write is answered
+// `unknown` without being published, on the first attempt as on every retry:
+// an operation that can never run and never says why. A client that mints its
+// own — the command line, the dashboard — mints through this grammar's layout,
+// and is held to it here like any other.
+//
+// VISIBLE ASCII WITH NO SPACE, because only the id's first thirty-six bytes
+// are the minted uuid and this check reads nothing after them — though a
+// surface may: the operator tools read the name after the uuid to hold an id
+// to the call it was minted for — while the whole id travels as the broker's
+// message-id header, and the client writing that header trims its ends and
+// turns a line break into a space. An id carrying either was deduplicated at
+// the broker as another id than the one every ledger answers for.
+func CheckCallerOpID(opID string) error {
+	const again = "send back the op_id an earlier answer returned, unchanged, " +
+		"or omit it to start the operation afresh"
+	if len(opID) > MaxCallerOpIDBytes {
+		return fmt.Errorf("op_id is %d bytes, and an operation id is at most %d: %s",
+			len(opID), MaxCallerOpIDBytes, again)
+	}
+	for i := 0; i < len(opID); i++ {
+		if c := opID[i]; c <= ' ' || c > '~' {
+			return fmt.Errorf("op_id %q holds %q at byte %d, and an operation id "+
+				"is visible ASCII with no space — the broker trims the ends of the "+
+				"header it travels in and rewrites a line break, so it would carry "+
+				"another id than the one every log answers for: %s",
+				opID, c, i, again)
+		}
+	}
+	if _, minted := OpMintedAt(opID); !minted {
+		return fmt.Errorf("op_id is for finishing an operation that came back "+
+			"`unknown` or partial, and %q is not an id this engine's grammar "+
+			"minted, so no node could tell whether it already ran: %s", opID, again)
+	}
+	return nil
+}
+
+// MaxCallerOpIDBytes bounds an operation id a caller brings back.
+//
+// A HUNDRED AND TWENTY-EIGHT BYTES, the longest id a surface mints rounded up
+// to a power of two: a gesture's id is a thirty-six-byte uuid, a dot and a name
+// ([NewOpID]) — `purge-` and a task's uuid is seventy-nine, and `readmit-` and
+// a node id at the sixty-four bytes one may be is a hundred and nine — so
+// every id an answer ever carried fits. And no more, because a gesture derives
+// each log's own id from the caller's by appending steps ([StepOpID]), and
+// every record, ledger row and message-id header of the gesture carries the
+// result.
+const MaxCallerOpIDBytes = 128
 
 // mintedAt is the instant the publisher reads an operation as minted at: the
 // one its id carries, or the zero instant for an id that carries none.

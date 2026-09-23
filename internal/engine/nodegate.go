@@ -154,12 +154,21 @@ func (e *GateUnjudged) Error() string {
 
 func (e *GateUnjudged) Unwrap() error { return e.Err }
 
-// Remedy is what the operator does about it.
-func (e *GateUnjudged) Remedy() string {
-	return fmt.Sprintf("this node could not read the presence leases, so it cannot "+
-		"tell whether %s is still running: retry once coordination answers, or — "+
-		"if you know %s is gone — evict it with -force, which does not need them",
-		e.Node, e.Node)
+// Remedy is what the operator does about it: ask again once coordination
+// answers, or force the eviction, which does not need the leases.
+//
+// IN NO SURFACE'S VOCABULARY — see [statelog.GateAction]. This is the refusal
+// most likely to meet an operator in a browser, since a coordination fault is
+// exactly when an absent node most needs evicting, and its sentence used to
+// tell them to pass a flag the dashboard does not have.
+func (e *GateUnjudged) Remedy() statelog.GateRemedy {
+	return statelog.GateRemedy{
+		Actions: []statelog.GateAction{statelog.GateRetrySameOp, statelog.GateForce},
+		Detail: fmt.Sprintf("this node could not read the presence leases, so it "+
+			"cannot tell whether %s is still running: ask again once coordination "+
+			"answers, or — if you know %s is gone — force the eviction, which does "+
+			"not need them", e.Node, e.Node),
+	}
 }
 
 // GateResult is what one gesture did to every log it had to reach.
@@ -231,81 +240,98 @@ func (d DomainGate) done() bool {
 // way for ever — and advising it anyway sent operators round a loop the answer
 // already knew the end of. The route and the command both render this one
 // judgement, so they can never advise two different things.
-func (d DomainGate) Retry() bool {
-	retry, _ := d.judge()
-	return retry
-}
+func (d DomainGate) Retry() bool { return d.Remedy().Offers(statelog.GateRetrySameOp) }
 
 // Remedy is what the operator does about a log the gesture did not finish, or
-// empty for one it did.
-func (d DomainGate) Remedy() string {
-	_, remedy := d.judge()
-	return remedy
-}
-
-func (d DomainGate) judge() (bool, string) {
+// the zero remedy for one it did.
+//
+// THE ACTIONS ARE WHAT A SURFACE SWITCHES ON and the detail names no surface's
+// controls: the command line renders [statelog.GateNewGesture] as "without
+// -op-id" and the dashboard as starting afresh, and a sentence spelling the
+// flags was rendered word for word by a screen that has none of them.
+func (d DomainGate) Remedy() statelog.GateRemedy {
 	if d.done() {
-		return false, ""
+		return statelog.GateRemedy{}
+	}
+	retry := func(detail string, also ...statelog.GateAction) statelog.GateRemedy {
+		return statelog.GateRemedy{
+			Actions: append([]statelog.GateAction{statelog.GateRetrySameOp}, also...),
+			Detail:  detail,
+		}
+	}
+	only := func(action statelog.GateAction, detail string) statelog.GateRemedy {
+		return statelog.GateRemedy{Actions: []statelog.GateAction{action}, Detail: detail}
 	}
 	if d.Err == nil {
 		// UNKNOWN: the record may or may not be on the log, and nothing
 		// here can tell which — the log's own ledger can, next time.
-		return true, "its outcome is unknown: the same gesture under the same " +
+		return retry("its outcome is unknown: the same gesture under the same " +
 			"operation id answers from this log's own ledger if the record landed, " +
-			"and writes it if it did not"
+			"and writes it if it did not")
 	}
 	var refusal *statelog.Unavailable
 	if errors.As(d.Err, &refusal) {
 		switch refusal.Reason {
 		case statelog.ReasonEvicted:
-			return false, "this node is evicted itself and writes nothing to any " +
-				"log: run the gesture from a node the fleet still counts (-url)"
+			return only(statelog.GateOtherNode, "this node is evicted itself and "+
+				"writes nothing to any log: run the gesture through a node the fleet "+
+				"still counts, under the same operation id")
 		case statelog.ReasonWrongStream:
-			return false, fmt.Sprintf("the log under %s's name is not the one "+
-				"this node's rows were derived from: re-anchor it with `crewlet "+
-				"retention reanchor` first — nothing can be written to it until "+
-				"then", d.Stream)
+			return only(statelog.GateReanchor, fmt.Sprintf("the log under %s's name "+
+				"is not the one this node's rows were derived from: re-anchor it "+
+				"first — nothing can be written to it until then — and then the same "+
+				"gesture under the same operation id finishes it", d.Stream))
 		case statelog.ReasonLogFull:
 			// PAST THE GATE RESERVE: a gate record is admitted into the
 			// room kept above the ceiling ordinary writes are refused
 			// at, so a gate record refused `log_full` found even that
 			// spent — which no retry refills.
-			return false, fmt.Sprintf("%s is full to its broker ceiling, past even "+
-				"the reserve kept there for gate records: raise its ceiling with "+
-				"`crewlet retention set-capacity`, which is the only thing that "+
-				"makes room for it", d.Stream)
+			return only(statelog.GateSetCapacity, fmt.Sprintf("%s is full to its "+
+				"broker ceiling, past even the reserve kept there for gate records: "+
+				"raise its ceiling, which is the only thing that makes room for it — "+
+				"then the same gesture under the same operation id finishes it, where "+
+				"a fresh one would write every log that already holds the record "+
+				"again", d.Stream))
 		case statelog.ReasonSuperseded:
-			return false, "a later gate record has undone this operation's since: " +
-				"start a new gesture, without -op-id, if the node should change again"
+			return only(statelog.GateNewGesture, "a later gate record has undone "+
+				"this operation's since: start a new gesture, under a fresh operation "+
+				"id, if the node should change again")
 		case statelog.ReasonOpReused:
-			return false, "the operation id already names a record on another " +
-				"object: run the gesture without -op-id, so it takes a fresh one"
+			return only(statelog.GateNewGesture, "the operation id already names a "+
+				"record on another object: start the gesture again under a fresh "+
+				"operation id")
 		case statelog.ReasonSkew:
-			return false, "a store and a stream were restored out of step, which " +
-				"no retry clears: restore them from one backup"
+			return only(statelog.GateRestore, "a store and a stream were restored "+
+				"out of step, which no retry clears: restore them from one backup")
 		case statelog.ReasonBehind:
-			return true, "this node is catching up with the log, which clears on its own"
+			return retry("this node is catching up with the log, which clears on " +
+				"its own: then the same gesture under the same operation id finishes it")
 		case statelog.ReasonDeferred:
-			return true, "this node holds a record it cannot decode and a node " +
-				"running a newer build can serve it (-url)"
+			return retry("this node holds a record it cannot decode: a node "+
+				"running a newer build can finish the same gesture under the same "+
+				"operation id", statelog.GateOtherNode)
 		case statelog.ReasonFloorUnknown:
-			return true, "the trim floor could not be read; it clears once " +
-				"coordination answers"
+			return retry("the trim floor could not be read: the same gesture " +
+				"under the same operation id finishes it once coordination answers")
 		case statelog.ReasonBelowFloor:
-			return true, "this node is adopting a peer's snapshot; it clears once " +
-				"it has, or another node can serve it (-url)"
+			return retry("this node is adopting a peer's snapshot: the same "+
+				"gesture under the same operation id finishes it once it has, here "+
+				"or through another node", statelog.GateOtherNode)
 		}
-		return false, "no retry clears this refusal: " + string(refusal.Reason)
+		return statelog.GateRemedy{
+			Detail: "no retry clears this refusal: " + string(refusal.Reason),
+		}
 	}
 	if errors.Is(d.Err, statelog.ErrConflict) {
-		return true, "the node's gate subject kept changing under this write"
+		return retry("the node's gate subject kept changing under this write: the " +
+			"same gesture under the same operation id finishes it")
 	}
 	if errors.Is(d.Err, queue.ErrTooLarge) {
-		return false, "the record is larger than the broker carries, which no " +
-			"retry changes: check the broker's max_payload"
+		return statelog.GateRemedy{Detail: "the record is larger than the broker " +
+			"carries, which no retry changes: check the broker's max_payload"}
 	}
-	return true, "the write failed before it could answer: the same gesture under " +
-		"the same operation id finishes it"
+	return retry("the write failed before it could answer: the same gesture under " +
+		"the same operation id finishes it")
 }
 
 // NodeGate is the gesture, over every identity-claiming log this node runs.

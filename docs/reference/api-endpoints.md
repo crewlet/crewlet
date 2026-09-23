@@ -87,7 +87,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
 | `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
 | `POST` | `/work/retention/maintenance/exclude` | Record that a participant's process is stopped and holds no outstanding request |
-| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node whose operation ledger may have lost the first purge's row since — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build — answers the retry `unknown` again rather than purging twice. An id the engine did not mint is refused with `400 op_id_invalid`: it carries no instant, so no node could tell whether it already ran. So is one over 128 bytes or holding anything but visible ASCII — a space included — since the broker carries the id in a header that trims its ends and rewrites a line break (see [the three retention gestures that write](#the-three-retention-gestures-that-write) for the whole rule). The answer carries the write's `outcome`, its `op_id` and the `position` the record holds, which is absent for `unknown`: that outcome has none. **Operator-only**, and absent rather than 503 on a build with no tracker |
+| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge — pass back the `op_id` a previous answer returned, unchanged: it carries the instant it was minted, and a node whose operation ledger may have lost the first purge's row since — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build — answers the retry `unknown` again rather than purging twice. An id that is not in the engine's grammar is refused with `400 op_id_invalid`: it carries no instant, so no node could tell whether it already ran. So is one over 128 bytes or holding anything but visible ASCII — a space included — since the broker carries the id in a header that trims its ends and rewrites a line break (see [the three retention gestures that write](#the-three-retention-gestures-that-write) for the whole rule). The answer carries the write's `outcome`, its `op_id` and the `position` the record holds, which is absent for `unknown`: that outcome has none. **Operator-only**, and absent rather than 503 on a build with no tracker |
 | `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo, and the case a reanchor would answer |
 | `POST` | `/work/retention/reanchor` | Adopt a recreated stream, or a broker restored from an older copy, at the next generation |
 | `GET` | `/work/views` | One container's **view strip**: the six every container has without anybody saving one, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) — a project key is upper-cased and a unit is resolved to its `id` where the chart gave it one, so a team's strip is one strip under either of its spellings and `?viewer=` is whose personal views and pins order the strip — **your own seat, or operator-only for anybody else's**, the same scope rule as `/work/my-work`; absent is the shared strip, which needs no credential |
@@ -2267,8 +2267,8 @@ letting it write again are not reads, whatever a laptop deployment allows.
 | Route | What it does |
 |---|---|
 | `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
-| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail` and `hint`. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. |
-| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A position that could not be compared at all — the register or the floor unreadable, or this node behind a reanchor the fleet has made — is `500 gate_failed`, and refuses too. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
+| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. |
+| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A position that could not be compared at all — the register or the floor unreadable, or this node behind a reanchor the fleet has made — is `500 gate_failed`, and refuses too. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
 `confirm` echoes the node id, and a mismatch is `400`. A node id no node could
 run under — the [`node.id`](../concepts/configuration.md#nodeid) rule, since the
@@ -2296,7 +2296,7 @@ log**:
     {"domain": "pages", "stream": "CREWLET_PAGES_LOG",
      "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.pages:node-4",
      "outcome": "unknown",
-     "retry": true,
+     "actions": ["retry_same_op"],
      "hint": "its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not"}
   ]
 }
@@ -2312,25 +2312,42 @@ written**, and `reason` names why in the vocabulary every write refusal uses
 (`log_full`, `evicted`, …). A log that answered holds its record whatever the
 other did.
 
-A log the gesture did not finish also carries **`retry`** — whether the same
-request, sent again with the answer's `op_id`, can finish it — and **`hint`**,
-what to do. `retry` is true for an `unknown` outcome, a lost race and a refusal
-that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`).
-It is **false** where the same request is refused the same way for ever:
-`log_full` (a gate record is admitted into the log's
-[gate reserve](../guides/retention.md#the-gate-reserve), so this is a log full
-to its broker ceiling past even that — raise the ceiling with `crewlet
-retention set-capacity`),
-`evicted` (this node is evicted itself; ask one the fleet still counts),
-`wrong_stream` (the log was rebuilt; re-anchor it), `skew`, and the two that
-are about the operation rather than the log — `superseded`, an operation whose
-record landed and a later gate record on the same node has undone since (an
-eviction retried after a readmission), and `op_reused`, an operation id that
-already names a record on another object. Both of those are a new gesture,
-without `op_id`.
+A log the gesture did not finish also carries **`actions`** — what to do, in
+order — and **`hint`**, the sentence saying why. Both are absent on a log that
+holds its record. The actions are a closed set a client switches on, and
+`hint` names no client's controls: `crewlet retention evict` renders an action
+as its own flags and the dashboard's evict dialog as its own buttons, so a
+sentence spelling `-force` is never shown beside a screen that has no such
+flag. Every refusal answer above carries `actions` beside its `hint` too,
+and the `op_id` the request was sent under — so `retry_same_op` on a refusal
+(`503 eviction_unjudged`) is the same request with that `op_id`, read off the
+answer like any other. Nothing was written under it, so sending it again with
+a fresh one is equally safe.
+
+| Action | What the operator does | Where the gate answers it |
+|---|---|---|
+| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome, a lost race, a failure before the write answered, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`); `503 eviction_unjudged` |
+| `new_gesture` | Start a new gesture, without `op_id` | `superseded` — the operation's record landed and a later gate record on the same node has undone it since (an eviction retried after a readmission) — and `op_reused`, an operation id that already names a record on another object |
+| `force` | Send the eviction again with `force=true` | `409 eviction_refused`, `503 eviction_unjudged` |
+| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | `evicted` (this node is evicted itself), and beside `retry_same_op` on `deferred` and `below_floor` |
+| `reanchor` | [Re-anchor the log](../guides/retention.md#re-anchoring-a-recreated-or-restored-log) first, then send the same request with the same `op_id` | `wrong_stream` |
+| `set_capacity` | [Raise the log's ceiling](../guides/retention.md#changing-a-logs-ceiling), then send the same request with the same `op_id` | `log_full` — a gate record is admitted into the log's [gate reserve](../guides/retention.md#the-gate-reserve), so this is a log full to its broker ceiling past even that |
+| `wait` | Wait for what `hint` names to clear on its own, then run it again | `409 eviction_refused` (the lease to lapse), `409 readmission_refused` (the node to catch up) |
+| `restore` | Restore the store and the stream from one backup | `skew` |
+
+A log with a `hint` and **no** `actions` is one no gesture clears — a record
+larger than the broker's `max_payload`, or a refusal reason this build has no
+word for — and the hint says what does. Only `retry_same_op` makes the same
+request, sent again **now**, the remedy. But four actions — `retry_same_op`,
+`other_node`, `reanchor` and `set_capacity` — keep the gesture's own `op_id` as
+how it is finished once the operator has acted: a gesture sent afresh after
+raising a ceiling is a second one, which writes every log that already holds
+the first one's record again, re-dates that eviction, restarts its fence
+window and turns the first `op_id` into `superseded`. Only `new_gesture` ends
+the operation for good.
 
 `complete` is true only when every log answered `applied` or `pending`. When it
-is false and a log says `retry`, send **the same request again with `op_id`**
+is false and a log offers `retry_same_op`, send **the same request again with `op_id`**
 set to the operation id the answer carried. Each log's record is published
 under an id derived from it — the entry's own `op_id`, which carries the
 gesture's sign, the log and the node — and each log's snapshot reads that id's
@@ -2345,9 +2362,16 @@ it is a different operation on every log, and one carried to another node is
 that node's own operation.
 
 An `op_id` is held to one rule, here and on the purge route, and anything else
-is `400 op_id_invalid` with nothing judged or written: an id **the engine
-minted**, of **at most 128 bytes** of **visible ASCII with no space**. One the
-engine did not mint carries no instant, so no node could tell whether it
+is `400 op_id_invalid` with nothing judged or written: an id **in the engine's
+grammar** — a UUIDv7 whose leading 48 bits are the Unix millisecond it was
+minted at, optionally followed by `.` and a name — of **at most 128 bytes** of
+**visible ASCII with no space**. A client may mint its own, and both of the
+engine's own clients do, before the first request: `crewlet retention evict`
+on the workstation's clock and the dashboard's evict dialog on the browser's.
+The mint instant is read by the state log to decide whether its ledger can
+vouch for a retry, so a client clock far ahead of the fleet's is the one case
+this trusts a caller with — the same one it trusts the engine's own nodes with.
+An id with no instant carries nothing to read, so no node could tell whether it
 already ran. The rest of the rule is the broker's: only the id's leading uuid
 is minted and the rest is free text, while the whole id travels as the
 broker's message-id header, which trims its ends and turns a line break into a
@@ -2361,8 +2385,9 @@ the request, so a request abandoned before it wrote nothing; once the first
 record is about to be written the node finishes the gesture under its own
 one-minute budget, so a dropped connection or a client timeout never leaves a
 node evicted on one log and counted on the other. A caller that sends its own
-`op_id` — `crewlet retention evict` always does — can ask again with it and
-read every log's answer.
+`op_id` — `crewlet retention evict` and the dashboard both do — can ask again
+with it and read every log's answer; one that let the route mint it has lost
+the id with the answer that never arrived.
 
 Every node running the state log serves both routes, whichever backends the
 company uses: a company on an external tracker still runs both logs. A node

@@ -186,15 +186,24 @@ func PermitEviction(nodeID string, live []Presence, force bool) error {
 	return nil
 }
 
-// Remedy is what the operator does about an eviction refusal.
-func (e *EvictionRefusal) Remedy() string {
+// Remedy is what the operator does about an eviction refusal: wait for the
+// lease to lapse, or force the eviction past it.
+//
+// IN NO SURFACE'S VOCABULARY — see [GateAction]: the command line renders
+// [GateForce] as -force and the dashboard as a separately confirmed control,
+// and a sentence spelling the flag was rendered word for word by a screen that
+// has none.
+func (e *EvictionRefusal) Remedy() GateRemedy {
 	if e.NodeID == "" {
-		return "name the node to evict"
+		return GateRemedy{Detail: "name the node to evict"}
 	}
-	return fmt.Sprintf("stop %s and wait for its presence lease to lapse "+
-		"(its LIVE column in `crewlet retention status` reads no), then run the "+
-		"eviction again — or, if it is wedged in a way that still renews its "+
-		"lease, evict it with -force", e.NodeID)
+	return GateRemedy{
+		Actions: []GateAction{GateWait, GateForce},
+		Detail: fmt.Sprintf("stop %s and wait for its presence lease to lapse — "+
+			"the retention report stops showing it live — then run the eviction "+
+			"again; or, if it is wedged in a way that still renews its lease, "+
+			"force the eviction past the lease", e.NodeID),
+	}
 }
 
 // ReadmissionBound is one identity-claiming domain's bound, as the node that
@@ -292,14 +301,18 @@ func (e *ReadmissionRefusal) Error() string {
 // where it does not, at boot or on the heartbeat that finds it there — and a
 // readmission is the gesture that follows that repair rather than one that
 // stands in for it.
-func (e *ReadmissionRefusal) Remedy() string {
-	return fmt.Sprintf("start %s if it is not running: it catches up on its own, "+
-		"replaying what the log still holds and adopting a peer's snapshot where "+
-		"it does not (`crewlet retention snapshots` says whether any peer can "+
-		"donate). Readmit it once it has applied every record up to the one just "+
-		"before the higher of the floor and the first surviving sequence this "+
-		"refusal names: its SEQ in `crewlet retention status` at that bound minus "+
-		"one or above, at the log's current generation", e.NodeID)
+func (e *ReadmissionRefusal) Remedy() GateRemedy {
+	return GateRemedy{
+		Actions: []GateAction{GateWait},
+		Detail: fmt.Sprintf("start %s if it is not running: it catches up on its "+
+			"own, replaying what the log still holds and adopting a peer's snapshot "+
+			"where it does not — the retention report's snapshots say whether any "+
+			"peer can donate one. Readmit it once it has applied every record up to "+
+			"the one just before the higher of the floor and the first surviving "+
+			"sequence this refusal names: its position on that log in the retention "+
+			"report at that bound minus one or above, at the log's current "+
+			"generation", e.NodeID),
+	}
 }
 
 // PermitReadmission decides whether an evicted node may be counted again.

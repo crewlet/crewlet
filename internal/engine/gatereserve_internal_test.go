@@ -177,10 +177,11 @@ func TestAnEvictionPastTheReserveIsSentToSetCapacity(t *testing.T) {
 		}
 		if d.Retry() {
 			t.Errorf("%s advises running the gesture again on a log whose reserve "+
-				"is spent: %s", d.Domain, d.Remedy())
+				"is spent: %+v", d.Domain, d.Remedy())
 		}
-		if !strings.Contains(d.Remedy(), "set-capacity") {
-			t.Errorf("%s's remedy does not name set-capacity: %s", d.Domain, d.Remedy())
+		if !d.Remedy().Offers(statelog.GateSetCapacity) {
+			t.Errorf("%s's remedy does not offer raising the ceiling: %+v",
+				d.Domain, d.Remedy())
 		}
 		if !strings.Contains(d.Err.Error(), "gate record") {
 			t.Errorf("%s's refusal does not say the gate record was refused past "+

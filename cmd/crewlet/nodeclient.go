@@ -198,14 +198,33 @@ type noAnswer struct{ error }
 
 func (e noAnswer) Unwrap() error { return e.error }
 
+// nodeRefusal is a non-200 the node answered: the status, and the refusal's
+// own fields beside the message built from them.
+//
+// A TYPE rather than a bare error for the one command that has to act on a
+// field the message does not carry: a gate refusal names what to do as
+// `actions` — a closed set each surface renders in its own words — and
+// `crewlet retention evict` renders them as the flags it has (-force, -op-id),
+// which it can only do if it can read them.
+type nodeRefusal struct {
+	Status  int
+	Code    string
+	Actions []string
+	msg     string
+}
+
+func (e *nodeRefusal) Error() string { return e.msg }
+
 // nodeError turns a non-200 into something an operator can act on.
 func nodeError(status int, body []byte, sentToken bool) error {
 	var payload struct {
-		Error  string `json:"error"`
-		Detail string `json:"detail"`
-		Hint   string `json:"hint"`
+		Error   string   `json:"error"`
+		Detail  string   `json:"detail"`
+		Hint    string   `json:"hint"`
+		Actions []string `json:"actions"`
 	}
 	_ = json.Unmarshal(body, &payload)
+	refusal := &nodeRefusal{Status: status, Code: payload.Error, Actions: payload.Actions}
 	switch status {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		if !sentToken {
@@ -222,13 +241,14 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		// the detail and hint beside it are what say where to go
 		// instead — "draining" on its own names what happened and not
 		// what to do about it.
-		return fmt.Errorf("this node cannot serve that: %s", withRefusalDetail(
+		refusal.msg = "this node cannot serve that: " + withRefusalDetail(
 			firstNonEmpty(payload.Error,
 				"it is running without the backend the route needs"),
-			payload.Detail, payload.Hint))
+			payload.Detail, payload.Hint)
 	default:
-		return fmt.Errorf("the node answered %d: %s", status,
+		refusal.msg = fmt.Sprintf("the node answered %d: %s", status,
 			withRefusalDetail(firstNonEmpty(payload.Error, string(body)),
 				payload.Detail, payload.Hint))
 	}
+	return refusal
 }

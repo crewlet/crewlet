@@ -2,6 +2,7 @@ package statelog_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -240,8 +241,11 @@ func TestAReadmissionIsRefusedBelowTheFloor(t *testing.T) {
 					t.Errorf("the refusal never mentions %q: %s", want, refusal)
 				}
 			}
-			if !strings.Contains(refusal.Remedy(), "crewlet retention snapshots") {
-				t.Errorf("the remedy does not say where to look: %s", refusal.Remedy())
+			// WHERE TO LOOK, in no surface's vocabulary: the retention
+			// report, which the command line prints and the dashboard draws.
+			if remedy := refusal.Remedy(); !strings.Contains(remedy.Detail, "snapshots") ||
+				!slices.Equal(remedy.Actions, []statelog.GateAction{statelog.GateWait}) {
+				t.Errorf("the remedy does not say to wait and where to look: %+v", remedy)
 			}
 		})
 	}

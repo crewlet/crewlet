@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -41,8 +41,10 @@ type fakeRetentionNode struct {
 
 	// gateQuery is everything the last gate request carried, and
 	// gateResult what the gate answers with — every log applied when nil.
+	// gateErr, when it is one of the gate's refusals, is answered instead.
 	gateQuery  url.Values
 	gateResult *engine.GateResult
+	gateErr    error
 
 	// hangUp makes a gate request go unanswered: the connection is closed
 	// with no response.
@@ -103,14 +105,20 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 				}
 				opID := r.URL.Query().Get("op_id")
 				if opID == "" {
-					opID = "op-minted"
+					opID = statelog.NewOpID(time.Now(), verb+"-"+r.PathValue("node"))
 				}
-				// THE ENGINE'S OWN TYPE, rendered as the route renders
-				// it, so this fixture cannot drift from the answer a
-				// real node gives.
-				result := n.gateResult
-				if result == nil {
-					result = &engine.GateResult{Domains: []engine.DomainGate{
+				w.Header().Set("Content-Type", "application/json")
+				// A REFUSAL, RENDERED BY THE ROUTE'S OWN RENDERER, so the
+				// actions this command turns into flags are the ones a real
+				// node sends.
+				if refusal, ok := api.RenderGateRefusal(r.PathValue("node"),
+					opID, n.gateErr); ok {
+					w.WriteHeader(refusal.Status)
+					_ = json.NewEncoder(w).Encode(refusal.Body)
+					return
+				}
+				result := engine.GateResult{Node: r.PathValue("node"), OpID: opID,
+					Domains: []engine.DomainGate{
 						{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG",
 							OpID: opID + ".evict.tracker", Outcome: statelog.OutcomeApplied,
 							Position: statelog.Position{
@@ -120,30 +128,13 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 							Position: statelog.Position{
 								Stream: "CREWLET_PAGES_LOG", Seq: 4410}},
 					}}
+				if n.gateResult != nil {
+					result.Domains = n.gateResult.Domains
 				}
-				domains := make([]map[string]any, 0, len(result.Domains))
-				for _, d := range result.Domains {
-					entry := map[string]any{"domain": d.Domain, "stream": d.Stream,
-						"op_id": d.OpID}
-					var refused *statelog.Unavailable
-					switch {
-					case errors.As(d.Err, &refused):
-						entry["error"], entry["reason"] = d.Err.Error(), refused.Reason
-					case d.Err != nil:
-						entry["error"] = d.Err.Error()
-					default:
-						entry["outcome"], entry["position"] = d.Outcome, d.Position
-					}
-					if hint := d.Remedy(); hint != "" {
-						entry["retry"], entry["hint"] = d.Retry(), hint
-					}
-					domains = append(domains, entry)
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"node": r.PathValue("node"), "evicted": verb == "evict",
-					"op_id": opID, "complete": result.Complete(), "domains": domains,
-				})
+				// THE ROUTE'S OWN RENDERER, never a copy of it here: the copy
+				// this replaced claimed it "cannot drift" and already sent a
+				// position for an unknown log that no node sends.
+				_ = json.NewEncoder(w).Encode(api.RenderGate(verb == "evict", result))
 			})
 	}
 	n.server = httptest.NewServer(mux)
@@ -472,35 +463,44 @@ func TestAGateGestureRequiresTheNodeIdTwice(t *testing.T) {
 func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 	node := newFakeRetentionNode(t)
 	base := bootstrapForURL(t, node.server.URL)
+	gesture := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
 	applied := engine.DomainGate{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG",
-		OpID: "op-9.evict.tracker", Outcome: statelog.OutcomeApplied,
+		OpID: gesture + ".evict.tracker", Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 918280002}}
 	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{applied,
-		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: "op-9.evict.pages",
+		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: gesture + ".evict.pages",
 			Outcome: statelog.OutcomeUnknown}}}
 
 	stdout, _, err := cli(t, "retention", "evict", "node-4", base,
-		"-confirm", "node-4", "-op-id", "op-9", "-force")
+		"-confirm", "node-4", "-op-id", gesture, "-force")
 	if err == nil {
 		t.Fatalf("a gesture that missed the pages log exited zero:\n%s", stdout)
 	}
-	if got := node.gateQuery.Get("op_id"); got != "op-9" {
-		t.Errorf("the node was sent op_id %q, want the operator's own op-9 — a "+
-			"retry under a fresh id is a second gesture", got)
+	if got := node.gateQuery.Get("op_id"); got != gesture {
+		t.Errorf("the node was sent op_id %q, want the operator's own %s — a "+
+			"retry under a fresh id is a second gesture", got, gesture)
 	}
 	if got := node.gateQuery.Get("force"); got != "true" {
 		t.Errorf("the node was sent force=%q for an eviction run with -force", got)
 	}
+	again := "-op-id " + gesture + " -force"
 	for _, want := range []string{
 		"tracker: applied at CREWLET_TRACKER_LOG 918280002",
 		"pages: unknown",
-		"-op-id op-9 -force",
+		again,
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the output never says %q:\n%s", want, stdout)
 		}
 	}
-	if !strings.Contains(err.Error(), "-op-id op-9 -force") {
+	// NO POSITION FOR AN UNKNOWN LOG: the route sends none, and a line
+	// printing one — "unknown at 0" — reads as a record at the log's origin.
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.Contains(line, "pages: unknown") && strings.Contains(line, " at ") {
+			t.Errorf("the unknown log's line prints a position: %q", line)
+		}
+	}
+	if !strings.Contains(err.Error(), again) {
 		t.Errorf("the error never names the command that finishes it: %v", err)
 	}
 	// AND IT DOES NOT CLAIM THE NODE STOPS BEING COUNTED, which is only true
@@ -511,29 +511,86 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 	}
 
 	// A FULL LOG IS NOT OFFERED THE SAME COMMAND AGAIN, and says what makes
-	// room instead.
+	// room instead — as this command's own verb, which the node's sentence
+	// no longer spells, because the dashboard renders it too.
 	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{applied,
-		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: "op-9.evict.pages",
+		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: gesture + ".evict.pages",
 			Err: fmt.Errorf("pages: %w", &statelog.Unavailable{
 				Reason: statelog.ReasonLogFull, Detail: "the broker refused to store it"})}}}
 	stdout, _, err = cli(t, "retention", "evict", "node-4", base,
-		"-confirm", "node-4", "-op-id", "op-9")
+		"-confirm", "node-4", "-op-id", gesture)
 	if err == nil {
 		t.Fatalf("a gesture a full log refused exited zero:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "pages: not written (log_full)") ||
-		!strings.Contains(stdout, "set-capacity") {
+		!strings.Contains(stdout, "crewlet retention set-capacity CREWLET_PAGES_LOG") {
 		t.Errorf("a full log's refusal never names the capacity verb:\n%s", stdout)
 	}
-	if strings.Contains(stdout, "-op-id") || strings.Contains(err.Error(), "-op-id") {
-		t.Errorf("a full log was advised the retry it refuses for ever:\n%s\n%v",
-			stdout, err)
+	// NOT THE SAME COMMAND NOW — it is refused the same way until the
+	// ceiling moves — AND NOT A FRESH ONE AFTER: once there is room, this
+	// gesture's own id is what finishes it, because a fresh one writes the
+	// tracker's log again and re-dates the eviction there.
+	if strings.Contains(stdout, "The gesture has not reached every log. Run it again") {
+		t.Errorf("a full log was advised the retry it refuses until its ceiling "+
+			"moves:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "-confirm <bytes>, then run this again with -op-id "+gesture) ||
+		!strings.Contains(err.Error(), "then run it again with -op-id "+gesture) {
+		t.Errorf("a full log was not told to finish this gesture once it has "+
+			"room:\n%s\n%v", stdout, err)
+	}
+
+	// A SUPERSEDED OPERATION IS ADVISED A NEW GESTURE, and not this one again.
+	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{applied,
+		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: gesture + ".evict.pages",
+			Err: fmt.Errorf("pages: %w", &statelog.Unavailable{
+				Reason: statelog.ReasonSuperseded, Detail: "undone since"})}}}
+	stdout, _, err = cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-op-id", gesture)
+	if err == nil || !strings.Contains(stdout, "run it again without -op-id") {
+		t.Errorf("a superseded log was not advised a fresh gesture (%v):\n%s", err, stdout)
+	}
+	if strings.Contains(stdout, "-op-id "+gesture) {
+		t.Errorf("a superseded log was advised the operation it can never finish:\n%s",
+			stdout)
 	}
 
 	// A READMISSION HAS NO -force: it is refused as a flag rather than sent.
 	if _, _, err := cli(t, "retention", "readmit", "node-4", base,
 		"-confirm", "node-4", "-force"); err == nil {
 		t.Error("readmit accepted -force, which it has no meaning for")
+	}
+}
+
+// A REFUSED EVICTION SAYS HOW TO GET PAST IT IN THIS COMMAND'S OWN FLAGS.
+//
+// The node names what to do as actions and a sentence spelling no flag, since
+// the dashboard renders the same refusal; this command turns `force` into
+// -force — and does not offer it to an operator who already passed it.
+func TestARefusedEvictionNamesTheFlagThatForcesIt(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	for name, refusal := range map[string]error{
+		"a live lease": fmt.Errorf("engine: evict node node-4: %w",
+			statelog.PermitEviction("node-4",
+				[]statelog.Presence{{NodeID: "node-4"}}, false)),
+		"an unreadable listing": &engine.GateUnjudged{Node: "node-4",
+			Err: fmt.Errorf("list the live nodes: coordination is unreachable")},
+	} {
+		node.gateErr = refusal
+		_, _, err := cli(t, "retention", "evict", "node-4", base, "-confirm", "node-4")
+		if err == nil {
+			t.Fatalf("%s: a refused eviction exited zero", name)
+		}
+		if !strings.Contains(err.Error(), "evict it with -force") {
+			t.Errorf("%s: the refusal never names -force:\n%v", name, err)
+		}
+	}
+	node.gateErr = fmt.Errorf("engine: evict node node-4: %w",
+		statelog.PermitEviction("node-4", []statelog.Presence{{NodeID: "node-4"}}, false))
+	_, _, err := cli(t, "retention", "evict", "node-4", base, "-confirm", "node-4")
+	if err == nil || !strings.Contains(err.Error(), "LIVE column") {
+		t.Errorf("a live node's refusal never says how to tell its lease lapsed: %v", err)
 	}
 }
 
@@ -663,7 +720,8 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	}
 	floor := strconv.FormatUint(tracker.LastSeq, 10)
 	for _, want := range []string{"409", "readmission_refused", "node-away",
-		"is 0", "below " + floor, "crewlet retention snapshots"} {
+		"is 0", "below " + floor, "crewlet retention snapshots",
+		"crewlet retention status"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal never says %q:\n%v", want, err)
 		}

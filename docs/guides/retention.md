@@ -516,27 +516,44 @@ position it already has, and only a missing log is written — even through a
 node whose applier had not reached the first record yet, and however long
 after the first run the retry comes. A fresh id would be a second gesture
 rather than this one finished. The command mints the id **before** it asks —
-the engine's own way, carrying its instant, since the node refuses an id it
-did not mint — so a gesture the node never answered — the connection dropped,
-the wait ran out — still prints the `-op-id` that finishes it.
+in the engine's own grammar, carrying its instant, since the node refuses an id
+that carries none — so a gesture the node never answered — the connection
+dropped, the wait ran out — still prints the `-op-id` that finishes it.
 
-Where running it again **cannot** finish a log, it says what can instead, and
-offers no `-op-id`:
+Where running it again **cannot** finish a log straight away, it says what
+has to happen first — and in every case but two, the gesture survives that
+remedy, so it prints the same `-op-id` to finish it with afterwards. A fresh id
+there would be a second gesture: every log that already holds the first one's
+record would be written again, its eviction re-dated and its fence window
+restarted, and the first id would answer `superseded` to anyone finishing it.
 
 - `log_full` — that log is full to its broker ceiling, past even the
   [reserve kept for gate records](#the-gate-reserve), so no retry makes room:
-  raise its ceiling with [`crewlet retention set-capacity`](#changing-a-logs-ceiling).
-  A log full only for ordinary writes does not refuse an eviction at all.
+  raise its ceiling with [`crewlet retention set-capacity`](#changing-a-logs-ceiling),
+  then run the gesture again with the same `-op-id`. A log full only for
+  ordinary writes does not refuse an eviction at all.
 - `evicted` — the node you ran it on is itself evicted and writes nothing: run
-  the gesture from a node the fleet still counts.
+  the gesture, under the same `-op-id`, through a node the fleet still counts
+  (`-url`).
 - `wrong_stream` — the log was rebuilt under this node:
-  [re-anchor it](#re-anchoring-a-recreated-or-restored-log) first.
+  [re-anchor it](#re-anchoring-a-recreated-or-restored-log) first, then run the
+  gesture again with the same `-op-id`.
+
+The two where the operation itself is over, and a new gesture is the only way
+on:
+
 - `superseded` — the operation's record landed and a later gate record on the
   same node has undone it since (an eviction retried after a readmission took
   the node back). Run a new gesture, without `-op-id`, if the node should
   change again.
 - `op_reused` — the operation id already names a record on another object:
   run the gesture without `-op-id`.
+
+What to do about each log comes from the node as an **action** — the same
+gesture again, a new one, force, another node, a reanchor, a larger ceiling,
+a wait or a restore ([the full set](../reference/api-endpoints.md#the-three-retention-gestures-that-write))
+— beside a sentence that names no flag, and the command prints each action as
+the flags it has. The dashboard renders the same actions as its own controls.
 
 It prints the watermark before and after, and the instant the eviction takes
 effect. **The evicted node stays counted for about a minute** on each log after

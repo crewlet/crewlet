@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -559,8 +560,10 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 				"finish it on the logs it did not reach; empty starts a new one")
 		if evict {
 			force = fs.Bool("force", false,
-				"evict a node that still holds a live presence lease — only for "+
-					"one wedged in a way that still renews it")
+				"evict past the live-lease judgement: a node that still holds a "+
+					"presence lease (one wedged in a way that still renews it), or "+
+					"one whose lease this node cannot read (503 eviction_unjudged) "+
+					"— only when you know it is gone")
 		}
 	})
 	if err != nil {
@@ -622,10 +625,24 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 				"again with %s — every log that already holds the record answers "+
 				"from its own rows, and only a missing one is written.\n", verb, again)
 		}
+		// A REFUSAL NAMES WHAT TO DO AS ACTIONS, which this command renders
+		// as the flags it has: the node's own sentence names no surface's
+		// controls, because the dashboard renders the same refusal.
+		var refused *nodeRefusal
+		if errors.As(err, &refused) {
+			advice := gateAdvice(refused.Actions, gateAdviceContext{
+				again: again, forced: forced, readmit: !evict, node: node})
+			if len(advice) > 0 {
+				return fmt.Errorf("%w\n  %s", err, strings.Join(advice, "\n  "))
+			}
+		}
 		return err
 	}
 	fmt.Fprintf(stdout, "%s %s (operation %s)\n", verb, node, answer.OpID)
-	pending, retry := false, false
+	// retry is a log the same command finishes NOW, and keep one it finishes
+	// once what its own line names is done — both under this gesture's own
+	// operation id, never a fresh one.
+	pending, retry, keep := false, false, false
 	for _, d := range answer.Domains {
 		switch {
 		case d.Outcome == string(statelog.OutcomeUnknown):
@@ -633,21 +650,34 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 			// as "at 0" it read as a record landed at the log's origin.
 			fmt.Fprintf(stdout, "  %s: unknown — the record may or may not be "+
 				"on the log\n", d.Domain)
-		case d.Outcome != "":
+		case d.Outcome != "" && d.Position != nil:
 			fmt.Fprintf(stdout, "  %s: %s at %s %d\n", d.Domain, d.Outcome,
 				d.Position.Stream, d.Position.Seq)
+			pending = pending || d.Outcome == string(statelog.OutcomePending)
+		case d.Outcome != "":
+			fmt.Fprintf(stdout, "  %s: %s\n", d.Domain, d.Outcome)
 			pending = pending || d.Outcome == string(statelog.OutcomePending)
 		case d.Reason != "":
 			fmt.Fprintf(stdout, "  %s: not written (%s) — %s\n", d.Domain, d.Reason, d.Error)
 		default:
 			fmt.Fprintf(stdout, "  %s: no outcome — %s\n", d.Domain, d.Error)
 		}
-		// WHAT TO DO ABOUT A LOG THE GESTURE DID NOT FINISH, in the node's
-		// own words — and only where it has some: running the command
-		// again is the remedy for some refusals and a loop for others.
+		// WHAT TO DO ABOUT A LOG THE GESTURE DID NOT FINISH: the node's
+		// sentence, then its actions as this command's own flags — and
+		// only where it has some: running the command again is the
+		// remedy for some refusals and a loop for others. The same
+		// gesture again is said once, below, for every log it finishes.
 		if d.Hint != "" {
 			fmt.Fprintf(stdout, "    %s\n", d.Hint)
-			retry = retry || d.Retry
+		}
+		retry = retry || slices.Contains(d.Actions, string(statelog.GateRetrySameOp))
+		keep = keep || slices.ContainsFunc(d.Actions, func(a string) bool {
+			return statelog.GateAction(a).KeepsOperation()
+		})
+		for _, line := range gateAdvice(d.Actions, gateAdviceContext{
+			again: again, forced: forced, readmit: !evict, node: node,
+			stream: d.Stream, perLog: true}) {
+			fmt.Fprintf(stdout, "    %s\n", line)
 		}
 	}
 	if pending {
@@ -664,10 +694,19 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 		// rather than this one finished, and a log whose refusal no
 		// retry clears is not offered one — its own line above says
 		// what does.
+		if !retry && keep {
+			// NOT NOW, AND NOT AFRESH. A log waiting on a larger ceiling
+			// or a reanchor is finished by THIS gesture once that is done:
+			// a fresh operation id would write every log that already
+			// holds the record again, re-dating each eviction.
+			return fmt.Errorf("the %s of %s did not reach every log: do what each "+
+				"log's line names, then run it again with %s — a fresh operation id "+
+				"would write the logs that already hold the record again",
+				verb, node, again)
+		}
 		if !retry {
 			return fmt.Errorf("the %s of %s did not reach every log, and running "+
-				"it again cannot finish it until what each log's line names is "+
-				"done", verb, node)
+				"it again cannot finish it: each log's line says what does", verb, node)
 		}
 		fmt.Fprintf(stdout, "  The gesture has not reached every log. Run it again "+
 			"with %s to finish it: a log that already holds the record answers "+
@@ -709,23 +748,97 @@ type gateAnswer struct {
 // gateDomain is one log's answer: an outcome and its position, or the reason
 // and the error that stopped it.
 type gateDomain struct {
-	Domain   string `json:"domain"`
-	Stream   string `json:"stream"`
-	OpID     string `json:"op_id"`
-	Outcome  string `json:"outcome"`
-	Position struct {
-		Stream     string `json:"stream"`
-		Generation uint32 `json:"generation"`
-		Seq        uint64 `json:"seq"`
-	} `json:"position"`
+	Domain  string `json:"domain"`
+	Stream  string `json:"stream"`
+	OpID    string `json:"op_id"`
+	Outcome string `json:"outcome"`
+
+	// Position is ABSENT for an unknown outcome, and a pointer so that
+	// absence is observable rather than a zero position that reads as a
+	// record at the log's origin.
+	Position *gatePosition `json:"position"`
+
 	Reason string `json:"reason"`
 	Error  string `json:"error"`
 
-	// Retry and Hint are the node's own judgement of a log the gesture did
-	// not finish: whether running it again under the same operation id can
-	// finish it, and what to do either way. Absent on a finished log.
-	Retry bool   `json:"retry"`
-	Hint  string `json:"hint"`
+	// Actions and Hint are the node's own judgement of a log the gesture
+	// did not finish: what to do, as values this command renders as its
+	// own flags ([gateAdvice]), and the sentence saying why in no
+	// surface's vocabulary. Absent on a finished log.
+	Actions []string `json:"actions"`
+	Hint    string   `json:"hint"`
+}
+
+// gatePosition is where a log's record is durable.
+type gatePosition struct {
+	Stream     string `json:"stream"`
+	Generation uint32 `json:"generation"`
+	Seq        uint64 `json:"seq"`
+}
+
+// gateAdviceContext is what [gateAdvice] needs to spell an action as a
+// command: the flags that finish this gesture, whether it was forced or is a
+// readmission, and — for one log's line — which log.
+type gateAdviceContext struct {
+	again   string
+	forced  bool
+	readmit bool
+	node    string
+	stream  string
+
+	// perLog is a line under one log of a 200, where the same gesture
+	// again is said once below for every log it finishes rather than on
+	// each.
+	perLog bool
+}
+
+// gateAdvice renders the node's remedy actions as what to type.
+//
+// # Why the command line renders them, and not the node
+//
+// The node used to send one sentence in this command's vocabulary — "evict it
+// with -force", "run it again without -op-id", "(-url)" — and the dashboard
+// rendered that sentence word for word beside a dialog with none of those
+// flags. So the node now says WHAT to do as a closed set of actions and a
+// sentence naming no surface's controls, and each surface says HOW: here, as
+// flags. An action this build does not know renders nothing, and the node's
+// sentence above it still says what it is.
+func gateAdvice(actions []string, c gateAdviceContext) []string {
+	var out []string
+	for _, a := range actions {
+		switch statelog.GateAction(a) {
+		case statelog.GateRetrySameOp:
+			if !c.perLog {
+				out = append(out, "run it again with "+c.again)
+			}
+		case statelog.GateNewGesture:
+			out = append(out, "run it again without -op-id, so it takes a fresh one")
+		case statelog.GateForce:
+			if !c.forced && !c.readmit {
+				out = append(out, "or, if you know "+c.node+" is gone, evict it with "+
+					"-force")
+			}
+		case statelog.GateOtherNode:
+			out = append(out, "run it through another node the fleet still counts: "+
+				"-url <that node> "+c.again)
+		case statelog.GateReanchor:
+			out = append(out, "crewlet retention reanchor -stream "+c.stream+
+				", then run this again with "+c.again)
+		case statelog.GateSetCapacity:
+			out = append(out, "crewlet retention set-capacity "+c.stream+
+				" <bytes> -confirm <bytes>, then run this again with "+c.again)
+		case statelog.GateWait:
+			if c.readmit {
+				out = append(out, "its SEQ in `crewlet retention status` says when it "+
+					"has caught up, and `crewlet retention snapshots` whether a peer "+
+					"can donate one; then run this again")
+			} else {
+				out = append(out, "its LIVE column in `crewlet retention status` reads "+
+					"no once the lease has lapsed; then run this again")
+			}
+		}
+	}
+	return out
 }
 
 // gateRequestTimeout is how long `retention evict` and `readmit` wait for the
