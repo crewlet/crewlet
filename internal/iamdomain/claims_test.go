@@ -126,10 +126,22 @@ func TestAnOrphanedReservationIsReportedAndARemovalRepairsIt(t *testing.T) {
 	rig := newWriteRig(t)
 	reader := rig.reader(t)
 
+	// THE ADDRESS, because that is the claim an enrolment takes FIRST and
+	// the one an enrolment stopped in its tracks leaves behind. A LOGIN
+	// cannot be claimed for an id nobody enrolled at all: its grammar is
+	// its holder's kind, and there is no holder to read it from.
+	blinder, err := iamdomain.NewBlinder(testBlindKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ghostAddress, err := blinder.Email("ghost@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
 	ghost := uuid.Must(uuid.NewV7()).String()
 	if err := rig.during(func() error {
-		_, err := rig.writer.Claim(t.Context(), iamdomain.KindLogin,
-			"ghost.person", ghost, "claim-ghost")
+		_, err := rig.writer.Claim(t.Context(), iamdomain.KindEmail,
+			ghostAddress, ghost, "claim-ghost")
 		return err
 	}); err != nil {
 		t.Fatalf("Claim: %v", err)
@@ -138,12 +150,16 @@ func TestAnOrphanedReservationIsReportedAndARemovalRepairsIt(t *testing.T) {
 	// there is nothing it keeps out of circulation and nothing to report.
 	released := uuid.Must(uuid.NewV7()).String()
 	if err := rig.during(func() error {
-		if _, err := rig.writer.Claim(t.Context(), iamdomain.KindLogin,
-			"ghost.released", released, "claim-released"); err != nil {
+		releasedAddress, err := blinder.Email("released@example.com")
+		if err != nil {
 			return err
 		}
-		_, err := rig.writer.Release(t.Context(), iamdomain.KindLogin,
-			"ghost.released", released, "release-released", "given back")
+		if _, err := rig.writer.Claim(t.Context(), iamdomain.KindEmail,
+			releasedAddress, released, "claim-released"); err != nil {
+			return err
+		}
+		_, err = rig.writer.Release(t.Context(), iamdomain.KindEmail,
+			releasedAddress, released, "release-released", "given back")
 		return err
 	}); err != nil {
 		t.Fatalf("Claim and Release: %v", err)
@@ -164,9 +180,8 @@ func TestAnOrphanedReservationIsReportedAndARemovalRepairsIt(t *testing.T) {
 		t.Fatalf("Claims: %v", err)
 	}
 	if len(stopped.Orphans) != 1 || stopped.Orphans[0].Person != ghost ||
-		stopped.Orphans[0].Login != "ghost.person" ||
-		!slices.Equal(stopped.Orphans[0].Holds, []iamdomain.ObjectKind{iamdomain.KindLogin}) {
-		t.Fatalf("orphans = %+v, want the ghost reservation holding its login",
+		!slices.Equal(stopped.Orphans[0].Holds, []iamdomain.ObjectKind{iamdomain.KindEmail}) {
+		t.Fatalf("orphans = %+v, want the ghost reservation holding its address",
 			stopped.Orphans)
 	}
 

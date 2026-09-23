@@ -35,8 +35,11 @@ type linkedDirectory struct {
 	person iamdomain.Sighting
 }
 
-func (d linkedDirectory) PersonByEmailBlind(_ context.Context, blind string) (
-	iamdomain.Sighting, error) {
+// PersonBySubjectBlind answers the LINK: a sign-in resolves the provider's
+// subject through the link an invitation or an administrator made, never an
+// address the provider asserted.
+func (d linkedDirectory) PersonBySubjectBlind(_ context.Context, blind string,
+	_ time.Time) (iamdomain.Sighting, error) {
 
 	if blind != d.blind {
 		return iamdomain.Sighting{}, nil
@@ -147,6 +150,13 @@ func TestAnIdentityProviderSignInRedirectsBackAndIsAnnounced(t *testing.T) {
 		Stage: iam.StageActive, Login: "sam.okoro",
 	}
 	audit := &recordingAudit{}
+	// THE LINK IS KEYED ON THE SUBJECT'S BLIND under the surface's own
+	// blinder, so the directory answers only for the subject this provider
+	// asserts.
+	subjectBlind, err := fixtureBlinder(t).Subject(idp.URL, "subject-42")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// A REAL KEYRING, because the flight is a cookie: the fixture's
 	// pass-through cipher leaves JSON in it, which net/http refuses to
 	// carry, exactly as a browser would.
@@ -164,11 +174,7 @@ func TestAnIdentityProviderSignInRedirectsBackAndIsAnnounced(t *testing.T) {
 		Issuer: idp.URL, ClientID: idpClientID, ClientSecret: "not-a-real-secret",
 		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
 	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
-		o.Directory = linkedDirectory{
-			// stubBlinder's own spelling of the subject's blind.
-			blind:  "subject:" + idp.URL + "|subject-42",
-			person: person,
-		}
+		o.Directory = linkedDirectory{blind: subjectBlind, person: person}
 		o.Audit, o.Cipher = audit, cipher
 	})
 	mux := http.NewServeMux()

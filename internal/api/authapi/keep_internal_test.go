@@ -3,7 +3,9 @@ package authapi
 import (
 	"context"
 	"errors"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -119,6 +121,7 @@ func keepFixture(t *testing.T, landed statelog.Position, holdErr error) (
 	custody := &recordingCustody{err: holdErr}
 	return &Service{
 		boot: &b, writer: writer, signer: signer, custody: custody,
+		audit: quietAudit{},
 		provider: oidc.NewProvider(oidc.Config{Issuer: "https://idp.example.com"},
 			nil, nil),
 		now: time.Now,
@@ -179,3 +182,10 @@ func (c *recordingCustody) held() []iamdomain.RefreshGrant {
 	defer c.mu.Unlock()
 	return append([]iamdomain.RefreshGrant(nil), c.grants...)
 }
+
+// quietAudit takes every announcement and keeps none: this suite's subject is
+// custody, and the audit trail has its own.
+type quietAudit struct{}
+
+func (quietAudit) Emit(context.Context, events.Payload)       {}
+func (quietAudit) Failed(context.Context, authevents.Failure) {}
