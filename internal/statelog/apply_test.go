@@ -38,6 +38,13 @@ type probeApplier struct {
 	slowFrom uint64
 	slowFor  time.Duration
 	now      func() time.Time
+
+	// lockedOnce is the sequence whose FIRST apply fails the way a lost
+	// race for the write lock does, which the store classifies as
+	// transient and answers by running the whole transaction body again.
+	// It is how a case stages the re-run no healthy store produces.
+	lockedOnce uint64
+	lockedHit  bool
 }
 
 func newProbeApplier() *probeApplier {
@@ -50,6 +57,15 @@ func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 	a.mu.Unlock()
 	if fail != 0 && rec.Position.Seq == fail {
 		return 0, fmt.Errorf("the probe applier refuses sequence %d", fail)
+	}
+	a.mu.Lock()
+	locked := a.lockedOnce != 0 && rec.Position.Seq == a.lockedOnce && !a.lockedHit
+	if locked {
+		a.lockedHit = true
+	}
+	a.mu.Unlock()
+	if locked {
+		return 0, errors.New("database is locked")
 	}
 	if slowFrom != 0 && rec.Position.Seq >= slowFrom && a.now != nil {
 		// The clock is injected, so "slow" is deterministic rather than
@@ -1358,6 +1374,49 @@ func TestApplyTxAbortsAreCounted(t *testing.T) {
 	if got := h.counter(metrics.StatelogApplyRecords); got == 0 {
 		t.Error("the applier recorded no records at all, so this recorder is " +
 			"not connected and the assertion above proves nothing")
+	}
+}
+
+// A RE-RUN APPLY TRANSACTION SAYS WHAT IT SAW ONCE.
+//
+// The store runs an apply's body again when an attempt fails transiently, and
+// the rows it wrote roll back with it — but a counter bumped and a line logged
+// from inside the body do not. So a record retained as unverifiable, or
+// dropped by a gate, on the attempt that was abandoned and again on the one
+// that committed was counted twice, and `records.unverifiable` and
+// `records.gated` are what the alarm table reads. This stages the re-run the
+// healthy store never produces: the LAST record of the run fails its first
+// apply the way a lost lock does, so the whole body — the unverifiable record
+// and the gated one included — runs twice.
+func TestARerunApplySaysWhatItSawOnce(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.applier.gate = statelog.ReasonEvicted
+	h.applier.gated[2] = true
+	h.applier.lockedOnce = 3
+	h.fetch.offerFramed(1, sealedUnder(t, "k9", env(1, "edit", "a", "op-1", 1)))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	h.fetch.offer(3, env(3, "edit", "c", "op-3", 1))
+	if err := h.run(3); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// THE CONTROL: the body did run twice, or nothing below is about a
+	// re-run at all.
+	if got := h.counter(metrics.StatelogApplyTxAborts); got != 1 {
+		t.Fatalf("the store re-ran the apply body %d time(s), want exactly 1 "+
+			"— without the re-run this case asserts nothing", got)
+	}
+	if got := h.retainedCount(); got != 1 {
+		t.Fatalf("retained %d, want the one record this node cannot "+
+			"authenticate", got)
+	}
+	if got := h.counter(metrics.StatelogRecordsUnverifiable); got != 1 {
+		t.Errorf("one unverifiable record was counted %d times — the count "+
+			"is taken inside a body the store ran twice", got)
+	}
+	if got := h.counter(metrics.StatelogRecordsGated); got != 1 {
+		t.Errorf("one gated record was counted %d times — the count is "+
+			"taken inside a body the store ran twice", got)
 	}
 }
 

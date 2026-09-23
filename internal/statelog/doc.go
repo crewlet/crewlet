@@ -55,9 +55,12 @@
 // The rows a record produces, the record's operation id, and the checkpoint
 // that covers it commit in ONE transaction. The acknowledgement is OUTSIDE
 // it, because the store may re-run a transaction's body and a publish inside
-// one would happen twice. Two properties follow: a node can only be
-// BEHIND, never inconsistent; and a transaction ends at a RECORD boundary,
-// never inside one.
+// one would happen twice. The same holds for everything the body SAYS rather
+// than writes — a warning, a count of records retained or gated — so the body
+// notes what it saw, resets the notes with its tally on every attempt, and
+// the loop announces them once the commit lands. Two properties follow: a
+// node can only be BEHIND, never inconsistent; and a transaction ends at a
+// RECORD boundary, never inside one.
 //
 // The shape this must not copy is the one this framework replaced, and it was
 // correct for its own estate. internal/projection — deleted by node migration

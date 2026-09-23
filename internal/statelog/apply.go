@@ -855,8 +855,9 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 // still covers it, reporting whether it landed.
 func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, error) {
 	landed := false
+	var notes []applyNote
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
-		landed = false
+		landed, notes = false, notes[:0]
 		if _, covered, err := r.tables.deferredBelow(ctx, tx, rec.Scope, &rec.Position); err != nil {
 			return err
 		} else if covered {
@@ -865,8 +866,12 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		opts := r.opts
 		opts.Now = r.now()
 		opts.MaxVariables = r.db.Caps().MaxVariables
-		if _, _, err := r.applyOne(ctx, tx, rec, opts); err != nil {
+		_, gate, gated, err := r.applyOne(ctx, tx, rec, opts)
+		if err != nil {
 			return err
+		}
+		if gated {
+			notes = append(notes, applyNote{rec: rec, kind: noteGated, gate: gate})
 		}
 		if err := r.tables.release(ctx, tx, rec.Position); err != nil {
 			return err
@@ -878,6 +883,7 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		return false, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
 			rec.Position, err)
 	}
+	r.announce(ctx, notes)
 	return landed, nil
 }
 
@@ -1064,6 +1070,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	var tally results
 	var rows int
 	var boundBy string
+	var notes []applyNote
 	started := r.now()
 
 	// THE ABORTS ARE COUNTED HERE, and this is the only place that can.
@@ -1097,7 +1104,14 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// attempt that failed transiently, so a counter accumulated
 		// across attempts counts the abandoned one too — and the
 		// metrics would report work that was rolled back.
+		//
+		// The NOTES reset with them, for the same reason and a sharper
+		// one: a note is a log line and a count said AFTER the commit,
+		// and a note kept from an abandoned attempt would announce a
+		// record that attempt retained and the committed one may not
+		// have — once for every attempt the store ran.
 		consumed, committedAt, tally, rows, boundBy = consumed[:0], Position{}, results{}, 0, ""
+		notes = notes[:0]
 		txStart := r.now()
 
 		hasDeferred, err := r.anyDeferred(ctx, tx)
@@ -1166,15 +1180,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 				}
 				hasDeferred = true
 				tally.retained++
-				r.countWith(metrics.StatelogRecordsUnverifiable, metrics.Attrs{
-					"domain": r.domain.Name(),
-				})
-				r.logger.WarnContext(ctx, "statelog_record_unverifiable",
-					"domain", r.domain.Name(), "position", rec.Position.String(),
-					"kind", rec.Kind, "node_holds", r.verifier.KeyIDs(),
-					"detail", "retained until this node's secrets.keys holds the key "+
-						"it was signed under; expected briefly during a keyring "+
-						"rotation and an operator error if it persists")
+				notes = append(notes, applyNote{rec: rec, kind: noteUnverifiable})
 
 			case rec.V > r.domain.RecordVersion():
 				if r.domain.InstallsGate(rec.Envelope) {
@@ -1197,10 +1203,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 				}
 				hasDeferred = true
 				tally.retained++
-				r.logger.WarnContext(ctx, "statelog_record_deferred",
-					"domain", r.domain.Name(), "position", rec.Position.String(),
-					"kind", rec.Kind, "record_version", rec.V,
-					"build_reads", r.domain.RecordVersion())
+				notes = append(notes, applyNote{rec: rec, kind: noteDeferred})
 
 			default:
 				blocked := false
@@ -1221,13 +1224,14 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 					}
 				}
 				if !blocked {
-					n, gated, err := r.applyOne(ctx, tx, rec, opts)
+					n, gate, gated, err := r.applyOne(ctx, tx, rec, opts)
 					if err != nil {
 						return err
 					}
 					rows += n
 					if gated {
 						tally.gated++
+						notes = append(notes, applyNote{rec: rec, kind: noteGated, gate: gate})
 					} else {
 						tally.applied++
 					}
@@ -1280,6 +1284,8 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	if len(consumed) == 0 {
 		return consumed, nil
 	}
+	// WHAT THE COMMITTED ATTEMPT SAW, said once — see [applyNote].
+	r.announce(ctx, notes)
 
 	// AFTER THE OUTER TRANSACTION RETURNS, IN THIS ORDER.
 	//
@@ -1366,42 +1372,114 @@ func (r *Runner) Commits() float64 {
 }
 
 // applyOne runs the domain's state machine for one record, unless a gate says
-// it must produce no rows.
-func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (int, bool, error) {
+// it must produce no rows — in which case it reports the gate and says
+// NOTHING: it runs inside a transaction body the store may run again, so the
+// caller notes the gate and [Runner.announce] says it once the commit lands.
+func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (int, Reason, bool, error) {
 	started := r.now()
 	opts.StoredAt = rec.StoredAt
 	reason, gated, err := r.applier.Gated(ctx, tx, rec)
 	if err != nil {
-		return 0, false, fmt.Errorf("statelog: read the apply gates at %s: %w", rec.Position, err)
+		return 0, "", false, fmt.Errorf("statelog: read the apply gates at %s: %w", rec.Position, err)
 	}
 	if gated {
 		// A DURABLE RECORD THAT APPLIES NOWHERE. It still advanced the
 		// anchor and it still advances the checkpoint: the log consumed
 		// it, and a checkpoint that skipped it would replay it for ever.
-		r.logger.WarnContext(ctx, "statelog_record_gated",
-			"domain", r.domain.Name(), "position", rec.Position.String(),
-			"kind", rec.Kind, "gate", string(reason), "writer", rec.Writer)
-		r.countWith(metrics.StatelogRecordsGated, metrics.Attrs{
-			"gate": string(reason), "subject_kind": rec.Subject.Kind,
-		})
-		return 0, true, nil
+		return 0, reason, true, nil
 	}
 	n, err := r.applier.Apply(ctx, tx, rec, opts)
 	if err != nil {
-		return 0, false, fmt.Errorf("statelog: apply %s at %s: %w", rec.Kind, rec.Position, err)
+		return 0, "", false, fmt.Errorf("statelog: apply %s at %s: %w", rec.Kind, rec.Position, err)
 	}
 	if err := r.tables.writeOp(ctx, tx, rec.OpID, r.tables.subjectOf(rec.Subject), rec.Position, opts.Now); err != nil {
-		return 0, false, err
+		return 0, "", false, err
 	}
 	if r.metrics != nil {
 		// ONE RECORD'S APPLY, which is the real ceiling on how long a
 		// read can be delayed: a single record past the time budget is
 		// still one transaction, so the batch's own duration cannot
 		// bound it.
+		//
+		// A TIMING, and so the one observation that stays inside the
+		// body: an attempt the store rolled back and ran again still
+		// held the applier for as long as it took, which is exactly
+		// what this bounds. What moves out is every COUNT of an
+		// outcome, which an abandoned attempt would state twice.
 		r.metrics.Observe(metrics.StatelogApplyRecordDuration, r.now().Sub(started),
 			metrics.Attrs{"domain": r.domain.Name(), "kind": rec.Kind})
 	}
-	return n, false, nil
+	return n, "", false, nil
+}
+
+// applyNote is one thing an apply transaction observed about one record that
+// is SAID rather than written: a warning line, and for two of the three kinds
+// a counter an alarm reads.
+//
+// # Why it is a value and not a call
+//
+// Everything inside an apply transaction's body may run MORE THAN ONCE: the
+// store re-runs a body that failed transiently ([store.Writer.Tx]), and the
+// rows it wrote are rolled back with it. A log line or a counter bumped from
+// inside is not — so a record retained on an abandoned attempt and retained
+// again on the one that committed was announced twice, and
+// `crewlet.statelog.records.unverifiable` and `records.gated`, which the alarm
+// table reads, counted a record two times for the one the node actually holds.
+// The body notes what it saw, resets its notes with its tally on every
+// attempt, and [Runner.announce] says them ONCE, after the commit, for the
+// attempt that landed.
+type applyNote struct {
+	rec  Record
+	kind noteKind
+
+	// gate is the reason a gated record applied nowhere.
+	gate Reason
+}
+
+// noteKind is which of the three things a note says.
+type noteKind int
+
+const (
+	// noteUnverifiable — retained because it is signed under a key this
+	// node does not hold.
+	noteUnverifiable noteKind = iota
+
+	// noteDeferred — retained because a newer build wrote it.
+	noteDeferred
+
+	// noteGated — consumed, and applied nowhere, because a gate said so.
+	noteGated
+)
+
+// announce says what one committed transaction noted, once.
+func (r *Runner) announce(ctx context.Context, notes []applyNote) {
+	for _, note := range notes {
+		rec := note.rec
+		switch note.kind {
+		case noteUnverifiable:
+			r.countWith(metrics.StatelogRecordsUnverifiable, metrics.Attrs{
+				"domain": r.domain.Name(),
+			})
+			r.logger.WarnContext(ctx, "statelog_record_unverifiable",
+				"domain", r.domain.Name(), "position", rec.Position.String(),
+				"kind", rec.Kind, "node_holds", r.verifier.KeyIDs(),
+				"detail", "retained until this node's secrets.keys holds the key "+
+					"it was signed under; expected briefly during a keyring "+
+					"rotation and an operator error if it persists")
+		case noteDeferred:
+			r.logger.WarnContext(ctx, "statelog_record_deferred",
+				"domain", r.domain.Name(), "position", rec.Position.String(),
+				"kind", rec.Kind, "record_version", rec.V,
+				"build_reads", r.domain.RecordVersion())
+		case noteGated:
+			r.logger.WarnContext(ctx, "statelog_record_gated",
+				"domain", r.domain.Name(), "position", rec.Position.String(),
+				"kind", rec.Kind, "gate", string(note.gate), "writer", rec.Writer)
+			r.countWith(metrics.StatelogRecordsGated, metrics.Attrs{
+				"gate": string(note.gate), "subject_kind": rec.Subject.Kind,
+			})
+		}
+	}
 }
 
 // anyDeferred reports whether this node holds any record it cannot decode, so
