@@ -255,6 +255,25 @@ func (t Truncation) err(stream string) error {
 		ErrLogTruncated, t.Peer, what, stream)
 }
 
+// HoldsRecord reports whether log holds, at seq, the record the broker stored at
+// storedAt — a checkpoint's record, named by its sequence and its instant.
+//
+// FALSE for everything that is not that record: a sequence the log no longer
+// holds or never reached, another record there, and an instant of zero, which
+// names no record at all. So a caller asking whether a peer's history is the
+// log's gets "yes" only where the log itself says so, and weighs every other
+// answer as history the log may have lost.
+func HoldsRecord(ctx context.Context, log LogReader, seq uint64, storedAt time.Time) (bool, error) {
+	if seq == 0 || storedAt.IsZero() {
+		return false, nil
+	}
+	_, _, held, ok, err := log.At(ctx, seq)
+	if err != nil {
+		return false, fmt.Errorf("statelog: read the record at sequence %d: %w", seq, err)
+	}
+	return ok && sameRecord(held, storedAt), nil
+}
+
 // sameRecord reports whether two broker instants name one record at one
 // sequence — at the resolution a checkpoint row keeps, for the reason
 // [identityResolution] gives.

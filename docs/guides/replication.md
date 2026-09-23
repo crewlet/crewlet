@@ -282,6 +282,11 @@ the node's rows are keyed to. A generation cannot say which stream a sequence
 is on — a stream deleted and remade keeps the generation and counts from 1
 again — so this is what lets a [reanchor](retention.md#re-anchoring-a-recreated-or-restored-log)
 tell a peer further along the lost stream from one that came up on the new one.
+And **`checkpoint_stored_at`** names the record the checkpoint stands on — the
+broker's instant for it — which a sequence alone cannot: after a broker
+restored from an older copy is written past a node's rows, the log holds
+another record at the same sequence. It is what lets a reanchor tell a peer
+whose history is the log's from one holding history the log lost.
 
 Folding them into one would make a node that is applying nothing while its
 position advances look identical to one that is fully caught up. `crewlet

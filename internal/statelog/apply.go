@@ -525,6 +525,16 @@ func (r *Runner) Committed() Position {
 	return r.cursor
 }
 
+// CommittedRecord is [Runner.Committed] with the broker's instant for the record
+// at it — the one this node consumed there, zero where that is unknown — read
+// under one lock, because a sequence paired with another record's instant names
+// no record this node ever consumed ([Runner.checkpointAt]).
+func (r *Runner) CommittedRecord() (Position, time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cursor, r.checkpointAt
+}
+
 // StreamCreatedAt is the creation instant of the stream this runner's
 // positions are keyed to: the broker's own when the runner was built, and the
 // one a reanchor confirmed after that. It is what every live reading of the

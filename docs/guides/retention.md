@@ -985,11 +985,18 @@ adopts that peer's snapshot instead, and does so on its own ([a node a peer
 re-anchored past](#a-node-a-peer-re-anchored-past)). A peer the fleet has
 **evicted** is not counted, in this rule or the next: its generation is
 abandoned rather than the fleet's. Otherwise only
-the most caught-up node on the stream its rows came from may re-anchor. Every
-node publishes, beside its position, the creation instant of the stream its
-rows are keyed to, so a peer still on the lost stream is compared with this
-node and one that came up on the rebuilt stream with no rows is not: it is
-further along nothing a reanchor discards. `-force` overrides the
+the most caught-up node on the stream its rows came from may re-anchor — among
+the peers holding history the log does **not**: a peer whose checkpoint record
+the log still holds is on the log, so nothing it applied is lost by a reanchor
+that follows it, and it is not weighed (whether what it wrote after a restore
+is kept is the `-discard` question, not this one). So a node the log diverged
+from can re-anchor although the copy-age nodes that wrote the log past it
+stand further along the log than its checkpoint. Every node publishes, beside
+its position, the creation instant of the stream its rows are keyed to and the
+broker's instant for its checkpoint's record, so a peer still on the lost
+stream, or past a restored log's end, is compared with this node and one that
+came up on the rebuilt stream with no rows is not: it is further along nothing
+a reanchor discards. A refusal names the peer that is further along. `-force` overrides the
 most-caught-up rule for the case where the fleet cannot be asked, and never the
 first. The
 vectors are exempt from both: their coverage legitimately differs node to node,

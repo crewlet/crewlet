@@ -131,7 +131,10 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 }
 
 // writePast boots B on the restored broker — its rows are the copy's age, so
-// nothing it can see is wrong — and writes the log past A's checkpoint.
+// nothing it can see is wrong — writes the log past A's checkpoint, and
+// PUBLISHES where that left it, as B's heartbeat would before it stopped: a
+// fleet whose copy-age node never said how far it got hides every rule a peer's
+// position feeds.
 func (d *divergedBroker) writePast(t *testing.T) {
 	t.Helper()
 	eb, backB := bootNode(t, &d.b, d.cfg)
@@ -153,6 +156,23 @@ func (d *divergedBroker) writePast(t *testing.T) {
 				fmt.Sprintf("op-b-%d", d.written), "t-1", "ENG", tracker.NoIfMatch,
 				tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil)
 		})
+	}
+	waitUntil(t, 10*time.Second, "node B to apply its own writes", func() bool {
+		return running.runner.Committed().Seq >= d.end
+	})
+	eb.native.Load().log.publishPositions(t.Context())
+	rows, err := eb.backends.Fleet.Positions(t.Context())
+	if err != nil {
+		t.Fatalf("read the register: %v", err)
+	}
+	for _, row := range rows {
+		if row.NodeID != d.b.Node.ID {
+			continue
+		}
+		if pos := row.Domains[tracker.Domain{}.Name()]; pos.Seq < d.end || pos.CheckpointStoredAt.IsZero() {
+			t.Fatalf("node B published %+v, want its position at the log's end %d "+
+				"naming the record it stands on", pos, d.end)
+		}
 	}
 	eb.Stop(context.Background())
 	backB.Close(context.Background())

@@ -985,7 +985,10 @@ history in the new generation, and this node adopts its snapshot instead. A
 peer that is gone for good is released by evicting it first
 ([`crewlet retention evict`](../guides/retention.md#eviction)): an evicted peer counts
 toward neither this rule nor the next. Otherwise only the most caught-up node
-on the stream its rows came from may run it; `-force` overrides that rule, and
+on the stream its rows came from may run it, among the peers holding history
+the log does not — a peer whose checkpoint record the log holds is on the log
+and is not weighed — and the refusal names the peer further along; `-force`
+overrides that rule, and
 an unreadable positions register, and never a re-anchored peer. Nor does it
 ever open a generation another node already opened: if a peer got there first,
 the verb reads its record back, names it, and commits nothing.

@@ -398,9 +398,34 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			// stream from 1 at the same generation number. Neither says
 			// anything about who went further along the stream this node's
 			// rows came from.
-			if at, runs := row.Domains[domain]; runs && at.Generation == in.Generation &&
-				sameStream(at.StreamCreatedAt, in.KeyedTo) && at.Seq > in.Highest {
-				in.Highest = at.Seq
+			at, runs := row.Domains[domain]
+			if !runs || at.Generation != in.Generation ||
+				!sameStream(at.StreamCreatedAt, in.KeyedTo) || at.Seq <= in.Highest {
+				continue
+			}
+			// AND ONLY A PEER HOLDING HISTORY THE LOG DOES NOT. One whose
+			// checkpoint record the log holds is ON the log, whatever its
+			// sequence: nothing it applied is lost by a reanchor that follows
+			// the log, and whether what it wrote after a restore is kept is
+			// the discard question, never this one. Counted, it refused
+			// every reanchor of a node the log DIVERGED from — the nodes
+			// whose rows were the copy's age wrote the log past it, so each
+			// stands further along the log than the diverged node's
+			// checkpoint — and the only way through was the force flag,
+			// which also waives this rule where it does apply. A checkpoint
+			// past the log's end, another record at its sequence, or no
+			// record named at all is history the log may have lost, and it
+			// counts.
+			onLog, holdErr := statelog.HoldsRecord(ctx, running.log, at.Seq, at.CheckpointStoredAt)
+			if holdErr != nil {
+				return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether the log "+
+					"holds peer %s's checkpoint record at %d of %s could not be read, "+
+					"and it decides whether that peer holds history a reanchor "+
+					"would lose — check the broker and re-run: %w",
+					statelog.ErrReanchorRefused, row.NodeID, at.Seq, stream, holdErr)
+			}
+			if !onLog {
+				in.Highest, in.HighestPeer = at.Seq, row.NodeID
 			}
 		}
 		peers = reanchoredPeers(rows, domain, in.Generation, self, evicted)

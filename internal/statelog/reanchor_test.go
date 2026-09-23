@@ -104,6 +104,18 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 			guard: confirmed(),
 			names: "what the reanchor discards",
 		},
+		// THE REFUSAL NAMES WHO IS AHEAD, and sends the operator there.
+		"a named peer holds history the log does not": {
+			in: func() statelog.ReanchorInputs {
+				in := reanchorInputs()
+				in.Position, in.HighestPeer = 4_000, "node-ahead"
+				return in
+			}(),
+			guard: confirmed(),
+			names: "node-ahead reached 9000 holding history the log does not — only " +
+				"the most caught-up node may reanchor, because everything above its " +
+				"own position is what the reanchor discards; re-anchor on node-ahead",
+		},
 		"the register could not be read": {
 			in: func() statelog.ReanchorInputs {
 				in := reanchorInputs()

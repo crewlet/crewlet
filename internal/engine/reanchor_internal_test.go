@@ -120,6 +120,76 @@ func TestAReanchorsHighWaterMarkIsReadInItsOwnGeneration(t *testing.T) {
 	}
 }
 
+// ONLY A PEER HOLDING HISTORY THE LOG DOES NOT COUNTS AS AHEAD.
+//
+// "Only the most caught-up node may reanchor" protects what a reanchor would
+// lose: history a peer applied that the log no longer holds. A peer whose
+// checkpoint record the log DOES hold is on the log — every record it applied
+// is one the log still carries — and counting it refused every reanchor of a
+// node the log diverged from, because the copy-age nodes that wrote the log
+// past it stand further along the log than its checkpoint; force was the only
+// way through, and force waives the rule where it does apply. So the record a
+// peer's checkpoint names is asked of the log, and only a peer past the log's
+// end, with another record at its sequence, or naming no record counts — the
+// highest of them named.
+func TestOnlyAPeerHoldingHistoryTheLogDoesNotCountsAsAhead(t *testing.T) {
+	t.Parallel()
+	e, _ := aRunningNode(t)
+	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	for _, op := range []string{"op-1", "op-2"} {
+		if res, err := e.native.Load().writer.EvictNode(t.Context(), op, "node-"+op); err != nil ||
+			res.Outcome != statelog.OutcomeApplied {
+			t.Fatalf("a write: %+v, %v", res, err)
+		}
+	}
+	own, record := running.runner.CommittedRecord()
+	_, _, below, held, err := running.log.At(t.Context(), own.Seq-1)
+	if err != nil || !held || record.IsZero() {
+		t.Fatalf("the log's record below the checkpoint = (%v, %v), the checkpoint's "+
+			"own instant %s — the case needs two records it holds", held, err, record)
+	}
+	keyed, name := running.runner.KeyedTo(), running.domain.Name()
+	publish := func(node string, at coord.DomainPosition) {
+		t.Helper()
+		at.Generation, at.StreamCreatedAt = own.Generation, keyed
+		if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
+			NodeID: node, At: time.Now().UTC(),
+			Domains: map[string]coord.DomainPosition{name: at},
+		}); err != nil {
+			t.Fatalf("publish %s's row: %v", node, err)
+		}
+	}
+	read := func() statelog.ReanchorInputs {
+		t.Helper()
+		in, _, err := e.reanchorInputs(t.Context(), running)
+		if err != nil {
+			t.Fatalf("reanchorInputs: %v", err)
+		}
+		return in
+	}
+
+	// ON THE LOG, at this node's own checkpoint and below it: not ahead.
+	publish("on-the-log", coord.DomainPosition{Seq: own.Seq, CheckpointStoredAt: record})
+	publish("behind-on-the-log", coord.DomainPosition{Seq: own.Seq - 1, CheckpointStoredAt: below})
+	if in := read(); in.Highest != 0 || in.HighestPeer != "" {
+		t.Fatalf("peers whose checkpoint records the log holds count as ahead: "+
+			"highest %d from %q, want none", in.Highest, in.HighestPeer)
+	}
+	// ANOTHER RECORD AT ITS SEQUENCE: history the log lost.
+	publish("another-record", coord.DomainPosition{Seq: own.Seq - 1,
+		CheckpointStoredAt: below.Add(time.Hour)})
+	if in := read(); in.Highest != own.Seq-1 || in.HighestPeer != "another-record" {
+		t.Fatalf("a peer with another record at its checkpoint reads as highest %d "+
+			"from %q, want %d from another-record", in.Highest, in.HighestPeer, own.Seq-1)
+	}
+	// PAST THE END, naming no record: counted, and named as the highest.
+	publish("past-the-end", coord.DomainPosition{Seq: own.Seq + 50})
+	if in := read(); in.Highest != own.Seq+50 || in.HighestPeer != "past-the-end" {
+		t.Fatalf("a peer past the log's end reads as highest %d from %q, want %d "+
+			"from past-the-end", in.Highest, in.HighestPeer, own.Seq+50)
+	}
+}
+
 // A STREAM THAT CANNOT BE READ REFUSES THE REANCHOR, rather than keying the
 // checkpoint to an instant nobody read at a first sequence of zero.
 func TestAReanchorOfAStreamThatCannotBeReadRefuses(t *testing.T) {

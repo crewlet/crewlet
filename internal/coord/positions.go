@@ -54,6 +54,25 @@ type DomainPosition struct {
 	// did not publish it, which a reader weighs conservatively.
 	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
 
+	// CheckpointStoredAt is the broker's instant for the record at this
+	// node's checkpoint — the one it consumed at Seq — and with Seq it NAMES
+	// that record, which a sequence alone cannot: after a broker restored
+	// from an older copy is written past a node's rows, the same sequence
+	// holds another record in the log than in those rows.
+	//
+	// WHAT IT LETS A PEER ASK is whether this node's history is the log's.
+	// A node whose checkpoint record the log holds is on the log, whatever
+	// its sequence — nothing it holds is lost by a reanchor that follows the
+	// log — while one whose record the log does not hold, or holds another
+	// record at, holds history the log lost; only the second is weighed
+	// against a reanchoring node's own position
+	// ([statelog.ReanchorInputs.Highest]).
+	//
+	// ZERO IS UNKNOWN — a checkpoint naming no record, or a build that did
+	// not publish it — and a reader weighs it as history the log may not
+	// hold.
+	CheckpointStoredAt time.Time `json:"checkpoint_stored_at,omitzero"`
+
 	// Snapshot is the newest VERIFIED snapshot this node holds, and its
 	// generation travels with it: a snapshot from before a reanchor is not
 	// a donor for a node that needs one after it, and a bare sequence

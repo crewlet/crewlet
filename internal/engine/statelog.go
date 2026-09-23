@@ -3151,7 +3151,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	}
 	for _, name := range s.order {
 		running := s.domains[name]
-		at := running.runner.Committed()
+		at, record := running.runner.CommittedRecord()
 		// AND PASSED BY A REANCHOR: the same predicate the join asks, so
 		// the rejoin this requests is one the join then acts on. The
 		// runner is told first, which is what refuses this node's reads
@@ -3172,9 +3172,13 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		// THE INSTANT THE ROWS ARE KEYED TO rides beside the generation,
 		// because a generation alone cannot say which stream a sequence is
 		// on — see [coord.DomainPosition.StreamCreatedAt].
+		//
+		// AND THE RECORD THE CHECKPOINT STANDS ON, so a peer can tell a node on
+		// the log from one whose history the log lost — see
+		// [coord.DomainPosition.CheckpointStoredAt].
 		pos := coord.DomainPosition{
 			Seq: at.Seq, Generation: at.Generation, AppliedThrough: at.Seq,
-			StreamCreatedAt: running.runner.KeyedTo(),
+			StreamCreatedAt: running.runner.KeyedTo(), CheckpointStoredAt: record,
 		}
 		// APPLIED_THROUGH IS LOWER WHEN SOMETHING IS DEFERRED, and the
 		// two numbers are what tell a lagging node from a stalled one:

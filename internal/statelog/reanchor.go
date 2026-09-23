@@ -183,14 +183,21 @@ type ReanchorInputs struct {
 	// generation, and Highest is the highest any peer published at that
 	// same generation ON THE SAME STREAM — the one this node's rows are
 	// keyed to, or one a peer's row does not name (a build that did not
-	// publish it, weighed conservatively). A sequence at another generation,
-	// or on another stream at this one, is a number in another space and
-	// says nothing about who went further along this one. Only the most
-	// caught-up node may reanchor, because whatever it did not apply is what
-	// the fleet loses — and an EVICTED peer is left out for PeersReanchored's
-	// reason: what it applied is on no disk the fleet will read again.
-	Position uint64
-	Highest  uint64
+	// publish it, weighed conservatively) — among the peers holding history
+	// the LOG DOES NOT: whose checkpoint record the log does not hold, past
+	// its end or with another record at the sequence, or which name no
+	// record ([coord.DomainPosition.CheckpointStoredAt]). A sequence at
+	// another generation, or on another stream at this one, is a number in
+	// another space and says nothing about who went further along this one;
+	// and a peer whose checkpoint record the log holds is on the log, so
+	// nothing it applied is lost by a reanchor that follows it. Only the
+	// most caught-up node may reanchor, because whatever it did not apply is
+	// what the fleet loses — and an EVICTED peer is left out for
+	// PeersReanchored's reason: what it applied is on no disk the fleet will
+	// read again. HighestPeer names the peer at Highest, for the refusal.
+	Position    uint64
+	Highest     uint64
+	HighestPeer string
 
 	// RegisterReadable reports whether the register could be listed at
 	// all. When it could not, the comparison above cannot be made and only
@@ -494,10 +501,15 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error
 				"the force flag if that is accepted", ErrReanchorRefused)
 		}
 		if in.Position < in.Highest {
-			return ReanchorPlan{}, fmt.Errorf("%w: this node is at %d and the fleet reached "+
-				"%d — only the most caught-up node may reanchor, because "+
-				"everything above its own position is what the reanchor "+
-				"discards", ErrReanchorRefused, in.Position, in.Highest)
+			who, remedy := "the fleet", "re-anchor on the node that did instead"
+			if in.HighestPeer != "" {
+				who, remedy = in.HighestPeer, "re-anchor on "+in.HighestPeer+" instead"
+			}
+			return ReanchorPlan{}, fmt.Errorf("%w: this node is at %d and %s reached %d "+
+				"holding history the log does not — only the most caught-up node "+
+				"may reanchor, because everything above its own position is what "+
+				"the reanchor discards; %s", ErrReanchorRefused, in.Position, who,
+				in.Highest, remedy)
 		}
 	}
 	// THE GENERATION AFTER EVERY ONE THIS DOMAIN HAS USED: this node's own,
