@@ -343,19 +343,46 @@ that is not.
 crewlet retention evict node-4 -confirm node-4
 ```
 
+The trim counts nodes **per log**, so an eviction is a record on every log it
+counts nodes on: the tracker's log and the pages log. (The vector log counts
+nothing — a node behind on it is a coverage figure — and gets none.) Every
+node running the state log can make the gesture, whichever backends the
+company uses: a company on an external tracker still runs both logs.
+
+It is **judged once, before anything is written**: a node that still holds a
+live presence lease is refused, because it is still reaching the fleet and
+almost certainly running — an eviction would drop everything it writes and
+move its seats. Stop it and wait for its `LIVE` column in `crewlet retention
+status` to read `no`; `-force` overrides the refusal for a node wedged in a way
+that still renews its lease. A refusal writes nothing to either log.
+
+Past the judgement the record goes to each log in turn, and each answers on
+its own line with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
+every write has — `applied`, `pending` or `unknown` — or `not written` with the
+reason that stopped that log (`log_full`, say). A log that answered holds its
+record whatever the other did. When **not every log holds it**, the command
+exits non-zero and prints the operation id; run the same command again with
+`-op-id <id>` to finish it. Each log's record is published under an id derived
+from that one, so a log that already holds the record answers from its own
+ledger at the position it already has, and only the missing log is written.
+A fresh id would be a second gesture rather than this one finished.
+
 It prints the watermark before and after, and the instant the eviction takes
-effect. **The evicted node stays counted for about a minute**, so a live node
-is certain to have read its own tombstone before the trim passes it.
+effect. **The evicted node stays counted for about a minute** on each log after
+that log's record lands, so a live node is certain to have read its own
+tombstone before the trim passes it. `crewlet retention status` shows the node
+as evicted only once every log holds its tombstone, and dates it from the
+latest of them.
 
 The honest worst case for that window is **zero**: a node three heartbeats late
 reads its tombstone exactly when the trim may pass it. So the window is a
-convenience rather than the safety property. The safety property is the
-applier's own **eviction gate**, which drops an evicted node's records wherever
-they land, depends on nothing but the log's own order, and holds when
-coordination cannot be reached at all.
+convenience rather than the safety property. The safety property is each log's
+applier's own **eviction gate**, which drops an evicted node's records on that
+log wherever they land, depends on nothing but the log's own order, and holds
+when coordination cannot be reached at all.
 
-Readmission is the inverse commit rather than a delete, so the whole history
-survives a replay:
+Readmission is the inverse commit on every one of those logs rather than a
+delete, so the whole history survives a replay:
 
 ```
 crewlet retention readmit node-4 -confirm node-4
@@ -368,21 +395,23 @@ has passed — typically a machine that is still switched off — puts back
 exactly the pin the eviction lifted, while the node itself is missing records
 the log has already lost or is licensed to lose.
 
-The comparison is the one the node's own [write fence](#the-trim-floor) makes:
-its last published position in the tracker's log and the pages log, against
-the higher of each log's published floor and its first surviving sequence. A
-node that has never published a position is judged as holding nothing. Nothing
-is written on a refusal, and the node needs nothing from you but time: start it
-if it is not running, and it [catches up on its own](#the-join-runbook) —
-replaying what the log still holds, adopting a snapshot where it does not.
-Readmit it once it has applied every record up to the one just before that
-bound: in `crewlet retention status`, its `SEQ` for each of those domains has
-reached one less than the higher of the domain's `TRIM FLOOR` and `FIRST`. The
-refusal's own `floor`, `first_seq` and `generation` are the numbers it
-compared — right after a [re-anchor](#re-anchoring-a-recreated-stream) the
-`TRIM FLOOR` column can still show the old generation's floor, which the
-refusal no longer reads — and running the readmission again is always safe,
-since a refusal writes nothing.
+The comparison is the one the node's own [write fence](#the-trim-floor) makes,
+made once for every log before either is written: its last published position
+in the tracker's log and the pages log, against the higher of each log's
+published floor and its first surviving sequence. A node that has never
+published a position is judged as holding nothing. Nothing is written to either
+log on a refusal, and the node needs nothing from you but time: start it if it
+is not running, and it [catches up on its own](#the-join-runbook) — replaying
+what the log still holds, adopting a snapshot where it does not. Readmit it
+once it has applied every record up to the one just before that bound: in
+`crewlet retention status`, its `SEQ` for each of those domains has reached one
+less than the higher of the domain's `TRIM FLOOR` and `FIRST`. The refusal's
+own `floor`, `first_seq` and `generation` are the numbers it compared — right
+after a [re-anchor](#re-anchoring-a-recreated-stream) the `TRIM FLOOR` column
+can still show the old generation's floor, which the refusal no longer reads —
+and running the readmission again is always safe, since a refusal writes
+nothing. A readmission that reaches one log and not the other is finished the
+way an eviction is, with `-op-id`.
 
 The refusal is not what keeps the fleet's data safe, and being refused is not
 an emergency: a node below the floor is refused every write that assumes a

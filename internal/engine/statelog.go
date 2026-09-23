@@ -398,6 +398,17 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	defer cancelConsumers()
 
 	for _, domain := range registeredDomains() {
+		// A DOMAIN THE TRIM COUNTS NODES ON MUST SAY WHO IS EVICTED ON IT.
+		// Without an answer the trim can never stop counting an evicted
+		// node on that log, and the log grows behind a machine that is not
+		// coming back until its ceiling refuses writes — silently, since a
+		// log with nobody evicted and one that cannot say look the same.
+		if _, lists := domain.(evictionLister); domain.ClaimsIdentity() && !lists {
+			s.Stop()
+			return nil, fmt.Errorf("engine: domain %q claims identity and cannot "+
+				"list the evictions on its own log, so the trim could never stop "+
+				"counting an evicted node there", domain.Name())
+		}
 		running, err := s.start(ctx, consumerCtx, host, domain, logs[domain.Name()], epoch)
 		if err != nil {
 			// EVERY DOMAIN OR NONE. A node running half its register
@@ -995,8 +1006,9 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 	}
 }
 
-// Readmissible answers the tracker writer's [tracker.Readmission]: whether an
+// Readmissible is the node gate's judgement of a readmission: whether an
 // evicted node has fallen below a floor it would be counted against again.
+// Asked ONCE per gesture, before any log is written — see [NodeGate.Readmit].
 //
 // HERE, because this is the one object holding all three inputs — the
 // positions register the node's own heartbeat writes, the floor the trim

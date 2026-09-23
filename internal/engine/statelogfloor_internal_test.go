@@ -537,9 +537,10 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 	}
 }
 
-// A NODE BELOW THE TRIM FLOOR IS NOT READMITTED — through the writer the
+// A NODE BELOW THE TRIM FLOOR IS NOT READMITTED — through the node gate the
 // readmission route calls, judged against the register, the published floors
-// and the logs as the engine wires them.
+// and the logs as the engine wires them, with nothing written to either log on
+// a refusal.
 //
 // The documentation promised this refusal; the writer wrote the inverse record
 // for any node, so an operator readmitting a machine that was still offline
@@ -553,9 +554,9 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
 	s := e.native.log
-	writer := e.native.writer
-	if writer == nil {
-		t.Fatal("the node runs no tracker writer")
+	gate := e.native.gate
+	if gate == nil {
+		t.Fatal("the node runs no node gate")
 	}
 	wiki := s.Domain(pages.Domain{}.Name())
 	vectors := s.Domain(search.Domain{}.Name())
@@ -564,9 +565,9 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	}
 
 	const away = "node-away"
-	if res, err := writer.EvictNode(t.Context(), "op-evict", away); err != nil ||
-		res.Outcome != statelog.OutcomeApplied {
-		t.Fatalf("evict %s: %v (outcome %q)", away, err, res.Outcome)
+	if res, err := gate.Evict(t.Context(), GateRequest{
+		Node: away, OpID: "op-evict", By: "operator"}); err != nil || !res.Complete() {
+		t.Fatalf("evict %s: %v (%+v)", away, err, res)
 	}
 	at := running.runner.Committed()
 	if at.Seq < 3 {
@@ -598,18 +599,24 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 			t.Fatalf("publish %s's floor: %v", r.domain.Name(), err)
 		}
 	}
-	end := func() uint64 {
+	// BOTH LOGS' ENDS, because a refusal writes nothing to EITHER.
+	end := func() [2]uint64 {
 		t.Helper()
-		_, last, err := running.log.Bounds(t.Context())
-		if err != nil {
-			t.Fatalf("read the log's end: %v", err)
+		var out [2]uint64
+		for i, r := range []*runningDomain{running, wiki} {
+			_, last, err := r.log.Bounds(t.Context())
+			if err != nil {
+				t.Fatalf("read %s's end: %v", r.domain.Name(), err)
+			}
+			out[i] = last
 		}
-		return last
+		return out
 	}
+	readmit := GateRequest{Node: away, OpID: "op-readmit", By: "operator"}
 	refusedIn := func(domain string, seq, floorWant, firstWant uint64) {
 		t.Helper()
 		before := end()
-		_, err := writer.ReadmitNode(t.Context(), "op-readmit", away)
+		_, err := gate.Readmit(t.Context(), readmit)
 		var refusal *statelog.ReadmissionRefusal
 		if !errors.As(err, &refusal) {
 			t.Fatalf("readmitting %s answered %v, want a refusal naming %s", away,
@@ -622,7 +629,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 				refusal.Bound.First, domain, seq, floorWant, firstWant)
 		}
 		if last := end(); last != before {
-			t.Fatalf("the log moved from %d to %d on a refused readmission", before, last)
+			t.Fatalf("the logs moved from %v to %v on a refused readmission", before, last)
 		}
 	}
 
@@ -651,20 +658,23 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 
 	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK.
 	floor(wiki, 0)
-	res, err := writer.ReadmitNode(t.Context(), "op-readmit", away)
+	res, err := gate.Readmit(t.Context(), readmit)
 	if err != nil {
 		t.Fatalf("a node one record short of every floor was refused: %v", err)
 	}
-	if res.Outcome != statelog.OutcomeApplied {
-		t.Fatalf("the readmission answered %q, want applied", res.Outcome)
+	for _, d := range res.Domains {
+		if d.Err != nil || d.Outcome != statelog.OutcomeApplied {
+			t.Fatalf("the readmission answered %+v on %s, want applied", d, d.Domain)
+		}
 	}
-	rows, err := tracker.Evictions(t.Context(), back.Store.Replicated(),
-		running.domain.Stream().Name)
-	if err != nil {
-		t.Fatalf("read the evictions: %v", err)
-	}
-	if len(rows) != 1 || rows[0].NodeID != away || !rows[0].IsBack {
-		t.Fatalf("evictions = %+v, want %s readmitted", rows, away)
+	for _, lister := range []evictionLister{tracker.Domain{}, pages.Domain{}} {
+		rows, err := lister.Evictions(t.Context(), back.Store)
+		if err != nil {
+			t.Fatalf("read the evictions: %v", err)
+		}
+		if len(rows) != 1 || rows[0].NodeID != away || !rows[0].Back {
+			t.Fatalf("evictions = %+v, want %s readmitted on every log", rows, away)
+		}
 	}
 }
 

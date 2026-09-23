@@ -10,7 +10,10 @@
 // documentation: the table that must carry a class, the stream whose settings
 // must agree with its replay protocol, the apply that must produce the same
 // rows twice, the envelope that must not fail on a version this build cannot
-// read.
+// read, the record that must name the node that wrote it and the generation it
+// was decided in, and the evictions a domain that claims identity must be able
+// to list — because the trim counts nodes per log, and a log whose evictions
+// nothing reads counts an evicted node for ever.
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //
@@ -96,6 +99,12 @@ type Candidate struct {
 	// db. It is how [Stamped] reaches the one builder that can forget the
 	// framework's stamp.
 	Write func(ctx context.Context, pub *statelog.Publisher, db *store.DB) error
+
+	// EncodeGate builds the record that evicts nodeID from this domain's log
+	// — or, with readmit, takes it back — as the domain's own writer
+	// publishes it. Required of a domain that claims identity, whose log the
+	// trim counts nodes on; see [Evictions].
+	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
 }
 
 // Factory builds a fresh candidate for one case.
@@ -109,6 +118,7 @@ func Run(t *testing.T, new Factory) {
 	t.Run("envelope", func(t *testing.T) { runEnvelope(t, new) })
 	t.Run("apply", func(t *testing.T) { runApply(t, new) })
 	t.Run("stamp", func(t *testing.T) { runStamp(t, new) })
+	t.Run("evictions", func(t *testing.T) { runEvictions(t, new) })
 }
 
 // openEstate brings up a replicated estate with the framework's tables and the

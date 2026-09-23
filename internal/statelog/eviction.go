@@ -51,6 +51,40 @@ type Tombstone struct {
 	Generation uint32
 }
 
+// EvictionRow is one node's standing on ONE identity-claiming domain's log, as
+// that domain's own applied rows hold it — the APPLIED shape, where each
+// domain's eviction record is what wrote it.
+//
+// # Why every domain answers for its own log
+//
+// An eviction is a record on a log like any other, keyed on a position in that
+// log's own sequence space, so every node applies it into that domain's table
+// and every node's copy is identical — which is what makes the applier's
+// eviction gate hold when coordination cannot be reached at all. The trim reads
+// the same rows for a different question: a node stops being counted on a log
+// once its tombstone THERE is older than the fence window. Asked of another
+// domain's table, the answer is about another number space; the trim asked the
+// tracker's table on behalf of the pages log, filtered on the pages stream,
+// found nothing, and counted an evicted node on that log for ever.
+type EvictionRow struct {
+	// NodeID is who was evicted.
+	NodeID string
+
+	// At is the broker's own instant for the eviction record — what the
+	// fence window is measured from, identical on every node — and By the
+	// operator who ran it.
+	At time.Time
+	By string
+
+	// From is the COMPOSED position the eviction takes effect above, and
+	// Readmitted the one a readmission takes effect at. A readmission is
+	// an inverse commit rather than a delete, so a node that has been
+	// taken back still has a row, and Back says so.
+	From       uint64
+	Readmitted uint64
+	Back       bool
+}
+
 // Presence is a node holding a live lease, whether or not it has reported a
 // position yet.
 type Presence struct {
@@ -116,19 +150,27 @@ func (e *EvictionRefusal) Error() string {
 
 // PermitEviction decides whether a node may be evicted at all.
 //
-// # A LIVE LEASE REFUSES, and that refusal is a precondition of the whole
-// design
+// # A LIVE LEASE REFUSES, unless the operator overrides it
 //
-// Evicting a node that is still talking to coordination would let the trim
-// advance past a node that is about to write — and the write-path fence that
-// is supposed to catch that reads a CACHED tombstone, refreshed on the same
-// coordination loop the node has by definition still got.
+// A node holding a presence lease has renewed it within the last few
+// coordination round trips: it is reaching the fleet and, almost always,
+// running. Its position is advancing, so it pins nothing its own progress will
+// not release — and evicting it drops everything it writes above the eviction
+// on every applier, stops its own writes the moment its applier reaches the
+// eviction, and moves its seats. Eviction is the gesture for a node that is NOT
+// coming back, and a live lease is the fleet's own evidence that this one is;
+// the refusal is what stops a mistyped node id taking a healthy machine out.
 //
-// So the only state in which an eviction is permitted is one where the target
-// has missed at least three consecutive coordination round trips. Which is
-// exactly why the publisher's fence checks a THIRD source — that node's own
-// applied eviction rows, fresh to its applied prefix and the only one still
-// fresh when its coordination path is wedged.
+// It is about safety rather than permission, and an operator can know something
+// the lease does not say — a node wedged in a way that still renews — which is
+// what force is for. Nothing about the fleet's data rests on it either way: the
+// applier's eviction gate drops the evicted node's records whatever it manages
+// to publish, and its own fence refuses its writes from its own applied rows,
+// the one source still fresh when its coordination path is wedged.
+//
+// ASKED ONCE PER GESTURE, before any log is written — by the engine's node
+// gate, over every identity-claiming log — because judged per log it could
+// reach two answers about one node.
 func PermitEviction(nodeID string, live []Presence, force bool) error {
 	if nodeID == "" {
 		return &EvictionRefusal{Detail: "no node was named"}
@@ -136,12 +178,23 @@ func PermitEviction(nodeID string, live []Presence, force bool) error {
 	held := slices.ContainsFunc(live, func(p Presence) bool { return p.NodeID == nodeID })
 	if held && !force {
 		return &EvictionRefusal{NodeID: nodeID, Detail: "it holds a live presence " +
-			"lease, so it is still reaching coordination — and an eviction is " +
-			"only safe once the target has missed enough round trips to be out " +
-			"of contact, because the fence that stops it writing reads a value " +
-			"refreshed on the connection it still has"}
+			"lease, so it is still reaching coordination and almost certainly " +
+			"running — an eviction drops every record it writes on every node and " +
+			"moves its seats, which is the gesture for a node that is not coming " +
+			"back"}
 	}
 	return nil
+}
+
+// Remedy is what the operator does about an eviction refusal.
+func (e *EvictionRefusal) Remedy() string {
+	if e.NodeID == "" {
+		return "name the node to evict"
+	}
+	return fmt.Sprintf("stop %s and wait for its presence lease to lapse "+
+		"(its LIVE column in `crewlet retention status` reads no), then run the "+
+		"eviction again — or, if it is wedged in a way that still renews its "+
+		"lease, evict it with -force", e.NodeID)
 }
 
 // ReadmissionBound is one identity-claiming domain's bound, as the node that

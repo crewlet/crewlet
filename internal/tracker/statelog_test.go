@@ -40,11 +40,38 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// publishes every kind it arbitrates — an anchor row for a
 			// kind nothing writes is a row nothing ever reads — so a
 			// partial list here would report the FIXTURE as the fault.
-			Kinds: suiteKinds(),
-			Rows:  tracker.NewRows,
-			Write: suiteWrite,
+			Kinds:      suiteKinds(),
+			Rows:       tracker.NewRows,
+			Write:      suiteWrite,
+			EncodeGate: encodeSuiteGate,
 		}
 	})
+}
+
+// encodeSuiteGate is the eviction record a peer's writer publishes onto this
+// log — or, with readmit, the inverse commit that takes the node back.
+func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
+	at := time.Unix(1_700_000_000, 0).UTC()
+	body, err := json.Marshal(tracker.Eviction{
+		V: tracker.GateRecordVersion, NodeID: node, EvictedBy: "suite",
+		EvictedAt: at, Readmitted: readmit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	op := "suite-evict-" + node
+	if readmit {
+		op = "suite-readmit-" + node
+	}
+	return tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			V: tracker.RecordVersion, OpID: op,
+			Subject: tracker.EvictionSubject(node), Op: tracker.OpEviction,
+			CreatedAt: at, Writer: "suite-peer",
+			Scope: tracker.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "suite", ActorKind: tracker.AuthorSystem,
+	}.Encode()
 }
 
 // suiteWrite is one write through the tracker's own [tracker.Writer] — the

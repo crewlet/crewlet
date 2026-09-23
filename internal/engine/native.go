@@ -77,6 +77,15 @@ type native struct {
 	// has no native at all.
 	log *stateLog
 
+	// gate is eviction and readmission over every identity-claiming log in
+	// the register. PER NODE AND BUILT WITH THE LOG, never gated on a
+	// backend: the register runs every domain or none, so a company on an
+	// external tracker whose pages are the engine's own still has a tracker
+	// log and a pages log the trim counts nodes on — and an eviction that
+	// only a native tracker could write left such a company unable to evict
+	// anybody at all.
+	gate *NodeGate
+
 	// It adopts the state log in its own step; until then this node runs
 	// one projector and one log side by side, and that is visible here
 	// rather than hidden behind a common name.
@@ -197,6 +206,10 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		return err
 	}
 	n.log = sl
+	if n.gate, err = newNodeGate(sl, e.backends.Coord, e.backends.Store,
+		nodeID, e.metrics); err != nil {
+		return err
+	}
 
 	if runTracker {
 		running := sl.Domain(tracker.Domain{}.Name())
@@ -224,12 +237,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// than to a row — so the write resolves it and the record
 			// carries the handle, and no applier ever reads an org.
 			World: liveSeats{engine: e},
-			// AND THE STATE LOG FOR THE ONE GATE THE ROWS CANNOT
-			// JUDGE: a readmission is refused while the node is below
-			// a trim floor, and where it stands is the register's and
-			// what the log may have lost is the floor's and the
-			// stream's — all three held by the runtime, none here.
-			Readmission: sl,
 			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM, and every
 			// surface derives its own from it with Writer.As: a seat's
 			// tools act as that seat, an operator's session as that
@@ -567,6 +574,15 @@ func (e *Engine) TrackerWriter() *tracker.Writer {
 		return nil
 	}
 	return e.native.writer
+}
+
+// NodeGate is eviction and readmission over every identity-claiming log, or
+// nil on a node running no state log.
+func (e *Engine) NodeGate() *NodeGate {
+	if e.native == nil {
+		return nil
+	}
+	return e.native.gate
 }
 
 // Pages is this node's knowledge read side, or nil.

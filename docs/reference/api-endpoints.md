@@ -81,8 +81,8 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
 | `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
-| `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node, so the trim can pass a floor it is pinning |
-| `POST` | `/work/retention/readmit/{node}` | Lift it — the inverse commit rather than a delete. Refused `409` while the node still lacks records a trim floor lets the log delete |
+| `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on — the tracker's and the pages log — so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
+| `POST` | `/work/retention/readmit/{node}` | Lift it on every one of those logs — the inverse commit rather than a delete. Refused `409` while the node still lacks records a trim floor lets the log delete |
 | `POST` | `/work/retention/capacity` | Drive a log's byte-ceiling change as far as this node's mode allows |
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
 | `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
@@ -2255,19 +2255,63 @@ letting it write again are not reads, whatever a laptop deployment allows.
 | Route | What it does |
 |---|---|
 | `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
-| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate. |
-| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit. **Refused `409 readmission_refused`**, with nothing written, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A position that could not be compared at all — the register or the floor unreadable, or this node behind a reanchor the fleet has made — is `500 gate_failed`, and refuses too. |
+| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail` and `hint`. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. |
+| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A position that could not be compared at all — the register or the floor unreadable, or this node behind a reanchor the fleet has made — is `500 gate_failed`, and refuses too. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
-`confirm` echoes the node id, and a mismatch is `400`. Both gate routes answer
-with the write's **three-valued outcome** — `applied`, `pending` or `unknown` —
-its position and its operation id: a gate the caller believes has landed and
-which is only `pending` is the difference between a node that has stopped
-writing and one that is about to.
+`confirm` echoes the node id, and a mismatch is `400`. A request carrying no
+operator identity is `403 operator_required`, because every log's record names
+the operator who made the gesture and `crewlet retention status` prints it
+beside the eviction.
 
-A node whose company runs no native tracker has no eviction gate, and both gate
-routes answer `503 no_tracker` rather than `404`. The routes exist on this
-build, and telling an operator they do not sends them looking for a version
-mismatch that is not there.
+**The gesture is judged once, before any log is written**, and then its record
+goes to each identity-claiming log in turn. The trim counts nodes per log, so a
+record on one log lifts that log's pin and no other. A `200` answers **per
+log**:
+
+```json
+{
+  "node": "node-4",
+  "evicted": true,
+  "op_id": "0b4c7f7e-6d52-4d0b-9a4e-2f0f4f3a9c11",
+  "complete": false,
+  "domains": [
+    {"domain": "tracker", "stream": "CREWLET_TRACKER_LOG",
+     "op_id": "0b4c7f7e-6d52-4d0b-9a4e-2f0f4f3a9c11.evict.tracker",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_TRACKER_LOG", "generation": 1, "seq": 918280002}},
+    {"domain": "pages", "stream": "CREWLET_PAGES_LOG",
+     "op_id": "0b4c7f7e-6d52-4d0b-9a4e-2f0f4f3a9c11.evict.pages",
+     "error": "statelog: unavailable (log_full): the broker refused to store the record: …",
+     "reason": "log_full"}
+  ]
+}
+```
+
+Each entry is one log's own answer. `outcome` is the write's
+[three-valued outcome](../guides/replication.md#a-write-has-three-outcomes) —
+`applied`, `pending` or `unknown` — with the `position` the record holds: a gate
+the caller believes has landed and which is only `pending` is the difference
+between a node that has stopped writing and one that is about to. An entry with
+`error` in place of an `outcome` was **not written**, and `reason` names why in
+the vocabulary every write refusal uses (`log_full`, `evicted`, …). A log that
+answered holds its record whatever the other did.
+
+`complete` is true only when every log answered `applied` or `pending`. When it
+is false, send **the same request again with `op_id`** set to the operation id
+the answer carried. Each log's record is published under an id derived from it
+— the entry's own `op_id`, which also carries the gesture's sign — so a log
+whose ledger already holds the record answers from that ledger at the position
+it has and is not written twice, and only the missing log is written. Without
+`op_id` the route mints a fresh one, which is a second gesture rather than this
+one finished; and an id carried from an eviction to the readmission after it is
+a different operation on every log, never the eviction answered again.
+
+Every node running the state log serves both routes, whichever backends the
+company uses: a company on an external tracker still runs both logs. A node
+running no state log has no log to write a gate to and answers
+`503 no_state_log` rather than `404` — the routes exist on this build, and
+telling an operator they do not sends them looking for a version mismatch that
+is not there.
 
 ### The capacity window
 

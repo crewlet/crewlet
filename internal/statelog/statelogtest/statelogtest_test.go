@@ -36,7 +36,7 @@ func TestTheCompactedControlPasses(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		c := control()
-		c.Domain = compactedControl{c.Domain.(controlDomain)}
+		c.Domain = compactedControl{}
 		c.Rows = rowsOver(c.Domain)
 		return c
 	})
@@ -79,11 +79,12 @@ func controlWrite(stampOf func(statelog.Stamp) statelog.Stamp) func(context.Cont
 
 func control() statelogtest.Candidate {
 	return statelogtest.Candidate{
-		Domain:  controlDomain{},
-		Applier: controlApplier{},
-		Kinds:   []string{"widget"},
-		Rows:    rowsOver(controlDomain{}),
-		Write:   controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
+		Domain:     controlDomain{},
+		Applier:    controlApplier{},
+		Kinds:      []string{"widget"},
+		Rows:       rowsOver(controlDomain{}),
+		Write:      controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
+		EncodeGate: encodeControlGate,
 		Migrate: func(ctx context.Context, db *store.DB) error {
 			return db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, controlDDL)
@@ -133,13 +134,47 @@ CREATE TABLE control_deferred_scope (
     PRIMARY KEY (position, path)
 );
 CREATE INDEX control_deferred_scope_path_idx ON control_deferred_scope (path);
+CREATE TABLE control_evictions (
+    node_id             TEXT    NOT NULL PRIMARY KEY,
+    at                  INTEGER NOT NULL,
+    by                  TEXT    NOT NULL DEFAULT '',
+    from_position       INTEGER NOT NULL,
+    readmitted_position INTEGER
+);
 `
 
-type controlDomain struct{}
+// controlGateKind is the control domain's eviction record, and controlGate its
+// shape: the envelope every build reads, plus the node and the direction.
+const controlGateKind = "eviction"
 
-func (controlDomain) Name() string { return "control" }
+type controlGate struct {
+	statelog.Envelope
+	Node    string
+	Readmit bool
+}
 
-func (controlDomain) Stream() statelog.StreamSpec {
+// encodeControlGate is the control domain's own eviction record.
+func encodeControlGate(node string, readmit bool) ([]byte, error) {
+	op := "gate-evict-" + node
+	if readmit {
+		op = "gate-readmit-" + node
+	}
+	return json.Marshal(controlGate{
+		Envelope: statelog.Envelope{
+			V: 1, Kind: controlGateKind,
+			Subject: statelog.Subject{Kind: controlGateKind, ID: node},
+			OpID:    op, Gen: 1, Writer: "control",
+			Scope: statelog.ScopeSet{Paths: []string{controlGateKind}},
+		},
+		Node: node, Readmit: readmit,
+	})
+}
+
+type controlBase struct{}
+
+func (controlBase) Name() string { return "control" }
+
+func (controlBase) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
 		Name:            "CREWLET_CONTROL_LOG",
 		Subjects:        []string{"crewlet.control.log.>"},
@@ -151,9 +186,9 @@ func (controlDomain) Stream() statelog.StreamSpec {
 	}
 }
 
-func (controlDomain) RecordVersion() int { return 1 }
+func (controlBase) RecordVersion() int { return 1 }
 
-func (controlDomain) Envelope(payload []byte) (statelog.Envelope, error) {
+func (controlBase) Envelope(payload []byte) (statelog.Envelope, error) {
 	var env statelog.Envelope
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return statelog.Envelope{}, err
@@ -161,9 +196,9 @@ func (controlDomain) Envelope(payload []byte) (statelog.Envelope, error) {
 	return env, nil
 }
 
-func (controlDomain) InstallsGate(statelog.Envelope) bool { return false }
+func (controlBase) InstallsGate(statelog.Envelope) bool { return false }
 
-func (controlDomain) Tables() map[string]statelog.TableClass {
+func (controlBase) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
 		"control_widgets":        statelog.Replicated,
 		"control_ops":            statelog.Local,
@@ -172,20 +207,64 @@ func (controlDomain) Tables() map[string]statelog.TableClass {
 	}
 }
 
-func (controlDomain) DeferredTable() string { return "control_log_deferred" }
-func (controlDomain) ScopeIndex() string    { return "control_deferred_scope" }
-func (controlDomain) OpsTable() string      { return "control_ops" }
-func (controlDomain) ReadinessInput() bool  { return true }
-func (controlDomain) ClaimsIdentity() bool  { return true }
-func (controlDomain) FeedGroup() string     { return "" }
+func (controlBase) DeferredTable() string { return "control_log_deferred" }
+func (controlBase) ScopeIndex() string    { return "control_deferred_scope" }
+func (controlBase) OpsTable() string      { return "control_ops" }
+func (controlBase) ReadinessInput() bool  { return true }
+func (controlBase) ClaimsIdentity() bool  { return true }
+func (controlBase) FeedGroup() string     { return "" }
+
+// controlDomain is the identity-claiming control: the base, plus the eviction
+// record and table every domain the trim counts nodes on has to have.
+type controlDomain struct{ controlBase }
+
+func (controlDomain) InstallsGate(env statelog.Envelope) bool {
+	return env.Kind == controlGateKind
+}
+
+func (controlDomain) Tables() map[string]statelog.TableClass {
+	tables := controlBase{}.Tables()
+	tables["control_evictions"] = statelog.Replicated
+	return tables
+}
+
+// Evictions answers from this log's own rows, as a real domain does.
+func (controlDomain) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+	var out []statelog.EvictionRow
+	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT node_id, at, by, from_position, readmitted_position
+			FROM control_evictions ORDER BY node_id`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var (
+				e          statelog.EvictionRow
+				at, from   int64
+				readmitted sql.NullInt64
+			)
+			if err := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted); err != nil {
+				return err
+			}
+			e.At, e.From = store.DecodeTime(at), uint64(from)
+			e.Readmitted = uint64(readmitted.Int64)
+			e.Back = readmitted.Valid && readmitted.Int64 > from
+			out = append(out, e)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
 
 // compactedControl is the same domain under the other replay protocol: no
 // arbitration, no operation ledger, and a gap that is a coverage number rather
 // than a fault.
-type compactedControl struct{ controlDomain }
+type compactedControl struct{ controlBase }
 
 func (c compactedControl) Stream() statelog.StreamSpec {
-	s := c.controlDomain.Stream()
+	s := c.controlBase.Stream()
 	s.Replay = statelog.ReplayCompacted
 	s.MaxPerSubject = 1
 	s.MaxAge = time.Hour
@@ -210,6 +289,9 @@ func (compactedControl) Tables() map[string]statelog.TableClass {
 type controlApplier struct{}
 
 func (controlApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ statelog.ApplyOptions) (int, error) {
+	if rec.Kind == controlGateKind {
+		return applyControlGate(ctx, tx, rec, false)
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO control_widgets (id, version) VALUES (?, ?)
 		ON CONFLICT (id) DO UPDATE SET version = excluded.version
@@ -230,6 +312,44 @@ func (controlApplier) Gated(context.Context, *sql.Tx, statelog.Record) (statelog
 }
 
 func (controlApplier) Committed(context.Context) {}
+
+// applyControlGate records an eviction or its readmission, as an inverse
+// commit — or, when deleting, the way a domain that got it wrong would.
+func applyControlGate(ctx context.Context, tx *sql.Tx, rec statelog.Record,
+	deleting bool) (int, error) {
+
+	var gate controlGate
+	if err := json.Unmarshal(rec.Payload, &gate); err != nil {
+		return 0, fmt.Errorf("control: decode the gate at %s: %w", rec.Position, err)
+	}
+	at := rec.Position.Packed()
+	var res sql.Result
+	var err error
+	switch {
+	case gate.Readmit && deleting:
+		res, err = tx.ExecContext(ctx,
+			`DELETE FROM control_evictions WHERE node_id = ?`, gate.Node)
+	case gate.Readmit:
+		res, err = tx.ExecContext(ctx, `
+			UPDATE control_evictions SET readmitted_position = ?
+			WHERE node_id = ? AND from_position < ?`, at, gate.Node, at)
+	default:
+		res, err = tx.ExecContext(ctx, `
+			INSERT INTO control_evictions
+				(node_id, at, by, from_position, readmitted_position)
+			VALUES (?, ?, ?, ?, NULL)
+			ON CONFLICT (node_id) DO UPDATE SET
+				at = excluded.at, by = excluded.by,
+				from_position = excluded.from_position, readmitted_position = NULL
+			WHERE excluded.from_position > control_evictions.from_position`,
+			gate.Node, store.EncodeTime(rec.StoredAt), "control", at)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("control: apply the gate at %s: %w", rec.Position, err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
 
 // A DOMAIN THAT LIES ABOUT ITSELF IS CAUGHT, which is what says the cases can
 // fail as well as pass.
@@ -348,6 +468,42 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		}
 	})
 
+	// AND A DOMAIN THAT CANNOT SAY WHO IS EVICTED ON ITS OWN LOG, which is
+	// the defect the pages log shipped with: an applier, a fence and a table
+	// for an eviction, and no answer the trim could read — so an evicted
+	// node was counted on that log for ever. Each arm is a way to get the
+	// answer wrong; every verdict comes back from applied records.
+	for name, mutate := range map[string]func(*statelogtest.Candidate){
+		"an identity-claiming domain that lists no evictions": func(c *statelogtest.Candidate) {
+			c.Domain = unlisted{}
+		},
+		"a domain whose list reads some other log's rows": func(c *statelogtest.Candidate) {
+			c.Domain = blindLister{}
+		},
+		"an applier that deletes a readmitted node's row": func(c *statelogtest.Candidate) {
+			c.Applier = deletingApplier{}
+		},
+		"a domain that claims no identity and lists evictions": func(c *statelogtest.Candidate) {
+			c.Domain = listingCompacted{}
+		},
+		"an identity-claiming candidate with no eviction record": func(c *statelogtest.Candidate) {
+			c.EncodeGate = nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := statelogtest.Evictions(t, func(*testing.T) statelogtest.Candidate {
+				c := control()
+				mutate(&c)
+				return c
+			})
+			if err == nil {
+				t.Fatalf("the suite passed %s — the trim reads exactly this to stop "+
+					"counting an evicted node", name)
+			}
+		})
+	}
+
 	// AND AN APPLIER THAT IS NOT IDEMPOTENT AT A POSITION. This one needs
 	// a store, so its verdict comes back from the apply case rather than
 	// from the declaration.
@@ -390,4 +546,36 @@ func (appendOnly) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ 
 		`INSERT INTO control_widgets (id, version) VALUES (?, ?)`,
 		fmt.Sprintf("%s-%d", rec.Subject.ID, rec.Position.Seq), rec.Position.Packed())
 	return 1, err
+}
+
+// unlisted claims identity and has no answer for who is evicted on its log.
+type unlisted struct{ controlBase }
+
+// blindLister answers from somewhere other than its own log's rows — the
+// shape the trim's old read had, asking the tracker's table on the pages
+// log's behalf and finding nothing.
+type blindLister struct{ controlDomain }
+
+func (blindLister) Evictions(context.Context, *store.DB) ([]statelog.EvictionRow, error) {
+	return nil, nil
+}
+
+// deletingApplier removes a readmitted node's row instead of marking it back,
+// which loses the eviction's history on every replay.
+type deletingApplier struct{ controlApplier }
+
+func (d deletingApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
+	opts statelog.ApplyOptions) (int, error) {
+
+	if rec.Kind == controlGateKind {
+		return applyControlGate(ctx, tx, rec, true)
+	}
+	return d.controlApplier.Apply(ctx, tx, rec, opts)
+}
+
+// listingCompacted claims no identity and answers for evictions anyway.
+type listingCompacted struct{ compactedControl }
+
+func (listingCompacted) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+	return controlDomain{}.Evictions(ctx, db)
 }

@@ -528,16 +528,34 @@ func retentionAck(args []string, stdout, stderr io.Writer) error {
 // ONE FUNCTION FOR BOTH, because they are one gesture with a sign — and
 // because the confirmation, the printing and the outcome vocabulary would
 // otherwise be written twice and drift.
+//
+// # One gesture, every identity-claiming log, one line per log
+//
+// The node judges the gesture once and writes its record to every log the
+// trim counts nodes on, so the answer is PER LOG: each with its own
+// three-valued outcome, or the refusal that stopped that log. A gesture that
+// did not reach every log exits non-zero and says how to finish it — the same
+// command with the operation id it answered with, which every log that already
+// holds the record answers from its own ledger rather than writing twice.
 func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	verb := "readmit"
 	if evict {
 		verb = "evict"
 	}
 	node, rest := splitSubject(args)
-	var confirm *string
+	var confirm, opID *string
+	var force *bool
 	client, err := nodeClientFor(rest, "retention "+verb, stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "",
 			"repeat the node id — this changes whether that machine's records apply")
+		opID = fs.String("op-id", "",
+			"the operation id an earlier run of this gesture answered with, to "+
+				"finish it on the logs it did not reach; empty starts a new one")
+		if evict {
+			force = fs.Bool("force", false,
+				"evict a node that still holds a live presence lease — only for "+
+					"one wedged in a way that still renews it")
+		}
 	})
 	if err != nil {
 		return err
@@ -554,30 +572,50 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	// eviction is FOR — it is how a floor an absent node is pinning gets
 	// to move — and a readmission can be refused by exactly that number.
 	before, beforeErr := retentionFloors(client)
-	var answer struct {
-		Node     string `json:"node"`
-		Evicted  bool   `json:"evicted"`
-		Outcome  string `json:"outcome"`
-		Position struct {
-			Stream     string `json:"stream"`
-			Generation uint32 `json:"generation"`
-			Seq        uint64 `json:"seq"`
-		} `json:"position"`
+	var answer gateAnswer
+	query := url.Values{"confirm": {node}}
+	if *opID != "" {
+		query.Set("op_id", *opID)
 	}
-	path := fmt.Sprintf("/work/retention/%s/%s?confirm=%s", verb,
-		url.PathEscape(node), url.QueryEscape(node))
+	if force != nil && *force {
+		query.Set("force", "true")
+	}
+	path := fmt.Sprintf("/work/retention/%s/%s?%s", verb, url.PathEscape(node),
+		query.Encode())
 	if err := client.post(context.Background(), path, &answer); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s %s: %s at %s %d\n", verb, node, answer.Outcome,
-		answer.Position.Stream, answer.Position.Seq)
-	if answer.Outcome == "pending" {
+	fmt.Fprintf(stdout, "%s %s (operation %s)\n", verb, node, answer.OpID)
+	pending := false
+	for _, d := range answer.Domains {
+		switch {
+		case d.Outcome != "":
+			fmt.Fprintf(stdout, "  %s: %s at %s %d\n", d.Domain, d.Outcome,
+				d.Position.Stream, d.Position.Seq)
+			pending = pending || d.Outcome == "pending"
+		case d.Reason != "":
+			fmt.Fprintf(stdout, "  %s: not written (%s) — %s\n", d.Domain, d.Reason, d.Error)
+		default:
+			fmt.Fprintf(stdout, "  %s: no outcome — %s\n", d.Domain, d.Error)
+		}
+	}
+	if pending {
 		// THE THREE-VALUED OUTCOME, said plainly. A gate the operator
 		// believes has landed and which is only durable is the
 		// difference between a node that has stopped writing and one
 		// that is about to.
-		fmt.Fprintln(stdout, "  The record is durable and this node has not "+
-			"applied it yet: the gate takes effect as each node reaches it.")
+		fmt.Fprintln(stdout, "  A pending log holds the record durably and this node "+
+			"has not applied it yet: the gate takes effect as each node reaches it.")
+	}
+	if !answer.Complete {
+		// NOT A FAILURE TO RETRY BLINDLY: the logs that answered hold
+		// their record, and a fresh operation id would be a second
+		// gesture rather than this one finished.
+		fmt.Fprintf(stdout, "  The gesture has not reached every log. Run it again "+
+			"with -op-id %s to finish it: a log that already holds the record "+
+			"answers from its own ledger and is not written twice.\n", answer.OpID)
+		return fmt.Errorf("the %s of %s did not reach every log — run it again "+
+			"with -op-id %s", verb, node, answer.OpID)
 	}
 	if evict {
 		fmt.Fprintf(stdout, "  %s stays COUNTED for about %s, so a live node is "+
@@ -598,6 +636,32 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 		fmt.Fprintf(stdout, "  %s trim floor %d → %d\n", d.domain, d.floor, now[d.domain])
 	}
 	return nil
+}
+
+// gateAnswer is the gate routes' answer as this command reads it — a shape of
+// its own, for [retentionReport]'s reason.
+type gateAnswer struct {
+	Node     string       `json:"node"`
+	Evicted  bool         `json:"evicted"`
+	OpID     string       `json:"op_id"`
+	Complete bool         `json:"complete"`
+	Domains  []gateDomain `json:"domains"`
+}
+
+// gateDomain is one log's answer: an outcome and its position, or the reason
+// and the error that stopped it.
+type gateDomain struct {
+	Domain   string `json:"domain"`
+	Stream   string `json:"stream"`
+	OpID     string `json:"op_id"`
+	Outcome  string `json:"outcome"`
+	Position struct {
+		Stream     string `json:"stream"`
+		Generation uint32 `json:"generation"`
+		Seq        uint64 `json:"seq"`
+	} `json:"position"`
+	Reason string `json:"reason"`
+	Error  string `json:"error"`
 }
 
 // evictionFenceWindow is how long an evicted node stays counted, as this

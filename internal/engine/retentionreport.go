@@ -53,12 +53,8 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		in.Register, in.RegisterReadable = positions, true
 	}
 	if r.leases != nil {
-		if leases, err := r.leases.ListLive(ctx, coord.ClassNode); err == nil {
-			for _, lease := range leases {
-				if id, ok := coord.NodeID(lease.Resource); ok {
-					in.Live = append(in.Live, statelog.Presence{NodeID: id})
-				}
-			}
+		if live, err := livePresences(ctx, r.leases); err == nil {
+			in.Live = live
 		}
 	}
 	floors := map[string]coord.TrimFloor{}
@@ -70,6 +66,9 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	backups, _ := r.fleet.BackupPoints(ctx)
 	newest, haveBackup := coord.NewestBackup(backups)
 
+	// perLog is each identity-claiming log's own tombstones, which the node
+	// block folds into one answer per node below.
+	var perLog [][]statelog.Tombstone
 	for _, name := range r.state.order {
 		running := r.state.domains[name]
 		if running == nil {
@@ -102,15 +101,67 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		// evictions invisible for the first fifteen minutes of its life
 		// and for the whole life of a fleet whose duty is not running,
 		// which is exactly when somebody is reading this.
-		in.Tombstones = append(in.Tombstones,
-			r.tombstones(ctx, running, d.Generation)...)
+		if running.domain.ClaimsIdentity() {
+			perLog = append(perLog, r.tombstones(ctx, running, d.Generation))
+		}
 		d.SnapshotSkip = r.skipFor(in.Register, name)
 		in.Domains = append(in.Domains, d)
 	}
+	in.Tombstones = fleetTombstones(perLog)
 
 	in.Reading = r.reading(ctx, now, newest, haveBackup)
 	in.Maintenance = r.openMaintenance(ctx)
 	return statelog.NewReport(in)
+}
+
+// fleetTombstones folds each identity-claiming log's own tombstones into the
+// one answer per node the report's node block renders: a node is shown evicted
+// only where EVERY such log holds its tombstone, as of the LATEST of them.
+//
+// # Why the intersection, and why the latest
+//
+// The trim counts nodes per log, so "evicted" on the node block is a claim
+// about all of them at once: a node evicted on the tracker's log and not yet on
+// the pages log is still counted on the pages log and still pins it. Rendered
+// from either log alone — which is what appending every log's rows did, the
+// last one read winning — that node read as evicted, and the COUNTED column
+// said no while one log's applied term waited on it. Until the gesture has
+// reached every log the node is shown as it is on the log still counting it,
+// which is also what the gesture's own answer tells the operator to finish.
+//
+// The window is measured from the latest tombstone because the node stops
+// being counted on every log only once the last of them has aged past it; the
+// earliest would call the eviction effective while one log still counts it.
+//
+// No log at all — a report assembled with no identity-claiming domain — is no
+// tombstone.
+func fleetTombstones(perLog [][]statelog.Tombstone) []statelog.Tombstone {
+	if len(perLog) == 0 {
+		return nil
+	}
+	latest := make(map[string]statelog.Tombstone, len(perLog[0]))
+	held := make(map[string]int, len(perLog[0]))
+	for _, tombs := range perLog {
+		seen := make(map[string]bool, len(tombs))
+		for _, t := range tombs {
+			if seen[t.NodeID] {
+				continue
+			}
+			seen[t.NodeID] = true
+			held[t.NodeID]++
+			if prev, ok := latest[t.NodeID]; !ok || t.At.After(prev.At) {
+				latest[t.NodeID] = t
+			}
+		}
+	}
+	out := make([]statelog.Tombstone, 0, len(latest))
+	for id, t := range latest {
+		if held[id] == len(perLog) {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	return out
 }
 
 // openMaintenance is the capacity operation currently holding the fleet, or

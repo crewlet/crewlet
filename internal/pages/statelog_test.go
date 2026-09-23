@@ -40,7 +40,36 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			Kinds:  suiteKinds(),
 			Rows:   pages.NewRows,
 			Write:  suiteWrite,
+			// THE GATE RECORD, which this domain had an applier, a fence
+			// and a table for and no writer — so the trim never learned an
+			// evicted node had left this log.
+			EncodeGate: encodeSuiteGate,
 		}
+	})
+}
+
+// encodeSuiteGate is the eviction record a peer's store publishes onto this
+// log — or, with readmit, the inverse commit that takes the node back.
+func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
+	op, payload, scope := suitePayload(pages.KindEviction, node)
+	eviction := payload.(pages.Eviction)
+	eviction.Readmitted = readmit
+	body, err := marshal(eviction)
+	if err != nil {
+		return nil, err
+	}
+	opID := "suite-evict-" + node
+	if readmit {
+		opID = "suite-readmit-" + node
+	}
+	return pages.Encode(pages.MutationRecord{
+		RecordEnvelope: pages.RecordEnvelope{
+			V: pages.RecordVersion, OpID: opID,
+			Subject: pages.EvictionSubject(node), Op: op, Scope: scope,
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1,
+			Writer: "suite-peer",
+		},
+		Mutation: body, Actor: "suite", ActorKind: pages.AuthorOperator,
 	})
 }
 

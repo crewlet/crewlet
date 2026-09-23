@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -33,6 +37,11 @@ type fakeRetentionNode struct {
 	gated    string
 	confirm  string
 	gateKind string
+
+	// gateQuery is everything the last gate request carried, and
+	// gateResult what the gate answers with — every log applied when nil.
+	gateQuery  url.Values
+	gateResult *engine.GateResult
 }
 
 func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
@@ -63,13 +72,46 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 			func(w http.ResponseWriter, r *http.Request) {
 				n.gated, n.confirm = r.PathValue("node"), r.URL.Query().Get("confirm")
 				n.gateKind = verb
+				n.gateQuery = r.URL.Query()
+				opID := r.URL.Query().Get("op_id")
+				if opID == "" {
+					opID = "op-minted"
+				}
+				// THE ENGINE'S OWN TYPE, rendered as the route renders
+				// it, so this fixture cannot drift from the answer a
+				// real node gives.
+				result := n.gateResult
+				if result == nil {
+					result = &engine.GateResult{Domains: []engine.DomainGate{
+						{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG",
+							OpID: opID + ".evict.tracker", Outcome: statelog.OutcomeApplied,
+							Position: statelog.Position{
+								Stream: "CREWLET_TRACKER_LOG", Seq: 918280002}},
+						{Domain: "pages", Stream: "CREWLET_PAGES_LOG",
+							OpID: opID + ".evict.pages", Outcome: statelog.OutcomeApplied,
+							Position: statelog.Position{
+								Stream: "CREWLET_PAGES_LOG", Seq: 4410}},
+					}}
+				}
+				domains := make([]map[string]any, 0, len(result.Domains))
+				for _, d := range result.Domains {
+					entry := map[string]any{"domain": d.Domain, "stream": d.Stream,
+						"op_id": d.OpID}
+					var refused *statelog.Unavailable
+					switch {
+					case errors.As(d.Err, &refused):
+						entry["error"], entry["reason"] = d.Err.Error(), refused.Reason
+					case d.Err != nil:
+						entry["error"] = d.Err.Error()
+					default:
+						entry["outcome"], entry["position"] = d.Outcome, d.Position
+					}
+					domains = append(domains, entry)
+				}
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"node": r.PathValue("node"), "evicted": verb == "evict",
-					"outcome": "applied",
-					"position": map[string]any{
-						"stream": "CREWLET_TRACKER_LOG", "seq": 918280002,
-					},
+					"op_id": opID, "complete": result.Complete(), "domains": domains,
 				})
 			})
 	}
@@ -381,6 +423,65 @@ func TestAGateGestureRequiresTheNodeIdTwice(t *testing.T) {
 	}
 }
 
+// A GESTURE THAT DID NOT REACH EVERY LOG EXITS NON-ZERO, SAYS WHICH LOG, AND
+// SAYS HOW TO FINISH IT.
+//
+// An eviction is a record on every identity-claiming log and each log answers
+// on its own. A gesture that landed on the tracker's log and not the pages log
+// has lifted one pin and left the other, and the only honest thing to print is
+// both answers and the command that writes the missing one: the same gesture
+// under the operation id it answered with, which the log that already holds
+// the record answers from its own ledger.
+func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{
+		{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG", OpID: "op-9.evict.tracker",
+			Outcome:  statelog.OutcomeApplied,
+			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 918280002}},
+		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: "op-9.evict.pages",
+			Err: fmt.Errorf("pages: %w", &statelog.Unavailable{
+				Reason: statelog.ReasonLogFull, Detail: "the broker refused to store it"})},
+	}}
+
+	stdout, _, err := cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-op-id", "op-9", "-force")
+	if err == nil {
+		t.Fatalf("a gesture that missed the pages log exited zero:\n%s", stdout)
+	}
+	if got := node.gateQuery.Get("op_id"); got != "op-9" {
+		t.Errorf("the node was sent op_id %q, want the operator's own op-9 — a "+
+			"retry under a fresh id is a second gesture", got)
+	}
+	if got := node.gateQuery.Get("force"); got != "true" {
+		t.Errorf("the node was sent force=%q for an eviction run with -force", got)
+	}
+	for _, want := range []string{
+		"tracker: applied at CREWLET_TRACKER_LOG 918280002",
+		"pages: not written (log_full)",
+		"-op-id op-9",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the output never says %q:\n%s", want, stdout)
+		}
+	}
+	if !strings.Contains(err.Error(), "-op-id op-9") {
+		t.Errorf("the error never names the operation to finish: %v", err)
+	}
+	// AND IT DOES NOT CLAIM THE NODE STOPS BEING COUNTED, which is only true
+	// once every log holds the record.
+	if strings.Contains(stdout, "stays COUNTED") {
+		t.Errorf("an incomplete eviction printed the fence window as though it "+
+			"had taken effect:\n%s", stdout)
+	}
+
+	// A READMISSION HAS NO -force: it is refused as a flag rather than sent.
+	if _, _, err := cli(t, "retention", "readmit", "node-4", base,
+		"-confirm", "node-4", "-force"); err == nil {
+		t.Error("readmit accepted -force, which it has no meaning for")
+	}
+}
+
 // `crewlet retention readmit` IS REFUSED FOR A NODE BELOW THE TRIM FLOOR, and
 // the refusal prints the node's position beside the floor — end to end, from
 // the verb through the route and the writer to a real engine's register,
@@ -481,8 +582,9 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a node one record short of the floor was refused: %v", err)
 	}
-	if !strings.Contains(stdout, "readmit node-away: applied") {
-		t.Errorf("the readmission did not report landing:\n%s", stdout)
+	if !strings.Contains(stdout, "tracker: applied at CREWLET_TRACKER_LOG") ||
+		!strings.Contains(stdout, "pages: applied at CREWLET_PAGES_LOG") {
+		t.Errorf("the readmission did not report landing on both logs:\n%s", stdout)
 	}
 	// AND THE WATERMARK IS READ FROM A REAL NODE'S ANSWER, which is the
 	// one encoding every fixture here can drift from.

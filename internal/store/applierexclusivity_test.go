@@ -455,14 +455,19 @@ func allowanceFor(file string) (string, bool) {
 // readOnlyOfReplicated names the calls that take the replicated estate's
 // handle and only read through it.
 //
-// Two of them, and both are worth naming rather than inferring: a handoff is
-// the point past which this walk cannot follow the handle, so the difference
+// One of them, and it is worth naming rather than inferring: a handoff is the
+// point past which this walk cannot follow the handle, so the difference
 // between "hands it to a reader" and "hands it to a writer" has to be
 // declared. The list is exercised by the controls above, so an entry that
 // stopped being a reader shows up as a control failure rather than as silence.
+//
+// `Evictions` was the second, and it left when each identity-claiming domain
+// began answering for its own log: it takes the node handle and reads the
+// replicated peer itself, so nothing hands it the estate any more — and an
+// exemption naming a call nobody makes is one that would silently cover the
+// next function of that name, whatever it wrote.
 var readOnlyOfReplicated = map[string]bool{
 	"CursorFor": true, // statelog.CursorFor reads a domain's checkpoint.
-	"Evictions": true, // tracker.Evictions reads the eviction rows.
 }
 
 // replicatedWriteAt reports whether one node reaches a write on the

@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // fakeBackupRegister records the point the acknowledgement wrote.
@@ -185,22 +184,45 @@ func TestAnAcknowledgementNamingAnUnknownStreamIsRefused(t *testing.T) {
 	}
 }
 
-// fakeNodeGate answers the two gate writes with what it was built with.
+// fakeNodeGate answers the two gestures with what it was built with and
+// remembers what it was asked.
 type fakeNodeGate struct {
 	readmit error
-	evicted []string
+	evict   error
+
+	// result is what a gesture past the judgement answers; empty is every
+	// log applied.
+	result *engine.GateResult
+
+	asked []engine.GateRequest
 }
 
-func (f *fakeNodeGate) EvictNode(_ context.Context, opID, node string) (tracker.WriteResult, error) {
-	f.evicted = append(f.evicted, node)
-	return tracker.WriteResult{Outcome: statelog.OutcomeApplied, OpID: opID}, nil
-}
-
-func (f *fakeNodeGate) ReadmitNode(_ context.Context, opID, _ string) (tracker.WriteResult, error) {
-	if f.readmit != nil {
-		return tracker.WriteResult{}, f.readmit
+func (f *fakeNodeGate) answer(req engine.GateRequest, refusal error) (engine.GateResult, error) {
+	f.asked = append(f.asked, req)
+	if refusal != nil {
+		return engine.GateResult{}, refusal
 	}
-	return tracker.WriteResult{Outcome: statelog.OutcomeApplied, OpID: opID}, nil
+	if f.result != nil {
+		out := *f.result
+		out.Node, out.OpID = req.Node, req.OpID
+		return out, nil
+	}
+	return engine.GateResult{Node: req.Node, OpID: req.OpID, Domains: []engine.DomainGate{
+		{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG", OpID: req.OpID + ".evict.tracker",
+			Outcome:  statelog.OutcomeApplied,
+			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 12}},
+		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: req.OpID + ".evict.pages",
+			Outcome:  statelog.OutcomeApplied,
+			Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Seq: 7}},
+	}}, nil
+}
+
+func (f *fakeNodeGate) Evict(_ context.Context, req engine.GateRequest) (engine.GateResult, error) {
+	return f.answer(req, f.evict)
+}
+
+func (f *fakeNodeGate) Readmit(_ context.Context, req engine.GateRequest) (engine.GateResult, error) {
+	return f.answer(req, f.readmit)
 }
 
 // A READMISSION REFUSED BELOW THE FLOOR IS A 409 CARRYING BOTH NUMBERS, and a
@@ -220,7 +242,7 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 		Bound: statelog.ReadmissionBound{Domain: "tracker", Generation: 2,
 			Floor: 9_000, First: 8_800},
 	}
-	gate := &fakeNodeGate{readmit: fmt.Errorf("tracker: readmit node node-4: %w", refusal)}
+	gate := &fakeNodeGate{readmit: fmt.Errorf("engine: readmit node node-4: %w", refusal)}
 	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
 
 	code, body := postAck(t, a, "/work/retention/readmit/node-4?confirm=node-4")
@@ -252,10 +274,127 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 		http.StatusInternalServerError || body["error"] != "gate_failed" {
 		t.Fatalf("an unreadable register answered %d %v, want 500 gate_failed", code, body)
 	}
+}
 
-	// AND AN EVICTION IS UNTOUCHED BY ANY OF IT.
-	if code, body := postAck(t, a, "/work/retention/evict/node-5?confirm=node-5"); code !=
-		http.StatusOK || len(gate.evicted) != 1 {
-		t.Fatalf("an eviction answered %d %v", code, body)
+// AN EVICTION OF A NODE STILL HOLDING ITS PRESENCE LEASE IS A 409, and
+// `force=true` is what the engine is asked to override it with — never
+// assumed, and never sent on a readmission.
+//
+// The judgement existed and nothing called it: the route evicted whatever node
+// id it was given, so a mistyped id took a running machine out of the fleet.
+func TestAnEvictionOfALiveNodeIsRefusedAsAnAnswer(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	refusal := &statelog.EvictionRefusal{NodeID: "node-4", Detail: "it holds a live presence lease"}
+	gate := &fakeNodeGate{evict: fmt.Errorf("engine: evict node node-4: %w", refusal)}
+	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
+
+	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4")
+	if code != http.StatusConflict || body["error"] != "eviction_refused" {
+		t.Fatalf("a refused eviction answered %d %v, want 409 eviction_refused", code, body)
+	}
+	if hint, _ := body["hint"].(string); hint != refusal.Remedy() {
+		t.Errorf("hint = %q, want the refusal's remedy %q", hint, refusal.Remedy())
+	}
+	if len(gate.asked) != 1 || gate.asked[0].Force {
+		t.Fatalf("the engine was asked %+v, want one unforced eviction", gate.asked)
+	}
+
+	gate.evict = nil
+	if code, body := postAck(t, a,
+		"/work/retention/evict/node-4?confirm=node-4&force=true"); code != http.StatusOK {
+		t.Fatalf("a forced eviction answered %d %v", code, body)
+	}
+	if !gate.asked[1].Force {
+		t.Fatal("force=true never reached the engine")
+	}
+	if code, _ := postAck(t, a,
+		"/work/retention/readmit/node-4?confirm=node-4&force=true"); code != http.StatusOK ||
+		gate.asked[2].Force {
+		t.Fatalf("a readmission carried force (%+v), which it has no meaning for", gate.asked[2])
+	}
+}
+
+// THE GESTURE ANSWERS PER LOG, NAMES WHO RAN IT, AND CARRIES THE OPERATION ID
+// A RETRY FINISHES IT WITH.
+//
+// An eviction is a record on every identity-claiming log, and the logs answer
+// independently — so the route reports each one's three-valued outcome, or the
+// refusal that stopped it, and `complete` says whether every log holds the
+// record. A gesture that reached the tracker's log and not the pages log is a
+// 200 with `complete: false`, not a failure: the tracker's record stands, and
+// the same request sent again with the `op_id` it answered with is what writes
+// the rest.
+func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	gate := &fakeNodeGate{result: &engine.GateResult{Domains: []engine.DomainGate{
+		{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG", OpID: "op-1.evict.tracker",
+			Outcome:  statelog.OutcomePending,
+			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 41}},
+		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: "op-1.evict.pages",
+			Err: fmt.Errorf("pages: %w", &statelog.Unavailable{
+				Reason: statelog.ReasonLogFull, Detail: "the broker refused"})},
+	}}}
+	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
+
+	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4&op_id=op-1")
+	if code != http.StatusOK {
+		t.Fatalf("a partial gesture answered %d %v, want 200 — the logs that "+
+			"answered hold their record", code, body)
+	}
+	if body["complete"] != false || body["op_id"] != "op-1" {
+		t.Fatalf("complete = %v, op_id = %v, want false and the caller's own op-1",
+			body["complete"], body["op_id"])
+	}
+	if len(gate.asked) != 1 || gate.asked[0].OpID != "op-1" || gate.asked[0].By != "founder" {
+		t.Fatalf("the engine was asked %+v, want op-1 run by the token's operator "+
+			"founder — every log's record names who ran it", gate.asked)
+	}
+	domains, _ := body["domains"].([]any)
+	if len(domains) != 2 {
+		t.Fatalf("domains = %v, want one entry per log", body["domains"])
+	}
+	tracker, _ := domains[0].(map[string]any)
+	pages, _ := domains[1].(map[string]any)
+	if tracker["outcome"] != "pending" || tracker["op_id"] != "op-1.evict.tracker" {
+		t.Errorf("the tracker's entry is %v, want its pending outcome under its "+
+			"own derived operation", tracker)
+	}
+	if position, _ := tracker["position"].(map[string]any); position["seq"] != float64(41) {
+		t.Errorf("the tracker's entry carries position %v, want seq 41", tracker["position"])
+	}
+	if _, has := pages["outcome"]; has || pages["reason"] != "log_full" ||
+		pages["error"] == nil {
+		t.Errorf("the pages entry is %v, want no outcome, reason log_full and "+
+			"the error — a refusal is not one of the three outcomes", pages)
+	}
+
+	// AND WITHOUT ONE, A FRESH OPERATION — which it answers with, because a
+	// retry needs it.
+	gate.result = nil
+	code, body = postAck(t, a, "/work/retention/evict/node-4?confirm=node-4")
+	if code != http.StatusOK || body["complete"] != true {
+		t.Fatalf("a complete gesture answered %d %v", code, body)
+	}
+	if opID, _ := body["op_id"].(string); opID == "" || opID != gate.asked[1].OpID {
+		t.Fatalf("the answer's op_id %v is not the one the engine ran, %q",
+			body["op_id"], gate.asked[1].OpID)
+	}
+}
+
+// A NODE RUNNING NO STATE LOG ANSWERS 503 NAMING THAT, rather than 404 —
+// the route exists on this build, and telling an operator it does not sends
+// them looking for a version mismatch.
+func TestAGateOnANodeWithNoStateLogSaysSo(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b})
+	for _, verb := range []string{"evict", "readmit"} {
+		code, body := postAck(t, a, "/work/retention/"+verb+"/node-4?confirm=node-4")
+		if code != http.StatusServiceUnavailable || body["error"] != "no_state_log" {
+			t.Errorf("%s on a node with no state log answered %d %v, want 503 "+
+				"no_state_log", verb, code, body)
+		}
 	}
 }

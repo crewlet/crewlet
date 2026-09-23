@@ -1683,9 +1683,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// retention gesture the engine cannot make on its own: an
 		// operator's assertion that a copy has left the host.
 		Retention: e.Backends().Fleet,
-		// And the eviction gate, which is a RECORD rather than a
-		// coordination write — so it goes through the same writer a
-		// seat's tools do, and carries the same three-valued outcome.
+		// And the eviction gate, which is a RECORD on every
+		// identity-claiming log rather than a coordination write —
+		// judged once, written to each log, and answered per log with
+		// the same three-valued outcome every write has.
 		Nodes: nativeNodes(e),
 		// The capacity window. The engine itself refuses the verb when
 		// this node is publishing, so the route exists in every mode and
@@ -2402,12 +2403,18 @@ func nativeWork(e *engine.Engine) queries.WorkReader {
 	return nil
 }
 
-// nativeNodes is the eviction gate, or nil where this node runs no tracker —
-// converted for [nativeWork]'s reason: a typed nil would pass the route's
-// registration check and panic on the first press.
+// nativeNodes is the eviction gate over every identity-claiming log, or nil
+// where this node runs no state log — converted for [nativeWork]'s reason: a
+// typed nil would pass the route's registration check and panic on the first
+// press.
+//
+// NOT THE TRACKER'S WRITER, which is what this was: that wrote the tracker's
+// log alone, so an eviction lifted one log's pin and left the pages log
+// counting the node for ever — and a company whose tracker is external, which
+// still runs both logs, could not evict anybody at all.
 func nativeNodes(e *engine.Engine) api.NodeGate {
-	if w := e.TrackerWriter(); w != nil {
-		return w
+	if g := e.NodeGate(); g != nil {
+		return g
 	}
 	return nil
 }

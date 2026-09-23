@@ -1,7 +1,6 @@
 package tracker_test
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"strings"
@@ -151,95 +150,74 @@ func TestTheDeletionGateCountsItsHits(t *testing.T) {
 	}
 }
 
-// readmissionJudge is the engine's half of a readmission, fixed: it answers
-// what it was built with and remembers who it was asked about.
-type readmissionJudge struct {
-	answer error
-	asked  []string
-}
-
-func (j *readmissionJudge) Readmissible(_ context.Context, nodeID string) error {
-	j.asked = append(j.asked, nodeID)
-	return j.answer
-}
-
-// A READMISSION IS JUDGED BEFORE IT IS WRITTEN, AND A REFUSED ONE WRITES
-// NOTHING.
+// A READMISSION IS THE INVERSE COMMIT, AND THIS LOG'S OWN ROWS SAY SO.
 //
-// The readmission record is what lifts a node's tombstone on every node that
-// applies it, so the refusal is worth nothing unless it comes before the
-// append: a refusal returned after it would be a record the fleet had already
-// acted on. And a writer that has nothing to judge with refuses rather than
-// writing unjudged, which is what this writer did for every readmission it was
-// ever asked for while the operator documentation said it would refuse.
-func TestAReadmissionIsJudgedBeforeItIsWritten(t *testing.T) {
+// The eviction's whole history survives a replay because a readmission is a
+// second record rather than a delete — so a node that was evicted, readmitted
+// and evicted again reads as three facts rather than as one long absence. And
+// [tracker.Domain.Evictions] is what the trim reads to stop counting a node on
+// THIS log, so what it answers after each step is the contract: evicted and
+// not back, then back, then evicted again with the readmission cleared.
+//
+// Whether the readmission is PERMITTED is not this writer's to judge any more:
+// it is one fleet gesture over every identity-claiming log, judged once by the
+// engine's node gate before either log is written, and certified there.
+func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	if _, err := r.writer.EvictNode(t.Context(), "op-evict", "node-b"); err != nil {
-		t.Fatalf("EvictNode: %v", err)
-	}
-	r.drain()
-	end := func() uint64 {
+	standing := func(node string) (held, back bool) {
 		t.Helper()
-		last, err := r.log.End(t.Context())
+		rows, err := tracker.Domain{}.Evictions(t.Context(), r.db)
 		if err != nil {
-			t.Fatalf("read the log's end: %v", err)
+			t.Fatalf("read the evictions: %v", err)
 		}
-		return last
-	}
-	evicted := end()
-
-	// NO JUDGE, NO READMISSION.
-	if _, err := r.writer.ReadmitNode(t.Context(), "op-unjudged", "node-b"); err == nil ||
-		!strings.Contains(err.Error(), "trim floor") {
-		t.Fatalf("a writer with nothing to judge a readmission by answered %v, "+
-			"want a refusal naming the trim floor", err)
-	}
-
-	// A REFUSAL COMES BACK WHOLE, so the route can report the numbers.
-	refusal := &statelog.ReadmissionRefusal{NodeID: "node-b", Domain: "tracker",
-		Published: true, Seq: 3, Bound: statelog.ReadmissionBound{
-			Domain: "tracker", Floor: 9, First: 9}}
-	judge := &readmissionJudge{answer: refusal}
-	r.writer.Readmission = judge
-	var got *statelog.ReadmissionRefusal
-	if _, err := r.writer.ReadmitNode(t.Context(), "op-refused", "node-b"); !errors.As(err, &got) ||
-		got != refusal {
-		t.Fatalf("a refused readmission answered %v, want the judge's own refusal", err)
-	}
-	if len(judge.asked) != 1 || judge.asked[0] != "node-b" {
-		t.Fatalf("the judge was asked about %v, want exactly [node-b]", judge.asked)
-	}
-	if last := end(); last != evicted {
-		t.Fatalf("the log moved from %d to %d on a refused readmission — the "+
-			"record lifting the tombstone landed anyway", evicted, last)
+		for _, row := range rows {
+			if row.NodeID == node {
+				if row.From == 0 || row.At.IsZero() {
+					t.Fatalf("%s's eviction row carries no position (%d) or no "+
+						"instant (%s) — the gate and the fence window read both",
+						node, row.From, row.At)
+				}
+				if row.Back && row.Readmitted <= row.From {
+					t.Fatalf("%s is back at %d, which is not above its eviction "+
+						"at %d", node, row.Readmitted, row.From)
+				}
+				return true, row.Back
+			}
+		}
+		return false, false
 	}
 
-	// AN EVICTION IS NEVER JUDGED: it is the gesture that makes a floor
-	// move, and asking whether the node is below it would be backwards.
-	if _, err := r.writer.EvictNode(t.Context(), "op-evict-c", "node-c"); err != nil {
-		t.Fatalf("EvictNode with a refusing judge: %v", err)
-	}
-	if len(judge.asked) != 1 {
-		t.Fatalf("an eviction asked the readmission judge about %v", judge.asked[1:])
+	for _, node := range []string{"node-b", "node-c"} {
+		if _, err := r.writer.EvictNode(t.Context(), "op-evict-"+node, node); err != nil {
+			t.Fatalf("EvictNode %s: %v", node, err)
+		}
 	}
 	r.drain()
+	if held, back := standing("node-b"); !held || back {
+		t.Fatalf("node-b after its eviction: held %v, back %v — want evicted", held, back)
+	}
 
-	// AND A PERMITTED ONE LANDS AND TAKES THE NODE BACK.
-	judge.answer = nil
 	if _, err := r.writer.ReadmitNode(t.Context(), "op-back", "node-b"); err != nil {
-		t.Fatalf("a permitted readmission: %v", err)
+		t.Fatalf("ReadmitNode: %v", err)
 	}
 	r.drain()
-	rows, err := tracker.Evictions(t.Context(), r.db.Replicated(),
-		tracker.Domain{}.Stream().Name)
-	if err != nil {
-		t.Fatalf("read the evictions: %v", err)
+	if held, back := standing("node-b"); !held || !back {
+		t.Fatalf("node-b after its readmission: held %v, back %v — want its row "+
+			"kept and marked back, which is what an inverse commit is", held, back)
 	}
-	for _, row := range rows {
-		if back := row.NodeID == "node-b"; row.IsBack != back {
-			t.Errorf("%s readmitted = %v, want %v", row.NodeID, row.IsBack, back)
-		}
+	if held, back := standing("node-c"); !held || back {
+		t.Fatalf("node-c, never readmitted, reads held %v, back %v", held, back)
+	}
+
+	if _, err := r.writer.EvictNode(t.Context(), "op-evict-again", "node-b"); err != nil {
+		t.Fatalf("EvictNode again: %v", err)
+	}
+	r.drain()
+	if held, back := standing("node-b"); !held || back {
+		t.Fatalf("node-b evicted a second time reads held %v, back %v — a "+
+			"re-eviction must clear the readmission, or the row would still "+
+			"say the node is back", held, back)
 	}
 }
 

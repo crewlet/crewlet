@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -329,14 +330,8 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	// counts at position zero and blocks, which is correct: trimming past
 	// a node that is joining is deleting what it is about to replay.
 	if r.leases != nil {
-		leases, err := r.leases.ListLive(ctx, coord.ClassNode)
-		if err != nil {
-			return in, fmt.Errorf("list the live nodes: %w", err)
-		}
-		for _, lease := range leases {
-			if id, ok := coord.NodeID(lease.Resource); ok {
-				in.live = append(in.live, statelog.Presence{NodeID: id})
-			}
+		if in.live, err = livePresences(ctx, r.leases); err != nil {
+			return in, err
 		}
 	}
 	return in, nil
@@ -668,6 +663,28 @@ func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
 	return floor, true, true
 }
 
+// evictionLister is what the trim asks an identity-claiming domain: every
+// eviction its OWN applied rows hold, on its OWN log.
+//
+// DECLARED HERE, by the caller that counts nodes per log, and answered by each
+// domain for itself. The trim used to call the tracker's reader for every
+// identity-claiming domain with that domain's stream name — so on the pages
+// log it asked the tracker's table for rows filed under the pages stream,
+// found none, and counted an evicted node there for ever. `startStateLog`
+// refuses a registered identity-claiming domain that does not answer this,
+// and the statelogtest suite certifies that every one answers it correctly.
+type evictionLister interface {
+	Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error)
+}
+
+// The two identity-claiming domains this build registers, held to the
+// interface at compile time so a reshaped method is a build failure rather
+// than a boot refusal.
+var (
+	_ evictionLister = tracker.Domain{}
+	_ evictionLister = pages.Domain{}
+)
+
 // tombstones is every eviction this node has applied for one domain's log.
 //
 // READ FROM THE REPLICATED ROWS rather than from coordination, because that is
@@ -682,13 +699,21 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 	generation uint32) []statelog.Tombstone {
 
 	if r.db == nil || !running.domain.ClaimsIdentity() {
-		// ONLY THE IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS. A
-		// domain that does not claim identity has no say in who the
-		// fleet counts, and asking it would be reading another
-		// domain's table under this one's stream name.
+		// ONLY AN IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS. A domain
+		// that does not claim identity has no say in who the fleet
+		// counts on its log.
 		return nil
 	}
-	rows, err := tracker.Evictions(ctx, r.db.Replicated(), running.domain.Stream().Name)
+	lister, ok := running.domain.(evictionLister)
+	if !ok {
+		// UNREACHABLE ON A NODE THAT BOOTED — [Engine.startStateLog]
+		// refuses such a domain — and logged rather than assumed, on the
+		// conservative side: nobody is uncounted.
+		log.ErrorContext(ctx, "retention_evictions_unlisted",
+			"domain", running.domain.Name())
+		return nil
+	}
+	rows, err := lister.Evictions(ctx, r.db)
 	switch {
 	case errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled):
 		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. The
@@ -698,12 +723,13 @@ func (r *retention) tombstones(ctx context.Context, running *runningDomain,
 		// it at WARN would put a line in every clean shutdown.
 		return nil
 	case err != nil:
-		log.WarnContext(ctx, "retention_evictions_unreadable", "err", err)
+		log.WarnContext(ctx, "retention_evictions_unreadable",
+			"domain", running.domain.Name(), "err", err)
 		return nil
 	}
 	out := make([]statelog.Tombstone, 0, len(rows))
 	for _, row := range rows {
-		if row.IsBack {
+		if row.Back {
 			// READMITTED, so there is no tombstone: the node is
 			// counted again and its position pins the floor as any
 			// other node's does.

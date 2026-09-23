@@ -456,7 +456,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 	})
 }
 
-// EvictNode installs the gate that drops a node's records.
+// EvictNode installs the gate that drops a node's records on this log.
 //
 // # Why the record carries the position and not a time
 //
@@ -464,10 +464,20 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 // is the log's own — so every node reaches the same verdict about every record
 // with no clock, no coordination read and no agreement beyond the order they
 // all already have. That is what makes it the fence that holds when
-// coordination cannot be reached at all, which is the only state in which an
-// eviction is permitted: the fleet refuses one while the target's presence
-// lease is live, so an evicted node has already been silent for at least
-// three coordination round trips.
+// coordination cannot be reached at all.
+//
+// # And why nothing here judges whether the node may be evicted
+//
+// An eviction is ONE fleet gesture over every identity-claiming log, and
+// whether it is permitted — the target must not be holding a live presence
+// lease ([statelog.PermitEviction]) — is asked once, before the first log is
+// written, by the engine's node gate. Judged here, and again beside every
+// other log's gate record, one gesture could reach two answers about one node
+// and leave it evicted on one log and counted on the other. The gate is the
+// one production caller of this method and of [Writer.ReadmitNode].
+//
+// EvictedBy is this writer's own actor, so the caller hands it a writer acting
+// as the operator who ran the gesture — see [Writer.As].
 func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (WriteResult, error) {
 	return w.gateNode(ctx, opID, nodeID, false)
 }
@@ -476,43 +486,12 @@ func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (WriteResul
 // whole history survives a replay — and a node that was evicted, readmitted
 // and evicted again reads correctly rather than as one long absence.
 //
-// # And it is refused for a node the trim floor has passed
-//
-// [Writer.Readmission] is asked first, and its refusal is returned whole —
-// a [*statelog.ReadmissionRefusal] carrying the node's position and the floor
-// — with nothing appended. The judgement is made BEFORE the append and outside
-// the decide's snapshot, because neither of its inputs is in that
-// transaction: the positions register and the published floor are
-// coordination, and the log's first sequence is the broker's. Why reading them
-// a moment early costs nothing is [statelog.PermitReadmission]'s to say.
+// Unjudged here for [Writer.EvictNode]'s reason: a node below a trim floor is
+// refused a readmission by the engine's node gate, which reads the positions
+// register, the published floors and every identity-claiming log once, before
+// either log is written — see [statelog.PermitReadmission].
 func (w *Writer) ReadmitNode(ctx context.Context, opID, nodeID string) (WriteResult, error) {
-	if nodeID == "" {
-		return WriteResult{}, fmt.Errorf("tracker: a readmission names no node")
-	}
-	if w.Readmission == nil {
-		return WriteResult{}, fmt.Errorf("tracker: this writer cannot establish "+
-			"where node %s stands against the trim floor, so it cannot readmit "+
-			"it — a node the floor has passed cannot replay what it is missing, "+
-			"and the readmission is refused rather than written unjudged", nodeID)
-	}
-	if err := w.Readmission.Readmissible(ctx, nodeID); err != nil {
-		return WriteResult{}, fmt.Errorf("tracker: readmit node %s: %w", nodeID, err)
-	}
 	return w.gateNode(ctx, opID, nodeID, true)
-}
-
-// Readmission judges whether an evicted node may be counted again.
-//
-// DECLARED HERE, by the one caller, and answered by the engine: the inputs are
-// the positions register, the fleet's published floors and every
-// identity-claiming domain's own log, and this package holds none of them.
-type Readmission interface {
-	// Readmissible answers nil when the node may be taken back, a
-	// [*statelog.ReadmissionRefusal] when a floor it would be counted
-	// against has passed it, and any other error when that cannot be
-	// established — which refuses too, since a judgement nobody could
-	// make is not one that came back clear.
-	Readmissible(ctx context.Context, nodeID string) error
 }
 
 func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool) (WriteResult, error) {

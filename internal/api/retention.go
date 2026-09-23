@@ -48,32 +48,35 @@ type retentionWriter interface {
 	PutBackupPoint(ctx context.Context, p coord.BackupPoint) error
 }
 
-// NodeGate is the eviction half, which is a RECORD on the log rather than a
-// coordination write — so it goes through the same writer a seat's tools do,
-// and its outcome is the same three-valued answer every other write has.
+// NodeGate is the eviction half, which is a RECORD on every identity-claiming
+// log rather than a coordination write — one gesture, judged once, written to
+// each log, and answered per log with the same three-valued outcome every other
+// write has. See [engine.NodeGate].
 //
 // EXPORTED, unlike its neighbour, because the caller has to convert a typed
-// nil to a genuine one before handing it over: a nil *tracker.Writer inside a
+// nil to a genuine one before handing it over: a nil *engine.NodeGate inside a
 // non-nil interface passes this route's own check and panics on the first
 // press.
 type NodeGate interface {
-	EvictNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
+	// Evict answers a [*statelog.EvictionRefusal], wrapped, for a node
+	// still holding a live presence lease — which this route reports as a
+	// refusal rather than a failure.
+	Evict(ctx context.Context, req engine.GateRequest) (engine.GateResult, error)
 
-	// ReadmitNode answers a [*statelog.ReadmissionRefusal], wrapped, for a
-	// node below a trim floor it would be counted against — which this
-	// route reports as a refusal rather than a failure.
-	ReadmitNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
+	// Readmit answers a [*statelog.ReadmissionRefusal], wrapped, for a node
+	// below a trim floor it would be counted against — likewise a refusal.
+	Readmit(ctx context.Context, req engine.GateRequest) (engine.GateResult, error)
 }
 
 // TaskPurger is the purge half, and it is a SEPARATE seam rather than a third
 // method on [NodeGate].
 //
-// Every other write on that surface is the FLEET's — an eviction is a decision
-// about a machine, and the process's own writer is the right author. A purge
-// destroys a company's data, and the record has to carry the PERSON who asked
-// for it, so the identity is an argument rather than a property of the writer
-// this process happens to hold. Keeping it apart is also what lets this route
-// be exercised without a broker: the alternative signature hands back a
+// The gate is a decision about a MACHINE, written to every identity-claiming
+// log from one judgement; a purge destroys one task's rows on one log, and has
+// nothing to judge but the confirmation. Both records carry the PERSON who
+// asked, so the identity is an argument on each rather than a property of the
+// writer this process happens to hold. Keeping it apart is also what lets this
+// route be exercised without a broker: the alternative signature hands back a
 // concrete `*tracker.Writer`, which no test can supply without a publisher, a
 // store and a log.
 type TaskPurger interface {
@@ -281,18 +284,13 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// THE CALLER MAY BRING ITS OWN OPERATION ID, and this is the one
-	// route where that matters. A purge that answers `unknown` has no
-	// acknowledgement and no position — it may have landed and it may
-	// not — so the only correct response is to retry, and a retry with a
-	// FRESH id would append a second purge of a task the first one may
-	// already have destroyed. A fresh id per press is right for the
-	// eviction beside this (two operators evicting one node are two
-	// decisions worth recording); it is wrong here.
-	opID := strings.TrimSpace(r.URL.Query().Get("op_id"))
-	if opID == "" {
-		opID = uuid.NewString()
-	}
+	// THE CALLER MAY BRING ITS OWN OPERATION ID. A purge that answers
+	// `unknown` has no acknowledgement and no position — it may have
+	// landed and it may not — so the only correct response is to retry,
+	// and a retry with a FRESH id would append a second purge of a task the
+	// first one may already have destroyed. The gate routes beside this
+	// take one for the same reason.
+	opID := callerOpID(r)
 	result, err := a.purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
 	if err != nil {
 		log.Warn("api_purge_failed", "task", id, "operator", operator,
@@ -313,29 +311,55 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// callerOpID is the operation id a caller brought in `?op_id=`, or a fresh one
+// where it brought none.
+//
+// A retry is only a retry under the SAME id: a gesture that came back `unknown`
+// or partial is finished by sending the id it answered with, and one sent with
+// a fresh id is a second gesture.
+func callerOpID(r *http.Request) string {
+	if opID := strings.TrimSpace(r.URL.Query().Get("op_id")); opID != "" {
+		return opID
+	}
+	return uuid.NewString()
+}
+
 // gate answers the eviction and readmission routes.
 //
 // ONE HANDLER FOR BOTH, because they are one gesture with a sign: a
-// readmission is the INVERSE COMMIT rather than a delete, written by the same
-// writer onto the same subject, so two handlers would be two copies of one
-// refusal vocabulary.
+// readmission is the INVERSE COMMIT rather than a delete, written onto the same
+// subjects of the same logs, so two handlers would be two copies of one refusal
+// vocabulary.
 //
-// The vocabulary has one word only the readmission reaches: a node below the
-// trim floor is REFUSED, by the writer and before anything is appended, and
-// the answer is a 409 carrying the node's position beside the floor rather
-// than a failure — see [statelog.PermitReadmission].
+// # One gesture, every identity-claiming log, and each log's own answer
+//
+// The engine judges the gesture once and then writes its record to every log
+// the trim counts nodes on — see [engine.NodeGate]. A refusal is a 409 with
+// nothing written anywhere: an eviction of a node still holding a live
+// presence lease (unless `force=true`), a readmission of one below a trim
+// floor it would be counted against, each carrying the numbers the refusal is
+// about. Past the judgement the answer is 200 and PER LOG — each with its own
+// three-valued outcome, or the refusal that stopped that log — and `complete`
+// says whether every log now holds the record. An incomplete answer is not a
+// failure to report as one: the logs that answered hold their record, and the
+// same request sent again with the `op_id` it answered with writes only what
+// is missing.
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a.nodes == nil {
-			writeJSON(w, http.StatusServiceUnavailable,
-				map[string]string{"error": "no_tracker"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "no_state_log",
+				"detail": "this node runs no state log, so there is no log to " +
+					"write an eviction to — ask a node that runs the native " +
+					"tracker or knowledge base",
+			})
 			return
 		}
 		node := r.PathValue("node")
 		// THE CONFIRMATION ECHOES THE NODE ID, the same shape the
 		// destructive CLI gestures already use: an eviction stops a
-		// machine writing and a readmission lets it write again, and
-		// neither is a value to get from a shell history.
+		// machine's records applying and a readmission lets them apply
+		// again, and neither is a value to get from a shell history.
 		if node == "" || r.URL.Query().Get("confirm") != node {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
 				"error": "confirm_required",
@@ -344,22 +368,35 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			})
 			return
 		}
-		operator, _ := auth.OperatorFrom(r.Context())
-		// A FRESH ID PER PRESS, unlike the chart apply's derived one:
-		// every node computes the chart's id from the revision so the
-		// losers collapse, but two operators evicting one node are two
-		// decisions and the ledger should record both.
-		opID := uuid.NewString()
-		var result tracker.WriteResult
+		operator, ok := auth.OperatorFrom(r.Context())
+		if !ok || operator == "" {
+			// THE GUARD ALREADY REFUSED AN UNAUTHENTICATED CALLER, so
+			// this is the build with no operator identity on the
+			// context at all — and every log's record names who ran
+			// the gesture, which is what `retention status` prints
+			// beside an eviction.
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "operator_required",
+				"detail": "an eviction and a readmission are operator gestures " +
+					"and this request carries no operator identity",
+			})
+			return
+		}
+		req := engine.GateRequest{
+			Node: node, OpID: callerOpID(r), By: operator,
+			Force: evict && r.URL.Query().Get("force") == "true",
+		}
+		var result engine.GateResult
 		var err error
 		if evict {
-			result, err = a.nodes.EvictNode(r.Context(), opID, node)
+			result, err = a.nodes.Evict(r.Context(), req)
 		} else {
-			result, err = a.nodes.ReadmitNode(r.Context(), opID, node)
+			result, err = a.nodes.Readmit(r.Context(), req)
 		}
-		var refused *statelog.ReadmissionRefusal
+		var readmission *statelog.ReadmissionRefusal
+		var eviction *statelog.EvictionRefusal
 		switch {
-		case errors.As(err, &refused):
+		case errors.As(err, &readmission):
 			// A REFUSAL IS AN ANSWER, NOT A FAULT, and it is the one
 			// this route promises: the node the operator asked for is
 			// below a floor it would be counted against, and nothing
@@ -369,19 +406,32 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 			// gate_failed" would read an engine problem where there is
 			// a node still catching up.
 			log.Info("retention_readmission_refused", "operator", operator,
-				"node", node, "domain", refused.Domain,
-				"position", refused.Seq, "floor", refused.Bound.Held())
+				"node", node, "domain", readmission.Domain,
+				"position", readmission.Seq, "floor", readmission.Bound.Held())
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"error":  "readmission_refused",
-				"detail": refused.Error(),
-				"hint":   refused.Remedy(),
-				"node":   node, "domain": refused.Domain,
-				"published":        refused.Published,
-				"position":         refused.Seq,
-				"generation":       refused.Generation,
-				"floor":            refused.Bound.Floor,
-				"first_seq":        refused.Bound.First,
-				"floor_generation": refused.Bound.Generation,
+				"detail": readmission.Error(),
+				"hint":   readmission.Remedy(),
+				"node":   node, "domain": readmission.Domain,
+				"published":        readmission.Published,
+				"position":         readmission.Seq,
+				"generation":       readmission.Generation,
+				"floor":            readmission.Bound.Floor,
+				"first_seq":        readmission.Bound.First,
+				"floor_generation": readmission.Bound.Generation,
+			})
+			return
+		case errors.As(err, &eviction):
+			// THE SAME FOR AN EVICTION: a node still renewing its
+			// presence lease is still reaching the fleet, and nothing
+			// was written anywhere.
+			log.Info("retention_eviction_refused", "operator", operator,
+				"node", node, "detail", eviction.Detail)
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":  "eviction_refused",
+				"detail": eviction.Error(),
+				"hint":   eviction.Remedy(),
+				"node":   node,
 			})
 			return
 		case err != nil:
@@ -391,16 +441,37 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 				map[string]string{"error": "gate_failed", "detail": err.Error()})
 			return
 		}
-		log.Info("retention_gate", "operator", operator, "node", node, "evict", evict)
+		domains := make([]map[string]any, 0, len(result.Domains))
+		for _, d := range result.Domains {
+			entry := map[string]any{
+				"domain": d.Domain, "stream": d.Stream, "op_id": d.OpID,
+			}
+			if d.Err != nil {
+				// NO OUTCOME, AND THE REASON WHY — a refusal names
+				// its reason in the vocabulary every write refusal
+				// uses, so a caller can tell `log_full` from
+				// `evicted` without reading the sentence.
+				entry["error"] = d.Err.Error()
+				var refused *statelog.Unavailable
+				if errors.As(d.Err, &refused) {
+					entry["reason"] = refused.Reason
+				}
+			} else {
+				// THE THREE-VALUED OUTCOME, whole. A gate the caller
+				// believes landed and which is only `pending` is the
+				// difference between a node that has stopped writing
+				// and one that is about to.
+				entry["outcome"] = d.Outcome
+				entry["position"] = d.Position
+			}
+			domains = append(domains, entry)
+		}
+		complete := result.Complete()
+		log.Info("retention_gate", "operator", operator, "node", node,
+			"evict", evict, "op_id", result.OpID, "complete", complete)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"node": node, "evicted": evict,
-			// THE THREE-VALUED OUTCOME, whole. A gate the caller
-			// believes landed and which is only `pending` is the
-			// difference between a node that has stopped writing and
-			// one that is about to.
-			"outcome":  result.Outcome,
-			"position": result.Position,
-			"op_id":    result.OpID,
+			"node": node, "evicted": evict, "op_id": result.OpID,
+			"complete": complete, "domains": domains,
 		})
 	}
 }
