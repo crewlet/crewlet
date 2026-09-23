@@ -342,6 +342,42 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 			t.Fatalf("a second take inside the interval = %v, want a recent skip", err)
 		}
 	})
+
+	// BUT RECENT MEANS ADOPTABLE: once a reanchor has moved a domain to a new
+	// generation, the artefact from before it is one no joiner can take —
+	// they ask at the generation the domain is on — so the next take runs
+	// inside the interval. Skipped as recent, every peer the reanchor left
+	// behind had no donor until the interval ran out.
+	t.Run("the recent one is from a generation a domain has left", func(t *testing.T) {
+		t.Parallel()
+		h := newSnapHarness(t)
+		if _, err := h.snap.Take(t.Context()); err != nil {
+			t.Fatalf("the first take: %v", err)
+		}
+		seedCursor(t, h.db, probeStream,
+			statelog.Position{Stream: probeStream, Generation: 2, Seq: 10}, h.created)
+		h.health.Position = statelog.Position{Stream: probeStream, Generation: 2, Seq: 10}
+		h.clock = h.clock.Add(time.Minute)
+		m, err := h.snap.Take(t.Context())
+		if err != nil {
+			t.Fatalf("a take after the domain moved generation = %v, want a snapshot "+
+				"— the one held is from generation 1, which nobody can adopt", err)
+		}
+		if got := m.Domains["probe"].Generation; got != 2 {
+			t.Fatalf("the new artefact names generation %d, want 2", got)
+		}
+		// AND ONE AT THE CURRENT GENERATION IS RECENT AGAIN.
+		h.clock = h.clock.Add(time.Minute)
+		if _, err := h.snap.Take(t.Context()); !isRecent(err) {
+			t.Fatalf("a third take = %v, want a recent skip", err)
+		}
+	})
+}
+
+// isRecent reports a take skipped because the newest artefact is recent.
+func isRecent(err error) bool {
+	reason, ok := statelog.Skipped(err)
+	return ok && reason == statelog.SkipRecent
 }
 
 // THE PREVIOUS SNAPSHOT GOES LAST.

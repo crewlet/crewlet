@@ -151,6 +151,43 @@ func (f foreignStream) err(domain, stream string) error {
 // prose.
 var ErrAheadOfLog = errors.New("statelog: this node's checkpoint is past the log's end")
 
+// ErrGenerationPassed reports a domain a peer has re-anchored while this node's
+// rows stayed in the generation before: the fleet's history now continues from
+// the re-anchored peer's rows, which this node's are not.
+//
+// ITS OWN SENTINEL BESIDE [ErrStreamRecreated] and [ErrAheadOfLog], because
+// neither of them can see it and its remedy is not theirs. On a recreated
+// stream this node's own reading of the instant finds the rebuild, and on a
+// restored broker its checkpoint is past the log's end — but only for as long
+// as nothing has written past it, and a node whose checkpoint was below the
+// restored end never sees either: its log looks like its own history, its
+// applier runs on into the new generation's records, and its reads and writes
+// are served from rows missing everything the re-anchoring node held past the
+// copy. The remedy is not an operator's verb either, because the history this
+// node needs exists — on the peer that re-anchored — so the node ADOPTS that
+// peer's snapshot, on its own, through the ordinary join.
+var ErrGenerationPassed = errors.New("statelog: a peer re-anchored this log past this node's generation")
+
+// passedGeneration is what established that a peer re-anchored a domain past
+// this applier's rows: the checkpoint the rows stand at, and the generation the
+// fleet is on.
+type passedGeneration struct {
+	at    Position
+	fleet uint32
+}
+
+// err is the one sentence every refusal over a passed generation carries — the
+// applier's stop, a read's `wrong_stream` and a write's.
+func (p passedGeneration) err(domain, stream string) error {
+	return fmt.Errorf("%w: %s's rows are at generation %d of %s and a peer has "+
+		"re-anchored it to generation %d, so the history the log now continues "+
+		"is that peer's rows rather than these — neither a read nor a write can be "+
+		"answered from them, and nothing on the log can bring them level; this "+
+		"node adopts a snapshot from a peer at generation %d, which it asks the "+
+		"fleet for on its own",
+		ErrGenerationPassed, domain, p.at.Generation, stream, p.fleet, p.fleet)
+}
+
 // pastEnd reports a checkpoint past a log's last sequence — [Health.AheadOfLog],
 // the zero fence's own reading and [Runner.ObserveEnd] ask it in one spelling.
 //

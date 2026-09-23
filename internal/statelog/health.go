@@ -351,6 +351,17 @@ type Health struct {
 	// The remedy is the same either way, an operator's re-anchor.
 	StreamRecreated bool
 
+	// GenerationPassed is a domain a peer re-anchored past this node's rows
+	// ([ErrGenerationPassed]): the log now continues from that peer's rows,
+	// so these are a history the fleet has left. The identity's third half,
+	// and observed for the reason the recreation is — the heartbeat's
+	// reading of the positions register, or a record on the log from a
+	// generation this node never entered, lands in [Runner.StreamIdentity]
+	// and this is errors.Is against that same answer. It refuses exactly
+	// where a recreation does; its remedy is not an operator's but this
+	// node's own adoption of a peer's snapshot.
+	GenerationPassed bool
+
 	// Coverage is COMPACTED domains only: the fraction of rows present
 	// against rows expected. A gap here is the compaction policy working
 	// rather than a fault, which is why it is a number and not a bool.
@@ -382,7 +393,7 @@ func (h Health) Refusal(now time.Time) ReadRefusal {
 		return RefuseFloorUnknown
 	case h.Floor.Effective(now) == FloorBelow:
 		return RefuseBelowFloor
-	case h.AheadOfLog() || h.StreamRecreated:
+	case h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed:
 		return RefuseWrongStream
 	case h.Err != "" || h.Stalled:
 		return RefuseStalled
@@ -455,7 +466,7 @@ func (h Health) AheadOfLog() bool {
 func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
 	floor := h.Floor.Effective(now)
 	if h.Err != "" || h.Evicted || floor == FloorBelow || floor == FloorUnknown ||
-		h.AheadOfLog() || h.StreamRecreated {
+		h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed {
 		return false
 	}
 	// A FROZEN PREFIX, which is the one term here that a lag resembles and
@@ -538,7 +549,7 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 		// failure is silent.
 		return false, RefuseBrokerUnreachable
 	}
-	if h.AheadOfLog() || h.StreamRecreated {
+	if h.AheadOfLog() || h.StreamRecreated || h.GenerationPassed {
 		return false, RefuseWrongStream
 	}
 	// THE LAG ITSELF, and it is non-nil by the check above: a node with

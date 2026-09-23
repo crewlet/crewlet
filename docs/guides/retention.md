@@ -269,7 +269,7 @@ answer rather than a silence:
 | `deferred` | this node holds a record it cannot decode |
 | `insufficient_space` | not enough disk in `store.snapshot_dir` |
 | `ahead_of_log` | this node's checkpoint is past the log's end, so its rows are keyed to a sequence space the stream no longer has |
-| `recent` | the newest artefact is younger than `snapshot_interval` — but see below |
+| `recent` | the newest artefact is younger than `snapshot_interval` and names every domain at the generation this node is on — but see below |
 | `failed` | the copy was attempted and errored; the engine log carries the error |
 
 `recent` is the one reason a healthy node reaches, and it is therefore **not**
@@ -281,6 +281,14 @@ answer to that when there is no current artefact behind it.
 A node that holds an older artefact and cannot refresh it publishes **both** —
 the position it can still donate from, and the reason it has stopped
 refreshing. A skip never erases what is already on disk.
+
+**A reanchor or an adoption refreshes it at once.** A joiner asks for an
+artefact at the generation each domain is on and refuses any other, so an
+artefact from before a [reanchor](#re-anchoring-a-recreated-or-restored-log) is
+one nobody can adopt however young it is. It does not count as `recent`, and a
+completed reanchor or adoption wakes the loop, so the node takes a new one as
+soon as its gate allows — rather than up to `snapshot_interval` later, while
+every peer the reanchor left behind waits with nothing to adopt.
 
 ### Sizing the snapshot volume
 
@@ -333,6 +341,34 @@ below the published floor whose missing records the log still holds reports
    the path is a restore from `crewlet backup`, and the log has to still reach
    the artefact's position. `crewlet retention verify --restore` is what tells
    you in advance that it does.
+
+### A node a peer re-anchored past
+
+When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) the
+tracker's or the knowledge base's log, it opens the next generation from its
+own rows — and every other node's rows are then a history the log no longer
+continues from. Nothing on the log can bring them level, so each of those nodes
+adopts a snapshot from a node in the new generation, **on its own**:
+
+- It learns of the new generation from the re-anchoring node's position row,
+  which that node publishes the moment the reanchor completes, on its next
+  heartbeat — or sooner, from the reanchor's own record arriving on its log,
+  which stops its applier before anything of the new generation is applied.
+- From then until the adoption lands it refuses that domain's reads and writes
+  as `wrong_stream`, logs `statelog_generation_passed` naming both generations,
+  and gives up its seats — whether or not its own readings of the log look
+  wrong. On a broker restored from an older copy, a node whose checkpoint was
+  below the restored end sees nothing wrong at all, which is why the fleet's
+  generation is what decides it rather than the log.
+- It adopts through the join above, asking for an artefact at the new
+  generation (the join logs `statelog_behind_a_reanchor`). Its applier is then
+  re-keyed to the checkpoint it adopted and resumes with no restart.
+- The re-anchoring node wakes its snapshot loop when the reanchor completes, so
+  it can donate as soon as its gate allows. Until some node in the new
+  generation holds an artefact, the others ask again on the doubling interval.
+
+The vectors are exempt: each node re-anchors its own copy, so a peer ahead there
+is a recovery in progress rather than a history this node has lost.
 
 **`rejoin_window`** (default 30 m) is your budget for a node to become a
 complete replica. `crewlet retention status` prints this node's store size, the
@@ -595,11 +631,11 @@ election. So if anything writes the restored log past that checkpoint — a node
 whose own database was not ahead of it — the refusal lifts and the node carries
 on from rows the log does not contain. The engine cannot tell that from the
 harmless case, so it logs `statelog_ahead_of_log_cleared` saying both. **After
-restoring a broker, deal with every node whose checkpoint was past the restored
-log's end before anything else writes to it** — re-anchor it with the verb
-below, which treats it as the *restored* case and follows the log from its end,
-or have it adopt a peer's snapshot through [the join
-runbook](#the-join-runbook).
+restoring a broker, re-anchor the most caught-up node whose checkpoint was past
+the restored log's end, before anything else writes to it** — the verb below
+treats it as the *restored* case and follows the log from its end — and every
+other node, ahead of the restored end or not, then adopts from it on its own:
+see [a node a peer re-anchored past](#a-node-a-peer-re-anchored-past).
 
 **A rebuild under a node that never restarts is caught too**, wherever the node
 reads the stream's state: the position heartbeat does every ten seconds, and a
@@ -694,14 +730,16 @@ record the copy kept is written against that record — the rows already hold it
 For a recreated log it does **not** recover records that were on the old stream
 and were never applied here. For a restored one it keeps what the rows hold
 past the copy, which is on no log any more — so no other node can replay it,
-and each of them has to adopt a snapshot from this node through [the join
-runbook](#the-join-runbook).
+and each of them adopts a snapshot from a node in the new generation on its
+own ([a node a peer re-anchored past](#a-node-a-peer-re-anchored-past)).
 
 For the tracker and the knowledge base it refuses while any peer has already
 re-anchored the stream — a peer at a later generation of it — naming the peer:
 that peer's rows are the fleet's history in the new generation, and a second
 reanchor from another node's rows would open the same generation over a
-different prefix of what was lost, which nothing could reconcile. Otherwise only
+different prefix of what was lost, which nothing could reconcile. This node
+adopts that peer's snapshot instead, and does so on its own ([a node a peer
+re-anchored past](#a-node-a-peer-re-anchored-past)). Otherwise only
 the most caught-up node on the stream its rows came from may re-anchor. Every
 node publishes, beside its position, the creation instant of the stream its
 rows are keyed to, so a peer still on the lost stream is compared with this

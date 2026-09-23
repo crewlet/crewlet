@@ -122,7 +122,10 @@ far along they are:
   is *behind*;
 - its checkpoint names **a stream that is not this one**, which is a log
   deleted and rebuilt underneath it (`crewlet retention reanchor` is the
-  repair);
+  repair) — or a history that log no longer continues from, because a peer
+  re-anchored it past this node's generation (the node repairs that itself, by
+  [adopting](../guides/retention.md#a-node-a-peer-re-anchored-past) a snapshot
+  from the new generation);
 - its applied position has **stopped moving** for a minute while records wait —
   a stall, which is the one of these that looks like lag and is not: the node
   owes progress and is not making it;

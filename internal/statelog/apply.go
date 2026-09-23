@@ -239,13 +239,28 @@ type Runner struct {
 	// the live instant, or by a live reading of the instant while the
 	// loop runs ([Runner.ObserveStream]). Nil until then.
 	//
-	// CLEARED BY ONE THING ONLY, and not by a re-run, unlike a stop or a
-	// fault: those are verdicts about rows an adoption may replace, and
-	// this is a verdict about the positions this runner was built on. The
-	// one thing that moves those is an operator's reanchor of this
-	// domain's stream, which re-keys the runner to the stream it adopted
-	// ([Runner.Reanchored]). See [Runner.StreamIdentity].
+	// NOT CLEARED BY A RE-RUN, unlike a stop or a fault: this is a verdict
+	// about the positions this runner was built on, and a re-run starts
+	// from the same ones. Two things move them: an operator's reanchor of
+	// this domain's stream, which re-keys the runner to the stream it
+	// adopted ([Runner.Reanchored]), and a snapshot adoption, which
+	// replaces them wholesale with rows keyed to the live stream
+	// ([Runner.Rejoined]). See [Runner.StreamIdentity].
 	foreign *foreignStream
+
+	// passed is the generation the FLEET is on for this domain, once it
+	// has been established that a peer re-anchored the log past this
+	// applier's rows — by the heartbeat's reading of the positions register
+	// ([Runner.ObserveFleetGeneration]) or by a record on the log written in
+	// a generation this applier never entered ([Runner.decode]). Nil until
+	// then, and never set for a domain that claims no identity, whose
+	// nodes re-anchor their own copies one at a time by design.
+	//
+	// STICKY LIKE foreign, and for the same reason: it is a verdict about
+	// the positions the rows stand at, and nothing on the log can move
+	// those into the new generation — the re-anchoring peer's rows are what
+	// it continues from. An adoption replaces them ([Runner.Rejoined]).
+	passed *passedGeneration
 
 	// ahead is the verdict of the last reading that found this applier's
 	// checkpoint PAST the log's end ([Runner.ObserveEnd]), nil while none
@@ -411,15 +426,16 @@ func (r *Runner) KeyedTo() time.Time {
 // the checkpoint the reanchor committed, and the creation instant the operator
 // confirmed.
 //
-// # What it clears, and why nothing else may
+// # What it clears, and why a re-run may not
 //
-// The recreation verdict ([Runner.StreamIdentity]) is permanent for anything
-// the process can do on its own — a re-run, an adoption — because it is a
-// statement that the positions this runner was built on name a stream the
-// broker no longer serves. A reanchor is the one act that replaces those
-// positions: it committed a checkpoint in a new generation on the live stream,
-// keyed to the live instant. Re-keyed to both, the runner's positions are
-// sequences on that stream again, so the verdict no longer holds, and a
+// The recreation verdict ([Runner.StreamIdentity]) survives a re-run because it
+// is a statement that the positions this runner was built on name a stream the
+// broker no longer serves, and a re-run starts from the same positions. A
+// reanchor replaces them — as an adoption does from a peer's rows
+// ([Runner.Rejoined]): it committed a checkpoint in a new generation on the
+// live stream, keyed to the live instant. Re-keyed to both, the runner's
+// positions are sequences on that stream again, so the verdict no longer holds
+// — nor does a passed generation the new one has reached — and a
 // reading of where the log ENDS taken against the old checkpoint says nothing
 // about the new one.
 //
@@ -457,8 +473,10 @@ func (r *Runner) Reanchored(at Position, created time.Time) error {
 	}
 	r.created = created
 	r.cursor = at
-	r.foreign = nil
-	r.ahead = nil
+	r.foreign, r.ahead = nil, nil
+	if r.passed != nil && at.Generation >= r.passed.fleet {
+		r.passed = nil
+	}
 	// AND THE STOP THE RECREATION CAUSED, because the reanchor is what
 	// answers it — left in place until the loop's next run cleared it, the
 	// health would go on reporting a stopped applier for the moment in
@@ -574,12 +592,18 @@ func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool
 
 // StreamIdentity is nil while every position this applier holds — its
 // checkpoint, every anchor it wrote, every version — is a sequence on the
-// stream the broker serves under this domain's name, and an error once that is
-// known not to be so. Two findings answer it, in this order:
+// stream the broker serves under this domain's name, in the history the log
+// continues, and an error once that is known not to be so. Three findings
+// answer it, in this order:
 //
 //   - wrapping [ErrStreamRecreated]: the stream was rebuilt — at boot, where the
 //     checkpoint names another stream, or while running, where
-//     [Runner.ObserveStream] found a new creation instant. Permanent.
+//     [Runner.ObserveStream] found a new creation instant. Until a reanchor or
+//     an adoption.
+//   - wrapping [ErrGenerationPassed]: a peer re-anchored the log past this
+//     applier's generation ([Runner.ObserveFleetGeneration], or a record
+//     written in a generation this applier never entered), so the log now
+//     continues from that peer's rows. Until an adoption.
 //   - wrapping [ErrAheadOfLog]: the last reading of the log's end found it below
 //     this applier's checkpoint ([Runner.ObserveEnd]) — a stream rebuilt and
 //     not yet re-read, or a broker restored from an older copy, which keeps its
@@ -595,13 +619,137 @@ func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool
 // node to apply.
 func (r *Runner) StreamIdentity() error {
 	r.mu.Lock()
-	foreign, ahead := r.foreign, r.ahead
+	foreign, passed, ahead := r.foreign, r.passed, r.ahead
 	r.mu.Unlock()
 	switch {
 	case foreign != nil:
 		return foreign.err(r.domain.Name(), r.spec.Name)
+	case passed != nil:
+		return passed.err(r.domain.Name(), r.spec.Name)
 	case ahead != nil:
 		return ahead.err(r.spec.Name)
+	}
+	return nil
+}
+
+// ObserveFleetGeneration takes the generation the FLEET is on for this domain —
+// the highest any node or the trim has published — and answers true the one
+// time it establishes that a peer re-anchored the log past this applier's rows.
+//
+// # Why a number from the positions register can establish it
+//
+// A generation moves only by a reanchor, or by adopting the snapshot of a node
+// that ran one, so a peer standing at a later one holds the rows the log's
+// history continues from — and nothing on the log can bring this node's rows
+// there: a reanchor opens its generation from one node's rows, which include
+// whatever that node held past what the log still carries. Before this, a node
+// left on the old generation carried on as though nothing had happened wherever
+// its own readings could not see the move — below a restored broker's end, or
+// past it once something had written the log beyond its checkpoint — and
+// served reads and arbitrated writes from rows the fleet had left behind.
+//
+// NEVER FOR A DOMAIN THAT CLAIMS NO IDENTITY. Its nodes re-anchor their own
+// copies one at a time by design ([PermitReanchor]), so a peer ahead of this
+// node's generation there is the ordinary state of a recovery in progress
+// rather than a history this node has lost.
+func (r *Runner) ObserveFleetGeneration(fleet uint32) bool {
+	if !r.domain.ClaimsIdentity() {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.passedLocked(fleet)
+}
+
+// passedLocked records that the fleet is on generation fleet, answering true
+// the one time that establishes the verdict. The caller holds mu.
+func (r *Runner) passedLocked(fleet uint32) bool {
+	if fleet <= r.cursor.Generation {
+		return false
+	}
+	if r.passed != nil {
+		if fleet > r.passed.fleet {
+			// A NEW VALUE, never a write through the shared pointer:
+			// [Runner.StreamIdentity] reads it after the lock is
+			// released.
+			r.passed = &passedGeneration{at: r.passed.at, fleet: fleet}
+		}
+		return false
+	}
+	r.passed = &passedGeneration{at: r.cursor, fleet: fleet}
+	return true
+}
+
+// Rejoined re-derives what this runner knows about its positions from the
+// checkpoint a join left in the replicated file: that checkpoint, the creation
+// instant its rows are keyed to (zero where the file holds none), and the live
+// instant of the stream the join was judged against.
+//
+// # Why a join can clear what only a reanchor could before
+//
+// The recreation verdict says the positions this runner was built on name a
+// stream the broker no longer serves, and the passed-generation verdict says
+// they stand in a generation the log has left. An adoption REPLACES those
+// positions wholesale — every row, every anchor, the checkpoint — with a peer's,
+// and the join installs an artefact only once it has checked, before the
+// transfer and again before the install, that it was taken against the stream
+// this node is live on and at the generation the fleet is on. A runner that kept
+// either verdict would stop again the moment its loop loaded the adopted
+// checkpoint, so the one repair that can bring such a node back left it exactly
+// where it was — which is how deleting the database came to be the only way
+// out.
+//
+// # Why it RE-DERIVES them rather than clearing them
+//
+// Because the caller cannot always say whether the file was replaced: a join
+// that finds every domain current may be standing on an artefact an earlier
+// rejoin installed and could not open. So each verdict is judged against the
+// file as it now is, by the rule that established it: the recreation holds
+// while the rows are keyed to another stream than the live one, and a passed
+// generation holds while the rows stand below the generation it recorded — the
+// highest this runner has seen, which a record on the log may have shown it
+// before the positions register did. A join that replaced nothing therefore
+// changes nothing, and one that installed the fleet's history clears both.
+//
+// # Called with the loop stopped
+//
+// For [Runner.Reanchored]'s reason: the loop is the one writer of the cursor
+// this sets. The engine's rejoin halts every applier before the file can be
+// replaced and starts them again after this.
+func (r *Runner) Rejoined(at Position, keyed, live time.Time) error {
+	if at.Stream != r.spec.Name {
+		return fmt.Errorf("%w: a join for %s named a checkpoint on %s",
+			ErrWrongStream, r.spec.Name, at.Stream)
+	}
+	if live.IsZero() {
+		return fmt.Errorf("statelog: a join for %s named no live creation instant, "+
+			"and a runner keyed to none detects no later rebuild", r.spec.Name)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cursor = at
+	if IdentityOf(keyed, live, !keyed.IsZero()) == StreamRecreated {
+		// THE ROWS ARE STILL ANOTHER STREAM'S: the verdict holds, and is
+		// established here if nothing had yet.
+		if r.foreign == nil {
+			r.foreign = &foreignStream{keyed: keyed, live: live}
+		}
+	} else {
+		r.created = live
+		r.foreign = nil
+	}
+	if r.passed != nil && at.Generation >= r.passed.fleet {
+		r.passed = nil
+	}
+	// A READING OF THE END paired with a checkpoint this runner no longer
+	// stands at says nothing about the one it does — [Runner.loadCursor]'s
+	// own rule.
+	if r.ahead != nil && r.ahead.at != at {
+		r.ahead = nil
+	}
+	if (r.foreign == nil && errors.Is(r.stopped, ErrStreamRecreated)) ||
+		(r.passed == nil && errors.Is(r.stopped, ErrGenerationPassed)) {
+		r.stopped = nil
 	}
 	return nil
 }
@@ -1071,11 +1219,22 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		// built with, so the comparison above passes — but a live reading
 		// has since found the broker serving another stream under the
 		// name, and resuming would apply that stream's records into rows
-		// keyed to the one before it. Only a reanchor clears the verdict,
-		// and it re-keys the runner before the loop is started again.
+		// keyed to the one before it. Only a reanchor or an adoption
+		// clears the verdict, and each re-keys the runner before the loop
+		// is started again.
 		if r.foreign != nil {
 			return fmt.Errorf("%w: %w", ErrStopped,
 				r.foreign.err(r.domain.Name(), r.spec.Name))
+		}
+		// SO DOES A GENERATION THE FLEET HAS MOVED PAST, for the same
+		// reason: a re-run from the same rows would apply the new
+		// generation's records into them. A rejoin that found no donor
+		// starts the loop again, and this is what stops it at once, saying
+		// why — where a loop that was already running when the verdict
+		// landed is stopped by [Runner.decode] at its next record.
+		if r.passed != nil {
+			return fmt.Errorf("%w: %w", ErrStopped,
+				r.passed.err(r.domain.Name(), r.spec.Name))
 		}
 		return nil
 	})
@@ -1325,7 +1484,11 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 	out := make([]Record, 0, len(batch))
 	// THE CHECKPOINT'S GENERATION, read once per batch: the loop is the one
 	// writer of the cursor and nothing moves its generation while it runs.
-	gen := r.Committed().Generation
+	// And whether the fleet is already known to have left it, which the
+	// heartbeat can establish between two batches.
+	r.mu.Lock()
+	gen, passed := r.cursor.Generation, r.passed != nil
+	r.mu.Unlock()
 	for _, m := range batch {
 		env, err := r.domain.Envelope(m.Payload)
 		if err != nil {
@@ -1344,6 +1507,35 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 				"declares no scope — an empty scope claims it makes nothing "+
 				"stale, which is the one claim a record no build may be able to "+
 				"read cannot make", ErrStopped, m.Seq))
+		}
+		// A RECORD FROM A GENERATION THIS APPLIER NEVER ENTERED IS A STOP,
+		// on a domain that claims identity. Its writer stood in that
+		// generation, so a peer re-anchored the log and this node did not:
+		// the log now continues from that peer's rows, and applying what
+		// follows into these would mix two histories nothing can
+		// separate afterwards. It is the one reading that sees the move
+		// the moment it reaches this node — the reanchor's own record is
+		// the first thing the new generation puts on the log — where the
+		// positions register is a heartbeat away.
+		//
+		// AND SO IS ANY RECORD ONCE THE MOVE IS KNOWN, however it became
+		// known: the heartbeat's reading of the register can establish it
+		// while this loop runs and no record of the new generation has
+		// reached this node — a node ahead of a restored broker's end skips
+		// the reanchor's own record, and a record need not carry its
+		// writer's generation — and a loop that went on applying would put
+		// the new generation's records into these rows all the same. (A
+		// re-run is stopped before it fetches, by [Runner.loadCursor].) The
+		// node adopts the peer's snapshot; the verdict is what refuses its
+		// reads and writes until it has.
+		if passed || (env.Gen > gen && r.domain.ClaimsIdentity()) {
+			r.mu.Lock()
+			r.passedLocked(env.Gen)
+			verdict := *r.passed
+			r.mu.Unlock()
+			return nil, r.stop(ctx, fmt.Errorf("%w: the record at sequence %d, "+
+				"written in generation %d, is not applied: %w", ErrStopped, m.Seq,
+				env.Gen, verdict.err(r.domain.Name(), r.spec.Name)))
 		}
 		out = append(out, Record{
 			Envelope: env,

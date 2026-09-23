@@ -428,7 +428,7 @@ replication:
 | `statelog_apply_retrying` | `WARN` | The applier hit a failure it retries in place. Written once, when the run of failures starts. |
 | `statelog_apply_faulted` | `ERROR` | The same failure has outlived the retry budget (30 seconds): this node's rows have stopped moving, its reads refuse and its seats move until a retry succeeds. Written once per run of failures, when it crosses the budget — not on every retry. While it lasts, the node's status and every refused read name the current error, and `crewlet.statelog.apply.retries` counts the attempts. |
 | `statelog_apply_recovered` | `INFO` | A retry succeeded and the run of failures is over, with how long it lasted (`after`) and the last error it saw. A failure after it starts a new run, written again from `statelog_apply_retrying`. |
-| `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker or the knowledge base the node also stops claiming seats and the ones it holds move to a peer. What resumes it is a build that can read what this one could not, at its next boot, or — for a recreated stream — [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart. Written once per stop. |
+| `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream, a record written in a generation this node never entered — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker or the knowledge base the node also stops claiming seats and the ones it holds move to a peer. What resumes it is a build that can read what this one could not, at its next boot; for a recreated stream, [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart; and for a log a peer re-anchored, the snapshot this node [adopts on its own](retention.md#a-node-a-peer-re-anchored-past). Written once per stop. |
 | `statelog_adopted` | `INFO` | The node replaced its replicated database with a peer's snapshot, naming the donor, the artefact's `sha256` (the donor's `statelog_snapshot_sent` carries the same one) and when it was taken (`taken_at`), which is how old the history it installed is. |
 | `statelog_record_gated` | `WARN` | A durable record applied nowhere, naming the gate. |
 | `statelog_write_gated` | `WARN` | The same, seen by the write that published it. |
@@ -438,7 +438,13 @@ replication:
 The snapshotter, the donor and the adopter write under the same component. The
 lines the engine writes *around* those loops — `statelog_stream_recreated` and
 `statelog_below_the_floor` among them — carry `component=engine`, because the
-component names the code that wrote a line rather than what it is about.
+component names the code that wrote a line rather than what it is about. Two of
+them are about a peer's reanchor: `statelog_generation_passed` (`WARN`) is the
+heartbeat finding a log re-anchored past this node's generation, naming both
+(`generation`, `fleet_generation`), from which point the domain refuses; and
+`statelog_behind_a_reanchor` (`WARN`) is the join asking the fleet for a
+snapshot at the new generation, naming the domains and the generations it asks
+at. See [a node a peer re-anchored past](retention.md#a-node-a-peer-re-anchored-past).
 
 ## Three things CI cannot prove
 

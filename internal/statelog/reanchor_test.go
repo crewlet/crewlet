@@ -1104,6 +1104,25 @@ func TestARecordTheCheckpointDoesNotCoverIsWaitedFor(t *testing.T) {
 	}
 }
 
+// runOnce runs a runner's loop to its end and answers why it ended, with a
+// budget that is its own verdict: a loop still running when it expires is one
+// that did not stop.
+//
+// SYNCHRONOUS, rather than [applyHarness.run]'s poll of Stopped, because a
+// re-run resets that field only once its goroutine is scheduled — a poll can
+// read the PREVIOUS run's stop and report a re-run that never stopped as one
+// that did.
+func runOnce(t *testing.T, runner *statelog.Runner) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	err := runner.Run(ctx)
+	if ctx.Err() != nil {
+		t.Fatalf("the loop was still running after 3s (then %v) — it did not stop", err)
+	}
+	return err
+}
+
 // derefAll renders a list of expectations for a failure message.
 func derefAll(expects []*uint64) []string {
 	out := make([]string, len(expects))
@@ -1252,5 +1271,216 @@ func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 		statelog.IdentityOf(created, rebuilt, true) != statelog.StreamSame {
 		t.Fatalf("the committed checkpoint is %s keyed to %s, want generation %d "+
 			"sequence 2 on the adopted stream", at, created, gen)
+	}
+}
+
+// anonymousProbe is the probe domain claiming no identity, which is what the
+// vectors are: their nodes re-anchor their own copies one at a time.
+type anonymousProbe struct{ probeDomain }
+
+func (anonymousProbe) ClaimsIdentity() bool { return false }
+
+// A PEER THAT RE-ANCHORED THE LOG PAST THIS NODE'S GENERATION IS ESTABLISHED
+// FROM THE FLEET'S NUMBER, and refuses the domain's reads and writes.
+//
+// A generation moves only by a reanchor, so a peer at a later one holds the
+// rows the log now continues from — and a node left behind whose own readings
+// see nothing wrong (below a restored broker's end, or past it once something
+// wrote beyond its checkpoint) carried on serving and arbitrating from rows the
+// fleet had left. Never for a domain claiming no identity, where a peer ahead
+// is a per-node recovery in progress.
+func TestAPeerReanchoringPastThisNodeIsEstablishedFromTheFleet(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	at := h.runner.Committed()
+	if h.runner.ObserveFleetGeneration(at.Generation) {
+		t.Fatal("the fleet at this node's own generation established a verdict")
+	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("the control refuses: %v", err)
+	}
+	if !h.runner.ObserveFleetGeneration(at.Generation + 1) {
+		t.Fatal("a fleet one generation ahead established nothing")
+	}
+	if h.runner.ObserveFleetGeneration(at.Generation + 2) {
+		t.Fatal("a second reading established the verdict a second time — the " +
+			"engine's line about it would repeat every heartbeat")
+	}
+	err := h.runner.StreamIdentity()
+	if !errors.Is(err, statelog.ErrGenerationPassed) {
+		t.Fatalf("StreamIdentity = %v, want the passed generation", err)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("generation %d", at.Generation+2)) {
+		t.Errorf("the refusal does not name the fleet's newest generation: %v", err)
+	}
+	// A RUN OVER ROWS THE FLEET HAS LEFT STOPS BEFORE IT FETCHES — which is
+	// what a rejoin that found no donor starts again.
+	if err := runOnce(t, h.runner); !errors.Is(err, statelog.ErrGenerationPassed) {
+		t.Fatalf("a run after the verdict = %v, want a stop over the passed generation", err)
+	}
+
+	// AND A LOOP ALREADY RUNNING WHEN THE VERDICT LANDS APPLIES NOTHING MORE,
+	// whatever generation the next record says: a node ahead of a restored
+	// broker's end never sees the reanchor's own record, and a record need
+	// not carry its writer's generation.
+	m := newApplyHarness(t, probeDomain{})
+	m.fetch.offer(1, env(1, "edit", "a", "op-a", 1))
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- m.runner.Run(ctx) }()
+	for m.runner.Committed().Seq < 1 && ctx.Err() == nil {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !m.runner.ObserveFleetGeneration(m.runner.Committed().Generation + 1) {
+		t.Fatal("the fleet ahead of a running loop established nothing")
+	}
+	m.fetch.offer(2, env(2, "edit", "b", "op-b", 1))
+	select {
+	case err := <-done:
+		if !errors.Is(err, statelog.ErrGenerationPassed) {
+			t.Fatalf("the running loop ended with %v, want a stop over the passed "+
+				"generation", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("the running loop never stopped after the verdict landed")
+	}
+	if got := m.runner.Committed(); got.Seq != 1 {
+		t.Fatalf("the loop stands at %s, want sequence 1 — it applied a record into "+
+			"rows the fleet has left", got)
+	}
+
+	anon := newApplyHarness(t, anonymousProbe{})
+	if anon.runner.ObserveFleetGeneration(anon.runner.Committed().Generation + 1) {
+		t.Fatal("a domain claiming no identity took a peer's generation as a " +
+			"history it had lost — its nodes re-anchor their own copies")
+	}
+	if err := anon.runner.StreamIdentity(); err != nil {
+		t.Fatalf("a domain claiming no identity refuses over a peer ahead: %v", err)
+	}
+}
+
+// A RECORD FROM A GENERATION THIS NODE NEVER ENTERED STOPS THE APPLIER BEFORE
+// IT IS APPLIED.
+//
+// Its writer stood in that generation, so a peer re-anchored the log and this
+// node did not — and the reanchor's own record is the first thing the new
+// generation puts on the log, so this reading sees the move the moment it
+// reaches the node, where the positions register is a heartbeat away. Applied,
+// the new generation's records would land on rows missing whatever the
+// re-anchoring node held past the log. A domain claiming no identity applies it.
+func TestARecordFromALaterGenerationStopsTheApplier(t *testing.T) {
+	t.Parallel()
+	later := func(seq uint64, id string) statelog.Envelope {
+		e := env(seq, "edit", id, "op-"+id, 1)
+		e.Gen = 2
+		return e
+	}
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-a", 1))
+	if err := h.run(1); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	h.fetch.offer(2, later(2, "b"))
+	err := h.run(2)
+	if !errors.Is(err, statelog.ErrStopped) || !errors.Is(err, statelog.ErrGenerationPassed) {
+		t.Fatalf("run = %v, want a stop over the passed generation", err)
+	}
+	if got := h.runner.Committed(); got.Seq != 1 {
+		t.Fatalf("the applier stands at %s, want sequence 1 — the record from "+
+			"generation 2 was applied into rows from generation 1", got)
+	}
+	if err := h.runner.StreamIdentity(); !errors.Is(err, statelog.ErrGenerationPassed) {
+		t.Fatalf("StreamIdentity = %v, want the passed generation: the stop ends "+
+			"the loop, and the reads and writes refuse on this", err)
+	}
+	// AND A RE-RUN STOPS AGAIN, which is what keeps a rejoin that found no
+	// donor from resuming it into the old rows.
+	if err := runOnce(t, h.runner); !errors.Is(err, statelog.ErrGenerationPassed) {
+		t.Fatalf("a re-run = %v, want the same stop", err)
+	}
+
+	anon := newApplyHarness(t, anonymousProbe{})
+	anon.fetch.offer(1, env(1, "edit", "a", "op-a", 1))
+	anon.fetch.offer(2, later(2, "b"))
+	if err := anon.run(2); err != nil {
+		t.Fatalf("a domain claiming no identity refused a record from a later "+
+			"generation: %v", err)
+	}
+}
+
+// A JOIN RE-KEYS THE RUNNER TO THE FLEET'S HISTORY, AND ONLY TO IT.
+//
+// Both verdicts used to outlive the adoption that answers them — the runner
+// stopped again on the checkpoint the join had just installed, so a node a peer
+// re-anchored past had no way back but deleting its database. They are
+// re-derived from the file as the join left it rather than cleared, because a
+// join that replaced nothing must change nothing: rows still keyed to another
+// stream keep the recreation, and rows still below the fleet's generation keep
+// the passed one.
+func TestAJoinReKeysTheRunnerOnlyToTheFleetsHistory(t *testing.T) {
+	t.Parallel()
+	born := time.Date(2026, 9, 10, 12, 0, 0, 123_456_789, time.UTC)
+	rebuilt := born.Add(time.Hour)
+	fresh := func(t *testing.T) *applyHarness {
+		t.Helper()
+		h := newApplyHarness(t, probeDomain{})
+		h.rebuild(probeDomain{}, born)
+		h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+		if err := h.run(1); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if !h.runner.ObserveStream(rebuilt) || !h.runner.ObserveFleetGeneration(2) {
+			t.Fatal("the rebuild and the peer's generation established nothing")
+		}
+		return h
+	}
+	old := func(h *applyHarness) statelog.Position { return h.runner.Committed() }
+
+	// NOTHING REPLACED: the rows are the lost stream's, in the old generation.
+	h := fresh(t)
+	if err := h.runner.Rejoined(old(h), born, rebuilt); err != nil {
+		t.Fatalf("Rejoined: %v", err)
+	}
+	if err := h.runner.StreamIdentity(); !errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("after a join that replaced nothing the identity is %v, want the "+
+			"rebuild still", err)
+	}
+
+	// THE LIVE STREAM, STILL IN THE OLD GENERATION: the recreation clears and
+	// the passed generation does not.
+	h = fresh(t)
+	if err := h.runner.Rejoined(old(h), rebuilt, rebuilt); err != nil {
+		t.Fatalf("Rejoined: %v", err)
+	}
+	if err := h.runner.StreamIdentity(); !errors.Is(err, statelog.ErrGenerationPassed) {
+		t.Fatalf("rows on the live stream below the fleet's generation read %v, "+
+			"want the passed generation still", err)
+	}
+
+	// THE FLEET'S HISTORY: the live stream at the fleet's generation. Both
+	// clear, the runner is keyed to the live stream, and its loop runs on.
+	h = fresh(t)
+	adopted := statelog.Position{Stream: probeStream, Generation: 2, Seq: 1}
+	seedCursor(t, h.db, probeStream, adopted, rebuilt)
+	if err := h.runner.Rejoined(adopted, rebuilt.Truncate(time.Microsecond), rebuilt); err != nil {
+		t.Fatalf("Rejoined: %v", err)
+	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("a runner re-keyed to the fleet's history still refuses: %v", err)
+	}
+	if got := h.runner.StreamCreatedAt(); !got.Equal(rebuilt) {
+		t.Fatalf("the runner is keyed to %s, want the live %s", got, rebuilt)
+	}
+	h.fetch.offer(2, func() statelog.Envelope {
+		e := env(2, "edit", "b", "op-2", 1)
+		e.Gen = 2
+		return e
+	}())
+	if err := h.run(2); err != nil {
+		t.Fatalf("the loop over the adopted checkpoint: %v", err)
+	}
+	if got := h.runner.Committed(); got != (statelog.Position{Stream: probeStream, Generation: 2, Seq: 2}) {
+		t.Fatalf("the loop stands at %s, want generation 2 sequence 2", got)
 	}
 }

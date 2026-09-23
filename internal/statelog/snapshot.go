@@ -110,7 +110,9 @@ const (
 	SkipDeferred SkipReason = "deferred"
 
 	// SkipRecent — the newest local snapshot is younger than the
-	// interval.
+	// interval, and still names every domain at the generation this node
+	// stands at. One from a generation a domain has since left is not a
+	// recent snapshot of anything a joiner can adopt, whatever its age.
 	SkipRecent SkipReason = "recent"
 
 	// SkipAheadOfLog — this node's checkpoint sits PAST the log's last
@@ -604,10 +606,16 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if found && s.now().Sub(newest) < s.deps.Interval {
+	// RECENT MEANS ADOPTABLE, not merely young. A joiner asks for an
+	// artefact at the generation each domain is on and refuses any other, so
+	// once a reanchor or an adoption has moved one of this node's domains,
+	// the artefact it holds is a snapshot nobody can use — and the interval
+	// would have kept it the node's only one for up to a day, leaving every
+	// peer the reanchor left behind with no donor to adopt from.
+	if found && s.now().Sub(newest.TakenAt) < s.deps.Interval && s.current(newest) {
 		return &ErrSkipped{Reason: SkipRecent, Detail: fmt.Sprintf(
 			"the newest local snapshot is %s old, inside the %s interval",
-			s.now().Sub(newest).Round(time.Second), s.deps.Interval)}
+			s.now().Sub(newest.TakenAt).Round(time.Second), s.deps.Interval)}
 	}
 
 	free, storeSize, err := s.space()
@@ -648,15 +656,15 @@ func (s *Snapshotter) scrubList() []string {
 // COMPLETE, which is what the manifest means: a copy with no manifest beside
 // it is the debris of a run that did not finish, and treating it as a snapshot
 // would let one crashed attempt suppress every later one.
-func (s *Snapshotter) newest() (time.Time, bool, error) {
+func (s *Snapshotter) newest() (Manifest, bool, error) {
 	entries, err := os.ReadDir(s.deps.Dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return time.Time{}, false, nil
+		return Manifest{}, false, nil
 	}
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("statelog: read %s: %w", s.deps.Dir, err)
+		return Manifest{}, false, fmt.Errorf("statelog: read %s: %w", s.deps.Dir, err)
 	}
-	var newest time.Time
+	var newest Manifest
 	var found bool
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -666,11 +674,24 @@ func (s *Snapshotter) newest() (time.Time, bool, error) {
 		if err != nil {
 			continue
 		}
-		if !found || m.TakenAt.After(newest) {
-			newest, found = m.TakenAt, true
+		if !found || m.TakenAt.After(newest.TakenAt) {
+			newest, found = m, true
 		}
 	}
 	return newest, found, nil
+}
+
+// current reports whether a manifest names every registered domain at the
+// generation this node's own checkpoint stands at — which is the only
+// generation a joiner asking this node would accept it at.
+func (s *Snapshotter) current(m Manifest) bool {
+	for _, reg := range s.deps.Domains {
+		at, named := m.Domains[reg.Domain.Name()]
+		if !named || at.Generation != reg.Health().Position.Generation {
+			return false
+		}
+	}
+	return true
 }
 
 // rotate removes every snapshot but the newest SnapshotsKept.

@@ -92,7 +92,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 		logs[domain.Name()] = running.log
 	}
 
-	behind, want, err := s.replayable(t.Context(), logs)
+	behind, _, want, err := s.replayable(t.Context(), logs)
 	if err != nil {
 		t.Fatalf("replayable: %v — a node with no checkpoint compared its "+
 			"absent generation against the fleet's and failed its own boot on "+

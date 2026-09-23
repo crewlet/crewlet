@@ -310,7 +310,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	}
 	behindNow := func() []string {
 		t.Helper()
-		behind, _, err := s.replayable(t.Context(), logs)
+		behind, _, _, err := s.replayable(t.Context(), logs)
 		if err != nil {
 			t.Fatalf("replayable: %v", err)
 		}

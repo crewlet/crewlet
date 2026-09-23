@@ -196,6 +196,16 @@ type stateLog struct {
 	// loop has not concluded anything yet.
 	snapshot atomic.Pointer[snapshotHeld]
 
+	// snapshotNudge wakes the snapshot loop out of its interval, for the
+	// two events that make the artefact this node holds one nobody can
+	// adopt: a reanchor moved one of its domains to a new generation, or an
+	// adoption replaced its rows. A joiner asks for an artefact at the
+	// generation each domain is on, so until the loop takes another the
+	// peers that reanchor left behind have no donor — for up to the
+	// interval, a day by default. Buffered by one: a nudge that finds one
+	// already pending adds nothing to it.
+	snapshotNudge chan struct{}
+
 	// run is the context the runtime's loops run under — the heartbeat,
 	// the snapshot loop, the donor — and stop is what ends them. HELD
 	// rather than re-derived, for the reason the native runtime states: a
@@ -363,6 +373,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
 		ceilings: ceilings, volume: streamVolume(boot),
 		run: runCtx, stop: cancel,
+		snapshotNudge: make(chan struct{}, 1),
 	}
 	// PROVISION EVERY LOG FIRST, and only then decide whether this node
 	// can replay from where it is.
@@ -400,8 +411,10 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// replicated database file — and it can only do that while nothing
 	// holds a transaction open on it. An applier started first would be
 	// mid-batch when the rename landed, writing rows into an inode with
-	// no name and reporting a checkpoint nobody will ever read.
-	if _, err := e.join(ctx, s, logs); err != nil {
+	// no name and reporting a checkpoint nobody will ever read. And no
+	// runner exists yet to re-key: each is built after this, against the
+	// live instant, over whatever file the join left.
+	if _, _, err := e.join(ctx, s, logs); err != nil {
 		s.Stop()
 		return nil, err
 	}
@@ -1424,8 +1437,12 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	// from this health's own end rather than from whichever reading the
 	// runner last had — reported as recreated, a node whose broker merely
 	// came back from an older copy would name a rebuild that never happened.
-	health.StreamRecreated = errors.Is(running.runner.StreamIdentity(),
-		statelog.ErrStreamRecreated)
+	identity := running.runner.StreamIdentity()
+	health.StreamRecreated = errors.Is(identity, statelog.ErrStreamRecreated)
+	// AND ITS PASSED-GENERATION HALF, from the same answer: a peer
+	// re-anchored this log past this node's rows, which is the one finding
+	// here a restored broker below this node's checkpoint cannot show.
+	health.GenerationPassed = errors.Is(identity, statelog.ErrGenerationPassed)
 	lag := uint64(0)
 	if end > at.Seq {
 		lag = end - at.Seq
@@ -1599,7 +1616,7 @@ func (c *Company) Epoch() map[string]any {
 // — and it reports what it concluded, because the runtime caller retries on a
 // fleet that could not donate and the boot simply comes up.
 func (e *Engine) join(ctx context.Context, s *stateLog,
-	logs map[string]*jetstream.DomainLog) (joinOutcome, error) {
+	logs map[string]*jetstream.DomainLog) (joinOutcome, statelog.OfferRequest, error) {
 
 	conn, ok := e.backends.Queue.(interface{ Conn() *nats.Conn })
 	if !ok || conn.Conn() == nil {
@@ -1607,21 +1624,35 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		// megabytes over request/reply rather than anything the queue
 		// contract carries. A backend with none is the memory twin, in
 		// a test, with no peer to donate anyway.
-		return joinNoDonor, nil
+		return joinNoDonor, statelog.OfferRequest{}, nil
 	}
 
-	behind, want, err := s.replayable(ctx, logs)
+	behind, passed, want, err := s.replayable(ctx, logs)
 	if err != nil {
-		return "", err
+		return "", statelog.OfferRequest{}, err
 	}
-	if len(behind) == 0 {
-		return joinCurrent, nil
+	if len(behind) == 0 && len(passed) == 0 {
+		return joinCurrent, want, nil
 	}
-	log.WarnContext(ctx, "statelog_below_the_floor",
-		"node", s.nodeID, "domains", behind,
-		"detail", "this node's checkpoint is below what the log still holds, so "+
-			"it cannot replay the records it is missing; it will ask the fleet "+
-			"for a snapshot")
+	if len(behind) > 0 {
+		log.WarnContext(ctx, "statelog_below_the_floor",
+			"node", s.nodeID, "domains", behind,
+			"detail", "this node's checkpoint is below what the log still holds, "+
+				"so it cannot replay the records it is missing; it will ask the "+
+				"fleet for a snapshot")
+	}
+	if len(passed) > 0 {
+		generations := make(map[string]uint32, len(passed))
+		for _, name := range passed {
+			generations[name] = want.Generations[name]
+		}
+		log.WarnContext(ctx, "statelog_behind_a_reanchor",
+			"node", s.nodeID, "domains", passed, "generations", generations,
+			"detail", "a peer re-anchored these logs past the generation this "+
+				"node's rows are at, so the logs now continue from that peer's "+
+				"rows and nothing on them can bring these level; it will ask the "+
+				"fleet for a snapshot at the generation named")
+	}
 
 	adopter, err := statelog.NewAdopter(statelog.AdoptDeps{
 		Domains:  s.registered(),
@@ -1645,7 +1676,7 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		},
 	})
 	if err != nil {
-		return "", err
+		return "", statelog.OfferRequest{}, err
 	}
 	_, err = adopter.Join(ctx)
 	switch {
@@ -1655,21 +1686,23 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		// error rides along because it holds each donor's refusal, which
 		// is what an operator reads to learn why nobody could donate.
 		log.WarnContext(ctx, "statelog_no_snapshot_offered",
-			"node", s.nodeID, "domains", behind, "error", err.Error(),
+			"node", s.nodeID, "domains", slices.Concat(behind, passed),
+			"error", err.Error(),
 			"detail", "no peer could donate a usable snapshot, so this node "+
 				"comes up on the history it has; reads report the coverage "+
 				"they could not account for, the domains that gate seat "+
 				"admission keep it from claiming work it cannot answer for, "+
 				"and it asks again on a widening interval")
-		return joinNoDonor, nil
+		return joinNoDonor, want, nil
 	case err != nil:
-		return "", fmt.Errorf("engine: this node is below the log's floor on %v "+
-			"and the join failed: %w", behind, err)
+		return "", statelog.OfferRequest{}, fmt.Errorf("engine: this node cannot "+
+			"replay its way to the fleet on %v and the join failed: %w",
+			slices.Concat(behind, passed), err)
 	}
 	// NO LINE OF ITS OWN: the adopter writes `statelog_adopted` with the
 	// donor, the artefact's checksum and when it was taken, and a second
 	// line here made one adoption read as two.
-	return joinAdopted, nil
+	return joinAdopted, want, nil
 }
 
 // joinOutcome is what a join concluded, for the caller that acts on the
@@ -1721,11 +1754,18 @@ const (
 //  2. THE JOIN is the boot's own: what it needs, who can donate, fetch,
 //     verify, install. Nothing about it is different at runtime — that was
 //     the point of making the framework resolve its estate per call.
-//  3. THE CONSUMERS ARE RESET to the checkpoint the file keeps — see
-//     [stateLog.resetConsumers]. That includes a join that found every
-//     domain CURRENT: the file under it may be an artefact an earlier rejoin
-//     installed and could not open, which the heartbeat read as behind
-//     before the restored appliers had loaded its checkpoint.
+//  3. EACH RUNNER IS RE-KEYED to the checkpoint the file keeps
+//     ([statelog.Runner.Rejoined]), which clears a recreated stream or a
+//     passed generation when the file now holds the fleet's history — the
+//     runner would otherwise stop again on the very checkpoint the adoption
+//     installed, leaving a node a peer re-anchored past with no way out but
+//     deleting its database. AND THE CONSUMERS ARE RESET to that checkpoint,
+//     because the broker will not move a consumer's start and one left at
+//     the old position would deliver every record in between to be dropped.
+//     Both include a join that found every domain CURRENT: the file under it
+//     may be an artefact an earlier rejoin installed and could not open,
+//     which no runner was re-keyed to and no consumer moved to — see
+//     [stateLog.resetConsumers], which [stateLog.restoreEstate] shares.
 //  4. THE APPLIERS START AGAIN, whatever happened: a join that found no
 //     donor leaves the node as it was, below the floor and refusing, and a
 //     node with no appliers at all would be worse than that.
@@ -1735,8 +1775,10 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	s.recovering.Lock()
 	defer s.recovering.Unlock()
 	log.WarnContext(ctx, "statelog_rejoin_started", "node", s.nodeID,
-		"detail", "this node is below the log's floor while running; its "+
-			"appliers pause while it asks the fleet for a snapshot")
+		"detail", "this node cannot replay its way to where the fleet is — it is "+
+			"below a log's floor, or a peer re-anchored a log past its "+
+			"generation — so its appliers pause while it asks the fleet for a "+
+			"snapshot")
 	s.haltAppliers()
 	// ctx IS the state log's own run context here — [requestRejoin]
 	// starts this under it — so the relaunched appliers get the lifetime
@@ -1747,14 +1789,24 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	for name, running := range s.domains {
 		logs[name] = running.log
 	}
-	outcome, err := e.join(ctx, s, logs)
+	outcome, want, err := e.join(ctx, s, logs)
 	switch {
 	case err != nil:
 		return err
 	case outcome == joinNoDonor:
 		return errNoDonor
 	}
-	s.resetConsumers(ctx)
+	// AGAINST THE INSTANT THE JOIN JUDGED THE ARTEFACT BY — the live one it
+	// read before asking, which the adopter checked the offer against and
+	// re-checked before the install — rather than a fresh read that could
+	// fail here and leave a runner keyed to the history the adoption just
+	// replaced.
+	s.resetConsumers(ctx, func(name string) (time.Time, error) {
+		return want.StreamCreatedAt[name], nil
+	})
+	if outcome == joinAdopted {
+		s.nudgeSnapshot()
+	}
 	log.InfoContext(ctx, "statelog_rejoined", "node", s.nodeID, "outcome", string(outcome))
 	return nil
 }
@@ -1794,14 +1846,25 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 		"detail", "the replicated database an earlier join left closed is "+
 			"open again; the node asks the fleet for a snapshot only if it is "+
 			"still below the floor, and no sooner than its retry interval allows")
-	s.resetConsumers(ctx)
+	// NO JOIN RAN, so no instant was judged: each runner is re-keyed
+	// against a fresh read of its live stream, and one that cannot be read
+	// keeps its verdict until the rejoin that follows reads it.
+	s.resetConsumers(ctx, func(name string) (time.Time, error) {
+		stats, err := s.domains[name].log.Stats(ctx)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return stats.CreatedAt, nil
+	})
 	return nil
 }
 
-// resetConsumers moves every domain's consumer to the checkpoint the replicated
-// file now keeps, because the broker will not move a consumer's start and one
-// left at the old position would deliver every record in between to be
-// dropped.
+// resetConsumers re-keys every domain's runner to the checkpoint the replicated
+// file now keeps ([statelog.Runner.Rejoined], against the live instant live
+// names) and moves its consumer there, because a runner still keyed to the
+// history the file replaced stops again on it, and the broker will not move a
+// consumer's start — one left at the old position would deliver every record
+// in between to be dropped.
 //
 // A FAILURE IS A LINE, NOT A FAILED CALL. Correctness is the checkpoint's and
 // the applier resumes from it regardless; what a consumer left behind costs is
@@ -1815,11 +1878,28 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 // [jetstream.DomainConsumer] clears the handle on that path and rebuilds it on
 // the next fetch, at the position it held before; without that this line would
 // be logging the start of a domain that never applies another record.
-func (s *stateLog) resetConsumers(ctx context.Context) {
+func (s *stateLog) resetConsumers(ctx context.Context, live func(name string) (time.Time, error)) {
 	for _, name := range s.order {
 		running := s.domains[name]
-		at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), running.domain.Stream().Name)
+		at, keyed, _, err := statelog.CursorFor(ctx, s.db.Replicated(), running.domain.Stream().Name)
 		if err == nil {
+			// THE RUNNER FIRST, against the live instant the caller
+			// judged the file by: a runner still keyed to the history
+			// the file replaced would stop again on the very checkpoint
+			// it now holds — a node a peer re-anchored past with no way
+			// out but deleting its database.
+			if instant, lerr := live(name); lerr != nil {
+				log.WarnContext(ctx, "statelog_runner_not_rekeyed",
+					"domain", name, "checkpoint", at.String(), "error", lerr.Error(),
+					"detail", "the live stream's creation instant could not be "+
+						"read, so the applier keeps the verdict it held; the next "+
+						"heartbeat finds it stopped and asks again")
+			} else if rerr := running.runner.Rejoined(at, keyed, instant); rerr != nil {
+				log.WarnContext(ctx, "statelog_runner_not_rekeyed",
+					"domain", name, "checkpoint", at.String(), "error", rerr.Error(),
+					"detail", "the applier keeps the verdict it held; the next "+
+						"heartbeat finds it stopped and asks again")
+			}
 			err = running.consumer.Reset(ctx, at.Seq)
 		}
 		if err != nil {
@@ -1918,25 +1998,41 @@ func (s *stateLog) requestRejoin(now time.Time) {
 // replayable answers, for every registered domain, whether this node can reach
 // the log from where its rows say it is — and what it would need if it cannot.
 //
+// TWO WAYS NOT TO BE ABLE TO, answered in two lists because they are two
+// different incidents an operator reads about. BEHIND: the record after this
+// node's checkpoint is gone from the log. PASSED: a peer re-anchored the log
+// past this node's generation, so the log now continues from that peer's rows
+// rather than from these — see [passedByAReanchor]. Either one is repaired by
+// the same adoption.
+//
 // NEED IS ONE BELOW THE FLOOR, per domain, which is the artefact's own
 // acceptance test: a snapshot at that position leaves the node with the whole
 // surviving log ahead of it and nothing missing in between. The generation
 // travels beside it because a bare sequence from before a reanchor names a
-// dead number space and would compare as if it were current.
+// dead number space and would compare as if it were current — and for a
+// passed domain it is the FLEET's generation, the only one a snapshot that
+// repairs it can be at.
 func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.DomainLog) (
-	behind []string, want statelog.OfferRequest, err error) {
+	behind, passed []string, want statelog.OfferRequest, err error) {
 
 	want = statelog.OfferRequest{
 		Need:            map[string]uint64{},
 		Generations:     map[string]uint32{},
 		StreamCreatedAt: map[string]time.Time{},
 	}
+	// THE FLEET'S GENERATIONS, READ ONCE for every domain: two
+	// coordination reads per join rather than two per domain, and one
+	// answer the domains are all judged against.
+	fleet, err := s.fleetGenerations(ctx)
+	if err != nil {
+		return nil, nil, statelog.OfferRequest{}, err
+	}
 	for _, domain := range registeredDomains() {
 		name := domain.Name()
 		appendTo, held := logs[name]
 		if !held {
-			return nil, statelog.OfferRequest{}, fmt.Errorf("engine: %s's log was not "+
-				"provisioned before the join asked what it holds", name)
+			return nil, nil, statelog.OfferRequest{}, fmt.Errorf("engine: %s's log "+
+				"was not provisioned before the join asked what it holds", name)
 		}
 		// ONE ROUND TRIP FOR EVERY TERM THE STREAM ANSWERS, which is
 		// also the only way they describe one moment: the first
@@ -1945,12 +2041,12 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		// behind ON, and read separately they can straddle a rebuild.
 		stats, err := appendTo.Stats(ctx)
 		if err != nil {
-			return nil, statelog.OfferRequest{}, err
+			return nil, nil, statelog.OfferRequest{}, err
 		}
 		first := stats.FirstSeq
 		at, _, found, err := statelog.CursorFor(ctx, s.db.Replicated(), domain.Stream().Name)
 		if err != nil {
-			return nil, statelog.OfferRequest{}, err
+			return nil, nil, statelog.OfferRequest{}, err
 		}
 		// A NODE WITH NO CHECKPOINT IS NOT AT GENERATION ZERO — IT IS AT
 		// NO GENERATION AT ALL, and the difference is the whole of this.
@@ -1972,36 +2068,42 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		// So the generation comes from the FLEET, and a node with no rows
 		// in a fleet that has moved past zero must ADOPT: the records
 		// before the re-anchor are not on the log to be replayed.
+		//
+		// AND SO DOES A NODE WHOSE ROWS THE FLEET HAS LEFT BEHIND: the
+		// same fleet generation, above the one its rows stand at, on a
+		// domain whose nodes must agree on their rows.
 		generation := at.Generation
-		if !found {
-			generation, err = s.fleetGeneration(ctx, name)
-			if err != nil {
-				return nil, statelog.OfferRequest{}, err
-			}
+		reanchored := passedByAReanchor(domain, at, found, fleet[name])
+		if !found || reanchored {
+			generation = fleet[name]
 		}
 		floor, err := s.trimFloor(ctx, name, generation)
 		if err != nil {
-			return nil, statelog.OfferRequest{}, err
+			return nil, nil, statelog.OfferRequest{}, err
 		}
 		want.Generations[name] = generation
 		want.StreamCreatedAt[name] = stats.CreatedAt
-		if !found && generation > 0 {
+		if usable := max(first, floor); usable > 0 {
+			want.Need[name] = usable - 1
+		}
+		switch {
+		case reanchored:
+			passed = append(passed, name)
+			continue
+		case !found && generation > 0:
 			behind = append(behind, name)
 			continue
 		}
 
-		// WHAT AN ARTEFACT MUST COVER is one below the HIGHER of the
-		// two: the stream's first surviving sequence is what is gone
-		// already, and the published floor is what the trim has been
-		// told it may delete and has not necessarily reached. A node
-		// that accepted an artefact chosen from `first` alone would
-		// install one the trim was about to pass. ONE BELOW because
-		// that is the lowest checkpoint [statelog.Replayable] accepts
-		// against it, sent as a number since the donor comparing it
+		// WHAT AN ARTEFACT MUST COVER, set above for every domain, is one
+		// below the HIGHER of the two: the stream's first surviving
+		// sequence is what is gone already, and the published floor is
+		// what the trim has been told it may delete and has not
+		// necessarily reached. A node that accepted an artefact chosen from
+		// `first` alone would install one the trim was about to pass. ONE
+		// BELOW because that is the lowest checkpoint [statelog.Replayable]
+		// accepts against it, sent as a number since the donor comparing it
 		// holds no view of this node's stream.
-		if usable := max(first, floor); usable > 0 {
-			want.Need[name] = usable - 1
-		}
 
 		// WHETHER THIS NODE IS BEHIND is a different question, and it
 		// is asked of `first` ALONE. The floor says what MAY be
@@ -2025,11 +2127,45 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 			behind = append(behind, name)
 		}
 	}
-	return behind, want, nil
+	return behind, passed, want, nil
 }
 
-// fleetGeneration is the number space the FLEET is on for a domain, for a node
-// whose own rows cannot say.
+// passedByAReanchor reports a domain a peer has re-anchored past this node's
+// rows: they are at a generation below the one the fleet is on, on a domain
+// whose nodes must hold identical rows at one checkpoint.
+//
+// ONE PREDICATE, asked by the join and by the heartbeat that requests one, for
+// the reason [statelog.Replayable] is one: a rejoin requested on a bound the
+// join does not test halts this node's appliers to ask, adopts nothing, and is
+// asked again on the next retry.
+//
+// # Why the generation alone decides it, and the instant does not
+//
+// A reanchor opens its generation from ONE node's rows — whatever that node
+// held, including what it held past everything the log still carries — so no
+// other node's rows are that history, whatever they hold and whichever stream
+// they are keyed to, and nothing on the log can make them so. On a recreated
+// stream such a node also finds its instant differs; on a broker restored from
+// an older copy it does not, and one whose checkpoint was below the restored end
+// sees nothing wrong at all, and would carry on applying the new generation's
+// records into rows missing the re-anchoring node's tail. Its only way to the
+// fleet's history used to be deleting its database; it is now the adoption
+// every other node that cannot replay makes.
+//
+// NEVER FOR A DOMAIN THAT CLAIMS NO IDENTITY, whose nodes re-anchor their own
+// copies one at a time by design ([statelog.PermitReanchor]) — adopting a whole
+// snapshot to repair one derived index is what that exemption exists to avoid.
+// And never for a node with no checkpoint, which the join already sends to
+// adopt at the fleet's generation.
+func passedByAReanchor(domain statelog.Domain, at statelog.Position, found bool,
+	fleet uint32) bool {
+
+	return domain.ClaimsIdentity() && found && fleet > at.Generation
+}
+
+// fleetGenerations is the number space the FLEET is on for each domain — for a
+// node whose own rows cannot say, and for one whose rows the fleet may have
+// left behind.
 //
 // TWO SOURCES BECAUSE EITHER MAY BE THE ONLY ONE. Every live node publishes
 // its own generation per domain in the position register, and the trim
@@ -2042,28 +2178,27 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 //
 // Zero is a real answer — a company that has never re-anchored — and it is
 // what makes a genuinely new node in a genuinely new fleet replay from the
-// beginning rather than ask for a snapshot nobody has.
-func (s *stateLog) fleetGeneration(ctx context.Context, domain string) (uint32, error) {
-	var newest uint32
+// beginning rather than ask for a snapshot nobody has. A domain nobody has
+// published anything for is absent from the map, which reads as that zero.
+func (s *stateLog) fleetGenerations(ctx context.Context) (map[string]uint32, error) {
+	newest := map[string]uint32{}
 	rows, err := s.fleet.Positions(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("engine: read the fleet's published positions to "+
-			"establish which generation %s is on: %w", domain, err)
+		return nil, fmt.Errorf("engine: read the fleet's published positions to "+
+			"establish which generation each domain is on: %w", err)
 	}
 	for _, row := range rows {
-		if at, named := row.Domains[domain]; named && at.Generation > newest {
-			newest = at.Generation
+		for domain, at := range row.Domains {
+			newest[domain] = max(newest[domain], at.Generation)
 		}
 	}
 	floors, err := s.fleet.Floors(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("engine: read the fleet's published trim floors to "+
-			"establish which generation %s is on: %w", domain, err)
+		return nil, fmt.Errorf("engine: read the fleet's published trim floors to "+
+			"establish which generation each domain is on: %w", err)
 	}
 	for _, f := range floors {
-		if f.Domain == domain && f.Generation > newest {
-			newest = f.Generation
-		}
+		newest[f.Domain] = max(newest[f.Domain], f.Generation)
 	}
 	return newest, nil
 }
@@ -2237,8 +2372,9 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 			// which is the one state this count exists to surface.
 			row.Detail = "this node cannot read the domain's own position: " +
 				err.Error()
-		case health.StreamRecreated:
-			// A REBUILT LOG FIRST, ahead of the stop it may also have
+		case health.StreamRecreated || health.GenerationPassed:
+			// A REBUILT LOG FIRST — or a log a peer re-anchored past this
+			// node's generation — ahead of the stop it may also have
 			// caused: the stop is a consequence (at boot it is this very
 			// finding; on a running node the consumer went with the old
 			// stream and its fetches fault), and this is the cause, with
@@ -2471,7 +2607,20 @@ func (e *Engine) snapshotLoop(s *stateLog, snap *statelog.Snapshotter,
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
+		case <-s.snapshotNudge:
+			// A REANCHOR OR AN ADOPTION: the next take is a question about
+			// whether the artefact is current, which the gate answers —
+			// see [stateLog.snapshotNudge].
 		}
+	}
+}
+
+// nudgeSnapshot wakes the snapshot loop, without waiting for it — see
+// [stateLog.snapshotNudge].
+func (s *stateLog) nudgeSnapshot() {
+	select {
+	case s.snapshotNudge <- struct{}{}:
+	default:
 	}
 }
 
@@ -2810,6 +2959,12 @@ const PositionHeartbeat = 10 * time.Second
 // coordination blinked would then be invisible to the trim, which is the
 // failure this whole loop exists to prevent.
 func (s *stateLog) publishPositions(ctx context.Context) {
+	// NO REGISTER, NOTHING TO PUBLISH TO — the condition the heartbeat is
+	// never started under, checked here too because a reanchor publishes
+	// through this directly.
+	if s.fleet == nil {
+		return
+	}
 	row := coord.NodePositions{
 		NodeID:        s.nodeID,
 		At:            time.Now().UTC(),
@@ -2817,9 +2972,32 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		Domains:       make(map[string]coord.DomainPosition, len(s.order)),
 	}
 	below := false
+	// THE FLEET'S GENERATIONS, for the one way a node falls out of step
+	// that nothing on its own log shows it: a peer re-anchored the log past
+	// this node's generation. Unread, this beat judges nothing by them —
+	// the same coordination store takes this node's own row below, and a
+	// failure there is what gets said.
+	generations, genErr := s.fleetGenerations(ctx)
 	for _, name := range s.order {
 		running := s.domains[name]
 		at := running.runner.Committed()
+		// AND PASSED BY A REANCHOR: the same predicate the join asks, so
+		// the rejoin this requests is one the join then acts on. The
+		// runner is told first, which is what refuses this node's reads
+		// and writes of the domain until the adoption lands.
+		if genErr == nil && passedByAReanchor(running.domain, at, true, generations[name]) {
+			if running.runner.ObserveFleetGeneration(generations[name]) {
+				log.WarnContext(ctx, "statelog_generation_passed",
+					"domain", name, "stream", running.domain.Stream().Name,
+					"generation", at.Generation, "fleet_generation", generations[name],
+					"detail", "a peer re-anchored this log past the generation "+
+						"this node's rows are at, so the log now continues from "+
+						"that peer's rows; this node refuses reads and writes of "+
+						"the domain and adopts a snapshot from a peer at the new "+
+						"generation")
+			}
+			below = true
+		}
 		// THE INSTANT THE ROWS ARE KEYED TO rides beside the generation,
 		// because a generation alone cannot say which stream a sequence is
 		// on — see [coord.DomainPosition.StreamCreatedAt].

@@ -264,6 +264,16 @@
 // below its first record, and replaying none of it is what keeps every object
 // from rolling back to the copy.
 //
+// And a reanchor breaks the premise for every OTHER node of a domain that claims
+// identity: it opens its generation from one node's rows, so the rest hold a
+// history the log no longer continues from, whatever their own readings of it
+// say — a node below a restored broker's end sees nothing wrong at all. That
+// is the identity's third finding ([ErrGenerationPassed]), established from the
+// fleet's published generation or from a record written in a generation the
+// node never entered, and refused exactly as the other two are. Its repair is
+// the node's own: it adopts a snapshot from the new generation, and the join
+// re-keys its runner to what it adopted ([Runner.Rejoined]).
+//
 // # The alarm table borrows every threshold it fires at
 //
 // It is in this package rather than beside any one subsystem because an alarm

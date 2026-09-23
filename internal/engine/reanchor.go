@@ -151,6 +151,15 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		return statelog.ReanchorPlan{}, err
 	}
 	completed = true
+	// THE FLEET IS TOLD AT ONCE, and this node's artefact is replaced soon.
+	// Every peer still in the generation this left adopts a snapshot from a
+	// node in the new one ([passedByAReanchor]), which it learns of from this
+	// node's position row and asks for at the generation that row names — so
+	// a row left for the next heartbeat is up to ten seconds in which those
+	// peers go on serving the old generation, and an artefact left for the
+	// snapshot interval is up to a day in which they have nothing to adopt.
+	s.publishPositions(ctx)
+	s.nudgeSnapshot()
 	// NO LINE OF ITS OWN: [statelog.Reanchor] writes `statelog_reanchored`
 	// with the domain, the generation, the case, the stream and its prior
 	// high-water mark, and a second line under that name here made one

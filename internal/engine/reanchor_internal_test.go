@@ -623,6 +623,19 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 			"%v — every peer still on that stream, and one on the new stream, was "+
 			"read as holding history it would discard", err)
 	}
+	// AND THE FLEET IS TOLD AT ONCE: every peer still in the old generation
+	// adopts from a node in the new one, and learns of it from this row.
+	rows, err = e.backends.Fleet.Positions(t.Context())
+	if err != nil {
+		t.Fatalf("read the register: %v", err)
+	}
+	for _, row := range rows {
+		if row.NodeID == e.native.nodeID && row.Domains[name].Generation != plan.Generation {
+			t.Fatalf("right after the reanchor this node's row says generation %d, "+
+				"want %d — the peers it left behind would not hear of it until the "+
+				"next heartbeat", row.Domains[name].Generation, plan.Generation)
+		}
+	}
 	waitUntil(t, 10*time.Second, "the tracker to resume", func() bool {
 		return running.runner.StreamIdentity() == nil &&
 			running.runner.Committed().Generation == plan.Generation
