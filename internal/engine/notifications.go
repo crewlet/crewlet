@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/slack"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The inbound edge, wired.
@@ -59,6 +60,40 @@ type notifications struct {
 	// which is what keeps [Engine.Registry] non-nil for every reader that
 	// found a company through [Engine.Company].
 	registryFor *Company
+
+	// rebuilding serialises every WHOLE rebuild of the registry, and every
+	// write into a live one, against each other. See directory.go.
+	//
+	// ITS OWN MUTEX rather than mu, because a rebuild reads the identity
+	// directory — a store read — and mu is taken on the inbound hot path
+	// by every reader of [Engine.Registry]; holding mu across the read
+	// would park every delivery behind it. Always taken BEFORE mu, never
+	// while holding it.
+	//
+	// It exists because the registry now has TWO rebuild triggers — a
+	// published company, and the identity applier's committed batch — and
+	// the second rebuilds for the SAME company the first built for, which
+	// is exactly the case registryFor's identity test cannot tell apart.
+	// Two rebuilds interleaved that way publish whichever finished last,
+	// and that can be the one that read the directory first.
+	rebuilding sync.Mutex
+
+	// directory is this node's identity directory as the registry reads
+	// it, or nil on a node that runs no identity domain — which keeps the
+	// chart-only behaviour. Set once, when the native runtime opens the
+	// domain, under mu.
+	directory notify.Directory
+
+	// directoryAt is the identity applier's committed position, and
+	// readAt what it was when the last reading was taken — so the
+	// periodic safety net can tell "nothing was applied since" from "rows
+	// moved with no committed hook", which is what an adoption does.
+	// directoryFailed marks a last reading that could not be taken, so
+	// the net retries it however still the position is. All three are
+	// read and written under [notifications.rebuilding].
+	directoryAt     func() statelog.Position
+	readAt          statelog.Position
+	directoryFailed bool
 
 	admits notify.Admitter
 
@@ -235,9 +270,31 @@ func (e *Engine) ChatThreads() *notify.ThreadReaders {
 // SERVER rather than about the config — losing them on an apply would make
 // every agent's own message annotate as a stranger until something
 // reconnected.
-func (e *Engine) refreshParties(c *Company) {
+//
+// # And it reads the identity directory, every time
+//
+// Which human seats' contact identities are registered depends on the org AND
+// on whether each seat's holder may still be reached, so every rebuild takes a
+// fresh reading of the directory — see directory.go, which is also where the
+// OTHER trigger lives: a suspension moves nothing in the org, so this
+// function alone would never withdraw anybody.
+func (e *Engine) refreshParties(ctx context.Context, c *Company) {
+	e.notify.rebuilding.Lock()
+	defer e.notify.rebuilding.Unlock()
+	e.rebuildPartiesLocked(c, e.readStandingLocked(ctx))
+}
+
+// rebuildPartiesLocked builds a WHOLE registry for c under one directory
+// reading and swaps it in. The caller holds [notifications.rebuilding].
+//
+// WHOLE, never a diff against the live one: the vendor identities, the chat
+// identities and the human contacts are each re-registered from their own
+// sources, because a patch applied to a fresh registry drops every identity it
+// did not touch, and a patch applied to the live one mutates a value a
+// running turn may be reading.
+func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 	reg := notify.NewRegistry(c.Org)
-	rec := reg.ReconcileHumanContacts(c.Org, e.resolver().LookupOK, notify.Standing{})
+	rec := reg.ReconcileHumanContacts(c.Org, e.resolver().LookupOK, standing)
 
 	// The CODE HOST's seat identities are config-derived, so they are
 	// rebuilt from the new company here rather than carried across. Doing
@@ -257,7 +314,6 @@ func (e *Engine) refreshParties(c *Company) {
 	}
 
 	e.notify.mu.Lock()
-	e.notify.registry, e.notify.registryFor = reg, c
 	chat := e.notify.mattermost
 	hosted := e.notify.slack
 	e.notify.mu.Unlock()
@@ -267,14 +323,27 @@ func (e *Engine) refreshParties(c *Company) {
 	// where a tracker's or a code host's are config-derived and rebuilt
 	// above. Losing them on an apply would make every agent's own message
 	// annotate as a stranger until something reconnected.
+	//
+	// BEFORE THE SWAP, and it used to be after it: published first, the
+	// new registry answered every agent's own bot as a stranger for the
+	// moment between the two, and with the directory's trigger a registry
+	// is rebuilt on every suspension rather than only on an apply. A
+	// transport repointed at a registry nobody reads yet loses nothing —
+	// a seat it connects meanwhile registers into the one about to be
+	// published.
 	if chat != nil {
 		chat.Reregister(reg)
 	}
 	if hosted != nil {
 		hosted.Reregister(reg)
 	}
+
+	e.notify.mu.Lock()
+	e.notify.registry, e.notify.registryFor = reg, c
+	e.notify.mu.Unlock()
 	log.Info("parties_indexed", "company", c.Config.Name, "parties", reg.Len(),
 		"human_contacts", rec.Registered, "unresolved", rec.Unresolved,
+		"withheld_seats", len(standing.Withheld()), "directory", standing.Consulted(),
 		"conflicts", len(rec.Conflicts))
 }
 

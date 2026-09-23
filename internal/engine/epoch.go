@@ -105,9 +105,9 @@ func (e *Engine) RecheckGitHub() {
 // publish: the registry is indexed for the exact value readers will find, and
 // deriving a second one here would give that value a different identity from
 // the one every stage above wired against.
-func (e *Engine) installEpoch(c, view *Company) *Company {
+func (e *Engine) installEpoch(ctx context.Context, c, view *Company) *Company {
 	if view != nil && !e.indexes(view) {
-		e.refreshParties(view)
+		e.refreshParties(ctx, view)
 	}
 	// COMPOSED rather than stored: the company a reader loads is this
 	// settings epoch and this node's chart view together, and whichever
@@ -283,7 +283,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// apply spends, and an apply refused between here and the publish has
 	// indexed a company nobody can reach, which costs a rebuild and
 	// nothing else.
-	e.refreshParties(view)
+	e.refreshParties(ctx, view)
 	if e.inboundStarted() {
 		// The TRACKER is rebuilt on the same edge and for the same
 		// reason: its lead map is derived from the org, so a node that
@@ -331,7 +331,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	applied = append(applied, "integrations")
 
 	previous := e.Company()
-	published := e.installEpoch(next, view)
+	published := e.installEpoch(ctx, next, view)
 	applied = append(applied, "epoch")
 
 	// THE BACKGROUND PASSES follow the revision too, and after the swap:

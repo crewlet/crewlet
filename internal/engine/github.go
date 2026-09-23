@@ -207,7 +207,9 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	}}
 
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
-	registered := e.notify.github.register(e.Registry(), c, env)
+	registered := e.intoLiveRegistry(func(reg *notify.Registry) int {
+		return e.notify.github.register(reg, c, env)
+	})
 	if registered == 0 {
 		// Enabled with no seat identity is a company mid-setup —
 		// `crewlet github provision` has not run — or a deployment that

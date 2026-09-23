@@ -423,6 +423,20 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		defer n.done.Done()
 		e.watchChart(runCtx)
 	}()
+	// AND THE PARTY REGISTRY'S DIRECTORY TRIGGER, on a node that runs the
+	// identity domain and on no other: a node that does not keeps the
+	// chart-only behaviour, because its empty copy of the directory would
+	// read as "nobody holds any seat". Handed over BEFORE the loop starts,
+	// so the first rebuild it runs already reads the directory — and before
+	// the boot publish, so the first registry does too.
+	if n.iamReader != nil {
+		e.useDirectory(iamDirectory{reader: n.iamReader}, n.iamReader.At)
+		n.done.Add(1)
+		go func() {
+			defer n.done.Done()
+			e.watchDirectory(runCtx)
+		}()
+	}
 	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
 	// down and [Engine.stopNative] — the same shutdown — is what ends it.
 	// Set before the two calls below because both reach through e.native:

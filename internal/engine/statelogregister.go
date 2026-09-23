@@ -293,7 +293,14 @@ func register() []registration {
 				// the only thing that sees every removal on every node.
 				// Nil is legal and means a node with no keyring: it
 				// deletes the rows and the key is a peer's to destroy.
-				return iamdomain.NewApplier(s.nodeID, s.shredder, nil), nil
+				//
+				// AND THE DIRECTORY'S SIGNAL, the party registry's
+				// second rebuild trigger beside the chart view's: a
+				// suspension withdraws a seat's contact identities
+				// with no chart record, so nothing on the publish path
+				// would ever see it. See directory.go.
+				return iamdomain.NewApplier(s.nodeID, s.shredder,
+					s.nudgeDirectory), nil
 			},
 			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
 				rows, err := iamdomain.NewRows(s.db)

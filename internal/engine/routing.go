@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
+	"github.com/crewlet/crewlet/internal/notify"
 )
 
 // Retrying the seat identities this node could not resolve.
@@ -118,11 +119,12 @@ func (e *Engine) rewireJira(ctx context.Context, c *Company) []string {
 	// what ITS credentials resolve to. Writing into that newer registry
 	// from here would put the previous revision's account back over the
 	// top, and a rotated credential would route to nobody.
-	reg := e.registryOf(c)
-	if reg == nil {
+	registered, current := e.intoRegistryOf(c, func(reg *notify.Registry) int {
+		return e.notify.jira.register(reg, c, env)
+	})
+	if !current {
 		return nil
 	}
-	registered := e.notify.jira.register(reg, c, env)
 	unresolved := e.notify.jira.unresolved(c, env)
 	e.logRewired(ctx, integration.KindJira, registered, unresolved)
 	return unresolved
@@ -209,11 +211,12 @@ func (e *Engine) rewireGitLab(ctx context.Context, c *Company) []string {
 	// what ITS credentials resolve to. Writing into that newer registry
 	// from here would put the previous revision's account back over the
 	// top, and a rotated credential would route to nobody.
-	reg := e.registryOf(c)
-	if reg == nil {
+	registered, current := e.intoRegistryOf(c, func(reg *notify.Registry) int {
+		return e.notify.gitlab.register(reg, c, env)
+	})
+	if !current {
 		return nil
 	}
-	registered := e.notify.gitlab.register(reg, c, env)
 	unresolved := e.notify.gitlab.unresolved(c, env)
 	e.logRewired(ctx, integration.KindGitLab, registered, unresolved)
 	return unresolved
@@ -242,11 +245,12 @@ func (e *Engine) rewireGitHub(ctx context.Context, c *Company) []string {
 	// what ITS credentials resolve to. Writing into that newer registry
 	// from here would put the previous revision's account back over the
 	// top, and a rotated credential would route to nobody.
-	reg := e.registryOf(c)
-	if reg == nil {
+	registered, current := e.intoRegistryOf(c, func(reg *notify.Registry) int {
+		return e.notify.github.register(reg, c, env)
+	})
+	if !current {
 		return nil
 	}
-	registered := e.notify.github.register(reg, c, env)
 	unresolved := e.notify.github.unresolved(c, env)
 	e.logRewired(ctx, integration.KindGitHub, registered, unresolved)
 	return unresolved

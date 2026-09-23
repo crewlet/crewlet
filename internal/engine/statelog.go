@@ -281,6 +281,14 @@ type stateLog struct {
 	// no engine behind the log.
 	nudgeChart func()
 
+	// nudgeDirectory is what the IDENTITY APPLIER calls after a committed
+	// batch that moved a seat's standing — a suspension, a bind, an
+	// unbind, a removal — threaded down for nudgeChart's reason: the apply
+	// is the only thing that sees it on every node, and a suspension
+	// moves nothing a published company would ever carry. It must not
+	// block either. See internal/engine/directory.go.
+	nudgeDirectory func()
+
 	// ceilings is the byte ceiling each domain's stream is CREATED with,
 	// sized from Tier A inside the broker's budget ([ceilingsFor]). It is
 	// only ever applied at creation: a stream's configuration has one
@@ -497,7 +505,8 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		metrics: e.metrics,
 		witness: e.stateLogWitness(),
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
-		nudgeChart: e.nudgeChart, shredder: e.personKeys(),
+		nudgeChart: e.nudgeChart, nudgeDirectory: e.nudgeDirectory,
+		shredder: e.personKeys(),
 		ceilings: ceilings, volume: streamVolume(boot),
 		run: runCtx, stop: cancel,
 	}

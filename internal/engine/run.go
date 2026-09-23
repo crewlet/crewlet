@@ -61,8 +61,14 @@ type Engine struct {
 	// rebuild loop. ONE SLOT, which is the coalescing window — see
 	// [Engine.nudgeChart].
 	chartNudge chan struct{}
-	backends   *Backends
-	node       *node.Node
+
+	// directoryNudge carries the identity applier's post-commit signal to
+	// the party registry's rebuild loop, on chartNudge's terms — see
+	// [Engine.nudgeDirectory].
+	directoryNudge chan struct{}
+
+	backends *Backends
+	node     *node.Node
 
 	// authEvents is this node's authentication audit trail, and
 	// stopAuthTrail ends its loop. See authevents.go.
@@ -662,6 +668,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// applier: a nil channel there would make every send block for
 		// ever on the apply loop's own goroutine.
 		chartNudge: make(chan struct{}, 1),
+		// And the identity applier's, for the same reason.
+		directoryNudge: make(chan struct{}, 1),
 	}
 	// ONE RUNNER PER ENGINE, because its in-process guard is half of what
 	// keeps two writers off one third-party app — see [setup.Runner.Hold].
@@ -847,7 +855,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// COMPOSED ONCE, here, and handed to the install: the registry is
 	// indexed for the value a reader will load, so that value has to exist
 	// before it is published. See [Engine.installEpoch].
-	e.installEpoch(company, e.epoch.withView(company))
+	e.installEpoch(ctx, company, e.epoch.withView(company))
 
 	// SET BEFORE the node, because the node is handed this exact value —
 	// two constructions of it would be two places to disagree about what

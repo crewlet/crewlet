@@ -150,7 +150,9 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 	}
 
 	e.notify.jira.resolve(ctx, base, deploy, jiraSeatCredentials(c, env))
-	registered := e.notify.jira.register(e.Registry(), c, env)
+	registered := e.intoLiveRegistry(func(reg *notify.Registry) int {
+		return e.notify.jira.register(reg, c, env)
+	})
 	if registered == 0 {
 		// Configured with no seat identity is a company mid-setup —
 		// `crewlet jira provision` has not run — or an instance that

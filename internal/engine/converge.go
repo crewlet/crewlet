@@ -80,7 +80,7 @@ func (e *Engine) convergeOn(ctx context.Context, c *Company) []string {
 		// permanently. An apply indexes it BEFORE it publishes, so that
 		// call is usually the one that has already happened; a chart
 		// write has no such moment and this is where it gets one.
-		e.refreshParties(c)
+		e.refreshParties(ctx, c)
 	}
 	steps = append(steps, "parties")
 
