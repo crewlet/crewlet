@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -221,6 +222,15 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	log.InfoContext(r.Context(), "iam_token_minted",
 		"person", person, "credential", id, "expires_at", expires)
+	granted := make([]string, 0, len(grants))
+	for _, g := range grants {
+		granted = append(granted, string(g))
+	}
+	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
+		Credential: id, Kind: types.CredentialToken, Owner: person,
+		Grants: granted, Colleague: string(colleague), ExpiresAt: expires,
+		By: iam.ActorFor(principal).Name, Reason: "a machine token was minted",
+	})
 	// THE VALUE IS IN THIS ANSWER AND IN NOTHING ELSE. It is not logged,
 	// not stored, and not readable back — a second route that returned it
 	// would make the estate hold a secret, which is the one thing this
@@ -269,21 +279,26 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	now := s.now()
 	found := false
+	var method iamdomain.CredentialMethod
+	const reason = "a credential was revoked"
 	at, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
+			// RESET PER RUN: the decide may run again against a fresh
+			// snapshot, and the verdict is the last run's.
+			found, method = false, ""
 			out := make([]iamdomain.Credential, 0, len(held))
 			for _, c := range held {
 				if c.ID == id && c.RevokedAt.IsZero() {
 					c.RevokedAt = now
-					found = true
+					found, method = true, c.Method
 				}
 				out = append(out, c)
 			}
 			return out
 		},
 		OpID:   s.opIDFor(r, "credentials:revoke:"+id),
-		Reason: "a credential was revoked",
+		Reason: reason,
 	})
 	if err != nil {
 		s.answerWrite(w, r, at, err, map[string]any{"id": id})
@@ -303,5 +318,9 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	log.InfoContext(r.Context(), "iam_credential_revoked",
 		"person", person, "credential", id)
+	s.audit.Emit(r.Context(), types.IAMCredentialRevoked{
+		Credential: id, Kind: types.CredentialKind(method), Owner: person,
+		By: callerName(r.Context()), Reason: reason,
+	})
 	s.answerWrite(w, r, at, nil, map[string]any{"id": id})
 }

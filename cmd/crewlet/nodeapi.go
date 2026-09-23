@@ -356,6 +356,9 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 		// nothing else would say so.
 		Ceiling: boot.API.Auth.MaxGrants,
 		Seats:   seatExists(e),
+		// What an administrator did — a token minted or revoked, a
+		// session ended, a person removed — on the node's audit feed.
+		Audit: e.AuthEvents(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: the identity directory: %w", err)

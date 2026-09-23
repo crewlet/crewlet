@@ -37,6 +37,7 @@ type rig struct {
 	service   *iamapi.Service
 	directory *fakeDirectory
 	writer    *fakeWriter
+	audit     *recordingAudit
 	mux       *http.ServeMux
 }
 
@@ -57,7 +58,9 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 		},
 	}}
 	writer := &fakeWriter{}
+	audit := &recordingAudit{}
 	opts := iamapi.Options{
+		Audit:     audit,
 		Directory: directory,
 		Authority: func(actor string, kind iam.Kind, grants []iam.Grant) iamapi.Writer {
 			writer.actor, writer.kind, writer.grants = actor, kind, grants
@@ -81,7 +84,7 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 		t.Fatalf("mount: %v", err)
 	}
 	return &rig{t: t, service: service, directory: directory,
-		writer: writer, mux: mux}
+		writer: writer, audit: audit, mux: mux}
 }
 
 // answered is one request's outcome.
@@ -221,6 +224,15 @@ type fakeWriter struct {
 
 	// releasedFrom is the holder each release named.
 	releasedFrom []string
+
+	// held is the credential set a SetCredentials call's Apply is run
+	// against, the way the real decide runs it against the snapshot.
+	held []iamdomain.Credential
+
+	// rerun, when set, is a SECOND snapshot the Apply is run against
+	// after the first — the real decide's round after a lost race, whose
+	// verdict is the one that lands.
+	rerun []iamdomain.Credential
 }
 
 func (w *fakeWriter) did(what string) (statelog.Position, error) {
@@ -252,6 +264,12 @@ func (w *fakeWriter) SetCredentials(_ context.Context, in iamdomain.CredentialSe
 	statelog.Position, error) {
 
 	w.creds = in
+	if in.Apply != nil {
+		w.held = in.Apply(w.held)
+		if w.rerun != nil {
+			w.held = in.Apply(w.rerun)
+		}
+	}
 	return w.did("credentials")
 }
 
@@ -736,6 +754,7 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 		Authority: func(string, iam.Kind, []iam.Grant) iamapi.Writer {
 			return &fakeWriter{}
 		},
+		Audit:        &recordingAudit{},
 		ExternalBase: "https://crewlet.example.com",
 	})
 	if err != nil {

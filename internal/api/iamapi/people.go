@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
@@ -374,6 +375,14 @@ func (s *Service) DeletePerson(w http.ResponseWriter, r *http.Request) {
 	reason := reasonOr(r.URL.Query().Get("reason"), "removed through /iam/people")
 	at, err := writer.Remove(r.Context(), id,
 		s.opIDFor(r, "people:remove:"+id), reason)
+	if err == nil {
+		// A REMOVAL ENDS EVERY SESSION THE PERSON HELD, with everything
+		// else about them, and this is the row that says so.
+		s.audit.Emit(r.Context(), types.IAMSessionEnded{
+			Person: id, Reason: types.EndPersonRemoved,
+			By: callerName(r.Context()),
+		})
+	}
 	s.answerWrite(w, r, at, err, map[string]any{"id": id})
 }
 
@@ -391,6 +400,7 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	opID := s.opIDFor(r, "people:mfa-reset:"+id)
+	const reason = "the second factor was reset"
 	at, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: id,
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
@@ -404,14 +414,21 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 			}
 			return out
 		},
-		OpID: opID, Reason: "the second factor was reset",
+		OpID: opID, Reason: reason,
 	})
 	if err != nil {
 		s.answerWrite(w, r, at, err, map[string]any{"id": id})
 		return
 	}
+	// THE RESET IS ANNOUNCED ONCE THE FACTOR IS GONE, whatever the
+	// revocation below does: a cleared factor is the fact an investigation
+	// needs, and a failed revocation is reported to the administrator on
+	// this very answer.
+	s.audit.Emit(r.Context(), types.IAMMFAReset{
+		Person: id, By: callerName(r.Context()), Reason: reason,
+	})
 	if _, err := writer.Revoke(r.Context(), id, opID+":revoke",
-		"the second factor was reset"); err != nil {
+		reason); err != nil {
 
 		// LOGGED AND REPORTED, because the half that landed matters: the
 		// factor is gone and the sessions are not, which is a state an
@@ -426,6 +443,17 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.answerWrite(w, r, at, nil, map[string]any{"id": id})
+}
+
+// callerName is the name an identity row records its author under: the same
+// [iam.ActorFor] the writer this surface hands out is built from, so the live
+// event and the durable history name one party the same way.
+func callerName(ctx context.Context) string {
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved {
+		return iam.AnonymousActor
+	}
+	return iam.ActorFor(principal).Name
 }
 
 // answerRead answers a write that turned out to change nothing by reading the

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -69,6 +70,17 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		log.InfoContext(r.Context(), "iam_sessions_revoked",
 			"person", id, "position", at.String())
+		// SOMEBODY ENDING THEIR OWN is a sign-out everywhere; anybody
+		// else ending them is a revocation, and the trail says which
+		// because the second is the row an investigation looks for.
+		why := types.EndRevoked
+		if principal, how := iam.From(r.Context()); how == iam.Resolved &&
+			principal.ID.String() == id {
+			why = types.EndLogoutAll
+		}
+		s.audit.Emit(r.Context(), types.IAMSessionEnded{
+			Person: id, Reason: why, By: callerName(r.Context()),
+		})
 	}
 	s.answerWrite(w, r, at, err, map[string]any{"id": id})
 }

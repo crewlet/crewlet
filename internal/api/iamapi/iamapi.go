@@ -42,6 +42,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -123,6 +124,18 @@ type Bootstrap interface {
 	MintCode(ctx context.Context) (path string, err error)
 }
 
+// Audit is where this surface's identity facts go: a credential minted or
+// revoked, a second factor reset, a session ended by somebody other than its
+// holder.
+//
+// ONE METHOD, because everything this surface records was authored by a
+// caller the guard resolved: there is no failed attempt here to count, only a
+// write to announce. internal/iam/authevents' Trail is what a running node
+// hands in.
+type Audit interface {
+	Emit(ctx context.Context, payload events.Payload)
+}
+
 // Options is what this surface is built from.
 type Options struct {
 	// Directory and Authority are required: a surface with a reader and
@@ -169,6 +182,12 @@ type Options struct {
 	// config refuses an absent one on a node that serves.
 	Ceiling []iam.Grant
 
+	// Audit records what this surface changed. REQUIRED: the directory is
+	// where credentials are minted and sessions ended by somebody else,
+	// and a surface that announced none of it would leave the live feed
+	// silent about the writes an investigation looks for first.
+	Audit Audit
+
 	// Now is the clock, injectable so a case can pin an expiry.
 	Now func() time.Time
 }
@@ -182,6 +201,7 @@ type Service struct {
 	external  string
 	seats     Seats
 	ceiling   []iam.Grant
+	audit     Audit
 	now       func() time.Time
 }
 
@@ -195,12 +215,17 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("iamapi: this surface needs an authority — a " +
 			"writer per caller, because an identity record's author is a " +
 			"property of the writer and never of the call")
+	case opts.Audit == nil:
+		return nil, errors.New("iamapi: this surface needs an audit trail — it " +
+			"mints and revokes credentials and ends other people's sessions, " +
+			"and a directory that announced none of it would leave the live " +
+			"feed silent about exactly those writes")
 	}
 	s := &Service{
 		directory: opts.Directory, authority: opts.Authority,
 		opener: opts.Opener, bootstrap: opts.Bootstrap,
 		external: opts.ExternalBase, seats: opts.Seats,
-		ceiling: slices.Clone(opts.Ceiling), now: opts.Now,
+		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit, now: opts.Now,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
