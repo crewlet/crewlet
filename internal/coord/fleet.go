@@ -412,6 +412,41 @@ type Activation struct {
 // other backend.
 const MaxApplyErrorLength = 2000
 
+// ActivationAt is the instant an activation is published at: the one the
+// caller asked for, or one millisecond after the activation it replaces when
+// the request is not later than that.
+//
+// # Why the pointer forces its instants forward
+//
+// The instant is what every row derived from a configuration is stamped with
+// (configplane.ActivationStamp), and a row refuses a stamp older than its own,
+// so that a node applying an older configuration late cannot walk a newer
+// one's values back. That guard is only right if a LATER activation always
+// carries a LATER instant — and the instant is the activating node's own
+// clock. An operator whose node runs a few seconds behind the one that
+// activated last, a node republishing its locally-active revision with the
+// `activated_at` it holds, two activations inside one millisecond: each put an
+// instant on the pointer no later than the stamps already on the projects and
+// the knowledge containers, and the new configuration was applied to neither,
+// silently, until some later activation happened to carry a later clock.
+//
+// Decided INSIDE the compare-and-set that replaces the pointer, against the
+// pointer it replaces, so two activations racing each other cannot both be
+// told the same instant: whichever lands second is compared with the first.
+//
+// # At the stamp's resolution
+//
+// Compared in Unix MILLISECONDS, the resolution configplane.ActivationStamp
+// stamps at, because an instant later by a few microseconds is the same
+// stamp and every guard lets an equal stamp through. The zero instant — no
+// previous activation — leaves the request as it is.
+func ActivationAt(requested, previous time.Time) time.Time {
+	if previous.IsZero() || requested.UnixMilli() > previous.UnixMilli() {
+		return requested.UTC()
+	}
+	return time.UnixMilli(previous.UnixMilli() + 1).UTC()
+}
+
 // TruncateApplyError applies [MaxApplyErrorLength].
 //
 // NEVER THROUGH A RUNE. A plain byte slice splits whatever multi-byte
@@ -460,6 +495,10 @@ type ActivationRequest struct {
 	// can apply the revision it names.
 	Payload []byte
 
+	// At is the instant the caller activated the revision at. The pointer
+	// may carry a LATER one — see [ActivationAt] — and the [Activation]
+	// Activate returns says which, so a caller keeping a local copy of the
+	// instant keeps the pointer's.
 	At time.Time
 
 	// Expect is the revision the caller read before building this one.

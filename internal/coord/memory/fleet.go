@@ -262,11 +262,17 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	// The twin gets both under one mutex, so the window cannot open here —
 	// which is the point of holding it to the same order anyway: a reader
 	// of this file should find the same invariant stated in both places.
+	// THE INSTANT IS DECIDED UNDER THE SAME MUTEX as the compare, against
+	// the pointer being replaced — see [coord.ActivationAt].
+	var previous time.Time
+	if f.set {
+		previous = f.target.At
+	}
 	f.payload = slices.Clone(req.Payload)
 	f.epoch++
 	f.target = coord.Activation{
 		Epoch: f.epoch, RevisionID: req.RevisionID,
-		At: req.At.UTC(), Summary: req.Summary,
+		At: coord.ActivationAt(req.At, previous), Summary: req.Summary,
 	}
 	f.set = true
 	return f.target, nil

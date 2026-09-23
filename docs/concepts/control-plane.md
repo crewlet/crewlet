@@ -56,6 +56,19 @@ The body is whatever the node sealed. With a keyring configured the coordination
 
 **Its revision is the epoch.** The coordination store assigns every key write a monotonic revision, so publishing the pointer appends and flips in a single write — there is no instant where a node can read an epoch whose target has not been published, and two operators activating at once get two different epochs rather than racing over a counter the engine keeps. It also gives the counter the property a plain revision-id pointer could never have: it moves on every activation *including re-activation of an unchanged revision*, which is the documented gesture for picking up a rotated credential (see [Secret Store § Propagation](secret-store.md#propagation)).
 
+**Every activation carries a later instant than the one it replaces.** The
+pointer records the instant a revision was activated, and every row a
+configuration derives — a tracker project, a knowledge container — is stamped
+with it and refuses an older stamp, so an older configuration applied late
+cannot walk a newer one back. That guard needs a later activation to carry a
+later instant, and the instant is the activating node's own clock; so inside
+the same compare-and-set that replaces the pointer, an activation whose
+instant is no later, to the millisecond, than the pointer's is published at
+one millisecond after it. Even an unconditional publish is a compare-and-set
+underneath for this reason. `Activate` returns the instant it published, and a
+node keeps that instant on its own copy of the revision, because it is what
+the node boots its chart with next time.
+
 The pointer's bucket has **no retention at all**. Everything else the fleet shares ages out; a pointer that expired would restart the epoch, and a fencing sequence that restarts is not a fence.
 
 > **On an embedded broker the coordination store lives inside the running engine**, so an *offline* `crewlet config import` — one run while the engine is stopped — can mark a revision active locally but cannot move the pointer; it says so, and the node publishes it at its next start. Run against a **running** node the same command goes through that node's `PUT /config` instead, which moves the pointer at once. A node that starts holding an active revision the fleet has no pointer for publishes it, unless the pointer it finds is newer; a restarted single-node deployment therefore comes back pointing at what it was already serving, and a node rejoining a live fleet converges on the fleet rather than rolling it back.

@@ -109,7 +109,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 		if !found {
 			return nil
 		}
-		return publishLocalActive(ctx, plane, pub, active, log)
+		return publishLocalActive(ctx, plane, pub, configs, active, log)
 	}
 	document, err := json.Marshal(seed.Company)
 	if err != nil {
@@ -126,7 +126,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 			// The file has not changed, so there is nothing to import.
 			// The node may still owe the fleet a POINTER — see
 			// publishLocalActive for the case that puts it there.
-			return publishLocalActive(ctx, plane, pub, active, log)
+			return publishLocalActive(ctx, plane, pub, configs, active, log)
 		}
 		if !seed.Override {
 			// THE COMPANY EXISTS AND THIS FILE IS ONLY A BOOTSTRAP, so
@@ -141,7 +141,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 					"-import-company "+seed.Path+"; to change the running "+
 					"fleet with no restart, run `crewlet config import "+
 					seed.Path+"`")
-			return publishLocalActive(ctx, plane, pub, active, log)
+			return publishLocalActive(ctx, plane, pub, configs, active, log)
 		}
 		parent = active.ID
 	}
@@ -193,6 +193,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	if err != nil {
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
+	keepPointersInstant(ctx, configs, id, at, published, log)
 	nudge(ctx, pub, id, summary, log)
 	log.InfoContext(ctx, "company_config_seeded", "revision", id, "epoch", published.Epoch,
 		"parent", parent, "sealed", cipher != nil)
@@ -223,7 +224,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 // republish its own revision once, which every peer then converges on — the
 // same outcome as an operator re-activating it deliberately.
 func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publisher,
-	active store.Revision, log *slog.Logger,
+	configs localActivator, active store.Revision, log *slog.Logger,
 ) error {
 	target, found, err := plane.Target(ctx)
 	if err != nil {
@@ -256,9 +257,41 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 	if err != nil {
 		return fmt.Errorf("publish the active revision: %w", err)
 	}
+	keepPointersInstant(ctx, configs, active.ID, active.ActivatedAt, published, log)
 	nudge(ctx, pub, active.ID, active.Summary, log)
 	log.InfoContext(ctx, "local_revision_published", "revision", active.ID, "epoch", published.Epoch)
 	return nil
+}
+
+// keepPointersInstant makes this node's local copy of a revision it just
+// published carry the instant the pointer does.
+//
+// The pointer publishes an instant later than the one it replaces
+// ([coord.ActivationAt]), so it can differ from the one this node asked for —
+// and the local row's `activated_at` is what this node boots its chart with
+// next time, which has to be the instant the fleet applied.
+//
+// BEST EFFORT, because the activation has landed and cannot be taken back:
+// the reconciler realigns the local copy with the pointer on every tick, so a
+// failure here costs one tick of a stale local instant.
+func keepPointersInstant(ctx context.Context, configs localActivator, id string,
+	asked time.Time, published coord.Activation, log *slog.Logger) {
+
+	if store.EncodeTime(asked) == store.EncodeTime(published.At) {
+		return
+	}
+	if _, err := configs.Activate(ctx, id, published.At); err != nil {
+		log.WarnContext(ctx, "local_revision_instant_not_aligned",
+			"revision", id, "asked", asked, "published", published.At, "error", err,
+			"detail", "the pointer carries a later instant than this node's copy; "+
+				"the reconciler aligns the copy on its next tick")
+	}
+}
+
+// localActivator is the one thing [keepPointersInstant] asks of the node's
+// config history.
+type localActivator interface {
+	Activate(ctx context.Context, revisionID string, at time.Time) (string, error)
 }
 
 // nudge announces an activation this node made, so peers converge in

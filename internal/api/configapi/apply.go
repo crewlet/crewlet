@@ -360,7 +360,11 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 	// activation has landed and cannot be taken back, so a failure here is
 	// not the write's failure, and the reconciler makes the fleet's target
 	// this node's active revision when it applies the epoch.
-	if _, aerr := s.configs.Activate(ctx, id, at); aerr != nil {
+	//
+	// AT THE POINTER'S INSTANT, which may be later than the one asked for
+	// (see [coord.ActivationAt]): the local copy's `activated_at` is what
+	// this node boots its chart with next time.
+	if _, aerr := s.configs.Activate(ctx, id, published.At); aerr != nil {
 		log.WarnContext(ctx, "config_revision_not_marked_active",
 			"revision", id, "epoch", published.Epoch, "error", aerr,
 			"detail", "the fleet is running this revision; this node marks "+

@@ -28,8 +28,14 @@ rollout, leaves the newer names alone. Re-applying an activation that has
 already landed writes nothing, which is every restart of every node on a
 company nobody has edited; re-activating an unchanged revision (the
 credential-rotation gesture) is a new activation, and writes one record per
-project to say so. The comparison is between instants on different nodes'
-clocks — the activating node's — so keep the fleet's clocks synchronised.
+project to say so. The instant is the activating node's clock, except that an
+activation is never published at an instant no later (to the millisecond)
+than the one it replaces: the activation pointer moves it to a millisecond
+after, so an activation made on a node whose clock runs behind the last
+activator's — or a node republishing an older `activated_at` at boot — is
+still applied to every project, where it used to be applied to none. Keep the
+fleet's clocks synchronised anyway: the rule orders activations against each
+other, and the stamps a chart carries are still read off real clocks.
 
 A numbering **gap** is normal and permanent. `ENG-7` exists, `ENG-8` never did,
 `ENG-9` is next: the counter moves before the task lands, so a crash between

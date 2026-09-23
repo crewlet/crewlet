@@ -47,6 +47,9 @@ import "time"
 // on it.
 //
 // The instants come from different nodes' clocks — each activating node's own
-// — so the ordering it gives is only as good as the fleet's clock
-// synchronisation, which the work-tracker guide states.
+// — but the activation pointer publishes each one LATER, at this resolution,
+// than the one it replaces (coord.ActivationAt, decided inside the
+// compare-and-set that moves the pointer), so a later activation always
+// carries a later stamp whichever node's clock made it. The work-tracker guide
+// still asks for synchronised clocks, because the stamps are read off them.
 func ActivationStamp(activatedAt time.Time) int64 { return activatedAt.UTC().UnixMilli() }
