@@ -19,6 +19,18 @@ the company config creates the project on the next apply, on every node, with
 no gesture from anybody. That is what lets a fresh company file its first task
 in its first minute.
 
+A project's name, purpose and unit follow the configuration that was
+**activated last**, whichever node applies what when: each project is stamped
+with the instant its configuration was activated, and a chart activated
+earlier never overwrites one activated later — so a node restarting on a
+revision the fleet has since replaced, or applying an older one late during a
+rollout, leaves the newer names alone. Re-applying an activation that has
+already landed writes nothing, which is every restart of every node on a
+company nobody has edited; re-activating an unchanged revision (the
+credential-rotation gesture) is a new activation, and writes one record per
+project to say so. The comparison is between instants on different nodes'
+clocks — the activating node's — so keep the fleet's clocks synchronised.
+
 A numbering **gap** is normal and permanent. `ENG-7` exists, `ENG-8` never did,
 `ENG-9` is next: the counter moves before the task lands, so a crash between
 the two costs a number rather than risking two tasks sharing a key. A key is

@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,15 +58,16 @@ func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
 
-	if _, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+	if _, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Purpose: "builds it", Unit: "Engineering"},
 	}); err != nil {
 		t.Fatalf("the first chart apply: %v", err)
 	}
 	r.drain()
 	// A CREATE LISTS WHAT IT SET, because every field moves from empty.
+	first := strconv.FormatInt(tracker.ChartEpochOf(activation(0)), 10)
 	if got := r.fieldsFor(tracker.ChangeProjectCreated); got != `{`+
-		`"chart_epoch":{"from":"0","to":"100"},`+
+		`"chart_epoch":{"from":"0","to":"`+first+`"},`+
 		`"name":{"from":"","to":"Engineering"},`+
 		`"purpose":{"from":"","to":"builds it"},`+
 		`"unit":{"from":"","to":"Engineering"}}` {
@@ -77,14 +79,15 @@ func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 	// because a re-declaration at a new revision is a real fact about the
 	// row — and because without it the reconcile that changes nothing else
 	// would be the empty row again.
-	if _, err := r.writer.ApplyChart(t.Context(), 101, []tracker.ChartProject{
+	if _, err := r.writer.ApplyChart(t.Context(), activation(1), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Purpose: "ships it", Unit: "Engineering"},
 	}); err != nil {
 		t.Fatalf("the second chart apply: %v", err)
 	}
 	r.drain()
+	second := strconv.FormatInt(tracker.ChartEpochOf(activation(1)), 10)
 	if got := r.fieldsFor(tracker.ChangeProjectUpdated); got != `{`+
-		`"chart_epoch":{"from":"100","to":"101"},`+
+		`"chart_epoch":{"from":"`+first+`","to":"`+second+`"},`+
 		`"purpose":{"from":"builds it","to":"ships it"}}` {
 
 		t.Errorf("a project purpose edit recorded %s — the row is supposed to "+

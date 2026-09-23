@@ -404,7 +404,7 @@ func taskOf(t *testing.T, r *roundTrip, id string) tracker.Task {
 func TestATaskNamingNoUnitIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
-	if _, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+	if _, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "core"},
 		// AND ONE THE CHART GAVE NO UNIT, which is a real shape: a
 		// project on a root-level seat belongs to no team.
@@ -474,7 +474,7 @@ func TestATaskNamingNoUnitIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 func TestAPromotedSubtaskIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
-	if _, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+	if _, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "core"},
 	}); err != nil {
 		t.Fatalf("ApplyChart: %v", err)

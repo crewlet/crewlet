@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
@@ -180,7 +181,16 @@ func embeddingWidth(c *Company) int {
 // refusal happened, which is the whole of what makes a degraded apply
 // diagnosable after the fact — it travels on ConfigRevisionApplied into the
 // audit event log, where it outlives the fleet view's one-minute bucket.
-func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.ApplyStatus, []string, error) {
+//
+// activatedAt is the instant the fleet activated cfg — the activation
+// pointer's own ([coord.Activation.At]) — and it is what every clause that
+// must agree across nodes about WHEN this configuration took effect reads:
+// the chart apply stamps each project with it, so an older configuration
+// arriving late on another node cannot walk a newer one back. Zero is a
+// configuration no activation named, whose chart is not applied; see
+// [Engine.applyChart].
+func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
+	activatedAt time.Time) (configplane.ApplyStatus, []string, error) {
 	e.applying.Lock()
 	defer e.applying.Unlock()
 	if e.stopped {
@@ -296,7 +306,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// the same reason. Their projectors, index, stores and feeds are NOT:
 	// those follow a coordination family, which a company revision does
 	// not change — see [Engine.reconcileNative].
-	e.reconcileNative(ctx, next)
+	e.reconcileNative(ctx, next, activatedAt)
 	// AND THE TOOL SKILLS' SOURCE, after the knowledge base's own reconcile
 	// above, because the Confluence source is read off the wiring it left
 	// running. See [Engine.reconcileSkills].

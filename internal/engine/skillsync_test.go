@@ -74,7 +74,7 @@ integrations:
 knowledge:
   backend: confluence
 `
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, connected)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, connected), time.Now()); err != nil {
 		t.Fatalf("Apply with confluence: %v", err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
@@ -92,7 +92,7 @@ knowledge:
 	// DISCONNECTED. The revision names another knowledge backend, so the
 	// wiki's skills describe a stack this company no longer runs, and they
 	// go with the apply rather than with the next restart.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("Apply without confluence: %v", err)
 	}
 	if got := e.Skills().Len(); got != 0 {

@@ -416,6 +416,19 @@ type Options struct {
 	Bootstrap *config.Bootstrap
 	Company   *config.Company
 
+	// ActivatedAt is when Company was activated: the `activated_at` of the
+	// revision this node's store marks active, when that is what Company
+	// is.
+	//
+	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED YET — a Tier B file this
+	// node booted with, which its reconciler publishes and applies with the
+	// pointer's own instant before a seat is claimed. It is not the boot's
+	// clock, because what reads it is the chart apply, which stamps every
+	// project with it so that an older configuration cannot walk a newer
+	// one back — and a boot on a stale revision stamped with NOW is exactly
+	// the older configuration that would. See [Engine.applyChart].
+	ActivatedAt time.Time
+
 	// Mode is what this node starts for: normal, or one of the two
 	// maintenance modes a capacity change restarts the fleet into.
 	//
@@ -732,7 +745,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// probe and run no duty until it finished. Seat acquisition is
 		// what waits; see [Engine.NativeHydrated].
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := e.startNative(ctx, opts.Bootstrap, company); err != nil {
+		if err := e.startNative(ctx, opts.Bootstrap, company, opts.ActivatedAt); err != nil {
 			return nil, err
 		}
 		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the

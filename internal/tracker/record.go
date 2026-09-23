@@ -1072,10 +1072,14 @@ type Project struct {
 	// column re-settles on the current key at the next epoch apply — which
 	// is why a company that adds an id holds the older spelling only in
 	// TASK rows, and only those need reading through [unitSpellings].
-	Name       string `json:"name"`
-	Purpose    string `json:"purpose,omitempty"`
-	Unit       string `json:"unit,omitempty"`
-	ChartEpoch int64  `json:"chart_epoch,omitempty"`
+	Name    string `json:"name"`
+	Purpose string `json:"purpose,omitempty"`
+	Unit    string `json:"unit,omitempty"`
+
+	// ChartEpoch is the activation the chart-owned fields were last
+	// written from ([ChartEpochOf]) — the guard that stops an older chart
+	// walking a newer one back.
+	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 
 	Fields          []FieldDef `json:"fields,omitempty"`
 	DefaultAssignee string     `json:"default_assignee,omitempty"`

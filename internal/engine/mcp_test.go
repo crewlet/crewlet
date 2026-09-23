@@ -232,7 +232,7 @@ func TestASharedServersToolsSurviveAConfigApply(t *testing.T) {
 
 	// The same document, re-applied — the rotation gesture an operator
 	// makes, and what the reconciler does at boot straight after seeding.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -269,7 +269,7 @@ func TestAHeldSeatsPerRoleToolsSurviveAConfigApply(t *testing.T) {
 		t.Fatalf("the boot epoch never gave the seat its own child: %q", before)
 	}
 
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -333,7 +333,7 @@ func TestAnApplyDoesNotRestartAHeldSeatsChild(t *testing.T) {
 	if !ok {
 		t.Fatal("the boot epoch gave the seat no per-role tool to compare")
 	}
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	second, ok := e.ToolsFor("ceo").Lookup("tracker_probe")
@@ -363,7 +363,7 @@ func TestAnUnchangedServerIsNotRestartedByAnApply(t *testing.T) {
 	if !ok {
 		t.Fatal("the boot epoch has no shared tool to compare")
 	}
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	second, ok := e.Company().Tools.Lookup("tracker_probe")
@@ -393,7 +393,7 @@ func TestAChangedServerSpecIsRestartedByAnApply(t *testing.T) {
 	// actually replaced.
 	next := strings.Replace(mcpCompany(true, "PATH"),
 		toolServerEchoEnv+`: "PATH"`, toolServerEchoEnv+`: "SEAT_TOKEN"`, 1)
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, next)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, next), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -423,7 +423,7 @@ func TestASharedServerARevisionRemovedIsStopped(t *testing.T) {
 	// gesture an operator makes to take a leaking integration offline.
 	without := with[:strings.Index(with, "mcp_servers:")] +
 		with[strings.Index(with, "roles:"):]
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, without)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, without), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 

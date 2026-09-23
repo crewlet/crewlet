@@ -74,6 +74,16 @@ turn_engine:
 // frames.
 const tickInterval = 25 * time.Millisecond
 
+// harnessActivation is the instant this harness's company was "activated".
+//
+// A harness node boots straight onto a company, standing in for `crewlet run`
+// without the reconciler that would publish it and apply it with the
+// activation pointer's own instant — and a company booted with no activation
+// is not charted until an activation names it, so its projects and knowledge
+// spaces would never exist. Every node of one harness fleet boots with the
+// SAME instant, because they are running one activation.
+var harnessActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+
 // node is a running node: engine and API in one process, wired as
 // `crewlet run` wires them.
 type node struct {
@@ -121,7 +131,9 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: &boot, Company: cfg})
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
+	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}

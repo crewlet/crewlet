@@ -1082,8 +1082,14 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	//
 	// Read BEFORE the engine, in its own open-and-close, so the engine still
 	// owns the backends it opens; see [companyFromStore].
+	//
+	// A FILE'S COMPANY HAS NO ACTIVATION YET, so its instant stays zero and
+	// the engine leaves its chart to the reconciler's first tick, which
+	// publishes the file and applies it with the pointer's own instant. The
+	// store's company carries the instant it was activated at.
+	var activatedAt time.Time
 	if company == nil {
-		if company, err = companyFromStore(ctx, *cfg.bootstrap); err != nil {
+		if company, activatedAt, err = companyFromStore(ctx, *cfg.bootstrap); err != nil {
 			return err
 		}
 	}
@@ -1091,7 +1097,8 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
 		"company", companyName(company))
 	e, err := engine.New(ctx, engine.Options{
-		Bootstrap: boot, Company: company, Metrics: recorder, Mode: nodeMode,
+		Bootstrap: boot, Company: company, ActivatedAt: activatedAt,
+		Metrics: recorder, Mode: nodeMode,
 	})
 	if err != nil {
 		return err

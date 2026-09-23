@@ -138,7 +138,11 @@ type native struct {
 //
 // The store and the fleet are not nil-checked: [New] refuses a Backends
 // without either, so every engine that reaches this holds both.
-func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Company) error {
+//
+// activatedAt is when c was activated, zero for a company no activation has
+// named yet — see [Options.ActivatedAt] and [Engine.applyChart].
+func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Company,
+	activatedAt time.Time) error {
 	// AN IN-MEMORY STREAM NEVER GETS THIS FAR. [Engine.New] refused a
 	// company that runs the log on one ([config.CheckTiers]): its first
 	// restart recreates the log empty and the node never serves again, so
@@ -371,7 +375,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// file work. Best effort here for the reason [Engine.applyChart]
 	// gives: a failure costs the projects that did not land and nothing
 	// else, and the next apply retries them.
-	e.applyChart(ctx, c)
+	e.applyChart(ctx, c, activatedAt)
 	// AND THE CONTAINERS, for the same reason and on the same terms — see
 	// [Engine.applyContainers], and the bug it fixes.
 	e.applyContainers(ctx, c)
@@ -745,7 +749,7 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 // all built at boot — so a revision that changes it takes effect on
 // restart, and the parser staying registered until then is the honest
 // state: the records are still there and still reachable.
-func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
+func (e *Engine) reconcileNative(ctx context.Context, c *Company, activatedAt time.Time) {
 	if e.native == nil {
 		return
 	}
@@ -766,7 +770,7 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 				"detail", "the previous routing is still current")
 		}
 	}
-	e.applyChart(ctx, c)
+	e.applyChart(ctx, c, activatedAt)
 	e.applyContainers(ctx, c)
 }
 
@@ -907,9 +911,27 @@ func chartContainers(c *Company) []chartContainer {
 // filing immediately. A reconcile that only ran at boot would leave every one
 // of those refused with "project X is not on this node" until somebody
 // restarted the fleet — a failure whose remedy is invisible from the message.
-// After the first node has done it the apply is free: the operation id is
-// derived from the revision and the key, so the losers of the broker's
-// arbitration write nothing.
+// After the first node has done it the apply is free: every project is
+// decided from its own row, so the losers of the broker's arbitration and
+// every later apply of the same activation find the chart already there and
+// write nothing.
+//
+// # Stamped with the ACTIVATION's instant, or not applied at all
+//
+// activatedAt is when the fleet activated c — the pointer's instant on an
+// apply, this node's active revision's on a boot — and it is what every
+// project is stamped with ([tracker.ChartEpochOf]). It used to be this node's
+// clock at the call, which broke both halves of the epoch: a node that booted
+// on a stale revision stamped NOW and walked the fleet's newer project names
+// back to its own old ones, and no apply ever matched the epoch an earlier one
+// stamped, so every apply and every boot on every node wrote a record per
+// project for a value nobody had changed.
+//
+// A company with NO activation — a Tier B file this node booted with, before
+// its reconciler has published it — has no instant to stamp, so its chart is
+// not applied here. Nothing waits on that: the reconciler's first tick, which
+// runs before this node claims a seat, publishes the file and applies it with
+// the pointer's instant.
 //
 // # Best effort, and what that costs
 //
@@ -917,16 +939,16 @@ func chartContainers(c *Company) []chartContainer {
 // epoch apply and the rest of it — the routing, the models, the tools — is
 // still correct without it. What a failure costs is exactly the projects that
 // did not land, and the next apply or the next boot retries them.
-func (e *Engine) applyChart(ctx context.Context, c *Company) {
+func (e *Engine) applyChart(ctx context.Context, c *Company, activatedAt time.Time) {
 	writer := e.TrackerWriter()
-	if writer == nil || c == nil || c.Org == nil {
+	if writer == nil || c == nil || c.Org == nil || activatedAt.IsZero() {
 		return
 	}
 	chart := chartProjects(c.Org)
 	if len(chart) == 0 {
 		return
 	}
-	wrote, err := writer.ApplyChart(ctx, tracker.ChartEpochOf(time.Now()), chart)
+	wrote, err := writer.ApplyChart(ctx, activatedAt, chart)
 	if err != nil {
 		log.ErrorContext(ctx, "tracker_chart_not_applied",
 			"error", err.Error(), "wrote", wrote,

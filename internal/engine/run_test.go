@@ -302,7 +302,7 @@ func TestAStoppedEngineAppliesNothing(t *testing.T) {
 	}
 	e.Stop(context.Background())
 
-	if _, _, err := e.Apply(t.Context(), scheduledCompany(t)); err == nil {
+	if _, _, err := e.Apply(t.Context(), scheduledCompany(t), time.Now()); err == nil {
 		t.Fatal("a stopped engine applied a revision")
 	}
 	if e.Company() != nil {
@@ -591,7 +591,7 @@ func TestADrainRefusesAnApplyBeforeTheTeardownDoes(t *testing.T) {
 	}
 	// SERVING FIRST, so the refusal below is the drain's and not a node
 	// that was never able to apply.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("an apply on a serving node was refused: %v", err)
 	}
 
@@ -604,7 +604,7 @@ func TestADrainRefusesAnApplyBeforeTheTeardownDoes(t *testing.T) {
 		t.Fatalf("the drain closed the broker, so this case is not testing "+
 			"what it claims: %v", err)
 	}
-	if _, _, err := e.Apply(context.Background(), parsedCompany(t, companyDoc)); err == nil {
+	if _, _, err := e.Apply(context.Background(), parsedCompany(t, companyDoc), time.Now()); err == nil {
 		t.Error("a drained node applied a revision: the apply gate is on the " +
 			"teardown rather than on the drain, so the reconcile tick can " +
 			"re-arm everything the drain is handing back")
@@ -750,7 +750,7 @@ func TestAnEngineRunsUnconfigured(t *testing.T) {
 func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngine(t)
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc), time.Now()); err != nil {
 		t.Fatalf("the first apply onto an unconfigured node failed: %v", err)
 	}
 	company := e.Company()

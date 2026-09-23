@@ -779,7 +779,7 @@ roles:
 
 	// LEARNED: the unconfigured node taking its first revision. Nothing was
 	// being refused at 0 — the dimension guard was simply off.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, wide)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, wide), time.Now()); err != nil {
 		t.Fatalf("apply the embedding provider: %v", err)
 	}
 	if got := e.Backends().Store.EmbeddingDim(); got != 3072 {
@@ -795,7 +795,7 @@ roles:
 
 	// HELD: a revision that would change it is refused, by the guard that
 	// already existed. This is what the learn-once rule protects.
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, narrow)); err == nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, narrow), time.Now()); err == nil {
 		t.Error("a revision changing the store's width was applied")
 	}
 	if got := e.Backends().Store.EmbeddingDim(); got != 3072 {
@@ -804,7 +804,7 @@ roles:
 
 	// AND HELD ACROSS A REMOVAL, which is the two-step way around the guard.
 	// Dropping the provider must not reset the width to "never told".
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, noVectors)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, noVectors), time.Now()); err != nil {
 		t.Fatalf("apply the removal: %v", err)
 	}
 	if got := e.Backends().Store.EmbeddingDim(); got != 3072 {
@@ -812,7 +812,7 @@ roles:
 			"re-adding it at another width would now be accepted and the "+
 			"recall pool would hold rows of two widths", got)
 	}
-	if _, _, err := e.Apply(t.Context(), parsedCompany(t, narrow)); err == nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, narrow), time.Now()); err == nil {
 		t.Error("removing and re-adding the provider changed the width")
 	}
 }
