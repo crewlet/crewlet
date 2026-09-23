@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
@@ -598,7 +599,7 @@ func (s *Sessions) reuse(r *http.Request, v session.Validation, remote string) {
 	ctx := r.Context()
 	lineage := v.Bearer.Lineage.String()
 	window := v.Bearer.AbsoluteExpiresAt.Sub(s.now())
-	first := s.audit.EmitOnce(ctx, "session_reuse:"+lineage, window,
+	first := s.audit.EmitOnce(ctx, authevents.OnceSessionReuse, lineage, window,
 		types.IAMSessionReuseDetected{
 			Person: v.Bearer.Person, Lineage: lineage,
 			Rotation: v.Bearer.Rotation, Remote: remote,
@@ -644,7 +645,7 @@ func (s *Sessions) ended(r *http.Request, v session.Validation) {
 			reason = types.EndAbsolute
 		}
 		lineage := v.Bearer.Lineage.String()
-		s.audit.EmitOnce(r.Context(), "session_ended:"+lineage, 0,
+		s.audit.EmitOnce(r.Context(), authevents.OnceSessionEnded, lineage, 0,
 			types.IAMSessionEnded{
 				Person: v.Bearer.Person, Lineage: lineage, Reason: reason,
 			})

@@ -210,7 +210,8 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 type silentAudit struct{}
 
 func (silentAudit) Emit(context.Context, events.Payload) {}
-func (silentAudit) EmitOnce(context.Context, string, time.Duration, events.Payload) bool {
+func (silentAudit) EmitOnce(context.Context, authevents.OnceClass, string, time.Duration,
+	events.Payload) bool {
 	return true
 }
 func (silentAudit) Failed(context.Context, authevents.Failure) {}

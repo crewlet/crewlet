@@ -380,58 +380,168 @@ func TestEmitOnceIsOncePerWindow(t *testing.T) {
 	ctx := context.Background()
 	payload := types.IAMTokenFirstUse{Token: "ops"}
 
-	if !trail.EmitOnce(ctx, "first_use:ops", time.Hour, payload) {
+	if !trail.EmitOnce(ctx, OnceTokenUse, "ops", time.Hour, payload) {
 		t.Fatal("the first use in a window did not publish")
 	}
 	clk.Set(noon.Add(59 * time.Minute))
-	if trail.EmitOnce(ctx, "first_use:ops", time.Hour, payload) {
+	if trail.EmitOnce(ctx, OnceTokenUse, "ops", time.Hour, payload) {
 		t.Error("a second use inside the window published again")
 	}
-	if !trail.EmitOnce(ctx, "first_use:ci", time.Hour, types.IAMTokenFirstUse{Token: "ci"}) {
+	if !trail.EmitOnce(ctx, OnceTokenUse, "ci", time.Hour, types.IAMTokenFirstUse{Token: "ci"}) {
 		t.Error("a different key was suppressed by another's window")
 	}
+	if !trail.EmitOnce(ctx, OnceTokenOverreach, "ops", time.Hour, payload) {
+		t.Error("one key in a DIFFERENT class was suppressed by the first " +
+			"class's window: a use and an overreach are two facts")
+	}
 	clk.Set(noon.Add(time.Hour))
-	if !trail.EmitOnce(ctx, "first_use:ops", time.Hour, payload) {
+	if !trail.EmitOnce(ctx, OnceTokenUse, "ops", time.Hour, payload) {
 		t.Error("the first use after the window closed did not publish")
 	}
-	if got := len(pub.published()); got != 3 {
-		t.Errorf("published %d, want 3", got)
+	if got := len(pub.published()); got != 4 {
+		t.Errorf("published %d, want 4", got)
 	}
 
 	// A ZERO WINDOW IS THE LIFE OF THE PROCESS.
-	if !trail.EmitOnce(ctx, "k", 0, payload) {
+	if !trail.EmitOnce(ctx, OnceSessionEnded, "k", 0, payload) {
 		t.Fatal("first call on a zero window did not publish")
 	}
 	clk.Set(noon.Add(24 * 365 * time.Hour))
-	if trail.EmitOnce(ctx, "k", 0, payload) {
+	if trail.EmitOnce(ctx, OnceSessionEnded, "k", 0, payload) {
 		t.Error("a zero window expired")
+	}
+
+	// A CLASS THIS BUILD KEEPS NO BOUND FOR PUBLISHES NOTHING, rather than
+	// growing a set nothing bounds.
+	if trail.EmitOnce(ctx, OnceClass("mystery"), "k", time.Hour, payload) {
+		t.Error("a class with no bound published")
 	}
 }
 
-// THE DEDUPE IS BOUNDED, and at the bound it forgets the key nearest to
-// expiring rather than growing.
-func TestEmitOnceIsBounded(t *testing.T) {
+// EVERY CLASS HAS A BOUND, and the bound is what the set holds to.
+func TestEveryOnceClassIsBounded(t *testing.T) {
+	t.Parallel()
+	for _, class := range OnceClasses {
+		if !class.Valid() || OnceBound(class) <= 0 {
+			t.Errorf("class %q has no bound", class)
+		}
+	}
+	if OnceClass("mystery").Valid() {
+		t.Error("a class this build does not name reports itself valid")
+	}
+	trail, _, _, _ := newTrail(t)
+	ctx := context.Background()
+	payload := types.IAMTokenFirstUse{Token: "ops"}
+	bound := OnceBound(OnceTokenUse)
+	for i := range bound + 10 {
+		trail.EmitOnce(ctx, OnceTokenUse, "t-"+strconv.Itoa(i), time.Hour, payload)
+	}
+	if got := trail.held(OnceTokenUse); got != bound {
+		t.Errorf("the token class holds %d keys, want its bound of %d", got, bound)
+	}
+}
+
+// ONE CLASS AT ITS BOUND NEVER EVICTS ANOTHER'S KEY.
+//
+// The dedupe was one set, evicting whichever entry's window ended soonest —
+// which is never a key remembered for the life of the process. So a node that
+// had seen as many deadline endings as the set held evicted a REPLAY's key on
+// every further ending, and the next presentation of the replayed cookie
+// published another reuse row and revoked again. Mutation: share one set
+// between the classes and the replay publishes twice.
+func TestAFullClassEvictsOnlyItsOwnKeys(t *testing.T) {
 	t.Parallel()
 	trail, _, clk, _ := newTrail(t)
 	ctx := context.Background()
-	payload := types.IAMTokenFirstUse{Token: "ops"}
-	// The first key has the shortest window.
-	trail.EmitOnce(ctx, "short", time.Minute, payload)
-	for i := range MaxOnceKeys - 1 {
-		trail.EmitOnce(ctx, "long-"+strconv.Itoa(i), time.Hour, payload)
+	payload := types.IAMSessionEnded{Reason: types.EndAbsolute}
+	for i := range OnceBound(OnceSessionEnded) - 1 {
+		trail.EmitOnce(ctx, OnceSessionEnded, "ended-"+strconv.Itoa(i), 0, payload)
 	}
-	clk.Set(noon.Add(time.Second))
-	trail.EmitOnce(ctx, "one-more", time.Hour, payload)
-	trail.mu.Lock()
-	size := len(trail.once)
-	_, kept := trail.once["short"]
-	trail.mu.Unlock()
-	if size > MaxOnceKeys {
-		t.Errorf("the dedupe holds %d keys, past its bound of %d", size, MaxOnceKeys)
+	replay := types.IAMSessionReuseDetected{Lineage: "A"}
+	if !trail.EmitOnce(ctx, OnceSessionReuse, "A", 8*time.Hour, replay) {
+		t.Fatal("the replay's first presentation did not publish")
 	}
-	if kept {
-		t.Error("at the bound the dedupe kept the key nearest to expiring and " +
-			"evicted a longer one")
+	if !trail.EmitOnce(ctx, OnceTokenUse, "ops", time.Hour,
+		types.IAMTokenFirstUse{Token: "ops"}) {
+		t.Fatal("the token's first use did not publish")
+	}
+	// A WHOLE BOUND'S WORTH MORE, so no eviction order that shared one set
+	// between the classes could have kept the replay's key.
+	for i := range OnceBound(OnceSessionEnded) + 1 {
+		clk.Set(noon.Add(time.Duration(i) * time.Millisecond))
+		trail.EmitOnce(ctx, OnceSessionEnded, "later-"+strconv.Itoa(i), 0, payload)
+	}
+	if trail.EmitOnce(ctx, OnceSessionReuse, "A", 8*time.Hour, replay) {
+		t.Error("a deadline ending evicted the replay's key, so the replay " +
+			"published — and revoked — a second time")
+	}
+	if trail.EmitOnce(ctx, OnceTokenUse, "ops", time.Hour,
+		types.IAMTokenFirstUse{Token: "ops"}) {
+		t.Error("a deadline ending evicted the token's hour")
+	}
+	if got, bound := trail.held(OnceSessionEnded), OnceBound(OnceSessionEnded); got != bound {
+		t.Errorf("the ended class holds %d, want its bound of %d", got, bound)
+	}
+}
+
+// AT ITS BOUND A CLASS FORGETS WHAT HAS EXPIRED FIRST, and only then the key
+// it claimed longest ago.
+func TestAFullClassForgetsTheExpiredBeforeTheOldest(t *testing.T) {
+	t.Parallel()
+	trail, _, clk, _ := newTrail(t)
+	ctx := context.Background()
+	payload := types.IAMSessionReuseDetected{}
+	bound := OnceBound(OnceSessionReuse)
+	trail.EmitOnce(ctx, OnceSessionReuse, "oldest", 8*time.Hour, payload)
+	trail.EmitOnce(ctx, OnceSessionReuse, "short", time.Minute, payload)
+	for i := range bound - 2 {
+		trail.EmitOnce(ctx, OnceSessionReuse, "long-"+strconv.Itoa(i), 8*time.Hour, payload)
+	}
+	clk.Set(noon.Add(2 * time.Minute))
+	trail.EmitOnce(ctx, OnceSessionReuse, "one-more", 8*time.Hour, payload)
+	if trail.EmitOnce(ctx, OnceSessionReuse, "oldest", 8*time.Hour, payload) {
+		t.Error("at the bound the class evicted a live key while an expired " +
+			"one was there to go")
+	}
+	// Full again, nothing expired: the key claimed longest ago goes.
+	trail.EmitOnce(ctx, OnceSessionReuse, "and-another", 8*time.Hour, payload)
+	if !trail.EmitOnce(ctx, OnceSessionReuse, "oldest", 8*time.Hour, payload) {
+		t.Error("with nothing expired, the class kept its oldest claim")
+	}
+	if got := trail.held(OnceSessionReuse); got > bound {
+		t.Errorf("the class holds %d keys, past its bound of %d", got, bound)
+	}
+}
+
+// A CLAIM HANDED BACK CAN BE TAKEN AGAIN, and handing back is the claim's own.
+func TestAReleasedClaimCanBeTakenAgain(t *testing.T) {
+	t.Parallel()
+	trail, pub, clk, _ := newTrail(t)
+	ctx := context.Background()
+	release, claimed := trail.Claim(ctx, OnceSessionEnded, "L", 0)
+	if !claimed {
+		t.Fatal("the first claim was not taken")
+	}
+	if _, again := trail.Claim(ctx, OnceSessionEnded, "L", 0); again {
+		t.Error("a held key was claimed twice")
+	}
+	release()
+	release()
+	if _, again := trail.Claim(ctx, OnceSessionEnded, "L", 0); !again {
+		t.Error("a released key could not be claimed again")
+	}
+	if len(pub.published()) != 0 {
+		t.Error("a claim published something")
+	}
+	// A stale release never undoes a LATER claim of the same key.
+	stale, _ := trail.Claim(ctx, OnceTokenUse, "ops", time.Minute)
+	clk.Set(noon.Add(2 * time.Minute))
+	if _, fresh := trail.Claim(ctx, OnceTokenUse, "ops", time.Minute); !fresh {
+		t.Fatal("an expired key could not be claimed again")
+	}
+	stale()
+	if _, again := trail.Claim(ctx, OnceTokenUse, "ops", time.Minute); again {
+		t.Error("an earlier claim's release handed back a later one")
 	}
 }
 

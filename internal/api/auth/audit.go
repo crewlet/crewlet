@@ -55,11 +55,13 @@ import (
 // Audit is where the guard's authentication facts go.
 //
 // CONSUMER-DEFINED and three methods wide, which is all of the trail the guard
-// uses. internal/iam/authevents' Trail is what a running node hands in.
+// uses. internal/iam/authevents' Trail is what a running node hands in, and
+// the once-per-window classes are its own: each keeps a bounded set of its
+// own, so no class can evict another's keys.
 type Audit interface {
 	Emit(ctx context.Context, payload events.Payload)
-	EmitOnce(ctx context.Context, key string, window time.Duration,
-		payload events.Payload) bool
+	EmitOnce(ctx context.Context, class authevents.OnceClass, key string,
+		window time.Duration, payload events.Payload) bool
 	Failed(ctx context.Context, f authevents.Failure)
 }
 
@@ -175,7 +177,8 @@ func (g *Guard) used(r *http.Request, entry config.APIToken) {
 		g.audit.Emit(r.Context(), row)
 		return
 	}
-	g.audit.EmitOnce(r.Context(), "token_first_use:"+entry.ID, TokenUseWindow, row)
+	g.audit.EmitOnce(r.Context(), authevents.OnceTokenUse, entry.ID,
+		TokenUseWindow, row)
 }
 
 // overreached records a Tier A token a route refused.
@@ -191,7 +194,8 @@ func (g *Guard) overreached(r *http.Request, entry config.APIToken, status int) 
 		g.audit.Emit(r.Context(), row)
 		return
 	}
-	g.audit.EmitOnce(r.Context(), "token_overreach:"+entry.ID, TokenUseWindow, row)
+	g.audit.EmitOnce(r.Context(), authevents.OnceTokenOverreach, entry.ID,
+		TokenUseWindow, row)
 }
 
 // RouteClass is the part of a path an audit row names: its first segment.

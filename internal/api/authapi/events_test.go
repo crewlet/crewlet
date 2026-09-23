@@ -37,7 +37,8 @@ func (a *recordingAudit) Emit(_ context.Context, payload events.Payload) {
 
 // EmitOnce publishes every time: nothing here is about the coalescing, which
 // internal/iam/authevents certifies.
-func (a *recordingAudit) EmitOnce(ctx context.Context, _ string, _ time.Duration,
+func (a *recordingAudit) EmitOnce(ctx context.Context, _ authevents.OnceClass, _ string,
+	_ time.Duration,
 	payload events.Payload) bool {
 
 	a.Emit(ctx, payload)

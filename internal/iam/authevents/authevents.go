@@ -42,21 +42,28 @@
 // The number of clients one minute names ([MaxClientsPerMinute]), the distinct
 // subjects one tally can count ([MaxSubjectsCounted]), the people one row names
 // ([MaxPeopleNamed]), the clients the overflow row can count
-// ([MaxFoldedClients]) and the keys the once-per-window dedupe remembers
-// ([MaxOnceKeys]) are all things an attacker would otherwise choose. Each is a
-// constant with its reason at its definition, and a count that reaches its cap
+// ([MaxFoldedClients]) and the keys the once-per-window dedupe remembers of
+// each class ([OnceBound]) are all things an attacker would otherwise choose.
+// Each is a constant with its reason at its definition, and a count that
+// reaches its cap
 // SATURATES rather than being dropped, so a row reads "at least" rather than
 // understating what happened.
 //
 // # Coalescing that is not failure accounting
 //
 // [Trail.EmitOnce] is the other shape a rate needs: a fact that repeats and is
-// worth one row per window — a Tier A token's first use in an hour, a session
-// noticed past its deadline, a record on a state log signed under a key this
-// node lacks. It is the notification digest's idiom (one row stands for the
-// window) applied to a single key, and it reports whether it published so a
-// caller that has to act exactly once alongside the row — the revocation a
-// replayed cookie triggers — can hang the action on the same decision.
+// worth one row per window — a Tier A token's first use in an hour or its
+// overreach, a replayed cookie, a session noticed past its deadline. It is the
+// notification digest's idiom (one row stands for the window) applied to a
+// single key, and it reports whether it published so a caller that has to act
+// exactly once alongside the row — the revocation a replayed cookie triggers —
+// can hang the action on the same decision. [Trail.Claim] is the same decision
+// for a caller that must READ before it knows what the fact is, and hands the
+// key back when the read cannot say.
+//
+// EACH CLASS OF FACT KEEPS ITS OWN BOUNDED SET ([OnceClass]), so a class
+// remembered for the life of the process can never evict one that expires —
+// see once.go for what one shared set cost.
 package authevents
 
 import (
@@ -188,17 +195,6 @@ const (
 	// before its `clients` field saturates, which is the same "at least"
 	// reading [MaxSubjectsCounted] has. 4096 eight-byte digests is 32 KiB.
 	MaxFoldedClients = 4096
-
-	// MaxOnceKeys is how many keys [Trail.EmitOnce] remembers at once.
-	//
-	// 8192. The keys are token ids (a handful), session lineages noticed
-	// past a deadline or replayed (bounded by sessions this company
-	// issued inside their own lifetime) and state-log key ids (capped
-	// again by their caller). At full it evicts the entry whose window
-	// ends soonest, so the worst case is one early re-publication of the
-	// fact nearest to expiring anyway — never an unbounded map an
-	// authenticated caller grows one lineage at a time.
-	MaxOnceKeys = 8192
 )
 
 // PublishBudget bounds one publish.
@@ -228,7 +224,7 @@ type Trail struct {
 
 	mu      sync.Mutex
 	minutes map[time.Time]*minute
-	once    map[string]time.Time
+	once    map[OnceClass]*onceSet
 }
 
 // minute is every failed attempt one minute held.
@@ -270,7 +266,7 @@ func New(opts Options) (*Trail, error) {
 		pub: opts.Publisher, counter: opts.Counter, node: opts.Node,
 		now: opts.Now, logger: opts.Logger, key: key,
 		minutes: map[time.Time]*minute{},
-		once:    map[string]time.Time{},
+		once:    newOnceSets(),
 	}
 	if t.now == nil {
 		t.now = func() time.Time { return time.Now().UTC() }
@@ -305,73 +301,6 @@ func (t *Trail) Emit(ctx context.Context, payload events.Payload) {
 				"for it; iam_history holds the fleet-wide record of every "+
 				"identity write")
 	}
-}
-
-// EmitOnce publishes payload unless key was published within window, and
-// reports whether it published.
-//
-// THE REPORT IS PART OF THE CONTRACT: a caller whose action must happen once
-// alongside the row — ending every session of a person whose cookie was
-// replayed — takes the same decision rather than keeping a second dedupe that
-// could disagree with this one.
-//
-// A window of zero or less remembers the key for the life of the process.
-func (t *Trail) EmitOnce(ctx context.Context, key string, window time.Duration,
-	payload events.Payload) bool {
-
-	if t == nil || payload == nil {
-		return false
-	}
-	if !t.claimOnce(key, window) {
-		return false
-	}
-	t.Emit(ctx, payload)
-	return true
-}
-
-// forever is the expiry a window of zero remembers a key until: past any
-// instant this process will reach, without the overflow a literal maximum
-// time would cause in an addition.
-var forever = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
-
-// claimOnce decides whether key may publish now, remembering that it did.
-func (t *Trail) claimOnce(key string, window time.Duration) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	now := t.now()
-	if until, seen := t.once[key]; seen && now.Before(until) {
-		return false
-	}
-	until := forever
-	if window > 0 {
-		until = now.Add(window)
-	}
-	if _, present := t.once[key]; !present && len(t.once) >= MaxOnceKeys {
-		t.evictOnce(now)
-	}
-	t.once[key] = until
-	return true
-}
-
-// evictOnce makes room for one key: every expired entry goes, and if none had
-// expired, the one whose window ends soonest.
-func (t *Trail) evictOnce(now time.Time) {
-	for key, until := range t.once {
-		if !now.Before(until) {
-			delete(t.once, key)
-		}
-	}
-	if len(t.once) < MaxOnceKeys {
-		return
-	}
-	var soonest string
-	var soonestAt time.Time
-	for key, until := range t.once {
-		if soonest == "" || until.Before(soonestAt) {
-			soonest, soonestAt = key, until
-		}
-	}
-	delete(t.once, soonest)
 }
 
 // Failed records one failed attempt: a counter now, and a share of the row its
