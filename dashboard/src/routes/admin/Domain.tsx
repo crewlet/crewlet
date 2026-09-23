@@ -50,7 +50,8 @@ import {
   Terms,
   TrimStatus,
 } from "./Retention.tsx";
-import type { RetentionGenerationState, RetentionNode } from "~/protocol/index.ts";
+import type { RetentionGenerationState } from "~/contract/retention.ts";
+import type { RetentionNode } from "~/protocol/index.ts";
 
 /** How often the retention document is re-read, matching the fleet's own. */
 const POLL_MS = 30_000;

@@ -41,7 +41,8 @@ import {
   type Seat,
   type SeatKind,
 } from "~/lib/seats.ts";
-import type { AgentRow, FeedRow, QueryErrorCode, SandboxEntry } from "~/protocol/index.ts";
+import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
+import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { Attention } from "~/lib/attention.ts";
 
 /**

@@ -9,7 +9,8 @@
 
 import { describe, expect, test } from "vitest";
 
-import { CHANGE_FIELDS, attribution } from "./attribution.ts";
+import { CHANGE_FIELDS } from "~/contract/attribution.ts";
+import { attribution } from "./attribution.ts";
 import type { WorkChange } from "~/protocol/index.ts";
 
 function change(over: Partial<WorkChange>): WorkChange {

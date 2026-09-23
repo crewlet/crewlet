@@ -16,12 +16,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
-import {
-  queryErrorCode,
-  type QueryErrorCode,
-  type QueryMap,
-  type QueryName,
-} from "~/protocol/index.ts";
+import { queryErrorCode, type QueryMap, type QueryName } from "~/protocol/index.ts";
+import type { QueryErrorCode } from "~/contract/errors.ts";
 
 export interface QueryResult<T> {
   data: T | null;
@@ -30,7 +26,7 @@ export interface QueryResult<T> {
    *  how a polled screen becomes unreadable. */
   loading: boolean;
   /** The engine's machine-readable code (`unauthorized`, `unavailable`,
-   *  `timeout`, …), or null. Typed as the protocol's own union, so a screen
+   *  `timeout`, …), or null. Typed as the contract's own union, so a screen
    *  comparing it against a code the engine does not send fails the
    *  typecheck. */
   error: QueryErrorCode | null;

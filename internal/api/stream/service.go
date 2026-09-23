@@ -296,7 +296,7 @@ func (s *Service) currentTools() []map[string]any { return s.tools() }
 
 // Broadcast pushes an envelope to every client, for the surfaces that own their
 // own data — the roster, the org tree, the tool catalogue, the schedules.
-func (s *Service) Broadcast(kind string, data any) {
+func (s *Service) Broadcast(kind Kind, data any) {
 	s.hub.Broadcast(Push(kind, data, s.now()))
 }
 

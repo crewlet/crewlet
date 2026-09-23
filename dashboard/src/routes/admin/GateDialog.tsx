@@ -72,13 +72,8 @@
 import { useState } from "react";
 import { Button, Callout, Checkbox, InlineCode, Input, Modal, Tag } from "@crewlethq/ui";
 import { DnsGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
-import {
-  GATE_REQUEST_TIMEOUT_MS,
-  keepsOperation,
-  newGateOpID,
-  rest,
-  RestError,
-} from "~/protocol/index.ts";
+import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
+import { keepsOperation, newGateOpID, rest, RestError } from "~/protocol/index.ts";
 import type { RetentionGateDomain, RetentionGateResult } from "~/protocol/index.ts";
 
 /**

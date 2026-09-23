@@ -76,23 +76,7 @@ import { fmtCount, fmtDate, fmtDateTime, fmtExact, fmtPct, relTime, tsKey } from
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-
-/**
- * Which dimension the time axis is split on.
- *
- * The engine's own closed set minus nothing: a value it does not know is
- * refused naming what it accepts, so this list and `tokens.Groups` have to
- * agree — and they are checked against each other by the engine's own gate
- * over this file.
- */
-const GROUPS = [
-  { value: "phase", label: "Phase" },
-  { value: "model", label: "Model" },
-  { value: "seat", label: "Seat" },
-  { value: "unit", label: "Unit" },
-  { value: "worker", label: "Worker" },
-  { value: "turn", label: "Turn" },
-] as const;
+import { GROUPS } from "~/contract/spend.ts";
 
 /**
  * WHICH WINDOWS THIS SCREEN HAS.

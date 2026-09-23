@@ -21,7 +21,7 @@ import {
   phaseTone,
   rollUp,
 } from "./Integrations.tsx";
-import type { IntegrationRow } from "~/protocol/types.ts";
+import type { IntegrationRow } from "~/contract/integrations.ts";
 
 afterEach(cleanup);
 

@@ -76,7 +76,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { awaitingPerson, indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { MAX_EVENTS } from "~/protocol/index.ts";
+import { MAX_EVENTS } from "~/contract/wire.ts";
 import { cutInto, spanOf, spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";

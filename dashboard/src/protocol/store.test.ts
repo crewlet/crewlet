@@ -9,7 +9,8 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { MAX_EVENTS, MAX_PHASES, Store } from "./store.ts";
+import { MAX_EVENTS } from "../contract/wire.ts";
+import { MAX_PHASES, Store } from "./store.ts";
 import type { EventEnvelope, FeedRow } from "./types.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {

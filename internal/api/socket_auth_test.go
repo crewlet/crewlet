@@ -61,7 +61,7 @@ func TestAClosedPostureOpensTheSocketOnItsQueryToken(t *testing.T) {
 	if err := json.Unmarshal(raw, &first); err != nil {
 		t.Fatalf("decode %s: %v", raw, err)
 	}
-	if first["kind"] != stream.KindSnapshot {
+	if first["kind"] != string(stream.KindSnapshot) {
 		t.Fatalf("first frame = %v, want the snapshot", first["kind"])
 	}
 }

@@ -1,15 +1,3 @@
-//#region src/protocol/store.ts
-/**
-* Longest activity feed a tab keeps.
-*
-* Matches the server's own retention (`livestate.EventFeedLimit`) so a
-* reconnect's snapshot neither truncates the feed nor leaves rows the server
-* cannot resend. Exported because it is also the limit of what anything derived
-* from the feed can HONESTLY claim to know: a busy company fills 400 events in
-* minutes, and a panel covering an hour has to say where the record actually
-* starts rather than drawing the gap as quiet.
-*/
-var MAX_EVENTS = 400;
 var ALL_DATA_SLICES = [
 	"agents",
 	"events",
@@ -967,40 +955,11 @@ var rest = {
 	})
 };
 //#endregion
-//#region src/protocol/gate.ts
-/**
-* The node gate — evicting a node and readmitting one — as the wire knows it:
-* the remedy vocabulary a gate answer speaks, the operation id a gesture is
-* finished under, and how long a gesture may take to answer.
-*
-* Every constant here is a COPY of something the engine owns, because this is
-* a separate build that cannot import a Go identifier — and each copy is held
-* to the engine's by a gate on the engine side (`internal/api`'s
-* `gate_client_test.go`), in both directions, so it cannot drift silently. The
-* minter is held to a vector file both sides read.
-*/
-/**
-* What an operator does about a log a gesture did not finish, or a gesture
-* refused before anything was written — `statelog.GateActions`.
-*
-* AN ACTION, NEVER A FLAG. The engine used to send one sentence in the command
-* line's words ("evict it with -force", "without -op-id"), and this dashboard
-* rendered it beside a dialog that has none of those flags. The engine now
-* says WHAT to do and each surface says HOW: here, as its own controls.
-*/
-var GATE_ACTIONS = [
-	"retry_same_op",
-	"new_gesture",
-	"force",
-	"other_node",
-	"reanchor",
-	"set_capacity",
-	"restore",
-	"wait"
-];
+//#region src/contract/gate.ts
 /**
 * The actions after which the gesture is finished under ITS OWN operation id —
-* `statelog.GateActionsKeepingOperation`.
+* `statelog.GateActionsKeepingOperation`, held by
+* `internal/api.TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes`.
 *
 * A log refused `log_full` cannot be finished by sending the gesture again at
 * once, and a surface that let go of the id then left the operator nothing
@@ -1015,23 +974,25 @@ var GATE_ACTIONS_KEEPING_OPERATION = [
 	"reanchor",
 	"set_capacity"
 ];
+//#endregion
+//#region src/protocol/gate.ts
+/**
+* The node gate — evicting a node and readmitting one — as the wire knows it:
+* the remedy vocabulary a gate answer speaks, the operation id a gesture is
+* finished under, and what a remedy means for that id.
+*
+* The engine's own values — the actions, which of them keep the id, and how
+* long a gesture may take — are declared in `../contract/gate.ts`, the one
+* home of what an engine gate holds (`internal/api`'s `gate_client_test.go`);
+* what is DONE with them is here. RELATIVE, because this directory is also
+* built alone as `protocol.js`, where the `~` alias does not exist. The
+* minter is held to a vector file both sides read.
+*/
 /** Whether, once the operator has done `action`, the gesture is finished under
-*  its own operation id. */
+*  its own operation id ([GATE_ACTIONS_KEEPING_OPERATION]). */
 function keepsOperation(action) {
 	return GATE_ACTIONS_KEEPING_OPERATION.includes(action);
 }
-/**
-* How long one gesture's request may take before the dialog gives up on it.
-*
-* SEVENTY-FIVE SECONDS, the command line's own `gateRequestTimeout` and for its
-* reason: the engine bounds a gesture at a minute from its first record to its
-* last answer (`engine.GateBudget`), and the judgement before it and the round
-* trip around it are a coordination read and a request. Waiting past the
-* node's own bound is what makes its answer — every log's outcome — reach the
-* operator rather than a client timeout that knows none of it. The default
-* thirty seconds gave up on a gesture the node went on to finish.
-*/
-var GATE_REQUEST_TIMEOUT_MS = 75e3;
 /**
 * An operation id in the engine's grammar (`statelog.NewOpID`), from its parts.
 *
@@ -1091,4 +1052,4 @@ function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.ge
 	return layoutOpID(now, random(/* @__PURE__ */ new Uint8Array(10)), `${verb}-${node}`);
 }
 //#endregion
-export { GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };
+export { LiveSocket, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };

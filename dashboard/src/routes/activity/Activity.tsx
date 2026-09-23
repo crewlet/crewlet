@@ -42,29 +42,9 @@ import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram } from "~/ui/Histogram.tsx";
 import { FacetRail } from "~/ui/FacetRail.tsx";
+import { CATEGORIES } from "~/contract/categories.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-
-/**
- * The categories the engine assigns, as a CLOSED set.
- *
- * Mirrors `events.CategoryNames()`, which returns EIGHT. This list held ten:
- * `communication` and `knowledge` are categories no event is registered
- * under, so two of the chips could never match a row and the reader was
- * invited to filter a log down to nothing and conclude the engine was quiet.
- * A chip for a category with nothing in it is still useful — it says the
- * category exists and is quiet — but only where the category exists.
- */
-const CATEGORIES = [
-  "a2a",
-  "decision",
-  "learning",
-  "lifecycle",
-  "notification",
-  "system",
-  "task",
-  "webhook",
-] as const;
 
 const PAGE = 100;
 

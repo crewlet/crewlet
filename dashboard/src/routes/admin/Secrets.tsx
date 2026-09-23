@@ -60,7 +60,8 @@ import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
-import type { ConfigReference, QueryErrorCode, SecretRow } from "~/protocol/index.ts";
+import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
+import type { QueryErrorCode } from "~/contract/errors.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 

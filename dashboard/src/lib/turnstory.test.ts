@@ -8,8 +8,8 @@
  */
 
 import { describe, expect, test } from "vitest";
+import { ABSORBED } from "~/contract/turnbands.ts";
 import {
-  ABSORBED,
   absorbedGroups,
   bandOf,
   collapseRuns,

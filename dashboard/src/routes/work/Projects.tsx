@@ -67,6 +67,7 @@ import { useNow } from "~/lib/clock.ts";
 import { Segmented } from "~/ui/primitives.tsx";
 import { filed, ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
+import { PROJECT_SORT_KEYS } from "~/contract/work.ts";
 
 /** Which projects the grid lists, as the one switch this page has. */
 const SHOWN = ["active", "archived", "all"] as const;
@@ -87,19 +88,6 @@ const ASKED: Record<Shown, "false" | "only" | "true"> = {
   archived: "only",
   all: "true",
 };
-
-/**
- * The orderings the ENGINE takes, as the dashboard's own copy.
- *
- * It is a copy by necessity — this is a separate build in a separate language
- * and cannot import `tracker.ProjectSorts` — so a Go gate holds it against
- * that list in both directions (`internal/tracker/client_gate_test.go`). The
- * drift it catches is silent and total: a header carrying a key the engine
- * refuses turns one click into a `bad_params` refusal over the whole screen,
- * and an ordering the engine grew that no header offers is one nobody can
- * reach.
- */
-const PROJECT_SORT_KEYS = ["key", "name", "unit", "open", "done", "closed", "last_change"] as const;
 
 /**
  * What the directory opens on.

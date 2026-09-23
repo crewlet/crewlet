@@ -1,12 +1,8 @@
 package api_test
 
 import (
-	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -50,21 +46,15 @@ func TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes(t *testing.T) {
 // on to finish.
 func TestTheDashboardWaitsPastTheGateBudget(t *testing.T) {
 	t.Parallel()
-	// A number is not a literal [clientsource] has a reader for, so the one
-	// file that declares it is read directly.
-	gate := filepath.Join(clientsource.Tree(t), "protocol", "gate.ts")
-	source, err := os.ReadFile(gate)
+	raw, err := clientsource.Scalar(clientsource.Tree(t), "GATE_REQUEST_TIMEOUT_MS")
 	if err != nil {
-		t.Fatalf("read %s: %v", gate, err)
+		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`export const GATE_REQUEST_TIMEOUT_MS = ([0-9_]+);`).FindSubmatch(source)
-	if m == nil {
-		t.Fatalf("%s declares no GATE_REQUEST_TIMEOUT_MS", gate)
-	}
-	body := string(m[1])
-	ms, err := strconv.ParseInt(strings.ReplaceAll(body, "_", ""), 10, 64)
+	// Base 0 reads the literal as TypeScript spells it: `75_000` is
+	// seventy-five thousand, never a parse failure.
+	ms, err := strconv.ParseInt(raw, 0, 64)
 	if err != nil {
-		t.Fatalf("GATE_REQUEST_TIMEOUT_MS = %q is not a number: %v", body, err)
+		t.Fatalf("GATE_REQUEST_TIMEOUT_MS = %q is not a number: %v", raw, err)
 	}
 	if wait := time.Duration(ms) * time.Millisecond; wait <= engine.GateBudget {
 		t.Errorf("the dashboard waits %s for a gesture the node bounds at %s — it "+

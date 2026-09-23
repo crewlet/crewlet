@@ -268,7 +268,8 @@ internal/
 ├── skipgate/ solo/       # The suite's own gates: a skip is not a pass, and
 │                         #   which packages need the runner to themselves
 ├── clientsource/         # Holds a declaration the dashboard makes against the
-│                         #   engine's own, found by name and read by syntax
+│                         #   engine's own, found by name and read by syntax;
+│                         #   every one lives in dashboard/src/contract/
 ├── sourcetree/           # What is this repository's tree: the module root,
 │                         #   and a walk that never reads a nested checkout
 ├── e2e/                  # The end-to-end company, and the dashboard replay

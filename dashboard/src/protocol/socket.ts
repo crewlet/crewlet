@@ -16,7 +16,8 @@
 import { api } from "./api.ts";
 import { apiToken } from "./authToken.ts";
 import type { Store } from "./store.ts";
-import type { Frame, QueryErrorCode, QueryMap, QueryName } from "./types.ts";
+import type { Frame, QueryMap, QueryName } from "./types.ts";
+import type { QueryErrorCode } from "../contract/errors.ts";
 
 const PATH = "/ws/stream";
 
