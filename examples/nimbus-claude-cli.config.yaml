@@ -219,6 +219,7 @@ api:
       - config:write
       - secrets:write
       - fleet:operate
+      - people:manage
       - sandbox:run
 
     tokens:
@@ -237,6 +238,7 @@ api:
           - config:write
           - secrets:write
           - fleet:operate
+          - people:manage
           - sandbox:run
         colleague: none
 

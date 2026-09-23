@@ -192,7 +192,10 @@ api:
     # directory record or an identity provider's group mapping confer.
     # Required once a port is set, with no default — one granting
     # everything is a ceiling that does nothing, and one granting a subset
-    # silently locks out whatever it left out.  These are the ten.
+    # silently locks out whatever it left out.  These are the eleven —
+    # leave out people:manage and nobody can ever invite, bind or remove
+    # anybody, because the first person receives the whole ceiling and may
+    # confer only what they hold.
     max_grants:
       - state:read
       - audit:read
@@ -203,6 +206,7 @@ api:
       - config:write
       - secrets:write
       - fleet:operate
+      - people:manage
       - sandbox:run
 
     tokens:
@@ -219,7 +223,7 @@ api:
         token: "${CREWLET_API_TOKEN_FOUNDER}"
         # What this credential may do.  Required and non-empty: a
         # credential's blast radius is stated where it is pinned, never
-        # inferred.  This one is the founder's, so it is all ten.
+        # inferred.  This one is the founder's, so it is all eleven.
         grants:
           - state:read
           - audit:read
@@ -230,6 +234,7 @@ api:
           - config:write
           - secrets:write
           - fleet:operate
+          - people:manage
           - sandbox:run
         # How far into the company's own WORK it reaches: none (the
         # default) is invisible to the roster, to a mention and to a
