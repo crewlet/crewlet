@@ -208,6 +208,21 @@ type stepUpRequest struct {
 // is where that proof is given. It is the only route here that is BOTH guarded
 // and throttled: the caller is known, and an unbounded retry against a known
 // person is a password oracle with the enumeration already done.
+//
+// # It REPLACES the session it was made from, and is not a new sign-in
+//
+// The proof is recorded by opening a fresh session — a new lineage, so the
+// identifier a privilege change is made under is not the one that circulated
+// before it — and the session it replaces is ENDED, first. It used to be left
+// running: every step-up left a second live session behind, a copy of the old
+// cookie went on working for the rest of its week, and a person's session
+// listing grew by one per confirmation. And the replacement CONFIRMS the
+// sign-in rather than repeating it, so it inherits that session's absolute
+// deadline and the grants its identity provider's groups conferred: a step-up
+// that restarted the absolute clock would let a session be kept alive for
+// ever by confirming it, and one that dropped the carried grants would cost a
+// person the authority they stepped up to use — or, copied onto a fresh
+// deadline, let group-derived authority outlive the provider's assertion.
 func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	arrived := s.now()
 	source := s.sourceOf(r)
@@ -281,6 +296,10 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	replaced, ok := s.replacedSession(w, r, held)
+	if !ok {
+		return
+	}
 	// THE PROOF IS RECORDED BY RE-OPENING THE SESSION, which stamps a
 	// fresh reauth instant on the row every node reads. A field written
 	// locally would be proof on ONE node, and the surface that asks for it
@@ -288,6 +307,40 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	s.throttle.Flush(r.Context(), source)
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInPassword, factor: factor.factor,
-		stepUp: true, replaces: s.lineageOf(r),
+		stepUp:      true,
+		replaces:    replaced.Bearer.Lineage.String(),
+		absolute:    replaced.Bearer.AbsoluteExpiresAt,
+		groupGrants: replaced.Session.GroupGrants,
 	})
+}
+
+// replacedSession is the session a step-up confirms, validated here, or false
+// once it has written the refusal.
+//
+// # Read under the signature AND the rows, and never the bare cookie
+//
+// What a step-up inherits — the absolute deadline and the carried grants —
+// and what it ends are the session the caller PRESENTED, so it is read the
+// way the guard read it: the signature decides the lineage, and this node's
+// rows decide that it is live. A lineage off an unverified cookie would let a
+// caller name somebody else's session to end, and a deadline off one would
+// let them choose their own.
+//
+// THE PERSON MUST BE THE ONE WHO PROVED: a principal resolved from a cookie
+// is its bearer's person, so a mismatch is a session that changed hands
+// between the guard and here, and the answer is the one the guard would now
+// give. A node that cannot say is the unknown arm, as it is everywhere.
+func (s *Service) replacedSession(w http.ResponseWriter, r *http.Request,
+	held iamdomain.Sighting) (session.Validation, bool) {
+
+	v := s.signer.Validate(r.Context(), s.directoryFor(), session.Presented(r))
+	switch {
+	case v.Row == session.RowValid && v.Bearer.Person == held.ID:
+		return v, true
+	case v.Row == session.RowBehind || v.Row == session.RowStalled:
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+	default:
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
+	}
+	return session.Validation{}, false
 }

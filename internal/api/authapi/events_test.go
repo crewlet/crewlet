@@ -81,6 +81,26 @@ type estate struct {
 
 	// starts are the sessions this estate was asked to open, in order.
 	starts []iamdomain.SessionStart
+
+	// closes records every session ended, and closeErr is what ending
+	// one answers.
+	closes   []closedSession
+	closeErr error
+}
+
+// closedSession is one CloseSession call.
+type closedSession struct{ lineage, person, reason, opID string }
+
+func (e *estate) CloseSession(_ context.Context, lineage, person, reason,
+	opID string) (statelog.Position, error) {
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closeErr != nil {
+		return statelog.Position{}, e.closeErr
+	}
+	e.closes = append(e.closes, closedSession{lineage, person, reason, opID})
+	return statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 8}, nil
 }
 
 func (e *estate) PersonByLogin(_ context.Context, login string) (iamdomain.Sighting, error) {
@@ -134,6 +154,12 @@ type signInRig struct {
 
 func newSignInRig(t *testing.T) *signInRig {
 	t.Helper()
+	return newSignInRigWith(t, nil)
+}
+
+// newSignInRigWith is [newSignInRig] with further fakes replaced.
+func newSignInRigWith(t *testing.T, replace func(*authapi.Options)) *signInRig {
+	t.Helper()
 	hasher := credential.NewHasher(cheap, 1)
 	verifier, err := hasher.Hash(password)
 	if err != nil {
@@ -161,6 +187,9 @@ func newSignInRig(t *testing.T) *signInRig {
 	b.API.Auth.Backend = config.AuthBackendLocal
 	svc := buildWith(t, b, nil, func(o *authapi.Options) {
 		o.Directory, o.Writer, o.Hasher, o.Audit = e, e, hasher, audit
+		if replace != nil {
+			replace(o)
+		}
 	})
 	return &signInRig{svc: svc, estate: e, audit: audit, recovery: codes}
 }

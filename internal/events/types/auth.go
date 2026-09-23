@@ -452,8 +452,11 @@ func (e IAMLoginFailures) Summary() string {
 // IAMStepUpCompleted is a signed-in person confirming who they are again, which
 // is what the surfaces that change what a company IS ask for.
 //
-// It opens a FRESH session carrying the new proof; Replaces is the one the
-// confirmation was made from, so a reader can join the two.
+// It opens a FRESH session carrying the new proof, keeping the absolute
+// deadline and the provider-carried grants of the one it replaces; Replaces is
+// that one, ENDED before the new one opened, so a reader can join the two. No
+// separate session-ended row is written for it: this row is the record of
+// why it ended.
 type IAMStepUpCompleted struct {
 	Person       string       `json:"person"`
 	Login        string       `json:"login"`

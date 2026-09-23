@@ -952,7 +952,13 @@ instant it was proved on its row, and the guard composes the deadline from
 that and this node's `api.auth.session.step_up` at decision time. Proof is a
 fact about one sign-in rather than about the person, so a proof on a laptop
 says nothing about a phone signed in last week, and a step-up re-proves by
-opening a new session rather than by moving a field. A session exchanged from
+opening a new session rather than by moving a field. That new session **ends
+the one it replaces** — first, so a close that does not land fails the step-up
+rather than leaving two live sessions — and it confirms the sign-in rather
+than repeating it: it keeps the replaced session's absolute deadline, or
+confirming a session would keep it alive for ever, and the grants its identity
+provider's groups conferred, or stepping up would cost the authority it was
+for. A session exchanged from
 a Tier A token records no proof at all, so its `reauth_at` is zero and every
 step-up surface refuses it. A node that has not yet applied the session's row
 — the read-only grace in the table above — claims no proof it cannot see.

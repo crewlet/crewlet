@@ -328,16 +328,6 @@ func (s *Service) bearerOf(r *http.Request) session.Bearer {
 	return s.signer.Validate(r.Context(), s.directoryFor(), cookie).Bearer
 }
 
-// lineageOf is the lineage this request's cookie carries, or "" for a cookie
-// whose bearer did not verify — read under [Service.bearerOf]'s rule.
-func (s *Service) lineageOf(r *http.Request) string {
-	bearer := s.bearerOf(r)
-	if bearer.Lineage == uuid.Nil {
-		return ""
-	}
-	return bearer.Lineage.String()
-}
-
 // clearSession ends the session in the browser under every name a bearer can
 // be held under — see [session.Clears].
 func (s *Service) clearSession(w http.ResponseWriter) {

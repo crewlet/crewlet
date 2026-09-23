@@ -489,9 +489,12 @@ type signIn struct {
 
 	// stepUp marks a signed-in person confirming who they are again, which
 	// announces itself as a step-up rather than as a fresh sign-in; replaces
-	// is the session the confirmation was made from.
+	// is the session the confirmation was made from, which is ENDED before
+	// its replacement opens, and absolute is that session's own deadline,
+	// which the replacement keeps — see [Service.StepUp].
 	stepUp   bool
 	replaces string
+	absolute time.Time
 
 	// groupGrants are what the identity provider's groups conferred, and
 	// empty on every other method. They ride into the session record and
@@ -521,6 +524,26 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	expires := s.now().Add(s.boot.API.Auth.Session.Absolute())
+	if !how.absolute.IsZero() {
+		expires = how.absolute
+	}
+	if how.replaces != "" {
+		// THE SESSION BEING REPLACED ENDS FIRST, and a failure to end it
+		// fails the gesture. In the other order a close that did not land
+		// would leave the new session open beside the old one — the
+		// second live session this exists to prevent — or need a
+		// compensating close of a session whose open record this node
+		// may not have applied. This way round a failure changes nothing
+		// and the retry is clean; the one residue, an open that fails
+		// after the close landed, is a person asked to sign in again.
+		if _, err := s.writer.CloseSession(r.Context(), how.replaces, held.ID,
+			"replaced by a step-up", "step-up:"+how.replaces); err != nil {
+			log.WarnContext(r.Context(), "api_step_up_close_failed",
+				"error", err, "lineage", how.replaces)
+			httpjson.Unavailable(w, httpjson.CodeUnavailable, retryIdentity)
+			return
+		}
+	}
 	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: held.ID,
 		AbsoluteExpiresAt: expires,
