@@ -130,6 +130,19 @@ func (c *leadChart) LeadsContainer(context.Context, string, string) (bool, error
 	return false, c.err
 }
 
+// LeadsAnyone is [leadChart.Leads] asked of every subject.
+func (c *leadChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	for pair, led := range c.leads {
+		if led && pair[0] == actor {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 var _ authz.Chart = (*leadChart)(nil)
 
 // watchFixture is a socket server whose tokens are bound to seats.

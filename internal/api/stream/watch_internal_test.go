@@ -161,6 +161,12 @@ func (c *heldChart) LeadsContainer(context.Context, string, string) (bool, error
 	return false, nil
 }
 
+// LeadsAnyone is never the question a seat-named watch asks, so it answers
+// what [heldChart.Leads] finally does: nobody.
+func (c *heldChart) LeadsAnyone(context.Context, string) (bool, error) {
+	return false, nil
+}
+
 // mutableChart answers the one lead question the case asks, changeably.
 type mutableChart struct {
 	mu    sync.Mutex
@@ -193,6 +199,16 @@ func (c *mutableChart) LeadsUnit(context.Context, string, string) (bool, error) 
 
 func (c *mutableChart) LeadsContainer(context.Context, string, string) (bool, error) {
 	return false, nil
+}
+
+// LeadsAnyone is [mutableChart.Leads] asked of every subject.
+func (c *mutableChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return false, c.err
+	}
+	return c.leads && actor == "platform-lead", nil
 }
 
 // waitUntil polls cond for up to ten seconds.

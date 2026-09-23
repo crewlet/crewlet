@@ -36,6 +36,12 @@ func (handleChart) LeadsContainer(context.Context, string, string) (bool, error)
 	return false, nil
 }
 
+// LeadsAnyone is [handleChart.Leads] asked of every subject: `lead` leads
+// somebody, and nobody else does.
+func (handleChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	return actor == "lead", nil
+}
+
 // A LEAD NAMES A REPORT THE WAY A MODEL TYPES THEM, and is admitted.
 //
 // `set_priorities` resolves its `handle` against the chart — a model types

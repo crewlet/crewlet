@@ -154,6 +154,27 @@ type Object struct {
 	// whose pins, whose priorities. Empty on everything else.
 	Owner string
 
+	// Unresolved says Owner is a name the caller TYPED that nobody has
+	// resolved to the record it addresses yet: somebody else's LOGIN,
+	// which the identity directory resolves to the record its holder acts
+	// under — a bound person's seat, or the login itself.
+	//
+	// DECIDED BEFORE THE DIRECTORY IS ASKED, which is the whole reason it
+	// exists. Asked after, the directory's answer reached callers it could
+	// never admit: a login nobody holds was refused on the name as typed
+	// while a held one this node could not resolve answered 503 carrying
+	// the seat it was bound to, so a caller with no authority over anybody
+	// learnt which logins exist and whose seat each holds from the
+	// difference. Decided first, the admin grant and the caller's own login
+	// admit as they would on the record, a class with no lead path refuses,
+	// a caller who leads nobody is refused exactly as they would be on
+	// somebody's seat they do not lead — so what the directory says is
+	// never theirs to learn — and a caller who leads somebody is answered
+	// [ErrUnresolved]: resolve the login, then decide again on the record.
+	//
+	// Read by the two personal classes and by nothing else.
+	Unresolved bool
+
 	// Author is the login that WROTE this, for the one class where
 	// authorship is the authority: a page comment is edited and removed
 	// by whoever left it.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -81,6 +82,10 @@ func (flatChart) LeadsUnit(context.Context, string, string) (bool, error) {
 }
 
 func (flatChart) LeadsContainer(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (flatChart) LeadsAnyone(context.Context, string) (bool, error) {
 	return false, nil
 }
 
@@ -280,6 +285,13 @@ type leadsChart struct {
 
 func (c leadsChart) Leads(_ context.Context, actor, subject string) (bool, error) {
 	return actor == c.lead && subject == c.report, nil
+}
+
+// LeadsAnyone is [leadsChart.Leads] asked of every subject — and it has to be
+// stated here, because the embedded [flatChart]'s "nobody" would refuse the
+// lead before their report's login was ever looked up.
+func (c leadsChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	return actor == c.lead, nil
 }
 
 // A CALLER'S OWN RECORD IS READ UNDER THE NAME IT IS WRITTEN UNDER.
@@ -629,6 +641,95 @@ func TestMyWorkAndPeopleDefaultToTheCaller(t *testing.T) {
 			if got := c.asked(work); got != "bo" {
 				t.Errorf("%s naming bo read %q — the default is overriding the "+
 					"argument", c.what, got)
+			}
+		})
+	}
+}
+
+// spiedDirectory is [loginDirectory] counting what it was asked.
+type spiedDirectory struct {
+	loginDirectory
+	mu    sync.Mutex
+	asked []string
+}
+
+func (d *spiedDirectory) HolderRecord(ctx context.Context, login string) (string, error) {
+	d.mu.Lock()
+	d.asked = append(d.asked, login)
+	d.mu.Unlock()
+	return d.loginDirectory.HolderRecord(ctx, login)
+}
+
+// A CALLER WITH NO AUTHORITY LEARNS NOTHING FROM THE DIRECTORY, on a question
+// as on a tool — not even when this node cannot read it.
+//
+// The name used to be looked up FIRST: a login nobody holds was refused on
+// the name as typed, while a held one this node could not place answered 503,
+// so a caller who leads nobody read which logins exist off the difference.
+// Decided first, every login is the same refusal — the one a seat they do not
+// lead gets — and the directory is never asked. A lead may still be admitted
+// on the record, so for them a directory that cannot say is 503.
+func TestACallerWithNoAuthorityLearnsNothingFromTheDirectoryOnAQuestion(t *testing.T) {
+	t.Parallel()
+	stranger := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
+		Login: "pat.nobody", Seat: "pat", Stage: iam.StageActive,
+		Grants: []iam.Grant{iam.GrantStateRead}}
+	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+	blind := loginDirectory{err: errors.New("engine: ana.diaz is bound to ana " +
+		"and this node cannot say where that seat is now")}
+	for _, question := range []string{"work_my_work", "work_inbox", "work_person"} {
+		t.Run(question, func(t *testing.T) {
+			t.Parallel()
+			var answers []string
+			for _, c := range []struct {
+				asked string
+				dir   loginDirectory
+			}{
+				{"ana.diaz", loginDirectory{}},
+				{"ghost.person", loginDirectory{}},
+				{"ana.diaz", blind},
+				{"ghost.person", blind},
+			} {
+				work := &stubWork{}
+				dir := &spiedDirectory{loginDirectory: c.dir}
+				s := viewerSources(t, work)
+				s.Holders = dir
+				s.Chart = leadsChart{lead: "lead", report: "dev"}
+				r := queries.NewRegistry()
+				queries.Register(r, s)
+				_, err := r.Answer(iam.WithPrincipal(t.Context(), stranger), question,
+					map[string]any{"handle": c.asked})
+				var refusal *queries.Refusal
+				if !errors.As(err, &refusal) {
+					t.Fatalf("%q = %v, want the refusal a seat they do not lead gets",
+						c.asked, err)
+				}
+				if len(dir.asked) != 0 {
+					t.Errorf("%q asked the directory %v for a caller it could "+
+						"never admit", c.asked, dir.asked)
+				}
+				answers = append(answers, fmt.Sprintf("%s %v", refusal.Reason,
+					refusal.Grants))
+			}
+			for _, answer := range answers[1:] {
+				if answer != answers[0] {
+					t.Errorf("two logins were refused differently (%s, %s), which "+
+						"is the directory speaking", answers[0], answer)
+				}
+			}
+
+			// A LEAD MAY BE ADMITTED ON THE RECORD, so for them this node
+			// cannot say.
+			s := viewerSources(t, &stubWork{})
+			s.Holders = blind
+			s.Chart = leadsChart{lead: "lead", report: "dev"}
+			r := queries.NewRegistry()
+			queries.Register(r, s)
+			if _, err := r.Answer(iam.WithPrincipal(t.Context(), lead), question,
+				map[string]any{"handle": "dev.person"}); !errors.Is(err, queries.ErrUnavailable) {
+				t.Errorf("a lead on a directory that cannot say = %v, want %v",
+					err, queries.ErrUnavailable)
 			}
 		})
 	}

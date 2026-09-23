@@ -104,6 +104,62 @@ func leadsInChart(o *org.Organization, actor, subject string) bool {
 	return false
 }
 
+// LeadsAnyone reports whether actor leads any seat at all — the question a
+// decision asks about a record before anybody knows whose it is (see
+// [authz.Object.Unresolved]).
+//
+// THE SAME RELATION [ChartAuthority.Leads] ASKS, over every seat rather than
+// one, so the two can never disagree about somebody: a caller this lets have a
+// login looked up is one [ChartAuthority.Leads] admits on at least one seat,
+// and one it refuses is refused by [ChartAuthority.Leads] on every seat.
+func (c ChartAuthority) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	o, err := c.org()
+	if err != nil {
+		return false, err
+	}
+	return leadsAnyoneInChart(o, actor), nil
+}
+
+// leadsAnyoneInChart is the walk, split out for the reason [leadsInChart] is.
+//
+// IT ASKS [leadsInChart] OF EVERY SEAT rather than restating the relation — a
+// second statement of who leads whom is the copy that drifts — and answers the
+// common case without that walk: a seat that manages nobody and is no unit's
+// effective lead can be nobody's ancestor and nobody's unit lead, the only two
+// ways [leadsInChart] answers yes. Without it every caller who leads nobody,
+// naming a login, would cost a walk of every seat's management chain.
+func leadsAnyoneInChart(o *org.Organization, actor string) bool {
+	role := o.Role(actor)
+	if actor == "" || role == nil || role.Handle() != actor {
+		// NOT A SEAT TODAY — a login, or a handle a seat used to answer
+		// to, which [leadsInChart] never matches because it compares the
+		// handle every chain carries now.
+		return false
+	}
+	if len(role.Manages) == 0 && !leadsAUnit(o, role) {
+		return false
+	}
+	for seat := range o.AllRoles() {
+		if seat != role && leadsInChart(o, actor, seat.Handle()) {
+			return true
+		}
+	}
+	return false
+}
+
+// leadsAUnit reports whether role is some unit's effective lead, BY THE SEAT
+// [org.Organization.EffectiveLead] resolves rather than by the handle a unit
+// wrote — so a unit naming a handle the seat has since been renamed from still
+// counts, exactly as it does in [leadsInChart].
+func leadsAUnit(o *org.Organization, role *org.Role) bool {
+	for unit := range o.AllUnits() {
+		if o.EffectiveLead(unit) == role {
+			return true
+		}
+	}
+	return false
+}
+
 // LeadsProject reports whether actor leads the unit that owns a project, or is
 // the seat whose own project it is.
 //

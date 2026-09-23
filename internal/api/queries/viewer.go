@@ -131,10 +131,19 @@ func (s Sources) seatOf(p iam.Principal) *org.Role {
 //
 // DECIDED ON WHAT THE NAME RESOLVED TO, because the lead relation is a fact
 // about a seat: asked about a login, a lead was refused the report they lead.
-// A login that names nobody is decided on the name as typed first — which
-// nobody leads, so only the admin grant passes — and only then answered as
-// naming no record, so a caller with no authority learns nothing from the
-// directory: "not found" before "you may not" would make it a roster.
+//
+// BUT THE DIRECTORY IS ASKED ONLY ONCE THE AUTHORITY IS DECIDED AS FAR AS IT
+// CAN BE WITHOUT THE RECORD ([Sources.mayLook]): the admin grant passes, a
+// caller who could be admitted only as the lead of whoever holds the login
+// passes, and everybody else is refused exactly as they would be on a seat
+// they do not lead, before anything is looked up. The directory's answers
+// differ by login — nobody holds this one, this node cannot place that one —
+// and answered after the lookup, a login nobody holds was refused while a held
+// one this node could not resolve answered 503, so a caller with no authority
+// over anybody read which logins exist off the difference. A login that names
+// nobody is then decided on the name as typed — which nobody leads, so only
+// the admin grant passes — and only then answered as naming no record: "not
+// found" before "you may not" would make it a roster.
 //
 // THE SCOPE RULE IS THE AUTHORITY TABLE'S, asked with the question's OWN verb:
 // `work_inbox` asks [authz.ActionInboxRead], `work_my_work`
@@ -155,16 +164,24 @@ func (s Sources) recordHandle(ctx context.Context, action authz.Action,
 	if how == iam.Unknown {
 		return "", unresolved(ctx, "viewer")
 	}
-	owner, _, err := iam.OwnerOf(ctx, principal, asked, s.Holders)
+	owner, _, err := iam.OwnerOf(ctx, principal, asked, s.Holders,
+		s.mayLook(principal, action))
+	var looked *iam.LookRefused
 	switch {
+	case errors.As(err, &looked):
+		return "", looked.Err
 	case errors.Is(err, iam.ErrNoHolder), errors.Is(err, iam.ErrHolderUnseated):
 		if refusal := s.mayRead(ctx, principal, action, asked); refusal != nil {
 			return "", refusal
 		}
 		return "", fmt.Errorf("%w: %w", ErrNotFound, err)
 	case err != nil:
-		return "", fmt.Errorf("%w: this node cannot say whose record %q is: %w",
-			ErrUnavailable, asked, err)
+		// THE DIRECTORY'S OWN WORDS GO TO THE LOG: they name the seat a
+		// login is bound to, and this error is what a caller is answered.
+		log.WarnContext(ctx, "queries_record_undecidable", "question",
+			string(action), "name", asked, "error", err.Error())
+		return "", fmt.Errorf("%w: this node cannot say whose record %q is yet",
+			ErrUnavailable, asked)
 	case owner == "":
 		return "", errNoRecord
 	case asked == "", iam.NamesSelf(principal, asked):
@@ -174,6 +191,29 @@ func (s Sources) recordHandle(ctx context.Context, action authz.Action,
 		return "", err
 	}
 	return owner, nil
+}
+
+// mayLook is the authority a personal question decides BEFORE the identity
+// directory is asked whose record somebody else's login is — see
+// [iam.MayLook] and [authz.Object.Unresolved]: the question's own verb, asked
+// of a record nobody has resolved yet, answered exactly as [Sources.mayRead]
+// answers it. [authz.ErrUnresolved] lets the lookup happen and nothing more:
+// it is a caller who could be admitted only as the lead of whoever holds the
+// login, and [Sources.recordHandle] decides again on the record it resolves to.
+func (s Sources) mayLook(principal iam.Principal, action authz.Action) iam.MayLook {
+	return func(ctx context.Context, login string) error {
+		d := authz.Decide(ctx, principal, action, authz.Object{
+			Kind: authz.KindPerson, ID: login, Owner: login, Unresolved: true,
+		}, s.Chart, s.clock())
+		switch {
+		case d.Allowed, errors.Is(d.Err, authz.ErrUnresolved):
+			return nil
+		case d.Unknown():
+			return fmt.Errorf("%w: this node cannot decide %s on somebody "+
+				"else's record yet: %w", ErrUnavailable, action, d.Err)
+		}
+		return refused(string(action)+" of somebody else's record", d)
+	}
 }
 
 // seatHandle is [Sources.recordHandle] for a question about a SEAT's own

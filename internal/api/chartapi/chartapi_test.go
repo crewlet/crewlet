@@ -168,6 +168,20 @@ func (c rel) LeadsContainer(_ context.Context, actor, container string) (bool, e
 	return c.answer(c.containers, actor, container)
 }
 
+// LeadsAnyone is [rel.Leads] asked of every subject — read off the seats map
+// rather than a map of its own, since it is the same relation.
+func (c rel) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	for pair, led := range c.seats {
+		if led && pair[0] == actor {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (c rel) answer(in map[[2]string]bool, actor, subject string) (bool, error) {
 	if c.err != nil {
 		return false, c.err

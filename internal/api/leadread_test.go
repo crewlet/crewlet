@@ -209,3 +209,8 @@ func (leadOf) LeadsUnit(context.Context, string, string) (bool, error) {
 func (leadOf) LeadsContainer(context.Context, string, string) (bool, error) {
 	return false, nil
 }
+
+// LeadsAnyone is [leadOf.Leads] asked of every subject.
+func (c leadOf) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	return actor == c.lead, nil
+}

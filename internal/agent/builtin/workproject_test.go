@@ -422,6 +422,13 @@ func (c projectChart) LeadsContainer(context.Context, string, string) (bool, err
 	return false, nil
 }
 
+// LeadsAnyone answers the person relation's "anybody at all", which is the
+// person relation's own and refuses here for the reason [projectChart.Leads]
+// does.
+func (c projectChart) LeadsAnyone(context.Context, string) (bool, error) {
+	return false, nil
+}
+
 // chartLeads and chartRefuses are the two answers a chart that CAN answer
 // gives.
 var (

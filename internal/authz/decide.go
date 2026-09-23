@@ -272,6 +272,12 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		if r.class == ClassOwnRecord {
 			return consulting(Decision{Reason: ReasonNotSelf}, adminGrant)
 		}
+		if o.Unresolved {
+			// NOBODY KNOWS WHOSE RECORD THIS IS YET — see
+			// [Object.Unresolved] — and the only admission left is
+			// leading whoever turns out to hold it.
+			return consulting(leadsSomebody(ctx, chart, actorOf(p)), adminGrant)
+		}
 		return consulting(leads(ctx, chart, actorOf(p), o.Owner, ReasonNotSelf),
 			adminGrant)
 
@@ -483,6 +489,29 @@ func leads(ctx context.Context, chart Chart, actor, subject string, refusal Reas
 		return Decision{Allowed: true, Reason: ReasonLead}
 	}
 	return Decision{Reason: refusal}
+}
+
+// leadsSomebody is [leads] for an owner nobody has resolved yet: a caller who
+// leads nobody is refused EXACTLY as [leads] refuses them on a seat they do
+// not lead — the same reason, and the same grants once the class adds them —
+// so the refusal cannot say whether the name was ever looked up; a caller who
+// leads somebody is told to resolve the name and ask again ([ErrUnresolved]);
+// and a chart that cannot say is unknown, as it is everywhere.
+func leadsSomebody(ctx context.Context, chart Chart, actor string) Decision {
+	if actor == "" {
+		return Decision{Reason: ReasonNotSelf}
+	}
+	if chart == nil {
+		return Decision{Reason: ReasonNotLead, Err: ErrNoChart}
+	}
+	ok, err := chart.LeadsAnyone(ctx, actor)
+	switch {
+	case err != nil:
+		return Decision{Reason: ReasonNotLead, Err: err}
+	case ok:
+		return Decision{Reason: ReasonNotLead, Err: ErrUnresolved}
+	}
+	return Decision{Reason: ReasonNotSelf}
 }
 
 // leadsContainer is [leads] over a page container key.

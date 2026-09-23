@@ -15,9 +15,10 @@
 // reaches for a store handle to "just look the principal up here". The one
 // function that needs a read it cannot make — [OwnerOf], whose record
 // somebody else's login names — is HANDED it, as a seam ([Holders]) the engine
-// implements over the identity directory; the rule stays here because the
-// tools, the questions and the routes all have to answer it the same way, and
-// this is the one package all three already import.
+// implements over the identity directory, and is handed the authority decision
+// that comes BEFORE that read ([MayLook]) the same way; the rule stays here
+// because the tools, the questions and the routes all have to answer it the
+// same way, and this is the one package all three already import.
 //
 // # Three namespaces that can never collide
 //
@@ -67,7 +68,10 @@
 // somebody else's LOGIN is their holder's record (a bound person's seat), and
 // anything else is the chart's. A login is never a seat — [NamesLogin] — so it
 // is never matched against the chart's roster, where `jane.doe` resembles the
-// seat `jane` closely enough to land on it.
+// seat `jane` closely enough to land on it. And the directory is asked only
+// once the caller's authority is decided as far as it can be without the
+// record ([MayLook]), because what the directory says differs by login and a
+// caller it could never admit must not learn any of it.
 package iam
 
 import (

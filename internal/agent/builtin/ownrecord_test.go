@@ -491,3 +491,91 @@ func TestSomebodyElsesSeatIsWrittenExactly(t *testing.T) {
 		}
 	}
 }
+
+// A CALLER WITH NO AUTHORITY LEARNS NOTHING FROM THE DIRECTORY — not even when
+// this node cannot read it.
+//
+// The authority used to be decided AFTER the lookup, and the directory's
+// answers differ by login: a login nobody holds was refused on the name as
+// typed, while a held one this node could not place answered undecidable
+// carrying the directory's own words — "j.bound is bound to jane". A caller
+// who leads nobody read which logins exist, and whose seat each holds, off the
+// difference. Decided first, every one of those is the same refusal, and the
+// directory is never asked. A caller who leads somebody may still be admitted
+// on the record, so for them the node honestly cannot say — in words that are
+// not the directory's.
+func TestACallerWithNoAuthorityLearnsNothingFromTheDirectory(t *testing.T) {
+	t.Parallel()
+	// `dev` leads nobody in [handleChart]; `lead` leads `dev`.
+	stranger := as(iam.Principal{Kind: iam.KindPerson, Login: "dev.person",
+		Seat: "dev"}, iam.GrantWorkWrite, iam.GrantStateRead)
+	lead := as(iam.Principal{Kind: iam.KindPerson, Login: "lead.person",
+		Seat: "lead"}, iam.GrantWorkWrite, iam.GrantStateRead)
+	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
+		iam.GrantFleetOperate, iam.GrantWorkWrite, iam.GrantStateRead)
+	blind := func() *directory {
+		return &directory{err: errors.New("engine: j.bound is bound to jane and " +
+			"this node cannot say where that seat is now")}
+	}
+	for _, verb := range personVerbs() {
+		t.Run(verb.name, func(t *testing.T) {
+			t.Parallel()
+			var answers []string
+			for _, c := range []struct {
+				typed string
+				dir   *directory
+			}{
+				{"j.bound", &directory{}},
+				{"ghost.person", &directory{}},
+				{"leaver.person", &directory{}},
+				{"j.bound", blind()},
+				{"ghost.person", blind()},
+			} {
+				person := &personSpy{}
+				got := verb.call(stranger, personDeps(person, c.dir), c.typed)
+				if !got.Failed || person.handle != "" {
+					t.Fatalf("naming %q reached a record: %s", c.typed, got.Output)
+				}
+				if !errors.Is(got.Cause, builtin.ErrRefused) {
+					t.Errorf("naming %q failed with %v, want the refusal a "+
+						"seat they do not lead gets: %s", c.typed, got.Cause, got.Output)
+				}
+				if len(c.dir.asked) != 0 {
+					t.Errorf("naming %q asked the directory %v for a caller "+
+						"it could never admit", c.typed, c.dir.asked)
+				}
+				answers = append(answers, got.Output)
+			}
+			for _, answer := range answers[1:] {
+				if answer != answers[0] {
+					t.Errorf("two logins were refused in different words, which "+
+						"is the directory speaking:\n%s\n%s", answers[0], answer)
+				}
+			}
+
+			// A LEAD MAY BE ADMITTED ON THE RECORD, so a node that cannot
+			// read the directory cannot say — and the admin grant may be
+			// told that too. Neither hears the directory's own words.
+			for who, caller := range map[string]context.Context{
+				"a lead": lead, "the admin grant": admin,
+			} {
+				got := verb.call(caller, personDeps(&personSpy{}, blind()), "j.bound")
+				if verb.ownerOnly && who == "a lead" {
+					// NO LEAD PATH: refused before the lookup, as above.
+					if !errors.Is(got.Cause, builtin.ErrRefused) {
+						t.Errorf("%s on an owner-only verb failed with %v", who, got.Cause)
+					}
+					continue
+				}
+				if !errors.Is(got.Cause, builtin.ErrUndecidable) {
+					t.Errorf("%s, on a directory that cannot say, failed with %v: %s",
+						who, got.Cause, got.Output)
+				}
+				if strings.Contains(got.Output, "bound to") ||
+					strings.Contains(got.Output, "jane") {
+					t.Errorf("%s was told the directory's own words: %s", who, got.Output)
+				}
+			}
+		})
+	}
+}

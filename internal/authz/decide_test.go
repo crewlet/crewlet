@@ -56,6 +56,22 @@ func (c chart) LeadsContainer(_ context.Context, actor, container string) (bool,
 	return c.containers[[2]string{actor, container}], nil
 }
 
+// LeadsAnyone answers whether actor leads anybody, READ OFF THE LEADS MAP
+// rather than a map of its own: it is the question "is there a subject
+// [chart.Leads] answers true for", and a fixture holding a second answer to it
+// could disagree with the first.
+func (c chart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	for pair, led := range c.leads {
+		if led && pair[0] == actor {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // nimbus is the fixture every case below decides against: the CTO leads the
 // SRE, leads the PLATFORM project, and leads the `sre` unit.
 func nimbus() chart {
@@ -631,5 +647,88 @@ func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A NAME NOBODY HAS RESOLVED IS DECIDED BEFORE THE DIRECTORY IS ASKED, and a
+// caller the directory's answer could never admit learns nothing from it.
+//
+// Asked after the lookup, a stranger naming a login nobody holds was refused
+// on the name as typed while a held one this node could not resolve answered
+// 503 carrying the seat it was bound to — so which logins exist, and whose
+// seat each holds, was readable off the difference by anybody. Decided first:
+// the admin grant and the caller's own login admit as they would on any
+// record; a class with no lead path, and a caller who leads nobody, are
+// refused with EXACTLY the decision somebody's seat they do not lead gets, so
+// the refusal cannot say whether a lookup ever happened; and a caller who
+// leads somebody is told to resolve the name and decide again on the record.
+func TestANameNobodyResolvedIsDecidedBeforeTheDirectoryIsAsked(t *testing.T) {
+	t.Parallel()
+	unresolved := func(login string) authz.Object {
+		return authz.Object{Kind: authz.KindPerson, Owner: login, Unresolved: true}
+	}
+	resolvedTo := func(seat string) authz.Object {
+		return authz.Object{Kind: authz.KindPerson, Owner: seat}
+	}
+	stranger := person("pat.nobody", iam.GrantWorkWrite, iam.GrantStateRead)
+	lead := personLeading("cto", iam.GrantWorkWrite, iam.GrantStateRead)
+	admin := person("ops.admin", iam.GrantFleetOperate)
+	blind := chart{err: errors.New("the chart view is behind")}
+
+	for _, c := range []struct {
+		name   string
+		p      iam.Principal
+		action authz.Action
+		chart  chart
+		want   string // allowed, refused, resolve, unknown
+	}{
+		{"the admin grant, on a queue", admin, authz.ActionPersonRead, nimbus(), "allowed"},
+		{"the admin grant, on a mark", admin, authz.ActionInboxMark, nimbus(), "allowed"},
+		{"the caller's own login", stranger, authz.ActionPersonRead, nimbus(), "allowed"},
+		{"a stranger, on a queue", stranger, authz.ActionPersonRead, nimbus(), "refused"},
+		{"a stranger, on a mark", stranger, authz.ActionInboxMark, nimbus(), "refused"},
+		// A MARK HAS NO LEAD PATH, so leading somebody changes nothing
+		// and the chart is never asked — not even a chart that cannot say.
+		{"a lead, on a mark", lead, authz.ActionInboxMark, blind, "refused"},
+		{"a lead, on a queue", lead, authz.ActionPersonRead, nimbus(), "resolve"},
+		{"a stranger, on a chart that cannot say", stranger, authz.ActionPersonRead,
+			blind, "unknown"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			login := "someone.else"
+			if c.name == "the caller's own login" {
+				login = c.p.Login
+			}
+			d := authz.Decide(t.Context(), c.p, c.action, unresolved(login),
+				c.chart, decidedAt)
+			var got string
+			switch {
+			case errors.Is(d.Err, authz.ErrUnresolved):
+				got = "resolve"
+			case d.Unknown():
+				got = "unknown"
+			case d.Allowed:
+				got = "allowed"
+			default:
+				got = "refused"
+			}
+			if got != c.want {
+				t.Fatalf("decided %s (%+v), want %s", got, d, c.want)
+			}
+			if got != "refused" {
+				return
+			}
+			// THE SAME REFUSAL SOMEBODY'S SEAT THEY DO NOT LEAD GETS,
+			// reason and grants alike: anything else is the refusal
+			// saying whether the name was looked up.
+			onSeat := authz.Decide(t.Context(), c.p, c.action, resolvedTo("sre-2"),
+				nimbus(), decidedAt)
+			if d.Reason != onSeat.Reason || !slices.Equal(d.Grants, onSeat.Grants) {
+				t.Errorf("refused before the lookup as %s %v, and on a seat they "+
+					"do not lead as %s %v — the two must be one answer",
+					d.Reason, d.Grants, onSeat.Reason, onSeat.Grants)
+			}
+		})
 	}
 }

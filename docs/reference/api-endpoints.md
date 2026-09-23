@@ -2619,12 +2619,18 @@ one of them takes a `handle`, and the rule for whose is the same, in one place:
    `token:` login no entry declares is held by nobody, whatever the directory
    says, because no credential can act as it. So a mistyped `token:opps`
    names no record rather than a queue kept for a credential that does not
-   exist. A login nobody holds, or
-   one whose holder is bound to a seat the chart no longer has, names no
-   record (`404`) — but only to a caller the question would have admitted on
-   the name as typed, which nobody leads, so everybody else is refused as
-   below and learns nothing about which logins exist. A node that cannot read
-   the directory answers `503`.
+   exist. **The directory is asked only after the question has decided what
+   it can without it**: `fleet:operate` is admitted whatever the login turns
+   out to be, and a caller who leads somebody may be, so for those two the
+   login is looked up and the question decided again on the record it names;
+   everybody else — somebody who leads nobody — is refused exactly as they
+   would be on a seat they do not lead, before anything is looked up, so the
+   refusal never says whether the login exists or whose seat it holds. A
+   login nobody holds, or one whose holder is bound to a seat the chart no
+   longer has, then names no record (`404`) for `fleet:operate` and is
+   refused as below for a lead, who leads nobody by that name. A node that
+   cannot read the directory answers `503` — to those two only, and without
+   the directory's own words, which name the seat a login is bound to.
 4. **Anybody else's handle** is decided by the authority table on the record
    it resolved to, each question asking its own verb. The first three are
    somebody's QUEUE, and take the owner-or-lead rule: whoever leads that

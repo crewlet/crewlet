@@ -97,6 +97,51 @@ func TestTheChartWalkReadsTheManagesChainAndTheUnitLead(t *testing.T) {
 	}
 }
 
+// WHETHER A SEAT LEADS ANYBODY IS THE SAME RELATION, ASKED OF EVERY SEAT.
+//
+// It is what a caller naming somebody else's login is decided by before the
+// identity directory is asked: a caller who leads nobody is refused without
+// the lookup. So it must agree with [leadsInChart] exactly — a seat it says
+// leads nobody while [leadsInChart] admits it on somebody is a lead refused
+// their own report, and the reverse sends a stranger's lookup to the
+// directory. Held against the definition over every seat of the fixture, the
+// shortcut for a seat that manages nobody and leads no unit included.
+func TestTheChartWalkSaysWhetherASeatLeadsAnybody(t *testing.T) {
+	t.Parallel()
+	o, err := chartOf(t).Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	for _, c := range []struct {
+		actor string
+		want  bool
+	}{
+		{"ceo", true},      // manages the SRE
+		{"cto", true},      // leads the division the SRE sits in
+		{"sre-lead", true}, // leads the unit it sits in, with the SRE beside it
+		{"sre", false},     // manages nobody and leads no unit
+		{"nobody", false},  // not a seat at all
+		{"jane.doe", false},
+		{"", false},
+	} {
+		if got := leadsAnyoneInChart(o, c.actor); got != c.want {
+			t.Errorf("leadsAnyone(%q) = %v, want %v", c.actor, got, c.want)
+		}
+	}
+	for actor := range o.AllRoles() {
+		want := false
+		for subject := range o.AllRoles() {
+			if leadsInChart(o, actor.Handle(), subject.Handle()) {
+				want = true
+			}
+		}
+		if got := leadsAnyoneInChart(o, actor.Handle()); got != want {
+			t.Errorf("leadsAnyone(%q) = %v, and leads() admits it on some "+
+				"seat = %v", actor.Handle(), got, want)
+		}
+	}
+}
+
 // AND A PROJECT IS LED BY ITS UNIT'S LEAD, OR BY THE SEAT WHOSE OWN IT IS.
 func TestTheChartWalkReadsAProjectsLead(t *testing.T) {
 	t.Parallel()

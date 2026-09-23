@@ -248,6 +248,10 @@ func (h *holdersSpy) HolderRecord(_ context.Context, login string) (string, erro
 	return owner, nil
 }
 
+// mayLook is a gate that lets every caller look, for the cases about what the
+// directory's answers mean rather than about who may learn them.
+func mayLook(context.Context, string) error { return nil }
+
 // A NAME ADDRESSES ONE RECORD, WHOEVER NAMES IT, AND A LOGIN IS NEVER A SEAT.
 //
 // [RecordOwner] made the caller's own record one name for the read and the
@@ -299,7 +303,8 @@ func TestANameAddressesTheRecordItsHolderKeeps(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			holders := directory()
-			owner, settled, err := OwnerOf(context.Background(), c.caller, c.typed, holders)
+			owner, settled, err := OwnerOf(context.Background(), c.caller, c.typed,
+				holders, mayLook)
 			switch {
 			case c.err != nil && !errors.Is(err, c.err):
 				t.Fatalf("OwnerOf(%q) = %v, want %v", c.typed, err, c.err)
@@ -332,7 +337,8 @@ func TestADirectoryThatCannotSayIsNeverReadAsNobody(t *testing.T) {
 		"a directory that could not be read": &holdersSpy{err: errors.New("store blip")},
 		"no directory at all":                nil,
 	} {
-		owner, settled, err := OwnerOf(context.Background(), admin, "jane.doe", holders)
+		owner, settled, err := OwnerOf(context.Background(), admin, "jane.doe",
+			holders, mayLook)
 		if err == nil || errors.Is(err, ErrNoHolder) || errors.Is(err, ErrHolderUnseated) {
 			t.Errorf("%s: OwnerOf = %q, %v, %v — want the unknown arm", name,
 				owner, settled, err)
@@ -354,6 +360,73 @@ func TestALoginShapedNameIsNeverASeat(t *testing.T) {
 	} {
 		if got := NamesLogin(name); got != login {
 			t.Errorf("NamesLogin(%q) = %v, want %v", name, got, login)
+		}
+	}
+}
+
+// A CALLER WHO MAY NOT LOOK NEVER REACHES THE DIRECTORY.
+//
+// Asked after the lookup, the directory's answers differed by login — nobody
+// holds this one, that one's holder cannot be placed on this node — and a
+// caller with no authority over anybody read which logins exist off the
+// difference. The gate's refusal comes back UNCHANGED, marked as the gate's,
+// whatever the directory would have said and whether or not there is one; a
+// surface wired with no gate at all cannot say, rather than looking anyway.
+func TestACallerWhoMayNotLookNeverReachesTheDirectory(t *testing.T) {
+	t.Parallel()
+	stranger := Principal{Kind: KindPerson, Login: "pat.nobody"}
+	refusal := errors.New("pat.nobody may not read somebody else's queue")
+	refuse := func(context.Context, string) error { return refusal }
+	for _, c := range []struct {
+		name    string
+		holders *holdersSpy
+	}{
+		{"a login somebody holds", &holdersSpy{records: map[string]string{
+			"jane.doe": "jane"}}},
+		{"a login nobody holds", &holdersSpy{}},
+		{"a directory that cannot say", &holdersSpy{err: errors.New("behind")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			owner, settled, err := OwnerOf(context.Background(), stranger,
+				"jane.doe", c.holders, refuse)
+			var refused *LookRefused
+			if !errors.As(err, &refused) || !errors.Is(err, refusal) {
+				t.Fatalf("OwnerOf = %v, want the gate's own refusal", err)
+			}
+			if owner != "" || settled {
+				t.Errorf("OwnerOf answered %q settled=%v beside a refusal", owner, settled)
+			}
+			if len(c.holders.asked) != 0 {
+				t.Errorf("the directory was asked %v for a caller who may not look",
+					c.holders.asked)
+			}
+		})
+	}
+
+	// NO DIRECTORY AT ALL REFUSES THE SAME WAY, so the answer does not
+	// say whether this surface could have looked.
+	if _, _, err := OwnerOf(context.Background(), stranger, "jane.doe", nil,
+		refuse); !errors.Is(err, refusal) {
+		t.Errorf("with no directory wired, OwnerOf = %v, want the gate's refusal", err)
+	}
+
+	// AND NO GATE IS NOT "GO AHEAD": it cannot say, and asks nobody.
+	holders := &holdersSpy{records: map[string]string{"jane.doe": "jane"}}
+	_, _, err := OwnerOf(context.Background(), stranger, "jane.doe", holders, nil)
+	if err == nil || errors.Is(err, ErrNoHolder) || errors.Is(err, ErrHolderUnseated) {
+		t.Errorf("with no gate wired, OwnerOf = %v, want the unknown arm", err)
+	}
+	if len(holders.asked) != 0 {
+		t.Errorf("with no gate wired, the directory was asked %v", holders.asked)
+	}
+
+	// YOUR OWN NAMES, AND A SEAT'S, NEVER ASK THE GATE: neither is
+	// somebody else's login, so there is nothing to refuse the looking of.
+	for _, typed := range []string{"", "pat.nobody", "dev"} {
+		if _, _, err := OwnerOf(context.Background(), stranger, typed, holders,
+			refuse); err != nil {
+			t.Errorf("OwnerOf(%q) asked the gate: %v", typed, err)
 		}
 	}
 }

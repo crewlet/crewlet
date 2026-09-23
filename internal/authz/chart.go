@@ -4,12 +4,15 @@ import "context"
 
 // Chart is the company hierarchy, as much of it as the rules ask about.
 //
-// CONSUMER-DEFINED AND FOUR METHODS. It is declared here because this is the
+// CONSUMER-DEFINED AND FIVE METHODS. It is declared here because this is the
 // package that calls it, and it is small because a seam is what a caller
 // needs rather than what a provider has: internal/org can answer a dozen
-// questions about a chart and these are the four any authority rule turns
-// on — who leads a person, a project, a unit and a page container. UnitMember arrives with the chat surface, where it gets its first call
-// site — a seam method nothing calls is a declaration connected to nothing.
+// questions about a chart and these are the five any authority rule turns
+// on — who leads a person, a project, a unit and a page container, and
+// whether somebody leads ANYBODY, which is the question asked about a record
+// before anybody knows whose it is ([Object.Unresolved]). A relation arrives
+// with its first call site — a seam method nothing calls is a declaration
+// connected to nothing.
 //
 // # Every one is THREE-VALUED, and that is the whole reason it exists
 //
@@ -58,6 +61,19 @@ type Chart interface {
 	// that very container with no error to notice. It is the same mistake
 	// [LeadsUnit] exists to make impossible, one key class further on.
 	LeadsContainer(ctx context.Context, actor, containerKey string) (bool, error)
+
+	// LeadsAnyone reports whether actor leads SOMEBODY — any seat at all
+	// that [Chart.Leads] would answer true for.
+	//
+	// THE QUESTION ASKED BEFORE THE RECORD IS KNOWN, and nothing else asks
+	// it: a caller naming somebody else's LOGIN is admitted to that
+	// person's record only as the lead of the seat the login resolves to,
+	// and the resolution is the identity directory's. Asked first, it is
+	// what lets a caller who leads nobody be refused without the directory
+	// being consulted at all — so what the directory says, or that it
+	// cannot say, is never an answer that differs by login for somebody
+	// the answer could not admit. See [Object.Unresolved].
+	LeadsAnyone(ctx context.Context, actor string) (bool, error)
 }
 
 // NoChart is a chart that can answer nothing, and says so.
@@ -86,5 +102,10 @@ func (NoChart) LeadsUnit(context.Context, string, string) (bool, error) {
 
 // LeadsContainer reports that this surface holds no chart.
 func (NoChart) LeadsContainer(context.Context, string, string) (bool, error) {
+	return false, ErrNoChart
+}
+
+// LeadsAnyone reports that this surface holds no chart.
+func (NoChart) LeadsAnyone(context.Context, string) (bool, error) {
 	return false, ErrNoChart
 }

@@ -43,6 +43,11 @@ func (c chart) LeadsContainer(_ context.Context, actor, container string) (bool,
 	return actor == "cto" && container == "ENG", c.err
 }
 
+// LeadsAnyone is [chart.Leads] asked of every subject: `cto` leads `bo`.
+func (c chart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	return actor == "cto", c.err
+}
+
 // ---- principals --------------------------------------------------------- //
 
 // person is somebody signed in and bound to a seat, holding these grants.

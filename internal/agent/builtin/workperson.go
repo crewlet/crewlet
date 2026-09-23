@@ -493,6 +493,20 @@ func SetPinsFor(ctx context.Context, deps WorkDeps, name string,
 // person's record through the same function, so a record this writes is the
 // record a screen reads.
 //
+// # But the authority comes before the directory
+//
+// Somebody else's login is looked up only once [WorkDeps.mayLook] has let it
+// be: the verb decided on a record nobody has resolved yet. The admin grant
+// passes, a caller who could be admitted only as the lead of whoever holds the
+// login passes, and everybody else — a caller who leads nobody, and any
+// non-admin on a verb only a record's owner may take — is refused with the
+// very refusal they would get on somebody's seat they do not lead, before the
+// directory is asked anything. Asked after, what the directory said differed
+// by login: a login nobody holds was refused on the name as typed, and a held
+// one this node could not place answered 503 naming the seat it was bound to —
+// so a caller with no authority over anybody read which logins exist, and
+// whose seat each holds, off the difference.
+//
 // # Then decided, on what it resolved to
 //
 // The relation the table asks is about a SEAT, so it is asked of the record
@@ -502,19 +516,26 @@ func SetPinsFor(ctx context.Context, deps WorkDeps, name string,
 // # And a login that names nobody discloses nothing
 //
 // A login nobody holds, and a holder whose seat the chart no longer has, are
-// decided on the name AS TYPED first — which nobody leads, so only the admin
-// grant passes — and only then refused as naming no record. The other order
-// made the directory a roster: a caller with no authority over anybody learnt
-// which logins exist from a "nobody" that was not a "you may not". A node that
-// cannot say is 503-shaped ([ErrUndecidable]) and says nothing either way.
+// decided on the name AS TYPED — which nobody leads, so only the admin grant
+// passes — and only then refused as naming no record. A node that cannot say
+// is 503-shaped ([ErrUndecidable]) and says nothing either way: the
+// directory's own words go to the log, because they name the seat a login is
+// bound to and the answer goes to whoever asked.
 func (d WorkDeps) personRecord(ctx context.Context, tool string,
 	action authz.Action, name string,
 	seat func(string) (string, string)) (string, *tools.Result) {
 
 	name = strings.TrimSpace(name)
 	principal, _ := iam.From(ctx)
-	owner, settled, err := iam.OwnerOf(ctx, principal, name, d.Holders)
+	owner, settled, err := iam.OwnerOf(ctx, principal, name, d.Holders,
+		d.mayLook(action))
+	var looked *iam.LookRefused
 	switch {
+	case errors.As(err, &looked):
+		// THE TABLE'S OWN REFUSAL, worded as every other one is — the
+		// same bytes this caller gets on a seat they do not lead.
+		refusal := refused(string(action), looked.Err)
+		return "", &refusal
 	case errors.Is(err, iam.ErrNoHolder), errors.Is(err, iam.ErrHolderUnseated):
 		if refused := d.mayWrite(ctx, action,
 			authz.Object{Kind: authz.KindPerson, Owner: name}); refused != nil {
@@ -525,10 +546,14 @@ func (d WorkDeps) personRecord(ctx context.Context, tool string,
 			"record of anybody's under it: %v.", tool, clip(name), err))
 		return "", &refusal
 	case err != nil:
-		refusal := failedBy(fmt.Errorf("%w whose record %q is: %w",
-			ErrUndecidable, name, err), fmt.Sprintf("%s could not be "+
-			"decided: this node cannot say whose record %q is (%v). Try "+
-			"again in a moment.", tool, clip(name), err))
+		log.WarnContext(ctx, "builtin_person_record_undecidable",
+			"tool", tool, "name", name, "error", err.Error(),
+			"detail", "this node could not say whose record the name is; the "+
+				"caller was told to try again and not why")
+		refusal := failedBy(fmt.Errorf("%w whose record %q is", ErrUndecidable,
+			name), fmt.Sprintf("%s could not be decided: this node cannot say "+
+			"whose record %q is right now. Try again in a moment.", tool,
+			clip(name)))
 		return "", &refusal
 	case !settled:
 		resolved, refusal := seat(owner)
@@ -548,6 +573,31 @@ func (d WorkDeps) personRecord(ctx context.Context, tool string,
 		return "", refused
 	}
 	return owner, nil
+}
+
+// mayLook is the authority a person verb decides BEFORE the identity directory
+// is asked whose record somebody else's login is — see [iam.MayLook] and
+// [authz.Object.Unresolved]: the same verb, through the same authorizer, asked
+// of a record nobody has resolved yet.
+//
+// [authz.ErrUnresolved] LETS THE LOOKUP HAPPEN and nothing more. It is the
+// answer for a caller who could be admitted only as the lead of whoever holds
+// the login, which is a question about the record — so the login is looked
+// up, and [WorkDeps.personRecord] decides the verb again on what it resolved
+// to. Every other answer is the caller's, and comes back as it is.
+func (d WorkDeps) mayLook(action authz.Action) iam.MayLook {
+	return func(ctx context.Context, login string) error {
+		if d.Authorize == nil {
+			return ErrNoAuthorizer
+		}
+		err := d.Authorize(ctx, action, authz.Object{
+			Kind: authz.KindPerson, Owner: login, Unresolved: true,
+		})
+		if errors.Is(err, authz.ErrUnresolved) {
+			return nil
+		}
+		return err
+	}
 }
 
 // readAsNamed is how a READ resolves a name [iam.OwnerOf] handed back

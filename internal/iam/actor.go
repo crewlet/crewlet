@@ -263,6 +263,44 @@ var ErrHolderUnseated = errors.New("iam: that login's holder is bound to a " +
 var errNoHolders = errors.New("iam: no identity directory is wired to say " +
 	"whose record a login names")
 
+// errNoLook is what [OwnerOf] answers for somebody else's login when it was
+// given no [MayLook] to decide first. UNKNOWN for [errNoHolders]' reason, and
+// never "go ahead": a surface that wired no gate would otherwise hand the
+// directory's answer to whoever asked.
+var errNoLook = errors.New("iam: no authority decision is wired to say whether " +
+	"this caller may look a login up")
+
+// MayLook decides whether THIS caller may learn what the identity directory
+// says about somebody else's login — asked by [OwnerOf] BEFORE the directory
+// is, and answering nil to let it be asked or the caller's own refusal to stop
+// it.
+//
+// # Why the authority comes first
+//
+// The directory's answers differ by login: nobody holds this one, that one's
+// holder is bound to a seat the chart has moved, a third is covered by a record
+// this node cannot decode and so cannot be said at all. Decided after the
+// lookup, those were answers every caller could tell apart — a login nobody
+// holds refused on the name as typed, a held one this node could not resolve
+// answered 503 naming the seat it was bound to — so a caller with no authority
+// over anybody read which logins exist, and whose seat each holds, off the
+// difference. So the surface decides first whatever it can decide without the
+// record (the admin grant, a verb only a record's owner may take, a caller who
+// leads nobody), and only a caller the record could still admit reaches the
+// directory at all. internal/authz holds the rule as [authz.Object.Unresolved];
+// this is the seam its answer reaches [OwnerOf] through, because this package
+// holds values and decides nothing.
+type MayLook func(ctx context.Context, login string) error
+
+// LookRefused is [OwnerOf]'s answer when its [MayLook] refused the lookup: the
+// gate's own error, UNCHANGED in Err, so a caller tells its own authority
+// answer from anything the directory said and answers it exactly as it answers
+// that decision everywhere else.
+type LookRefused struct{ Err error }
+
+func (r *LookRefused) Error() string { return r.Err.Error() }
+func (r *LookRefused) Unwrap() error { return r.Err }
+
 // OwnerOf is the record a name addresses when THIS caller names it — the name
 // a surface reads a personal record under and writes one under, from a tool's
 // argument, a question's parameter or a route's path alike.
@@ -282,7 +320,10 @@ var errNoHolders = errors.New("iam: no identity directory is wired to say " +
 //     [RecordOwner], which may be empty for a principal with none.
 //   - A LOGIN is looked up: its holder's record, through [Holders] —
 //     [ErrNoHolder], [ErrHolderUnseated] or an unknown error otherwise. A
-//     login is never a seat, and never read literally.
+//     login is never a seat, and never read literally. And it is looked up
+//     only once look has let it be: a caller the record could never admit is
+//     answered look's own refusal, as a [LookRefused], and the directory is
+//     never asked — see [MayLook].
 //   - ANYTHING ELSE is returned UNCHANGED and UNSETTLED: a seat's handle, or
 //     words a model typed. That is the chart's to resolve, and this package
 //     holds no chart — a surface resolves it exactly, or against the
@@ -290,15 +331,24 @@ var errNoHolders = errors.New("iam: no identity directory is wired to say " +
 //
 // SETTLED says which: true when the answer is a record owner this function
 // established, false when it is the name handed back for the chart.
-func OwnerOf(ctx context.Context, p Principal, name string, holders Holders) (
-	owner string, settled bool, err error) {
+func OwnerOf(ctx context.Context, p Principal, name string, holders Holders,
+	look MayLook) (owner string, settled bool, err error) {
 
 	switch {
 	case name == "", NamesSelf(p, name):
 		return RecordOwner(p), true, nil
 	case !NamesLogin(name):
 		return name, false, nil
-	case holders == nil:
+	case look == nil:
+		return "", false, fmt.Errorf("%w: %q", errNoLook, name)
+	}
+	// THE AUTHORITY BEFORE THE DIRECTORY — see [MayLook] — and before the
+	// directory's own absence too: a caller who may not look is refused the
+	// same way whether or not this surface could have looked.
+	if refused := look(ctx, name); refused != nil {
+		return "", false, &LookRefused{Err: refused}
+	}
+	if holders == nil {
 		return "", false, fmt.Errorf("%w: %q", errNoHolders, name)
 	}
 	owner, err = holders.HolderRecord(ctx, name)
