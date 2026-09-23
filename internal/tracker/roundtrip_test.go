@@ -323,11 +323,16 @@ func (r *roundTrip) apply(from, last uint64) {
 					MaxVariables: r.db.Caps().MaxVariables}); err != nil {
 				return err
 			}
+			// THE WIRE SUBJECT, as the framework's own applier records
+			// it: the ledger's subject is what a write resolving an op id
+			// compares against, so a harness that wrote the bare one
+			// would have every write it resolves refused as a reuse.
 			if _, err := tx.ExecContext(r.t.Context(), `
 				INSERT INTO tracker_ops (op_id, subject, position, applied_at)
 				VALUES (?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
-				env.OpID, env.Subject.String(), record.Position.Packed(),
-				store.EncodeTime(storedAt)); err != nil {
+				env.OpID,
+				tracker.Domain{}.Stream().SubjectPrefix+"."+env.Subject.String(),
+				record.Position.Packed(), store.EncodeTime(storedAt)); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(r.t.Context(), `
@@ -585,6 +590,7 @@ func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
 		snap, err := rows.Snapshot(t.Context(), statelog.Subject{
 			Kind: string(tracker.KindTask), ID: "t-1",
 		}, statelog.ScopeSet{Paths: []string{"task:t-1"}}, "op-probe",
+			func(*sql.Tx, statelog.OpEntry) error { return nil },
 			func(*sql.Tx, statelog.Position) (statelog.Decision, error) {
 				return statelog.Decision{Payload: []byte("{}")}, nil
 			})

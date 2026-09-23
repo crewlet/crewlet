@@ -82,7 +82,7 @@ func (probeDomain) FeedGroup() string     { return "" }
 type applier struct {
 	mu        sync.Mutex
 	committed statelog.Position
-	ops       map[string]statelog.Position
+	ops       map[string]statelog.OpEntry
 
 	// lost is the instant the ledger last lost rows before — zero while it
 	// never has. See [harness.sweep].
@@ -168,13 +168,19 @@ func (a *applier) passedBy() {
 func newApplier() *applier {
 	return &applier{
 		committed: statelog.Position{Stream: probeStream, Generation: 1},
-		ops:       map[string]statelog.Position{},
+		ops:       map[string]statelog.OpEntry{},
 		auto:      true,
 	}
 }
 
-// landed is what the appender calls when the broker acknowledges a record.
-func (a *applier) landed(opID string, at statelog.Position) {
+// landed is what the appender calls when the broker acknowledges a record on
+// subject.
+//
+// AN ID'S FIRST ROW IS KEPT, as the real ledger's `ON CONFLICT DO NOTHING`
+// keeps it: an acknowledgement the broker served out of its duplicate window
+// names the FIRST record's sequence, and a write that reused the id on
+// another subject must find the first record's subject here, not its own.
+func (a *applier) landed(opID, subject string, at statelog.Position) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.auto {
@@ -183,8 +189,8 @@ func (a *applier) landed(opID string, at statelog.Position) {
 	if a.committed.Packed() < at.Packed() {
 		a.committed = at
 	}
-	if opID != "" {
-		a.ops[opID] = at
+	if _, held := a.ops[opID]; opID != "" && !held {
+		a.ops[opID] = statelog.OpEntry{Position: at, Subject: subject}
 	}
 }
 
@@ -233,11 +239,11 @@ func (a *applier) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statel
 	return ctx.Err()
 }
 
-func (a *applier) Op(_ context.Context, opID string) (statelog.Position, bool, error) {
+func (a *applier) Op(_ context.Context, opID string) (statelog.OpEntry, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	at, ok := a.ops[opID]
-	return at, ok, nil
+	entry, ok := a.ops[opID]
+	return entry, ok, nil
 }
 
 // LostBefore answers the instant [harness.sweep] or
@@ -289,14 +295,19 @@ type fakeRows struct {
 }
 
 func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statelog.ScopeSet,
-	opID string, decide func(*sql.Tx, statelog.Position) (statelog.Decision, error)) (statelog.Snap, error) {
+	opID string, judge func(*sql.Tx, statelog.OpEntry) error,
+	decide func(*sql.Tx, statelog.Position) (statelog.Decision, error)) (statelog.Snap, error) {
 	// THE OPERATION FIRST, exactly as the real snapshot reads it: an
-	// operation this node's ledger holds is answered and not decided.
+	// operation this node's ledger holds is judged and answered, and not
+	// decided.
 	if held, ok, _ := r.applier.Op(ctx, opID); ok {
 		r.mu.Lock()
 		r.calls++
 		r.mu.Unlock()
-		return statelog.Snap{Held: held, HeldOK: true}, nil
+		if err := judge(nil, held); err != nil {
+			return statelog.Snap{}, err
+		}
+		return statelog.Snap{Held: held.Position, HeldOK: true}, nil
 	}
 	r.mu.Lock()
 	snap, err := r.snap, r.decideErr
@@ -471,7 +482,7 @@ func (h *harness) adoptFromAScrubbingDonor(at time.Time) { h.lose(at) }
 func (h *harness) lose(at time.Time) {
 	h.applier.mu.Lock()
 	defer h.applier.mu.Unlock()
-	h.applier.ops = map[string]statelog.Position{}
+	h.applier.ops = map[string]statelog.OpEntry{}
 	if at.After(h.applier.lost) {
 		h.applier.lost = at
 	}
@@ -520,7 +531,7 @@ func (c *countingAppender) Append(ctx context.Context, subject, msgID string, ex
 		return seq, dup, err
 	}
 	c.lastSeq.Store(int64(seq))
-	c.applier.landed(msgID, statelog.Position{Stream: probeStream, Generation: c.gen(), Seq: seq})
+	c.applier.landed(msgID, subject, statelog.Position{Stream: probeStream, Generation: c.gen(), Seq: seq})
 	if fail != nil {
 		// THE RECORD LANDED AND THE ANSWER DID NOT, which is the whole
 		// content of an ambiguous publish.

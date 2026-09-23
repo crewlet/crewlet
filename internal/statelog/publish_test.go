@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -742,6 +743,87 @@ func TestARecordMustDeclareWhatItMakesStale(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "scope") {
 		t.Fatalf("write with no scope = %v, want a refusal naming the scope", err)
+	}
+}
+
+// AN OPERATION ID CARRIED TO A SECOND OBJECT IS REFUSED, NOT ANSWERED WITH THE
+// FIRST OBJECT'S RECORD — and the same id on the same object is still the same
+// operation.
+//
+// The ledger keeps an id's first row and answers a retry from it, before the
+// domain decides anything. A write to b under the id a write to a had used
+// found a's row there and was answered `applied` at a's position — a write to
+// b reported done, with nothing written to b at all. An operation id is the
+// caller's — a seat carrying one forward, a route taking `?op_id=` — so this
+// is a caller's mistake the framework has to refuse rather than confirm.
+func TestAnOperationIDReusedOnAnotherObjectIsRefused(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	first, err := h.write(probeSubject("a"), "op-shared", "one")
+	if err != nil || first.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the first write: %v (%+v)", err, first)
+	}
+	appended := h.appends.appends.Load()
+
+	res, err := h.write(probeSubject("b"), "op-shared", "two")
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonOpReused {
+		t.Fatalf("a write to b under a's operation id answered (%+v, %v), want an "+
+			"op_reused refusal", res, err)
+	}
+	if res.Outcome == statelog.OutcomeApplied {
+		t.Fatalf("a write to b was reported applied at %s, a's record", res.Position)
+	}
+	if n := h.appends.appends.Load(); n != appended {
+		t.Fatalf("the refused write reached the broker %d time(s) — the ledger "+
+			"answers it before anything is decided", n-appended)
+	}
+
+	again, err := h.write(probeSubject("a"), "op-shared", "one")
+	if err != nil || again.Outcome != statelog.OutcomeApplied ||
+		again.Position != first.Position || !again.Collapsed {
+		t.Fatalf("the same operation on the same object answered (%+v, %v), want "+
+			"applied at %s and collapsed — a retry is the same write",
+			again, err, first.Position)
+	}
+}
+
+// AND SO IS ONE WHOSE REUSE ONLY THE BROKER'S ANSWER SHOWS.
+//
+// A write whose snapshot was taken before the first object's record landed
+// finds no row, decides, and appends under the same id — which the broker's
+// duplicate window collapses onto the first record, acknowledging a's
+// sequence. Resolved from the ledger, that answered `applied` at a's position
+// too. The resolution judges the row exactly as the snapshot does.
+func TestAReusedOperationIDTheBrokerCollapsedIsRefused(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var fired atomic.Bool
+	var first statelog.Result
+	var firstErr error
+	h.rows.mu.Lock()
+	h.rows.afterSnapshot = func() {
+		// a's WRITE LANDS BETWEEN b's SNAPSHOT AND b's APPEND, which is
+		// the one ordering the snapshot's own check cannot see. Once only,
+		// and not under a sync.Once: a's own snapshot runs this hook too.
+		if fired.CompareAndSwap(false, true) {
+			first, firstErr = h.write(probeSubject("a"), "op-shared", "one")
+		}
+	}
+	h.rows.mu.Unlock()
+
+	res, err := h.write(probeSubject("b"), "op-shared", "two")
+	if firstErr != nil || first.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the first write: %v (%+v)", firstErr, first)
+	}
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonOpReused {
+		t.Fatalf("a write to b the broker collapsed onto a's record answered "+
+			"(%+v, %v), want an op_reused refusal", res, err)
+	}
+	if refusal.Position != first.Position {
+		t.Errorf("the refusal names %s, want a's record at %s", refusal.Position,
+			first.Position)
 	}
 }
 

@@ -65,18 +65,22 @@ func NewRows(db *store.DB, d Domain, guards Guards) (*SnapshotRows, error) {
 // broker matches the expectation, accepts the append, and both callers are
 // told they won.
 func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSet,
-	opID string, decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error) {
+	opID string, held func(tx *sql.Tx, entry OpEntry) error,
+	decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error) {
 
 	var snap Snap
 	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		// THE OPERATION FIRST — see [Snap.Held]. A domain with no ledger
 		// answers false here, which is every write on it.
-		held, ok, err := r.tables.op(ctx, tx, opID)
+		entry, ok, err := r.tables.op(ctx, tx, opID)
 		if err != nil {
 			return err
 		}
 		if ok {
-			snap.Held, snap.HeldOK = held, true
+			if err = held(tx, entry); err != nil {
+				return err
+			}
+			snap.Held, snap.HeldOK = entry.Position, true
 			return nil
 		}
 		// THE CHECKPOINT THESE ROWS ARE AT, from the same transaction:
@@ -156,29 +160,28 @@ const everythingPath = ""
 // "absent" below the checkpoint means "not applied here YET" and "absent"
 // below an adoption means "scrubbed out of the snapshot I arrived with".
 // Either read as "somebody else won" republishes a write that already landed.
-func (r *SnapshotRows) Op(ctx context.Context, opID string) (Position, bool, error) {
+func (r *SnapshotRows) Op(ctx context.Context, opID string) (OpEntry, bool, error) {
 	if r.tables.ops == "" {
 		// A DOMAIN WITH NO LEDGER CANNOT ANSWER, and saying so is not the
 		// same as saying no: the caller's own arm for a ledgerless domain
 		// is what decides, and answering false here would make an
 		// ambiguous publish look resolved.
-		return Position{}, false, nil
+		return OpEntry{}, false, nil
 	}
-	var at Position
+	var entry OpEntry
+	var held bool
 	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		got, _, err := r.tables.op(ctx, tx, opID)
-		at = got
+		var err error
+		entry, held, err = r.tables.op(ctx, tx, opID)
 		return err
 	})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return Position{}, false, nil
-	case err != nil:
-		return Position{}, false, err
-	case at.Seq == 0 && at.Generation == 0:
-		return Position{}, false, nil
+	if err != nil {
+		return OpEntry{}, false, err
 	}
-	return at, true, nil
+	// THE ROW'S OWN FOUND FLAG, not its position: a zero position is a
+	// value a row can hold, and reading it as absence answered a present
+	// row "never applied".
+	return entry, held, nil
 }
 
 // LostBefore answers how far back the domain's ledger may have lost rows — see

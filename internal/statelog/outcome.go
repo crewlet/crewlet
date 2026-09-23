@@ -177,6 +177,12 @@ const (
 	// stream and means a store or stream was restored out of step.
 	ReasonSkew Reason = "skew"
 
+	// ReasonOpReused — the write's operation id already names a record on
+	// another object in this node's ledger: an operation id names one
+	// write, and the caller sent it with a different one. Nothing was
+	// written for this write, and a fresh id is what it needs.
+	ReasonOpReused Reason = "op_reused"
+
 	// ReasonLogTruncated — the log lost records a peer's rows hold
 	// ([ErrLogTruncated]): a broker restored from an older copy, and a peer
 	// whose rows are newer than the copy. This node's own rows are the log's

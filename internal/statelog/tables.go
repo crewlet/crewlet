@@ -397,24 +397,42 @@ func (t tables) lostBefore(ctx context.Context, tx *sql.Tx) (time.Time, bool, er
 	return store.DecodeTime(before), true, nil
 }
 
-// op answers where an operation was applied on this node.
-func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (Position, bool, error) {
+// OpEntry is one row of a domain's operation ledger: an operation this node's
+// applier applied, where its record landed, and the WIRE subject it landed on
+// — the domain's prefix and the object's kind and id, as the anchor is keyed.
+//
+// THE SUBJECT IS WHAT MAKES A ROW AN ANSWER. An operation id is the caller's,
+// and one carried to a second object finds the first object's row under it —
+// so a row answers for a write only on the subject that write is to, and
+// [Publisher.heldHere] refuses the rest.
+type OpEntry struct {
+	Position Position
+	Subject  string
+}
+
+// op answers where an operation was applied on this node, and on what.
+func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (OpEntry, bool, error) {
 	if t.ops == "" {
-		return Position{}, false, nil
+		return OpEntry{}, false, nil
 	}
 	var packed int64
+	var subject string
 	err := tx.QueryRowContext(ctx,
-		`SELECT position FROM `+t.ops+` WHERE op_id = ?`, opID).Scan(&packed)
+		`SELECT position, subject FROM `+t.ops+` WHERE op_id = ?`, opID).
+		Scan(&packed, &subject)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Position{}, false, nil
+		return OpEntry{}, false, nil
 	case err != nil:
-		return Position{}, false, fmt.Errorf("statelog: read operation %q: %w", opID, err)
+		return OpEntry{}, false, fmt.Errorf("statelog: read operation %q: %w", opID, err)
 	}
-	return Position{
-		Stream:     t.stream,
-		Generation: uint32(packed / GenerationStride),
-		Seq:        uint64(packed % GenerationStride),
+	return OpEntry{
+		Position: Position{
+			Stream:     t.stream,
+			Generation: uint32(packed / GenerationStride),
+			Seq:        uint64(packed % GenerationStride),
+		},
+		Subject: subject,
 	}, true, nil
 }
 

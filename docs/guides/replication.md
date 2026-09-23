@@ -69,6 +69,14 @@ create that took its key number and never filed its task is finished on a
 fresh number, which leaves a gap in the project's numbering (ENG-8 is skipped)
 rather than two items sharing a key.
 
+An operation id names **one** write, and a ledger row answers only for a write
+to the object it landed on. The same id sent with a write to a different object
+is refused **`op_reused`**, naming where it landed — whether the ledger finds
+it before anything is decided or the broker's duplicate window collapses the
+second append onto the first record — rather than answered `applied` at a
+position on an object the second write never touched. A different write takes
+a fresh id.
+
 The ledger **travels inside a snapshot**. A node that
 [adopted one](retention.md) holds a row for every operation its donor applied,
 so a retry of one is answered from it exactly as the donor would have answered

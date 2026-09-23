@@ -162,7 +162,7 @@ type gateLog struct {
 
 	// applied answers from this node's own operation ledger for the log,
 	// which is how a retried gesture is answered without a second record.
-	applied func(ctx context.Context, opID string) (statelog.Position, bool, error)
+	applied func(ctx context.Context, opID string) (statelog.OpEntry, bool, error)
 
 	// write publishes the log's own gate record.
 	write func(ctx context.Context, by, opID, node string, readmit bool) (statelog.Result, error)
@@ -353,7 +353,7 @@ func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) Gat
 		// write below takes its own snapshot of the same estate and says
 		// why it cannot.
 		if at, done, err := l.applied(ctx, d.OpID); err == nil && done {
-			d.Outcome, d.Position = statelog.OutcomeApplied, at
+			d.Outcome, d.Position = statelog.OutcomeApplied, at.Position
 			out.Domains = append(out.Domains, d)
 			continue
 		}

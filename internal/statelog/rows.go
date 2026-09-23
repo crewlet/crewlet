@@ -55,7 +55,13 @@ type Rows interface {
 	// domain is NOT asked to decide: the snapshot answers [Snap.Held]
 	// and nothing else. See [Snap.Held] for why deciding is wrong there
 	// rather than merely wasted.
+	//
+	// held JUDGES THAT ROW, in the same transaction, before the snapshot
+	// answers with it: an error from it is the snapshot's error, and nil
+	// lets [Snap.Held] stand. It is how the publisher refuses a row that
+	// answers for some other write ([Publisher.heldHere]).
 	Snapshot(ctx context.Context, subj Subject, s ScopeSet, opID string,
+		held func(tx *sql.Tx, entry OpEntry) error,
 		decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error)
 
 	// Op answers where an operation was applied on this node.
@@ -65,7 +71,7 @@ type Rows interface {
 	// below the checkpoint means "not applied here YET", and "absent"
 	// before the watermark may mean "lost". Either read as "somebody else
 	// won" republishes a write that already landed.
-	Op(ctx context.Context, opID string) (Position, bool, error)
+	Op(ctx context.Context, opID string) (OpEntry, bool, error)
 
 	// LostBefore answers the instant before which the domain's ops table
 	// may have lost rows, reporting false when it has lost none: every row

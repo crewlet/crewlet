@@ -481,14 +481,14 @@ func TestALogThatAlreadyHoldsTheGestureIsAnsweredFromItsLedger(t *testing.T) {
 		live: func(context.Context) ([]statelog.Presence, error) { return nil, nil },
 		logs: []gateLog{{
 			domain: "tracker", stream: "CREWLET_TRACKER_LOG",
-			applied: func(_ context.Context, opID string) (statelog.Position, bool, error) {
-				return held, opID == "op-1.evict.tracker", nil
+			applied: func(_ context.Context, opID string) (statelog.OpEntry, bool, error) {
+				return statelog.OpEntry{Position: held}, opID == "op-1.evict.tracker", nil
 			},
 			write: write("tracker", 99),
 		}, {
 			domain: "pages", stream: "CREWLET_PAGES_LOG",
-			applied: func(context.Context, string) (statelog.Position, bool, error) {
-				return statelog.Position{}, false, errors.New("the ledger is unreadable")
+			applied: func(context.Context, string) (statelog.OpEntry, bool, error) {
+				return statelog.OpEntry{}, false, errors.New("the ledger is unreadable")
 			},
 			write: write("pages", 7),
 		}},

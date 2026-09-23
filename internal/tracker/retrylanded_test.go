@@ -234,6 +234,46 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	return writer, lost
 }
 
+// AN OPERATION ID CARRIED TO ANOTHER TASK IS REFUSED, NOT ANSWERED WITH THE
+// FIRST TASK'S RECORD — through the real writer, publisher and ledger.
+//
+// The snapshot answers a retry from the ledger row under the operation's id
+// before anything is decided. The purge's id sent with a purge of a second
+// task found the first purge's row there and was answered `applied`, at the
+// first task's position, with the second task never touched: the operator was
+// told a destruction happened that did not.
+func TestAnOperationIDCarriedToAnotherTaskIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	filedTask(t, r, "t-1")
+	filedTask(t, r, "t-2")
+	op := statelog.NewOpID(time.Now(), "purge-t-1")
+	first, err := r.writer.PurgeTask(t.Context(), op, "t-1", "ENG", "spam")
+	if err != nil || first.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the purge of t-1 = (%+v, %v)", first.Result, err)
+	}
+	r.drain()
+	end := r.logEnd(t)
+
+	_, err = r.writer.PurgeTask(t.Context(), op, "t-2", "ENG", "spam")
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonOpReused {
+		t.Fatalf("t-1's purge id sent with a purge of t-2 answered %v, want an "+
+			"op_reused refusal", err)
+	}
+	if refusal.Position != first.Position {
+		t.Errorf("the refusal names %s, want t-1's purge at %s", refusal.Position,
+			first.Position)
+	}
+	if got := r.logEnd(t); got != end {
+		t.Fatalf("the refused purge put %d record(s) on the log", got-end)
+	}
+	if answer := r.ask(map[string]any{"container": "project:ENG"}); len(answer.Rows) != 1 {
+		t.Fatalf("the project holds %d task(s), want t-2 untouched", len(answer.Rows))
+	}
+}
+
 // logEnd is the log's last sequence.
 func (r *roundTrip) logEnd(t *testing.T) uint64 {
 	t.Helper()

@@ -198,11 +198,15 @@ func (r *roundTrip) drain() {
 				statelog.ApplyOptions{Now: wednesday, StoredAt: storedAt}); err != nil {
 				return err
 			}
+			// THE WIRE SUBJECT, as the framework's own applier records
+			// it: the ledger's subject is what a write resolving an op id
+			// compares against, so a harness that wrote the bare one
+			// would have every write it resolves refused as a reuse.
 			if _, err := tx.ExecContext(r.t.Context(), `
 				INSERT INTO pages_ops (op_id, subject, position, applied_at)
 				VALUES (?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
-				env.OpID, env.Subject.String(), record.Position.Packed(),
-				store.EncodeTime(storedAt)); err != nil {
+				env.OpID, spec.SubjectPrefix+"."+env.Subject.String(),
+				record.Position.Packed(), store.EncodeTime(storedAt)); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(r.t.Context(), `

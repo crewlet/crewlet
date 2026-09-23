@@ -661,9 +661,43 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 // the same transaction read.
 func (p *Publisher) snapshot(ctx context.Context, req Request) (Snap, error) {
 	return p.rows.Snapshot(ctx, req.Subject, req.Scope, req.OpID,
+		func(_ *sql.Tx, held OpEntry) error { return p.heldHere(req, held) },
 		func(tx *sql.Tx, checkpoint Position) (Decision, error) {
 			return req.Decide(tx, p.stampAt(checkpoint))
 		})
+}
+
+// heldHere judges a row of this node's ledger found under the write's own
+// operation id: nil when it answers for this write, a refusal when it does not.
+//
+// ONE JUDGEMENT FOR BOTH PLACES THE LEDGER ANSWERS — a retry the snapshot
+// finds already applied ([Snap.Held]) and an append whose answer is resolved
+// from the ledger ([Publisher.Resolve]) — because they are the same question
+// asked before and after the broker.
+//
+// # A row on another subject answers for some other write
+//
+// An operation id is the caller's — a seat carries one forward and asks again,
+// a route takes `?op_id=` — and the ledger keeps an id's FIRST row. So the same
+// id sent with a write to a second object finds the first object's row: the
+// snapshot answered `applied` at the first object's position, and inside the
+// broker's duplicate window the second append collapsed onto the first record
+// and the resolution answered the same. Either way the caller was told a write
+// to b was done, at a position on a, with nothing written to b at all. It is
+// refused `op_reused`, naming where the id landed, rather than confirmed.
+func (p *Publisher) heldHere(req Request, held OpEntry) error {
+	if held.Subject == p.subjectOf(req.Subject) {
+		return nil
+	}
+	return &Unavailable{
+		Reason: ReasonOpReused,
+		Detail: fmt.Sprintf("operation %q landed on %s at %s, and this write is "+
+			"to %s — an operation id names one write, so a different one needs "+
+			"a fresh id", req.OpID, held.Subject, held.Position,
+			p.subjectOf(req.Subject)),
+		Position: held.Position,
+		OpID:     req.OpID,
+	}
 }
 
 // stampAt is the stamp a decision taken at checkpoint is handed. One function
@@ -1116,16 +1150,19 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 	// table is permanently empty, so a read of it would answer "absent"
 	// for every record including its own.
 	if p.domain.OpsTable() != "" {
-		where, ok, err := p.rows.Op(ctx, req.OpID)
+		entry, ok, err := p.rows.Op(ctx, req.OpID)
 		if err != nil {
 			return Result{}, fmt.Errorf("statelog: read the operation ledger: %w", err)
 		}
 		if ok {
+			if err := p.heldHere(req, entry); err != nil {
+				return Result{}, err
+			}
 			return Result{
 				Outcome:  OutcomeApplied,
-				Position: where,
+				Position: entry.Position,
 				OpID:     req.OpID,
-				Version:  where.Packed(),
+				Version:  entry.Position.Packed(),
 			}, nil
 		}
 	}
