@@ -214,14 +214,29 @@ export function Shell({ children }: { children: ReactNode }) {
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
 
   const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
+  // THE VIEWER'S OWN INBOX IS PUSHED, and the poll is what remains when a push
+  // is not: a frame lost to backpressure or to a reconnect is never re-sent,
+  // and a node that cannot decide the watch sends none until it can.
   const inbox = useQuery(
     "work_inbox",
     viewer.handle ? { handle: viewer.handle, limit: 50 } : undefined,
     {
       enabled: viewer.handle !== "",
       pollMs: 60_000,
+      refetchOnInboxOf: viewer.handle,
     },
   );
+
+  // WATCH THE VIEWER'S SEAT, which is what asks the engine for its
+  // `inbox_changed` frames. The shell owns it because the shell outlives every
+  // screen: a watch taken by the Inbox screen would end the moment the reader
+  // navigated away, and the rail's badge is what has to stay current. The
+  // socket re-sends it on every reconnect.
+  useEffect(() => {
+    if (viewer.handle === "") return;
+    socket.watch(viewer.handle);
+    return () => socket.watch("");
+  }, [socket, viewer.handle]);
 
   // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
   // dialog forever. Everything after that is the state bar.

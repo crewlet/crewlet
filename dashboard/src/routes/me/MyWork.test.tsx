@@ -17,7 +17,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { MyWork } from "./MyWork.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
-import type { QueryName, WorkInboxNotice } from "~/protocol/index.ts";
+import { Store, type QueryName, type WorkInboxNotice } from "~/protocol/index.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -34,7 +34,10 @@ afterEach(() => {
 /** One socket answering each question with a fixture. */
 function serving(answers: Partial<Record<QueryName, unknown>>) {
   const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
-  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  // A REAL STORE beside the scripted socket: the screen's inbox and day are
+  // asked again when the store says the seat's inbox moved, so a client with
+  // no store is a client this screen cannot be mounted on.
+  vi.mocked(useClient).mockReturnValue({ store: new Store(), socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
   vi.mocked(useOrg).mockReturnValue({
     name: "Acme",
@@ -249,7 +252,7 @@ test("the header claims no count while the inbox is still in flight", async () =
           ? emptyDay
           : {},
   );
-  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  vi.mocked(useClient).mockReturnValue({ store: new Store(), socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
   vi.mocked(useOrg).mockReturnValue({
     name: "Acme",

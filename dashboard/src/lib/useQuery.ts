@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
 import {
   queryErrorCode,
+  UNAVAILABLE_RETRY_MS,
   type QueryErrorCode,
   type QueryMap,
   type QueryName,
@@ -73,30 +74,50 @@ export interface QueryOptions {
    * screen and a tab switch is not a reason to re-ask them.
    */
   refetchOnFocus?: boolean;
+  /**
+   * Ask again shortly after an `inbox_changed` frame for this seat.
+   *
+   * FOR THE ANSWERS A COMMITTED TRACKER RECORD MOVES — the inbox, and what is
+   * read beside it. The frame reaches only a socket watching the seat (the
+   * shell watches the viewer's own), so on any other seat this never fires
+   * and the poll is what keeps the screen current, exactly as before there
+   * was a push. Keep the poll either way: a frame lost to backpressure or to
+   * a reconnect is not re-sent, and the poll is what bounds how stale that
+   * leaves the screen.
+   */
+  refetchOnInboxOf?: string;
 }
 
 /**
- * How soon an `unavailable` answer is asked again.
+ * How long after an `inbox_changed` frame the answer is asked for, collecting
+ * any frame that lands in the meantime into the same ask.
  *
- * `unavailable` is the engine saying "ask me in a moment": its projection is
- * catching up, or its coordination store did not answer. The banner for it
- * tells a person the screen fills in on its own, and a query with no poll
- * behind it never asked again, so a screen opened during a restart held that
- * banner until somebody reloaded. Five seconds is the engine's own
- * Retry-After when it has no better hint, which is its shared health tick
- * (`stream.HealthInterval`): sooner asks before anything could have changed,
- * later leaves a recovered node looking broken.
+ * A BOUND, NOT A DEBOUNCE: the first frame starts the clock and later ones
+ * join it, so a steady run of pushes still produces an answer every half
+ * second rather than none until the run stops. Half a second, because the
+ * engine pushes once per APPLIED BATCH and a bulk gesture — a person moving a
+ * column of items, a triage seat filing a set — lands as a run of batches over
+ * a few hundred milliseconds; collected, the run is one read rather than one
+ * per batch, which matters against a per-person budget of four questions in
+ * flight at once. Next to the sixty-second poll this replaces, the wait is
+ * invisible.
  */
-export const UNAVAILABLE_RETRY_MS = 5_000;
+export const INBOX_SETTLE_MS = 500;
 
 export function useQuery<K extends QueryName>(
   what: K,
   params?: Record<string, unknown>,
   options: QueryOptions = {},
 ): QueryResult<QueryMap[K]> {
-  const { socket } = useClient();
+  const { socket, store } = useClient();
   const { connected } = useConnection();
-  const { enabled = true, pollMs, refetchOnReconnect = true, refetchOnFocus = false } = options;
+  const {
+    enabled = true,
+    pollMs,
+    refetchOnReconnect = true,
+    refetchOnFocus = false,
+    refetchOnInboxOf = "",
+  } = options;
 
   const [state, setState] = useState<{
     data: QueryMap[K] | null;
@@ -192,6 +213,33 @@ export function useQuery<K extends QueryName>(
     document.addEventListener("visibilitychange", wake);
     return () => document.removeEventListener("visibilitychange", wake);
   }, [enabled, refetchOnFocus, refetch]);
+
+  // A SEAT'S INBOX MOVING ASKS AGAIN, within INBOX_SETTLE_MS.
+  //
+  // Subscribed to the store directly rather than through `useSlice`, because
+  // nothing here renders the counter: a re-render per frame would be work
+  // done to reach a timer. The count is compared against the one this effect
+  // started from, so a frame for ANOTHER seat — which moves the same slice —
+  // asks nothing.
+  useEffect(() => {
+    if (!enabled || refetchOnInboxOf === "") return;
+    let seen = store.state.inboxMoves[refetchOnInboxOf] ?? 0;
+    let timer: ReturnType<typeof setTimeout> | 0 = 0;
+    const unsubscribe = store.subscribe(["inboxMoves"], () => {
+      const now = store.state.inboxMoves[refetchOnInboxOf] ?? 0;
+      if (now === seen) return;
+      seen = now;
+      if (timer) return; // already collecting
+      timer = setTimeout(() => {
+        timer = 0;
+        refetch();
+      }, INBOX_SETTLE_MS);
+    });
+    return () => {
+      unsubscribe();
+      clearTimeout(timer);
+    };
+  }, [store, enabled, refetchOnInboxOf, refetch]);
 
   return { ...state, refetch };
 }

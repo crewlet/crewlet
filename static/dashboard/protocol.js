@@ -36,7 +36,8 @@ function emptyState() {
 		connected: false,
 		authRejected: false,
 		identityUnverifiable: false,
-		accessRefused: null
+		accessRefused: null,
+		inboxMoves: {}
 	};
 }
 var Store = class {
@@ -165,6 +166,20 @@ var Store = class {
 		if (!value) this.state.identityUnverifiable = false;
 		if (!value) this.state.health = { status: "unknown" };
 		this.emit("health");
+	}
+	/**
+	* One seat's inbox moved. The SEAT is read off the payload's own `handle`
+	* rather than trusted from anywhere else, and a frame without one moves
+	* nothing — a counter under "" would be a seat no screen asks about.
+	*/
+	applyInboxChanged(change) {
+		const handle = change?.handle;
+		if (typeof handle !== "string" || handle === "") return;
+		this.state.inboxMoves = {
+			...this.state.inboxMoves,
+			[handle]: (this.state.inboxMoves[handle] ?? 0) + 1
+		};
+		this.emit("inboxMoves");
 	}
 	applyIdentity(state) {
 		const next = state?.state === "unverifiable";
@@ -347,6 +362,10 @@ async snapshot() {
 * payload, a trace, a different spend window, the configuration document — is
 * asked for over the same socket and answered on it.
 *
+* One push is addressed to a SEAT rather than to every tab: `inbox_changed`,
+* sent only to a socket that asked to `watch` that seat and was allowed to. It
+* is how a person learns they have work without waiting for a poll.
+*
 * There are no HTTP fetches in normal operation. The REST snapshot is used for
 * exactly one thing: keeping the page honest while the socket is down (a proxy
 * that refuses to upgrade, a restarting engine), and it stops the moment the
@@ -388,6 +407,29 @@ var FALLBACK_MS = 5e3;
 * screen shows an error rather than an eternal skeleton.
 */
 var QUERY_TIMEOUT_MS = 1e4;
+/**
+* How soon something the engine answered `unavailable` is asked again — a
+* query (see `useQuery`) or a watch.
+*
+* `unavailable` is the engine saying "ask me in a moment": its projection is
+* catching up, its coordination store did not answer, or its chart view is
+* behind. The banner for it tells a person the screen fills in on its own, and
+* a request with nothing behind it never asked again, so a screen opened during
+* a restart held that banner until somebody reloaded. Five seconds is the
+* engine's own Retry-After when it has no better hint, which is its shared
+* health tick (`stream.HealthInterval`): sooner asks before anything could
+* have changed, later leaves a recovered node looking broken.
+*
+* ONE DECLARATION for both, because the engine's answer is one: a query and a
+* watch refused `unavailable` by the same node are waiting on the same thing.
+*/
+var UNAVAILABLE_RETRY_MS = 5e3;
+/**
+* What a watch refusal's error frame names in `what` — the engine's
+* `watchWhat`. A watch carries no query id, so this is how an error frame about
+* one is told from a query's.
+*/
+var WATCH_WHAT = "watch";
 /**
 * Every {@link QueryErrorCode}, as a value a rejection's message can be tested
 * against.
@@ -437,6 +479,14 @@ var LiveSocket = class {
 	refused = false;
 	nextQueryId = 1;
 	inflight = /* @__PURE__ */ new Map();
+	/**
+	* The seat this tab watches for `inbox_changed` frames, or "". Held HERE
+	* rather than only sent, because a watch lives in the engine's routing index
+	* for ONE socket: every new socket starts watching nothing, so the tab has to
+	* say it again on every open.
+	*/
+	watched = "";
+	watchRetry = 0;
 	token = "";
 	/** Whether the shell has already been asked to collect a token. */
 	askedForToken = false;
@@ -467,6 +517,7 @@ var LiveSocket = class {
 	stop() {
 		this.isClosed = true;
 		clearTimeout(this.reconnectTimer);
+		clearTimeout(this.watchRetry);
 		this.stopPing();
 		this.stopFallback();
 		this.failInflight("closed");
@@ -527,6 +578,52 @@ var LiveSocket = class {
 	flushQueries() {
 		for (const entry of this.inflight.values()) this.sendQuery(entry);
 	}
+	/**
+	* Ask for one seat's `inbox_changed` frames on this socket and every socket
+	* after it, or stop with "".
+	*
+	* ONE SEAT, because the engine keeps one per socket: a watch is a screen
+	* saying where it now is, so a second call replaces the first rather than
+	* adding to it. The engine decides a watch the way it decides the inbox
+	* question about the same seat — its holder, whoever leads it, or the admin
+	* grant — and answers a refusal on the socket rather than closing it; see
+	* `watchAnswered`.
+	*/
+	watch(seat) {
+		const next = seat.trim();
+		clearTimeout(this.watchRetry);
+		this.watchRetry = 0;
+		const clearing = next === "" && this.watched !== "";
+		this.watched = next;
+		if (next !== "" || clearing) this.sendWatch();
+	}
+	sendWatch() {
+		if (!this.connected || !this.sock) return;
+		try {
+			this.sock.send(JSON.stringify({
+				kind: "watch",
+				seat: this.watched
+			}));
+		} catch {}
+	}
+	/**
+	* The engine refused a watch — the one it was just sent, or the one it
+	* re-decided when it re-checked this socket's credential.
+	*
+	* `unavailable` means this node could not read the chart that decides it,
+	* which clears on its own, so it is asked again after the engine's own
+	* retry hint. ANY OTHER CODE IS A DECISION, and asking again would only be
+	* refused again: the screen's poll carries on as it did before there was a
+	* push at all, and the next socket asks once more in case the answer moved.
+	*/
+	watchAnswered(code) {
+		if (code !== "unavailable" || this.watched === "") return;
+		clearTimeout(this.watchRetry);
+		this.watchRetry = setTimeout(() => {
+			this.watchRetry = 0;
+			this.sendWatch();
+		}, UNAVAILABLE_RETRY_MS);
+	}
 	connect() {
 		if (this.sock && (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING)) return;
 		const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -551,11 +648,14 @@ var LiveSocket = class {
 			this.stopFallback();
 			this.startPing();
 			this.flushQueries();
+			if (this.watched !== "") this.sendWatch();
 		};
 		sock.onmessage = (e) => this.onMessage(String(e.data));
 		sock.onclose = (e) => {
 			this.stopPing();
 			this.sock = null;
+			clearTimeout(this.watchRetry);
+			this.watchRetry = 0;
 			for (const entry of this.inflight.values()) {
 				clearTimeout(entry.timer);
 				entry.timer = 0;
@@ -706,13 +806,21 @@ var LiveSocket = class {
 			case "health":
 				this.store.applyHealth(msg.data);
 				break;
+			case "inbox_changed":
+				this.store.applyInboxChanged(msg.data);
+				break;
 			case "identity":
 				this.store.applyIdentity(msg.data);
 				break;
 			case "result":
 				this.settle(msg.id, null, msg.data);
 				break;
-			case "error": this.settle(msg.id, msg.error || "query_failed", null);
+			case "error":
+				if (msg.what === WATCH_WHAT && msg.id === void 0) {
+					this.watchAnswered(msg.error);
+					break;
+				}
+				this.settle(msg.id, msg.error || "query_failed", null);
 		}
 	}
 	settle(id, error, data) {
@@ -1012,4 +1120,4 @@ var rest = {
 	})
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };
+export { LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };

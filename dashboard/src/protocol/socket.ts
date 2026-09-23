@@ -7,6 +7,10 @@
  * payload, a trace, a different spend window, the configuration document — is
  * asked for over the same socket and answered on it.
  *
+ * One push is addressed to a SEAT rather than to every tab: `inbox_changed`,
+ * sent only to a socket that asked to `watch` that seat and was allowed to. It
+ * is how a person learns they have work without waiting for a poll.
+ *
  * There are no HTTP fetches in normal operation. The REST snapshot is used for
  * exactly one thing: keeping the page honest while the socket is down (a proxy
  * that refuses to upgrade, a restarting engine), and it stops the moment the
@@ -60,6 +64,31 @@ const FALLBACK_MS = 5_000;
  * screen shows an error rather than an eternal skeleton.
  */
 const QUERY_TIMEOUT_MS = 10_000;
+
+/**
+ * How soon something the engine answered `unavailable` is asked again — a
+ * query (see `useQuery`) or a watch.
+ *
+ * `unavailable` is the engine saying "ask me in a moment": its projection is
+ * catching up, its coordination store did not answer, or its chart view is
+ * behind. The banner for it tells a person the screen fills in on its own, and
+ * a request with nothing behind it never asked again, so a screen opened during
+ * a restart held that banner until somebody reloaded. Five seconds is the
+ * engine's own Retry-After when it has no better hint, which is its shared
+ * health tick (`stream.HealthInterval`): sooner asks before anything could
+ * have changed, later leaves a recovered node looking broken.
+ *
+ * ONE DECLARATION for both, because the engine's answer is one: a query and a
+ * watch refused `unavailable` by the same node are waiting on the same thing.
+ */
+export const UNAVAILABLE_RETRY_MS = 5_000;
+
+/**
+ * What a watch refusal's error frame names in `what` — the engine's
+ * `watchWhat`. A watch carries no query id, so this is how an error frame about
+ * one is told from a query's.
+ */
+const WATCH_WHAT = "watch";
 
 /**
  * Every {@link QueryErrorCode}, as a value a rejection's message can be tested
@@ -121,6 +150,14 @@ export class LiveSocket {
   private refused = false;
   private nextQueryId = 1;
   private inflight = new Map<number, Inflight>();
+  /**
+   * The seat this tab watches for `inbox_changed` frames, or "". Held HERE
+   * rather than only sent, because a watch lives in the engine's routing index
+   * for ONE socket: every new socket starts watching nothing, so the tab has to
+   * say it again on every open.
+   */
+  private watched = "";
+  private watchRetry: ReturnType<typeof setTimeout> | 0 = 0;
   private token = "";
   /** Whether the shell has already been asked to collect a token. */
   private askedForToken = false;
@@ -161,6 +198,7 @@ export class LiveSocket {
   stop(): void {
     this.isClosed = true;
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.watchRetry);
     this.stopPing();
     this.stopFallback();
     this.failInflight("closed");
@@ -226,6 +264,56 @@ export class LiveSocket {
     for (const entry of this.inflight.values()) this.sendQuery(entry);
   }
 
+  /**
+   * Ask for one seat's `inbox_changed` frames on this socket and every socket
+   * after it, or stop with "".
+   *
+   * ONE SEAT, because the engine keeps one per socket: a watch is a screen
+   * saying where it now is, so a second call replaces the first rather than
+   * adding to it. The engine decides a watch the way it decides the inbox
+   * question about the same seat — its holder, whoever leads it, or the admin
+   * grant — and answers a refusal on the socket rather than closing it; see
+   * `watchAnswered`.
+   */
+  watch(seat: string): void {
+    const next = seat.trim();
+    clearTimeout(this.watchRetry);
+    this.watchRetry = 0;
+    // A CLEAR IS SENT even to a socket that watched nothing, because the one
+    // it is sent on may be watching what this tab asked for before.
+    const clearing = next === "" && this.watched !== "";
+    this.watched = next;
+    if (next !== "" || clearing) this.sendWatch();
+  }
+
+  private sendWatch(): void {
+    if (!this.connected || !this.sock) return; // `onopen` sends it
+    try {
+      this.sock.send(JSON.stringify({ kind: "watch", seat: this.watched }));
+    } catch {
+      // The close handler owns recovery, and the next open re-sends it.
+    }
+  }
+
+  /**
+   * The engine refused a watch — the one it was just sent, or the one it
+   * re-decided when it re-checked this socket's credential.
+   *
+   * `unavailable` means this node could not read the chart that decides it,
+   * which clears on its own, so it is asked again after the engine's own
+   * retry hint. ANY OTHER CODE IS A DECISION, and asking again would only be
+   * refused again: the screen's poll carries on as it did before there was a
+   * push at all, and the next socket asks once more in case the answer moved.
+   */
+  private watchAnswered(code: string | undefined): void {
+    if (code !== "unavailable" || this.watched === "") return;
+    clearTimeout(this.watchRetry);
+    this.watchRetry = setTimeout(() => {
+      this.watchRetry = 0;
+      this.sendWatch();
+    }, UNAVAILABLE_RETRY_MS);
+  }
+
   // ---- connection --------------------------------------------------------
 
   private connect(): void {
@@ -270,11 +358,17 @@ export class LiveSocket {
       // catch-up fetch of its own — but any query that was waiting for this
       // socket, or lost with the last one, does need sending now.
       this.flushQueries();
+      // AND THE WATCH, which the engine held for the last socket only.
+      if (this.watched !== "") this.sendWatch();
     };
     sock.onmessage = (e: MessageEvent) => this.onMessage(String(e.data));
     sock.onclose = (e: CloseEvent) => {
       this.stopPing();
       this.sock = null;
+      // A pending watch retry was for the socket that just went; the next
+      // open sends the watch anyway.
+      clearTimeout(this.watchRetry);
+      this.watchRetry = 0;
       // Queries are NOT failed here: they are reads, and the reconnect re-sends
       // them. Their answer-timeout is stopped so the wait for a new socket is
       // not counted against the server.
@@ -448,6 +542,9 @@ export class LiveSocket {
       case "health":
         this.store.applyHealth(msg.data as never);
         break;
+      case "inbox_changed":
+        this.store.applyInboxChanged(msg.data as never);
+        break;
       case "identity":
         this.store.applyIdentity(msg.data as never);
         break;
@@ -455,6 +552,11 @@ export class LiveSocket {
         this.settle(msg.id, null, msg.data);
         break;
       case "error":
+        // A WATCH'S REFUSAL carries no query id, only what it is about.
+        if (msg.what === WATCH_WHAT && msg.id === undefined) {
+          this.watchAnswered(msg.error);
+          break;
+        }
         // An error frame always carries a code. One that does not is still
         // a failure nobody explained, which is what `query_failed` means.
         this.settle(msg.id, msg.error || "query_failed", null);

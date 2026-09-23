@@ -11,8 +11,8 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ClientContext } from "./store-hooks.ts";
-import { UNAVAILABLE_RETRY_MS, useQuery } from "./useQuery.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { useQuery } from "./useQuery.ts";
+import { LiveSocket, Store, UNAVAILABLE_RETRY_MS } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;

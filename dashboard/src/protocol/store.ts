@@ -21,6 +21,7 @@ import type {
   FeedRow,
   EventEnvelope,
   HealthPush,
+  InboxChange,
   OrgBudget,
   OrgProjection,
   Overlay,
@@ -117,6 +118,17 @@ export interface StoreState {
    * access, so the only repair is an administrator's.
    */
   accessRefused: string | null;
+  /**
+   * How many `inbox_changed` frames this socket has delivered, per seat.
+   *
+   * A COUNTER, NOT THE INBOX: the frame carries identifiers and a hint rather
+   * than the notices, so what a screen does with it is ask `work_inbox` again
+   * (see `useQuery`'s `refetchOnInboxOf`), and a count moving is the whole of
+   * what it needs to know. Only the seat this socket WATCHES is ever sent
+   * one. NOT part of what a snapshot replaces: a reconnect re-asks every query
+   * anyway, so there is nothing for a snapshot to restore.
+   */
+  inboxMoves: Record<string, number>;
 }
 
 export type Slice = keyof StoreState;
@@ -152,6 +164,7 @@ function emptyState(): StoreState {
     authRejected: false,
     identityUnverifiable: false,
     accessRefused: null,
+    inboxMoves: {},
   };
 }
 
@@ -317,6 +330,21 @@ export class Store {
     // "healthy" is a lie with a timestamp nobody can see.
     if (!value) this.state.health = { status: "unknown" };
     this.emit("health");
+  }
+
+  /**
+   * One seat's inbox moved. The SEAT is read off the payload's own `handle`
+   * rather than trusted from anywhere else, and a frame without one moves
+   * nothing — a counter under "" would be a seat no screen asks about.
+   */
+  applyInboxChanged(change: Partial<InboxChange> | null | undefined): void {
+    const handle = change?.handle;
+    if (typeof handle !== "string" || handle === "") return;
+    this.state.inboxMoves = {
+      ...this.state.inboxMoves,
+      [handle]: (this.state.inboxMoves[handle] ?? 0) + 1,
+    };
+    this.emit("inboxMoves");
   }
 
   applyIdentity(state: { state?: string } | null | undefined): void {

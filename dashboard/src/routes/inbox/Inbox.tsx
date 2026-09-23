@@ -169,7 +169,10 @@ export function Inbox() {
           include_snoozed: state === "snoozed",
         }
       : undefined,
-    { enabled: viewer.handle !== "", pollMs: 30_000 },
+    // PUSHED as well as polled: the shell watches the viewer's seat, so a
+    // notice lands here within half a second of its commit rather than up to
+    // a poll later. See `refetchOnInboxOf`.
+    { enabled: viewer.handle !== "", pollMs: 30_000, refetchOnInboxOf: viewer.handle },
   );
   usePageCoverage(inbox.data);
 

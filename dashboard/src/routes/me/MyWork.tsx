@@ -124,9 +124,15 @@ export function MyWork() {
   // NOT UNTIL SOMEBODY IS CHOSEN — the same guard the board takes. `whose`
   // is empty until the chart has loaded, and the engine
   // refuses this question without a handle.
+  //
+  // PUSHED on the reader's own day: the record that hands somebody work is the
+  // record that writes them a notice, so the frame that moves their inbox is
+  // the one that moves this. On a report's day no frame arrives — the shell
+  // watches the viewer's own seat — and the poll is what keeps it current.
   const state = useQuery("work_my_work", whose ? { handle: whose } : undefined, {
     enabled: whose !== "",
     pollMs: 30_000,
+    refetchOnInboxOf: whose,
   });
   const mine = state.data;
 
@@ -138,6 +144,7 @@ export function MyWork() {
   const inbox = useQuery("work_inbox", whose ? { handle: whose, limit: INBOX_ROWS } : undefined, {
     enabled: whose !== "",
     pollMs: 30_000,
+    refetchOnInboxOf: whose,
   });
   const notices = inbox.data?.notices ?? [];
   // THE REASON VOCABULARY, IN THE VOICE OF WHOSE DAY THIS IS. `reasonPhrase` is
