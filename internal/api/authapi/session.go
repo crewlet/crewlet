@@ -179,17 +179,17 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 // stepUpDue reports whether this caller's proof of identity is old enough that
 // the next sensitive action will ask them to confirm it.
 //
-// DERIVED FROM THE SAME SETTING THE GATE USES, never a second number: a client
-// that warned at a different threshold from the one that refuses would either
-// nag early or surprise late, and both read as a bug in the engine.
+// THE PRINCIPAL'S OWN DEADLINE, never a second number: [iam.Principal.ReauthAt]
+// is the instant the proof stops counting, composed by the guard from when the
+// session proved identity and this node's `step_up` window — the one setting
+// the gate uses — so a client warned here and refused there is warned at the
+// threshold that refuses. A zero deadline is stale: nothing proved yet is due
+// by definition, which is the honest reading of a session opened by a route
+// that does not prove identity at all — see the Tier A token exchange.
 //
-// [iam.Principal.Fresh] AND NOTHING ELSE, because ReauthAt is the instant a
-// proof goes STALE, which the guard derives once from the configured window.
-// This used to read it as the instant the proof was GIVEN and add the window
-// itself — which matched a session arm that stored the proof instant in the
-// field, and matched nothing else: [iam.Principal.Fresh] read every signed-in
-// person as stale the moment they proved themselves, and a Tier A token as
-// fresh for twice the window. A zero ReauthAt is nothing proved yet, and due.
+// IT USED TO SUBTRACT THE WINDOW A SECOND TIME, reading ReauthAt as the
+// instant of proof while the guard wrote it as the deadline, so a fresh proof
+// counted for twice the window here.
 func (s *Service) stepUpDue(p iam.Principal) bool {
 	return !p.Fresh(s.now())
 }

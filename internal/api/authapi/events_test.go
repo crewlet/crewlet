@@ -78,6 +78,9 @@ type estate struct {
 	// counters are the revocation epoch and session generation a session
 	// is opened at, which the writer reads in its own snapshot.
 	counters iamdomain.SessionOpened
+
+	// starts are the sessions this estate was asked to open, in order.
+	starts []iamdomain.SessionStart
 }
 
 func (e *estate) PersonByLogin(_ context.Context, login string) (iamdomain.Sighting, error) {
@@ -93,9 +96,10 @@ func (e *estate) PersonByLogin(_ context.Context, login string) (iamdomain.Sight
 
 func (e *estate) AnyPerson(context.Context) (bool, error) { return true, nil }
 
-func (e *estate) OpenSession(context.Context, iamdomain.SessionStart) (iamdomain.SessionOpened, error) {
+func (e *estate) OpenSession(_ context.Context, in iamdomain.SessionStart) (iamdomain.SessionOpened, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.starts = append(e.starts, in)
 	opened := e.counters
 	opened.Position = statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 9}
 	return opened, nil

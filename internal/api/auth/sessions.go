@@ -468,19 +468,18 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 // ceiling was lowered enforces it on its next request rather than on a row
 // somebody has to rewrite. A mixed fleet mid-rollout is a LEGAL state, which
 // is why each node publishes a hash of its own ceiling.
+//
+// AND SO IS THE STEP-UP WINDOW, for the same reason: `api.auth.session.step_up`
+// is this node's own setting, and the session row states only WHEN its holder
+// proved who they are. The principal's [iam.Principal.ReauthAt] is the instant
+// that proof stops counting — the proof plus this node's window — so a
+// shortened window takes effect on the next request, and a session that
+// proved nothing (a Tier A token's exchanged cookie, or a row this node has
+// not applied) is never fresh.
 func (s *Sessions) principal(v session.Validation, binding session.Binding,
 	ceiling []iam.Grant, stepUp time.Duration) iam.Principal {
 
 	person := v.Person
-	// THE PROOF INSTANT BECOMES A DEADLINE HERE, once. The row says WHEN
-	// this session last proved identity; [iam.Principal.ReauthAt] is the
-	// instant after which that proof is stale, which is what every reader
-	// of a principal compares against — and a principal carrying the proof
-	// instant itself would read as stale the moment it was proved.
-	var reauth time.Time
-	if !person.ReauthAt.IsZero() {
-		reauth = person.ReauthAt.Add(stepUp)
-	}
 	return iam.Principal{
 		// THE PERSON'S OWN ID, parsed from the bearer. A bearer that
 		// reached here verified, so the value is one this engine wrote.
@@ -499,12 +498,22 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		Grants:    intersect(person.Grants, ceiling),
 		Colleague: person.Colleague,
 		Stage:     person.Stage,
-		// WHEN THIS SESSION'S PROOF GOES STALE, from when it was last
-		// given. It is the session's own fact plus the one step-up
-		// window, so a sensitive gesture an hour into a session asks
-		// for a password again.
-		ReauthAt: reauth,
+		// WHEN THIS SESSION'S PROOF STOPS COUNTING. It used to be read
+		// off a person field nothing ever set, so every session was
+		// stale from its first request and no person could reach a
+		// step-up surface at all — enrolling a second factor included.
+		ReauthAt: reauthDeadline(v.Session.ProvedAt, stepUp),
 	}
+}
+
+// reauthDeadline is the instant a proof taken at provedAt stops authorising a
+// step-up surface, or the zero time — which [iam.Principal.Fresh] reads as
+// stale — for a session that proved nothing.
+func reauthDeadline(provedAt time.Time, stepUp time.Duration) time.Time {
+	if provedAt.IsZero() {
+		return time.Time{}
+	}
+	return provedAt.Add(stepUp)
 }
 
 // personID parses the id a bearer carries.

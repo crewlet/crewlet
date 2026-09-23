@@ -188,3 +188,51 @@ func openSession(t *testing.T, rig *writeRig, person string) (*session.Signer, s
 	}
 	return signer, cookie
 }
+
+// A SESSION'S PROOF IS READ BACK AS ITS OWN FACT.
+//
+// A step-up surface asks how recently the holder proved who they are, and the
+// only honest answer is the instant the session was opened on a proof — every
+// node reading it off the replicated row rather than off the person, since
+// proof on one device says nothing about another. Nothing recorded it, so
+// the guard composed every session's deadline from zero and no step-up could
+// ever be satisfied; and a session opened on NO proof must read back as none,
+// never as a stale-but-set instant.
+func TestASessionsProofIsReadBackAsItsOwnFact(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	const person = "018f3a9c-0000-7000-8000-0000000008a2"
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Sarah Chen", Email: "sarah@example.com", Login: "sarah.chen",
+		OpID: "op-enrol", Reason: "a hire",
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	proved := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	reader := rig.reader(t)
+	for name, at := range map[string]time.Time{
+		"a sign-in":          proved,
+		"a token's exchange": {},
+	} {
+		lineage := uuid.Must(uuid.NewV7()).String()
+		if err := rig.draining(func() error {
+			_, err := rig.writer.OpenSession(t.Context(), iamdomain.SessionStart{
+				Lineage: lineage, Person: person, ProvedAt: at,
+				AbsoluteExpiresAt: time.Now().Add(time.Hour),
+				OpID:              "session:" + lineage,
+			})
+			return err
+		}); err != nil {
+			t.Fatalf("%s: open a session: %v", name, err)
+		}
+		got, err := reader.Resolve(t.Context(), lineage, person)
+		if err != nil {
+			t.Fatalf("%s: resolve: %v", name, err)
+		}
+		if !got.Session.Found || !got.Session.ProvedAt.Equal(at) {
+			t.Errorf("%s: the session reads back as %+v, want found and proved at %s",
+				name, got.Session, at)
+		}
+	}
+}

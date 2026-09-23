@@ -518,7 +518,14 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: held.ID,
 		AbsoluteExpiresAt: expires,
-		OpID:              "session:" + lineage.String(),
+		// EVERY PATH HERE IS A PROOF — a password and its second factor,
+		// an identity provider's token, an invitation, the bootstrap
+		// code, a step-up — so the session is fresh from this instant,
+		// and a step-up surface asks again once this node's window has
+		// passed. It is the one field that says so: without it every
+		// session was stale from its first request.
+		ProvedAt: s.now(),
+		OpID:     "session:" + lineage.String(),
 		// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT, because
 		// nothing in this answer reads the row: the bearer carries the
 		// position and every node validates against its own applier.

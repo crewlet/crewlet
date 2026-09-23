@@ -219,6 +219,23 @@ type Session struct {
 	// signature, so moving it costs no store write at all.
 	AbsoluteExpiresAt time.Time `json:"absolute_expires_at,omitzero"`
 
+	// ProvedAt is when the holder proved who they are to open this
+	// session — a password and its second factor, an identity provider's
+	// token, an invitation or the bootstrap code — which is what a
+	// step-up surface asks to be recent.
+	//
+	// ON THE SESSION AND NOT THE PERSON, because proof is a fact about one
+	// sign-in: a person proving themselves on a laptop proves nothing
+	// about the phone they signed in on last week. A step-up re-proves by
+	// OPENING A NEW SESSION, so the value is written once, at start, and
+	// never moved — which keeps this log's volume proportional to
+	// sign-ins rather than to requests.
+	//
+	// ZERO IS "NOTHING WAS PROVED", never "long ago": a session exchanged
+	// from a Tier A token proves no person is at the keyboard, and a
+	// stale-but-set instant would one day have made it fresh.
+	ProvedAt time.Time `json:"proved_at,omitzero"`
+
 	// EndedReason is why a session stopped, on the CLOSE record: signed
 	// out, revoked, expired, or reuse detected. "This session was ended by
 	// reuse detection" is the sentence an investigation is looking for,

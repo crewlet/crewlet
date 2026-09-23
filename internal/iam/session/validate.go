@@ -76,6 +76,13 @@ type SessionRow struct {
 
 	// Epoch is the revocation epoch the session was opened at.
 	Epoch uint64
+
+	// ProvedAt is when the holder proved who they are to open this
+	// session, or zero for one opened on no proof of a person. It is what
+	// a step-up surface asks to be recent, and it is the SESSION's fact
+	// rather than the person's: proof on one device says nothing about
+	// another, and a step-up re-proves by opening a new session.
+	ProvedAt time.Time
 }
 
 // PersonRow is the holder's row.
@@ -98,10 +105,6 @@ type PersonRow struct {
 	// are for.
 	Seat   string
 	SeatAt uint64
-
-	// ReauthAt is when this session last proved identity afresh, which is
-	// what the step-up column of the table compares against.
-	ReauthAt time.Time
 }
 
 // Row is which row of the session table a bearer landed on.
@@ -293,6 +296,12 @@ type Validation struct {
 	// that read nothing.
 	Person PersonRow
 
+	// Session is the session's own row as this node has it — when it was
+	// proved — and the zero row on [RowBehind], whose whole meaning is that
+	// this node has not applied it: a node that is behind serves reads on
+	// the signature and the epoch, and claims no proof it cannot see.
+	Session SessionRow
+
 	// Detail says which fact decided, for a log line. It is NEVER sent to
 	// the caller: the code is, and the code is the same for every refusal.
 	Detail string
@@ -463,7 +472,7 @@ func (s *Signer) served(row Row, b Bearer, identity Identity,
 	rotation rotationVerdict, now time.Time, detail string) Validation {
 
 	out := Validation{Row: row, Bearer: b, Person: identity.Person,
-		Detail: detail}
+		Session: identity.Session, Detail: detail}
 	issuedAt := b.IdleExpiresAt.Add(-Idle)
 	stale := now.Sub(issuedAt) >= ReissueAfter
 	if !stale && rotation != rotationBehind {

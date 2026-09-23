@@ -918,6 +918,18 @@ because each is a row in a domain that **lags independently**.
 | Seat absent, and this node's chart position is below the binding's, chart applier lag under 60 s | 503 `identity_unavailable` naming the chart |
 | The chart applier stalled past 60 s, or the view is not built | 503 |
 
+**`reauth_at` is the session's own proof plus `step_up`.** Every session a
+sign-in opens — a password and its second factor, an identity provider's
+token, a redeemed invitation, the bootstrap code, a step-up — records the
+instant it was proved on its row, and the guard composes the deadline from
+that and this node's `api.auth.session.step_up` at decision time. Proof is a
+fact about one sign-in rather than about the person, so a proof on a laptop
+says nothing about a phone signed in last week, and a step-up re-proves by
+opening a new session rather than by moving a field. A session exchanged from
+a Tier A token records no proof at all, so its `reauth_at` is zero and every
+step-up surface refuses it. A node that has not yet applied the session's row
+— the read-only grace in the table above — claims no proof it cannot see.
+
 **503 and never 401 on a node that is behind.** A browser reads 401 as "sign in
 again" and discards the cookie, so one stalled applier answering 401 would log
 everybody on that node out and stampede the identity provider with the

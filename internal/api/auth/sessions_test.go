@@ -72,13 +72,13 @@ func newSignedIn(t *testing.T) *signedIn {
 		dir: &fakeDirectory{identity: session.Identity{
 			Applied:    sessionStart,
 			Generation: 1,
-			Session:    session.SessionRow{Found: true, Epoch: 3},
+			Session: session.SessionRow{Found: true, Epoch: 3,
+				ProvedAt: at.Add(-10 * time.Minute)},
 			Person: session.PersonRow{
 				Found: true, Epoch: 3, Stage: iam.StageActive,
 				Login: "sarah.chen", Seat: sessionSeat, SeatAt: 900,
 				Colleague: iam.ColleagueWrite,
 				Grants:    []iam.Grant{iam.GrantStateRead, iam.GrantConfigRead},
-				ReauthAt:  at.Add(10 * time.Minute),
 			},
 		}},
 		chart: &fakeChart{position: 1000, seats: map[string]session.Seat{
@@ -253,31 +253,44 @@ func TestASignedInPersonIsResolvedFromTheirCookie(t *testing.T) {
 	}
 }
 
-// A SESSION'S PROOF IS FRESH FOR ONE STEP-UP WINDOW AFTER IT WAS GIVEN.
+// A SESSION'S PROOF COUNTS FOR THIS NODE'S STEP-UP WINDOW, AND NO PROOF IS STALE.
 //
-// The row records WHEN a session last proved identity, and a principal
-// carries the instant that proof goes STALE — which every reader of a
-// principal compares against. The session arm used to copy the first into the
-// second, so a person who had just proved themselves read as stale on the very
-// request that followed. Mutation: copy the row's instant straight across and
-// the principal is stale ten minutes into a fifteen-minute window.
-func TestASessionsProofIsFreshForOneStepUpWindow(t *testing.T) {
+// The principal's ReauthAt is the instant a step-up surface stops accepting
+// this session's proof: when the session proved who its holder is, plus this
+// node's own `step_up` window. It was read off a person field nothing ever
+// set, so every session was stale from its first request and no person could
+// reach a step-up surface at all — enrolling a second factor included. A
+// session that proved nothing — a Tier A token's exchanged cookie, or a row
+// this node has not applied — stays stale, because a stale-but-set instant
+// would one day make it fresh.
+func TestASessionsProofCountsForTheStepUpWindow(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
 	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
 	if got.how != iam.Resolved {
 		t.Fatalf("resolution %v, want resolved", got.how)
 	}
-	proved := rig.dir.identity.Person.ReauthAt
-	window := config.DefaultBootstrap().API.Auth.Session.StepUp()
-	if want := proved.Add(window); !got.principal.ReauthAt.Equal(want) {
-		t.Errorf("the principal's proof goes stale at %s, want %s — the "+
-			"instant it was given plus one step-up window",
-			got.principal.ReauthAt, want)
+	proved := rig.dir.identity.Session.ProvedAt
+	want := proved.Add(config.DefaultSessionStepUp)
+	if !got.principal.ReauthAt.Equal(want) {
+		t.Errorf("reauth deadline %s, want the proof at %s plus the %s window",
+			got.principal.ReauthAt, proved, config.DefaultSessionStepUp)
 	}
-	if !got.principal.Fresh(proved.Add(window / 2)) {
-		t.Error("halfway through the window after proving themselves, the " +
-			"person reads as stale")
+	if !got.principal.Fresh(rig.at) {
+		t.Error("a session proved ten minutes ago is stale inside an hour's window")
+	}
+
+	unproved := newSignedIn(t)
+	unproved.dir.identity.Session.ProvedAt = time.Time{}
+	got = unproved.call(unproved.guard(), http.MethodGet, "/agents",
+		unproved.withCookie)
+	// THE ZERO DEADLINE, and not a window added to nothing: the two are
+	// both stale, and only the first says "never proved" to a reader of
+	// `reauth_at` rather than naming the year one.
+	if got.how != iam.Resolved || !got.principal.ReauthAt.IsZero() {
+		t.Errorf("a session that proved nothing resolved %v with reauth "+
+			"deadline %s — want resolved with none", got.how,
+			got.principal.ReauthAt)
 	}
 }
 

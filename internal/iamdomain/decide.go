@@ -1102,6 +1102,7 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 		rec.Mutation, err = EncodeSession(Session{
 			V: DocumentVersion, Person: in.Person, Epoch: epoch,
 			AbsoluteExpiresAt: in.AbsoluteExpiresAt,
+			ProvedAt:          in.ProvedAt,
 		})
 		return err
 	}
@@ -1176,6 +1177,12 @@ type SessionStart struct {
 	Person            string
 	AbsoluteExpiresAt time.Time
 	OpID              string
+
+	// ProvedAt is when the holder proved who they are to open it, or zero
+	// for a session opened on no proof of a person — see
+	// [Session.ProvedAt]. It is the WRITER's clock, authored at the proof,
+	// like the absolute deadline beside it.
+	ProvedAt time.Time
 
 	// NoWait asks for the answer the broker's acknowledgement already
 	// establishes, rather than waiting for this node's applier.

@@ -215,10 +215,13 @@ func readSessionRow(ctx context.Context, tx *sql.Tx, lineage string,
 	if lineage == "" {
 		return nil
 	}
-	var endedAt, epoch int64
+	var (
+		endedAt, epoch int64
+		document       []byte
+	)
 	err := tx.QueryRowContext(ctx, `
-		SELECT epoch, ended_at FROM iam_sessions WHERE lineage = ?`,
-		lineage).Scan(&epoch, &endedAt)
+		SELECT epoch, ended_at, document FROM iam_sessions WHERE lineage = ?`,
+		lineage).Scan(&epoch, &endedAt, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// ABSENT IS A FINDING, not a failure: it is what the bearer's own
@@ -229,9 +232,17 @@ func readSessionRow(ctx context.Context, tx *sql.Tx, lineage string,
 	case err != nil:
 		return fmt.Errorf("iamdomain: read the session row: %w", err)
 	}
+	doc, err := DecodeSession(document)
+	if err != nil {
+		// THE UNKNOWN ARM, as for a person's row: a session a newer peer
+		// wrote that this build cannot open is one whose facts this node
+		// cannot state, and answering it as absent would be a 401.
+		return fmt.Errorf("iamdomain: open session %q: %w", lineage, err)
+	}
 	out.Found = true
 	out.Ended = endedAt != 0
 	out.Epoch = uint64(epoch)
+	out.ProvedAt = doc.ProvedAt
 	return nil
 }
 
