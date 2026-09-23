@@ -244,14 +244,19 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > to tell "your token is wrong" from "the engine is down". Without it a reader
 > holding a stale token sees "retrying" for ever.
 >
-> **Two credential shapes reach every route, and the header wins.** A Tier A
+> **Three credential shapes reach every route, and the header wins.** A Tier A
 > bearer in `Authorization` is the deployment's own machine credential; a
-> `crewlet_session` cookie is a person who signed in. Both resolve to the same
-> principal, so no route knows which arrived. When a request carries both, the
-> **header** decides — a browser sends its cookie whether or not the caller
-> meant to, and an `Authorization` header is only ever there because somebody
-> put it there. A request presenting a *wrong* header therefore stays anonymous
-> rather than being upgraded by whatever cookie is in the jar.
+> [machine token](#post-iamcredentials-mints-a-machine-token) (`cwl_pat_…`)
+> in the same header is somebody in the directory — a person's own token, or a
+> service account's — and acts as its owner; a `crewlet_session` cookie is a
+> person who signed in. The two bearers are told apart by the value's shape,
+> which picks how it is checked and admits nothing by itself. All three
+> resolve to the same principal, so no route knows which arrived. When a
+> request carries a header and a cookie, the **header** decides — a browser
+> sends its cookie whether or not the caller meant to, and an `Authorization`
+> header is only ever there because somebody put it there. A request presenting
+> a *wrong* header therefore stays anonymous rather than being upgraded by
+> whatever cookie is in the jar.
 >
 > **`api.auth.max_grants` clamps a person exactly as it clamps a token.** The
 > ceiling is applied when the request is resolved, not written anywhere, so

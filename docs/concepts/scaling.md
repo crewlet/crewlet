@@ -221,13 +221,15 @@ node-wide cap could not have had: one person opening six tabs would have been
 an outage for everybody else's dashboard. So the load a company's store sees
 is **four per operator at the dashboard**, not four per tab.
 
-**A principal is its id, not its login.** A login is optional — a person
-enrolled by address alone, or who redeemed an invitation without choosing one,
-has none — and keyed on it every such person shared one four-slot budget, so
-the second of them to open a dashboard queued behind the first. The id is what
-every row keys a principal on: never empty for anybody the guard resolved,
-never shared between two, and unchanged when somebody renames their login, so
-their open tabs go on sharing one allowance across the change.
+**A principal is its id, not its login.** A login is a name, and a name is
+renamed — and until every enrolment was required to carry one it was also
+optional, so keyed on it every person enrolled by address alone shared one
+four-slot budget under the empty login, and the second of them to open a
+dashboard queued behind the first. The id is what every row keys a principal
+on: never empty for anybody the guard resolved, never shared between two, and
+unchanged when somebody renames their login, so their open tabs go on sharing
+one allowance across the change. A person's own machine token acts as them and
+shares that allowance too.
 
 ### The store's reserved connection
 
