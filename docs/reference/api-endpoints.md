@@ -89,7 +89,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, `POST /operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
-`/operator/mcp` is the one route the by-method rule splits, because it is mounted for every verb: its `POST` — every JSON-RPC call, reads included — is refused, and its `GET` server-to-client stream is served like any other read. Its `DELETE`, which ends a session, rides the default with the writes; the session dies with the listener a moment later either way. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
+`/operator/mcp` is the one route the by-method rule splits, because it is mounted for every verb: its `POST` — every JSON-RPC call, reads included — is refused. It is served [statelessly](#every-call-is-decided-by-the-request-that-carries-it), so it offers no server-to-client stream and holds no session: its `GET` is served like any other read and answers the MCP transport's own `405 Allow: POST`, and its `DELETE` rides the default with the writes. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
 A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and a body the CLI and the dashboard both render:
 
@@ -2607,6 +2607,28 @@ reasoning about kinds.
 There is deliberately **no way for the caller to name a seat to act as**. That
 would let anybody holding the token write as anybody, and a tracker whose
 author field is chosen by the writer is not an audit trail.
+
+### Every call is decided by the request that carries it
+
+The endpoint is served **statelessly**: it issues no `Mcp-Session-Id`, opens
+no server-to-client stream (`GET` and `DELETE` answer `405` with
+`Allow: POST`), and decides each JSON-RPC call as the credential the `POST`
+carrying it presented, on that request. Two things follow, and both are the
+point:
+
+- **A grant withdrawn is withdrawn from the next call.** Lowering
+  `api.auth.max_grants`, editing a person's grants, revoking their session or
+  removing a token takes effect on the assistant's very next call, however
+  long it has been connected.
+- **A session id is not a credential.** Nothing another client echoes can make
+  it act as somebody else: a request presenting a different credential is
+  decided as that credential, whatever headers it copies.
+
+A stateful session — the transport's default — decided every call as the
+request that *opened* it, which made both of those false. Nothing this surface
+serves needs one: its tool list is fixed when the node builds it, so there is
+nothing to notify a client about, and no tool here asks the client anything
+back.
 
 ### Why it is not under `/mcp/`
 

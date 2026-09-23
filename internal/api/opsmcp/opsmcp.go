@@ -178,7 +178,8 @@ func (s *Server) Tools() []string {
 // context by the auth middleware and read by the deps' own Actor function —
 // never from an argument. A caller that could name its own actor could file
 // work as anybody, which is the same rule a seat's tools follow and the same
-// reason.
+// reason. It is the credential of the request CARRYING this call, and not of
+// one before it, because [Server.Handler] serves every request statelessly.
 func handlerFor(tool tools.Callable) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var args map[string]any
@@ -204,14 +205,34 @@ func handlerFor(tool tools.Callable) mcp.ToolHandler {
 
 // Handler serves the surface at [Path].
 //
-// EVERY METHOD, for the reason the sandbox bridge takes every method:
-// streamable HTTP is a GET for the server-to-client stream and a DELETE to
-// end a session, and a pattern naming one verb answers 405 to the others —
-// which an MCP client reports as a transport that does not support streaming
-// rather than as a route registered wrong.
+// # STATELESS, so every call is decided by the request that carries it
+//
+// The SDK's stateful handler opens a SESSION on the initialize request and
+// serves every later request on that session through the context the
+// initialize request had — so the principal a tool call reads off its context
+// is whoever OPENED the session, not whoever sent the call. That made two
+// things true that must not be: a grant withdrawn mid-session went on working
+// for as long as the assistant stayed connected (the ceiling, a revoked
+// session and a removed token included), and any other credential presenting
+// the same Mcp-Session-Id header acted as the opener — a session id is an
+// opaque handle a client echoes, not a secret anybody proved.
+//
+// Stateless mode gives each POST a temporary session built from THAT
+// request's own context, so the guard's resolution of each request is the
+// resolution its tool call is decided on, and there is no session for a second
+// credential to ride. Nothing this surface serves needed the state: its
+// catalogue is fixed at construction, so there is no list-changed
+// notification to push, and no tool here asks the client anything back.
+//
+// EVERY METHOD IS STILL ROUTED HERE, so a GET for the server-to-client stream
+// and a DELETE to end a session are answered by the SDK's own 405 with
+// `Allow: POST` — the transport's documented way of saying "this server offers
+// no stream" — rather than by a mux 405 a client reports as a route
+// registered wrong.
 func (s *Server) Handler() http.Handler {
 	streamable := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return s.srv }, nil)
+		func(*http.Request) *mcp.Server { return s.srv },
+		&mcp.StreamableHTTPOptions{Stateless: true})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// THE GUARD IS THE APP'S, not a second one here: this path is
 		// not on [auth.Unguarded]'s exemption list, so a request that

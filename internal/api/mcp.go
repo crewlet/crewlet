@@ -92,9 +92,11 @@ func (a *App) mountOperator(mux *http.ServeMux, server *opsmcp.Server) {
 	if server == nil {
 		return
 	}
-	// EVERY METHOD, for the reason the bridge takes every method: streamable
-	// HTTP is a GET for the server-to-client stream and a DELETE to end a
-	// session.
+	// EVERY METHOD, so the transport's own verbs reach the SDK: this surface
+	// is served statelessly and the SDK answers a GET for a stream and a
+	// DELETE for a session with its own `405 Allow: POST`, which a client
+	// reads as "no stream offered" — a mux 405 would read as a route
+	// registered wrong. See opsmcp's Handler.
 	mux.Handle(opsmcp.Path, server.Handler())
 	log.Info("operator_mcp_mounted", "path", opsmcp.Path,
 		"tools", server.Tools(),
