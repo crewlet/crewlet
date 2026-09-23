@@ -7,7 +7,44 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/config"
 )
+
+// A BEARER WRITE PASSES THE NODE'S OWN CROSS-SITE CHECK.
+//
+// The CLI dials the node on the address it can reach — loopback, on the host —
+// and a deployment behind a proxy is reached by browsers at `api.external_url`,
+// which is the only origin the node's check admits. The client used to send
+// its dialled address as the Origin, so every `crewlet iam` write to such a
+// deployment was refused as a cross-site request. The node here runs the REAL
+// check, configured for an external URL the test server is not. Mutation:
+// send the base URL as the Origin again and the suspension answers 403.
+func TestAnIamWritePassesTheNodesCrossSiteCheck(t *testing.T) {
+	var reached bool
+	var boot config.Bootstrap
+	boot.API.ExternalURL = "https://crewlet.example.com"
+	node := httptest.NewServer(auth.NewCSRF(&boot).Middleware(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			reached = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"position":"1:1"}`))
+		})))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	var out, errs bytes.Buffer
+	if err := run([]string{"iam", "suspend", "p-1", "-config", cfg,
+		"-api", node.URL}, &out, &errs); err != nil {
+		t.Fatalf("iam suspend through the node's cross-site check: %v\n%s",
+			err, errs.String())
+	}
+	if !reached {
+		t.Error("the write never reached the handler behind the check")
+	}
+}
 
 // THE CLI CARRIES ITS OWN CREDENTIAL, AND NEVER THE CONFIG'S FIRST TOKEN.
 //

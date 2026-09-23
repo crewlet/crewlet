@@ -449,11 +449,12 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	// THE ORIGIN IS THIS NODE'S OWN. Every write on this surface is
-	// origin-checked, and a CLI that sent none would be refused as a
-	// cross-site request — which is the check working, on the one caller
-	// it was never about.
-	req.Header.Set("Origin", c.base)
+	// NO ORIGIN, deliberately. The node's cross-site check admits a
+	// BEARER with none — a browser cannot make one travel — and refuses a
+	// PRESENT Origin that is not an address the deployment is reached at.
+	// This client used to send its own base URL, which is the loopback
+	// address it dials and almost never `api.external_url`, so every write
+	// it made to a deployment behind a proxy was refused as cross-site.
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("reach %s: %w", target, err)
