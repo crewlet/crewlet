@@ -35,10 +35,10 @@ import (
 // token (it owns no tokens) or a machine token (which may not mint another).
 // So for this one request it signs in exactly as the dashboard does: the login,
 // a password read from the terminal without echo or from the first line of
-// standard input, and a second-factor code where the person holds one; then
-// the mint, carrying the cookie that answered; then a logout, so the session it
-// opened ends with the command rather than living on, in nobody's browser, for
-// its absolute lifetime.
+// standard input, and a second-factor code where the person holds one, read the
+// same way; then the mint, carrying the cookie that answered; then a logout, so
+// the session it opened ends with the command rather than living on, in
+// nobody's browser, for its absolute lifetime.
 //
 // # Why it states an Origin here and nowhere else
 //
@@ -239,12 +239,17 @@ func selfRefusal(status int, answer map[string]any, raw []byte) error {
 // mintOwnToken is `crewlet iam token -login`: it reads what signing in needs,
 // signs in, mints, and signs out.
 //
-// THE PASSWORD NEVER COMES FROM A FLAG, for CREWLET_API_TOKEN's reason: a
-// value on a command line lands in shell history and in `ps`. It is read from
-// the terminal without echo, or — piped — as the first line of standard input,
-// with the second line the second-factor code when the flag gives none.
+// NEITHER THE PASSWORD NOR THE SECOND FACTOR COMES FROM A FLAG, for
+// CREWLET_API_TOKEN's reason: a value on a command line lands in shell history
+// and in `ps`. The second factor is held to that as much as the password is,
+// because one of the two things it may be is a RECOVERY CODE — a single-use
+// secret that stays good until it is spent, and a sign-in refused for a
+// mistyped password spends nothing, so a code typed as an argument would sit
+// in the shell's history still working. Each is read from the terminal without
+// echo, or — piped — as the next line of standard input: the password first,
+// then the code, asked for only once the first factor checks out.
 func mintOwnToken(ctx context.Context, boot *config.Bootstrap, apiURL,
-	login, code string, body map[string]any, stdin io.Reader,
+	login string, body map[string]any, stdin io.Reader,
 	stderr io.Writer) (map[string]any, error) {
 
 	base, err := nodeBaseURL(boot, apiURL, "the company's identity directory")
@@ -258,23 +263,24 @@ func mintOwnToken(ctx context.Context, boot *config.Bootstrap, apiURL,
 	}
 	m := selfMint{
 		base: base, origin: reachedAt(boot, base), login: login,
-		password: password, code: strings.TrimSpace(code), body: body,
-		http: httpx.Client(apiTimeout),
+		password: password, body: body, http: httpx.Client(apiTimeout),
 	}
 	answer, err := m.mint(ctx, stderr)
-	if !errors.Is(err, errSecondFactor) || m.code != "" {
+	if !errors.Is(err, errSecondFactor) {
 		return answer, err
 	}
 	// ASKED FOR, ONCE: the first factor checked out and the person holds a
 	// second, so the code is the one thing missing.
-	if m.code, err = readLine(in, stdin, stderr, "Second-factor code: "); err != nil {
+	code, err := readSecret(stdin, in, stderr, "Second-factor code: ")
+	if err != nil {
 		return nil, fmt.Errorf("this person holds a second factor, and none "+
-			"was given: pass -code, or pipe it as the line after the "+
+			"was given: type it when asked, or pipe it as the line after the "+
 			"password (%w)", err)
 	}
-	if m.code == "" {
+	if m.code = strings.TrimSpace(code); m.code == "" {
 		return nil, errors.New("this person holds a second factor, and none " +
-			"was given: pass -code with the current six digits or a recovery code")
+			"was given: type the current six digits or a recovery code when " +
+			"asked, or pipe it as the line after the password")
 	}
 	return m.mint(ctx, stderr)
 }
@@ -301,16 +307,6 @@ func readSecret(stdin io.Reader, lines *bufio.Reader, prompt io.Writer,
 		raw, err := term.ReadPassword(int(f.Fd()))
 		fmt.Fprintln(prompt)
 		return string(raw), err
-	}
-	return readPiped(lines)
-}
-
-// readLine reads one line a person may see as they type it: a code.
-func readLine(lines *bufio.Reader, stdin io.Reader, prompt io.Writer,
-	ask string) (string, error) {
-
-	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		fmt.Fprint(prompt, ask)
 	}
 	return readPiped(lines)
 }

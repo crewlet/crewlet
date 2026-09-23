@@ -58,7 +58,7 @@ Usage:
   crewlet iam revoke ID                                End every session and token they hold
   crewlet iam sessions ID                              Their sessions, newest first
   crewlet iam credentials [-person ID]                 What somebody proves themselves with
-  crewlet iam token -login L [-code C] [-label L] [-days N] [-grants G,...] [-colleague L]
+  crewlet iam token -login L [-label L] [-days N] [-grants G,...] [-colleague L]
                                                        Mint YOUR OWN machine token, shown ONCE
   crewlet iam token -person ID [-label L] [-days N] [-grants G,...] [-colleague L]
                                                        Mint a service account's, shown ONCE
@@ -93,9 +93,10 @@ it cannot mint another token, and it cannot change how its owner signs in.
 
 A person's token is theirs alone to mint: whoever mints one sees its value, and
 it acts as them. So "iam token -login" signs you in for the one request — the
-password from the terminal without echo, or the first line piped in, with the
-second-factor code from -code or the next line — mints, and signs out, reading
-no CREWLET_API_TOKEN. An administrator mints with -person for SERVICE ACCOUNTS
+password from the terminal without echo, or the first line piped in, and a
+second-factor code the same way when your account holds one, or the line after
+it; never a flag, because a recovery code on a command line stays good in the
+shell's history — mints, and signs out, reading no CREWLET_API_TOKEN. An administrator mints with -person for SERVICE ACCOUNTS
 only; every write the token makes is recorded as its owner's, through
 pat:<credential id>.
 `
@@ -135,8 +136,6 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	limit := fs.Int("limit", 0, "how many rows at most")
 	login := fs.String("login", "",
 		"the login to create somebody under, or to sign in as to mint your own token")
-	code := fs.String("code", "",
-		"a second-factor code, for `token -login` (else read after the password)")
 	email := fs.String("email", "", "the address to create somebody under")
 	kind := fs.String("kind", "", "person or machine (create only)")
 	name := fs.String("name", "", "the person's own name")
@@ -202,7 +201,7 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return err
 		}
 		return out.token(mintOwnToken(ctx, boot, *apiURL,
-			strings.TrimSpace(*login), *code, body, stdin, stderr))
+			strings.TrimSpace(*login), body, stdin, stderr))
 	}
 	client, err := newIAMClient(boot, *apiURL)
 	if err != nil {

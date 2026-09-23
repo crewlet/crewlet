@@ -164,7 +164,7 @@ func TestYourOwnTokenIsMintedFromYourOwnSession(t *testing.T) {
 	}
 }
 
-// A SECOND FACTOR IS THE LINE AFTER THE PASSWORD, or the -code flag.
+// A SECOND FACTOR IS THE LINE AFTER THE PASSWORD, and never a flag.
 //
 // The first factor checks out and the node asks for the code; the command
 // reads it once and signs in again. Mutation: stop reading the second line and
@@ -178,15 +178,27 @@ func TestASecondFactorIsAskedForOnce(t *testing.T) {
 	if len(n.signIns) != 2 || n.signIns[1]["code"] != "123456" {
 		t.Errorf("the sign-ins carried %v, want a second one with the code", n.signIns)
 	}
+}
 
-	flagged := newSelfNode(t)
-	flagged.wantCode = "654321"
-	if _, errs, err := runSelf(t, flagged, "a long pass phrase\n",
-		"-code", "654321"); err != nil {
-		t.Fatalf("a flagged code: %v\n%s", err, errs)
+// A SECOND-FACTOR CODE IS NOT A FLAG, for the password's reason.
+//
+// One of the two things it may be is a RECOVERY CODE, a single-use secret that
+// stays good until it is spent — and a sign-in refused for a mistyped password
+// spends nothing, so a code typed as an argument would sit in the shell's
+// history and in `ps` still working. So `-code` is an unknown flag, refused
+// before anything is read or sent: exactly `-token`'s treatment. Mutation:
+// declare the flag again and the command signs in with it.
+func TestASecondFactorCodeIsNeverAFlag(t *testing.T) {
+	n := newSelfNode(t)
+	n.wantCode = "654321"
+	_, _, err := runSelf(t, n, "a long pass phrase\n", "-code", "654321")
+	if err == nil || !strings.Contains(err.Error(), "-code") {
+		t.Fatalf("a code on the command line answered %v, want the flag "+
+			"refused as one nothing declares", err)
 	}
-	if len(flagged.signIns) != 1 {
-		t.Errorf("a code given up front took %d sign-ins, want one", len(flagged.signIns))
+	if len(n.signIns) != 0 {
+		t.Errorf("the command signed in %d times before refusing the flag",
+			len(n.signIns))
 	}
 }
 

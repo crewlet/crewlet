@@ -812,7 +812,9 @@ a person mints their own from their own session, which is `POST
 /iam/credentials` with no `?person=` — and `crewlet iam token -login` is that
 request, signing in for it exactly as the dashboard does —
 the password from the terminal without echo or the first line piped in, a
-second-factor code from `-code` or the line after it — and signs out after,
+second-factor code the same way or the line after it, and never either as a
+flag, because a recovery code on a command line stays good in the shell's
+history — and signs out after,
 so the session it opened does not outlive the command. It reads no
 `CREWLET_API_TOKEN`. A deployment that signs in only through an identity
 provider serves no password route, so the command cannot sign in there: the

@@ -135,8 +135,10 @@ cmd/crewlet/          # The one binary. run / validate / schema / migrate /
                       #   file in the clear to do it. The ONE exception is
                       #   `iam token -login`, which mints the caller's OWN
                       #   token and so signs in AS them for the one request
-                      #   (a password off the terminal or the first piped
-                      #   line, never a flag) and signs out after: a
+                      #   (a password, and a second-factor code where one
+                      #   is held, off the terminal or piped lines — never
+                      #   a flag, since a recovery code stays good in shell
+                      #   history) and signs out after: a
                       #   person's token is theirs alone to mint, and the
                       #   only bearers this CLI otherwise holds are the
                       #   deployment's (owns no tokens) or a token (may not
