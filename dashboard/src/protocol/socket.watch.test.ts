@@ -1,5 +1,6 @@
 /**
- * How the live socket watches a seat, and what an `inbox_changed` frame does.
+ * How the live socket watches a seat, what an `inbox_changed` frame does, and
+ * what a query frame it sends carries.
  *
  * A watch lives in the engine's routing index for ONE socket, so the tab has to
  * say it again on every open — a reconnect that forgot it would leave a person
@@ -140,5 +141,24 @@ describe("an inbox_changed frame", () => {
     frame(null);
     expect(store.state.inboxMoves).toEqual({ ana: 2 });
     expect(store.version("inboxMoves")).toBe(before);
+  });
+});
+
+// A QUERY FRAME CARRIES NO CREDENTIAL. The engine decides every question by
+// the principal the handshake resolved and reads no token off a frame, so one
+// in the frame is the reader's bearer copied into every message for nothing —
+// and into whatever a proxy or a browser extension logs of the socket.
+describe("a query frame", () => {
+  test("carries the question and not the token", () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    socket.setToken("fixture-token-long-enough-to-pass");
+    socket.start();
+    dial(0).open();
+    void socket.query("fleet");
+    const frames = dial(0).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    const query = frames.find((frame) => frame.kind === "query");
+    expect(query).toBeDefined();
+    expect(Object.keys(query!).sort()).toEqual(["id", "kind", "params", "what"]);
   });
 });

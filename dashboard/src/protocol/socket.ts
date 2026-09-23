@@ -167,7 +167,9 @@ export class LiveSocket {
     this.store = store;
   }
 
-  /** Operator bearer token, sent on the handshake and with every query frame. */
+  /** Operator bearer token, sent on the handshake and on the refusal probe — never
+   *  in a frame, since the engine decides every question by the principal the
+   *  handshake resolved. */
   setToken(token: string): void {
     this.token = token || "";
     // A supplied credential clears the ask-once latch. The latch exists so a
@@ -247,7 +249,9 @@ export class LiveSocket {
       what: entry.what,
       params: entry.params,
     };
-    if (this.token) frame.token = this.token;
+    // NO CREDENTIAL IN THE FRAME. The engine asks every question as the
+    // principal the handshake resolved and reads no per-frame token, so one
+    // here was the reader's bearer copied into every frame for nothing.
     try {
       this.sock.send(JSON.stringify(frame));
     } catch {

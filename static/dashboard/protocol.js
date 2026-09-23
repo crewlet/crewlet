@@ -494,7 +494,9 @@ var LiveSocket = class {
 	constructor(store) {
 		this.store = store;
 	}
-	/** Operator bearer token, sent on the handshake and with every query frame. */
+	/** Operator bearer token, sent on the handshake and on the refusal probe — never
+	*  in a frame, since the engine decides every question by the principal the
+	*  handshake resolved. */
 	setToken(token) {
 		this.token = token || "";
 		if (this.token) this.askedForToken = false;
@@ -563,7 +565,6 @@ var LiveSocket = class {
 			what: entry.what,
 			params: entry.params
 		};
-		if (this.token) frame.token = this.token;
 		try {
 			this.sock.send(JSON.stringify(frame));
 		} catch {
