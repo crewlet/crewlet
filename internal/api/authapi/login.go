@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // maxLoginBody bounds what a sign-in will read.
@@ -490,6 +491,12 @@ type signIn struct {
 	// rather than a JSON body it has no script to read. Empty answers
 	// JSON, which is what every fetch-driven route wants.
 	redirect string
+
+	// refresh is the refresh token a PROVIDER sign-in obtained, and empty
+	// for every other way in: the deactivation probe asks the provider
+	// with it, so it goes into custody beside the session it belongs to —
+	// see [Service.keep].
+	refresh string
 }
 
 // completeSignIn opens the session and sets the cookie.
@@ -514,6 +521,10 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	})
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_sign_in_session_failed", "error", err)
+		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
+		return
+	}
+	if how.refresh != "" && !s.keep(r, lineage.String(), held.ID, how.refresh, at) {
 		httpjson.Fail(w, http.StatusServiceUnavailable, httpjson.CodeUnavailable)
 		return
 	}
@@ -558,6 +569,46 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		ExpiresAt: expires, Position: at.String(),
 	})
 }
+
+// keep takes custody of a provider sign-in's refresh token, reporting whether
+// the sign-in may go on.
+//
+// A SIGN-IN WHOSE TOKEN COULD NOT BE KEPT IS REFUSED, and the session it just
+// opened is closed. Admitted, it would be a session the deactivation probe
+// never sees — somebody disabled at the provider keeping it until its absolute
+// deadline, which is the one thing the probe exists to prevent; refused, it
+// costs the person one retry. The close is best effort and is the node's own
+// record under the lineage's op id: no cookie was issued, so nothing can
+// present the session either way, and the close only keeps the sessions
+// screen from listing it as live.
+func (s *Service) keep(r *http.Request, lineage, person, refresh string,
+	at statelog.Position) bool {
+
+	err := s.custody.Hold(r.Context(), iamdomain.RefreshGrant{
+		Lineage: lineage, Person: person,
+		Issuer: s.provider.Config().Issuer, Token: refresh,
+		Start: uint64(at.Packed()),
+	}, s.now())
+	if err == nil {
+		return true
+	}
+	log.ErrorContext(r.Context(), "api_sign_in_refresh_unkept",
+		"person", person, "lineage", lineage, "error", err,
+		"detail", "the provider's refresh token could not be kept, so the "+
+			"deactivation probe could never ask about this session; the "+
+			"sign-in is refused rather than admitted unprobed")
+	// WITHOUT CANCEL: the request is about to be answered and its context
+	// ended, and a cleanup that inherits a dead context does nothing.
+	if _, err := s.writer.CloseSession(context.WithoutCancel(r.Context()),
+		lineage, person, reasonRefreshUnkept, "close:"+lineage); err != nil {
+		log.WarnContext(r.Context(), "api_sign_in_session_left_open",
+			"lineage", lineage, "error", err)
+	}
+	return false
+}
+
+// reasonRefreshUnkept is what a session closed by [Service.keep] records.
+const reasonRefreshUnkept = "refresh_unkept"
 
 // backend is how this deployment signs people in.
 func (s *Service) backend() config.AuthBackend {

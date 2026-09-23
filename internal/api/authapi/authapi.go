@@ -222,6 +222,15 @@ type Audit interface {
 	Failed(ctx context.Context, f authevents.Failure)
 }
 
+// Custody keeps an OIDC session's refresh token for the deactivation probe.
+//
+// CONSUMER-DEFINED and one method wide: internal/iamdomain's Refreshes
+// satisfies it, and the only thing this surface ever does with a refresh
+// token is hand it over — nothing on the request path reads one back.
+type Custody interface {
+	Hold(ctx context.Context, grant iamdomain.RefreshGrant, now time.Time) error
+}
+
 // Options is what the surface is built from.
 type Options struct {
 	// Bootstrap is Tier A. REQUIRED: the cookie's name and Secure flag,
@@ -289,6 +298,13 @@ type Options struct {
 	// company signing in with passwords.
 	Provider *oidc.Provider
 
+	// Custody keeps the refresh token a provider sign-in obtains, for the
+	// deactivation probe. REQUIRED WHERE A PROVIDER IS: the probe is the
+	// only thing that notices somebody disabled at the provider, and a
+	// sign-in whose token was dropped is a session no central
+	// deactivation ends before its absolute deadline.
+	Custody Custody
+
 	// Clients resolves a caller's own address through this deployment's
 	// trusted proxies. REQUIRED.
 	//
@@ -325,6 +341,7 @@ type Service struct {
 	clients   *auth.Clients
 	provider  *oidc.Provider
 	audit     Audit
+	custody   Custody
 	now       func() time.Time
 }
 
@@ -354,6 +371,8 @@ func New(opts Options) (*Service, error) {
 		// with passwords seals no flight, so requiring it would refuse
 		// a wiring that is complete.
 		{"Cipher", opts.Provider != nil && opts.Cipher == nil},
+		// AND CUSTODY, for the same reason and the same condition.
+		{"Custody", opts.Provider != nil && opts.Custody == nil},
 		{"Clients", opts.Clients == nil},
 		{"Audit", opts.Audit == nil},
 	} {
@@ -373,6 +392,7 @@ func New(opts Options) (*Service, error) {
 		opener:   opts.Opener,
 		cipher:   opts.Cipher,
 		provider: opts.Provider,
+		custody:  opts.Custody,
 		clients:  opts.Clients, audit: opts.Audit, now: opts.Now,
 	}
 	if s.now == nil {

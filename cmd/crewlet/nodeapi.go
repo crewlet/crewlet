@@ -20,7 +20,6 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
-	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -202,8 +201,14 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		// THE SAME PURE FUNCTION THE GUARD USES over the same Tier A,
 		// which is one PARSER rather than one instance — see
 		// [auth.Clients].
-		Clients:  auth.NewClients(boot),
-		Provider: signInProvider(boot),
+		Clients: auth.NewClients(boot),
+		// THE PROCESS'S ONE PROVIDER, which the deactivation probe asks
+		// through too — so both share one cache of its discovery document
+		// and keys, and one reading of the Tier A block that built it.
+		Provider: e.IdentityProvider(),
+		// AND WHERE A SIGN-IN'S REFRESH TOKEN GOES, which is the only
+		// thing the probe has to ask the provider with.
+		Custody: refreshCustody(e),
 		// THE NODE'S ONE AUDIT TRAIL, which the guard and the directory
 		// hand what they saw to as well: a failed sign-in and a refused
 		// bearer fold into one row per client per minute only because
@@ -275,24 +280,19 @@ func sessionReuse(e *engine.Engine) func(context.Context, string) {
 	}
 }
 
-// signInProvider is the identity provider, or nil where none is configured.
-func signInProvider(boot *config.Bootstrap) *oidc.Provider {
-	block := boot.API.Auth.OIDC
-	if block == nil || block.Issuer == "" {
+// refreshCustody is the engine's refresh-token custody as the sign-in surface's
+// seam, or a genuine nil.
+//
+// THE CONVERSION IS EXPLICIT because a typed nil in an interface is not nil:
+// handing the pointer straight over would give the surface a non-nil Custody
+// wrapping nothing, and the constructor's "required where a provider is" check
+// would pass on a node that cannot keep a token.
+func refreshCustody(e *engine.Engine) authapi.Custody {
+	custody := e.RefreshCustody()
+	if custody == nil {
 		return nil
 	}
-	return oidc.NewProvider(oidc.Config{
-		Issuer:       block.Issuer,
-		ClientID:     block.ClientID,
-		ClientSecret: block.ClientSecret,
-		RedirectURI:  boot.API.ExternalBase() + auth.PathAuthOIDCCallback,
-		RequireACR:   block.RequireACR,
-		// BOTH WERE DROPPED HERE, so the request sent the package's
-		// scopes whatever the file said and the probe ran at the
-		// package's hour whatever `deactivation_probe` said.
-		Scopes:            block.RequestedScopes(),
-		DeactivationProbe: block.DeactivationProbe(),
-	}, nil, nil)
+	return custody
 }
 
 // seatHeld reports whether a seat is one somebody in the identity directory is

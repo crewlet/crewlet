@@ -160,6 +160,7 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// so it is not the caller's to change now.
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInOIDC, acr: claims.ACR, redirect: flight.Return,
+		refresh: tokens.Refresh,
 	})
 }
 

@@ -107,6 +107,7 @@ func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
 		Sessions:  stubSessions{},
 		Clients:   auth.NewClients(&b),
 		Provider:  provider,
+		Custody:   stubCustody{},
 		Cipher:    stubCipher{},
 		Audit:     &recordingAudit{},
 		Now:       func() time.Time { return clock },
@@ -206,6 +207,14 @@ type stubCipher struct{}
 
 func (stubCipher) Encrypt(plaintext, _ string) (string, error) { return plaintext, nil }
 func (stubCipher) Decrypt(sealed, _ string) (string, error)    { return sealed, nil }
+
+// stubCustody keeps nothing, which a case about ROUTES needs: what a sign-in
+// hands custody has its own case in keep_internal_test.go.
+type stubCustody struct{}
+
+func (stubCustody) Hold(context.Context, iamdomain.RefreshGrant, time.Time) error {
+	return nil
+}
 
 type stubSessions struct{}
 
