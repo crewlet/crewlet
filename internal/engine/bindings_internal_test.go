@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // seatTable is a [session.Chart] answering from a table, counting the seat
@@ -332,6 +336,90 @@ func TestAFiringAlarmHoldsThroughAFailedReadAndAStalledChart(t *testing.T) {
 		t.Errorf("after the outage the residue reads %s (fired %v), want the "+
 			"five minutes since it was first found", reading.DanglingBindingFor,
 			fired)
+	}
+}
+
+// A WALK THAT CANNOT READ THE BINDINGS IS SAID WHEN IT STARTS AND WHEN IT ENDS,
+// not on every beat between.
+//
+// The walk rides the alarm heartbeat, so an outage of the directory's read
+// fails it every [statelog.AlarmInterval]; one warning per beat was four a
+// minute for as long as the outage lasted, which buries the one thing the log
+// is read for — when it started. It is said at the alarm tracker's own rate
+// instead: a line on entry, and a line on exit carrying how long it lasted and
+// how many beats failed, so an operator knows how long `iam_binding_dangling`
+// was standing on an old reading.
+func TestAFailingWalkIsSaidWhenItStartsAndWhenItEnds(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	dir := dirOf(bound("p1", "triage-bot", 900))
+	w := newWatchOver(dir, companyChart())
+	var logs bytes.Buffer
+	w.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	lines := func(event string) []map[string]any {
+		var out []map[string]any
+		for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var line map[string]any
+			if json.Unmarshal([]byte(raw), &line) == nil && line["msg"] == event {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+	t0 := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
+	w.observe(ctx, t0)
+
+	// A STOP THIS PROCESS ASKED FOR is not an outage, and says nothing.
+	dir.mu.Lock()
+	dir.fail = store.ErrNoEstate
+	dir.at.Seq++
+	dir.mu.Unlock()
+	w.observe(ctx, t0.Add(statelog.AlarmInterval))
+	if got := lines("iam_binding_walk_failed"); len(got) != 0 {
+		t.Fatalf("an adoption's closed estate was reported as a failed walk: %v", got)
+	}
+
+	dir.mu.Lock()
+	dir.fail = errors.New("database is locked")
+	dir.mu.Unlock()
+	for i := 2; i <= 5; i++ {
+		w.observe(ctx, t0.Add(time.Duration(i)*statelog.AlarmInterval))
+	}
+	if got := lines("iam_binding_walk_failed"); len(got) != 1 {
+		t.Fatalf("four failed beats wrote %d iam_binding_walk_failed line(s), "+
+			"want the one that started the run", len(got))
+	}
+	if got := lines("iam_binding_walk_recovered"); len(got) != 0 {
+		t.Fatalf("a walk still failing said it recovered: %v", got)
+	}
+
+	dir.mu.Lock()
+	dir.fail = nil
+	dir.mu.Unlock()
+	w.observe(ctx, t0.Add(6*statelog.AlarmInterval))
+	recovered := lines("iam_binding_walk_recovered")
+	if len(recovered) != 1 {
+		t.Fatalf("the read that ended the run wrote %d recovery line(s), want one",
+			len(recovered))
+	}
+	if recovered[0]["for"] != (4*statelog.AlarmInterval).String() ||
+		recovered[0]["failed_beats"] != float64(4) {
+		t.Errorf("the recovery reads %v; it says how long the alarm was blind and "+
+			"over how many beats", recovered[0])
+	}
+	w.observe(ctx, t0.Add(7*statelog.AlarmInterval))
+	if got := lines("iam_binding_walk_recovered"); len(got) != 1 {
+		t.Errorf("a healthy beat after the recovery said it again (%d lines)", len(got))
+	}
+
+	// A LATER OUTAGE IS A RUN OF ITS OWN, and is said again.
+	dir.mu.Lock()
+	dir.fail = errors.New("database is locked")
+	dir.at.Seq++
+	dir.mu.Unlock()
+	w.observe(ctx, t0.Add(8*statelog.AlarmInterval))
+	if got := lines("iam_binding_walk_failed"); len(got) != 2 {
+		t.Errorf("a second outage wrote %d failure line(s) in all, want two", len(got))
 	}
 }
 

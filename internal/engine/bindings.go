@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -227,6 +228,16 @@ type bindingWatch struct {
 	unsettled bool
 	// classes is each binding's last classification, by person.
 	classes map[string]classified
+
+	// failingSince is when the current run of walks that could not read
+	// the bindings began, and failed how many beats it has lasted; both
+	// zero while the last walk read them. See [bindingWatch.walkFailed]
+	// for why a run is said twice rather than once a beat.
+	failingSince time.Time
+	failed       int
+
+	// logger is where the walk speaks: the package's own outside a case.
+	logger *slog.Logger
 }
 
 // newBindingWatch is the watch over one engine, or nil on a node that runs no
@@ -244,7 +255,7 @@ func newBindingWatch(e *Engine) *bindingWatch {
 // newWatchOver is a watch over any directory and chart view.
 func newWatchOver(dir bindingSource, chart session.Chart) *bindingWatch {
 	return &bindingWatch{dir: dir, chart: chart, first: map[string]time.Time{},
-		classes: map[string]classified{}}
+		classes: map[string]classified{}, logger: log}
 }
 
 // observe takes one observation of this node's bindings at now.
@@ -285,11 +296,10 @@ func (w *bindingWatch) observe(ctx context.Context, now time.Time) {
 			// adoption's rename — is not an unreadable directory.
 			return
 		}
-		log.WarnContext(ctx, "iam_binding_walk_failed", "err", err,
-			"detail", "the iam_binding_dangling alarm holds what it last "+
-				"observed until a read of the bindings succeeds")
+		w.walkFailed(ctx, now, err)
 		return
 	}
+	w.walkRecovered(ctx, now)
 	sighting, classes, settled := classify(ctx, w.chart, bindings, previous,
 		chartAt, chartErr == nil)
 	w.record(now, sighting, classes, dirAt, chartAt, !settled || chartErr != nil)
@@ -371,6 +381,56 @@ func (w *bindingWatch) record(now time.Time, s bindingSighting,
 	// have.
 	w.first, w.at, w.seen, w.known = next, now, residues, true
 	w.classes, w.dirAt, w.chartAt, w.unsettled = classes, dirAt, chartAt, unsettled
+}
+
+// walkFailed notes a beat whose read of the bindings failed, and says so only
+// if it is the first of its run.
+//
+// # The rate is the alarm table's own
+//
+// The walk runs on the alarm heartbeat, so a directory that cannot be read
+// fails it every [statelog.AlarmInterval] — four lines a minute for as long as
+// the outage lasts, where the quarter-hourly evaluation it replaced wrote one.
+// A failing walk is a STATE of the same shape as an alarm: it holds for minutes
+// or days, and while it holds the `iam_binding_dangling` alarm is blind,
+// standing on the reading it last took. So it is said at the rate
+// [statelog.Tracker] says an alarm: once when it begins and once when it ends,
+// the second carrying how long it lasted — because a level repeated every beat
+// makes the log useless for the one thing an operator reads it for, when the
+// state STARTED, and the end is what says how long the alarm's silence meant
+// nothing. Both at WARN, as the tracker's pair is, so a filter that shows one
+// end shows the other.
+func (w *bindingWatch) walkFailed(ctx context.Context, now time.Time, err error) {
+	w.mu.Lock()
+	first := w.failingSince.IsZero()
+	if first {
+		w.failingSince = now
+	}
+	w.failed++
+	w.mu.Unlock()
+	if !first {
+		return
+	}
+	w.logger.WarnContext(ctx, "iam_binding_walk_failed", "err", err,
+		"detail", "the iam_binding_dangling alarm holds what it last "+
+			"observed until a read of the bindings succeeds; "+
+			"iam_binding_walk_recovered says when that is")
+}
+
+// walkRecovered notes a beat that read the bindings, and ends a run of failed
+// ones by saying how long it lasted.
+func (w *bindingWatch) walkRecovered(ctx context.Context, now time.Time) {
+	w.mu.Lock()
+	since, failed := w.failingSince, w.failed
+	w.failingSince, w.failed = time.Time{}, 0
+	w.mu.Unlock()
+	if since.IsZero() {
+		return
+	}
+	w.logger.WarnContext(ctx, "iam_binding_walk_recovered",
+		"for", now.Sub(since).Round(time.Second).String(), "failed_beats", failed,
+		"detail", "the bindings are readable again, and iam_binding_dangling "+
+			"reflects them from this beat")
 }
 
 // fill writes the latest observation into a reading.

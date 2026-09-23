@@ -643,11 +643,13 @@ the seat — and one evaluation feeds every surface that reports it:
   late, clears before it can fire. A beat that cannot read the directory, or
   whose chart has stalled, changes nothing: a firing alarm stays up and a
   residue keeps its first sighting, so an outage neither clears the alarm nor
-  restarts its clock. And a beat re-reads the directory only when the
-  directory's or the chart's applied position has moved since the last, or a
-  binding went unjudged, so a quiet company's heartbeat costs two position
-  reads. See
-  [Alarms](../reference/alarms.md).
+  restarts its clock. A read that fails is logged the way an alarm is — one
+  `iam_binding_walk_failed` when the run of failed beats starts and one
+  `iam_binding_walk_recovered` when it ends, carrying how long the alarm stood
+  on its old reading — rather than once a beat. And a beat re-reads the
+  directory only when the directory's or the chart's applied position has
+  moved since the last, or a binding went unjudged, so a quiet company's
+  heartbeat costs two position reads. See [Alarms](../reference/alarms.md).
 
 **A node that cannot read the directory refuses the removal rather than
 allowing it.** A node running no identity domain holds an empty copy of those
