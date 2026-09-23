@@ -419,6 +419,23 @@ const (
 	// evidence it was issued to them.
 	CodeInviteSpent Code = "invite_spent"
 
+	// CodeSubjectConflict is an identity provider account this estate holds
+	// a live link to for MORE THAN ONE person — which nothing the broker
+	// arbitrates produces and a restore can — so it signs neither of them
+	// in.
+	//
+	// A 409 AND NEVER A 503, because it is a DEFINITE refusal: waiting does
+	// not clear it, and an answer carrying a Retry-After would have a
+	// browser retry for ever against a state only an administrator's
+	// removal of a link ends. SPECIFIC rather than [CodeSignInRefused],
+	// because the caller has already proved the subject to the provider —
+	// they are one of its holders and this discloses nothing to a stranger —
+	// and because "your details were wrong" would send them to retype a
+	// password they never used. It names NEITHER holder: who else holds the
+	// link is not the caller's to learn, and the log line names both for
+	// the administrator who has to decide.
+	CodeSubjectConflict Code = "subject_conflict"
+
 	// CodeSeatUnavailable is somebody whose session validated perfectly
 	// and whose SEAT the org chart no longer holds.
 	//
@@ -600,6 +617,9 @@ var codes = map[Code]string{
 
 	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
 		"for a new one.",
+	CodeSubjectConflict: "Your identity provider account is linked to more " +
+		"than one person here, so it signs nobody in. Ask an administrator to " +
+		"remove the link that is not yours.",
 
 	CodeForbidden: "You are signed in, and you may not make this change. The " +
 		"detail names what it needs.",

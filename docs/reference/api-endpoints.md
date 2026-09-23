@@ -307,6 +307,7 @@ already have:
 | `second_factor_required` | Reached only by somebody who already passed the first factor, so it discloses nothing to a stranger — and without it a client cannot tell "your password is wrong" from "now type your code", which are different screens |
 | `bootstrap_closed` | Says this company has started, which whoever can reach an unstarted one would find out by trying |
 | `invite_spent` | Read by somebody holding the link, which is already evidence it was issued to them. One code for redeemed, withdrawn and expired, because the remedy is the same and telling them apart would say "already used" to somebody whose link merely aged out |
+| `subject_conflict` | `409` from `/auth/oidc/callback`, reached only past the identity provider, by somebody who has just proved the subject: their provider account is linked to more than one person here — which a restore can produce and nothing else does — so it signs nobody in. A definite refusal with no `Retry-After`, because waiting never clears it; an administrator removing the link that is not theirs does. It names neither holder; the node's log (`api_oidc_subject_ambiguous`) names both |
 
 ### Which grant a route needs
 

@@ -835,8 +835,12 @@ the estate's other duties are scheduled.
 A provider sign-in resolves the subject through the person's **link**, and only
 a live one: a withdrawn or expired link signs nobody in. A subject that two
 people hold live links to — which the engine never writes, and a restore can —
-signs **neither** of them in, and the refusal names both, because the subject
-is the whole of what a provider sign-in proves.
+signs **neither** of them in, because the subject is the whole of what a
+provider sign-in proves. The browser is answered `409 subject_conflict`: a
+definite refusal with no `Retry-After`, since waiting never clears it and only
+an administrator removing one of the links does. It names neither holder — who
+else holds the link is not the caller's to learn — and the node's log line
+`api_oidc_subject_ambiguous` names both, for the administrator who decides.
 
 Without `offline_access` there is no refresh token and therefore no probe, and
 validation says so rather than leaving you believing an off-boarding is felt

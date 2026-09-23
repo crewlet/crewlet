@@ -6,17 +6,21 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -310,4 +314,92 @@ func signInThroughProvider(t *testing.T, idp *provider, b config.Bootstrap,
 	finished := httptest.NewRecorder()
 	mux.ServeHTTP(finished, callback)
 	return finished
+}
+
+// A PROVIDER SUBJECT TWO PEOPLE HOLD IS A CONFLICT, NOT AN OUTAGE.
+//
+// A restore can leave one provider account linked to two people, and the
+// sign-in then resolves to neither — the subject is the whole of what it
+// proves. It was answered as `503 identity_unavailable` with a Retry-After,
+// which told the browser to wait out a state that waiting never ends: only an
+// administrator removing one of the links does. It is a definite refusal —
+// 409 `subject_conflict`, no Retry-After, no session — that names neither
+// holder to the caller, and it is one failed attempt on the trail.
+//
+// The control is a directory that genuinely cannot be read, which IS an
+// outage and keeps its 503 and its Retry-After.
+func TestAProviderSubjectTwoPeopleHoldIsAConflictNotAnOutage(t *testing.T) {
+	t.Parallel()
+	const (
+		first  = "0192f00d-0000-7000-8000-0000000000a1"
+		second = "0192f00d-0000-7000-8000-0000000000b2"
+	)
+	round := func(err error) (*httptest.ResponseRecorder, *recordingAudit,
+		config.Bootstrap) {
+
+		t.Helper()
+		idp := newProvider(t)
+		b := bootstrapFor(t)
+		b.API.Auth.Backend = config.AuthBackendOIDC
+		b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+		audit := &recordingAudit{}
+		finished := signInThroughProvider(t, idp, b, func(o *authapi.Options) {
+			o.Directory = failingSubjects{err: err}
+			o.Audit = audit
+		})
+		return finished, audit, b
+	}
+	finished, audit, b := round(fmt.Errorf("%w: %s, %s",
+		iamdomain.ErrSubjectAmbiguous, first, second))
+	if finished.Code != http.StatusConflict {
+		t.Fatalf("an ambiguous subject answered %d (%s), want 409", finished.Code,
+			finished.Body)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(finished.Body.Bytes(), &body); err != nil {
+		t.Fatalf("the refusal is not JSON: %v (%s)", err, finished.Body)
+	}
+	if body["error"] != string(httpjson.CodeSubjectConflict) {
+		t.Errorf("the refusal's code is %v, want %s", body["error"],
+			httpjson.CodeSubjectConflict)
+	}
+	if after := finished.Header().Get("Retry-After"); after != "" {
+		t.Errorf("the refusal carries Retry-After %q, so a browser retries a "+
+			"state only an administrator can end", after)
+	}
+	if raw := finished.Body.String(); strings.Contains(raw, first) ||
+		strings.Contains(raw, second) {
+		t.Errorf("the refusal names a holder to the caller: %s", raw)
+	}
+	for _, c := range finished.Result().Cookies() {
+		if c.Name == session.CookieName(b.API.ExternalBase()) && c.Value != "" {
+			t.Error("an ambiguous subject was handed a session")
+		}
+	}
+	if _, failures := audit.snapshot(); len(failures) != 1 ||
+		failures[0].Subject == "" {
+		t.Errorf("the trail holds %+v, want the one refused attempt naming the "+
+			"provider subject", failures)
+	}
+
+	// THE CONTROL: an unreadable directory is an outage.
+	unread, _, _ := round(errors.New("the replicated estate is not open"))
+	if unread.Code != http.StatusServiceUnavailable ||
+		unread.Header().Get("Retry-After") == "" {
+		t.Errorf("an unreadable directory answered %d with Retry-After %q, want "+
+			"503 and a time to come back", unread.Code,
+			unread.Header().Get("Retry-After"))
+	}
+}
+
+// failingSubjects answers every provider subject with one error.
+type failingSubjects struct {
+	stubDirectory
+	err error
+}
+
+func (d failingSubjects) PersonBySubjectBlind(context.Context, string, time.Time) (
+	iamdomain.Sighting, error) {
+
+	return iamdomain.Sighting{}, d.err
 }

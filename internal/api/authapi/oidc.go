@@ -139,7 +139,19 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	held, err := s.personForSubject(r, claims)
-	if err != nil {
+	switch {
+	case errors.Is(err, iamdomain.ErrSubjectAmbiguous):
+		// A DEFINITE REFUSAL, NOT AN OUTAGE. Answered as the 503 below it
+		// told the browser to retry against a state no amount of waiting
+		// changes — only an administrator removing one of the links does.
+		// A FAILED ATTEMPT on the trail, and NOT a throttle failure: the
+		// caller proved the subject to the provider, so this is nobody
+		// guessing.
+		attempt.Subject = claims.Issuer + "|" + claims.Subject
+		s.audit.Failed(r.Context(), attempt)
+		httpjson.Fail(w, http.StatusConflict, httpjson.CodeSubjectConflict)
+		return
+	case err != nil:
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
@@ -201,7 +213,9 @@ func (s *Service) personForSubject(r *http.Request, claims oidc.Claims) (
 	if errors.Is(err, iamdomain.ErrSubjectAmbiguous) {
 		// LOUDER than an outage, because waiting does not clear it: a
 		// restore left one subject linked to two people, and the
-		// sign-in stays refused until an operator removes a link.
+		// sign-in stays refused until an operator removes a link. The
+		// error names both holders, and this line is the only place
+		// they are named — the caller is told neither.
 		log.ErrorContext(r.Context(), "api_oidc_subject_ambiguous",
 			"issuer", claims.Issuer, "error", err)
 		return iamdomain.Sighting{}, err
