@@ -931,9 +931,10 @@ type Stream struct {
 	// EVERY STATE LOG SHARES ONE BUDGET, and a derived value is only what
 	// this log asks for within it. The broker reserves each ceiling in full
 	// when it creates the stream, so the derived ceilings of every state
-	// log are scaled down together to fit half of what the broker can
-	// grant them; a value set here is never scaled, and a boot that cannot
-	// reserve it fails naming this field.
+	// log being created are scaled down together to fit what the logs that
+	// already exist leave of half of what the broker can grant them; a
+	// value set here is never scaled, and a boot that cannot reserve it
+	// fails naming this field.
 	//
 	// WHAT THIS FIELD DOES IS NARROWER THAN IT LOOKS. It is the value the
 	// stream is CREATED with, and thereafter a DECLARATION the engine

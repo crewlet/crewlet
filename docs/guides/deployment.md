@@ -65,7 +65,9 @@ never below 1 GiB each, so:
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes` or `stream.pages_log_max_bytes` later,
   changes nothing about streams that already exist; `crewlet retention
-  set-capacity` is what changes a running log's ceiling.
+  set-capacity` is what changes a running log's ceiling. A log created later —
+  one a new version adds — is sized from what the existing logs' ceilings leave
+  of that half, so logs that already hold all of it leave it the 1 GiB floor.
 
 [Replication](replication.md#how-the-byte-ceilings-are-sized) has the whole
 arithmetic and the refusal's text.

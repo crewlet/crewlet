@@ -343,19 +343,38 @@ number, and a node sizes them together, once, when it creates their streams:
 | Step | What happens |
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
-| **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
+| **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs, so a restart divides the same half the first boot did. Where the broker states no limit, or it cannot be read, the share is half of the stream volume's free space instead, and nothing is added to it: a reservation never spends free space, so that figure already contains what the logs hold. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
 | **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB), the knowledge base's log for a quarter of that (1..16 GiB), and the vector changelog for 16 GiB capped by the same quarter. |
-| **The fit** | A ceiling you set is never scaled. The unset ones share what is left of the logs' half in proportion to what each asked for, and none goes below 1 GiB. |
+| **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' half first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. |
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
 missing stream is created with and nothing else: a booting node never rewrites
 a running stream's configuration, and the broker never re-checks a reservation
 it has already granted. A log created larger than today's sizing would make it
 boots as it is, and the node logs `jetstream_stream_capacity_differs` with both
-numbers. A knowledge-base log created before it joined the budget, at a fixed
-4 GiB, is the common case, and it is harmless: its reservation was granted
-when it was made. To reclaim it (or to raise any log), use
+numbers — its ceiling, and what this sizing would create it with if no log
+existed yet. A knowledge-base log created before it joined the budget, at a
+fixed 4 GiB, is the common case, and it is harmless: its reservation was
+granted when it was made. To reclaim it (or to raise any log), use
 [`crewlet retention set-capacity`](retention.md#changing-a-logs-ceiling).
+
+**And it counts at that ceiling when another log is created beside it.** A log
+a new version adds, or one whose stream was deleted, is sized from what the
+existing logs leave of the half, not from what they would ask for today — so a
+log being created fits inside what the existing logs leave of their share,
+past it only by the 1 GiB floor and a ceiling you set for it. What the existing
+logs already hold is not reduced: when they hold more than the share (a ceiling
+set and later unset, a log created while the volume had more room, one raised
+with `crewlet retention set-capacity`), the logs reserve that much past it too,
+and a log created beside them gets the floor. When a log is created below what
+it would have had on an empty broker, the node says so with
+`statelog_ceiling_short_of_fit`, naming each log it created short, the ceiling
+it got (`created`) and the one it would have had (`fit`), and what each
+existing log holds (`held`); once the node is up, `crewlet retention
+set-capacity` gives an existing log's reservation back and raises the new one.
+It is never created above that `fit`, even where the existing logs leave more:
+every later boot reports its stream against that figure, and a log created
+past it would be reported as a capacity difference on every one of them.
 
 **A boot that still cannot reserve a log says why.** When even the floors, or
 a ceiling you set, do not fit, the node refuses to boot with an error naming
@@ -370,9 +389,10 @@ stream.store_max_bytes where you set one, and otherwise three quarters of the
 free space on the volume holding stream.store_dir (/var/lib/crewlet/stream),
 counting what the broker's streams already hold there.
 stream.pages_log_max_bytes is unset, so the ceiling was derived and scaled
-into the state logs' share of the broker, and it goes no lower than
-1073741824 bytes. Give the broker more room; the state logs that already exist
-keep the ceilings they were created with, and no Tier A setting changes them: …
+into what the state logs that already exist leave of their share of the
+broker, and it goes no lower than 1073741824 bytes. Give the broker more room;
+the state logs that already exist keep the ceilings they were created with,
+and no Tier A setting changes them: …
 ```
 
 The remedies are the ones it lists. Give the broker more room: raise

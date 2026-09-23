@@ -91,7 +91,9 @@ type domainHost interface {
 
 	// DomainStreamCeiling is the ceiling a domain's stream already holds,
 	// and whether it exists. What the logs hold counts as theirs when they
-	// are sized, which is what sizes a restart as the first boot was.
+	// are sized, which is what sizes a restart as the first boot was — and
+	// it is what a log being created is sized beside, since a log that
+	// exists reserves what it holds rather than what it would ask for now.
 	DomainStreamCeiling(ctx context.Context, stream string) (int64, bool, error)
 	DomainLog(ctx context.Context, stream string) (*jetstream.DomainLog, error)
 	DomainConsumer(ctx context.Context, stream, nodeID string, after uint64) (*jetstream.DomainConsumer, error)
@@ -168,11 +170,12 @@ type stateLog struct {
 	nudgeSkills func()
 
 	// ceilings is the byte ceiling each domain's stream is CREATED with,
-	// sized from Tier A inside the broker's budget ([ceilingsFor]). It is
-	// only ever applied at creation: a stream's configuration has one
-	// writer and a booting node is not it, so re-applying it would let
-	// restart order decide a shared limit and let a late node lower a
-	// ceiling an emergency grant had just raised.
+	// sized from Tier A inside the broker's budget ([ceilingsFor]); for a
+	// stream that already exists it is the value that stream is reported
+	// against. It is only ever applied at creation: a stream's
+	// configuration has one writer and a booting node is not it, so
+	// re-applying it would let restart order decide a shared limit and let
+	// a late node lower a ceiling an emergency grant had just raised.
 	ceilings map[string]domainCeiling
 
 	// volume is the directory the ceilings were derived from, which a

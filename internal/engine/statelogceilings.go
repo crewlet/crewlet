@@ -44,6 +44,11 @@ import (
 // before it joined the budget) boots as it is and is reported rather than
 // rewritten. Changing it is the capacity operation's, which runs where no
 // publisher can move the number it is decided against.
+//
+// And it COUNTS at that ceiling. What the budget promises is a bound on what
+// the logs reserve between them, and an existing log reserves what it holds,
+// not what today's arithmetic would give it — so a log created beside it is
+// sized from what it leaves ([fitCeilings]).
 
 // domainCeiling is one domain's stream ceiling and where Tier A puts it.
 type domainCeiling struct {
@@ -63,7 +68,8 @@ type domainCeiling struct {
 }
 
 // StreamBudgetShare is how much of what the broker can grant the state logs
-// their ceilings may reserve between them.
+// their ceilings may reserve between them — the ceilings their existing
+// streams hold included, whatever Tier A would size those at today.
 //
 // HALF. The same broker holds every seat's mailbox, every coordination bucket
 // (the leases, the ledgers, the counters, the company's sealed credentials)
@@ -159,11 +165,23 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 // still refuses a reservation its servers cannot back, and a client cannot
 // read their caps; the volume this node measured is the one figure it has, so
 // the same share of that bounds it.
+//
+// # Why the held ceilings are added back to the one figure and not the other
+//
+// The broker's figure is what it has LEFT, and a reservation spends it: once
+// the logs exist their ceilings are gone from it, so adding them back is what
+// hands a restart the number the creating boot had. Free space is spent by
+// bytes written and never by a reservation, so it still contains every ceiling
+// the logs hold. Adding them to it as well counted each one twice — a restart
+// sizing from its own disk divided a pool larger than its first boot's by half
+// of what the logs hold, and a log created beside them was handed that half on
+// top of the share.
 func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 	free int64, volume string) (map[string]domainCeiling, error) {
 
 	asked := map[string]domainCeiling{}
-	var held int64
+	held := map[string]int64{}
+	var holding int64
 	for _, domain := range registeredDomains() {
 		ceiling, err := tierACeiling(stream, domain, free)
 		if err != nil {
@@ -181,19 +199,20 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 			log.WarnContext(ctx, "statelog_ceiling_unread",
 				"domain", domain.Name(), "error", err.Error())
 		case found:
-			held += holds
+			held[domain.Name()] = holds
+			holding += holds
 		}
 	}
 
 	budget, err := host.StreamBudget(ctx)
-	available := budget.Available()
 	if err != nil {
 		log.WarnContext(ctx, "statelog_broker_budget_unread", "error", err.Error(),
 			"detail", "the state logs' ceilings are sized from this node's free "+
 				"space instead, and the broker still refuses one it cannot reserve")
 	}
-	if err != nil || available < 0 {
-		available = free
+	grantable := free
+	if available := budget.Available(); err == nil && available >= 0 {
+		grantable = available + holding
 	}
 	// A LIMIT OF ZERO FROM AN ACCOUNT THAT DECLARES NONE FOR THIS NODE IS
 	// SAID OUT LOUD, because the boot that follows does not say it.
@@ -214,8 +233,8 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 				"needs already exists, and the first create it has to make will "+
 				"be refused")
 	}
-	pool := int64(float64(available+held) * StreamBudgetShare)
-	sized := fitCeilings(asked, pool)
+	pool := int64(float64(grantable) * StreamBudgetShare)
+	sized := fitCeilings(asked, held, pool)
 
 	ceilings := make(map[string]int64, len(sized))
 	var explicit []string
@@ -230,11 +249,116 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 		"ceilings", ceilings, "explicit", explicit, "free", free,
 		"broker_limit", budget.Limit, "broker_committed", budget.Committed,
 		"broker_source", string(budget.Source), "held", held, "pool", pool)
+	// A LOG CREATED BELOW ITS FIT IS SAID OUT LOUD, because nothing else
+	// says it: the boot succeeds, the ceiling is the only number that
+	// moved, and the first sign would be a log refusing appends early. The
+	// logs whose holdings did it are reported against their fit by the
+	// broker's capacity line; this names the one they took it from, and
+	// the gesture that moves both.
+	if fit := shortOfFit(asked, held, pool, sized); len(fit) > 0 {
+		created := make(map[string]int64, len(fit))
+		for name := range fit {
+			created[name] = sized[name].Bytes
+		}
+		log.WarnContext(ctx, "statelog_ceiling_short_of_fit",
+			"created", created, "fit", fit, "held", held, "pool", pool,
+			"detail", "the state logs that already exist hold more of their "+
+				"share than this sizing would give them, so a log created now "+
+				"is sized from what they leave rather than from what it asked "+
+				"for; once this node is up, `crewlet retention set-capacity` "+
+				"gives an existing log's reservation back and raises this one")
+	}
 	return sized, nil
 }
 
-// fitCeilings scales the derived ceilings down to fit pool, leaving explicit
-// ones as the operator wrote them.
+// fitCeilings sizes every log inside pool: what a MISSING log is created with,
+// and the value an EXISTING one is reported against, which is never applied.
+// held is the ceiling each existing log's stream holds, by domain.
+//
+// # A log that exists counts at what it HOLDS
+//
+// Its reservation is the ceiling the broker granted it, and the pool bounds
+// what the logs reserve between them — so the logs being created divide what
+// the existing ones leave of the pool, whatever Tier A would give those today.
+//
+// The two numbers differ whenever a log was created at something other than
+// today's arithmetic: a knowledge-base log from before it joined the budget,
+// an explicit ceiling later unset, a log created while its volume had more
+// room, one a capacity operation resized. Dividing the pool by the ASKS
+// counted such a log at a reservation it does not have. Measured: a tracker
+// log holding 17179869184 bytes, created at an explicit ceiling later unset,
+// beside a pool of 8789273088, was counted at its ask, and the boot was
+// refused the vector changelog's reservation. On a 16 GiB volume that
+// arithmetic sizes the changelog at 3857765632 in bytes the tracker already
+// holds, and the logs ask for 22111376640 between them.
+//
+// So the missing logs divide what the existing ones leave of the pool, and
+// together with them reserve at most the pool, past it only by the floors and
+// by a ceiling set for a log being created. What the existing logs ALREADY
+// hold is not something this can give back: where they hold more than the
+// pool — a ceiling set and later unset, a log created while its volume had
+// more room, one a capacity operation raised — the missing ones get their
+// floors, and the total exceeds the pool by that excess as well. The cost is
+// stated rather than hidden: a log created beside logs that already hold the
+// whole share gets the floor ([shortOfFit] says so), and is refused by name
+// ([stateLog.storageRefused]) when not even that fits.
+//
+// # An existing log's own value is its fit on an EMPTY broker
+//
+// What this sizing would create it with if every log were missing, which is
+// the figure a restart reproduces: the boot that created the logs sized them
+// exactly so, so a log still holding what it was created with draws no report,
+// and one holding anything else is reported with both numbers.
+//
+// # And a missing log is created at NO MORE than that fit
+//
+// Because the fit is what every later boot reports its stream against, a log
+// created above it is a capacity difference nobody made, logged on every boot
+// of every node for the life of the stream. Dividing what the existing logs
+// leave reaches above the fit two ways: a log holding less than its own fit
+// leaves the difference to the missing ones, and a boot that stopped between
+// two creates leaves the next one dividing a remainder whose floor rounding
+// lands a byte or two over the empty-broker division — measured at 7158278827
+// against a fit of 7158278826. Capping at the fit gives up nothing the budget
+// promised and keeps every created log reproducible.
+//
+// Pure arithmetic, so every case is a table row rather than a broker.
+func fitCeilings(asked map[string]domainCeiling, held map[string]int64, pool int64) map[string]domainCeiling {
+	out := divide(asked, pool)
+	missing := map[string]domainCeiling{}
+	left := pool
+	for name, ceiling := range asked {
+		if holds, exists := held[name]; exists {
+			left -= holds
+			continue
+		}
+		missing[name] = ceiling
+	}
+	for name, created := range divide(missing, left) {
+		fit := out[name]
+		fit.Bytes = min(fit.Bytes, created.Bytes)
+		out[name] = fit
+	}
+	return out
+}
+
+// shortOfFit is every log this sizing creates below its fit on an empty
+// broker, with that fit: the logs the existing ones' holdings took bytes from.
+func shortOfFit(asked map[string]domainCeiling, held map[string]int64,
+	pool int64, sized map[string]domainCeiling) map[string]int64 {
+
+	fit := divide(asked, pool)
+	short := map[string]int64{}
+	for name, ceiling := range sized {
+		if _, exists := held[name]; !exists && ceiling.Bytes < fit[name].Bytes {
+			short[name] = fit[name].Bytes
+		}
+	}
+	return short
+}
+
+// divide scales the derived ceilings down to fit pool, leaving explicit ones as
+// the operator wrote them.
 //
 // # The arithmetic, and the two ways the obvious version overshoots
 //
@@ -246,12 +370,13 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 // And a log whose share falls below [MinDomainCeiling] is HELD at the floor
 // and the rest divide what remains, rather than being raised to it after the
 // division: raised afterwards, every floored log is bytes the others were also
-// given. So the total is the pool whenever the floors allow, and exceeds it
-// only by the floors themselves, which the broker then grants or refuses by
-// name.
-//
-// Pure arithmetic, so every case is a table row rather than a broker.
-func fitCeilings(asked map[string]domainCeiling, pool int64) map[string]domainCeiling {
+// given. So the derived logs never share more than the explicit ones leave,
+// and the total exceeds the pool only by the floors and by explicit ceilings
+// that do not fit it, which the broker then grants or refuses by name. A pool
+// already spent — below zero, where the logs that exist hold more than the
+// share or an explicit ceiling is larger than it — is a pool of nothing, and
+// every derived log is at its floor.
+func divide(asked map[string]domainCeiling, pool int64) map[string]domainCeiling {
 	out := maps.Clone(asked)
 	remaining := pool
 	var open []string
@@ -369,8 +494,8 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 	budget, err := host.StreamBudget(ctx)
 	had := roomLeft(budget, err, s.volume)
 	from := fmt.Sprintf("%s is unset, so the ceiling was derived and scaled into "+
-		"the state logs' share of the broker, and it goes no lower than %d bytes",
-		ceiling.Field, MinDomainCeiling)
+		"what the state logs that already exist leave of their share of the "+
+		"broker, and it goes no lower than %d bytes", ceiling.Field, MinDomainCeiling)
 	if ceiling.Explicit {
 		from = fmt.Sprintf("%s sets the ceiling", ceiling.Field)
 		if fits := budget.Available(); err == nil && fits >= MinDomainCeiling {
