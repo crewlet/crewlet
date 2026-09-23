@@ -286,7 +286,7 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 			out.FloorUnknownFor = max(out.FloorUnknownFor, statelog.FloorCacheStale)
 		}
 	}
-	out.SemanticCoverage = r.semanticCoverage(ctx, now)
+	out.SemanticCoverage = r.semanticCoverage()
 	r.space(&out)
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)

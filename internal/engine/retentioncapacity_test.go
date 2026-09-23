@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -259,5 +260,54 @@ func TestTheAlarmTableIsEvaluatedOnANodeThatHoldsNoDuty(t *testing.T) {
 			"series — every kind is written on every observation, firing or "+
 			"not, because a series that disappears reads as `no data` on "+
 			"every dashboard", series, len(statelog.Kinds()))
+	}
+}
+
+// THE VECTOR COVERAGE IS MEASURED ON EVERY TICK, AND ONLY ON A TICK.
+//
+// It used to be measured inside the report whenever the cached figure was a
+// whole interval old — which the next tick's report usually was not, because
+// the ticker fires on a fixed period and the report starts after the tick's
+// other measurements. Whenever the previous tick's took longer, the figure was
+// a few milliseconds short of an interval old, the scan was skipped, and
+// `recall_below_floor` read a coverage half an hour stale beside inputs a
+// quarter of an hour old. And a report is assembled on every dashboard poll,
+// so the scan must never run from one.
+func TestTheVectorCoverageIsMeasuredOnEveryTickAndReadByTheReport(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	scans := 0
+	fraction := 0.99
+	var fail error
+	r := &retention{coverage: func(context.Context) (float64, bool, error) {
+		scans++
+		return fraction, true, fail
+	}}
+	if got := r.semanticCoverage(); got != nil {
+		t.Fatalf("a node that has never ticked read a coverage of %v", *got)
+	}
+
+	r.measureCoverage(ctx)
+	fraction = 0.5
+	// THE NEXT TICK, however little time the drift left between them.
+	r.measureCoverage(ctx)
+	if scans != 2 {
+		t.Fatalf("two ticks scanned %d time(s): a tick skipped its measurement", scans)
+	}
+	for range 5 {
+		if got := r.semanticCoverage(); got == nil || *got != 0.5 {
+			t.Fatalf("the report read %v, want the latest tick's 0.5", got)
+		}
+	}
+	if scans != 2 {
+		t.Errorf("reading the report scanned the corpus %d more time(s)", scans-2)
+	}
+
+	// A FAILED SCAN LEAVES NOTHING: an unreadable corpus is not the
+	// covered one the last tick saw.
+	fail = errors.New("store closed")
+	r.measureCoverage(ctx)
+	if got := r.semanticCoverage(); got != nil {
+		t.Errorf("a failed scan left a coverage of %v standing", *got)
 	}
 }

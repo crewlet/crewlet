@@ -117,17 +117,17 @@ type retention struct {
 	// assemble a report, on different goroutines.
 	mu sync.Mutex
 
-	// coverAt, coverFraction and coverKnown are the last coverage
-	// measurement and when it was taken.
+	// coverFraction and coverKnown are the last tick's coverage
+	// measurement.
 	//
-	// CACHED FOR ONE TICK, because the measurement is a scan of the whole
-	// source corpus and a report is assembled on every operator request
-	// and every dashboard poll — where the trim's own inputs are read once
-	// per tick by construction. One [RetentionInterval] is also the
-	// resolution every other alarm input here has, so a fresher coverage
-	// number would be the only one on the reading that could disagree with
-	// its neighbours about which tick it describes.
-	coverAt       time.Time
+	// TAKEN ON THE TICK AND READ BY THE REPORT, because the measurement is
+	// a scan of the whole source corpus and a report is assembled on every
+	// operator request and every dashboard poll — where the trim's own
+	// inputs are read once per tick by construction. One
+	// [RetentionInterval] is also the resolution every other alarm input
+	// here has, so a fresher coverage number would be the only one on the
+	// reading that could disagree with its neighbours about which tick it
+	// describes. See [retention.measureCoverage].
 	coverFraction float64
 	coverKnown    bool
 
@@ -272,13 +272,16 @@ func (r *retention) tick(ctx context.Context) {
 }
 
 // evaluate observes this node's alarms and records what one tick can measure
-// about its own hardware.
+// about its own hardware and its vector coverage.
 //
 // THE MEASUREMENT COMES FIRST, because the reading the table is evaluated
-// against reads three of these back: a tick that observed before it measured
-// would evaluate the previous tick's disk against this tick's log.
+// against reads these back: a tick that observed before it measured would
+// evaluate the previous tick's disk against this tick's log. The vector
+// coverage is measured HERE and nowhere else — it is a scan of the whole
+// corpus, which a report assembled per dashboard poll must not repeat.
 func (r *retention) evaluate(ctx context.Context) {
 	r.capacity(ctx)
+	r.measureCoverage(ctx)
 	if r.alarms == nil {
 		return
 	}
