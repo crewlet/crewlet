@@ -226,6 +226,18 @@ type Options struct {
 	// resolve. Tier A tokens remain the whole of authentication there.
 	Sessions *auth.Sessions
 
+	// Tokens turns a machine token — a person's own access token or a
+	// service account's, minted at `/iam/credentials` — into its owner.
+	// See [auth.Tokens].
+	//
+	// NIL IS AN API THAT RESOLVES NO MACHINE TOKEN, which is what a suite
+	// has. `crewlet run` ALWAYS builds one over its engine, including on a
+	// node that runs no identity domain: there the read answers "this
+	// node cannot say", so a token minted elsewhere in the fleet is a 503
+	// a pipeline retries rather than a 401 that tells it a credential that
+	// is fine is broken.
+	Tokens *auth.Tokens
+
 	// AuthEvents is where the guard counts a refused credential and
 	// records a Tier A token's use and overreach. REQUIRED: the engine
 	// running beside this API holds the node's audit trail, and a guard
@@ -456,6 +468,7 @@ func New(opts Options) (*App, error) {
 	a := &App{
 		guard: auth.New(opts.Bootstrap).BindSeats(opts.SeatBindings).
 			WithDevPrincipal(opts.DevPrincipal).WithSessions(opts.Sessions).
+			WithTokens(opts.Tokens).
 			WithAudit(opts.AuthEvents),
 		csrf:         auth.NewCSRF(opts.Bootstrap),
 		secure:       servedOverHTTPS(opts.Bootstrap),

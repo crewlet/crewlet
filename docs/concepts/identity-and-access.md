@@ -513,7 +513,7 @@ would be a credential every operator with a backup holds.
 | Password | argon2id, 64 MiB, t=3, p=1, as a PHC string | A person chose it, so the space it came from is small enough to grind — and memory is the cost a GPU cannot buy its way around |
 | Second factor | The TOTP shared secret, sealed under the credential's own key | Nothing is *presented* to the engine but a six-digit code; the secret is what generates it, so it is encrypted rather than hashed |
 | Recovery code | SHA-256 | Minted here from `crypto/rand`, so there is no dictionary to grind and no memory cost to buy |
-| Machine token | SHA-256 over the whole token, prefix included | The same, plus: this is presented on *every* request a pipeline makes, and a hundred milliseconds of argon2id on each is a different kind of outage |
+| Machine token | SHA-256 over the prefix, the credential id and the secret — everything but the log position the value carries, which is a hint about *when* to look and proves nothing | The same, plus: this is presented on *every* request a pipeline makes, and a hundred milliseconds of argon2id on each is a different kind of outage |
 
 The rule is not "hash secrets with argon2id", it is **spend cost where an
 attacker has a shortcut** — and against a 32-byte value this engine minted,
@@ -595,6 +595,80 @@ The refusal itself is **one generic error for every arm** — no such login,
 wrong password, wrong code, code already spent. The one exception is choosing a
 *new* password, which is answered to somebody who has already proved who they
 are and must say what is wrong, or they will type variations until one sticks.
+
+---
+
+## Machine tokens: a person's own, and a service account's
+
+A **machine token** is the third credential, beside the deployment's Tier A
+tokens and a person's session: a bearer minted *for somebody in the
+directory* — a person's own token for the assistant they work through, or the
+token a **service account** (a directory row of kind `machine`, with a coloned
+login such as `ci:release`) presents from a pipeline. It is what
+`crewlet iam token` prints, and it is a `CREWLET_API_TOKEN` like any other:
+
+```bash
+crewlet iam token -person <id> -label "release pipeline" -grants state:read,work:write -days 30
+export CREWLET_API_TOKEN=cwl_pat_…
+```
+
+The value is `cwl_pat_<credential id>_<log position>_<secret>` and is shown
+**once**. The prefix is what a secret scanner matches on; the id and the
+position are in the clear so that checking one is a single keyed read of this
+node's own rows; the secret is 32 random bytes, and what the estate stores is a
+SHA-256 over the prefix, the id and the secret.
+
+**It acts as its owner.** A person's token is that person — their seat when the
+directory binds them to one, exactly as their session would be — and a service
+account's is that machine, or the seat it is bound to. There is no way to mint
+one that acts as anybody else.
+
+**It carries what it was minted with that its owner still holds.** The grants
+and the reach are named at the mint (`-grants`, `-colleague`); left out, the
+token carries every grant its owner holds that a token may carry, at the
+owner's own reach. On every request the minted set is cut to the owner's
+**current** grants and to this node's ceiling, and the reach to the narrower of
+the two — so demoting a person demotes every token they made, and nothing ever
+widens one.
+
+**What a mint refuses:**
+
+| Refused | Why |
+|---|---|
+| `secrets:read` and `people:manage`, whatever the owner holds | Revealing a credential and deciding who may do anything are gestures that need a person present, and a token is what an attacker holding a pipeline's environment already has |
+| A grant the owner does not hold, or a reach wider than theirs | A token narrows its owner and never widens them |
+| A grant the **minting party** does not hold | Whoever mints a token sees its value once, so minting one for somebody else is holding their grants oneself — the same rule as an enrolment |
+| An owner who is not active, and the machine row that binds a Tier A token (`token:<id>`) | That row is the deployment's credential's place in the directory, not an account |
+| No expiry, one already past, or one more than a year away | Ninety days by default and 365 at most: "forever" is deliberately unexpressible |
+| A request that presented a machine token | A token minted from a token is one whoever holds a pipeline's environment can renew for ever, a year at a time, with nobody present |
+
+A Tier A token minting one names the owner (`?person=`, or `-person` on the
+CLI): it is the deployment's credential and owns no tokens itself.
+
+**What ends one.** Revoking it (`crewlet iam revoke-credential <id> -person
+<owner>`, or `DELETE /iam/credentials/{id}`); its expiry; its owner being
+suspended, retired or removed; its owner being **signed out everywhere**
+(`crewlet iam revoke`), because a token is minted at its owner's revocation
+epoch and refused once that moves — which is what makes offboarding complete;
+and `crewlet iam invalidate-all`, because it is minted at the company's session
+generation too, for [a restore's reason](#two-counters-and-why-there-are-two).
+
+**A token manages no proof.** It is stepped up by construction for the grants
+it carries — it has nothing else to present — which is exactly why it is
+refused every gesture about *how its owner proves who they are*: it cannot mint
+another token, enrol or replace a second factor, regenerate the recovery codes,
+or answer a step-up, and `DELETE /iam/credentials/{id}` from one revokes
+machine tokens (itself included) and nothing else. Whoever finds a token leaked
+can withdraw it from wherever they found it; nobody holding one can take the
+account it belongs to.
+
+**Three answers, and the third is not the second.** A node that knows the
+token is no good answers `401`. A node that cannot tell answers `503` and a
+pipeline retries: one that has not yet applied the mint the token names (the
+position in the value is what tells "not yet" from "gone"), one whose identity
+applier is past the sixty-second stall grace, one holding a record it cannot
+decode about the owner, and one that runs no identity domain at all. A `401`
+there would teach a pipeline that a credential that is fine is broken.
 
 ---
 
@@ -732,7 +806,7 @@ to know it:
 | Field | What it is for |
 |---|---|
 | key tag | Which keyring entry signed this, so a verifier looks one key up rather than trying each — which is what makes adding a key zero-downtime |
-| generation | The fleet-wide counter `crewlet iam invalidate-all` moves, so one write ends every session in the company |
+| generation | The fleet-wide counter `crewlet iam invalidate-all` moves, so one write ends every session — and every machine token — in the company |
 | lineage | The session's identity, the subject its records arbitrate on, and — being a uuid7 — the instant it began, which the rotation index is derived from |
 | rotation | The window this cookie was issued in, derived from the session's age rather than recorded anywhere |
 | person | So a node can read their row without first reading the session's |
@@ -809,11 +883,15 @@ honestly serve — reads of a session it has not yet seen — and it ends at the
 same sixty seconds the alarm table already calls a stall, so a node serving
 stale identity is by definition a node already alarmed.
 
-### The two credential shapes meet at one frame
+### The three credential shapes meet at one frame
 
 The guard resolves a request once and attaches an `iam.Principal`, so nothing
 downstream branches on how somebody authenticated. A Tier A bearer becomes one
-from the configuration alone; a cookie becomes one from the two tables above.
+from the configuration alone; a cookie becomes one from the two tables above;
+a [machine token](#machine-tokens-a-persons-own-and-a-service-accounts)
+becomes its owner from one read of the directory. The two bearers are told
+apart by the value's shape, which chooses how it is checked and never admits
+anything by itself.
 
 **The header wins when both arrive.** A browser sends its cookie on every
 request whether or not the caller meant to present it, and an `Authorization`
@@ -1321,7 +1399,7 @@ that holds it. Rotating it is a migration, not a setting.
 | `iam_bootstrap_codes` | How a company with nobody in it acquires its first administrator |
 | `iam_sessions` | One row per session **lineage**. Rotations are not rows — a rotation id is derived — so this grows with sign-ins, not with requests |
 | `iam_revocation_epochs` | One person's **revocation epoch**, in its own table because every request compares against it |
-| `iam_session_generation` | The **fleet-wide generation** every bearer carries: one row, about nobody, that `crewlet iam invalidate-all` moves to end every session in the company at once |
+| `iam_session_generation` | The **fleet-wide generation** every bearer carries: one row, about nobody, that `crewlet iam invalidate-all` moves to end every session and machine token in the company at once |
 | `iam_history` | The authentication trail: who did what to whom, and why |
 
 Beside those sit three **gate** tables — `iam_evictions`, `iam_log_generations`
@@ -1347,8 +1425,8 @@ sets of sessions:
   gating it would make the fastest response to a stolen cookie the one that
   needs an administrator.
 - **The fleet-wide session generation** (`iam_session_generation`) ends *every*
-  session in the company. One row, about nobody, moved by
-  `crewlet iam invalidate-all`, and it requires the administrative grant.
+  session in the company, and every machine token. One row, about nobody,
+  moved by `crewlet iam invalidate-all`, and it requires `fleet:operate`.
 
 The second is not the first at a larger scale, and the difference is what a
 **restore** does. Restoring rolls the identity estate back to the instant the
@@ -1369,6 +1447,15 @@ sign-in that mints the bearer. A session opened after somebody signed out
 everywhere therefore carries the epoch that sign-out moved to, and one opened
 after an `invalidate-all` carries the new generation — so each counter ends
 exactly the sessions that predate it, never the ones that follow it.
+
+A **machine token is minted at both** in the same way, and refused once either
+moves past it. The epoch is what makes signing somebody out everywhere end
+their tokens too. The generation is what makes a restore safe for them: a
+token revoked after the backup was taken comes back unrevoked, and nothing can
+say which ones did — so, exactly as for a session, the only honest move is to
+end every one issued before the bump. Pipelines re-mint their tokens after a
+restore; the Tier A tokens in the configuration file are not in the estate and
+are untouched, which is what keeps a restored deployment reachable.
 
 ### Two retention horizons, and one
 
@@ -1484,7 +1571,7 @@ space a node needs before it can boot at all — and up for a large one. See
 The identity vocabulary above is what the engine *names*. What an operator sets
 today is smaller, and lives in two places:
 
-- **Tier A, `api.auth`** — `tokens`, the deployment's own machine credentials,
+- **Tier A, `api.auth`** — `tokens`, the deployment's own credentials,
   each carrying an id recorded as the author of anything written with it, the
   `grants` it may use and the `colleague` level it reaches the company's work
   at; `max_grants`, the ceiling above; `backend`, how people sign in; and the
@@ -1499,6 +1586,9 @@ today is smaller, and lives in two places:
   rather than in the company document because a seat's `contact` block says how
   to reach a person, not which credential they hold. See [Humans in the Org
   Chart](humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
+  The directory is also where a [machine
+  token](#machine-tokens-a-persons-own-and-a-service-accounts) is minted —
+  for a person or a service account, never in a file.
 
 Which surfaces always need a credential — reads included — is covered in
 [Configuration § Auth](configuration.md), and the operator MCP surface an

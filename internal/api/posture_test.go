@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -17,6 +21,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -91,7 +97,9 @@ func TestThePostureMatrix(t *testing.T) {
 	// store is the REAL /secrets surface for the same reason.
 	sources := queries.Sources{Company: active(t), Coord: coordmemory.New()}
 	store := postureSecrets(t)
-	plain := newApp(t, api.Options{Bootstrap: &b, Sources: sources, Secrets: store})
+	machine := postureTokens(t)
+	plain := newApp(t, api.Options{Bootstrap: &b, Sources: sources,
+		Secrets: store, Tokens: machine.arm})
 	devApp := newApp(t, api.Options{
 		Bootstrap: &b, DevPrincipal: dev, Sources: sources, Secrets: store,
 	})
@@ -106,9 +114,11 @@ func TestThePostureMatrix(t *testing.T) {
 	}
 
 	// The credential shapes, in the order every row states them. A
-	// session and a personal access token are deliberately absent: no
-	// route in this fixture mints either, so a column for one would
-	// assert a shape nothing here can produce.
+	// session is deliberately absent: no route in this fixture mints one,
+	// so a column for it would assert a shape nothing here can produce.
+	// A MACHINE TOKEN is here, read through the guard's real arm from
+	// rows this fixture holds — which is the shape `crewlet iam token`
+	// hands a pipeline as CREWLET_API_TOKEN.
 	type shape struct {
 		name   string
 		app    *api.App
@@ -143,6 +153,17 @@ func TestThePostureMatrix(t *testing.T) {
 		// principal covers an ABSENT credential only, or it would hide
 		// the typo somebody is about to spend an afternoon on.
 		{"a refused credential, on a -dev-principal node", devApp, "Bearer not-one-of-the-five"},
+		// A PERSONAL ACCESS TOKEN MINTED CARRYING state:read, whose
+		// owner holds every grant: it reaches what the TOKEN carries,
+		// never what its owner could.
+		{"a personal access token carrying state:read", plain, "Bearer " + machine.pat},
+		// A SERVICE ACCOUNT'S TOKEN, a machine carrying fleet:operate:
+		// the SRE's column, reached through a directory row rather than
+		// the configuration file.
+		{"a service account's token carrying fleet:operate", plain, "Bearer " + machine.service},
+		// AND A REVOKED ONE is a credential this node refuses, on every
+		// guarded route — never the owner, and never a 503.
+		{"a revoked personal access token", plain, "Bearer " + machine.revoked},
 	}
 
 	const (
@@ -172,67 +193,67 @@ func TestThePostureMatrix(t *testing.T) {
 		want [len(shapes)]int
 	}{
 		{"the exempt probe", "GET", "/health", "",
-			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok}},
+			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
 		{"the dashboard shell", "GET", "/dashboard", "",
-			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok}},
+			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
 		{"the company's working state", "GET", "/query/stream", "",
-			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath}},
 		{"an agent's transcripts", "GET", "/query/events", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath}},
 		{"the map of what is not configured", "GET", "/query/integrations", "",
-			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath, forbd, forbd, unath}},
 		{"the deployment's own shape", "GET", "/query/fleet", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath}},
 		// THE SNAPSHOT'S REST MIRRORS, decided by the grant their push
 		// kind takes on the socket rather than by being resolved at all.
 		{"the roster mirror", "GET", "/agents", "",
-			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath}},
 		{"the whole snapshot", "GET", "/stream/snapshot", "",
-			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath}},
 
 		// --- the deployment's own controls: fleet:operate ------------ //
 		{"clearing a spend ceiling", "POST", "/budgets/reset", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath}},
 		{"copying the node's durable state", "POST", "/backup?dir=/srv/posture", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath}},
 		// ADMITTED AS A 404: this fixture runs no domain log, so the
 		// stream is unknown — which is the handler speaking, after the
 		// authority layer let the request through.
 		{"moving the trim's backup floor", "POST",
 			"/work/retention/ack?stream=CREWLET_TRACKER_LOG&position=1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath, forbd, absent, unath}},
 		// ADMITTED AS A 503: this fixture runs no tracker to write the
 		// gate with.
 		{"evicting a node", "POST", "/work/retention/evict/n1?confirm=n1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath, forbd, down, unath}},
 		{"readmitting a node", "POST", "/work/retention/readmit/n1?confirm=n1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath, forbd, down, unath}},
 		// ADMITTED AS A 400: no target named.
 		{"resizing a stream", "POST", "/work/retention/capacity", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath}},
 		// ADMITTED AS A 500: this fixture's capacity window cannot be read.
 		{"the maintenance window's state", "GET",
 			"/work/retention/maintenance?stream=CREWLET_TRACKER_LOG", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, broken, broken, broken, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, broken, broken, broken, unath, forbd, broken, unath}},
 		{"abandoning a resize", "POST", "/work/retention/maintenance/abandon", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath}},
 		{"excluding a participant", "POST", "/work/retention/maintenance/exclude", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath}},
 		{"the value a reanchor must echo", "GET",
 			"/work/retention/reanchor?stream=CREWLET_TRACKER_LOG", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath, forbd, absent, unath}},
 		{"re-anchoring a log", "POST", "/work/retention/reanchor", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath}},
 
 		// --- the company's credentials ------------------------------- //
 		{"which credentials the company holds", "GET", "/secrets", "",
-			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath, forbd, forbd, unath}},
 		// THE VALUE TAKES config:read AND secrets:read, so the reader
 		// holding the first alone is refused the second.
 		{"a credential's value", "GET", "/secrets/POSTURE_PROBE?reveal=true", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath}},
 		{"overwriting a credential", "PUT", "/secrets/POSTURE_PROBE", "probe",
-			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath}},
+			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath}},
 	} {
 		t.Run(row.method+" "+row.path, func(t *testing.T) {
 			t.Parallel()
@@ -255,6 +276,87 @@ func TestThePostureMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// postureMachine is the machine-token arm this matrix resolves through, and
+// the three values it presents.
+type postureMachine struct {
+	arm                   *auth.Tokens
+	pat, service, revoked string
+}
+
+// postureTokens is the guard's REAL machine-token arm over three rows: a
+// person's token minted carrying state:read (their owner holds every grant), a
+// service account's token carrying fleet:operate, and a revoked token of the
+// first person's that carried everything.
+func postureTokens(t *testing.T) postureMachine {
+	t.Helper()
+	now := time.Now().UTC()
+	rows := map[string]credential.TokenRow{}
+	mint := func(owner credential.TokenOwner, grants []iam.Grant,
+		revoked time.Time) string {
+
+		t.Helper()
+		secret, err := credential.NewTokenSecret()
+		if err != nil {
+			t.Fatal(err)
+		}
+		token := credential.Token{
+			ID: uuid.Must(uuid.NewV7()).String(), Position: 1, Secret: secret,
+		}
+		rows[token.ID] = credential.TokenRow{
+			Applied: 2, Found: true, IsToken: true,
+			Verifier:  credential.TokenVerifier(token.ID, secret),
+			ExpiresAt: now.Add(time.Hour), RevokedAt: revoked,
+			Grants: grants, Owner: owner,
+		}
+		return token.Value()
+	}
+	person := credential.TokenOwner{
+		Found: true, ID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
+		Stage: iam.StageActive, Login: "jane.doe", Grants: iam.AllGrants,
+	}
+	service := credential.TokenOwner{
+		Found: true, ID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Login: "svc:deploy",
+		Grants: []iam.Grant{iam.GrantFleetOperate},
+	}
+	out := postureMachine{
+		pat:     mint(person, []iam.Grant{iam.GrantStateRead}, time.Time{}),
+		service: mint(service, []iam.Grant{iam.GrantFleetOperate}, time.Time{}),
+		revoked: mint(person, iam.AllGrants, now.Add(-time.Minute)),
+	}
+	arm, err := auth.NewTokens(auth.TokensDeps{
+		Directory: postureRows(rows), Chart: postureNoSeats{},
+	})
+	if err != nil {
+		t.Fatalf("NewTokens: %v", err)
+	}
+	out.arm = arm
+	return out
+}
+
+// postureRows is an identity directory holding a fixed set of tokens.
+type postureRows map[string]credential.TokenRow
+
+func (r postureRows) MachineToken(_ context.Context, id string) (
+	credential.TokenRow, error) {
+
+	if row, ok := r[id]; ok {
+		return row, nil
+	}
+	return credential.TokenRow{Applied: 2}, nil
+}
+
+// postureNoSeats is a chart holding no seats: every owner here is unbound.
+type postureNoSeats struct{}
+
+func (postureNoSeats) Seat(context.Context, string) (session.Seat, bool, error) {
+	return session.Seat{}, false, nil
+}
+
+func (postureNoSeats) Position(context.Context) (uint64, time.Duration, error) {
+	return 1, 0, nil
 }
 
 // postureSecrets is the real /secrets surface over a memory fleet, so the

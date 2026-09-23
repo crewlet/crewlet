@@ -99,8 +99,10 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 // what a restore needs and is a node gesture rather than a directory one.
 //
 // A backup taken before a revocation restores the session rows that revocation
-// ended, so a pre-restore bearer would work again. The fleet-wide generation
-// is the only number that can be pushed forward without reading anybody's row.
+// ended, so a pre-restore bearer would work again — a cookie, or a machine
+// token revoked after the copy was taken. The fleet-wide generation is the only
+// number that can be pushed forward without reading anybody's row, and both
+// carry it.
 func (s *Service) PostInvalidateAll(w http.ResponseWriter, r *http.Request) {
 	writer, ok := s.writerFor(r.Context())
 	if !ok {

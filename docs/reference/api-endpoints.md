@@ -574,9 +574,9 @@ list and nothing ever will be.
 | `DELETE /iam/people/{id}/sessions` | the person themselves or `people:manage` |
 | `POST /iam/people/{id}/mfa/reset` | `people:manage` |
 | `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
-| `POST /iam/credentials` | the person themselves or `people:manage` |
-| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage` |
-| `POST /iam/invalidate-all` | `fleet:operate` |
+| `POST /iam/credentials[?person=]` | the person themselves or `people:manage`; never a request presenting a machine token |
+| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; a machine token revokes machine tokens only |
+| `POST /iam/invalidate-all` | `fleet:operate`. Ends every session **and every machine token** |
 | `GET /iam/check` | `people:manage` or `audit:read` |
 | `POST /iam/bootstrap-code` | `people:manage`; refused once anybody can administer this company |
 | `GET /iam/audit` | `audit:read` |
@@ -616,6 +616,35 @@ and a machine's is coloned (`ci:release`, or `token:<id>` to bind a Tier A
 token), checked on a create and on a rename alike — and so is a `kind` other
 than `person` or `machine`, since a seat belongs to the chart and the engine
 is the node.
+
+#### `POST /iam/credentials` mints a machine token
+
+The owner is the person the **route** names — `?person=`, or the caller — and
+never a body field, because that is the value the authority table decided on.
+The body is `{"label", "expires_in_days", "grants", "colleague"}`, every field
+optional: omitted, the token carries every grant its owner holds that a token
+may carry, at the owner's own reach, for 90 days. The answer is `201` with
+`{"id", "person", "token", "grants", "colleague", "expires_at", "position"}`.
+
+| Answer | When |
+|---|---|
+| `400 bad_params` | No owner: a Tier A token owns no machine tokens, so it names one with `?person=` |
+| `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, a reach that is no level |
+| `403` | The request presented a machine token; a grant the owner does not hold, or `secrets:read` / `people:manage`; a grant the caller does not hold; a reach wider than the owner's; an owner who may not act |
+| `404` | Nobody by that id |
+
+**`Idempotency-Key` is ignored here, deliberately.** A retry that landed once
+would hand back the first attempt's record — whose secret was shown to nobody
+— beside this attempt's value, a token that verifies against nothing. A mint
+answered `unknown` is retried as a new mint, and the one that may have landed
+is a token nobody holds, which expires.
+
+Presented as `Authorization: Bearer cwl_pat_…`, the token acts as its owner —
+their seat if they are bound to one — carrying the grants it was minted with
+that the owner **still** holds, cut to the node's ceiling. It answers `401`
+where the node knows it is no good and `503 identity_unavailable` where the node
+cannot tell, including a node that has not yet applied the mint. See [Machine
+tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts).
 
 #### Values that are shown once
 

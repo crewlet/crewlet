@@ -6,95 +6,114 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/iam/credential"
 )
 
-// A MINTED TOKEN VERIFIES, AND WHAT IS STORED IS NOT THE TOKEN.
-func TestAMintedTokenVerifiesAndTheVerifierIsNotIt(t *testing.T) {
-	t.Parallel()
-	token, verifier, err := credential.NewToken()
+// mintToken is a token as the mint surface assembles one: a fresh id, a
+// secret, and the position the mint landed at.
+func mintToken(t *testing.T, position uint64) (credential.Token, string) {
+	t.Helper()
+	secret, err := credential.NewTokenSecret()
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	if !credential.VerifyToken(verifier, token) {
+	token := credential.Token{
+		ID: uuid.Must(uuid.NewV7()).String(), Position: position, Secret: secret,
+	}
+	return token, credential.TokenVerifier(token.ID, secret)
+}
+
+// A MINTED TOKEN ROUND-TRIPS THROUGH ITS VALUE AND VERIFIES, AND WHAT IS
+// STORED IS NOT THE TOKEN.
+func TestAMintedTokenParsesVerifiesAndIsNotItsVerifier(t *testing.T) {
+	t.Parallel()
+	token, verifier := mintToken(t, 1<<40|17)
+	value := token.Value()
+	if !strings.HasPrefix(value, credential.TokenPrefix) {
+		t.Fatalf("a minted token %q carries no prefix for a scanner to "+
+			"recognise it by", value)
+	}
+	parsed, ok := credential.ParseToken(value)
+	if !ok || parsed != token {
+		t.Fatalf("the value %q parsed as %+v (%v), want %+v", value, parsed,
+			ok, token)
+	}
+	if !credential.VerifyToken(verifier, parsed) {
 		t.Error("a minted token did not verify against its own verifier")
 	}
-	if verifier == token || strings.Contains(verifier, token) {
-		t.Fatal("the verifier is the token, so a replicated table holds a " +
-			"live credential every operator with a backup also holds")
+	if strings.Contains(verifier, token.Secret) {
+		t.Fatal("the verifier carries the secret, so a replicated table holds " +
+			"a live credential every operator with a backup also holds")
 	}
-	if credential.VerifyToken(verifier, token+"0") {
-		t.Error("a token with a character appended verified")
-	}
-	// TWO MINTS ARE TWO TOKENS. A mint that repeated would be one
+	// TWO MINTS ARE TWO SECRETS. A mint that repeated would be one
 	// credential handed to two machines.
-	second, _, err := credential.NewToken()
-	if err != nil {
-		t.Fatalf("mint: %v", err)
-	}
-	if second == token {
-		t.Fatal("two mints produced one token")
+	second, _ := mintToken(t, 1)
+	if second.Secret == token.Secret {
+		t.Fatal("two mints produced one secret")
 	}
 }
 
-// THE VERIFIER IS SHA-256 OVER THE WHOLE TOKEN, PREFIX INCLUDED.
+// THE VERIFIER COVERS THE PREFIX, THE ID AND THE SECRET — AND NOT THE
+// POSITION.
 //
-// Hashing only the random half would make two tokens with different prefixes —
-// a future format's, another deployment's — collide on one verifier, which is
-// a credential from somewhere else authenticating here. The construction is
-// asserted DIRECTLY rather than through a near-miss, because a near-miss
-// passes under exactly the mutation this is guarding against: strip a prefix
-// that is not there and the whole string is hashed anyway.
-//
-// PINNING THE CONSTRUCTION IS CORRECT HERE, unlike a password's: the verifier
-// is stored durably and is never re-derivable from anything else, so its shape
-// is a contract with every row already written rather than an implementation
-// detail.
-func TestTheVerifierIsSha256OverTheWholeToken(t *testing.T) {
+// The id is inside it so a verifier copied onto another credential's row
+// verifies nothing there, and the prefix so another format's value cannot
+// collide with one of these. The position is outside it because it is not
+// known until the mint that stores the verifier has landed — so a token whose
+// position somebody edits still verifies, which costs nothing: the position
+// authenticates nothing, it only decides whether an absent row is an answer or
+// a wait. PINNING THE CONSTRUCTION IS CORRECT HERE: the verifier is stored
+// durably and never re-derivable, so its shape is a contract with every row
+// already written.
+func TestTheVerifierCoversEverythingButThePosition(t *testing.T) {
 	t.Parallel()
-	token, verifier, err := credential.NewToken()
-	if err != nil {
-		t.Fatalf("mint: %v", err)
+	token, verifier := mintToken(t, 42)
+	sum := sha256.Sum256([]byte(credential.TokenPrefix + token.ID + "_" + token.Secret))
+	if verifier != hex.EncodeToString(sum[:]) {
+		t.Errorf("the verifier is %q, want sha256 over the prefix, the id and "+
+			"the secret", verifier)
 	}
-	if !strings.HasPrefix(token, credential.TokenPrefix) {
-		t.Fatalf("a minted token %q carries no prefix for a scanner to "+
-			"recognise it by", token)
+	moved := token
+	moved.Position = 43
+	if !credential.VerifyToken(verifier, moved) {
+		t.Error("a token verified differently at another position, so the " +
+			"verifier could never have been formed before the mint landed")
 	}
-	whole := sha256.Sum256([]byte(token))
-	if verifier != hex.EncodeToString(whole[:]) {
-		t.Errorf("the verifier is %q and sha256 of the whole token is %q — a "+
-			"verifier over the random half alone collides across prefixes",
-			verifier, hex.EncodeToString(whole[:]))
+	other := token
+	other.ID = uuid.Must(uuid.NewV7()).String()
+	if credential.VerifyToken(verifier, other) {
+		t.Error("the secret verified under another credential's id")
 	}
-	half := sha256.Sum256([]byte(strings.TrimPrefix(token, credential.TokenPrefix)))
-	if verifier == hex.EncodeToString(half[:]) {
-		t.Error("the verifier is sha256 of the random half alone")
+	tampered := token
+	tampered.Secret = strings.Repeat("0", len(token.Secret))
+	if credential.VerifyToken(verifier, tampered) {
+		t.Error("a token with another secret verified")
 	}
 }
 
-// THE SHAPE CHECK ROUTES AND NEVER REFUSES.
-//
-// It is for choosing which verifier to check a bearer against without running
-// every one of them. Using it as a gate would turn the prefix into a filter an
-// attacker strips.
-func TestTheShapeCheckOnlyRecognisesAndNeverGates(t *testing.T) {
+// ONLY A VALUE OF THIS SHAPE IS A TOKEN, and the parse routes rather than
+// refuses: whatever it declines, the guard still counts as a refused bearer.
+func TestOnlyAValueOfThisShapeParsesAsAToken(t *testing.T) {
 	t.Parallel()
-	token, verifier, err := credential.NewToken()
-	if err != nil {
-		t.Fatalf("mint: %v", err)
-	}
-	if !credential.LooksLikeToken(token) {
-		t.Error("a minted token is not recognised as one")
-	}
-	for _, value := range []string{"", "hello", "crw_nothex", "sk-ant-abc"} {
-		if credential.LooksLikeToken(value) {
-			t.Errorf("%q was recognised as a token", value)
+	token, _ := mintToken(t, 7)
+	good := token.Value()
+	for _, value := range []string{
+		"", "hello", "sk-ant-abc", credential.TokenPrefix,
+		strings.TrimPrefix(good, credential.TokenPrefix), // no prefix
+		good + "_extra", // a fourth part
+		strings.Replace(good, token.ID, "not-a-uuid", 1),
+		strings.Replace(good, "_7_", "_seven_", 1),
+		good[:len(good)-2],                                            // a short secret
+		good[:len(good)-2] + "zz",                                     // not hex
+		strings.Replace(good, token.ID, strings.ToUpper(token.ID), 1), // not canonical
+	} {
+		if _, ok := credential.ParseToken(value); ok {
+			t.Errorf("%q parsed as a token", value)
 		}
 	}
-	// AND THE VERIFICATION IS INDEPENDENT of it: a value that fails the
-	// shape check is still compared, and one that passes is still
-	// verified.
-	if credential.VerifyToken(verifier, "crw_deadbeef") {
-		t.Error("a token-shaped value verified without matching")
+	if _, ok := credential.ParseToken(good); !ok {
+		t.Errorf("a minted value %q did not parse", good)
 	}
 }

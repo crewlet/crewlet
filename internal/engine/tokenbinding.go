@@ -88,7 +88,7 @@ func (e *Engine) BoundSeat(ctx context.Context, login string) (session.PersonRow
 	if reader == nil {
 		return session.PersonRow{}, errNoIdentityDomain
 	}
-	ctx, cancel := context.WithTimeout(ctx, boundSeatBudget)
+	ctx, cancel := context.WithTimeout(ctx, requestReadBudget)
 	defer cancel()
 	return boundRowOf(ctx, reader, login)
 }
@@ -142,12 +142,16 @@ func boundRowOf(ctx context.Context, dir bindingDirectory, login string) (
 	}, nil
 }
 
-// boundSeatBudget bounds what resolving one request's token binding may cost.
+// requestReadBudget bounds what one identity read in front of a request may
+// cost: a Tier A token's binding ([Engine.BoundSeat]) and a machine token's
+// row ([Engine.MachineToken]).
 //
-// TWO SECONDS: it is a local read of a replicated table on this node's own
-// store, so anything approaching a second means the store is in trouble
+// TWO SECONDS: each is a keyed local read of a replicated table on this node's
+// own store, so anything approaching a second means the store is in trouble
 // rather than that the answer is slow — and it sits in front of every request
-// a Tier A token makes, so a longer one would hold the whole surface behind
-// one sick file handle. Running out is the unknown answer, a 503, rather
-// than an unbound credential.
-const boundSeatBudget = 2 * time.Second
+// such a credential makes, so a longer one would hold the whole surface behind
+// one sick file handle. Running out is the unknown answer, a 503, never an
+// unbound credential or a refused one. ONE CONSTANT for both because they are
+// the same read against the same store on the same request path; two would be
+// two opinions about how sick a file handle may be.
+const requestReadBudget = 2 * time.Second

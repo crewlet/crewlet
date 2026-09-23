@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
@@ -203,7 +204,9 @@ func intersect(declared, ceiling []iam.Grant) []iam.Grant {
 	return out
 }
 
-// Resolve answers who a request is, three-valued.
+// Resolve answers who a request is, three-valued, over the THREE credential
+// shapes: a Tier A token (resolve.go), a machine token (tokens.go) and a
+// session cookie (sessions.go).
 //
 // THE THREE ARMS ARE THE POINT, and they are not the same as the two
 // [Guard.Presented] answers:
@@ -243,6 +246,15 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 	// cookie happened to be in the jar.
 	if candidate := g.Credential(r); candidate != "" {
 		entry, ok := g.entry(candidate)
+		if !ok && g.machine != nil {
+			// THE THIRD ARM, chosen by the value's SHAPE and never
+			// gated on it: a value that parses is still verified, and
+			// one that does not is refused below like any other. See
+			// tokens.go.
+			if presented, isToken := credential.ParseToken(candidate); isToken {
+				return g.token(r, presented, candidate)
+			}
+		}
 		if !ok {
 			// PRESENT AND WRONG IS STILL ANONYMOUS, not unknown:
 			// this node checked and the answer was no. Unknown is

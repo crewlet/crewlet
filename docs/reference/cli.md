@@ -494,8 +494,10 @@ listener. A second process cannot publish one.
 
 **Authentication is `CREWLET_API_TOKEN` and nothing else.** The Tier A
 `api.auth.tokens` list is what a node *accepts*; it is not a wallet this
-command helps itself from. Export one of its values, or mint yourself a
-machine token with `crewlet iam token`.
+command helps itself from. Export one of its values, or a machine token
+minted with `crewlet iam token` — which acts as the person or service account
+it was minted for, and is refused only `iam token` itself and the gestures
+about how its owner signs in.
 
 | Command | What it does |
 |---|---|
@@ -511,10 +513,10 @@ machine token with `crewlet iam token`.
 | `revoke ID` | End every session and token they hold, by bumping their revocation epoch |
 | `sessions ID` | Their sessions, newest first, ended ones included |
 | `credentials` | What somebody proves themselves with. `-person` names them; without it, yourself |
-| `token` | Mint a machine token. Prints the value **once**; the estate holds a hash |
-| `revoke-credential ID` | Withdraw one credential, naming its owner with `-person` |
+| `token` | Mint a machine token for `-person` — a person's own, or a service account's. Prints the value **once**; the estate holds a hash. It acts as that owner, carrying `-grants` (default: everything the owner holds a token may carry) cut to what they still hold on every request, reaching the work at `-colleague` or narrower, for `-days` (90, at most 365). Never `secrets:read` or `people:manage`. See [Machine tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts) |
+| `revoke-credential ID` | Withdraw one credential, naming its owner with `-person`. Run with a machine token, it withdraws machine tokens only |
 | `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live |
-| `invalidate-all` | Invalidate every session in the company. The restore runbook's last step |
+| `invalidate-all` | Invalidate every session and every machine token in the company. The restore runbook's last step; the Tier A tokens in the config file are untouched |
 | `bootstrap-code` | Re-issue the one-time founder code. Withdraws every outstanding one first, so exactly one is live |
 | `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat removed, tombstoned, turned into an agent seat, or not yet applied on this node), grants this node's ceiling clamps, duplicated and orphaned claims, removed people whose key still lives. A binding this node's chart cannot judge — its applier past the 60-second stall grace — is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
 | `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-limit` |
@@ -527,9 +529,9 @@ machine token with `crewlet iam token`.
 | `-api URL` | the `api.host:port` in `-config` | The running node to talk to |
 | `-json` | off | Print the raw answer rather than a table |
 | `-reason TEXT` | the surface's own | Recorded on the change, and read by whoever audits it |
-| `-grants G,...` | leave alone | A comma-separated grant list, or the word `none` for an empty one |
-| `-colleague L` | leave alone | `none`, `read` or `write` |
-| `-person ID` | yourself | Whose credentials or sessions |
+| `-grants G,...` | leave alone | A comma-separated grant list, or the word `none` for an empty one. On `token`, what the token carries |
+| `-colleague L` | leave alone | `none`, `read` or `write`. On `token`, how far the token reaches — never further than its owner |
+| `-person ID` | yourself | Whose credentials or sessions, and whom a minted token is for. A Tier A token owns no tokens, so `token` run with one needs it |
 | `-label L` | — | What to call a minted token, for somebody holding four |
 | `-days N` | 90 | How long a minted token lasts, at most 365 — "forever" is deliberately unexpressible |
 | `-q TERM` | — | Narrow the directory on a login or a seat |

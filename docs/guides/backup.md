@@ -398,11 +398,14 @@ pushed forward without knowing:
 crewlet iam invalidate-all -api http://127.0.0.1:8080
 ```
 
-Every bearer minted before it — every cookie, every session — is invalid by
-construction, and everybody signs in again once. Machine tokens survive,
-because they carry their owner's revocation epoch rather than the generation;
-if the restore also rolled back a token revocation, withdraw it again with
-`crewlet iam revoke-credential`.
+Every bearer minted before it — every cookie, every session and every
+machine token — is invalid by construction: everybody signs in again once, and
+every pipeline holding a token minted with `crewlet iam token` needs a new one.
+Tokens are included for the same reason sessions are: a token revoked after the
+artefact was taken is live again in the restored rows, and nothing can say
+which ones were. The Tier A tokens in the configuration file are not in the
+estate and are untouched, which is what you run this command — and re-mint the
+pipelines' tokens — with.
 
 Run it **after** the fleet is up and **before** anybody is told the restore is
 finished. It takes `fleet:operate`, which is the grant whoever ran the restore

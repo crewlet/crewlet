@@ -262,6 +262,30 @@ type Credential struct {
 	// able to read back.
 	Label string `json:"label,omitempty"`
 
+	// Grants and Colleague are what a MACHINE TOKEN was minted carrying: a
+	// subset of its owner's grants and a reach no wider than theirs, both
+	// decided in the snapshot the mint read the owner in. They are a
+	// CEILING on the token rather than a grant of its own — a request
+	// carries only what the owner still holds — so demoting a person
+	// demotes every token they made. Empty on every other method.
+	Grants    []iam.Grant   `json:"grants,omitempty"`
+	Colleague iam.Colleague `json:"colleague,omitempty"`
+
+	// Epoch is the owner's revocation epoch when a machine token was
+	// minted. A token is refused once the owner's epoch moves past it,
+	// which is what makes signing somebody out everywhere — and
+	// offboarding them — end every token they hold as well as every
+	// session.
+	Epoch uint64 `json:"epoch,omitempty"`
+
+	// Generation is the company's session generation when a machine token
+	// was minted, and a token is refused once the generation moves past
+	// it — for the reason a session is: a backup taken before a token was
+	// revoked restores it unrevoked, and the restore runbook's
+	// invalidate-all is the only gesture that can end every such
+	// credential without knowing which they were.
+	Generation uint64 `json:"generation,omitempty"`
+
 	Extra map[string]json.RawMessage `json:"-"`
 }
 

@@ -1554,6 +1554,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
+	// AND THE THIRD CREDENTIAL, a machine token the directory minted —
+	// built on EVERY node, not only those that sign people in: it needs no
+	// keyring, and on a node running no identity domain its read answers
+	// "cannot say", so a token minted elsewhere is a 503 there rather than
+	// a 401 telling a pipeline its credential is broken.
+	machineTokens, err := auth.NewTokens(auth.TokensDeps{
+		Directory: e, Chart: engine.SeatViewOf(e),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("api: the machine-token arm: %w", err)
+	}
 	// AND THE WAY IN FOR A COMPANY THAT HAS NOBODY IN IT. A fresh estate
 	// holds no person, so the one-time code is what creates the first —
 	// written 0600 beside the store, its hash published so any ingress
@@ -1887,6 +1898,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// AND THE OTHER END OF THE COOKIE IT MINTS. Nil exactly when
 		// Auth is: a node that cannot sign one has none to check.
 		Sessions: sessions,
+		// AND OF THE TOKENS /iam/credentials MINTS — `crewlet iam
+		// token`'s value, presented as CREWLET_API_TOKEN.
+		Tokens: machineTokens,
 		// THE COMPANY'S IDENTITY DIRECTORY, nil on a node that runs no
 		// identity domain — see [directorySurface].
 		IAM: directory,

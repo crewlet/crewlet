@@ -27,7 +27,12 @@
 //
 // # Where a principal comes from
 //
-// One resolver, in resolve.go, over the credential shapes Tier A can express.
+// One resolver, [Guard.Resolve], over THREE credential shapes: a Tier A token
+// the configuration names (resolve.go), a machine token the identity directory
+// minted — a person's own access token or a service account's (tokens.go) —
+// and a session cookie (sessions.go). The first two arrive as a bearer and are
+// told apart by the value's shape; the third arrives as a cookie and yields to
+// any bearer presented beside it.
 // The guard is mounted UNCONDITIONALLY: mounting it only when Tier A carries
 // tokens would be two independent conditions deciding one security property,
 // coinciding only because every real caller happens to supply both. Tier A
@@ -286,6 +291,11 @@ type Guard struct {
 	// sessions turns a browser's cookie into the person holding it, or
 	// nil on a node that mints none. See sessions.go.
 	sessions *Sessions
+
+	// machine turns a machine token — a personal access token or a service
+	// account's — into its owner, or nil on a node that runs no identity
+	// domain. See tokens.go.
+	machine *Tokens
 
 	// audit is where a refused credential is counted and a Tier A
 	// token's use and overreach are recorded. See audit.go.

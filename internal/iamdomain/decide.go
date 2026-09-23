@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -740,7 +742,8 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 	return result.Position, err
 }
 
-// InvalidateAll ends every session in the company at once.
+// InvalidateAll ends every session in the company at once, and every machine
+// token.
 //
 // AN ADMINISTRATOR'S GESTURE, unlike [Writer.Revoke], and the asymmetry is the
 // blast radius: revoking is something a person does to themselves and
@@ -754,7 +757,9 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 // revocation somebody performed after the copy was taken is rolled back with
 // it and the session they revoked comes back. Bumping the fleet-wide
 // generation is the only move that ends those sessions without knowing which
-// they were — every cookie in existence is below the new value.
+// they were — every cookie in existence is below the new value. A machine
+// token is minted at the generation for the same reason ([Writer.MintToken]):
+// one revoked after the copy comes back unrevoked, and nothing can say which.
 //
 // THE NEW GENERATION IS READ INSIDE THE SNAPSHOT AND STATED ON THE RECORD, for
 // [Writer.Revoke]'s reason: an applier that incremented would fold over an
@@ -1445,6 +1450,280 @@ type CredentialSet struct {
 
 	OpID   string
 	Reason string
+}
+
+// MintToken adds a machine token to one person's or machine's credentials —
+// a personal access token for somebody's own assistant, or a service
+// account's token — reading the OWNER inside the snapshot the token is formed
+// in.
+//
+// # Why it is its own gesture rather than a CredentialSet
+//
+// What a token may carry is a fact about its owner NOW: a subset of the grants
+// they hold, a reach no wider than theirs, and the revocation epoch they are
+// at. A caller reading those first and handing in a finished credential would
+// be stating a read from another transaction — the pairing the write authority
+// forbids — so a demotion landing between the two would mint a token carrying
+// what its owner no longer holds. Minted on the owner's own subject, the mint
+// and a demotion contend and exactly one of them decides first.
+//
+// # What it refuses, and whose rule each is
+//
+//   - A grant the owner does not hold, or a reach wider than theirs: a token
+//     NARROWS its owner and never widens them.
+//   - secrets:read and people:manage, WHATEVER the owner holds: both are
+//     gestures that need a person present — revealing a credential and
+//     changing who may — and a token is what an attacker holding a pipeline's
+//     environment already has.
+//   - A grant the MINTING PARTY does not hold, for [Writer.mayConfer]'s rule:
+//     whoever mints a token sees its value once, so minting one for somebody
+//     else is holding their grants oneself.
+//   - An owner who may not act, a kind that is neither a person nor a
+//     machine, and a machine row that binds a Tier A token to a seat — that
+//     row IS the deployment's credential's place in the directory, not an
+//     account, and a token minted on it would act under the config file's
+//     name.
+//   - An expiry that is missing, past, or more than [credential.MaxTokenLifetime]
+//     away: "forever" is unexpressible.
+//
+// # It is minted at the owner's epoch AND the company's generation
+//
+// Both are read in the snapshot and stated on the credential, and a token is
+// refused once either moves past it — the same two counters that end a
+// session. The epoch is the owner signed out everywhere; the generation is the
+// restore runbook's invalidate-all, the one gesture that ends a credential a
+// restore brought back unrevoked without knowing which one it was.
+//
+// NIL GRANTS AND AN EMPTY REACH MEAN "AS MUCH AS MAY BE CARRIED": every grant
+// the owner holds that a token may carry, and the owner's own reach — resolved
+// here, in the snapshot, and stated on the record, so what the token carries is
+// never re-derived by a node applying it.
+func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, error) {
+	switch {
+	case in.PersonID == "" || in.ID == "" || in.OpID == "":
+		return TokenMinted{}, errors.New("iamdomain: minting a token needs " +
+			"its owner, its own id and an operation id")
+	case in.Verifier == "":
+		return TokenMinted{}, errors.New("iamdomain: minting a token needs " +
+			"the verifier its secret is checked against — the secret itself " +
+			"is never published")
+	case len(in.Label) > MaxTokenLabel:
+		return TokenMinted{}, fmt.Errorf("%w: a token's label is %d bytes and "+
+			"the cap is %d — it names which of somebody's tokens to revoke, "+
+			"and a listing renders it on every row", ErrInvalidToken,
+			len(in.Label), MaxTokenLabel)
+	case in.ExpiresAt.IsZero():
+		return TokenMinted{}, fmt.Errorf("%w: a token needs an expiry; one "+
+			"read as `never` is a credential that outlives whoever minted it",
+			ErrInvalidToken)
+	}
+	now := w.Now()
+	switch {
+	case !in.ExpiresAt.After(now):
+		return TokenMinted{}, fmt.Errorf("%w: the expiry %s is already past",
+			ErrInvalidToken, in.ExpiresAt.UTC().Format(time.RFC3339))
+	case in.ExpiresAt.Sub(now) > credential.MaxTokenLifetime:
+		return TokenMinted{}, fmt.Errorf("%w: a token may last at most %d "+
+			"days; `forever` is deliberately unexpressible, because a bearer "+
+			"secret nothing re-proves outlives whoever minted it",
+			ErrInvalidToken, int(credential.MaxTokenLifetime/(24*time.Hour)))
+	}
+
+	rec, err := w.record(PersonSubject(in.PersonID), OpUpdate, in.PersonID,
+		PeopleScope(in.PersonID), nil, in.Reason)
+	if err != nil {
+		return TokenMinted{}, err
+	}
+	// THE LAST RUN'S ANSWER, which is what the landed record carries.
+	var minted TokenMinted
+	decide := func(tx *sql.Tx) error {
+		owner, err := heldPerson(ctx, tx, in.PersonID, "a token for them")
+		if err != nil {
+			return err
+		}
+		if err := tokenOwnable(in.PersonID, owner); err != nil {
+			return err
+		}
+		login, err := loginOf(ctx, tx, in.PersonID)
+		if err != nil {
+			return err
+		}
+		if owner.Kind == iam.KindMachine &&
+			strings.HasPrefix(login, iam.TokenLoginPrefix) {
+			return fmt.Errorf("%w: %s is the directory's row for a Tier A "+
+				"token, which binds that token to a seat; it is not an "+
+				"account, and a token minted on it would act under the "+
+				"configuration file's name", ErrRefused, login)
+		}
+		grants, err := w.tokenGrants(in.Grants, owner.Grants)
+		if err != nil {
+			return err
+		}
+		colleague := in.Colleague
+		if colleague == "" {
+			colleague = owner.Colleague
+		}
+		if !colleague.Valid() && colleague != "" {
+			return fmt.Errorf("%w: %q is not a colleague level", ErrInvalidToken,
+				colleague)
+		}
+		if !colleagueWithin(colleague, owner.Colleague) {
+			return fmt.Errorf("%w: a token reaches the company's work no "+
+				"further than its owner, who reaches it at %q, and this one "+
+				"asks for %q", ErrRefused, owner.Colleague, colleague)
+		}
+		epoch, err := epochOf(ctx, tx, in.PersonID)
+		if err != nil {
+			return err
+		}
+		generation, err := generationOf(ctx, tx)
+		if err != nil {
+			return err
+		}
+		token := Credential{
+			V: DocumentVersion, ID: in.ID, Method: MethodToken,
+			Verifier: in.Verifier, Label: in.Label, ExpiresAt: in.ExpiresAt,
+			Grants: grants, Colleague: colleague, Epoch: epoch,
+			Generation: generation,
+		}
+		held := make([]Credential, 0, len(owner.Credentials)+1)
+		for _, c := range owner.Credentials {
+			if c.ID == in.ID {
+				// THE SAME MINT, RETRIED after an answer that did not
+				// arrive: the operation ledger is what collapses it,
+				// and a second copy of one id on the row would be two
+				// credentials a revocation names as one.
+				continue
+			}
+			held = append(held, c)
+		}
+		owner.Credentials = append(held, token)
+		minted = TokenMinted{Grants: grants, Colleague: colleague,
+			ExpiresAt: in.ExpiresAt, Epoch: epoch, Generation: generation}
+		rec.Mutation, err = EncodePerson(owner)
+		return err
+	}
+	result, err := w.publish(ctx,
+		w.request(&rec, in.OpID, statelog.PatternArbitrated, decide))
+	minted.Position = result.Position
+	return minted, err
+}
+
+// TokenMint is what minting a machine token needs.
+type TokenMint struct {
+	// PersonID is the owner: the person or machine the token acts as.
+	PersonID string
+
+	// ID is the credential's own id, minted by the caller because it is
+	// inside the verifier and the value — both formed before this runs.
+	ID string
+
+	// Verifier is [credential.TokenVerifier] over the id and the secret.
+	// NEVER the secret: this log is replicated, snapshotted and backed up.
+	Verifier string
+
+	Label string
+
+	// Grants is what the token may carry, or nil for every grant the owner
+	// holds that a token may carry. Colleague is its reach, or empty for
+	// the owner's own. See [Writer.MintToken].
+	Grants    []iam.Grant
+	Colleague iam.Colleague
+
+	// ExpiresAt is REQUIRED, and at most [credential.MaxTokenLifetime]
+	// away.
+	ExpiresAt time.Time
+
+	OpID   string
+	Reason string
+}
+
+// TokenMinted is what a mint landed carrying, and where.
+type TokenMinted struct {
+	// Position is where the record landed, which the token's value carries
+	// so a node below it answers "not yet" rather than "no such token".
+	Position statelog.Position
+
+	Grants     []iam.Grant
+	Colleague  iam.Colleague
+	ExpiresAt  time.Time
+	Epoch      uint64
+	Generation uint64
+}
+
+// MaxTokenLabel is how long a token's label may be, in bytes.
+//
+// ONE HUNDRED AND TWENTY-EIGHT: a label says which of somebody's tokens is
+// which — "release pipeline", "Claude on my laptop" — and is rendered on every
+// row of a credential listing, so a paragraph there is a listing nobody can
+// read. It is well above any name a person gives a token and well below what
+// would make the row the size of the document it sits in.
+const MaxTokenLabel = 128
+
+// ErrInvalidToken reports a mint whose request is malformed — a value the
+// caller typed, answered 400 rather than as an authority refusal.
+var ErrInvalidToken = errors.New("iamdomain: that token cannot be minted as asked")
+
+// TokenRefusedGrants are the grants a machine token may never carry, whatever
+// its owner holds.
+//
+// BOTH NEED A PERSON PRESENT: revealing a credential, and deciding who may do
+// anything at all. A token is what an attacker holding a pipeline's
+// environment already has.
+var TokenRefusedGrants = []iam.Grant{iam.GrantSecretRead, iam.GrantPeopleManage}
+
+// tokenGrants resolves what a token carries and refuses what it may not.
+func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
+	grants := asked
+	if grants == nil {
+		grants = make([]iam.Grant, 0, len(owner))
+		for _, g := range owner {
+			if g.Valid() && !slices.Contains(TokenRefusedGrants, g) {
+				grants = append(grants, g)
+			}
+		}
+	}
+	for _, g := range grants {
+		switch {
+		case slices.Contains(TokenRefusedGrants, g):
+			return nil, fmt.Errorf("%w: %s cannot be minted onto a token — it "+
+				"is a gesture that needs a person present, and a token is what "+
+				"an attacker holding a pipeline's environment already has",
+				ErrRefused, g)
+		case !g.Valid() || !slices.Contains(owner, g):
+			return nil, fmt.Errorf("%w: a token carries a subset of what its "+
+				"owner carries, and %s is not among %v", ErrRefused, g, owner)
+		}
+	}
+	if err := w.mayConfer(nil, grants); err != nil {
+		return nil, err
+	}
+	return slices.Clone(grants), nil
+}
+
+// tokenOwnable refuses an owner no token may act as.
+func tokenOwnable(personID string, owner Person) error {
+	switch {
+	case owner.Kind != iam.KindPerson && owner.Kind != iam.KindMachine:
+		return fmt.Errorf("%w: %s is not an enrolled person or machine, so "+
+			"there is nobody for a token to act as", ErrRefused, personID)
+	case !owner.Stage.MayAct():
+		return fmt.Errorf("%w: %s is %q, and a token acts only as somebody "+
+			"who may act", ErrRefused, personID, owner.Stage)
+	}
+	return nil
+}
+
+// loginOf is one person's login, read inside a decide's snapshot.
+func loginOf(ctx context.Context, tx *sql.Tx, personID string) (string, error) {
+	var login string
+	err := tx.QueryRowContext(ctx,
+		`SELECT login FROM iam_people WHERE id = ?`, personID).Scan(&login)
+	if err != nil {
+		return "", fmt.Errorf("iamdomain: read person %s's login: %w",
+			personID, err)
+	}
+	return login, nil
 }
 
 // Invite mints an invitation to an address nobody in this company holds.

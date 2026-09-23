@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/iamapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -250,6 +249,7 @@ type fakeWriter struct {
 	invited  iamdomain.InviteMint
 	updated  iamdomain.PersonUpdate
 	creds    iamdomain.CredentialSet
+	minted   iamdomain.TokenMint
 	err      error
 
 	// releasedFrom is the holder each release named.
@@ -301,6 +301,15 @@ func (w *fakeWriter) SetCredentials(_ context.Context, in iamdomain.CredentialSe
 		}
 	}
 	return w.did("credentials")
+}
+
+func (w *fakeWriter) MintToken(_ context.Context, in iamdomain.TokenMint) (
+	iamdomain.TokenMinted, error) {
+
+	w.minted = in
+	at, err := w.did("mint")
+	return iamdomain.TokenMinted{Position: at, Grants: in.Grants,
+		Colleague: in.Colleague, ExpiresAt: in.ExpiresAt}, err
 }
 
 func (w *fakeWriter) Claim(_ context.Context, kind iamdomain.ObjectKind,
@@ -606,98 +615,6 @@ func TestTheInviteUrlIsReturnedExactlyOnce(t *testing.T) {
 			t.Errorf("%s answered 200, so an invitation link is readable back",
 				target)
 		}
-	}
-}
-
-// A MINTED TOKEN CANNOT CARRY THE TWO GRANTS THAT NEED A PERSON PRESENT.
-func TestATokenCannotBeMintedWithSecretsReadOrPeopleManage(t *testing.T) {
-	t.Parallel()
-	r := newRig(t)
-	for _, refused := range []iam.Grant{iam.GrantSecretRead, iam.GrantPeopleManage} {
-		got := r.as(administrator(), http.MethodPost, "/iam/credentials",
-			map[string]any{
-				"person": alice.String(),
-				"grants": []string{string(refused)},
-			})
-		if got.status != http.StatusForbidden {
-			t.Errorf("minting %s answered %d, want 403 (body %v)",
-				refused, got.status, got.body)
-		}
-	}
-}
-
-// AND A TOKEN NARROWS ITS OWNER, never widens them.
-func TestATokenCarriesASubsetOfItsOwnersGrants(t *testing.T) {
-	t.Parallel()
-	r := newRig(t)
-	got := r.as(administrator(), http.MethodPost, "/iam/credentials",
-		map[string]any{
-			"person": bob.String(),
-			"grants": []string{string(iam.GrantConfigWrite)},
-		})
-	if got.status != http.StatusForbidden {
-		t.Errorf("a token widening its owner answered %d, want 403 (body %v)",
-			got.status, got.body)
-	}
-}
-
-// A MINTED TOKEN'S VALUE IS IN THE ANSWER AND IN THE ESTATE'S HASH.
-func TestAMintedTokenIsShownOnceAndStoredAsAVerifier(t *testing.T) {
-	t.Parallel()
-	r := newRig(t)
-	got := r.as(administrator(), http.MethodPost, "/iam/credentials",
-		map[string]any{"person": alice.String(), "label": "release"})
-	if got.status != http.StatusCreated {
-		t.Fatalf("status %d (body %v)", got.status, got.body)
-	}
-	value, _ := got.body["token"].(string)
-	id, _ := got.body["id"].(string)
-	if !strings.HasPrefix(value, "cwl_pat_") {
-		t.Errorf("the token %q does not name itself", value)
-	}
-	held := r.writer.creds.Apply(nil)
-	if len(held) != 1 {
-		t.Fatalf("the writer was asked to store %d credentials", len(held))
-	}
-	// THE VERIFIER MUST NOT CARRY THE SECRET, which is the whole of what
-	// "stored as a verifier" means: the estate is replicated, snapshotted,
-	// backed up and donated to joining peers, so anything recoverable from
-	// a row is a credential every one of those copies holds.
-	// THE PREFIX IS PEELED rather than the last underscore found: the
-	// secret is base64url, whose alphabet includes `_`, so splitting on
-	// the last one lands inside it about half the time.
-	secret := strings.TrimPrefix(value, "cwl_pat_"+id+"_")
-	switch {
-	case held[0].Verifier == "":
-		t.Error("nothing was stored, so any token authenticates")
-	case secret == "":
-		t.Errorf("the token %q carries no secret", value)
-	case strings.Contains(held[0].Verifier, secret):
-		t.Errorf("the stored verifier carries the secret itself")
-	case held[0].Verifier != credential.HashToken(secret):
-		t.Errorf("the stored verifier is not this engine's own hash of the " +
-			"secret, so nothing it minted would verify")
-	}
-	if held[0].Label != "release" {
-		t.Errorf("the label is %q", held[0].Label)
-	}
-	if held[0].ExpiresAt != at.Add(iamapi.DefaultTokenDays*24*time.Hour) {
-		t.Errorf("the token expires at %s", held[0].ExpiresAt)
-	}
-}
-
-// "FOREVER" IS UNEXPRESSIBLE, and a caller asking for it is told so rather
-// than silently clamped: five years is an intention the answer contradicts.
-func TestATokenCannotOutliveTheCeiling(t *testing.T) {
-	t.Parallel()
-	r := newRig(t)
-	got := r.as(administrator(), http.MethodPost, "/iam/credentials",
-		map[string]any{
-			"person": alice.String(), "expires_in_days": iamapi.MaxTokenDays + 1,
-		})
-	if got.status != http.StatusBadRequest {
-		t.Errorf("a five-year token answered %d, want 400 (body %v)",
-			got.status, got.body)
 	}
 }
 

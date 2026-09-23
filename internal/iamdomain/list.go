@@ -299,6 +299,12 @@ type CredentialRow struct {
 	// Label is what the mint called it, for a person who holds four
 	// tokens and needs to know which is which.
 	Label string
+
+	// Grants and Colleague are what a machine token was minted carrying —
+	// the ceiling on what it can do, re-cut to its owner's own grants on
+	// every request. Empty on every other method.
+	Grants    []iam.Grant
+	Colleague iam.Colleague
 }
 
 // Revoked reports a credential that has been withdrawn or has aged out.
@@ -342,6 +348,7 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 			row.RevokedAt = fromMillis(revoked)
 			if held, err := DecodeCredential(document); err == nil {
 				row.Label = held.Label
+				row.Grants, row.Colleague = held.Grants, held.Colleague
 			}
 			out = append(out, row)
 		}

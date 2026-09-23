@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -77,6 +80,67 @@ func TestAnIamCommandWithNoSubjectSaysWhatIsMissing(t *testing.T) {
 					err, tc.want)
 			}
 		})
+	}
+}
+
+// `iam token` ASKS FOR WHAT THE ROUTE READS: the owner on the QUERY, which is
+// what the authority table decides on, and the grants, reach and lifetime in
+// the body — and it prints the value with what it carries.
+//
+// It used to name the owner in a body field the route no longer reads, and to
+// drop -colleague on the floor, so every token it minted was the caller's own
+// at the caller's own reach whatever the command said. Mutation: send the
+// person in the body again and the node sees no `person` query.
+func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
+	var seen struct {
+		method, path, person, auth string
+		body                       map[string]any
+	}
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.method, seen.path = r.Method, r.URL.Path
+		seen.person = r.URL.Query().Get("person")
+		seen.auth = r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&seen.body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"c-1","person":"p-1","token":"cwl_pat_the-value",` +
+			`"grants":["state:read"],"colleague":"read",` +
+			`"expires_at":"2026-07-01T00:00:00Z"}`))
+	}))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	var out, errs bytes.Buffer
+	if err := run([]string{"iam", "token", "-person", "p-1", "-label", "ci",
+		"-days", "30", "-grants", "state:read", "-colleague", "read",
+		"-config", cfg, "-api", node.URL}, &out, &errs); err != nil {
+		t.Fatalf("iam token: %v\n%s", err, errs.String())
+	}
+	if seen.method != http.MethodPost || seen.path != "/iam/credentials" {
+		t.Fatalf("the node saw %s %s", seen.method, seen.path)
+	}
+	if seen.person != "p-1" {
+		t.Errorf("the owner reached the node as ?person=%q, want p-1", seen.person)
+	}
+	if _, inBody := seen.body["person"]; inBody {
+		t.Errorf("the owner travelled in the body too: %v", seen.body)
+	}
+	if seen.body["colleague"] != "read" || seen.body["label"] != "ci" ||
+		seen.body["expires_in_days"] != float64(30) {
+		t.Errorf("the body was %v", seen.body)
+	}
+	if grants, _ := seen.body["grants"].([]any); len(grants) != 1 ||
+		grants[0] != "state:read" {
+		t.Errorf("the grants reached the node as %v", seen.body["grants"])
+	}
+	if seen.auth != "Bearer a-tier-a-token" {
+		t.Errorf("authenticated as %q", seen.auth)
+	}
+	for _, want := range []string{"cwl_pat_the-value", "state:read", apiTokenEnv} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the output does not carry %q:\n%s", want, out.String())
+		}
 	}
 }
 

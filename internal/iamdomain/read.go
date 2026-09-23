@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -53,10 +54,9 @@ type Reader struct {
 	db  *store.DB
 	log *statelog.Reader
 
-	committed  func() statelog.Position
-	lag        func() time.Duration
-	deferred   func() (statelog.Deferral, bool)
-	generation func() uint64
+	committed func() statelog.Position
+	lag       func() time.Duration
+	deferred  func() (statelog.Deferral, bool)
 }
 
 // ReaderOptions is what a reader is built from.
@@ -301,6 +301,111 @@ func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) err
 	}
 	*out = uint64(epoch)
 	return nil
+}
+
+// MachineToken answers everything one presented machine token is checked
+// against, in ONE snapshot: the credential row under its id, the owner as this
+// node holds them now, the owner's current epoch, the company's current
+// session generation, and how far this node can vouch.
+//
+// It satisfies the request guard's consumer-defined seam, and it is the
+// token's [Reader.Resolve]: a revocation landing between a credential read
+// and an owner read would produce a verdict that never existed at any instant.
+// WHAT THE ROWS MEAN is [credential.CheckToken]'s, over the value returned.
+//
+// ONE KEYED READ OF ONE ROW, never a scan, because the token carries its own
+// id in the clear — which is what a credential presented on every request a
+// pipeline makes has to cost.
+//
+// AN ERROR IS ALWAYS THE UNKNOWN ARM. A row that will not decode is a newer
+// peer's, and answering it as "no such token" would tell a pipeline its
+// credential is broken for the length of an upgrade.
+func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenRow, error) {
+	out := credential.TokenRow{Applied: uint64(r.committed().Packed())}
+	var owner string
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		var (
+			method           string
+			verifier         []byte
+			expires, revoked int64
+			document         []byte
+		)
+		err := tx.QueryRowContext(ctx, `
+			SELECT person_id, method, verifier, expires_at, revoked_at, document
+			  FROM iam_credentials WHERE id = ?`, id).
+			Scan(&owner, &method, &verifier, &expires, &revoked, &document)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// ABSENT IS A FINDING, which the token's own mint position
+			// turns into "gone" or "not yet".
+			owner = ""
+			return nil
+		case err != nil:
+			return fmt.Errorf("iamdomain: read a token: %w", err)
+		}
+		held, err := DecodeCredential(document)
+		if err != nil {
+			return fmt.Errorf("iamdomain: open token %q: %w", id, err)
+		}
+		out.Found = true
+		out.IsToken = CredentialMethod(method) == MethodToken
+		out.Verifier = string(verifier)
+		out.ExpiresAt = fromMillis(expires)
+		out.RevokedAt = fromMillis(revoked)
+		out.Grants = held.Grants
+		out.Colleague = held.Colleague
+		out.Epoch = held.Epoch
+		out.Generation = held.Generation
+		if err := readGeneration(ctx, tx, &out.FleetGeneration); err != nil {
+			return err
+		}
+		return readTokenOwner(ctx, tx, owner, &out.Owner)
+	})
+	if err != nil {
+		return credential.TokenRow{}, err
+	}
+	// THE OWNER'S BUCKET, once the row has named them — and every
+	// deferral when it has not, because nothing can say which bucket a
+	// record this node could not decode is about.
+	out.Lag, out.Deferred = r.Staleness(owner)
+	return out, nil
+}
+
+// readTokenOwner fills a token's owner as this node holds them now.
+func readTokenOwner(ctx context.Context, tx *sql.Tx, id string,
+	out *credential.TokenOwner) error {
+
+	var (
+		stage, login, seat string
+		chartPosition      int64
+		document           []byte
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT stage, login, seat_id, chart_position, document
+		  FROM iam_people WHERE id = ? AND shredded = 0`, id).
+		Scan(&stage, &login, &seat, &chartPosition, &document)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("iamdomain: read a token's owner: %w", err)
+	}
+	doc, err := DecodePerson(document)
+	if err != nil {
+		return fmt.Errorf("iamdomain: open person %q: %w", id, err)
+	}
+	out.Found = true
+	out.ID = id
+	out.Kind = doc.Kind
+	// THE COLUMN, for [readPersonRow]'s reason: a token decided from the
+	// document served a suspended owner.
+	out.Stage = iam.Stage(stage)
+	out.Login = login
+	out.Grants = doc.Grants
+	out.Colleague = doc.Colleague
+	out.Seat = seat
+	out.SeatAt = uint64(chartPosition)
+	return readEpoch(ctx, tx, id, &out.Epoch)
 }
 
 // readGeneration fills the fleet-wide session generation.

@@ -87,6 +87,7 @@ type Writer interface {
 	SetStage(ctx context.Context, personID string, stage iam.Stage,
 		opID, reason string) (statelog.Position, error)
 	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Position, error)
+	MintToken(ctx context.Context, in iamdomain.TokenMint) (iamdomain.TokenMinted, error)
 	Claim(ctx context.Context, kind iamdomain.ObjectKind, token, personID,
 		opID string) (statelog.Position, error)
 	Release(ctx context.Context, kind iamdomain.ObjectKind, token, holder,

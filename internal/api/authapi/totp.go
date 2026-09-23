@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -22,6 +23,17 @@ import (
 // hold on somebody's account. A session alone is not enough for either: what
 // is being changed is the thing that would stop the person holding that
 // session, so the person has to be at the keyboard.
+//
+// # A machine token is refused both, whoever it acts as
+//
+// A personal access token acts AS its owner — a person, carrying their seat
+// — and is stepped up by construction for the grants it was minted with,
+// because it has nothing else to present. That makes the kind check below
+// pass and the step-up clock read fresh, so without a refusal of its own a
+// token would reach the two gestures a step-up exists to protect: whoever
+// holds a pipeline's environment could enrol their own second factor on the
+// owner's account, or regenerate the recovery codes and read them. A token
+// PROVES NOBODY IS PRESENT, so it manages no proof — see [machineToken].
 //
 // # The enrolment is TWO requests, and the secret is only in the first answer
 //
@@ -214,11 +226,34 @@ func (s *Service) steppedUp(w http.ResponseWriter, r *http.Request) (iam.Princip
 			})
 		return iam.Principal{}, false
 	}
+	if machineToken(w, r) {
+		return iam.Principal{}, false
+	}
 	if s.stepUpDue(principal) {
 		httpjson.Fail(w, http.StatusForbidden, httpjson.CodeStepUpRequired)
 		return iam.Principal{}, false
 	}
 	return principal, true
+}
+
+// machineToken refuses a request that presented a machine token, on a gesture
+// that manages the proof its owner signs in with, and says whether it did.
+//
+// ASKED OF THE CREDENTIAL AND NEVER OF THE PRINCIPAL: a token acts as its
+// owner, so the principal is a person with a fresh step-up clock and nothing
+// on it says a person is absent. What the request PRESENTED is the one fact
+// that does, and it is the guard's to state ([auth.PresentedToken]).
+func machineToken(w http.ResponseWriter, r *http.Request) bool {
+	if _, fromToken := auth.PresentedToken(r.Context()); !fromToken {
+		return false
+	}
+	httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
+		map[string]string{
+			"detail": "a machine token proves nobody is present, so it cannot " +
+				"confirm its owner's identity or change how they prove it; " +
+				"sign in as the person",
+		})
+	return true
 }
 
 // issuerLabel is what an authenticator app shows beside the account.

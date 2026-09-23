@@ -55,11 +55,12 @@ Usage:
   crewlet iam revoke ID                                End every session and token they hold
   crewlet iam sessions ID                              Their sessions, newest first
   crewlet iam credentials [-person ID]                 What somebody proves themselves with
-  crewlet iam token [-person ID] [-label L] [-days N]  Mint a machine token, shown ONCE
+  crewlet iam token [-person ID] [-label L] [-days N] [-grants G,...] [-colleague L]
+                                                       Mint a machine token, shown ONCE
   crewlet iam revoke-credential CREDENTIAL_ID [-person ID]
                                                        Withdraw one credential
   crewlet iam reset-mfa ID                             Clear the second factor and end sessions
-  crewlet iam invalidate-all                           Invalidate EVERY session in the company
+  crewlet iam invalidate-all                           Invalidate EVERY session and machine token
   crewlet iam bootstrap-code                           Re-issue the one-time founder code
   crewlet iam check                                    What is wrong with this company's access
   crewlet iam audit [-person ID] [-event OP] [-since POSITION] [-at TIME]
@@ -73,6 +74,11 @@ Flags:
 
 Export CREWLET_API_TOKEN to authenticate. Every /iam route is guarded, reads
 included: a map of who can reach a company is worth as much as the grants.
+
+A token minted by "iam token" acts as the person or service account it names,
+carrying at most what they hold now, for at most a year (90 days unless -days
+says otherwise). It is itself a CREWLET_API_TOKEN for every other command — but
+it cannot mint another token, and it cannot change how its owner signs in.
 `
 
 // runIAM dispatches `crewlet iam`.
@@ -109,7 +115,8 @@ func runIAM(args []string, stdout, stderr io.Writer) error {
 	email := fs.String("email", "", "the address to create somebody under")
 	kind := fs.String("kind", "", "person or machine (create only)")
 	name := fs.String("name", "", "the person's own name")
-	person := fs.String("person", "", "whose credentials or sessions")
+	person := fs.String("person", "",
+		"whose credentials or sessions, and whom a minted token is for")
 	label := fs.String("label", "", "what to call a minted token")
 	days := fs.Int("days", 0, "how long a minted token lasts")
 	event := fs.String("event", "", "narrow the trail to one operation")
@@ -203,19 +210,22 @@ func runIAM(args []string, stdout, stderr io.Writer) error {
 		return out.credentials(client.get(ctx, "/iam/credentials",
 			withPerson(orSubject(*person, subject))))
 	case "token":
-		body := map[string]any{"label": *label}
-		setValue(body, "person", orSubject(*person, subject))
+		// THE OWNER IS A QUERY PARAMETER, never a body field: it is the
+		// value the authority table decides on, and a body naming
+		// somebody else is a second answer to "whose" the route no
+		// longer reads. Omitted, the owner is whoever this credential
+		// resolves to — which for the deployment's Tier A token is
+		// nobody, and the node says so.
+		body, err := iamGrantsBody(*grants, *colleague)
+		if err != nil {
+			return err
+		}
+		body["label"] = *label
 		if *days > 0 {
 			body["expires_in_days"] = *days
 		}
-		if *grants != "" {
-			parsed, err := iamGrantsBody(*grants, "")
-			if err != nil {
-				return err
-			}
-			body["grants"] = parsed["grants"]
-		}
-		return out.token(client.post(ctx, "/iam/credentials", body))
+		return out.token(client.call(ctx, http.MethodPost, "/iam/credentials",
+			withPerson(orSubject(*person, subject)), body))
 	case "revoke-credential":
 		return out.written(client.delete(ctx, "/iam/credentials/"+subject,
 			withPerson(*person)))
@@ -294,12 +304,6 @@ func orSubject(flagged, positional string) string {
 func setIf(q url.Values, key, value string) {
 	if strings.TrimSpace(value) != "" {
 		q.Set(key, value)
-	}
-}
-
-func setValue(body map[string]any, key, value string) {
-	if strings.TrimSpace(value) != "" {
-		body[key] = value
 	}
 }
 
@@ -712,10 +716,13 @@ func (p *iamPrinter) token(answer map[string]any, err error) error {
 		return p.dump(answer)
 	}
 	fmt.Fprintf(p.w, "%s\n\n", str(answer["token"]))
-	fmt.Fprintf(p.w, "credential %s, expires %s\n", str(answer["id"]),
-		stamp(answer["expires_at"]))
+	fmt.Fprintf(p.w, "credential %s for %s, expires %s\n", str(answer["id"]),
+		str(answer["person"]), stamp(answer["expires_at"]))
+	fmt.Fprintf(p.w, "carries %s, reaching the company's work at %s\n",
+		dash(joinAny(answer["grants"])), dash(str(answer["colleague"])))
 	fmt.Fprintln(p.w, "This value is shown once. What the estate holds is a "+
-		"hash of it, so nothing can read it back.")
+		"hash of it, so nothing can read it back. Present it as "+
+		apiTokenEnv+", or as an `Authorization: Bearer` header.")
 	return nil
 }
 

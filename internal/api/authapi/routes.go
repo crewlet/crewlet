@@ -229,6 +229,10 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 			})
 		return
 	}
+	// NOR CAN A TOKEN ACTING AS A PERSON, which the kind above cannot see.
+	if machineToken(w, r) {
+		return
+	}
 
 	body, err := httpjson.ReadBody(w, r, maxLoginBody)
 	if err != nil {

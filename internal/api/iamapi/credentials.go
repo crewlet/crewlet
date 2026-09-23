@@ -1,17 +1,15 @@
 package iamapi
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -34,6 +32,12 @@ type credentialView struct {
 	ExpiresAt time.Time                  `json:"expires_at,omitzero"`
 	RevokedAt time.Time                  `json:"revoked_at,omitzero"`
 	Revoked   bool                       `json:"revoked"`
+
+	// Grants and Colleague are what a machine token was minted carrying:
+	// the ceiling on what it does, re-cut to its owner's own grants on
+	// every request. Absent on every other method.
+	Grants    []iam.Grant   `json:"grants,omitempty"`
+	Colleague iam.Colleague `json:"colleague,omitempty"`
 }
 
 // GetCredentials is `GET /iam/credentials?person=`.
@@ -57,51 +61,40 @@ func (s *Service) GetCredentials(w http.ResponseWriter, r *http.Request) {
 			ID: row.ID, Person: row.PersonID, Method: row.Method,
 			Label: row.Label, CreatedAt: row.CreatedAt,
 			ExpiresAt: row.ExpiresAt, RevokedAt: row.RevokedAt,
-			Revoked: row.Revoked(now),
+			Revoked: row.Revoked(now), Grants: row.Grants,
+			Colleague: row.Colleague,
 		})
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{"credentials": out})
 }
 
 // mintBody is what a token mint accepts.
+//
+// THE OWNER IS NOT IN IT. Whose token this is is the person the ROUTE names —
+// `?person=`, or the caller — because that is the value the authority table
+// decided on: a body naming somebody else was a second answer to "whose", and
+// the one the handler believed, so anybody could mint a token on anybody's
+// account by asking about themselves.
 type mintBody struct {
-	Person string `json:"person"`
-	Label  string `json:"label"`
+	Label string `json:"label"`
 
-	// ExpiresInDays is how long it lasts. Zero takes
-	// [DefaultTokenDays]; anything above [MaxTokenDays] is REFUSED
-	// rather than clamped, because a caller asking for five years is
-	// stating an intention the answer has to contradict out loud.
+	// ExpiresInDays is how long it lasts. Zero takes the default
+	// ([credential.DefaultTokenLifetime]); anything above a year is
+	// REFUSED rather than clamped, because a caller asking for five years
+	// is stating an intention the answer has to contradict out loud.
 	ExpiresInDays int `json:"expires_in_days"`
 
 	// Grants and Colleague are what the token carries. Both NARROW the
-	// owner and never widen them — see [Service.PostCredentials].
+	// owner and never widen them — see [iamdomain.Writer.MintToken].
+	// Omitted, the token carries every grant the owner holds that a token
+	// may carry, at the owner's own reach.
 	Grants    []iam.Grant   `json:"grants"`
 	Colleague iam.Colleague `json:"colleague"`
 }
 
-// DefaultTokenDays and MaxTokenDays bound a machine token's life.
-//
-// NINETY AND THREE HUNDRED AND SIXTY-FIVE, and the ceiling is the point:
-// "forever" is unexpressible here. A token is a bearer secret that lives in a
-// pipeline's environment, gets copied into a second pipeline, and outlives
-// whoever minted it — so the only bound anybody can rely on is one the mint
-// refuses to exceed. Ninety days is the default because it is the shortest
-// rotation an ordinary CI schedule absorbs without anybody noticing, and a
-// year is the longest a credential that nothing re-proves should be trusted.
-const (
-	DefaultTokenDays = 90
-	MaxTokenDays     = 365
-)
-
-// tokenValuePrefix is what a minted token looks like.
-//
-// SELF-DESCRIBING, so a value found in a log, an environment file or a paste
-// is recognisable as a Crewlet credential by whoever finds it — and by the
-// secret scanners a public repository runs.
-const tokenValuePrefix = "cwl_pat_"
-
-// PostCredentials is `POST /iam/credentials`.
+// PostCredentials is `POST /iam/credentials`: a machine token — a person's own
+// access token for their assistant, or a service account's — minted for the
+// person the route names.
 //
 // # The value is shown ONCE and stored as a verifier
 //
@@ -111,80 +104,82 @@ const tokenValuePrefix = "cwl_pat_"
 // pipeline makes. What that buys is that the estate being replicated,
 // snapshotted, backed up and donated to a joining peer leaks nothing.
 //
-// # Two grants can never be minted onto one
+// # What it may carry is the DOMAIN's decision
 //
-// `secrets:reveal` and `people:manage` are refused here whatever the owner
-// holds, because both are gestures that need a PERSON present: revealing a
-// credential and changing who may do so are exactly the two an attacker
-// holding a pipeline's environment would reach for. Everything else narrows
-// the owner — a token carries a SUBSET of what its owner carries, re-evaluated
-// per request, so demoting somebody demotes every token they made.
+// A subset of the owner's CURRENT grants, a reach no wider than theirs, never
+// secrets:read or people:manage, and nothing the caller does not hold — read
+// in the snapshot the credential is formed in, so a demotion landing a moment
+// earlier cannot be minted past. This handler shapes the request and renders
+// the answer; internal/iamdomain is the last frame every path to a token goes
+// through, and it is where each of those is refused.
+//
+// # A token does not mint a token
+//
+// A request carrying a machine token is refused here, whoever it acts as: a
+// token minted from a token is one whoever holds a pipeline's environment can
+// extend for ever, a year at a time, with nobody present.
 func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
+	// BEFORE THE BODY: what the request presented decides this whatever it
+	// asked for, so a token is told it may not mint rather than how to
+	// phrase a mint it may not make.
+	if _, fromToken := auth.PresentedToken(r.Context()); fromToken {
+		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+			map[string]string{"detail": "a machine token cannot mint another: " +
+				"one minted from a token is one whoever holds a pipeline's " +
+				"environment can renew for ever. Sign in, or use a Tier A token"})
+		return
+	}
+	// A TIER A TOKEN HOLDS NO TOKENS OF ITS OWN: it is the deployment's
+	// credential, its principal is an id no directory row carries, and "mint
+	// one for me" from it is a 404 about somebody who does not exist. Saying
+	// what to name instead is the answer an operator at the CLI needs.
+	if _, tierA := auth.TierA(r.Context()); tierA &&
+		strings.TrimSpace(r.URL.Query().Get("person")) == "" {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			map[string]string{"detail": "a Tier A token is the deployment's " +
+				"credential and owns no machine tokens: name the person or " +
+				"service account the token is for with ?person="})
+		return
+	}
 	in, ok := readBody[mintBody](w, r)
 	if !ok {
 		return
 	}
-	principal, how := iam.From(r.Context())
-	if how != iam.Resolved {
-		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
+	owner := s.subjectOf(r)
+	if owner == "" {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			map[string]string{"detail": "name the owner with ?person=, or " +
+				"sign in so this route can mint for you"})
 		return
 	}
-	person := strings.TrimSpace(in.Person)
-	if person == "" {
-		person = principal.ID.String()
-	}
-	days := in.ExpiresInDays
+	lifetime := credential.DefaultTokenLifetime
 	switch {
-	case days <= 0:
-		days = DefaultTokenDays
-	case days > MaxTokenDays:
+	case in.ExpiresInDays < 0:
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": "expires_in_days is a number of days " +
+				"from now, and a token that expired before it was minted is " +
+				"not one anybody can use"})
+		return
+	case in.ExpiresInDays > 0:
+		lifetime = time.Duration(in.ExpiresInDays) * 24 * time.Hour
+	}
+	if lifetime > credential.MaxTokenLifetime {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": "a token may last at most " +
-				strconv.Itoa(MaxTokenDays) + " days; `forever` is deliberately " +
-				"unexpressible, because a bearer secret nothing re-proves " +
-				"outlives whoever minted it"})
+				strconv.Itoa(int(credential.MaxTokenLifetime/(24*time.Hour))) +
+				" days; `forever` is deliberately unexpressible, because a " +
+				"bearer secret nothing re-proves outlives whoever minted it"})
 		return
 	}
-	for _, refused := range mintRefused {
-		if slices.Contains(in.Grants, refused) {
-			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				map[string]string{"detail": string(refused) + " cannot be " +
-					"minted onto a token: it is a gesture that needs a person " +
-					"present, and a token is what an attacker holding a " +
-					"pipeline's environment already has"})
-			return
-		}
-	}
-	// THE OWNER'S OWN SET IS THE CEILING, checked here and again at the
-	// record: internal/iamdomain refuses conferring what the party does
-	// not hold, so a handler that skipped this could still not widen
-	// anybody.
-	owner, err := s.directory.Person(r.Context(), person)
-	switch {
-	case errors.Is(err, iamdomain.ErrNotFound):
+	// NOBODY BY THAT ID is a 404 rather than whatever the decide would
+	// make of a row it cannot read — the one question here this surface
+	// answers before the domain does.
+	if _, err := s.directory.Person(r.Context(), owner); errors.Is(err,
+		iamdomain.ErrNotFound) {
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		return
-	case err != nil:
-		s.unavailable(w, r, "read a person", err)
-		return
-	}
-	grants := in.Grants
-	if grants == nil {
-		grants = owner.Grants
-	}
-	for _, g := range grants {
-		if !slices.Contains(owner.Grants, g) {
-			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				map[string]string{"detail": "a token carries a subset of what " +
-					"its owner carries, and " + string(g) + " is not among them"})
-			return
-		}
-	}
-	colleague := in.Colleague
-	if colleague > owner.Colleague {
-		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			map[string]string{"detail": "a token can only narrow its owner's " +
-				"reach into the company's work"})
+	} else if err != nil {
+		s.unavailable(w, r, "read a token's owner", err)
 		return
 	}
 	writer, ok := s.writerFor(r.Context())
@@ -194,69 +189,69 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := uuid.Must(uuid.NewV7()).String()
-	secret, err := mintSecret()
+	secret, err := credential.NewTokenSecret()
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_iam_token_mint_failed", "error", err)
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
-	value := tokenValuePrefix + id + "_" + secret
-	expires := s.now().Add(time.Duration(days) * 24 * time.Hour)
-	at, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
-		PersonID: person,
-		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
-			return append(held, iamdomain.Credential{
-				V: iamdomain.DocumentVersion, ID: id,
-				Method:    iamdomain.MethodToken,
-				Verifier:  credential.HashToken(secret),
-				Label:     strings.TrimSpace(in.Label),
-				ExpiresAt: expires,
-			})
-		},
-		OpID:   s.opIDFor(r, "credentials:mint:"+id),
-		Reason: "a machine token was minted",
+	const reason = "a machine token was minted"
+	minted, err := writer.MintToken(r.Context(), iamdomain.TokenMint{
+		PersonID: owner, ID: id,
+		Verifier:  credential.TokenVerifier(id, secret),
+		Label:     strings.TrimSpace(in.Label),
+		Grants:    in.Grants,
+		Colleague: in.Colleague,
+		ExpiresAt: s.now().Add(lifetime),
+		// A FRESH OPERATION EVERY TIME, and never the caller's
+		// Idempotency-Key. The key makes a retry land ONCE, which for a
+		// mint would hand back the first attempt's record — whose secret
+		// was never shown and is gone — beside this attempt's value, a
+		// token that verifies against nothing. A mint that answered
+		// `unknown` is retried as a new mint; the one that may have
+		// landed is a token nobody holds, and it expires.
+		OpID:   "credentials:mint:" + id,
+		Reason: reason,
 	})
 	if err != nil {
-		s.answerWrite(w, r, at, err, nil)
+		if errors.Is(err, iamdomain.ErrInvalidToken) {
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+				map[string]string{"detail": err.Error()})
+			return
+		}
+		s.answerWrite(w, r, minted.Position, err, nil)
 		return
 	}
+	// THE VALUE CARRIES WHERE THE MINT LANDED, which is only known now: a
+	// node that has applied past it and holds no row knows the token is
+	// gone, and one below it knows only that it has not seen it yet.
+	token := credential.Token{
+		ID: id, Position: uint64(minted.Position.Packed()), Secret: secret,
+	}
+	principal, _ := iam.From(r.Context())
 	log.InfoContext(r.Context(), "iam_token_minted",
-		"person", person, "credential", id, "expires_at", expires)
-	granted := make([]string, 0, len(grants))
-	for _, g := range grants {
+		"person", owner, "credential", id, "expires_at", minted.ExpiresAt)
+	granted := make([]string, 0, len(minted.Grants))
+	for _, g := range minted.Grants {
 		granted = append(granted, string(g))
 	}
 	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
-		Credential: id, Kind: types.CredentialToken, Owner: person,
-		Grants: granted, Colleague: string(colleague), ExpiresAt: expires,
-		By: iam.ActorFor(principal).Name, Reason: "a machine token was minted",
+		Credential: id, Kind: types.CredentialToken, Owner: owner,
+		Grants: granted, Colleague: string(minted.Colleague),
+		ExpiresAt: minted.ExpiresAt,
+		By:        iam.ActorFor(principal).Name, Reason: reason,
 	})
 	// THE VALUE IS IN THIS ANSWER AND IN NOTHING ELSE. It is not logged,
 	// not stored, and not readable back — a second route that returned it
 	// would make the estate hold a secret, which is the one thing this
 	// package's whole shape is against.
 	httpjson.Write(w, http.StatusCreated, map[string]any{
-		"id": id, "person": person, "token": value,
-		"expires_at": expires, "position": at.String(),
+		"id": id, "person": owner, "token": token.Value(),
+		"grants": minted.Grants, "colleague": minted.Colleague,
+		"expires_at": minted.ExpiresAt, "position": minted.Position.String(),
 		"detail": "this value is shown once and cannot be read back; what " +
 			"the estate holds is a hash of it",
 	})
-}
-
-// mintRefused are the grants a token may never carry.
-var mintRefused = []iam.Grant{iam.GrantSecretRead, iam.GrantPeopleManage}
-
-// mintSecret is 32 bytes of crypto/rand, URL-safe.
-//
-// 256 BITS, which is why the verifier is a plain SHA-256: there is no
-// dictionary behind a value this engine minted, so a memory-hard digest would
-// buy nothing and cost 50 ms on every request a pipeline makes.
-func mintSecret() (string, error) {
-	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(raw[:]), nil
 }
 
 // DeleteCredential is `DELETE /iam/credentials/{id}`.
@@ -264,6 +259,18 @@ func mintSecret() (string, error) {
 // IT REVOKES RATHER THAN DELETES, which is the same choice the session rows
 // make: "this token was withdrawn on the 3rd by Ana" is the sentence an
 // investigation is looking for, and a row that vanished carries none of it.
+//
+// # A machine token revokes machine tokens and nothing else
+//
+// A token acts as its owner, so the authority table admits it here as it
+// admits the owner. What it may NOT do is withdraw the proof the owner signs
+// in with — a password, a second factor, the recovery codes — because a token
+// proves nobody is present, and a leaked one that could strip its owner's
+// second factor would be the first half of taking the account. Revoking a
+// token, itself included, is what somebody who finds one leaked should be able
+// to do from wherever they found it. Decided INSIDE the snapshot, on the
+// method the row holds, since that is the only frame that knows which
+// credential the id names.
 func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	person := s.subjectOf(r)
 	if person == "" {
@@ -278,7 +285,8 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	now := s.now()
-	found := false
+	_, fromToken := auth.PresentedToken(r.Context())
+	found, withheld := false, false
 	var method iamdomain.CredentialMethod
 	const reason = "a credential was revoked"
 	at, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
@@ -286,12 +294,16 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
 			// RESET PER RUN: the decide may run again against a fresh
 			// snapshot, and the verdict is the last run's.
-			found, method = false, ""
+			found, withheld, method = false, false, ""
 			out := make([]iamdomain.Credential, 0, len(held))
 			for _, c := range held {
 				if c.ID == id && c.RevokedAt.IsZero() {
-					c.RevokedAt = now
-					found, method = true, c.Method
+					if fromToken && c.Method != iamdomain.MethodToken {
+						withheld = true
+					} else {
+						c.RevokedAt = now
+						found, method = true, c.Method
+					}
 				}
 				out = append(out, c)
 			}
@@ -302,6 +314,13 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.answerWrite(w, r, at, err, map[string]any{"id": id})
+		return
+	}
+	if withheld {
+		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+			map[string]string{"detail": "a machine token revokes machine " +
+				"tokens and nothing else: a password, a second factor or the " +
+				"recovery codes are withdrawn by the person, signed in"})
 		return
 	}
 	if !found {
