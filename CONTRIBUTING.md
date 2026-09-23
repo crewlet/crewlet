@@ -239,6 +239,14 @@ What follows are the prerequisites that legitimately vary by machine.
   `protocol/` imports it by a relative path, because `protocol.js` is built
   without the `~` alias.
 
+  **Nothing on a screen is money.** The dashboard draws spend in tokens and
+  never in a currency (rule 19 in `docs/reference/dashboard-design.md`), and
+  the client declares no price field for a screen to reach for. Three gates
+  hold it: `src/money.test.tsx` parses every shipped module and renders the
+  screens that draw spend over wire fixtures carrying a price, and
+  `TestTheDashboardRendersNoPrice` in `internal/api` scans every module the
+  engine serves from the committed bundle.
+
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit
   `static/dashboard` with your source change — `git add -A`, so the new

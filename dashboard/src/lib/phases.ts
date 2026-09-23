@@ -150,10 +150,6 @@ export interface PhaseRecord {
   /** The box that ran this phase, when a coding agent did. Links a transcript
    *  to the detached run it suspended into. */
   sandboxId: string;
-  /** What the run reported it cost, in currency. 0 when nothing reported one —
-   *  which is every phase but a sandbox-backed one, and every subscription
-   *  CLI, where the marginal cost genuinely is nothing. */
-  costUSD: number;
   /** The branches and pull requests the phase delivered. */
   deliveredRefs: string[];
   /**
@@ -386,10 +382,9 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     hostIteration: 0,
     backend: "",
     codingAgent: "",
-    // A RUNNING phase has none of these yet: the box id is stamped when the
-    // run is registered, and the cost and the refs are what it REPORTS back.
+    // A RUNNING phase has neither yet: the box id is stamped when the run is
+    // registered, and the refs are what it REPORTS back.
     sandboxId: "",
-    costUSD: 0,
     deliveredRefs: [],
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
     at: call.updated_at,
@@ -453,13 +448,14 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     hostIteration: num(p.host_iteration),
     backend: String(p.backend ?? ""),
     codingAgent: String(p.coding_agent ?? ""),
-    // THE SANDBOX'S THREE, all on `AgentPhaseCompleted` and none of them read
-    // until now: which box ran it (so the badge naming the coding agent can
-    // reach the run), what the run cost in currency — the ONE money figure the
-    // engine records, from a CLI's own `total_cost_usd` — and the branches and
-    // pull requests the phase produced.
+    // WHAT A SANDBOX RUN LEAVES ON `AgentPhaseCompleted`: which box ran it (so
+    // the badge naming the coding agent can reach the run) and the branches
+    // and pull requests the phase produced. The record also carries what the
+    // run's own CLI said it cost, and that is deliberately NOT read: the
+    // dashboard renders tokens and never money (rule 19 in
+    // docs/reference/dashboard-design.md), and a price parsed onto the record
+    // is one a component is a single line away from drawing.
     sandboxId: String(p.sandbox_id ?? ""),
-    costUSD: num(p.cost_usd),
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
     at: ev.timestamp,

@@ -23,6 +23,11 @@ package api_test
 // module loader, and the page then fails with a MIME error rather than a
 // missing file, which sends a reader looking for the wrong problem.
 //
+// And one rule the dashboard keeps is checked here on the artefact as well as
+// on the source, because the artefact is what a browser runs: nothing it
+// serves renders a price (TestTheDashboardRendersNoPrice, rule 19 in
+// docs/reference/dashboard-design.md).
+//
 // The dashboard's own assertions (its protocol, its router, its ordering
 // rules, and the measured contrast of every colour token in both themes) run
 // under Vitest — `npm test` in dashboard/, wired into `make dashboard-test` and
@@ -38,6 +43,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -454,6 +460,176 @@ var (
 	// componentRule matches the first rule of any design system component.
 	componentRule = regexp.MustCompile(`\.crewlet-[a-z]`)
 )
+
+// protocolModule is the second build target: the socket client alone, which
+// internal/e2e replays captured frames through. No page imports it, so the
+// crawl from the shell never reaches it, and a gate over "everything the
+// engine serves as a script" has to name it.
+const protocolModule = dashboardBase + "protocol.js"
+
+// A priceForm is one shape a price takes in a built module.
+type priceForm struct {
+	what string
+	re   *regexp.Regexp
+}
+
+// priceForms is every shape the bundle scan refuses, written as Rolldown's
+// minifier writes it — any of three quotes around a string, a template literal
+// for most of them, and no whitespace it does not need.
+//
+// ONE FORM IS DELIBERATELY LEFT TO THE SOURCE SCAN: a dollar sign
+// concatenated onto a value, `"$"+n`. React's own key escaping is written
+// exactly that way — a one-character dollar string plus `e.replace(…)` — so
+// in a bundle the two cannot be told apart, and a rule that fired on React's
+// chunk would have to exempt React by name. dashboard/src/money.test.tsx reads
+// that form in the parsed source, where a string in the dashboard's own code
+// is distinguishable from one in a dependency's.
+var priceForms = []priceForm{
+	// The engine's price fields however a client would spell them:
+	// `cost_usd` and `total_cost_usd` off the wire, `priced_calls`, and the
+	// camel-cased copy a parser makes.
+	{"names the engine's price field", regexp.MustCompile(`(?i)cost_?usd|priced_?calls`)},
+	// Intl's currency formatting: the style value, and the option keys that
+	// exist only to go with it.
+	{"asks Intl for its currency style", regexp.MustCompile("[\"'`]currency[\"'`]")},
+	{"passes Intl a currency option", regexp.MustCompile(`\bcurrency(?:Display|Sign)?\s*:`)},
+	// A currency by its code, as a whole word — `costUSD` is the field rule's.
+	{"names a currency by its code", regexp.MustCompile(`\b(?:USD|EUR|GBP)\b`)},
+	// The euro and the pound mean nothing but money here, so they are refused
+	// anywhere, escaped or not: the minifier may write either as `€`.
+	{"carries a currency sign", regexp.MustCompile(
+		`[€£]|\\u(?:20[aA][cC]|00[aA]3|\{20[aA][cC]\}|\{[aA]3\})|\\x[aA]3`)},
+	// The dollar sign is NOT refused on its own: it opens every `${VAR}`
+	// reference the dashboard explains. What is refused is a dollar sign in
+	// front of a value — a template substitution right behind one, or a JSX
+	// child that is a value right behind a text run ending in one. The braced
+	// reference is a text run followed by the CONSTANT `{VAR}`, which the
+	// last class excludes by refusing a quote.
+	{"writes a dollar sign before a substitution", regexp.MustCompile(`\$\$\{`)},
+	{"writes a dollar sign before a rendered value", regexp.MustCompile(
+		"[\\[,]\\s*[\"'`][^\"'`\\n]*\\$\\s*[\"'`]\\s*,\\s*[^\"'`\\s\\]]")},
+}
+
+// A priceFound is one place a module holds a price, with the text around it,
+// since a byte offset into a minified megabyte tells a reader nothing.
+type priceFound struct {
+	what, near string
+}
+
+// pricesInModule is every place a built module holds a price.
+func pricesInModule(module []byte) []priceFound {
+	var out []priceFound
+	for _, form := range priceForms {
+		for _, at := range form.re.FindAllIndex(module, -1) {
+			from, to := max(0, at[0]-60), min(len(module), at[1]+40)
+			out = append(out, priceFound{form.what, string(module[from:to])})
+		}
+	}
+	return out
+}
+
+// TestTheDashboardRendersNoPrice holds what the engine SERVES to rule 19 of
+// docs/reference/dashboard-design.md: the dashboard measures spend in tokens,
+// and never in money.
+//
+// The engine records a price where one is reported — only a subscription
+// coding CLI quotes one — and it is on the wire. A currency covering that
+// minority of calls, beside a token count covering all of them, reads as the
+// company's spend and is a fraction of it, so the client declares no price
+// field and draws none. dashboard/src/money.test.tsx holds the source and the
+// rendered screens; this holds the artefact, because the bundle is what a
+// browser runs and a committed bundle can carry what the source no longer does
+// — which is exactly how this landed: red on the build that still parsed
+// `cost_usd` into a `costUSD` nothing drew.
+//
+// Every module the shell reaches, lazy chunks included, through the crawl
+// TestTheShellLoadsFromTheBinary uses, and protocol.js, which no page imports.
+func TestTheDashboardRendersNoPrice(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+	c := crawlDashboard(t, a)
+	// A crawl that lost a file would scan less than the engine serves and
+	// call it clean. TestTheShellLoadsFromTheBinary names each problem; this
+	// only refuses to vouch for a bundle it could not read whole.
+	if len(c.problems) > 0 {
+		t.Fatalf("the crawl could not read %d of the files the shell reaches, so a "+
+			"price in one of them would go unseen; TestTheShellLoadsFromTheBinary names them",
+			len(c.problems))
+	}
+	modules := map[string][]byte{protocolModule: mustFetch(t, a, protocolModule, "text/javascript")}
+	for _, f := range c.ofKind(".js") {
+		modules[f.url] = f.body
+	}
+	// A FLOOR: the entry, the React chunk the build splits out, and
+	// protocol.js. A crawl that reached nothing would otherwise pass.
+	if len(modules) < 3 {
+		t.Fatalf("scanned %d modules; the entry, the React chunk and protocol.js are three",
+			len(modules))
+	}
+	for url, body := range modules {
+		for _, p := range pricesInModule(body) {
+			t.Errorf("%s %s: …%s… — the dashboard renders tokens and never money "+
+				"(rule 19 in docs/reference/dashboard-design.md); remove it from "+
+				"dashboard/src, then `make dashboard`", url, p.what, p.near)
+		}
+	}
+}
+
+// TestThePriceScanReadsWhatTheMinifierWrites certifies the scan itself, in
+// both directions, over modules written the way the build writes them: each
+// form it refuses must be found as exactly that form, and each dollar sign the
+// dashboard and React really do ship must not be. A scan that stopped reading
+// a form passes a bundle that prices something; a scan that cried wolf over
+// React's chunk is one somebody would switch off.
+func TestThePriceScanReadsWhatTheMinifierWrites(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, module, want string
+	}{
+		{"a parsed price", "sandboxId:String(t.sandbox_id??``),costUSD:Ry(t.cost_usd),",
+			"names the engine's price field"},
+		{"the priced-call count", "f.totals.priced_calls>0&&(0,m.jsxs)(`p`,{})",
+			"names the engine's price field"},
+		{"Intl's currency style", "new Intl.NumberFormat(void 0,{style:`currency`,currency:e})",
+			"asks Intl for its currency style"},
+		{"an Intl currency option", "e.toLocaleString(void 0,{currencyDisplay:`code`})",
+			"passes Intl a currency option"},
+		{"a currency code", `children:[e," USD"]`, "names a currency by its code"},
+		{"the euro sign", "children:[e,` €`]", "carries a currency sign"},
+		{"an escaped euro", `children:[e,"€"]`, "carries a currency sign"},
+		{"an escaped pound", `var p="\xA3";`, "carries a currency sign"},
+		{"a dollar in a template", "var s=`$${e.toFixed(2)}`;", "writes a dollar sign before a substitution"},
+		{"a dollar in JSX", "(0,m.jsxs)(`b`,{children:[`$`,e]})", "writes a dollar sign before a rendered value"},
+		{"a spaced dollar in JSX", `(0,m.jsxs)("b",{children:["US$ ",t.amount]})`,
+			"writes a dollar sign before a rendered value"},
+	} {
+		t.Run("finds "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			found := pricesInModule([]byte(tc.module))
+			if !slices.ContainsFunc(found, func(p priceFound) bool { return p.what == tc.want }) {
+				t.Errorf("%s: found %v, want a finding that it %s", tc.module, found, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, module string }{
+		// React's key escaping and its hydration markers, verbatim.
+		{"React's key escaping", "function se(e){var t={\"=\":`=0`,\":\":`=2`};return`$`+e.replace(/[=:]/g,function(e){return t[e]})}"},
+		{"React's marker set", "for(var i=0;i<n.length;i++)t[`$`+n[i]]=!0;"},
+		{"React's comment markers", "if(n===`$`||n===`$?`||n===`$~`||n===`$!`||n===`&`)"},
+		// The dashboard's own dollar signs, as the build writes them today.
+		{"a braced reference in JSX", "(0,m.jsxs)(U,{children:[`$`,`{VAR}`]})"},
+		{"a reference's opening sign", "w=C===``&&n.trimStart().startsWith(`$`)"},
+		{"an escaped reference", "var r=`\\${${e}}`;"},
+		{"a word that holds a code", "var e={focusUSDC:1};"},
+	} {
+		t.Run("leaves "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if found := pricesInModule([]byte(tc.module)); len(found) > 0 {
+				t.Errorf("%s: found %v in a module that prices nothing", tc.module, found)
+			}
+		})
+	}
+}
 
 // TestTheNoticesAreServedAsText checks a running engine answers its notices,
 // from the binary, as text a browser shows.

@@ -49,8 +49,6 @@ function bucket(over: Partial<Bucket> = {}): Bucket {
     output_tokens: 1_000,
     total_tokens: 5_000,
     calls: 12,
-    cost_usd: 0,
-    priced_calls: 0,
     ...over,
   };
 }

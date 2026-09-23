@@ -1211,7 +1211,10 @@ completed, memory holds what is happening. A screen renders both with one
 renderer, so each history row carries the same fields a live one does —
 `turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`,
 `round_narration`, `partial_round`,
-`total_tokens`, `cost_usd` — plus the envelope's `timestamp` and `failed`.
+`total_tokens` — plus the envelope's `timestamp` and `failed`. It is the
+stored record, so it also carries the phase's price where its own CLI
+reported one (`cost_usd`), which the dashboard never reads
+([rule 19](dashboard-design.md#rules-a-change-has-to-keep)).
 A finished row also carries `duration_ms`, which a live one cannot: it is the
 engine's own measurement of the phase, published on the record rather than
 reconstructed by pairing it with the `agent_phase_started` that shares its key.
@@ -2984,6 +2987,10 @@ Notes:
   Rendering the first as `$0.00` states a price nobody quoted. Only a
   POSITIVE price is summed — a negative one is a bad payload, not a
   rebate, and summing it would silently reduce a company's reported spend.
+  The dashboard reads neither field: it measures spend in tokens and never
+  in money, since a price covering the few calls that quote one reads, on
+  a screen, as the company's spend
+  ([rule 19](dashboard-design.md#rules-a-change-has-to-keep)).
 
 ### `GET /tokens/series`
 

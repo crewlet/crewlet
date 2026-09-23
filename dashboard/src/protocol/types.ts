@@ -373,28 +373,23 @@ export interface BridgeCall {
 // Spend
 // ---------------------------------------------------------------------------
 
+/**
+ * One slice of spend, in TOKENS — the one unit every call is measured in.
+ *
+ * THE ENGINE'S BUCKET CARRIES A PRICE BESIDE THESE, AND THIS DECLARES NONE OF
+ * IT. Only a subscription coding CLI quotes what a run cost, so a currency
+ * figure covers the minority of calls that quote one while the token count
+ * beside it covers all of them — and on a screen the first reads as the
+ * company's spend. The dashboard renders tokens only, never money (rule 19 in
+ * `docs/reference/dashboard-design.md`); a field nothing declares is a field
+ * no screen can reach for, and `money.test.tsx` and the bundle scan in
+ * `internal/api/dashboardjs_test.go` hold that from both ends.
+ */
 export interface Bucket {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
   calls: number;
-  /**
-   * What the calls in this bucket were billed, and how many of them quoted
-   * anything at all.
-   *
-   * TWO NUMBERS, because only a subscription coding CLI reports a price. A
-   * `cost_usd` of 0 over `priced_calls: 0` means nobody said what this cost;
-   * over 2 it means two runs were billed nothing.
-   *
-   * NOT RENDERED. The dashboard measures spend in TOKENS — a currency shown
-   * for the minority of calls that quote one, beside a token count covering
-   * all of them, reads as the company's spend and is a fraction of it. The
-   * field stays on the wire and in the store, so putting a price back on a
-   * screen is a rendering change rather than a migration. `priced_calls` IS
-   * read: it says how much of a window has accounting of its own.
-   */
-  cost_usd: number;
-  priced_calls: number;
 }
 
 export interface PhaseRow extends Bucket {

@@ -3789,3 +3789,27 @@ to.
     that asks, once per file at the best level, so nothing here is
     pre-compressed and no proxy is needed for it
     ([API endpoints](api-endpoints.md#wiring)).
+19. **Tokens, never money.** Every spend figure the dashboard draws is a token
+    count — on Spend, on a seat's Cost tab, on a task's cost, on a turn's
+    phases and in the landing screen's pulse. The engine records a price where
+    one is reported, and only a subscription coding CLI reports one, so a
+    currency figure covers the minority of calls that quote it while the token
+    count beside it covers all of them: on a screen it reads as the company's
+    spend and is a fraction of it. So no screen draws a price, a currency sign
+    in front of a figure, a currency code or an `Intl` currency format — and
+    the client declares no price field at all, because a field
+    `protocol/types.ts` declares is one a component is a single line away from
+    drawing. The engine's price stays on its API for anyone who asks for it
+    ([API endpoints](api-endpoints.md#token-spend-breakdown)). The one place it
+    can be read on a screen is a record shown **verbatim**, as the engine
+    stored it — an event's own payload — because a verbatim view that dropped
+    a field would misreport the record, and nothing there is drawn as a
+    figure. Three gates hold the rule, each over a different artefact: the
+    SOURCE, where `src/money.test.tsx` parses every shipped module — comments
+    excluded, so a note explaining the rule can name what it forbids; the
+    SCREENS, where the same suite renders the landing screen, Spend, a task, a
+    seat's Cost tab and a turn over wire fixtures that carry a price everywhere
+    the engine puts one, and reads text and attributes back for any trace of
+    it; and the BUNDLE, where `TestTheDashboardRendersNoPrice` scans every
+    module the engine serves, lazy chunks and `protocol.js` included, because
+    the committed bundle is what a browser runs.
