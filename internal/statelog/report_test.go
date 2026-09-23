@@ -64,9 +64,9 @@ func term(t *testing.T, d statelog.DomainReport, name statelog.TermName) statelo
 
 // A TERM A DOMAIN DOES NOT HAVE IS `n/a`, NEVER ZERO AND NEVER UNKNOWN.
 //
-// A compacted domain has no wake feed. Rendering that as `0` claims the feed
-// has scanned nothing, and rendering it as unreadable puts a block on the
-// screen of a fleet where nothing is wrong.
+// A domain that declares no wake feed has none. Rendering that as `0` claims
+// the feed has scanned nothing, and rendering it as unreadable puts a block on
+// the screen of a fleet where nothing is wrong.
 func TestATermADomainDoesNotHaveIsAbsentRatherThanUnknown(t *testing.T) {
 	t.Parallel()
 	rep := statelog.NewReport(statelog.ReportInputs{
@@ -77,7 +77,7 @@ func TestATermADomainDoesNotHaveIsAbsentRatherThanUnknown(t *testing.T) {
 	})
 	got := term(t, rep.Domains[0], statelog.TermFeedAckFloor)
 	if got.State != statelog.TermAbsent {
-		t.Errorf("a compacted domain's wake feed reports %q; a domain that has no "+
+		t.Errorf("a domain with no declared wake feed reports %q; a domain that has no "+
 			"feed at all is n/a, and both of the other two states put a fault "+
 			"on the screen", got.State)
 	}

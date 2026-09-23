@@ -450,9 +450,19 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningDomain) {
 
 // barrierOn puts one record on a domain's log that no gate drops and no
 // build refuses to decode, and answers its sequence.
+//
+// IN THE DOMAIN'S OWN ENCODING, through the engine's own [barrierEncoder]: a
+// tracker-shaped barrier on the knowledge base's log is a record that log's
+// envelope decoder need not accept, and a case would be measuring that
+// instead.
 func barrierOn(t *testing.T, running *runningDomain) uint64 {
 	t.Helper()
-	body, err := tracker.EncodeBarrier(statelog.Envelope{
+	encode := barrierEncoder(running.domain)
+	if encode == nil {
+		t.Fatalf("%s has no barrier encoding to put a record on its log with",
+			running.domain.Name())
+	}
+	body, err := encode(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind},
 		Gen:     running.runner.Committed().Generation,
@@ -549,6 +559,115 @@ func TestAFloorThatCouldNotBePublishedPurgesNothing(t *testing.T) {
 		t.Fatalf("the log starts at %d (err %v) after a tick whose floor was never "+
 			"published, want the %d it held — the purge ran on a licence nobody "+
 			"can read", now, err, first)
+	}
+}
+
+// TestEachLogsTrimWaitsOnItsOwnWakeFeed is the feed term read against every
+// registered log's own consumer, on a real stream.
+//
+// The trim used to name the TRACKER's group on every log with a feed. On the
+// knowledge base's log that consumer never exists, so the lookup answered
+// "never opened", the term permitted nothing, and that log was blocked on
+// `feed_ack_floor` for the life of the deployment — while its own feed
+// acknowledged every record it was handed. So each log's own feed
+// acknowledges a record here, every other term is satisfied, and the tick
+// has to trim up to that record; a log with no feed must report the term
+// absent rather than borrow somebody else's.
+func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
+	t.Parallel()
+	e, back, _ := trimmedTracker(t)
+	// MIN_AGE AT A NANOSECOND, so the age term permits everything already
+	// written and the tick is decided by the other five. Set on the loop
+	// rather than through validated config: the 24-hour floor exists for
+	// an operator, and this case is about a different term.
+	r := &retention{fleet: back.Fleet, state: e.native.log, nodeID: "node-a",
+		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
+	for _, name := range e.native.log.order {
+		running := e.native.log.Domain(name)
+		t.Run(name, func(t *testing.T) {
+			group := running.domain.FeedGroup()
+			if group == "" {
+				if _, has, _ := r.feedTerm(t.Context(), running); has {
+					t.Fatalf("%s declares no wake feed and its trim waits on one "+
+						"anyway — a consumer nobody opens on this log", name)
+				}
+				return
+			}
+			at := barrierOn(t, running)
+			var acked uint64
+			waitUntil(t, 20*time.Second, name+"'s own feed to acknowledge the record",
+				func() bool {
+					floor, exists, err := running.log.GroupAckFloor(t.Context(), group)
+					acked = floor
+					return err == nil && exists && floor >= at
+				})
+			waitUntil(t, 20*time.Second, name+"'s applier to commit the record",
+				func() bool { return running.runner.Committed().Seq >= at })
+
+			seq, has, readable := r.feedTerm(t.Context(), running)
+			if !has || !readable || seq < acked {
+				t.Fatalf("%s's feed term is (%d, has %v, readable %v), want its own "+
+					"feed %q's acknowledgement at %d — the term is reading a "+
+					"consumer the wakes on this log never advance",
+					name, seq, has, readable, group, acked)
+			}
+
+			committed := running.runner.Committed()
+			stream := running.domain.Stream().Name
+			now := time.Now().UTC()
+			floors, err := back.Fleet.Floors(t.Context())
+			if err != nil {
+				t.Fatalf("floors: %v", err)
+			}
+			previous := map[string]coord.TrimFloor{}
+			for _, f := range floors {
+				previous[f.Domain] = f
+			}
+			// EVERY OTHER TERM SATISFIED UP TO THE RECORD: this node
+			// counted at its own committed position, a verified backup
+			// covering the record, no holds, and a solo fleet's snapshot
+			// term — so a tick that still refuses is refusing on the feed.
+			shared := fleetInputs{
+				at: now, readable: true, previous: previous,
+				positions: []coord.NodePositions{{
+					NodeID: "node-a", At: now,
+					Domains: map[string]coord.DomainPosition{name: {
+						Generation: committed.Generation, Seq: committed.Seq,
+					}},
+				}},
+				backups: []coord.BackupPoint{{
+					Owner: "node-a", At: now, Verified: true,
+					Streams: map[string]coord.Position{stream: {
+						Stream: stream, Generation: committed.Generation, Seq: at,
+					}},
+				}},
+			}
+			if err := r.domain(t.Context(), name, shared); err != nil {
+				t.Fatalf("the tick on %s: %v", name, err)
+			}
+			floors, err = back.Fleet.Floors(t.Context())
+			if err != nil {
+				t.Fatalf("floors: %v", err)
+			}
+			var row coord.TrimFloor
+			for _, f := range floors {
+				if f.Domain == name {
+					row = f
+				}
+			}
+			if row.Blocked() {
+				t.Fatalf("%s's trim is blocked by %s with its own feed acknowledged "+
+					"through %d and every other term past it", name, row.BlockedBy, acked)
+			}
+			if row.TrimTo != at {
+				t.Fatalf("%s's tick licensed trimming to %d, want %d — the record "+
+					"the backup covers", name, row.TrimTo, at)
+			}
+			if first, _, err := running.log.Bounds(t.Context()); err != nil || first != at {
+				t.Fatalf("after the tick %s's log starts at %d (err %v), want %d",
+					name, first, err, at)
+			}
+		})
 	}
 }
 

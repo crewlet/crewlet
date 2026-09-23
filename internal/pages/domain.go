@@ -184,6 +184,13 @@ func (Domain) ReadinessInput() bool { return true }
 // arise here.
 func (Domain) ClaimsIdentity() bool { return true }
 
+// FeedGroup is the change feed's own consumer on this log: [FeedGroup], the
+// same constant the [Translator] opens, and NOT the tracker's. The trim once
+// read the tracker's group on this log too — a consumer that never exists
+// here — so its feed term permitted nothing and the knowledge base's log was
+// never trimmed at all.
+func (Domain) FeedGroup() string { return FeedGroup }
+
 // BarrierTables is the empty set, DECLARED.
 //
 // The barrier writes no row on any node, and stating that explicitly is what

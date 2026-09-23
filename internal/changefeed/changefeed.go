@@ -27,9 +27,9 @@
 //
 // So the seam is one level up. A [Source] names the estate as a STRING, an
 // [Opener] opens one durable consumer over it, and a [Record] is one delivered
-// change from either — the bucket adapter is [DocumentSource] here, and a log
-// domain supplies its own. Everything below this comment is unchanged by that
-// and is why the package exists.
+// change — and every estate left is a state log's domain, which supplies its
+// own opener. Everything below this comment is unchanged by that and is why
+// the package exists.
 //
 // # Why a group and not a duty
 //
@@ -101,24 +101,36 @@ type Source struct {
 	Name string
 
 	// Group is the durable consumer's name, and it is STABLE for the
-	// deployment's life: the name is where the fleet is, so a rename
-	// starts a second consumer at the head and abandons everything the
-	// first had not handled.
+	// deployment's life: the name is where the fleet is. A rename is a
+	// fresh consumer, and a fresh one starts from the log's first retained
+	// record, so it redelivers every record the log still holds as a wake —
+	// only the two dedupe layers in the package doc hold those back, and
+	// only within their own retention windows — and until it catches up its
+	// acknowledgement floor holds back the log's trim.
+	//
+	// On the broker the consumer is not literally named this: its durable
+	// name is derived from the group AND the stream it reads, so one group
+	// on two streams is two consumers.
 	//
 	// EACH ESTATE DECLARES ITS OWN, as a constant beside the translator
 	// that reads it. The helper that used to derive one from a document
 	// family is gone with the families — and what it was for survives as
 	// a rule rather than a function: a name is chosen once and never
 	// improved.
+	//
+	// A state log's DOMAIN declares the same name
+	// ([statelog.Domain.FeedGroup]), because the log's trim waits on this
+	// consumer from nodes that build no translator — and the engine
+	// refuses to start a feed whose group is not the one its domain
+	// declares.
 	Group string
 }
 
 // Opener opens one durable consumer over an estate.
 //
-// DECLARED HERE, by the consumer, and satisfied by [DocumentSource] for a
-// bucket family and by a state log's own domain for a log. The group name is
-// passed rather than held so there is exactly one place it comes from — the
-// translator's own [Source].
+// DECLARED HERE, by the consumer, and satisfied by each state log's own
+// domain. The group name is passed rather than held so there is exactly one
+// place it comes from — the translator's own [Source].
 type Opener interface {
 	Open(ctx context.Context, group string) (Records, error)
 }

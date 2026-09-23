@@ -73,8 +73,8 @@ type TrimTerm struct {
 	// than a missing one.
 	Known bool `json:"known"`
 
-	// Absent marks a term this domain does not have — a compacted domain
-	// has no wake feed — which renders `n/a` rather than zero.
+	// Absent marks a term this domain does not have — a domain that
+	// declares no wake feed — which renders `n/a` rather than zero.
 	Absent bool `json:"absent,omitempty"`
 
 	// Detail is the term's own sentence, which is what an operator reads

@@ -53,14 +53,28 @@ never a horizon.
 | `min_hold` | the lowest live pin — a backup or a joining node copying the log |
 | `backup_floor` | what has left the host |
 | `snapshot_floor` | the *k*-th highest verified snapshot position over the counted set |
-| `feed_ack_floor` | how far the wake feed has scanned |
+| `feed_ack_floor` | how far **that log's own** wake feed has acknowledged |
 | `age_floor` | the newest sequence older than `min_age` |
+
+`feed_ack_floor` is the acknowledgement floor of the durable consumer that each
+log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on
+`CREWLET_TRACKER_LOG`, and its group `crewlet-pages-feed` on
+`CREWLET_PAGES_LOG` — because a record that feed has not acknowledged is one
+nobody has been woken for yet. So a feed that has stopped holds back its own
+log and no other, and `blocked_by: feed_ack_floor` on a domain names that
+domain's feed.
+
+A group name is not the broker's consumer name. The durable consumer is named
+from the group **and** the stream, as `<group>__<stream>__<digest>` — for
+example `crewlet-pages-feed__CREWLET_PAGES_LOG__e5825de86642` — so on an
+external cluster `nats consumer ls <stream>` is what finds it, and a lookup by
+the group name alone finds nothing.
 
 A term that **could not be read** blocks, exactly as one that permits nothing
 does. A term nobody could read is not a term that is satisfied, and treating it
 as satisfied is how a trim advances past a node that could not report. A term
-this domain does not **have** — a compacted domain has no wake feed — is
-`n/a` rather than zero, which is a different thing again. And a term that was
+this domain does not **have** — the vector log has no wake feed — is `n/a`
+rather than zero, which is a different thing again. And a term that was
 read and **binds nothing** — no hold is pinning the log, or a solo fleet takes
 no snapshots — reads `unbounded` rather than carrying a sequence. Inside the
 engine its value is the largest there is, because it is the identity for the

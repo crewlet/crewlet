@@ -192,8 +192,9 @@ func TestAnUnreadableTermBlocksTheTrim(t *testing.T) {
 
 // AN ABSENT TERM IS `n/a`, NOT ZERO.
 //
-// A compacted domain has no wake feed at all, and reporting its position as
-// zero would block its trim for ever on a term it does not have.
+// A domain that declares no wake feed has no consumer to wait on, and
+// reporting its position as zero would block its trim for ever on a term it
+// does not have.
 func TestADomainWithNoWakeFeedIsNotBlockedByOne(t *testing.T) {
 	t.Parallel()
 	in := baseInputs()

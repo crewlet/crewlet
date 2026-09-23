@@ -43,7 +43,7 @@ type domainFeed struct {
 	envel  func(payload []byte) (statelog.Envelope, error)
 }
 
-// Consume implements [tracker.DomainConsumer].
+// Consume implements [tracker.DomainConsumer] and [pages.DomainConsumer].
 func (f domainFeed) Consume(ctx context.Context, group string) (changefeed.Records, error) {
 	g, err := f.log.Group(ctx, group)
 	if err != nil {
@@ -115,34 +115,65 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 // Stop ends this process's consumption; the durable position survives.
 func (r *domainRecords) Stop() error { return r.group.Stop() }
 
-// trackerFeedSource is the tracker's own change feed over its log.
-func trackerFeedSource(running *runningDomain) (tracker.FeedSource, error) {
-	if running == nil {
-		return tracker.FeedSource{}, fmt.Errorf("engine: the tracker domain is " +
-			"not running on this node, so nothing derives a wake from a " +
-			"committed record")
-	}
-	return tracker.FeedSource{Log: domainFeed{
-		log:    running.log,
-		stream: running.domain.Stream().Name,
-		envel:  running.domain.Envelope,
-	}}, nil
-}
-
-// pagesFeedSource is the knowledge base's own consumer over its log.
+// feedFor is the wake feed one running domain declares: the translator that
+// reads its records and the opener over its own log, or a nil translator for a
+// domain that declares none.
 //
-// The same shape [trackerFeedSource] has, and separate rather than generic
-// because each domain declares its own group name — which IS the fleet's
-// position, so a helper that derived one would be a rename waiting to happen.
-func pagesFeedSource(running *runningDomain) (pages.FeedSource, error) {
-	if running == nil {
-		return pages.FeedSource{}, fmt.Errorf("engine: the pages domain is not " +
-			"running on this node, so nothing derives a wake from a committed " +
-			"record")
-	}
-	return pages.FeedSource{Log: domainFeed{
+// # Why a switch, and why it checks the declaration
+//
+// A SWITCH, for [stateLog.applierFor]'s reason: a translator is not part of
+// the declaration — the knowledge base's translator reads Tier B on every
+// change — and the trim has to know which consumer to wait on from a node that
+// builds no feed at all. What the declaration DOES own is the group
+// ([statelog.Domain.FeedGroup]), so this is the one place the consumer the
+// wakes advance and the consumer the trim reads are held to each other, and a
+// domain whose feed disagrees with its declaration fails HERE, at boot,
+// naming itself. Each disagreement is silent anywhere else:
+//
+//   - declared and never built: the trim waits on a consumer no node ever
+//     opens, and that log grows until its ceiling refuses appends;
+//   - built and not declared: the trim never waits for the feed, and purges
+//     records nobody has been woken for yet;
+//   - built under another group: the trim waits on a consumer the wakes never
+//     advance — which is where the knowledge base's log stood while the trim
+//     read the tracker's group on it.
+func (e *Engine) feedFor(running *runningDomain) (changefeed.Translator, changefeed.Opener, error) {
+	var (
+		translator changefeed.Translator
+		opener     changefeed.Opener
+	)
+	// THE LOG IS THE SOURCE: the domain's own fleet-wide group over the
+	// same stream its applier reads, which is what derives a wake from a
+	// committed record rather than the writer's goroutine.
+	records := domainFeed{
 		log:    running.log,
 		stream: running.domain.Stream().Name,
 		envel:  running.domain.Envelope,
-	}}, nil
+	}
+	switch running.domain.Name() {
+	case tracker.Domain{}.Name():
+		translator, opener = tracker.NewTranslator(), tracker.FeedSource{Log: records}
+	case pages.Domain{}.Name():
+		translator, opener = pages.NewTranslator(e.skillsContainer), pages.FeedSource{Log: records}
+	}
+	declared := running.domain.FeedGroup()
+	switch {
+	case translator == nil && declared == "":
+		return nil, nil, nil
+	case translator == nil:
+		return nil, nil, fmt.Errorf("engine: domain %q declares the wake feed %q "+
+			"and this build runs none over its log, so its trim would wait for "+
+			"ever on a consumer nobody opens", running.domain.Name(), declared)
+	case declared == "":
+		return nil, nil, fmt.Errorf("engine: domain %q declares no wake feed and "+
+			"this build runs one as %q, so its trim would purge records that "+
+			"feed has not woken anybody for", running.domain.Name(),
+			translator.Source().Group)
+	case translator.Source().Group != declared:
+		return nil, nil, fmt.Errorf("engine: domain %q declares the wake feed %q "+
+			"and its feed runs as %q — the trim would wait on one consumer while "+
+			"the wakes advance the other", running.domain.Name(), declared,
+			translator.Source().Group)
+	}
+	return translator, opener, nil
 }

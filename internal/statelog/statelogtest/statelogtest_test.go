@@ -139,6 +139,7 @@ func (controlDomain) ScopeIndex() string    { return "control_deferred_scope" }
 func (controlDomain) OpsTable() string      { return "control_ops" }
 func (controlDomain) ReadinessInput() bool  { return true }
 func (controlDomain) ClaimsIdentity() bool  { return true }
+func (controlDomain) FeedGroup() string     { return "" }
 
 // compactedControl is the same domain under the other replay protocol: no
 // arbitration, no operation ledger, and a gap that is a coverage number rather

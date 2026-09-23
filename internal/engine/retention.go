@@ -621,26 +621,43 @@ func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 }
 
 // feedTerm is how far this domain's wake feed has acknowledged.
+//
+// THE GROUP IS THE DOMAIN'S OWN DECLARATION ([statelog.Domain.FeedGroup]),
+// never a name this file knows. It read the tracker's group for every domain
+// that claims identity, and on the knowledge base's log that consumer does not
+// exist — so the lookup below answered "never created", the term permitted
+// nothing, and that log was blocked on `feed_ack_floor` for the life of the
+// deployment while its own feed acknowledged every record.
 func (r *retention) feedTerm(ctx context.Context, running *runningDomain) (
 	seq uint64, has, readable bool) {
 
-	if !running.domain.ClaimsIdentity() {
+	group := running.domain.FeedGroup()
+	if group == "" {
 		// THIS DOMAIN HAS NO WAKE FEED, which is absent rather than
-		// unreadable: a compacted domain never had one, and reporting
-		// zero would block its trim for ever on a term it does not
-		// have.
+		// unreadable: reporting zero would block its trim for ever on a
+		// term it does not have.
 		return 0, false, false
 	}
-	floor, exists, err := running.log.GroupAckFloor(ctx, tracker.FeedGroup)
+	floor, exists, err := running.log.GroupAckFloor(ctx, group)
 	switch {
 	case err != nil:
+		// LOGGED HERE because the term can carry only that it is
+		// unknown: the blocked-trim line names the term and not the
+		// broker's answer, and without this the cause of an unreadable
+		// consumer is nowhere at all.
+		log.WarnContext(ctx, "retention_feed_unreadable",
+			"domain", running.domain.Name(), "group", group, "err", err)
 		return 0, true, false
 	case !exists:
-		// THE FEED HAS NOT BEEN CREATED YET, which is a fleet that has
-		// never started one rather than one whose consumer could not be
-		// read. It permits nothing, because a record no feed has seen is
-		// one nobody has been told about — and that is exactly what the
-		// term says.
+		// THE DECLARED FEED HAS NOT BEEN OPENED YET, which is a fleet
+		// that has never started it rather than one whose consumer
+		// could not be read. It permits nothing, because a record no
+		// feed has seen is one nobody has been told about — and that is
+		// exactly what the term says.
+		//
+		// It is also precisely what a WRONG group looks like, for ever,
+		// which is why the name is the domain's declaration and
+		// [Engine.feedFor] refuses a feed that opens any other.
 		return 0, true, true
 	}
 	return floor, true, true

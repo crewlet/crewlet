@@ -626,48 +626,30 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 	// says what it can read and a feed says how to run a durable consumer
 	// over one domain's own stream; which estate the records are in was
 	// the piece the domains replaced outright.
-	type source struct {
-		translator changefeed.Translator
-		opener     changefeed.Opener
-	}
-	sources := []source{}
-	if running := e.native.log.Domain(tracker.Domain{}.Name()); running != nil {
-		// THE LOG IS THE SOURCE, and it is the piece the domain
-		// replaced outright: a bucket feed needs a family and a key
-		// class, and a log delivery has neither. Its own fleet-wide
-		// group over the same stream the applier reads is what derives
-		// a wake from a committed record.
-		feed, err := trackerFeedSource(running)
+	//
+	// IN THE REGISTER'S ORDER and through [Engine.feedFor], which holds each
+	// feed to the group its domain declares — the consumer the trim waits
+	// on. A domain whose feed disagrees with its declaration gets no feed
+	// and an error naming it, rather than a trim that silently waits for
+	// ever or silently waits for nothing.
+	for _, domain := range registeredDomains() {
+		running := e.native.log.Domain(domain.Name())
+		if running == nil {
+			continue
+		}
+		translator, opener, err := e.feedFor(running)
 		if err != nil {
 			log.ErrorContext(ctx, "changefeed_unavailable",
-				"source", tracker.Source, "error", err.Error())
-		} else {
-			sources = append(sources, source{
-				translator: tracker.NewTranslator(),
-				opener:     feed,
-			})
+				"domain", domain.Name(), "error", err.Error())
+			continue
 		}
-	}
-	if running := e.native.log.Domain(pages.Domain{}.Name()); running != nil {
-		// THE LOG IS THE SOURCE HERE TOO. A bucket feed needed a family
-		// and a key class; a log delivery has neither, and its own
-		// fleet-wide group over the same stream the applier reads is
-		// what derives a wake from a committed record.
-		feed, err := pagesFeedSource(running)
-		if err != nil {
-			log.ErrorContext(ctx, "changefeed_unavailable",
-				"source", pages.Source, "error", err.Error())
-		} else {
-			sources = append(sources, source{
-				translator: pages.NewTranslator(e.skillsContainer),
-				opener:     feed,
-			})
+		if translator == nil {
+			// THE DOMAIN DECLARES NO WAKE FEED, and its trim term is
+			// absent for the same reason.
+			continue
 		}
-	}
-	for _, src := range sources {
-		translator := src.translator
 		feed, err := changefeed.New(changefeed.Options{
-			Opener: src.opener, Publisher: e.backends.Queue,
+			Opener: opener, Publisher: e.backends.Queue,
 			Claims: e.backends.Fleet, Translator: translator,
 			Metrics: e.metrics,
 		})

@@ -727,11 +727,10 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 	return publisher, evicted, nil
 }
 
-// readerFor builds a domain's READ authority: the four levels, the refusal
-// ladder, the coverage probe and the quorum-committed barrier a linearizable
-// read waits through.
+// barrierEncoder is how a domain writes the framework's barrier as a record on
+// its own log, or nil for a domain that has none.
 //
-// # Why the barrier encoder is a switch and not a method on Domain
+// # Why this is a switch and not a method on Domain
 //
 // A barrier is the framework's append and the DOMAIN's record — the read
 // index decides when one goes out and what its acknowledgement proves, and
@@ -740,6 +739,19 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 // which is the correct answer for one whose reads make no freshness claim
 // rather than a gap: the vectors are derived and compacted, so "as of a
 // position" is not a question about them.
+func barrierEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, error) {
+	switch domain.Name() {
+	case tracker.Domain{}.Name():
+		return tracker.EncodeBarrier
+	case pages.Domain{}.Name():
+		return pages.EncodeBarrier
+	}
+	return nil
+}
+
+// readerFor builds a domain's READ authority: the four levels, the refusal
+// ladder, the coverage probe and the quorum-committed barrier a linearizable
+// read waits through — the last only for a domain [barrierEncoder] knows.
 //
 // Until this existed [statelog.NewReader] and [statelog.NewReadIndex] were
 // constructed only by their own tests. Every domain reader read its rows
@@ -752,13 +764,7 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 func (s *stateLog) readerFor(domain statelog.Domain, appendTo *jetstream.DomainLog,
 	runner *statelog.Runner, running *runningDomain) (*statelog.Reader, error) {
 
-	var encode func(statelog.Envelope) ([]byte, error)
-	switch domain.Name() {
-	case tracker.Domain{}.Name():
-		encode = tracker.EncodeBarrier
-	case pages.Domain{}.Name():
-		encode = pages.EncodeBarrier
-	}
+	encode := barrierEncoder(domain)
 
 	deps := statelog.ReaderDeps{
 		Domain: domain,
@@ -1140,11 +1146,11 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 // applierFor is the state machine each domain declares.
 //
 // A SWITCH RATHER THAN A METHOD on the domain, because an applier is not part
-// of the declaration: the declaration is what a snapshot, a claim and a sweep
-// read, and it must be answerable by a build that cannot construct the applier
-// at all. What this costs is that a new domain fails HERE, at boot, naming
-// itself — rather than being registered with no state machine and applying
-// nothing.
+// of the declaration: the declaration is what a snapshot, a claim, a sweep and
+// the trim read, and it must be answerable by a build that cannot construct the
+// applier at all. What this costs is that a new domain fails HERE, at boot,
+// naming itself — rather than being registered with no state machine and
+// applying nothing.
 func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():

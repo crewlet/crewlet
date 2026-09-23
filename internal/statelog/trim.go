@@ -107,8 +107,9 @@ type Term struct {
 	Detail string
 
 	// Absent marks a term that does not exist for this domain rather than
-	// one that could not be read — a compacted domain has no wake feed,
-	// and an absent term is `n/a` rather than zero.
+	// one that could not be read — a domain that declares no wake feed
+	// ([Domain.FeedGroup] empty) has no such term, and an absent term is
+	// `n/a` rather than zero.
 	Absent bool
 }
 
@@ -263,8 +264,8 @@ type TrimInputs struct {
 	BackupMaxAge time.Duration
 
 	// FeedAckFloor is how far the wake feed has scanned, and whether this
-	// domain HAS a feed at all — a compacted domain does not, and an
-	// absent term is not a zero one.
+	// domain HAS a feed at all — false for a domain whose
+	// [Domain.FeedGroup] is empty, and an absent term is not a zero one.
 	FeedAckFloor uint64
 	HasFeed      bool
 	FeedReadable bool
@@ -443,9 +444,9 @@ func (in TrimInputs) snapshotFloor() Term {
 // feed is how far the wake feed has scanned.
 func (in TrimInputs) feed() Term {
 	if !in.HasFeed {
-		// ABSENT RATHER THAN ZERO. A compacted domain has no wake feed
-		// at all, and reporting `0` would block its trim for ever on a
-		// term it does not have.
+		// ABSENT RATHER THAN ZERO. A domain that declares no wake feed
+		// has no consumer to wait on, and reporting `0` would block its
+		// trim for ever on a term it does not have.
 		return Term{Name: TermFeedAckFloor, Absent: true,
 			Detail: "this domain has no wake feed"}
 	}

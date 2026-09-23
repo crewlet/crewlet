@@ -71,6 +71,7 @@ func (probeDomain) ScopeIndex() string    { return "probe_deferred_scope" }
 func (probeDomain) OpsTable() string      { return "probe_ops" }
 func (probeDomain) ReadinessInput() bool  { return true }
 func (probeDomain) ClaimsIdentity() bool  { return true }
+func (probeDomain) FeedGroup() string     { return "" }
 
 // applier stands in for this node's own apply loop: what it has committed,
 // and which operations it has written rows for.

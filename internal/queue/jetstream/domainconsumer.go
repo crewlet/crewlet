@@ -1295,22 +1295,30 @@ func (g *DomainGroup) Name() string { return g.name }
 // rather than from a handle.
 //
 // It reports (0, false, nil) when no such consumer exists. That is an ordinary
-// answer and a load-bearing one: a fleet that has never run the feed has not
-// failed to read it, and the two must not look alike — an unreadable term
-// blocks the trim, while an absent feed is a domain that does not have one.
+// answer and a load-bearing one: a fleet that has never opened the group has
+// not failed to read it, and the two must not look alike — an unreadable
+// consumer is a term nobody could evaluate, while an unopened one is a feed
+// that has seen nothing yet. Neither says whether the domain HAS a feed: that
+// is the domain's own declaration, and the caller asks it first. The same
+// answer is what a group name this log never had returns, for ever, so the
+// caller must pass the group the domain declares and never one it knows.
 func (l *DomainLog) GroupAckFloor(ctx context.Context, group string) (uint64, bool, error) {
-	cons, err := l.stream.Consumer(ctx, domainGroupName(l.name, group))
+	// THE ERRORS NAME THE DURABLE, not only the group: an operator chasing
+	// an unreadable term looks the consumer up on the broker, where the
+	// group's own spelling finds nothing.
+	durable := domainGroupName(l.name, group)
+	cons, err := l.stream.Consumer(ctx, durable)
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
 		return 0, false, nil
 	case err != nil:
-		return 0, false, fmt.Errorf("jetstream: read the group %q on %s: %w",
-			group, l.name, err)
+		return 0, false, fmt.Errorf("jetstream: read the group %q (consumer %s) on %s: %w",
+			group, durable, l.name, err)
 	}
 	info, err := cons.Info(ctx)
 	if err != nil {
-		return 0, false, fmt.Errorf("jetstream: read the group %q on %s: %w",
-			group, l.name, err)
+		return 0, false, fmt.Errorf("jetstream: read the group %q (consumer %s) on %s: %w",
+			group, durable, l.name, err)
 	}
 	// THE ACK FLOOR RATHER THAN THE DELIVERED SEQUENCE. Delivered says a
 	// record left the broker; the floor says every record below it was

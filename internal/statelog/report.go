@@ -27,8 +27,8 @@ import (
 // row per domain inside one answer — not a second command, not a second
 // route, and not a `?domain=` that returns a different document. A term that
 // does not apply to a domain reports ABSENT rather than zero, because a
-// compacted domain genuinely has no wake feed and rendering that as `0` is a
-// claim that the feed has scanned nothing.
+// domain that declares no wake feed genuinely has none and rendering that as
+// `0` is a claim that the feed has scanned nothing.
 //
 // # What is NOT here, and where it is instead
 //
@@ -548,8 +548,9 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 // turned back into words.
 //
 // ABSENT IS CHECKED FIRST. A term a domain does not have is also a term
-// nobody read, so the other order would report every compacted domain's wake
-// feed as unreadable and block-looking on a screen where nothing is wrong.
+// nobody read, so the other order would report the wake feed of every domain
+// that declares none as unreadable and block-looking on a screen where
+// nothing is wrong.
 //
 // AND UNBOUNDED IS CHECKED BEFORE KNOWN, because it IS known — the sentinel
 // only ever reaches here with Known set, and reporting it as an ordinary

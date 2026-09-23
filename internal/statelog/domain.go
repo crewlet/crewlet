@@ -101,6 +101,36 @@ type Domain interface {
 	// "the Replicated tables of a domain that claims identity" rather
 	// than "Replicated minus the tables somebody remembered".
 	ClaimsIdentity() bool
+
+	// FeedGroup is the fleet-wide consumer this domain's WAKE FEED runs as
+	// on its own stream, or empty for a domain that has no wake feed.
+	//
+	// DECLARED because two parties name one consumer and neither can ask
+	// the other: the feed that advances it, on whichever node wins a
+	// record, and the trim's `feed_ack_floor` term that waits for it, on
+	// whichever node holds the trim duty — which need not run the feed at
+	// all. When the trim named that consumer for itself it named ONE
+	// domain's for every domain with a feed; on the other log the
+	// consumer never exists, the term permits nothing, and that log's trim
+	// was blocked for the life of the deployment.
+	//
+	// EMPTY IS AN ANSWER rather than an omission, and it is the only one
+	// that makes the term ABSENT instead of zero. Each wrong answer costs
+	// something different and neither is loud: a domain with a feed that
+	// answers empty has its log trimmed past records nobody has been woken
+	// for yet, and one that answers another domain's group blocks its trim
+	// on a consumer nobody opens.
+	//
+	// The name is also the fleet's POSITION on its log, so it never
+	// changes. A new name is a fresh durable consumer, and every group
+	// starts from the log's first retained record rather than its head, so
+	// a rename loses nothing: it REPLAYS every record the log still holds
+	// as a wake, and only the change feed's claim and its wake-id dedupe
+	// hold those back, and only within their own retention windows. Until
+	// the new consumer catches up, its acknowledgement floor is what the
+	// trim's `feed_ack_floor` term reads, so the log's trim stalls behind
+	// the replay.
+	FeedGroup() string
 }
 
 // ReplayProtocol is how a domain's stream behaves under replay, and the

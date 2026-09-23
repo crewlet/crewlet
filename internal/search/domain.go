@@ -180,6 +180,16 @@ func (Domain) ReadinessInput() bool { return false }
 // none, because it is the one a fleet report would print.
 func (Domain) ClaimsIdentity() bool { return false }
 
+// FeedGroup is EMPTY: this domain has no wake feed.
+//
+// A vector is derived from a page or a task that already woke whoever it was
+// going to on its own log, and an embedding is news to nobody — so there is
+// no consumer here for the trim to wait on, and its `feed_ack_floor` term
+// reports absent rather than zero. Stated rather than inferred from the
+// compaction, because "is compacted" and "notifies nobody" are two facts that
+// merely coincide here.
+func (Domain) FeedGroup() string { return "" }
+
 // NewRows builds the publisher's read seam for this domain.
 //
 // THE FRAMEWORK IMPLEMENTS IT, for the reason the tracker's own seam gives:

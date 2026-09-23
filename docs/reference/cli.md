@@ -683,9 +683,10 @@ Then one row per registered domain — its stream, generation, replay protocol,
 both ends, bytes, ceiling and headroom — the six terms with their state and
 detail, one row per node per domain, and this node's own replica line.
 
-A term that does not apply to a domain prints `n/a` rather than `0`: a
-compacted domain has no wake feed, and an absent term is a different fact from
-one that permits nothing.
+A term that does not apply to a domain prints `n/a` rather than `0`: the
+vector log has no wake feed, and an absent term is a different fact from one
+that permits nothing. Where a log does have one, its `feed_ack_floor` is that
+log's own feed — never another domain's.
 
 **It exits non-zero exactly when this node has an active alarm**, on the
 report's own rule rather than a second one in the CLI — the shell script
