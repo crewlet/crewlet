@@ -238,6 +238,34 @@ var protocolCases = []testCase{
 		})
 	}},
 
+	{"a_windowed_counter_node_waits_for_the_last_lifetime_counter_node", func(h *harness) {
+		// The bump that windowed the token counters, stated as the deploy
+		// it protects. An older node charges the lifetime counter and a
+		// newer one the windowed counters, so the two running seats side
+		// by side would each see only its own share of the company's
+		// spend, and every cap would bind late by as much as the other
+		// build had spent. The older node's presence alone is enough to
+		// hold the newer one back — before it has taken a single seat.
+		if coord.ProtocolVersion < coord.WindowedCountersProtocol {
+			h.t.Fatalf("ProtocolVersion %d is below WindowedCountersProtocol %d: this build "+
+				"would claim seats beside the lifetime counters' nodes",
+				coord.ProtocolVersion, coord.WindowedCountersProtocol)
+		}
+		h.claim(coord.NodeResource("lifetime"), coord.AcquireOptions{
+			Owner: "lifetime:1", TTL: LongTTL, Ungated: true,
+			Protocol: coord.WindowedCountersProtocol - 1,
+		})
+		h.refused(coord.SeatResource("ceo"), coord.AcquireOptions{
+			Owner: "windowed:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
+		})
+		// And the floor that the lifetime counters' retirement reads says
+		// so: an older node is live, so their bucket is still in use.
+		if floor, any := h.floor(); !any || floor >= coord.WindowedCountersProtocol {
+			h.t.Fatalf("FleetProtocolFloor = (%d, %v) beside a lifetime-counter node, "+
+				"want a floor below %d", floor, any, coord.WindowedCountersProtocol)
+		}
+	}},
+
 	// --- the observability half ----------------------------------------
 
 	{"fleet_protocol_floor_reports_the_oldest_live_holder", func(h *harness) {

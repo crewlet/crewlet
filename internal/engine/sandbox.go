@@ -231,7 +231,7 @@ func secondsPtr(v *float64) *time.Duration {
 }
 
 // sandboxAccountant post-charges a collected coding run against the shared
-// counter.
+// counters.
 //
 // The charge happens AFTER the spend, which is why it cannot refuse: a refusal
 // cannot un-spend a run that already ran, and recording it anyway is the only
@@ -242,27 +242,53 @@ func secondsPtr(v *float64) *time.Duration {
 // moment the cap bound, and stamped a refusal on a seat that would still
 // admit its next round.
 //
-// The caps only decide whether to SAY the run went over. They are read live,
-// and a limit of 0 is unlimited, matching the config.
+// The run is counted in the windows of COLLECTION — the day, week and month
+// it was collected in, on the company's clock — because that is the only
+// instant the counter is told about: a run that started yesterday and ended
+// today is today's spend as far as any cap can know. The caps only decide
+// whether to SAY the run went over.
 //
 // Charging it once per launch, however often its completion is retried, is the
 // coordinator's side: see [sandbox.PendingRun.Charged].
 type sandboxAccountant struct {
-	budgets coord.Budgets
-	caps    func(agentID string) (org, seat int)
+	budgets postCharger
+
+	// basis reads, off the epoch LIVE at charge time rather than the one
+	// the turn was pinned to, the ceilings the run is measured against and
+	// the clock its windows are cut on: this charge lands after a run that
+	// may have taken hours, and the caps the company is running under now
+	// are the ones it should be measured against.
+	basis func(agentID string) budgetBasis
+
+	now func() time.Time
+}
+
+// postCharger is the slice of the fleet's counters the accountant calls.
+type postCharger interface {
+	PostCharge(ctx context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error)
 }
 
 func (a sandboxAccountant) Charge(ctx context.Context, agentID, _ string, tokens int) (bool, error) {
 	if a.budgets == nil || tokens <= 0 {
 		return false, nil
 	}
-	spend, err := a.budgets.PostCharge(ctx, coord.AgentScope(agentID), tokens)
+	basis := a.basis(agentID)
+	spend, err := a.budgets.PostCharge(ctx, coord.AgentScope(agentID), tokens,
+		coord.WindowsAt(a.now(), basis.zone))
 	if err != nil {
 		return false, err
 	}
-	orgLimit, seatLimit := a.caps(agentID)
-	over := (orgLimit > 0 && spend.OrgUsed > orgLimit) || (seatLimit > 0 && spend.AgentUsed > seatLimit)
-	return over, nil
+	return overAnyCap(spend.Org, basis.org) || overAnyCap(spend.Agent, basis.seat), nil
+}
+
+// overAnyCap reports whether a counter has spent past any window's ceiling.
+func overAnyCap(u coord.Usage, caps coord.Caps) bool {
+	for p, ceiling := range caps {
+		if u.In(p).Used > ceiling {
+			return true
+		}
+	}
+	return false
 }
 
 // resumer re-enters a suspended turn on this node.
@@ -1291,18 +1317,21 @@ func (e *Engine) sandboxAccountant() sandbox.Accountant {
 	}
 	return sandboxAccountant{
 		budgets: e.backends.Fleet,
-		// The ORG cap and the seat's own, read off the epoch LIVE at charge
-		// time rather than pinned to the turn: this charge lands after a run
-		// that may have taken hours, and the cap the company is running
-		// under now is the one it should be measured against.
-		caps: func(agentID string) (int, int) {
+		basis: func(agentID string) budgetBasis {
 			c := e.Company()
+			if c == nil || c.Org == nil {
+				// No epoch yet: nothing is capped, and the run is still
+				// counted, on UTC — the clock a company that names none
+				// has.
+				return basisOf(c, nil)
+			}
 			id, err := uuid.Parse(agentID)
 			if err != nil {
-				return companyBudget(c.Org), 0
+				return basisOf(c, nil)
 			}
-			return companyBudget(c.Org), seatBudget(c.Org, c.Org.AgentSeatByID(id))
+			return basisOf(c, c.Org.AgentSeatByID(id))
 		},
+		now: time.Now,
 	}
 }
 

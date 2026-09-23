@@ -6,10 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
-	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
@@ -162,29 +159,32 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 //
 // # Why this talks to a NODE and not to a file
 //
-// The token counter is FLEET state: it lives in the coordination store so
+// The token counters are FLEET state: they live in the coordination store so
 // that a company's cap is one number rather than one per node. On the default
 // topology that store is the engine's own embedded broker, which means there
 // is nothing on disk this command could open — and, worse, that opening it
 // anyway would be dangerous rather than merely useless: a second JetStream
 // server on the same store directory is ACCEPTED rather than refused
-// (measured), so two writers would corrupt the counter instead of contending
-// for it.
+// (measured), so two writers would corrupt the counters instead of contending
+// for them.
 //
-// So `show` reads the same answer the dashboard renders, and `reset` posts to
-// the one route that writes it. Both take the running node's address, which
-// defaults to what this node's own Tier A config says it binds — so the
-// common case is still `crewlet budgets show` beside the config file.
+// So `show` reads the same answer the dashboard renders. It takes the running
+// node's address, which defaults to what this node's own Tier A config says it
+// binds — so the common case is still `crewlet budgets show` beside the config
+// file.
+//
+// There is no `reset`, and no route for one (ADR-0019). Each ceiling is per
+// calendar window, and a window's allowance comes back when the window turns
+// over; room before then is made by raising the ceiling, which is a config
+// change like any other.
 func runBudgets(args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "show":
 		return budgetsShow(rest, stdout, stderr)
-	case "reset":
-		return budgetsReset(rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr,
-			"usage: crewlet budgets show|reset [<config.yaml>] [-url] [-token] [-scope]")
+			"usage: crewlet budgets show [<config.yaml>] [-url] [-token]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown budgets command %q", sub)
@@ -261,44 +261,4 @@ func dashIfEmpty(s string) string {
 		return "-"
 	}
 	return s
-}
-
-// budgetsReset zeroes the counters.
-//
-// # It is never a schedule
-//
-// A budget is a ceiling for the life of a deployment, and a counter that
-// rolled itself over would silently re-arm a company somebody had stopped on
-// purpose. So this is an operator action, and it names what it cleared.
-func budgetsReset(args []string, stdout, stderr io.Writer) error {
-	var scope *string
-	client, err := nodeClientFor(args, "budgets reset", stderr, func(fs *flag.FlagSet) {
-		scope = fs.String("scope", "",
-			"reset only this scope (org, or agent:<id>); empty resets every scope")
-	})
-	if err != nil {
-		return err
-	}
-	path := "/budgets/reset"
-	if *scope != "" {
-		path += "?scope=" + url.QueryEscape(*scope)
-	}
-	var answer struct {
-		Cleared int      `json:"cleared"`
-		Scopes  []string `json:"scopes"`
-	}
-	if err := client.post(context.Background(), path, &answer); err != nil {
-		return err
-	}
-	if answer.Cleared == 0 {
-		fmt.Fprintln(stdout, "Nothing to reset: no counter matched.")
-		return nil
-	}
-	// The report NAMES what was cleared. A count alone leaves an operator
-	// unable to tell "reset the seat I meant" from "reset a scope that was
-	// already empty".
-	slices.Sort(answer.Scopes)
-	fmt.Fprintf(stdout, "Reset %d scope(s): %s\n",
-		answer.Cleared, strings.Join(answer.Scopes, ", "))
-	return nil
 }

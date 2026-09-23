@@ -73,7 +73,7 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
 // middleware and runs BEFORE the mux: it refuses on path and method alone, so
 // a refusal proves the rule whether or not a handler exists behind it. That is
-// what makes the refusal case above meaningful for all sixteen — and it is
+// what makes the refusal case above meaningful for all fifteen — and it is
 // also what would let an entry naming a path nothing serves sit here for ever
 // looking exactly like one that works. [TestNothingIsRefusedForDrainingBeforeADrain]
 // holds the declaration in BOTH directions for that reason, in the idiom
@@ -99,7 +99,6 @@ var startsWork = []struct {
 	{http.MethodPut, "/secrets/GITHUB_TOKEN", false},
 	{http.MethodDelete, "/secrets/GITHUB_TOKEN", false},
 	{http.MethodPost, "/setup/integrations/github/provision", false},
-	{http.MethodPost, "/budgets/reset", true},
 	{http.MethodPost, "/backup", true},
 	{http.MethodPost, "/work/retention/ack", true},
 	{http.MethodPost, "/work/ENG-1/purge", false},
@@ -276,7 +275,7 @@ func TestAProcessWithNoEngineHasNothingToDrain(t *testing.T) {
 	t.Parallel()
 	b := closedPosture()
 	a := newApp(t, api.Options{Bootstrap: &b})
-	if rec := send(t, a, http.MethodPost, "/budgets/reset"); refusedForDraining(t, rec) {
+	if rec := send(t, a, http.MethodPost, "/backup"); refusedForDraining(t, rec) {
 		t.Error("a process with no engine refused a write for draining")
 	}
 }

@@ -316,7 +316,7 @@ older nodes keep working, newer ones wait — visibly, with
 or is released. A rolling deploy converges because that is what a rolling
 deploy does.
 
-Two consequences worth stating plainly:
+The consequences worth stating plainly:
 
 - **A stalled rollout stalls placement.** If you leave one old node
   running, the new ones hold nothing. The log line says so; watch for it.
@@ -330,6 +330,16 @@ Two consequences worth stating plainly:
   say so once with `coord_kv_duties_wait_for_older_build` (and
   `coord_kv_duties_resumed` when it ends). See
   [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
+- **Upgrading to the windowed token budgets (protocol 4) splits the
+  counters until the last old node leaves.** The old nodes run every seat
+  and charge the old lifetime counter; the new ones charge the windowed
+  counters once they hold seats, which is exactly when the old ones have
+  gone. Until then only the old nodes publish the live budget meter, and a
+  new node's `GET /budgets` reads windowed counters that start empty. The
+  old counters are not carried over: each window starts from zero at the
+  upgrade, and the retention sweep deletes the old bucket once no old node
+  is live. See
+  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows).
 
 ## Watching a fleet
 

@@ -35,7 +35,7 @@ type Fleet struct {
 	worked       map[string]workedEntry
 	cooldowns    map[string]time.Time
 	applies      map[string]coord.NodeApply
-	budgets      map[string]coord.Usage
+	budgets      map[string]coord.Tally
 	channels     map[string]coord.Channel
 	follows      map[string]followEntry
 	fires        map[string]time.Time
@@ -86,7 +86,7 @@ func NewFleet() *Fleet {
 		worked:       map[string]workedEntry{},
 		cooldowns:    map[string]time.Time{},
 		applies:      map[string]coord.NodeApply{},
-		budgets:      map[string]coord.Usage{},
+		budgets:      map[string]coord.Tally{},
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
 		fires:        map[string]time.Time{},
@@ -341,20 +341,22 @@ func (f *Fleet) ExpireApplies(cutoff time.Time) {
 
 // ---- the token counters ------------------------------------------------ //
 
-// Charge checks and increments the org's counter and the seat's.
+// Charge checks and increments the org's counter and the seat's, in every
+// window.
 //
 // The twin holds ONE mutex for the whole call, so the compensation the KV
 // backend needs never runs here. That is not a shortcut around the contract —
 // the observable behaviour is identical, and the suite asserts the behaviour
 // — it is what a single process can honestly offer: there is no second writer
 // to race, so building a compensation nothing could ever exercise would be a
-// path with no test that could reach it.
-func (f *Fleet) Charge(_ context.Context, agentScope string, tokens, orgLimit, agentLimit int) (coord.Spend, error) {
-	if tokens <= 0 {
+// path with no test that could reach it. The arithmetic is [coord.Tally]'s,
+// the same the KV backend runs.
+func (f *Fleet) Charge(_ context.Context, req coord.ChargeRequest) (coord.Spend, error) {
+	if req.Tokens <= 0 {
 		return coord.Spend{OK: true}, nil
 	}
-	if agentScope == "" {
-		return coord.Spend{}, errors.New("coord/memory: a charge needs a seat scope")
+	if err := req.Validate(); err != nil {
+		return coord.Spend{}, fmt.Errorf("coord/memory: %w", err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -362,81 +364,82 @@ func (f *Fleet) Charge(_ context.Context, agentScope string, tokens, orgLimit, a
 	// ORG FIRST for the REFUSAL, whichever order the writes go in: "the
 	// company is out" is the fact an operator has to see when both scopes
 	// are out of room.
+	now := time.Now().UTC()
+	org := f.budgets[coord.OrgScope].Roll(req.Windows)
+	seat := f.budgets[req.Seat].Roll(req.Windows)
 	for _, scope := range []struct {
 		name, key string
-		limit     int
-	}{{"org", coord.OrgScope, orgLimit}, {"agent", agentScope, agentLimit}} {
-		row := f.budgets[scope.key]
-		if scope.limit > 0 && row.Used+tokens > scope.limit {
-			// The refusal is recorded on the scope that made it, and on
-			// no other: see coord.Usage.RefusedAt.
-			row.Scope = scope.key
-			row.RefusedAt = time.Now().UTC()
-			f.budgets[scope.key] = row
-			return coord.Spend{
-				RefusedScope: scope.name, RefusedUsed: row.Used, RefusedLimit: scope.limit,
-			}, nil
+		tally     coord.Tally
+		caps      coord.Caps
+	}{{"org", coord.OrgScope, org, req.OrgCaps}, {"agent", req.Seat, seat, req.SeatCaps}} {
+		if refusing := scope.tally.Refusing(req.Tokens, scope.caps); len(refusing) > 0 {
+			// The refusal is recorded on the windows of the scope that
+			// made it, and on no other: see coord.WindowUsage.RefusedAt.
+			f.budgets[scope.key] = scope.tally.Stamp(refusing, scope.tally, now)
+			return scope.tally.Refusal(scope.name, refusing, scope.caps, req.Windows), nil
 		}
 	}
-	orgUsed := f.charge(coord.OrgScope, tokens)
-	agentUsed := f.charge(agentScope, tokens)
-	return coord.Spend{OK: true, OrgUsed: orgUsed, AgentUsed: agentUsed}, nil
+	// ADMITTED, which is also what clears both scopes' refusals: each has
+	// just had room in every window.
+	org, seat = org.Add(req.Tokens, now).ClearAll(), seat.Add(req.Tokens, now).ClearAll()
+	f.budgets[coord.OrgScope], f.budgets[req.Seat] = org, seat
+	return coord.Spend{
+		OK: true, Org: org.Usage(coord.OrgScope, req.Windows), Agent: seat.Usage(req.Seat, req.Windows),
+	}, nil
 }
 
 // PostCharge adds spend that already happened to both counters, refusing
 // nothing and leaving both refusal stamps as they were. See
 // [coord.Budgets.PostCharge].
-func (f *Fleet) PostCharge(_ context.Context, agentScope string, tokens int) (coord.Spend, error) {
+func (f *Fleet) PostCharge(_ context.Context, seat string, tokens int, windows coord.Windows) (coord.Spend, error) {
 	if tokens <= 0 {
 		return coord.Spend{OK: true}, nil
 	}
-	if agentScope == "" {
+	if seat == "" {
 		return coord.Spend{}, errors.New("coord/memory: a charge needs a seat scope")
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	orgUsed := f.add(coord.OrgScope, tokens)
-	agentUsed := f.add(agentScope, tokens)
-	return coord.Spend{OK: true, OrgUsed: orgUsed, AgentUsed: agentUsed}, nil
-}
-
-// charge applies one ADMITTED charge to a scope under the held lock, which is
-// also what clears the scope's refusal: it has just had room for a charge.
-func (f *Fleet) charge(scope string, delta int) int {
-	used := f.add(scope, delta)
-	row := f.budgets[scope]
-	row.RefusedAt = time.Time{}
-	f.budgets[scope] = row
-	return used
-}
-
-// add moves one scope's counter under the held lock, and nothing else about it.
-func (f *Fleet) add(scope string, delta int) int {
-	row := f.budgets[scope]
-	row.Scope = scope
-	row.Used = max(row.Used+delta, 0)
-	row.UpdatedAt = time.Now().UTC()
-	f.budgets[scope] = row
-	return row.Used
-}
-
-// Used reports one scope's spend.
-func (f *Fleet) Used(_ context.Context, scope string) (int, error) {
-	if scope == "" {
-		return 0, errors.New("coord/memory: a budget scope is required")
+	if err := windows.Validate(); err != nil {
+		return coord.Spend{}, fmt.Errorf("coord/memory: %w", err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.budgets[scope].Used, nil
+	now := time.Now().UTC()
+	org := f.budgets[coord.OrgScope].Roll(windows).Add(tokens, now)
+	agent := f.budgets[seat].Roll(windows).Add(tokens, now)
+	f.budgets[coord.OrgScope], f.budgets[seat] = org, agent
+	return coord.Spend{
+		OK: true, Org: org.Usage(coord.OrgScope, windows), Agent: agent.Usage(seat, windows),
+	}, nil
 }
 
-// Usage returns every counter, org first then seats by scope.
-func (f *Fleet) Usage(_ context.Context) ([]coord.Usage, error) {
+// Used reports one scope's counter against the given windows.
+func (f *Fleet) Used(_ context.Context, scope string, windows coord.Windows) (coord.Usage, error) {
+	if scope == "" {
+		return coord.Usage{}, errors.New("coord/memory: a budget scope is required")
+	}
+	if err := windows.Validate(); err != nil {
+		return coord.Usage{}, fmt.Errorf("coord/memory: %w", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.budgets[scope].Usage(scope, windows), nil
+}
+
+// Usage returns every counter against the given windows, org first then seats
+// by scope.
+//
+// Nothing here ages a counter out: the twin lives for one process, a far
+// shorter span than [coord.BudgetRetention], which is the KV bucket's age and
+// no part of what a caller can observe of a counter it is still charging.
+func (f *Fleet) Usage(_ context.Context, windows coord.Windows) ([]coord.Usage, error) {
+	if err := windows.Validate(); err != nil {
+		return nil, fmt.Errorf("coord/memory: %w", err)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]coord.Usage, 0, len(f.budgets))
-	for _, row := range f.budgets {
-		out = append(out, row)
+	for scope, tally := range f.budgets {
+		out = append(out, tally.Usage(scope, windows))
 	}
 	coord.SortUsage(out)
 	if len(out) == 0 {
@@ -445,20 +448,10 @@ func (f *Fleet) Usage(_ context.Context) ([]coord.Usage, error) {
 	return out, nil
 }
 
-// Reset zeroes one scope, or every scope when given "".
-func (f *Fleet) Reset(_ context.Context, scope string) (int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if scope != "" {
-		if _, ok := f.budgets[scope]; !ok {
-			return 0, nil
-		}
-		delete(f.budgets, scope)
-		return 1, nil
-	}
-	cleared := len(f.budgets)
-	clear(f.budgets)
-	return cleared, nil
+// RetireLifetimeCounters has nothing to retire: the twin lives and dies with
+// its process, so no earlier build's counters can exist in it.
+func (f *Fleet) RetireLifetimeCounters(context.Context) (bool, error) {
+	return false, nil
 }
 
 // ---- the agent-to-agent channels --------------------------------------- //

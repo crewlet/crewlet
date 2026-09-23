@@ -442,7 +442,7 @@ A rolling upgrade puts a vN and a vN+1 node on the same lease table and the same
 
 The rule is asymmetric: **a node refuses to claim anything while a live lease is held at a lower protocol version.** Older nodes keep working (they cannot know about a check that postdates them); newer ones wait, visibly, until the last old lease lapses. A rolling deploy converges because that is what a rolling deploy does.
 
-Two consequences worth stating plainly:
+Three consequences worth stating plainly:
 
 - **Lease schema evolution is additive-only.** A column the older build does not select is invisible to it; one it *requires* is a crash.
 - **A downgrade across a protocol bump needs a full drain.** An older build has no protocol check at all, so it will happily take over a newer node's expired leases. Stop the whole fleet before rolling back.
@@ -450,10 +450,11 @@ Two consequences worth stating plainly:
 
 **Duties have a second, narrower rule.** Fleet duties moved out of the seat lease bucket into a [bucket of their own](coordination.md#duties-have-a-bucket-of-their-own), which an older build cannot see. So while any node of a build that still keeps duties with the seat leases is live, newer nodes claim no duty at all (seats are unaffected), logging `coord_kv_duties_wait_for_older_build` once when the wait starts and `coord_kv_duties_resumed` when it ends. The older nodes run the duties they can until they stop. Rolling back across that change needs every newer node stopped first.
 
-The current protocol is **3**, and it has moved twice — each time because holding a lease came to *mean* something a previous build could not honour:
+The current protocol is **4**, and it has moved three times — each time because holding a lease came to *mean* something a previous build could not honour:
 
 - **v2 — the completion ledger.** Holding a seat lease now means consulting and settling the completion ledger. A v1 node cannot: it takes a seat over, never reads the record, and re-runs a turn whose effects already shipped.
 - **v3 — placement.** Holding a seat lease now means "and this node satisfies the seat's `role.placement`". A v2 node has no such concept, so it claims a seat pinned to a node id or a label it does not carry — and *succeeds*, because the lease is only a mutex and knows nothing about where a seat belongs. The operator's pin is silently violated: the seat runs, on the wrong node, with nothing to see.
+- **v4 — windowed token counters.** Holding a seat lease now means charging the seat's rounds to the [windowed token counters](coordination.md#token-budgets-are-windows) — a slot per day, week and month on the company's clock. A v3 node has only the lifetime counter, so beside a v4 node the two builds charge different records: each admits against a figure that is missing what the other build spent, and every cap binds late by exactly that much, with nothing refused to show it. See [the rolling upgrade across the token windows](coordination.md#the-rolling-upgrade-across-the-token-windows).
 
 ## What ownership looks like from outside
 

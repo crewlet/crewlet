@@ -28,8 +28,7 @@ import (
 //
 // So each gesture goes where the state is reachable: through a node that
 // already holds it. `crewlet retention ack`, `evict` and `readmit` are clients
-// of these routes, exactly as `crewlet budgets reset` and `crewlet backup` are
-// of theirs.
+// of these routes, exactly as `crewlet backup` is of its own.
 //
 // # Why they are POSTs even though one of them only publishes a number
 //

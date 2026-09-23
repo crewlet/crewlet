@@ -2,13 +2,42 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/config"
 )
+
+// post runs one POST and returns the status and decoded body.
+func post(t *testing.T, a *api.App, path, token string) (int, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	res := rec.Result()
+	var body map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	return res.StatusCode, body
+}
+
+// guarded is a bootstrap with one token and anonymous reads ON — the default
+// posture, and the one that makes the write/read distinction load-bearing.
+func guarded() *config.Bootstrap {
+	b := config.DefaultBootstrap()
+	b.API.Auth.AllowAnonymousRead = true
+	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "t0ken"}}
+	return &b
+}
 
 // fakeBackup records what the route asked it for.
 type fakeBackup struct {

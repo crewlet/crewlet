@@ -2034,7 +2034,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Card>
                 <Card.Header
                   icon={<TargetGlyph size="sm" />}
-                  subtitle="spend since the last reset, not the 7-day window"
+                  subtitle="the budget window closest to its ceiling, not the 7-day window"
                 >
                   <Card.Title>Live budget meter</Card.Title>
                 </Card.Header>

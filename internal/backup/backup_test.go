@@ -127,7 +127,7 @@ func TestABackupCapturesBothEstates(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
 	seedStream(t, nc, "CREWLET_AGENT", "crewlet.agent.>", 5)
-	seedBucket(t, nc, "crewlet_budgets", "org", "12345")
+	seedBucket(t, nc, "crewlet_token_windows", "org", "12345")
 	db := openStore(t)
 	if err := db.Events().Append(t.Context(), store.EventRecord{
 		ID: "e1", Type: "agent_phase_started", Source: "pm", Time: clock, Category: "task",
@@ -196,7 +196,7 @@ func TestABackupCapturesBothEstates(t *testing.T) {
 	}
 	// The coordination bucket, captured without ever being named as a
 	// bucket: it is a stream, so enumerating streams gets it.
-	bucket, ok := byName["KV_crewlet_budgets"]
+	bucket, ok := byName["KV_crewlet_token_windows"]
 	if !ok {
 		t.Fatalf("the coordination bucket was not captured; got %v", names(manifest.Streams))
 	}

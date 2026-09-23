@@ -1,198 +1,103 @@
 package engine
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"reflect"
-	"regexp"
-	"strings"
+	"context"
+	"errors"
 	"testing"
+	"time"
 
-	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 )
 
-// EVERY REGISTERED EVENT TYPE HAS A PUBLISHER.
-//
-// A type registered and never published is a decode path, a summary renderer,
-// a category row and a documented wire name for a fact nothing produces — and
-// it is INVISIBLE, because a consumer waiting for it is indistinguishable from
-// one whose event has not happened yet. Sixteen of the sixty-one were in that
-// state, and three of them had live consumers that therefore rendered nothing:
-// the dashboard's token header, its seat `terminated` state, and the audit
-// log's line for a node coming up.
-//
-// # Why it reads the SOURCE
-//
-// Because calling every publisher needs a broker, a store, a company and a
-// fleet — which is exactly why this went unnoticed. What a publisher looks
-// like is a composite literal of the payload type outside its own package, so
-// that is what this walks for.
-func TestEveryRegisteredEventTypeIsPublishedSomewhere(t *testing.T) {
-	t.Parallel()
-	producers := payloadLiterals(t)
-	for _, typ := range events.RegisteredTypes() {
-		payload, ok := events.PayloadFor(typ)
-		if !ok {
-			t.Errorf("%q is registered under no Go type", typ)
-			continue
-		}
-		of := reflect.TypeOf(payload).Elem()
-		// ONLY THE SHIPPED VOCABULARY. A test in this module may
-		// register a payload of its own to exercise the registry, and
-		// that one has no publisher by construction.
-		if !strings.HasSuffix(of.PkgPath(), "/internal/events/types") {
-			continue
-		}
-		if name := of.Name(); !producers[name] {
-			t.Errorf("%s (%q) is registered and nothing constructs it: a "+
-				"consumer waiting for it cannot tell that from an event that "+
-				"has not happened yet. Publish it, or retire the type",
-				name, typ)
-		}
-	}
-}
-
-// EVERY DECLARED GUARD KIND HAS A PRODUCER.
-//
-// The same gap as the one above, one level down: a registered event type can
-// carry a value nothing ever writes into it. `unhandled_exception` was
-// declared, documented and given an AFK sentence by the dashboard, and no code
-// path set it, because nothing recovered a panic at all. The registry test
-// cannot see that, since the event type itself had producers for its other
-// kinds.
-//
-// A producer is a breach built with the kind, `Kind: types.GuardX`, in a
-// non-test file: comparing against a kind is reading it, and only a writer
-// makes the value reachable.
-func TestEveryDeclaredGuardKindIsProducedSomewhere(t *testing.T) {
-	t.Parallel()
-	root := moduleRoot(t)
-	declared := guardKinds(t, filepath.Join(root, "internal", "events", "types"))
-	written := sourceMatches(t, root, regexp.MustCompile(`\bKind:\s*types\.(Guard[A-Za-z0-9_]+)\b`))
-	for _, name := range declared {
-		if !written[name] {
-			t.Errorf("types.%s is a declared guard kind and no breach is built "+
-				"with it: a dashboard sentence for it describes a state no seat "+
-				"can reach. Produce it, or retire the kind", name)
-		}
-	}
-}
-
-// guardKinds is every constant the payload package declares as a GuardKind,
-// read from its source so a kind added there is covered without being listed
-// here.
-func guardKinds(t *testing.T, dir string) []string {
+// meteringReporter is a meter loop over a company capped at 1 000 tokens a
+// day that has spent 250 today, with the given lease store — everything a
+// frame reads, and nothing a publish adds.
+func meteringReporter(t *testing.T, leases coord.Backend, now time.Time) *budgetReporter {
 	t.Helper()
-	fset := token.NewFileSet()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read %s: %v", dir, err)
+	fleet := coordmem.NewFleet()
+	windows := coord.WindowsAt(now, time.UTC)
+	if _, err := fleet.PostCharge(t.Context(), coord.AgentScope("x"), 250, windows); err != nil {
+		t.Fatalf("PostCharge: %v", err)
 	}
-	var kinds []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				value, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				if typ, ok := value.Type.(*ast.Ident); ok && typ.Name == "GuardKind" {
-					for _, ident := range value.Names {
-						kinds = append(kinds, ident.Name)
-					}
-				}
-			}
-		}
-	}
-	if len(kinds) == 0 {
-		t.Fatal("no GuardKind constant found, so this test could not fail")
-	}
-	return kinds
+	e := &Engine{backends: &Backends{Coord: leases, Fleet: fleet}}
+	e.epoch.current.Store(meteredCompany(config.TokenBudget{Day: ceiling(1000)}))
+	return &budgetReporter{engine: e}
 }
 
-// sourceMatches is every first submatch of pattern in the module's non-test Go
-// files outside the payloads' own package.
-func sourceMatches(t *testing.T, root string, pattern *regexp.Regexp) map[string]bool {
-	t.Helper()
-	found := map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		switch {
-		case err != nil:
-			return err
-		case d.IsDir():
-			// The payloads' OWN package is skipped: a literal there is
-			// a test fixture or a summary's receiver, not a publisher.
-			if d.Name() == "testdata" || d.Name() == "types" ||
-				strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
-			}
-			return nil
-		case !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
-			return nil
-		}
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for _, m := range pattern.FindAllStringSubmatch(string(body), -1) {
-			found[m[1]] = true
-		}
-		return nil
+// THE METER WAITS FOR THE LAST NODE THAT CHARGES THE LIFETIME COUNTER.
+//
+// During the rolling upgrade that windowed the counters, the older nodes run
+// every seat and charge the lifetime counter, and a newer node claims no seat
+// beside them — so the windowed counters it reads stay empty. Its frames would
+// read the company as having spent nothing, and every dashboard folds each
+// node's frame over the last, so the header would flicker between the two
+// readings for the whole rollout. It publishes nothing until the fleet's floor
+// reaches the windowed protocol, and once it has, it stops asking.
+//
+// Asked of [budgetReporter.frame], the decision [budgetReporter.publish]
+// sends or does not send, rather than of the gate alone: a gate nothing
+// consults passes every test of the gate.
+func TestTheMeterWaitsForTheLastLifetimeCounterNode(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
+	leases := coordmem.New()
+	r := meteringReporter(t, leases, now)
+
+	older, err := leases.TryAcquire(ctx, coord.NodeResource("older"), coord.AcquireOptions{
+		Owner: "older:1", TTL: time.Hour, Ungated: true,
+		Protocol: coord.WindowedCountersProtocol - 1,
 	})
-	if err != nil {
-		t.Fatalf("walk the module: %v", err)
+	if err != nil || older == nil {
+		t.Fatalf("claim the older node's presence = (%v, %v)", older, err)
 	}
-	return found
+	if _, err := leases.TryAcquire(ctx, coord.NodeResource("newer"), coord.AcquireOptions{
+		Owner: "newer:1", TTL: time.Hour, Ungated: true,
+	}); err != nil {
+		t.Fatalf("claim this node's presence: %v", err)
+	}
+	if frame, sent := r.frame(ctx, now); sent {
+		t.Fatalf("the meter would publish %+v from the windowed counters while a node "+
+			"of the lifetime counters' build is live and charging the other one", frame)
+	}
+
+	if released, err := leases.Release(ctx, coord.NodeResource("older"), "older:1", older.Epoch); err != nil || !released {
+		t.Fatalf("release the older node = (%v, %v)", released, err)
+	}
+	frame, sent := r.frame(ctx, now)
+	if !sent {
+		t.Fatal("the meter still publishes nothing after the last older node has gone")
+	}
+	if frame.OrgUsedTokens != 250 || frame.OrgMaxTokens != 1000 {
+		t.Fatalf("frame = %d of %d, want the company's 250 of its 1000 a day",
+			frame.OrgUsedTokens, frame.OrgMaxTokens)
+	}
+	// LATCHED: a floor that has reached the windowed protocol falls again
+	// only by a downgrade, which needs the whole fleet stopped, so the
+	// meter stops paying a lease listing per frame for it.
+	r.engine.backends.Coord = unreadableFloor{leases}
+	if _, sent := r.frame(ctx, now); !sent {
+		t.Fatal("the meter asked the lease store again after it had seen the fleet current")
+	}
 }
 
-// payloadLiterals is every `types.X{` a non-test file in this module writes.
-//
-// A composite literal outside the payload's own package is what a PUBLISHER
-// looks like: the payload types have no constructors, so an event is built by
-// naming the struct. Scanning the source rather than calling anything is the
-// point: the reason this gap survived is that reaching the publishers needs a
-// broker, a store, a company and a fleet.
-func payloadLiterals(t *testing.T) map[string]bool {
-	t.Helper()
-	found := sourceMatches(t, moduleRoot(t),
-		regexp.MustCompile(`\btypes\.([A-Z][A-Za-z0-9_]*)\{`))
-	if len(found) == 0 {
-		t.Fatal("no payload literal found anywhere, so this test could not fail")
+// A FLOOR THAT CANNOT BE READ IS NOT YET: a frame skipped costs one interval of
+// a meter that keeps its last reading, while a frame published from the wrong
+// counter is a reading that is wrong.
+func TestAnUnreadableFloorPublishesNoFrame(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
+	r := meteringReporter(t, unreadableFloor{coordmem.New()}, now)
+	if frame, sent := r.frame(t.Context(), now); sent {
+		t.Fatalf("the meter published %+v on a protocol floor nobody could read", frame)
 	}
-	return found
 }
 
-// moduleRoot is the directory holding go.mod, walking up from this package.
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("working directory: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("no go.mod above the working directory")
-		}
-		dir = parent
-	}
+// unreadableFloor is a lease store whose protocol floor cannot be read.
+type unreadableFloor struct{ coord.Backend }
+
+func (unreadableFloor) FleetProtocolFloor(context.Context) (int, bool, error) {
+	return 0, false, errors.New("the lease store is unreachable")
 }

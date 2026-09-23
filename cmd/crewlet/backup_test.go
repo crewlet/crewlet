@@ -40,7 +40,7 @@ func newBackupNode(t *testing.T) *backupNode {
 				"streams": []map[string]any{
 					{"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
 						"bytes": 4096, "messages": 12},
-					{"name": "KV_crewlet_budgets", "file": "streams/KV_crewlet_budgets.snapshot",
+					{"name": "KV_crewlet_token_windows", "file": "streams/KV_crewlet_token_windows.snapshot",
 						"bytes": 512, "messages": 3},
 				},
 			}
@@ -80,7 +80,7 @@ func TestBackupSendsTheDestinationAndReportsWhatWasCaptured(t *testing.T) {
 	}
 	// A KV bucket is reported as a bucket, not as the KV_ stream it
 	// happens to be stored as — the operator configured buckets.
-	if !strings.Contains(stdout, "bucket crewlet_budgets") {
+	if !strings.Contains(stdout, "bucket crewlet_token_windows") {
 		t.Errorf("the coordination bucket is not named as one:\n%s", stdout)
 	}
 }

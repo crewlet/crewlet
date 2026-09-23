@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -686,26 +687,31 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	// final. Waiting on the org's counter alone read it between the
 	// org's write and the seat's (a charge is two writes, org first), and
 	// failed a correct engine on a loaded machine with the seat at 0.
+	//
+	// Read against the company's day, which is UTC for a company that names
+	// no clock: the day the cap is written for.
 	budgets := n.engine.Backends().Fleet
+	today := func() coord.Windows { return coord.WindowsAt(time.Now(), time.UTC) }
 	waitFor(t, "the company cap to refuse a charge", func() bool {
-		rows, err := budgets.Usage(t.Context())
+		rows, err := budgets.Usage(t.Context(), today())
 		if err != nil {
 			return false
 		}
 		for _, row := range rows {
 			if row.Scope == coord.OrgScope {
-				return !row.RefusedAt.IsZero()
+				return !row.In(period.Day).RefusedAt.IsZero()
 			}
 		}
 		return false
 	})
 
-	used, err := budgets.Used(t.Context(), coord.OrgScope)
+	orgToday, err := budgets.Used(t.Context(), coord.OrgScope, today())
 	if err != nil {
 		t.Fatalf("used: %v", err)
 	}
+	used := orgToday.In(period.Day).Used
 	if used > 200 {
-		t.Errorf("the company spent %d against a cap of 200", used)
+		t.Errorf("the company spent %d against a cap of 200 a day", used)
 	}
 	// And the SEAT's counter moved with it: one charge, both scopes.
 	//
@@ -725,12 +731,12 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	id, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("ceo"))
 	var seatUsed int
 	waitFor(t, "the seat's counter to catch the org's", func() bool {
-		got, err := budgets.Used(t.Context(), coord.AgentScope(id.String()))
+		got, err := budgets.Used(t.Context(), coord.AgentScope(id.String()), today())
 		if err != nil {
 			return false
 		}
-		seatUsed = got
-		return got == used
+		seatUsed = got.In(period.Day).Used
+		return seatUsed == used
 	}, func() string {
 		return fmt.Sprintf("seat spent %d and the org %d; one charge must "+
 			"move both", seatUsed, used)

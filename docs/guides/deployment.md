@@ -726,7 +726,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn loop re-checks the seat fence at the top of every round and again before each of that round's tool calls — so a node that loses the seat mid-turn stops before its next call rather than running out the turn beside the seat's new owner. A turn that finished but whose delivery was never acked is not re-run, because the [completion ledger](../concepts/seat-ownership.md#the-completion-ledger) records what shipped.
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
-- *Token budgets.* A shared counter in the coordination slot, so an org cap of 500 k is 500 k across the fleet — and it covers **every** completion the engine makes on a seat's behalf, the turn loop, the coding sandbox and the auxiliary learning passes alike.
+- *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop, the coding sandbox and the auxiliary learning passes alike.
 - *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the curator).
 - *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
@@ -1305,11 +1305,10 @@ functions the REST routes call, so the two surfaces cannot disagree.
 
 ```bash
 crewlet budgets show      # the durable counters, read from a running node
-crewlet budgets reset     # -scope org, or -scope agent:<id>
 ```
 
-Both talk to a node rather than to a file: the counter is the fleet's, and on
-the default topology it lives inside the running engine. `-url` and `-token`
+It talks to a node rather than to a file: the counters are the fleet's, and on
+the default topology they live inside the running engine. `-url` and `-token`
 name another node; without them they are taken from the `api` block of the
 config on the command line.
 
@@ -1330,8 +1329,10 @@ An absent window is uncapped, and a ceiling of `0` is refused rather than read
 as unlimited. See [Configuration § Token budgets](../getting-started/configuration.md#token-budgets)
 for the rules and for the ceilings `crewlet validate` warns can never bind.
 
-Every model round is charged against both before it runs. A charge that does
-not fit is refused: the turn stops and the engine publishes a
+Every model round is charged against both before it runs, in every window at
+once — the day, the week and the month it falls in on the company's clock —
+and it is admitted only while every capped window of both has room. A charge
+that does not fit is refused: the turn stops and the engine publishes a
 `budget_exhausted` event naming the scope that refused and its figures,
 beside the turn's own `agent_turn_completed`. The
 check is atomic: if the agent's budget refuses, the org-level consumption it
@@ -1339,17 +1340,26 @@ had already charged is rolled back. In a fleet the counters live in the
 coordination slot, so an org cap of 500 k is 500 k across every node rather
 than per process.
 
-A refusal is also recorded beside the counter, as when that scope last refused
-a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
+A window's allowance comes back when the window turns over — at local
+midnight, on Monday, on the 1st — rolled inside the first charge after the
+boundary, so nothing has to run for it and no node has to be up at midnight.
+There is no reset: room before a window turns over is made by raising its
+ceiling, which takes effect on the next turn. See
+[Coordination § Token budgets are windows](../concepts/coordination.md#token-budgets-are-windows).
+
+A refusal is also recorded beside the counter, as when that window last
+refused a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
 and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
-and the next charge the scope admits clears it. That, not a counter at its cap,
+and the next charge the scope admits clears it, as does the window turning
+over. That, not a counter at its cap,
 is what exhausted means: a refused charge increments nothing, so the counter
 stops short of the cap by the size of the round that did not fit.
 
 A coding run is the one spend that cannot be checked first. Its box spends
 while the turn is suspended, so its tokens are known only when the run is
-collected, and they are **post-charged**: added to both counters without a
-check, because no answer can un-spend them. A run that takes a counter past its
+collected, and they are **post-charged**: added to both counters, in the
+windows the run is collected in, without a check, because no answer can
+un-spend them. A run that takes a counter past its
 cap is logged as `sandbox_spend_over_budget`, and the next round the seat or
 the company attempts is refused against the recorded figure.
 

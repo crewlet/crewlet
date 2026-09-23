@@ -141,7 +141,6 @@ func wireAPI(
 		Config:    configSurface,
 		Secrets:   secretSurface,
 		Setup:     setupSurface,
-		Budgets:   backends.Fleet,
 		Retention: backends.Fleet,
 		Capacity:  e,
 		Backup:    copier,

@@ -235,18 +235,21 @@ export interface LiveCall {
 }
 
 /** A live token meter: the fleet's SHARED counter, as the budget gate enforces
- *  it — every node's spend since the last deliberate reset, against the cap in
- *  the active revision. Never comparable to a spend rollup, which is a window
- *  over time rather than the life of a counter. */
+ *  it — every node's spend in one calendar window (the day, ISO week or month
+ *  on the company's clock that is refusing, else the one with the least room
+ *  left), against that window's cap in the active revision. Never comparable
+ *  to a spend rollup, which is a window over time a reader chose rather than
+ *  the window a cap is written for. */
 export interface Meter {
   used: number;
   max: number;
   /** When this scope last turned a charge away, in UTC; empty while it is not
    *  refusing. The gate's own record, kept in the shared counter beside the
    *  spend, so every node reports the same one and it clears on the scope's
-   *  next admitted charge. It is what "exhausted" means: a refused charge
-   *  increments nothing, so `used >= max` is sufficient but never necessary —
-   *  a scope charged in rounds stops short of its cap for ever. */
+   *  next admitted charge or when its window turns over. It is what
+   *  "exhausted" means: a refused charge increments nothing, so
+   *  `used >= max` is sufficient but never necessary — a scope charged in
+   *  rounds stops short of its cap for ever. */
   refused_at?: string;
 }
 

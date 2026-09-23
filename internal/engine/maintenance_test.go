@@ -71,6 +71,13 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// singleton they would be tidied on one node and grow for ever
 		// on the others.
 		"pages_ops",
+		// AND THE LIFETIME TOKEN COUNTERS an earlier build kept, which
+		// nothing in this build reads. Not a sweep: one bucket, deleted
+		// once no node of that build is live. Registered here because a
+		// retirement nothing runs is a bucket that holds a dead company's
+		// spend for the life of the deployment, and nothing else would
+		// ever say so.
+		"retired_budget_bucket",
 		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
 		// their entries is the point. The knowledge base had three —
 		// a change retention, a revision prune and an orphan collector

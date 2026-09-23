@@ -7,10 +7,15 @@ import (
 	"go/parser"
 	"go/token"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
@@ -144,17 +149,44 @@ func TestAFailedCompletionChargesNothing(t *testing.T) {
 	}
 }
 
-// THE PRE-FLIGHT GATE ASKS WITHOUT SPENDING. A probe that charged a token to
-// find out whether it may charge would make the question cost what it is
-// asking about.
-func TestTheBudgetGateProbesWithAZeroCharge(t *testing.T) {
+// THE PRE-FLIGHT GATE DECLINES A SEAT WITH NO ROOM LEFT, AND ASKS WITHOUT
+// SPENDING.
+//
+// It used to ask with a charge of zero tokens, which the counter answers OK
+// without looking — a phase whose provider reported no usage still ran — so
+// the gate had never declined anything: a company at its ceiling kept starting
+// reflection passes and paying for their auxiliary calls until each one's
+// first charge was refused mid-pass.
+func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 	t.Parallel()
-	meter := &countingMeter{}
-	if _, err := meter.Spend(t.Context(), 0); err != nil {
-		t.Fatal(err)
+	ctx := t.Context()
+	fleet := coordmem.NewFleet()
+	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
+	c := meteredCompany(config.TokenBudget{}, lead)
+	e := &Engine{backends: &Backends{Fleet: fleet}}
+	gate := e.learningBudget(c)
+
+	if ok, err := gate(ctx, lead); err != nil || !ok {
+		t.Fatalf("gate with the whole day left = (%v, %v), want (true, nil)", ok, err)
 	}
-	if meter.spent != 0 {
-		t.Errorf("the probe moved the counter by %d", meter.spent)
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	if _, err := fleet.PostCharge(ctx, scopeOf(t, c, lead), 100, windows); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	if ok, err := gate(ctx, lead); err != nil || ok {
+		t.Fatalf("gate with the day spent = (%v, %v), want (false, nil): a pass that "+
+			"starts now spends past the ceiling", ok, err)
+	}
+	// And asking moved nothing.
+	u, err := fleet.Used(ctx, scopeOf(t, c, lead), windows)
+	if err != nil || u.In(period.Day).Used != 100 {
+		t.Fatalf("the seat's day = (%+v, %v) after two questions, want the 100 spent",
+			u.In(period.Day), err)
+	}
+	// A seat nothing caps is never declined.
+	free := &org.Role{Name: "Free"}
+	if ok, err := e.learningBudget(meteredCompany(config.TokenBudget{}, free))(ctx, free); err != nil || !ok {
+		t.Fatalf("gate for an uncapped seat = (%v, %v), want (true, nil)", ok, err)
 	}
 }
 

@@ -203,7 +203,8 @@ Usage:
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet migrate [config]    Apply pending schema migrations (-check reports only)
-  crewlet budgets <cmd>       Show or reset the durable token counters
+  crewlet budgets show        Show the durable token counters, with the calendar
+                              window each scope is closest to its ceiling in
   crewlet backup -dir PATH    Copy this node's store and stream estate, through
                               the running engine, to a path on ITS host
   crewlet retention <cmd>     What the state log is holding, why it is not
@@ -1674,12 +1675,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Retention: nativeRetention(ctx, e),
 			NodeID:    nodeID,
 		},
-		// The WRITE half of the counter, for POST /budgets/reset. On the
-		// default topology the coordination store is this engine's own
-		// embedded broker, so a node that is running is the only thing
-		// that can reach it — which is why the reset is a route and not
-		// only a CLI subcommand.
-		Budgets: e.Backends().Fleet,
 		// The fleet's record of what the log may delete, for the one
 		// retention gesture the engine cannot make on its own: an
 		// operator's assertion that a copy has left the host.

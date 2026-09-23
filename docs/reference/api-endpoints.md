@@ -37,7 +37,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
 | `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
-| Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, `POST /operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
+| Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/work/*` writes, `POST /operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
 `/operator/mcp` is the one route the by-method rule splits, because it is mounted for every verb: its `POST` — every JSON-RPC call, reads included — is refused, and its `GET` server-to-client stream is served like any other read. Its `DELETE`, which ends a session, rides the default with the writes; the session dies with the listener a moment later either way. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
@@ -74,8 +74,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
-| `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
-| `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
+| `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against — per calendar window — and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
@@ -1544,25 +1543,29 @@ Two refusals, both **400** rather than a smaller answer:
 
 ### The live token meter
 
-`budget` carries the fleet's **shared token counter** as the budget gate
-enforces it: every node's spend since the last deliberate reset
-(`POST /budgets/reset`), beside the cap in the active revision — the tightest
-window the scope's `token_budget` caps, which is the one the counter is held
-to. It is the only
-figure that can honestly be divided into a configured cap, because both cover
-the same span. The dashboard's other token figures are spend rollups over a
-window of time; dividing one of those into a cap produces a percentage that is
-wrong by however much was spent outside the window.
+`budget` carries the fleet's **shared token counters** as the budget gate
+enforces them: every node's spend in **one calendar window** per scope — the
+day, ISO week or month on the company's clock that is refusing charges (where
+several are, the one that ends last, which is the window the refusal named),
+else the capped window with the least room left — beside that window's cap in
+the active revision. It is the only figure that can honestly be divided into a
+configured cap, because both cover the same span. A scope that caps no window
+carries its spend this month under a cap of `0`. The dashboard's other token
+figures are spend rollups over a window of time the reader chose; dividing one
+of those into a cap produces a percentage that is wrong by however much was
+spent outside the window.
 
-Every node publishes a `budget_reported` snapshot of the counter every
+Every node publishes a `budget_reported` snapshot of the counters every
 **15 seconds** (`engine.BudgetReportInterval`), and the projection folds each
-one in as it arrives. A company with no cap anywhere publishes none.
+one in as it arrives. A company with no cap anywhere publishes none, and
+neither does a node while any node of a build before the windowed counters is
+still live — see [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows).
 
 - `meter_id` identifies the node incarnation whose report is held. Every node
   reads the same counter, so reports under different ids describe the same
   figures read at different moments. A report is a complete snapshot, so a
   consumer **replaces** what it holds rather than merging or taking a
-  maximum: a reset has to be able to lower the figure.
+  maximum: a window turning over has to be able to lower the figure.
 - `seq` is monotonic within a `meter_id`. The feed it arrives on is
   **best-effort**: an ephemeral broadcast subscription that takes no acks,
   starts at the stream's tail on every (re)connect, and lets a slow consumer
@@ -1570,12 +1573,12 @@ one in as it arrives. A company with no cap anywhere publishes none.
   from the same meter is dropped, a report from another meter that was read
   **earlier** than the held one is dropped, and a gap is closed by the next
   report rather than replayed.
-- `refused_at` is when the cap last turned a charge away, in UTC, and empty
-  while the scope is not refusing. That, and not `used >= max`, is what
-  "exhausted" means: a refused charge increments nothing, so the counter stops
-  short of the cap by the size of the round that would not fit. The stamp is
-  kept in the shared counter beside the spend, so every node reports the same
-  one, and it clears on the scope's next admitted charge (or a reset).
+- `refused_at` is when the window last turned a charge away, in UTC, and empty
+  while it is not refusing. That, and not `used >= max`, is what "exhausted"
+  means: a refused charge increments nothing, so the counter stops short of the
+  cap by the size of the round that would not fit. The stamp is kept in the
+  shared counter beside the spend, so every node reports the same one, and it
+  clears on the scope's next admitted charge or when the window turns over.
 - `{}` means no report has arrived yet. Per-agent, `budget: null` means the
   same, or that the seat has no per-agent cap at all: the engine meters a seat
   only when its `token_budget` caps a window.
@@ -2469,7 +2472,7 @@ claim, and a store blip is not evidence for it.
   "nodes": [
     {
       "id": "core-1", "roles": ["ingress", "seats", "workers"], "labels": {},
-      "owner": "core-1:8f2a", "protocol": 3, "seats": 4, "expires_in": 41.2,
+      "owner": "core-1:8f2a", "protocol": 4, "seats": 4, "expires_in": 41.2,
       "config_epoch": 7, "config_status": "ok", "config_error": ""
     }
   ],
@@ -2557,28 +2560,37 @@ claim and a store blip is not evidence for it.
 ### `GET /budgets`
 
 Backs the dashboard's **Spend & budgets** screen. A token budget is described by
-two numbers that share a span, and one stamp:
+two numbers that share a span, and one stamp — all three about **one calendar
+window** per scope:
 
-- the **cap** is configuration, from the active company revision: the
-  tightest window the scope's `token_budget` caps (`max_tokens`), because the
-  counter keeps one figure per scope and that is the ceiling it is held to,
-  and `0` when the scope caps no window;
-- **durable usage** is the fleet's shared counter, in the
-  [coordination store](../concepts/coordination.md), written by every node
-  running the company and surviving restarts, until an operator resets it. It
-  is what the engine actually enforces against, and it is the same counter the
+- the **cap** is configuration, from the active company revision: the ceiling
+  of the window this row describes (`max_tokens`), and `0` when the scope caps
+  no window;
+- **durable usage** is the fleet's shared counter for that window, in the
+  [coordination store](../concepts/coordination.md#token-budgets-are-windows),
+  written by every node running the company and surviving restarts. It is what
+  the engine actually enforces against, and it is the same counter the
   [live token meter](#the-live-token-meter) pushes;
-- **`refused_at`** is when that scope last turned a charge away, kept in the
-  same counter and cleared by the scope's next admitted charge — or by
-  [`POST /budgets/reset`](#post-budgetsreset), which drops the counter and the
-  stamp together, since an operator who zeroes a counter has made room.
+- **`refused_at`** is when that window last turned a charge away, kept in the
+  same counter and cleared by the scope's next admitted charge or by the window
+  turning over.
 
-What a seat *spent over a window* is not here: that is the per-agent row of the
-[spend breakdown](#get-tokensbreakdown), a different span that must not be
-divided into a cap. The cap and the durable counter are the pair that can be,
-which is how this screen can say "this seat has burned 94% of its cap across two
-restarts". That was reachable only from `crewlet budgets show` before, which is
-itself a client of this route.
+The window is the one the scope is **refusing** in — where several are, the one
+that ends last, which is the window the refusal itself named — else the capped
+window with the **least room left**: the day, the ISO week or the month on the
+company's clock, cut at the moment of the answer, so the cap is never drawn
+beside another window's spend. Where the counter is already on a **later**
+window than that moment — a peer's clock a few seconds ahead across a boundary,
+or the company's `timezone` moved west — the row states the later window's
+spend, because that is what the gate refuses against. A scope that caps no
+window reports its spend this month. Each window's allowance comes back when it turns over; there is no route
+that resets a counter, and room before then is made by raising the ceiling.
+
+What a seat *spent over a window you choose* is not here: that is the per-agent
+row of the [spend breakdown](#get-tokensbreakdown), a different span that must
+not be divided into a cap. The cap and the durable counter are the pair that
+can be, which is how this screen can say "this seat has burned 94% of today's
+cap across two restarts". `crewlet budgets show` is a client of this route.
 
 ```json
 {
@@ -2613,36 +2625,6 @@ shows a permanently blocked seat at 99% and calls it healthy. A scope known
 only for a refusal (refused on its very first charge) is listed with no spend
 and an empty `durable_updated_at`.
 
-### `POST /budgets/reset`
-
-Zeroes the fleet's token counter. `?scope=` names one (`org`, `agent:<id>`);
-its absence clears every one.
-
-```bash
-curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
-  "http://localhost:8080/budgets/reset?scope=agent:<uuid>"
-```
-
-```json
-{"cleared": 1, "scopes": ["agent:<uuid>"]}
-```
-
-The answer **names what it cleared** rather than only counting it: this is an
-irreversible action against a spend ceiling, and a bare count leaves an
-operator unable to tell "reset the seat I meant" from "reset a scope that was
-already empty".
-
-This route exists because the counter is fleet state. On the default topology
-the [coordination store](../concepts/coordination.md) is the engine's own
-embedded broker, so a running node is the only thing that can reach it —
-which is why `crewlet budgets reset` is a client of this route rather than a
-command that opens a file.
-
-One refusal, deliberate: **401 without a token.** `allow_anonymous_read` is on
-by default and opens the whole read surface; a reset is a write, so it is never
-eligible. There is no "no counter here" refusal beside it, because every node
-opens the fleet's coordination store that holds the counter.
-
 ### `POST /backup`
 
 Copies this node's durable state — its store file, and every JetStream stream
@@ -2675,10 +2657,11 @@ The answer is the **manifest**, which is also written into the directory as
 failure anywhere leaves the directory without one, because a backup missing an
 estate is unrestorable rather than partial.
 
-This route exists for the same reason the budget reset does, twice over. The
-store is locked to the engine's process and the driver refuses a second
-process on a database file, so nothing outside can read it; the embedded
-broker binds no socket, so nothing outside can reach the stream estate either.
+This route exists because the state it copies is reachable only from inside
+the engine, twice over. The store is locked to the engine's process and the
+driver refuses a second process on a database file, so nothing outside can read
+it; the embedded broker binds no socket, so nothing outside can reach the stream
+estate either.
 `crewlet backup` is a client of this route.
 
 It is **synchronous and can take a while** — the duration is a property of the

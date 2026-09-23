@@ -53,10 +53,6 @@ type App struct {
 	// queries is the read surface both transports answer from.
 	queries *queries.Registry
 
-	// budgets is the fleet's token counter, for the one route that WRITES
-	// to it.
-	budgets budgetResetter
-
 	// backup takes a copy of this node's durable state.
 	backup backupTaker
 
@@ -200,13 +196,6 @@ type Options struct {
 	// as the author.
 	Operator *opsmcp.Server
 
-	// Budgets is the fleet's token counter. Supplied separately from
-	// Sources.Budget, which is the READ half: a reset is an operator
-	// action against a spend ceiling, and giving the read surface a
-	// method that clears one would put it a typo away from every screen
-	// that renders spend.
-	Budgets budgetResetter
-
 	// Retention is the fleet's record of what the log may delete, for the
 	// operator's backup acknowledgement.
 	Retention retentionWriter
@@ -318,7 +307,6 @@ func New(opts Options) (*App, error) {
 	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
-	a.budgets = opts.Budgets
 	a.backup = opts.Backup
 	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
 	a.capacity = opts.Capacity
@@ -330,13 +318,9 @@ func New(opts Options) (*App, error) {
 	// The NAMED read routes — the public REST API. Adapters over the same
 	// registry the generic form above reaches; see rest.go.
 	a.mountReads(mux)
-	// The one WRITE outside /config and the webhook edge. A POST, so the
-	// anonymous-read posture never opens it: clearing a company's spend
-	// ceiling is not a read, whatever a laptop deployment allows.
-	mux.Handle("POST /budgets/reset", http.HandlerFunc(a.serveBudgetReset))
-	// Also a POST, and for the same reason: copying every credential and
-	// every seat's memory to a path the caller names is not a read,
-	// whatever the anonymous-read posture allows.
+	// A POST, so the anonymous-read posture never opens it: copying every
+	// credential and every seat's memory to a path the caller names is not
+	// a read, whatever a laptop deployment allows.
 	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
 	// The three retention gestures that write. POSTs for the same reason:
 	// moving the floor the trim deletes against, stopping a machine
@@ -428,7 +412,6 @@ func (o Options) missing() error {
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
-		{"Budgets", o.Budgets == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
 		{"Backup", o.Backup == nil},

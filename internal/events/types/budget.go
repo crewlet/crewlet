@@ -62,9 +62,14 @@ func (e BudgetExhausted) SummaryFor(actor string) string {
 // BudgetMeter is one metered seat inside a BudgetReported snapshot.
 //
 // Only seats with a per-agent budget appear: the engine seeds a meter solely
-// for a non-zero role token budget, so absence means "no cap and no meter" — a
-// different fact from a cap of zero, and one a consumer must not draw as an
-// empty bar.
+// for a seat whose `token_budget` caps a window, so absence means "no cap and
+// no meter" — a different fact from a cap of zero, and one a consumer must not
+// draw as an empty bar.
+//
+// ONE WINDOW per meter: the scope's binding window (coord.Usage.Binding) — a
+// window that is refusing, else the capped window with the least room left —
+// so UsedTokens, MaxTokens and RefusedAt always describe the same calendar
+// window and a cap is never drawn over another window's spend.
 type BudgetMeter struct {
 	AgentID string `json:"agent_id"`
 	// Role rides along because the engine already knows it and every consumer
@@ -73,13 +78,14 @@ type BudgetMeter struct {
 	Role       string `json:"role"`
 	UsedTokens int    `json:"used_tokens"`
 	MaxTokens  int    `json:"max_tokens"`
-	// RefusedAt is when the cap last turned a charge away, as RFC 3339 in UTC,
-	// and empty while the scope is not refusing. That, not UsedTokens >=
+	// RefusedAt is when the window last turned a charge away, as RFC 3339 in
+	// UTC, and empty while it is not refusing. That, not UsedTokens >=
 	// MaxTokens, is what "exhausted" means: a refused charge increments
 	// nothing, so the counter stops short of the cap by the size of the round
 	// that would not fit. It is the shared counter's own stamp
-	// (coord.Usage.RefusedAt), cleared by the scope's next admitted charge,
-	// so every node reports the same one.
+	// (coord.WindowUsage.RefusedAt), cleared by the scope's next admitted
+	// charge and by the window turning over, so every node reports the same
+	// one.
 	RefusedAt string `json:"refused_at"`
 }
 
@@ -89,7 +95,8 @@ type BudgetMeter struct {
 // It exists because the dashboard's header renders the company's headroom
 // from a websocket push: a screen open while a company works has to move as
 // the company spends, and the spend rollups it already has cover windows of
-// time rather than the life of the counter, so they cannot substitute.
+// time chosen by the reader rather than the calendar window a cap is written
+// for, so they cannot substitute.
 // `GET /budgets` answers the same counters on demand, for a screen that is
 // read rather than watched.
 //
@@ -104,8 +111,8 @@ type BudgetReported struct {
 	// the same shared counter, so reports under different ids describe one
 	// set of figures read at different moments. A report is a complete
 	// snapshot, so consumers REPLACE what they hold, never merge or take a
-	// maximum, or a reset would leave a high-water mark no later report
-	// could clear.
+	// maximum, or a window turning over would leave a high-water mark no
+	// later report could clear.
 	MeterID string `json:"meter_id"`
 	// Seq is monotonic within MeterID, and the reorder guard between one
 	// node's reports. Broker ordering holds only within a topic and a
@@ -113,7 +120,10 @@ type BudgetReported struct {
 	// arrive after a newer one and walk the meter backwards. Two meters'
 	// sequences are unrelated, so between nodes the envelope's timestamp,
 	// which is when the counter was read, is the guard instead.
-	Seq           int `json:"seq"`
+	Seq int `json:"seq"`
+	// OrgUsedTokens and OrgMaxTokens are the company's binding window, as
+	// a [BudgetMeter]'s are; for a company that caps no window, its month's
+	// spend under a max of 0.
 	OrgUsedTokens int `json:"org_used_tokens"`
 	OrgMaxTokens  int `json:"org_max_tokens"`
 	// OrgRefusedAt is [BudgetMeter.RefusedAt] for the company-wide scope.

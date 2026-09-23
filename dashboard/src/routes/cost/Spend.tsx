@@ -6,8 +6,9 @@
  *  - the **spend rollup** is a WINDOW (24 hours by default, up to 30 days) over
  *    what the company's model calls consumed;
  *  - a **meter** is the fleet's shared counter as the budget gate enforces it:
- *    every node's spend since the last deliberate reset, against the cap in the
- *    company revision. It is the one figure a cap can be divided into.
+ *    every node's spend in ONE calendar window — the one closest to its
+ *    ceiling, or refusing — against that window's cap in the company revision.
+ *    It is the one figure a cap can be divided into.
  *
  * They are never comparable, and every number here says which it is.
  *
@@ -406,7 +407,7 @@ export function Spend() {
         <Card>
           <Card.Header
             icon={<TargetGlyph size="sm" />}
-            subtitle="spend since the last reset, not the window above"
+            subtitle="the budget window closest to its ceiling, not the window above"
             // THE GATE'S OWN WORD FIRST. `refused_at` is stamped when a charge
             // is actually turned away; `used >= max` is sufficient but never
             // necessary, because a refused charge increments nothing and a

@@ -257,10 +257,12 @@ can never refuse a turn, because another ceiling is always reached first:
   that holds it (a seat's day against the company's month) — everything a seat spends is
   the company's spend too.
 
-Spend is counted in the fleet's [coordination store](../concepts/coordination.md), so it
-survives restarts and is one number for the whole company however many nodes run it; see
-[Deployment § Token Budgets](../guides/deployment.md#token-budgets) for how a refusal is
-recorded and reported.
+Spend is counted in the fleet's [coordination store](../concepts/coordination.md#token-budgets-are-windows),
+one figure per window, so it survives restarts and is one number for the whole company however
+many nodes run it. There is **no reset**: a
+window's allowance comes back when the window turns over, and room before then is made by
+raising its ceiling. See [Deployment § Token Budgets](../guides/deployment.md#token-budgets)
+for how a refusal is recorded and reported.
 
 ### Scheduling
 

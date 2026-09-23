@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -633,8 +634,9 @@ func TestTheFleetStoreSurvivesARestartOnLocalCoordination(t *testing.T) {
 	}
 
 	first := mk()
-	if _, err := first.Fleet.Charge(t.Context(), coord.AgentScope("a-1"), 900, 0, 0); err != nil {
-		t.Fatalf("Charge: %v", err)
+	windows := coord.WindowsAt(time.Now(), time.UTC)
+	if _, err := first.Fleet.PostCharge(t.Context(), coord.AgentScope("a-1"), 900, windows); err != nil {
+		t.Fatalf("PostCharge: %v", err)
 	}
 	if err := first.Fleet.OpenChannel(t.Context(), coord.Channel{
 		ID: "c1", Requester: "alice", Target: "bob",
@@ -649,9 +651,11 @@ func TestTheFleetStoreSurvivesARestartOnLocalCoordination(t *testing.T) {
 
 	second := mk()
 	t.Cleanup(func() { second.Close(t.Context()) })
-	if used, err := second.Fleet.Used(t.Context(), coord.OrgScope); err != nil || used != 900 {
-		t.Errorf("org spend after a restart = %d (err %v), want 900 — the cap is a "+
-			"ceiling for the deployment's life, not for one process", used, err)
+	if used, err := second.Fleet.Used(t.Context(), coord.OrgScope, windows); err != nil ||
+		used.In(period.Month).Used != 900 {
+		t.Errorf("org spend after a restart = %+v (err %v), want 900 this month — a "+
+			"window's spend belongs to the window, not to the process that charged it",
+			used, err)
 	}
 	if _, found, err := second.Fleet.Channel(t.Context(), "c1"); err != nil || !found {
 		t.Errorf("the open ask did not survive the restart (found=%v err=%v) — "+

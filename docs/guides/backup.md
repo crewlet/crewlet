@@ -17,11 +17,11 @@ crewlet backup -dir /var/backups/crewlet/2026-08-30T18-00
 ```
 Backup written to /var/backups/crewlet/2026-08-30T18-00 on node-0 in 1.412s
 
-WHAT                     FILE                                  SIZE       CONTENTS
-store (node)             store.db                              252.0 KiB  20 migrations
-store (replicated)       store-replicated.db                   1.2 MiB    3 migrations
-stream CREWLET_AGENT     streams/CREWLET_AGENT.snapshot        1.1 KiB    5 messages
-bucket crewlet_budgets   streams/KV_crewlet_budgets.snapshot   512 B      3 messages
+WHAT                          FILE                                       SIZE       CONTENTS
+store (node)                  store.db                                   252.0 KiB  20 migrations
+store (replicated)            store-replicated.db                        1.2 MiB    3 migrations
+stream CREWLET_AGENT          streams/CREWLET_AGENT.snapshot             1.1 KiB    5 messages
+bucket crewlet_token_windows  streams/KV_crewlet_token_windows.snapshot  512 B      3 messages
 …
 ```
 
@@ -367,9 +367,11 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   re-provisioning** — secrets resolve store-first-env-second so a brand-new
   node starts from the environment, and every stream, bucket and mailbox is
   created idempotently at boot — at the price of the non-rebuildables above:
-  budget counters reset (a company somebody stopped on purpose re-arms
-  silently), sandbox-run records vanish (a billed box leaks until its own
-  TTL), and the completion ledger forgets (bounded duplicate turns).
+  the token counters lose the current day's, week's and month's spend (every
+  capped window re-arms silently — a company or seat that had spent its
+  ceiling gets the whole allowance back until that window turns over),
+  sandbox-run records vanish (a billed box leaks until its own TTL), and the
+  completion ledger forgets (bounded duplicate turns).
 
 ## What not to do
 

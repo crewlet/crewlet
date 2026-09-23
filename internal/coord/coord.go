@@ -25,8 +25,10 @@
 //     not merely idle — it raises everyone else's share.
 //
 // What belongs here rather than in a node's own database is ADR-0003, the
-// tri-state below is ADR-0005, and why [ProtocolVersion] REFUSES an older
-// peer where an event envelope round-trips one is ADR-0016.
+// tri-state below is ADR-0005, why [ProtocolVersion] REFUSES an older
+// peer where an event envelope round-trips one is ADR-0016, and why a token
+// budget is counted per calendar window — rolled inside the charge that
+// crosses a boundary, with no reset — is ADR-0019 (budget.go).
 //
 // Three rules carry the correctness of everything above:
 //
@@ -162,10 +164,14 @@ import (
 //
 // Bump this when the MEANING of holding a lease changes, never when
 // something merely gains a field. The history: v2 = holding a seat means
-// consulting the completion ledger; v3 = claiming
-// a seat means this node satisfies the role's placement. Both were silent
-// corruption in a mixed fleet, which is the bar.
-const ProtocolVersion = 3
+// consulting the completion ledger; v3 = claiming a seat means this node
+// satisfies the role's placement; v4 = running a seat means charging its
+// rounds to the WINDOWED token counters ([WindowedCountersProtocol]). Every
+// one was silent corruption in a mixed fleet, which is the bar: a v3 node and
+// a v4 node running seats side by side would each charge a different counter,
+// so each would see only its own share of the company's spend and every cap
+// would bind late — by as much as the other build had spent.
+const ProtocolVersion = 4
 
 // ErrUnavailable is the canonical "store could not answer" error. Backends
 // wrap their transport failures in it. Callers should not switch on it —
