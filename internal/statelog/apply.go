@@ -151,6 +151,10 @@ type RunnerDeps struct {
 
 	// Now is the clock, injectable so a test can drive the time budget.
 	Now func() time.Time
+
+	// Witness is told about a record this runner would not authenticate.
+	// Optional; see [Witness].
+	Witness Witness
 }
 
 // Runner is one domain's apply loop: one goroutine, one pinned connection, one
@@ -182,6 +186,11 @@ type Runner struct {
 	opts     ApplyOptions
 	created  time.Time
 	gen      uint32
+
+	// witnessTo and witnessedKeys are the audit half of a refusal; see
+	// [Witness].
+	witnessTo     Witness
+	witnessedKeys witnessed
 
 	waiters waiters
 
@@ -290,6 +299,8 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		now:      now,
 		created:  d.StreamCreatedAt,
 		gen:      d.Generation,
+
+		witnessTo: d.Witness,
 		opts: ApplyOptions{
 			ArbitratedKinds: spec.ArbitratedKinds,
 			Epoch:           d.Epoch,
@@ -779,11 +790,21 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 			// build that authenticated it, not by one that
 			// remembered an earlier build had looked at it.
 			body, verdict := r.verifier.Open(row.payload)
+			at := Position{
+				Stream:     r.spec.Name,
+				Generation: uint32(row.position / GenerationStride),
+				Seq:        uint64(row.position % GenerationStride),
+			}
 			switch verdict {
 			case KeyUnknown:
+				// STILL UNREADABLE, and said once per key for this
+				// process: after a restart this is the only place
+				// the node meets the record again.
+				r.witness(ctx, verdict, row.payload, at)
 				kept++
 				continue
 			case Tampered:
+				r.witness(ctx, verdict, row.payload, at)
 				return fmt.Errorf("%w: %s's retained record at packed position %d is "+
 					"not signed by this fleet — it was filed under a key this node "+
 					"did not hold and now fails under one it does",
@@ -797,11 +818,7 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 			}
 			rec := Record{
 				Envelope: env,
-				Position: Position{
-					Stream:     r.spec.Name,
-					Generation: uint32(row.position / GenerationStride),
-					Seq:        uint64(row.position % GenerationStride),
-				},
+				Position: at,
 				Payload:  body,
 				framed:   row.payload,
 				StoredAt: row.storedAt,
@@ -982,6 +999,13 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 		// payload to a domain's decoder is handing it to the one place
 		// that parses attacker-controlled bytes.
 		body, verdict := r.verifier.Open(m.Payload)
+		if verdict != Verified {
+			// OUTSIDE THE TRANSACTION, where the refusal is decided:
+			// the retention that follows for an unknown key runs in a
+			// body the store may run twice.
+			r.witness(ctx, verdict, m.Payload,
+				Position{Stream: r.spec.Name, Generation: r.gen, Seq: m.Seq})
+		}
 		if verdict == Tampered {
 			// PERMANENT, and it stops the loop. A record whose MAC
 			// fails under a key this fleet holds was written by

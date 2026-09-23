@@ -310,7 +310,10 @@ iam_token_overreach        # a Tier A token refused by a route, coalesced the
 iam_recovery_code_used     # and how many the person has left
 iam_session_generation_bumped   # every session in the company ended
 statelog_record_unverifiable    # a state-log record signed under a key this
-                                # node does not hold; retained until it does
+                                # node does not hold; nothing under it applies
+                                # until it does. Once per domain and key id
+                                # per node process, at most 16 ids — the id is
+                                # whatever the frame says
 statelog_record_tampered        # a record whose signature fails under a key
                                 # this node holds; the applier stopped
 

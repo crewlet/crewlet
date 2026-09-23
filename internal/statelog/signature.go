@@ -271,6 +271,17 @@ func (v *Verifier) KeyIDs() []string {
 	return out
 }
 
+// frameKeyID is the key id a frame names, or empty when the bytes are not a
+// frame. It authenticates nothing: it is what a refusal REPORTS, and the id is
+// whatever the writer put there.
+func frameKeyID(framed []byte) string {
+	id, _, _, ok := splitFrame(framed)
+	if !ok {
+		return ""
+	}
+	return id
+}
+
 // splitFrame parses a frame without trusting any length it declares.
 func splitFrame(framed []byte) (id string, mac, body []byte, ok bool) {
 	const head = len(frameMagic) + 2

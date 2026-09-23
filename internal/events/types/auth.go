@@ -708,7 +708,9 @@ func (e IAMSessionGenerationBumped) Summary() string {
 // RecordUnverifiable is a record on a state log signed under a key this node's
 // keyring does not hold. It is RETAINED and reprocessed once the key arrives —
 // expected briefly during a keyring rotation, and an operator error if it
-// persists.
+// persists. (A record that installs an apply gate is the exception: that one
+// stops the domain's applier, because a gate this node cannot authenticate
+// would license every record above it.)
 //
 // # Named for the framework, not for identity
 //
@@ -722,9 +724,10 @@ func (e IAMSessionGenerationBumped) Summary() string {
 // what the same framework calls a record retained for its key. The domain is a
 // field.
 //
-// ONCE PER DOMAIN AND KEY ID PER NODE, for as long as the process runs, with a
-// cap on distinct key ids stated where it is enforced: a key id is whatever
-// the frame says, and whoever can reach a cluster port can write frames.
+// ONCE PER DOMAIN AND KEY ID PER NODE PROCESS, and at most
+// statelog.MaxWitnessedKeys distinct ids per domain: a key id is whatever the
+// frame says, and whoever can reach a cluster port can write frames. The cap
+// is what keeps this type's rate the engine's rather than that writer's.
 type RecordUnverifiable struct {
 	Domain string `json:"domain"`
 	KeyID  string `json:"key_id"`
@@ -733,7 +736,7 @@ type RecordUnverifiable struct {
 	// half of the comparison an operator needs to fix it.
 	Held []string `json:"held,omitempty"`
 
-	// Position is where the first such record sat.
+	// Position is where the first such record sat, as `stream@generation:seq`.
 	Position string `json:"position"`
 }
 
@@ -743,8 +746,8 @@ func (RecordUnverifiable) EventType() string { return "statelog_record_unverifia
 // Summary names the key and what this node holds instead.
 func (e RecordUnverifiable) Summary() string {
 	return fmt.Sprintf("%s record signed under key %q, which this node does not "+
-		"hold (it holds %s); retained until it does", orSomebody(e.Domain, "A"),
-		e.KeyID, heldKeys(e.Held))
+		"hold (it holds %s); nothing under it is applied until it does",
+		orSomebody(e.Domain, "A"), e.KeyID, heldKeys(e.Held))
 }
 
 // RecordTampered is a record on a state log whose signature fails under a key
@@ -760,8 +763,9 @@ type RecordTampered struct {
 	KeyID  string   `json:"key_id"`
 	Held   []string `json:"held,omitempty"`
 
-	// Position is where the record sat: the log sequence, since a record
-	// this node refused was never given a position of its own.
+	// Position is where the record sat, as `stream@generation:seq`: the
+	// log's own coordinates, since a record this node refused was never
+	// applied at a position of its own.
 	Position string `json:"position"`
 }
 

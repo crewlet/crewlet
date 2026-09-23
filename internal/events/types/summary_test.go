@@ -205,11 +205,11 @@ func TestSummaries(t *testing.T) {
 		payload: RecordUnverifiable{Domain: "iam", KeyID: "k3",
 			Held: []string{"k2", "k1"}},
 		want: `iam record signed under key "k3", which this node does not hold ` +
-			`(it holds k1, k2); retained until it does`,
+			`(it holds k1, k2); nothing under it is applied until it does`,
 	}, {
 		name:    "a frame that is not a frame names no key",
-		payload: RecordTampered{Domain: "tracker", Position: "seq 918"},
-		want:    "tracker record at seq 918 fails its signature under no key (not a signed frame); the applier stopped",
+		payload: RecordTampered{Domain: "tracker", Position: "CREWLET_TRACKER_LOG@1:918"},
+		want:    "tracker record at CREWLET_TRACKER_LOG@1:918 fails its signature under no key (not a signed frame); the applier stopped",
 	}, {
 		name:    "a spent recovery code says how many are left",
 		payload: IAMRecoveryCodeUsed{Login: "jane.doe", Remaining: 0},
