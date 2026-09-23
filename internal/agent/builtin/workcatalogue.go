@@ -181,7 +181,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		}
 		result, err := writer.WriteTypes(ctx, statelog.NewOpID(time.Now(), "types"), types)
 		if err != nil {
-			return failed(writeFailure(tracker.WriteWorkCatalogueTool, err)), nil
+			return failed(writeFailure(actor, tracker.WriteWorkCatalogueTool, err)), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		out["types"] = map[string]any{
@@ -196,7 +196,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		}
 		result, err := writer.WriteFields(ctx, statelog.NewOpID(time.Now(), "fields"), fields)
 		if err != nil {
-			return failed(writeFailure(tracker.WriteWorkCatalogueTool, err)), nil
+			return failed(writeFailure(actor, tracker.WriteWorkCatalogueTool, err)), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		out["fields"] = map[string]any{

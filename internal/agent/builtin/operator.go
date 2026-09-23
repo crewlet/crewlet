@@ -70,6 +70,12 @@ type OperatorDeps struct {
 // two boots of one config advertise the same list.
 func OperatorTools(deps OperatorDeps) []tools.Callable {
 	work, pages := deps.Work, deps.Pages
+	// A CALL HERE IS AN OPERATION ITS CALLER HOLDS, because there is no
+	// turn to derive one from: every write answers with its `op_id`, and
+	// the call brought back with it is that operation again. See
+	// [WorkDeps.bindOperation] — and this is the only place that says so,
+	// because it is a fact about this surface rather than a setting.
+	work.callerOperations = true
 	candidates := []struct {
 		tool tools.Callable
 		on   bool

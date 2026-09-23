@@ -1996,6 +1996,23 @@ board over `GET /work/items` is served an answer that includes it rather than
 whatever this node happened to hold. The tools' own reads need none of it —
 they read `linearizable` — but the answer travels to a client that does not.
 
+A write's answer here also carries **`op_id`**: the operation that call *was*.
+A seat's writes derive their operation ids from its turn, so a seat repeating a
+call is the same operation; a call here has no turn, so each one is minted an
+operation of its own and told it. To finish a write that came back `unknown`,
+or a gesture that stopped part of the way through, send the call again with
+exactly the same arguments and that `op_id` — every write it makes is then the
+same operation again, a created item or a new comment or saved view included,
+answered from the ledger where it landed and finished where it did not. A call
+without one is a new operation: repeated, a create files a second item. The
+argument is offered by `create_work_item`, `update_work_item`,
+`comment_on_work_item`, `merge_work_item`, `remove_work_item`,
+`restore_work_item`, `set_priorities`, `set_pins`, `mark_inbox` and
+`save_work_view`, and held to the rule the purge and gate routes hold theirs
+to: an id this engine minted, at most 128 bytes of visible ASCII — anything
+else is refused naming `op_id`. Under the same `op_id`, different arguments
+are answered as the first call rather than applied.
+
 The one field that differs is **who the call acts as**. There is no turn and no
 seat here, so this surface supplies its own identity, and every tool resolves
 the caller through that rather than through the turn — a read that asked the

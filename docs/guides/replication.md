@@ -60,6 +60,19 @@ tracker duty repairs). The gesture fails naming the operation id, and running it
 again under that id answers each step that landed from the ledger and finishes
 the rest.
 
+What "under that id" means depends on who is asking. A **seat** derives its
+ids from its turn, the call's arguments and how many different calls to the
+same tool it made first, so it runs a gesture again by repeating the call with
+exactly the same arguments — before calling that tool with anything else. The
+**operator's MCP** has no turn, so every write's answer carries its `op_id` and
+a call that brings it back is that operation again
+([`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)).
+The purge and node-gate routes take theirs as `?op_id=`. A caller that sends
+neither starts a new operation, which finishes nothing: a create repeated that
+way files a second item. A create whose item landed and whose dependencies did
+not says so — the item is named, and its dependencies are finished on it with
+`update_work_item` rather than by filing it again.
+
 ### What a retry is judged by: the instant its operation was minted
 
 Every node keeps an **operation ledger** — which operations its own applier

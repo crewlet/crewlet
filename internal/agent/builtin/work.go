@@ -290,6 +290,19 @@ type WorkDeps struct {
 	// create failed when the task exists is the one answer that produces a
 	// duplicate.
 	Await func(ctx context.Context, at statelog.Position) error
+
+	// callerOperations is whether a caller with no turn holds the id of
+	// the operation each call is: every write answers with it as `op_id`,
+	// and a call that brings it back is that operation again rather than
+	// a new one. See [WorkDeps.bindOperation].
+	//
+	// UNEXPORTED AND SET BY [OperatorTools] ALONE, because it is a fact
+	// about the SURFACE rather than a setting: the operator's MCP is the
+	// one caller with no turn to derive an operation from, and a seat's
+	// registry that took an id from its arguments would let a model name
+	// another write's operation — answered as that write, whatever it
+	// asked for.
+	callerOperations bool
 }
 
 // Actor is who a write is attributed to.
@@ -348,8 +361,19 @@ type Actor struct {
 
 	// Calls is the run's call log, which a derived operation id reads its
 	// repeat count from — see [opIDFor] and [turnctx.CallLog]. Nil outside
-	// a turn, where every id is fresh anyway.
+	// a turn, where no id is derived from a run.
 	Calls *turnctx.CallLog
+
+	// Operation is the id of the operation this CALL is, on a surface
+	// whose callers have no turn to derive one from — the operator's
+	// ([WorkDeps.bindOperation]): the `op_id` the caller brought back, or
+	// one minted for this call and answered so it can be. Every write the
+	// call makes derives its own id from it ([opIDFor], [commentID]), so
+	// the call brought back is the same writes — the same task, the same
+	// comment, the same steps — answered from the ledger where they
+	// landed and finished where they did not. Empty in a turn, where the
+	// turn is the identity.
+	Operation string
 
 	Chain []string
 }
@@ -1228,7 +1252,7 @@ func (t *createWorkItem) Description() string {
 }
 
 func (t *createWorkItem) Parameters() map[string]any {
-	return scheduleInto(map[string]any{
+	return t.deps.operationParam(scheduleInto(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"title": map[string]any{
@@ -1300,7 +1324,7 @@ func (t *createWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"title"},
-	}, false)
+	}, false))
 }
 
 // scheduleInto merges the scheduling parameters into a tool's own schema.
@@ -1328,6 +1352,10 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	if t.deps.Writer == nil {
 		return unconfigured(CreateWorkItemTool), nil
+	}
+	actor, denied := t.deps.bindOperation(actor, CreateWorkItemTool, args)
+	if denied != "" {
+		return failed(denied), nil
 	}
 	writer := t.deps.Writer(actor)
 
@@ -1456,7 +1484,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// project has not declared and the declare is a separate record on a
 	// separate subject: doing it after would file the task that already
 	// failed.
-	declared, labelRefusal := t.deps.declareLabels(ctx, actor, args,
+	declared, labelRefusal := t.deps.declareLabels(ctx, actor, t.Name(), args,
 		task.Project, task.Tags)
 	if refusal := labelRefusal; refusal != "" {
 		return failed(refusal), nil
@@ -1480,7 +1508,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	got, err := writer.CreateTask(ctx, opID, task, notify)
 	if err != nil {
-		return failed(writeFailure(CreateWorkItemTool, err)), nil
+		return failed(writeFailure(actor, CreateWorkItemTool, err)), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
 		// AN ITEM NOBODY CAN SAY WAS FILED IS NOT ONE TO REPORT. The key
@@ -1490,11 +1518,11 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		return failed(createUnknown(actor, opID, got)), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	answer := map[string]any{
+	answer := withOperation(map[string]any{
 		"key": got.Key, "id": task.ID, "status": task.Status,
 		"assignee": task.Assignee, "outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"labels_created": declared, "version": got.Version,
-	}
+	}, actor)
 	if len(got.Warnings) > 0 {
 		answer["warnings"] = got.Warnings
 	}
@@ -1509,8 +1537,9 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		if err != nil {
 			// THE ITEM EXISTS AND IS REPORTED. Failing the call would
 			// tell a model its item was not filed, and the next
-			// attempt would file a second one.
-			answer["dependencies_failed"] = writeFailure(CreateWorkItemTool, err)
+			// attempt would file a second one — which is also what
+			// the generic failure text's "call it again" did.
+			answer["dependencies_failed"] = dependencyFailure(got.Key, task.ID, err)
 			return jsonResult(answer)
 		}
 		t.deps.settle(ctx, result.Position)
@@ -1537,43 +1566,47 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 //
 // # What it tells the caller to do depends on whether a repeat is the same operation
 //
-// A seat's operation id is derived from its turn and the call's own arguments
-// ([opIDFor]), so the same call again, before any different call to this tool,
-// is the same operation: it answers with the item if it landed and files it
-// once if it did not. Worded differently it is a new item. An unvouched one
-// publishes nothing whatever it is asked, so a repeat is safe and answers the
-// same way until this node holds the item — the list is what can say sooner. A
-// caller with no turn to derive from mints a fresh operation per call, so a
-// repeat is a second item if the first one landed.
+// Where a repeat can be the same operation ([sameCall]) — a seat repeating its
+// arguments, an operator bringing back its `op_id` — it answers with the item
+// if it landed and files it once if it did not; reworded, it is a new item. An
+// unvouched one publishes nothing whatever it is asked, so that repeat is safe
+// and answers the same way until this node holds the item — the list is what
+// can say sooner. A caller with no repeat that is the same operation is told
+// to look before filing again, because its repeat is a second item.
+//
+// THE OPERATION IT NAMES is the one to bring back where there is one to bring
+// back: the create's own step id handed back as an `op_id` would be a new
+// call's operation, deriving a new task.
 func createUnknown(actor Actor, opID string, got tracker.WriteResult) string {
 	why := "the write's acknowledgement was lost"
 	if got.Unvouched {
 		why = "this node's operation ledger may have lost the record of this " +
 			"operation, so this node cannot tell"
 	}
+	if actor.Operation != "" {
+		opID = actor.Operation
+	}
 	filed := ""
 	if got.Key != "" {
 		filed = fmt.Sprintf(" If this attempt filed it, it is %s.", got.Key)
 	}
-	seat := actor.OperationSeed() != ""
+	again := sameCall(actor, CreateWorkItemTool)
 	var next string
 	switch {
-	case got.Unvouched && seat:
+	case got.Unvouched && again != "":
 		next = "Look for it with list_work_items before doing anything else " +
-			"about it. Calling create_work_item again with exactly the same " +
-			"arguments is safe — it files nothing this node cannot vouch for — " +
-			"but answers the same way until the item reaches this node. Never " +
-			"file it again under different wording: if the first run filed it, " +
-			"that is a second item."
+			"about it. To repeat it, " + again + ": that is safe — it files " +
+			"nothing this node cannot vouch for — but answers the same way " +
+			"until the item reaches this node. Never file it again under " +
+			"different wording: if the first call filed it, that is a second item."
+	case again != "":
+		next = capitalize(again) + ": the retry is the same operation, " +
+			"answers with the item if it was filed, and files it once if it " +
+			"was not. Do not reword it — a call with different arguments is a " +
+			"new item."
 	case got.Unvouched:
 		next = "Look for it with list_work_items before filing it again: if " +
 			"the first attempt filed it, a second call files a second item."
-	case seat:
-		next = "Call create_work_item again with exactly the same arguments, " +
-			"before calling it with any other: the retry is the same " +
-			"operation, answers with the item if it was filed, and files it " +
-			"once if it was not. Do not reword it — a call with different " +
-			"arguments is a new item."
 	default:
 		next = "Look for it with list_work_items before filing it again: a " +
 			"second call is a new operation, and files a second item if the " +
@@ -1583,6 +1616,27 @@ func createUnknown(actor Actor, opID string, got tracker.WriteResult) string {
 		"operation %s). It may exist and it may not — do not report it as "+
 		"filed, and do not report it as failed.%s %s",
 		CreateWorkItemTool, why, opID, filed, next)
+}
+
+// dependencyFailure explains a create whose ITEM was filed and whose
+// dependencies did not all land.
+//
+// # Why it is not [writeFailure]
+//
+// Because the call is two writes and only the second failed, and every
+// sentence writeFailure has is about a call that wrote one thing: "the change
+// was NOT made" is false about the item, and "call create_work_item again" is
+// a second item for every caller whose repeat is a new operation — an
+// operator's, before `op_id` existed — and for a seat that files anything
+// else first. The item is named and the dependencies are finished on IT:
+// update_work_item takes the whole `waiting_on` set and records whatever of it
+// is still missing, under an operation of its own, on every surface alike.
+func dependencyFailure(key, id string, err error) string {
+	return fmt.Sprintf("The item WAS filed, as %s (%s), but recording what it "+
+		"waits on did not finish: %v. Do NOT call create_work_item again — that "+
+		"files a second item. Set its dependencies with update_work_item on %s, "+
+		"giving the same waiting_on: it records whichever of them are still "+
+		"missing, and says so if one cannot be.", key, id, err, key)
 }
 
 // resolveRef turns what a model typed — a key like ENG-7, or an id — into the
@@ -1752,7 +1806,19 @@ func handles(all ...string) []string {
 // kind — every call, before this existed — derives the id it always did.
 //
 // tool is the calling tool's own name, which is what the count is kept by.
+//
+// # And a caller with no turn names it outright
+//
+// A call on the operator's surface is its own identity ([Actor.Operation]):
+// each write it makes is a STEP of that operation, named by what it writes, so
+// the same call brought back with its `op_id` derives every id it derived the
+// first time — and a create derives the same task. Its arguments are not
+// part of it: the id the caller brought back is the claim that this is that
+// call.
 func opIDFor(actor Actor, tool, verb, object string, args map[string]any) string {
+	if actor.Operation != "" {
+		return statelog.StepOpID(actor.Operation, verb+"-"+object)
+	}
 	seed := actor.OperationSeed()
 	if seed == "" {
 		return statelog.NewOpID(time.Now(), verb+"-"+object)
@@ -1827,7 +1893,7 @@ func (t *updateWorkItem) Description() string {
 }
 
 func (t *updateWorkItem) Parameters() map[string]any {
-	return scheduleInto(map[string]any{
+	return t.deps.operationParam(scheduleInto(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -1897,7 +1963,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"item"},
-	}, true)
+	}, true))
 }
 
 // setArgSchema is the shape every set-valued argument takes.
@@ -1934,6 +2000,10 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfigured(UpdateWorkItemTool), nil
+	}
+	actor, denied := t.deps.bindOperation(actor, UpdateWorkItemTool, args)
+	if denied != "" {
+		return failed(denied), nil
 	}
 	writer := t.deps.Writer(actor)
 
@@ -1979,7 +2049,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if patch.Tags != nil {
 		// AGAINST THE TASK'S HOME PROJECT, which is the one whose set
 		// the write is checked against — never the caller's default.
-		if declared, refusal = t.deps.declareLabels(ctx, actor, args,
+		if declared, refusal = t.deps.declareLabels(ctx, actor, t.Name(), args,
 			before.Task.Project, *patch.Tags); refusal != "" {
 			return failed(refusal), nil
 		}
@@ -2046,7 +2116,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		return failed(refusal), nil
 	}
 
-	answer := map[string]any{"key": before.Task.Key, "labels_created": declared}
+	answer := withOperation(map[string]any{
+		"key": before.Task.Key, "labels_created": declared,
+	}, actor)
 	// THE PATCH IS SKIPPED WHEN THIS CALL IS ONLY A DEPENDENCY CHANGE.
 	// An empty patch is a real write — it stamps a version and writes a
 	// history row — and spending one on a call that changed no field of
@@ -2063,7 +2135,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				Parent: t.deps.parentParty(ctx, before.Task, patch),
 			}.Notify(t.deps.Leads))
 		if err != nil {
-			return failed(writeFailure(UpdateWorkItemTool, err)), nil
+			return failed(writeFailure(actor, UpdateWorkItemTool, err)), nil
 		}
 		t.deps.settle(ctx, got.Position)
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
@@ -2085,7 +2157,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
 			opIDFor(actor, t.Name(), "depend", before.Task.ID, args), change, t.deps.Leads)
 		if err != nil {
-			return failed(writeFailure(UpdateWorkItemTool, err)), nil
+			return failed(writeFailure(actor, UpdateWorkItemTool, err)), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		if _, held := answer["outcome"]; !held {
@@ -2117,7 +2189,11 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 //
 // It returns what it created, so a caller that set the flag by habit still
 // sees a typo in the answer rather than on a board three weeks later.
-func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
+//
+// ITS WRITE IS ONE OF THE CALL'S OWN, derived through [opIDFor] like the rest:
+// minted fresh, a call repeated — a re-run's, or an operator's brought back
+// under its `op_id` — declared again under an operation nothing could answer.
+func (d WorkDeps) declareLabels(ctx context.Context, actor Actor, tool string,
 	args map[string]any, project string, labels []string) ([]string, string) {
 
 	if len(labels) == 0 || !argBool(args, "labels_create_missing") {
@@ -2132,9 +2208,9 @@ func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
 			"project lead to declare it, or file without the label."
 	}
 	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx,
-		statelog.NewOpID(time.Now(), "tags-"+project), project, labels)
+		opIDFor(actor, tool, "tags", project, args), project, labels)
 	if err != nil {
-		return nil, writeFailure(tracker.WriteProjectTool, err)
+		return nil, writeFailure(actor, tracker.WriteProjectTool, err)
 	}
 	if len(warnings) > 0 {
 		// THE WARNINGS RIDE THE CREATED LIST, because they are about
@@ -2324,7 +2400,7 @@ func (t *commentOnWorkItem) Description() string {
 }
 
 func (t *commentOnWorkItem) Parameters() map[string]any {
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -2358,7 +2434,7 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"item", "body"},
-	}
+	})
 }
 
 func (t *commentOnWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -2373,6 +2449,10 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfigured(CommentOnWorkTool), nil
+	}
+	actor, denied := t.deps.bindOperation(actor, CommentOnWorkTool, args)
+	if denied != "" {
+		return failed(denied), nil
 	}
 	writer := t.deps.Writer(actor)
 
@@ -2486,14 +2566,14 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Thread: thread.ThreadParties,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(CommentOnWorkTool, err)), nil
+		return failed(writeFailure(actor, CommentOnWorkTool, err)), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	answer := map[string]any{
+	answer := withOperation(map[string]any{
 		"comment_id": comment.ID, "item": before.Task.Key,
 		"mentioned": comment.Mentions, "outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version": got.Version,
-	}
+	}, actor)
 	if comment.Ask != "" {
 		answer["asked"] = comment.Ask
 	}
@@ -2543,7 +2623,16 @@ func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment)
 // call: the comment's id is the subject its create arbitrates on, so an id
 // that stayed put while the operation moved would be refused as a comment that
 // already exists.
+//
+// A CALLER WITH NO TURN derives it from the call's operation instead
+// ([Actor.Operation]), and without the arguments — for the reason [opIDFor]
+// leaves them out there: the `op_id` the caller brought back IS the claim that
+// this is that call, so the comment it names is the one the first call posted.
 func commentID(actor Actor, tool, taskID string, args map[string]any) string {
+	if actor.Operation != "" {
+		return uuid.NewSHA1(commentNamespace, []byte(actor.Operation+"\x00"+
+			taskID+"\x00"+actor.Handle)).String()
+	}
 	seed := actor.OperationSeed()
 	if seed == "" {
 		seed = uuid.NewString()
@@ -2590,7 +2679,12 @@ func readFailure(name string, err error) string {
 
 // writeFailure explains a write that did not land, in terms the model can act
 // on: which of these it can fix by trying differently, and which it cannot.
-func writeFailure(name string, err error) string {
+//
+// IT TAKES THE ACTOR because what "the same call again" is depends on who is
+// calling ([sameCall]): a seat repeats its arguments, an operator brings back
+// the `op_id`, and a caller holding neither has no repeat that is the same
+// operation — telling it to repeat one filed a second item.
+func writeFailure(actor Actor, name string, err error) string {
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return fmt.Sprintf("%s: %v", name, err)
@@ -2625,13 +2719,20 @@ func writeFailure(name string, err error) string {
 		// merge, a promotion, a dependency — stopped at a step whose
 		// outcome is unknown, so the default below ("the change was NOT
 		// made") would be false about the steps that landed, and "done"
-		// false about the rest. The same call again carries the same
-		// operation id, and that is what finishes it.
+		// false about the rest. The same OPERATION again is what finishes
+		// it — and what that is depends on the caller ([sameCall]).
+		again := sameCall(actor, name)
+		if again == "" {
+			return fmt.Sprintf("%s stopped part of the way through: %v. Some "+
+				"of it may already have landed. Calling %s again is a new "+
+				"operation here and does not finish this one: read the items "+
+				"it touches with get_work_item and finish what is missing with "+
+				"the tool for each. Do not report it as done.", name, err, name)
+		}
 		return fmt.Sprintf("%s stopped part of the way through: %v. Some of "+
-			"it may already have landed. Call %s again with exactly the same "+
-			"arguments — the retry answers what landed and finishes the rest. "+
-			"Do not report it as done until a call answers without this "+
-			"error.", name, err, name)
+			"it may already have landed. %s — the retry answers what landed "+
+			"and finishes the rest. Do not report it as done until a call "+
+			"answers without this error.", name, err, capitalize(again))
 	case errors.Is(err, tracker.ErrReassignmentBudget):
 		// THE REFUSAL THAT MUST NOT INVITE ANOTHER ATTEMPT: this item is
 		// circulating between agents, and a message that reads like a
@@ -2642,6 +2743,122 @@ func writeFailure(name string, err error) string {
 	}
 	return fmt.Sprintf("%s did not land (%v). The change was NOT made — do not "+
 		"report it as done.", name, err)
+}
+
+// sameCall says how this caller makes THIS call again as the same operation,
+// as a clause to be told — or "" where no repeat is the same operation.
+//
+// ONE PLACE, because it is three different answers and every failure that
+// says "call again" has to give the right one. A SEAT's ids are derived from
+// its turn, the call's own arguments and how many different calls to the tool
+// came first ([opIDFor]), so the same arguments before any different call to
+// it are the same operation, and reworded they are a new one. An OPERATOR's
+// call is the operation it brings back as `op_id`. A caller with neither mints
+// afresh on every call, and a repeat it is told to make is a second write.
+func sameCall(actor Actor, tool string) string {
+	switch {
+	case actor.Operation != "":
+		return fmt.Sprintf("call %s again with exactly the same arguments and "+
+			"`op_id` %q", tool, actor.Operation)
+	case actor.OperationSeed() != "":
+		return fmt.Sprintf("call %s again with exactly the same arguments, "+
+			"before calling it with any others", tool)
+	}
+	return ""
+}
+
+// capitalize upper-cases a clause's first letter, for a clause that opens a
+// sentence. ASCII only, which is every clause [sameCall] writes.
+func capitalize(clause string) string {
+	if clause == "" || clause[0] < 'a' || clause[0] > 'z' {
+		return clause
+	}
+	return string(clause[0]-'a'+'A') + clause[1:]
+}
+
+// opIDArg is the argument a caller on the operator's surface brings an
+// operation back in, and the field every answer there carries it in.
+const opIDArg = "op_id"
+
+// bindOperation settles which operation this call is, or answers the refusal.
+//
+// # Why a caller with no turn needs one at all
+//
+// A seat's writes derive their ids from its turn, so the same call made again
+// — a re-run, or a repeat after an `unknown` — is the same operation, and the
+// ledger answers what landed. The operator's surface has no turn: every call
+// minted every id afresh, so the one thing an `unknown` or a gesture stopped
+// part of the way through asks for — the same operation again — was
+// unreachable. A create repeated filed a second item, and an update
+// conditioned on a version was refused as stale by its own first copy.
+//
+// So each call there IS an operation: one minted for it and answered as
+// `op_id` ([WorkDeps.withOperation]), or the one the caller brought back,
+// held to the same rule every surface that takes one holds it to
+// ([statelog.CheckCallerOpID]). Every write the call makes derives from it.
+//
+// # Why a turn's call is refused one
+//
+// Because the turn is already the identity, and an id a model could name
+// would be answered as whichever write it named, whatever this call asked for.
+// Refused rather than ignored: ignored, it reads as a promise the call keeps.
+//
+// AN EMPTY `op_id` IS NONE — it names no operation, and a model filling an
+// optional field writes one.
+func (d WorkDeps) bindOperation(actor Actor, tool string,
+	args map[string]any) (Actor, string) {
+
+	raw, brought := args[opIDArg]
+	if text, ok := raw.(string); ok && text == "" {
+		brought = false
+	}
+	if !d.callerOperations || actor.OperationSeed() != "" {
+		if brought {
+			return actor, fmt.Sprintf("%s takes no `op_id` here: these writes "+
+				"derive their operation from the turn, so the same call made "+
+				"again is already the same operation. Leave it out.", tool)
+		}
+		return actor, ""
+	}
+	if !brought {
+		actor.Operation = statelog.NewOpID(time.Now(), tool)
+		return actor, ""
+	}
+	op, _ := raw.(string)
+	if err := statelog.CheckCallerOpID(op); err != nil {
+		return actor, fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
+	}
+	actor.Operation = op
+	return actor, ""
+}
+
+// withOperation puts the call's operation on its answer, where it has one:
+// the `op_id` a caller brings back to make this call again as the same
+// operation. See [WorkDeps.bindOperation].
+func withOperation(answer map[string]any, actor Actor) map[string]any {
+	if actor.Operation != "" {
+		answer[opIDArg] = actor.Operation
+	}
+	return answer
+}
+
+// operationParam offers `op_id` in a write tool's schema, on the surface whose
+// callers bring one back ([WorkDeps.bindOperation]) and nowhere else.
+func (d WorkDeps) operationParam(schema map[string]any) map[string]any {
+	if !d.callerOperations {
+		return schema
+	}
+	props, _ := schema["properties"].(map[string]any)
+	props[opIDArg] = map[string]any{
+		"type": "string",
+		"description": "Leave it out for a new write. To finish one an earlier " +
+			"answer from this tool left `unknown` or part of the way through, " +
+			"send back the `op_id` that answer carried, unchanged, with exactly " +
+			"the same arguments: the call is then that same operation, and is " +
+			"answered with what landed. Under the same op_id, different " +
+			"arguments are answered as the first call rather than applied.",
+	}
+	return schema
 }
 
 // now and zone are the clock a query resolves against, defaulted here so a

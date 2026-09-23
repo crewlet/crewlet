@@ -56,7 +56,7 @@ func (t *mergeWorkItem) Description() string {
 }
 
 func (t *mergeWorkItem) Parameters() map[string]any {
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -78,7 +78,7 @@ func (t *mergeWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"item", "into"},
-	}
+	})
 }
 
 func (t *mergeWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -95,6 +95,10 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if t.deps.Merges == nil || t.deps.Reader == nil {
 		return unconfigured(tracker.MergeWorkItemTool), nil
+	}
+	actor, denied := t.deps.bindOperation(actor, tracker.MergeWorkItemTool, args)
+	if denied != "" {
+		return failed(denied), nil
 	}
 	ref := strings.TrimSpace(argString(args, "item"))
 	into := strings.TrimSpace(argString(args, "into"))
@@ -137,15 +141,15 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: tracker.ChangeStatus, Before: before.Task, After: cancelled,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.MergeWorkItemTool, err)), nil
+		return failed(writeFailure(actor, tracker.MergeWorkItemTool, err)), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	return jsonResult(withOperation(map[string]any{
 		"key": before.Task.Key, "merged_into": survivor,
 		"subtasks_moved": moveSubtasks(args),
 		"status":         string(tracker.StatusCancelled),
 		"outcome":        string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	})
+	}, actor))
 }
 
 // moveSubtasks reads the one knob this verb has, and ABSENT IS TRUE.

@@ -60,7 +60,7 @@ func (t *removeWorkItem) Description() string {
 }
 
 func (t *removeWorkItem) Parameters() map[string]any {
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -76,7 +76,7 @@ func (t *removeWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"item"},
-	}
+	})
 }
 
 func (t *removeWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -93,6 +93,10 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if t.deps.TrashWriter == nil || t.deps.Reader == nil {
 		return unconfigured(tracker.RemoveWorkItemTool), nil
+	}
+	actor, denied := t.deps.bindOperation(actor, tracker.RemoveWorkItemTool, args)
+	if denied != "" {
+		return failed(denied), nil
 	}
 	ref := strings.TrimSpace(argString(args, "item"))
 	if ref == "" {
@@ -120,13 +124,13 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: tracker.ChangeRemoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.RemoveWorkItemTool, err)), nil
+		return failed(writeFailure(actor, tracker.RemoveWorkItemTool, err)), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	return jsonResult(withOperation(map[string]any{
 		"key": before.Task.Key, "removed": true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	})
+	}, actor))
 }
 
 // ---- restore_work_item -------------------------------------------------- //
@@ -146,7 +150,7 @@ func (t *restoreWorkItem) Description() string {
 }
 
 func (t *restoreWorkItem) Parameters() map[string]any {
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -155,7 +159,7 @@ func (t *restoreWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"item"},
-	}
+	})
 }
 
 func (t *restoreWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -172,6 +176,10 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if t.deps.TrashWriter == nil || t.deps.Reader == nil {
 		return unconfigured(tracker.RestoreWorkItemTool), nil
+	}
+	actor, denied := t.deps.bindOperation(actor, tracker.RestoreWorkItemTool, args)
+	if denied != "" {
+		return failed(denied), nil
 	}
 	ref := strings.TrimSpace(argString(args, "item"))
 	if ref == "" {
@@ -202,11 +210,11 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: tracker.ChangeRestored, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.RestoreWorkItemTool, err)), nil
+		return failed(writeFailure(actor, tracker.RestoreWorkItemTool, err)), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(map[string]any{
+	return jsonResult(withOperation(map[string]any{
 		"key": before.Task.Key, "restored": true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	})
+	}, actor))
 }
