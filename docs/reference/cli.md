@@ -900,7 +900,7 @@ runbook — and it goes through that same surface's own route,
 Destroys a task and every row it produced: its own row, its comments, its body
 revisions, its checklist, its field values, its watchers, its relations, its
 dependencies, and every inbound
-reference and key alias that made it resolvable. A marker is written in their
+reference and the key directory row that made it resolvable. A marker is written in their
 place, and every later record about that task is dropped for ever — which is
 what stops a redelivery months afterwards resurrecting any of it.
 

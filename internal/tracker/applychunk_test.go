@@ -56,8 +56,6 @@ func TestACollectionsRowsSurviveEveryChunkWidth(t *testing.T) {
 		// ONLY THE WAITING_ON HALF reaches the dependency table.
 		{"tracker_task_deps", "blocker_id, task_id", 6},
 		{"tracker_checklist_items", "task_id, checklist_id, item_id", 12},
-		// The current key and the two former ones.
-		{"tracker_task_keys", "key", 3},
 	}
 
 	// The limits, in rows-per-statement terms for the widest template
@@ -140,7 +138,6 @@ func TestACollectionsRowsSurviveEveryChunkWidth(t *testing.T) {
 // with enough members to cross a chunk boundary at the small limits above.
 func chunkTask(id string) tracker.Task {
 	task := newTask(id)
-	task.FormerKeys = []string{"ENG-0", "OLD-7"}
 	task.Watchers = longHandles(9, 20)
 	task.Muted = []string{task.Watchers[1], task.Watchers[4]}
 	task.Collaborators = longHandles(tracker.MaxCollaborators, 20)

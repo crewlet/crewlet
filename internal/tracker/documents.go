@@ -197,30 +197,6 @@ func readCounter(ctx context.Context, tx *sql.Tx, project string) (Counter, bool
 	}, true, nil
 }
 
-// readAlias reports whether a key is claimed, and by which task.
-func readAlias(ctx context.Context, tx *sql.Tx, key string) (string, bool, error) {
-	var task string
-	switch err := tx.QueryRowContext(ctx,
-		`SELECT task_id FROM tracker_task_keys WHERE key = ?`, key).Scan(&task); {
-	case errors.Is(err, sql.ErrNoRows):
-		return "", false, nil
-	case err != nil:
-		return "", false, fmt.Errorf("tracker: read the claim on key %s: %w", key, err)
-	}
-	return task, true, nil
-}
-
-// readSubtree is every descendant of a root task, ORDERED BY (depth, id).
-//
-// # Why the order is part of the answer
-//
-// A cross-project move assigns each descendant a key from one minted range,
-// and a duty completing an abandoned walk on another node has to assign the
-// SAME key to the same descendant. The base rides the root's record; this
-// ordering is the other half, and it is by (depth, id) because both are
-// stable: a depth is a fact about the tree and an id never changes, while
-// anything ordered by a rank or a title would re-order under an edit somebody
-// made while the walk ran.
 // readChildBatch is one batch of a task's DIRECT children.
 //
 // # Why direct children rather than the subtree
@@ -262,6 +238,14 @@ func readChildBatch(ctx context.Context, tx *sql.Tx, parent, after string,
 	return scanSubtree(rows, parent)
 }
 
+// readSubtree is every descendant of a root task, ORDERED BY (depth, id).
+//
+// # Why the order is part of the answer
+//
+// A subtree removal publishes one tombstone per task in THIS order, so a
+// reader that sees a child removed has already seen its parent go. The depth
+// is what gives that; the id breaks the tie so every node, and every re-run,
+// walks one subtree in one order.
 func readSubtree(ctx context.Context, tx *sql.Tx, root string) ([]Task, error) {
 	rows, err := tx.QueryContext(ctx, `
 		WITH RECURSIVE descendants(id, depth) AS (

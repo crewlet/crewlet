@@ -450,7 +450,6 @@ func fallbackKind(applied map[string]Delta, op OpKind) ChangeKind {
 	}{
 		{"status", ChangeStatus},
 		{"assignee", ChangeAssignee},
-		{"project", ChangeMoved},
 		{"priority", ChangeFields},
 		{"title", ChangeFields},
 		{"type", ChangeFields},

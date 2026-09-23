@@ -45,9 +45,8 @@ import (
 // RemoveTask puts a task, and optionally its whole subtree, in the trash.
 //
 // ONE COMMIT PER TASK, published in DEPTH ORDER so a reader that sees a child
-// removed has already seen its parent go — the same order the move sequence
-// uses and for the same reason: a partially applied gesture must never leave a
-// tree in a shape no single write could have made.
+// removed has already seen its parent go: a partially applied gesture must
+// never leave a tree in a shape no single write could have made.
 //
 // The ROOT's own tombstone carries no `RemovedWith`, and every descendant's
 // names the root. A restore reads that to decide what comes back with what.
@@ -173,8 +172,8 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 			// this task was decided on the project the caller read it
 			// in, and a task that has moved since is another project's
 			// to remove.
-			if moved := stillIn(current, project); moved != nil {
-				return statelog.Decision{}, moved
+			if wrong := filedUnder(current, project); wrong != nil {
+				return statelog.Decision{}, wrong
 			}
 			if current.Removed != nil {
 				// ALREADY IN THE TRASH IS NOTHING TO DO, and it is a
@@ -219,8 +218,8 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
 					"on this node: %w", id, statelog.ErrUnavailable)
 			}
-			if moved := stillIn(current, project); moved != nil {
-				return statelog.Decision{}, moved
+			if wrong := filedUnder(current, project); wrong != nil {
+				return statelog.Decision{}, wrong
 			}
 			if current.Removed == nil {
 				// NOT IN THE TRASH IS NOTHING TO DO, on the removal's
@@ -238,31 +237,32 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 	})
 }
 
-// stillIn refuses a write whose authority was decided on a project the task
-// is no longer filed under.
+// filedUnder refuses a write whose authority was decided on a project the task
+// is not filed under.
 //
 // # Why the project a caller passes is checked INSIDE the snapshot
 //
 // Every caller of a task write resolved a key to reach the task and read its
 // project OFF THE ROW, outside this transaction — and then decided on that
 // project who may do what: a removal and a restore are the project lead's, and
-// a re-route is the project's own. A task moved to another project between
-// that read and this snapshot is somebody else's decision, and publishing
-// anyway lands one project lead's authority on another project's work, under
-// a scope naming the container the task left.
+// a re-route is the project's own. The write's SCOPE is formed from that
+// argument too, before the snapshot exists. A task's project never changes, so
+// an argument naming another one is a caller that read the wrong row — and
+// publishing anyway lands one project lead's authority on another project's
+// work, under a scope that does not cover the task it writes.
 //
 // So the project argument is a PRECONDITION, not a label, and it is checked
 // here — the one place the framework guarantees a single consistent read —
 // exactly as an if-match is. A CONFLICT rather than an ordinary refusal,
-// because nothing is wrong with the request: the caller reads the task again,
-// decides again on the project it is in now, and re-sends.
-func stillIn(current Task, project string) error {
+// because the remedy is the same one: the caller reads the task again, decides
+// on the project it is in, and re-sends.
+func filedUnder(current Task, project string) error {
 	if current.Project == project {
 		return nil
 	}
-	return fmt.Errorf("tracker: task %s (%s) is filed under project %s now, "+
-		"not %s where it was read — what this write may do was decided on a "+
-		"project the task has left, so read it again and decide on %s: %w",
+	return fmt.Errorf("tracker: task %s (%s) is filed under project %s, not "+
+		"%s as this write named it — what the write may do was decided on a "+
+		"project the task is not in, so read it again and decide on %s: %w",
 		current.Key, current.ID, current.Project, project, current.Project,
 		statelog.ErrConflict)
 }

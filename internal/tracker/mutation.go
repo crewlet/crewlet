@@ -132,10 +132,6 @@ const (
 	// object rather than their own kind of record.
 	TermObject TermKind = "object"
 
-	// TermKey is an addressable NAME — "ENG-142" — because the alias row
-	// is keyed on the key rather than on any object's id.
-	TermKey TermKind = "key"
-
 	// TermContainer is a project key, or the workspace.
 	TermContainer TermKind = "container"
 
@@ -148,9 +144,9 @@ const (
 	TermDomain TermKind = "domain"
 )
 
-// TermKinds are the five.
+// TermKinds are the four.
 var TermKinds = []TermKind{
-	TermObject, TermKey, TermContainer, TermFamily, TermDomain,
+	TermObject, TermContainer, TermFamily, TermDomain,
 }
 
 // Valid reports whether a term kind off the wire is one this build knows.
@@ -189,24 +185,23 @@ const (
 	pathContainer = "c"
 	pathFamily    = "f"
 	pathObject    = "o"
-	pathKey       = "k"
 )
 
 // ScopeTerm is one element of a record's blast radius.
 //
 // DATA, NOT CODE: a build that has never heard of the op still reads every
-// term, because a term names an object, a key, a container, a family or the
-// domain and nothing about the operation that produced it.
+// term, because a term names an object, a container, a family or the domain
+// and nothing about the operation that produced it.
 type ScopeTerm struct {
 	Kind TermKind `json:"k"`
 
-	// Container is the project key an object or a key lives in, or
-	// [WorkspaceContainer]. Required for TermObject and TermKey, empty
-	// for the other three, and never guessed: see the alphabet above.
+	// Container is the project key an object lives in, or
+	// [WorkspaceContainer]. Required for TermObject, empty for the other
+	// three, and never guessed: see the alphabet above.
 	Container string `json:"c,omitempty"`
 
-	// ID is the object's uuid, the key's name, the container's key or the
-	// family's name. Empty for TermDomain, which names everything.
+	// ID is the object's uuid, the container's key or the family's name.
+	// Empty for TermDomain, which names everything.
 	ID string `json:"i,omitempty"`
 }
 
@@ -215,8 +210,6 @@ func (t ScopeTerm) Path() string {
 	switch t.Kind {
 	case TermObject:
 		return join(pathDomain, pathContainer, t.container(), pathObject, t.ID)
-	case TermKey:
-		return join(pathDomain, pathContainer, t.container(), pathKey, t.ID)
 	case TermContainer:
 		// THE CONTAINER TERM'S OWN NAME IS ITS ID, not its Container
 		// field: "container(ENG)" names ENG, and reading the field
@@ -297,11 +290,10 @@ type ScopeSet struct {
 	// # Why the container is ON THE RECORD and not derived from the subject
 	//
 	// A subject names an object, not its home: a task's subject is its
-	// uuid, and which project it lives in is a fact about the row — one
-	// that CHANGES, because a task can move between projects. So the path
-	// a record's scope resolves to cannot be computed from the subject
-	// alone, and the only party that knows it at the moment the record is
-	// written is the writer.
+	// uuid, and which project it lives in is a fact about the ROW rather
+	// than about the subject. So the path a record's scope resolves to
+	// cannot be computed from the subject alone, and the only party that
+	// knows it at the moment the record is written is the writer.
 	//
 	// Leaving it out is silent rather than wrong-looking. Every task
 	// record would file its deferral under the workspace container while
@@ -399,10 +391,6 @@ func subjectPath(s Subject, container string) string {
 		// deferred settings edit block every write inside that project
 		// — which is exactly what an archive is.
 		return ScopeTerm{Kind: TermContainer, ID: s.ID}.Path()
-	case KindAlias:
-		key, _, _ := strings.Cut(s.ID, ".")
-		project, _, _ := strings.Cut(key, "-")
-		return ScopeTerm{Kind: TermKey, Container: project, ID: key}.Path()
 	case KindCatalogue:
 		return ScopeTerm{Kind: TermFamily, ID: string(KindCatalogue)}.Path()
 	case KindPerson:
@@ -473,7 +461,7 @@ func (s ScopeSet) Validate() error {
 	}
 	for _, t := range s.Terms {
 		switch t.Kind {
-		case TermObject, TermKey:
+		case TermObject:
 			if t.ID == "" {
 				return fmt.Errorf("tracker: a %s term names nothing", t.Kind)
 			}
@@ -779,7 +767,7 @@ func (r MutationRecord) Encode() ([]byte, error) {
 // kind has variants.
 type ChangeKind string
 
-// The twenty-seven, and each constant IS its wire value: a kind is written into
+// The twenty-six, and each constant IS its wire value: a kind is written into
 // every history row and onto every notification the log carries, so these
 // spellings are stored data in every company already running this build.
 // A kind added here goes into [ChangeKinds] in the same change: that slice is
@@ -795,7 +783,6 @@ const (
 	ChangeTags            ChangeKind = "tags"
 	ChangeRelations       ChangeKind = "relations"
 	ChangeRouted          ChangeKind = "routed"
-	ChangeMoved           ChangeKind = "moved"
 	ChangeReparented      ChangeKind = "reparented"
 	ChangeChecklist       ChangeKind = "checklist"
 	ChangeArchived        ChangeKind = "archived"
@@ -830,16 +817,16 @@ const (
 	ChangePersonUpdated ChangeKind = "person_updated"
 )
 
-// ChangeKinds are the twenty-seven.
+// ChangeKinds are the twenty-six.
 //
-// TWENTY-SEVEN AGAINST THIRTEEN SUBJECTS, and the gap is not an
+// TWENTY-SIX AGAINST TWELVE SUBJECTS, and the gap is not an
 // inconsistency: five commit classes carry no notification at all — a turn, a
 // generation, an eviction, a rank move and a barrier — because a reposition is
 // not history and a barrier writes no rows whatever.
 var ChangeKinds = []ChangeKind{
 	ChangeCreated, ChangeFields, ChangeStatus, ChangeAssignee,
 	ChangeCollaborators, ChangeWatchers, ChangeTags, ChangeRelations,
-	ChangeRouted, ChangeMoved, ChangeReparented,
+	ChangeRouted, ChangeReparented,
 	ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 	ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,

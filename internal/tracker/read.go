@@ -858,8 +858,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			// shares.
 			//
 			// It narrows no legitimate answer either. A subtree lives
-			// in one project — a cross-project move takes the
-			// descendants with it — and a subtask whose project
+			// in one project, and a subtask whose project
 			// differs from its root's is the `inconsistent_project`
 			// anomaly the attention set exists to surface, not a
 			// shape a board should quietly return rows from another

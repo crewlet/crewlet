@@ -226,7 +226,8 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	// THE SCOPE IS THE TASK ITSELF and cannot be formed until the id is
 	// resolved, which happens inside the transaction — so the framework
 	// read is given the object's own term once, from the reference, and
-	// the coverage probe inside the transaction is what catches an alias.
+	// the coverage probe inside the transaction is what catches a
+	// reference that was a KEY rather than the id.
 	//
 	// THE WHOLE FRESHNESS, not the level alone: a staleness bound is
 	// about this node's lag rather than about a set, so one row's read
@@ -335,22 +336,15 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	return out, nil
 }
 
-// resolveTaskID turns an id or a key — current or former — into an id.
-//
-// THE FORMER KEY RESOLVES TOO, and that is not a nicety: a task moved between
-// projects keeps its old key as an alias precisely so every link, chat message
-// and comment that named it still opens the right record. A lookup that only
-// knew the current key would break every reference the move was meant to keep.
+// resolveTaskID turns an id or a key into an id.
 func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, error) {
 	var id string
 	err := tx.QueryRowContext(ctx, `
 		SELECT id FROM tracker_tasks WHERE id = ?
 		UNION ALL
 		SELECT id FROM tracker_tasks WHERE key = ?
-		UNION ALL
-		SELECT task_id FROM tracker_task_keys WHERE key = ?
 		LIMIT 1`,
-		idOrKey, strings.ToUpper(idOrKey), strings.ToUpper(idOrKey)).Scan(&id)
+		idOrKey, strings.ToUpper(idOrKey)).Scan(&id)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", fmt.Errorf("%w: %s", ErrNoTask, idOrKey)

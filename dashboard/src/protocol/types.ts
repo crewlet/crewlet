@@ -2331,10 +2331,6 @@ export interface WorkItem {
    *  reset by any human touch. Past its cap the engine refuses the next
    *  hand-off rather than letting the item circle. */
   reassignments?: number;
-  /** Keys this task used to answer to — a project rename or a merge leaves
-   *  them, and every one still resolves, which is why they are worth
-   *  showing beside the current one. */
-  former_keys?: string[];
   /** What this task blocks: the MIRRORED half of a dependency, carried so a
    *  close can say who it unblocks without scanning the company. */
   dependents?: string[];

@@ -1305,14 +1305,6 @@ export function ItemProps({
           ...(item.routing_unit && item.routing_unit !== item.filed_unit
             ? [{ label: "Routes to", value: item.routing_unit }]
             : []),
-          ...((item.former_keys ?? []).length > 0
-            ? [
-                {
-                  label: "Former keys",
-                  value: <span className="mono">{(item.former_keys ?? []).join(", ")}</span>,
-                },
-              ]
-            : []),
         ],
       },
     );

@@ -147,7 +147,7 @@ task's every later edit on every node.
 | `checkbox` | `true` or `false` | a string — every rule for reading one disagrees about `"false"` |
 | `date` | a date; a timestamp when the field holds no time, **truncated with a warning** | a value that is not a date, and a bare date on a field that holds a time |
 | `dropdown`, `labels` | the option's slug, name or id — stored as the **id** | an option the field does not declare |
-| `relationship` | a key, a former key or an id — stored as the **id** | an item that does not exist |
+| `relationship` | a key or an id — stored as the **id** | an item that does not exist |
 | `people` | anything that resolves to exactly **one** colleague | a spelling that names nobody, or more than one |
 | `url` | an absolute url | one with no scheme or no host |
 | `email` | a parseable address — the **address**, not the display name | anything `Ana <ana@example.com>` cannot be read as |
@@ -529,11 +529,13 @@ two below. `remove_work_item` puts an item
 in the **trash** and `restore_work_item` takes it out again, at any age. Both
 are decided by the item's **own** project: the lead of the project it is filed
 under, or `fleet:operate`. The tool names an item rather than a project, so it
-reads which project that is off the item and asks then — and the write checks
-it again when it lands, so an item moved to another project in between is
-refused as a **conflict** naming the project it is in now rather than removed
-on the say-so of a lead it no longer answers to. A re-route through
-`update_work_item` is held to the same check. A removal hides an item from every list and board and destroys nothing — its
+reads which project that is off the item and asks then. An item never changes
+project — its key is minted in the one it is filed under — and the write
+checks the project it was decided on against the item inside its own
+snapshot, so a decision made on any other project is refused as a
+**conflict** naming the project the item is in rather than landed on the
+say-so of a lead it does not answer to. A re-route through `update_work_item`
+is held to the same check. A removal hides an item from every list and board and destroys nothing — its
 history is untouched and `list_work_items` with `removed: true` is the only
 thing that shows it. No seat holds either, because a seat that could hide work
 it did not want to do would be marking its own homework in the one way that

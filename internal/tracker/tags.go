@@ -653,3 +653,20 @@ func (w *Writer) EnsureTags(ctx context.Context, opID, project string,
 	// nothing is missing.
 	return result.Declared, result.Warnings, nil
 }
+
+// tagsOf reads a project's tag set outside any decision.
+func (w *Writer) tagsOf(ctx context.Context, project string) (TagSet, error) {
+	var set TagSet
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		stored, held, err := readTagSet(ctx, tx, project)
+		if err != nil {
+			return err
+		}
+		if !held {
+			stored = TagSet{V: DocumentVersion, Project: project}
+		}
+		set = stored
+		return nil
+	})
+	return set, err
+}

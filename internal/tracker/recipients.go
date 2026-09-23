@@ -310,7 +310,7 @@ func (k ChangeKind) TaskCommit() bool {
 	switch k {
 	case ChangeCreated, ChangeFields, ChangeStatus, ChangeAssignee,
 		ChangeCollaborators, ChangeWatchers, ChangeTags, ChangeRelations,
-		ChangeRouted, ChangeMoved, ChangeReparented,
+		ChangeRouted, ChangeReparented,
 		ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 		ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
 		ChangeRestored, ChangePurged:
@@ -319,15 +319,15 @@ func (k ChangeKind) TaskCommit() bool {
 	return false
 }
 
-// mayFallBack reports the six kinds that reach a lead when nobody else is
+// mayFallBack reports the five kinds that reach a lead when nobody else is
 // there to hear them.
 //
-// SIX RATHER THAN EVERY TASK KIND, because a fallback is for a change nobody
+// FIVE RATHER THAN EVERY TASK KIND, because a fallback is for a change nobody
 // would otherwise learn about: a tag edit or a checklist tick on an
 // unassigned, unwatched task is not something to page a lead for.
 func (k ChangeKind) mayFallBack() bool {
 	switch k {
-	case ChangeCreated, ChangeStatus, ChangeMoved, ChangeRemoved,
+	case ChangeCreated, ChangeStatus, ChangeRemoved,
 		ChangeComment, ChangeRouted:
 		return true
 	}

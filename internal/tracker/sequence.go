@@ -14,8 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// The SIX sequences that stay genuinely cross-object, and the one property
-// that makes them tolerable.
+// The FIVE sequences that stay genuinely cross-object — a create (1), an item
+// promotion (1a), a merge (13) and a bulk edit (26) here, and a dependency in
+// depend.go — and the one property that makes them tolerable.
 //
 // # Why a multi-append sequence is not a transaction, and must not pretend
 //
@@ -48,8 +49,8 @@ const (
 	// MaxBulkTasks is how many distinct task subjects one bulk gesture
 	// may carry.
 	//
-	// THE SAME 64 as every other fan-out in this design — a move batch, a
-	// merge batch, the scope term cap — because they are the same
+	// THE SAME 64 as every other fan-out in this design — a merge batch,
+	// the scope term cap — because they are the same
 	// quantity: how much work one durable claim covers before it has to
 	// heartbeat.
 	MaxBulkTasks = 64
@@ -62,8 +63,8 @@ const (
 	// refused halfway is a caller told "failed" about tasks that changed.
 	MaxBulkBytes = 8 << 20
 
-	// WalkBatch is one batch of a paced walk — a cross-project move's
-	// descendants, a merge's children.
+	// WalkBatch is one batch of a paced walk — a merge's children, and
+	// every duty selection that finishes one.
 	WalkBatch = 64
 
 	// ClaimTTL is how long the durable claim a walking sequence holds
@@ -87,7 +88,7 @@ const (
 // them. Three-valued by construction and that is the whole reason it is not a
 // bool: a lease is held, a (nil, nil) says a peer holds it, and an error says
 // NOTHING IS KNOWN — which is what lets the bulk admission fail OPEN over the
-// third while a cross-project move fails closed over it. Collapsed to two
+// third while a merge's walk fails closed over it. Collapsed to two
 // values, one of those two behaviours would have to be wrong.
 type Claims interface {
 	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error)
@@ -106,12 +107,10 @@ type Claims interface {
 // SUBJECT TOKEN, so each of these is filterable on its own.
 const (
 	classBulk  coord.Class = "bulk"
-	classMove  coord.Class = "move"
 	classMerge coord.Class = "merge"
 )
 
 func bulkClaim(domain string) string { return classBulk.Resource(domain) }
-func moveClaim(task string) string   { return classMove.Resource(task) }
 func mergeClaim(task string) string  { return classMerge.Resource(task) }
 
 // stepID derives one append's operation id from the gesture's own.
@@ -220,7 +219,7 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 		coerced  map[string]json.RawMessage
 		warnings []string
 	)
-	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), task.Project, 1,
+	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), task.Project,
 		func(tx *sql.Tx) error {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			var err error
@@ -294,7 +293,7 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 }
 
 // mintKey takes the next key number in a project. SEQUENCE 1's first append,
-// and 1a's and 7's.
+// and 1a's.
 //
 // # Why the number is a record and not a row read
 //
@@ -303,17 +302,9 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 // which is precisely what a conditional append on the counter's own subject
 // makes impossible: the loser is rejected, re-decides against the winner's
 // number and takes the next one.
-//
-// It mints a RANGE of k, because a cross-project move re-keys a whole subtree
-// and doing it one at a time would be one append per descendant on the busiest
-// subject in the project.
-func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
+func (w *Writer) mintKey(ctx context.Context, opID, project string,
 	guard func(*sql.Tx) error) (uint64, statelog.Result, error) {
 
-	if k < 1 {
-		return 0, statelog.Result{}, fmt.Errorf("tracker: a key mint takes %d "+
-			"numbers, and a mint of none moves the counter for nothing", k)
-	}
 	subject := CounterSubject(project)
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
@@ -342,7 +333,7 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 			}
 			base = uint64(counter.Last) + 1
 			next := Counter{
-				V: DocumentVersion, Project: project, Last: counter.Last + k,
+				V: DocumentVersion, Project: project, Last: counter.Last + 1,
 			}
 			decision, err := w.decide(subject, OpPatch, "", scope, opID,
 				next, nil, at)
@@ -554,7 +545,7 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	}
 
 	var parent Task
-	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), subtask.Project, 1,
+	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), subtask.Project,
 		func(tx *sql.Tx) error {
 			current, held, err := readTask(ctx, tx, parentID)
 			switch {
@@ -683,10 +674,11 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 	})
 	switch {
 	case err != nil:
-		// UNKNOWN, AND THIS ONE FAILS CLOSED. A cross-project move
-		// rewrites a whole subtree's keys; two of them interleaved
-		// produce a subtree keyed into two projects, which no duty can
-		// tell from an abandoned walk.
+		// UNKNOWN, AND THIS ONE FAILS CLOSED. A merge re-parents a
+		// duplicate's whole subtree; two of them interleaved — one
+		// duplicate folded into two different tasks at once — split its
+		// children between two parents, and nothing afterwards can say
+		// which fold each child belonged to.
 		return nil, fmt.Errorf("tracker: take %s: %w", resource, err)
 	case lease == nil:
 		return nil, fmt.Errorf("tracker: %s is held by another node, so this "+
@@ -731,243 +723,6 @@ func (h *held) release(ctx context.Context) {
 	_, _ = h.claims.Release(context.WithoutCancel(ctx), h.resource, h.owner, h.epoch)
 }
 
-// MoveTaskToProject re-homes a task and everything beneath it. SEQUENCE 7.
-//
-//	Rk, then take move/<task> → Rs the target project and its tag set;
-//	refuse archived, refuse a required field the task lacks → A the tags
-//	the subtree carries that the target lacks → A the alias on the former
-//	key at expectation 0 → A the counter, a RANGE mint for the whole
-//	subtree → A the root task, carrying the range's BASE and its length →
-//	per batch of ≤64 descendants, A per descendant on its own subject →
-//	release.
-//
-// # Why the base rides the root record
-//
-// The range's base is NOT recoverable afterwards. By the time a duty completes
-// an abandoned walk, other creates have advanced the counter — so a duty that
-// recomputed the base would assign a different key to the same descendant on a
-// different node, and the walk would stop being idempotent. The ordering by
-// (depth, id) fixes the ORDER; only the base fixes the ORIGIN.
-//
-// THE SOURCE PROJECT'S ORDER IS NOT REWRITTEN. The rows leave it entirely, so
-// there is nothing to place; what covers a reader whose closure names the
-// source is this sequence's own scope, which carries BOTH containers.
-//
-// CRASH RESIDUE: a tag declared with no task yet (harmless); an alias for a key
-// still held (harmless — the apply never lowers `current`); a numbering gap of
-// at most 64; descendants still keyed in the old project. REPAIRER: the tracker
-// duty, on a claim whose heartbeat aged past [ClaimStale], completes the walk
-// idempotently — a descendant whose row already carries the target project
-// writes nothing.
-func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target string,
-	newTags []Tag) (WriteResult, error) {
-
-	switch {
-	case taskID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a cross-project move names no task")
-	case target == "":
-		return WriteResult{}, fmt.Errorf("tracker: a cross-project move names no project")
-	}
-	claim, err := w.hold(ctx, moveClaim(taskID))
-	if err != nil {
-		return WriteResult{}, err
-	}
-	defer claim.release(ctx)
-
-	// The subtree, read ONCE and ordered by (depth, id) — the ordering the
-	// range assignment is a pure function of, so a duty completing this
-	// walk on another node assigns every descendant the same key.
-	var root Task
-	var subtree []Task
-	if w.db == nil {
-		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
-			"so it cannot read the subtree a cross-project move re-keys")
-	}
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		current, held, err := readTask(ctx, tx, taskID)
-		switch {
-		case err != nil:
-			return err
-		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				taskID, statelog.ErrUnavailable)
-		case current.Parent != nil && *current.Parent != "":
-			return fmt.Errorf("tracker: task %s has a parent, and only a ROOT "+
-				"task moves between projects — moving a subtask alone would "+
-				"leave it in a project its parent is not in", taskID)
-		case current.Project == target:
-			return fmt.Errorf("tracker: task %s is already in %s", taskID, target)
-		}
-		root = current
-		project, held, err := readProject(ctx, tx, target)
-		switch {
-		case err != nil:
-			return err
-		case !held:
-			return fmt.Errorf("tracker: project %s is not on this node: %w",
-				target, statelog.ErrUnavailable)
-		case project.Archived:
-			return fmt.Errorf("tracker: project %s is archived, so nothing "+
-				"moves into it", target)
-		}
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := requiredFields(ctx, tx, project, current); err != nil {
-			return err
-		}
-		subtree, err = readSubtree(ctx, tx, taskID)
-		return err
-	}); err != nil {
-		return WriteResult{}, err
-	}
-	if len(subtree) > MaxDescendants {
-		return WriteResult{}, fmt.Errorf("tracker: task %s has %d descendants "+
-			"and a move carries at most %d", taskID, len(subtree), MaxDescendants)
-	}
-
-	at := w.Now()
-	if len(newTags) > 0 {
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		set, err := w.tagsOf(ctx, target)
-		if err != nil {
-			return WriteResult{}, err
-		}
-		if merged, changed := mergeTags(set, newTags); changed {
-			if _, err := w.WriteDocument(ctx, stepID(opID, "tags"),
-				TagsSubject(target), "", merged, ChangeTags, nil); err != nil {
-				return WriteResult{}, fmt.Errorf("tracker: declare the moving "+
-					"subtree's tags in %s: %w", target, err)
-			}
-		}
-	}
-
-	// THE ALIAS BEFORE THE RE-KEY, so a key somebody pastes into chat
-	// keeps resolving from the moment it stops being current.
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if _, err := w.claimAlias(ctx, stepID(opID, "alias"), root.Key, taskID, at); err != nil {
-		return WriteResult{}, err
-	}
-
-	base, _, err := w.mintKey(ctx, stepID(opID, "counter"), target, 1+len(subtree), nil)
-	if err != nil {
-		return WriteResult{}, err
-	}
-
-	former := append(append([]string{}, root.FormerKeys...), root.Key)
-	rootKey := fmt.Sprintf("%s-%d", target, base)
-	rootRank, err := IntegerAt(base)
-	if err != nil {
-		return WriteResult{}, err
-	}
-	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target, former,
-		&KeyMint{N: base, Base: base, Length: 1 + len(subtree)})
-	if err != nil {
-		return result, err
-	}
-
-	for i, descendant := range subtree {
-		n := base + uint64(i) + 1
-		step := stepID(opID, fmt.Sprintf("d%d", i))
-		if _, err := w.moveOne(ctx, step, descendant, target,
-			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
-			&KeyMint{N: n}); err != nil {
-			return result, fmt.Errorf("tracker: %d of %d descendants moved; the "+
-				"tracker duty completes the rest idempotently: %w",
-				i, len(subtree), err)
-		}
-	}
-	result.Key, result.Rank = rootKey, rootRank
-	return result, nil
-}
-
-// moveOne re-homes one task of a moving subtree.
-func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
-	target string, former []string, mint *KeyMint) (WriteResult, error) {
-
-	patch := TaskPatch{Project: &target, FormerKeys: &former, Mint: mint}
-	// NO NOTIFICATION AND NO HISTORY BUMP on a descendant: a subtree that
-	// moved wakes the people watching the root, not everybody watching
-	// every task beneath it.
-	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch, patch,
-		ChangeMoved, nil)
-}
-
-// claimAlias takes a former key, create-only, so the key keeps resolving.
-//
-// FIRST-WRITER-WINS ON ITS OWN SUBJECT, and a claim that loses is not an error:
-// somebody already recorded this key's move, which is the fact the claim
-// exists to establish.
-func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
-	at time.Time) (WriteResult, error) {
-
-	subject := AliasSubject(key, 1)
-	scope := ScopeSet{Subject: true}
-	result, err := w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternCreate,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			if owner, claimed, err := readAlias(ctx, tx, key); err != nil {
-				return statelog.Decision{}, err
-			} else if claimed && owner != taskID {
-				return statelog.Decision{}, fmt.Errorf("tracker: key %s belongs "+
-					"to task %s, so it cannot be aliased to %s", key, owner, taskID)
-			}
-			return w.decide(subject, OpCreate, "", scope, opID, KeyAlias{
-				Key: key, TaskID: taskID,
-			}, nil, at)
-		},
-	})
-	if errors.Is(err, statelog.ErrExists) {
-		return result, nil
-	}
-	return result, err
-}
-
-// tagsOf reads a project's tag set outside any decision.
-func (w *Writer) tagsOf(ctx context.Context, project string) (TagSet, error) {
-	var set TagSet
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		stored, held, err := readTagSet(ctx, tx, project)
-		if err != nil {
-			return err
-		}
-		if !held {
-			stored = TagSet{V: DocumentVersion, Project: project}
-		}
-		set = stored
-		return nil
-	})
-	return set, err
-}
-
-// mergeTags adds the tags a moving subtree carries that the target lacks.
-//
-// BY SLUG AND NEVER BY LABEL, because a slug is what a stored value points at
-// and a label is what somebody renamed last week. Reports whether anything
-// changed, so a move that brings no new tag publishes no record at all.
-func mergeTags(set TagSet, incoming []Tag) (TagSet, bool) {
-	have := make(map[string]bool, len(set.Tags))
-	for _, t := range set.Tags {
-		have[t.Slug] = true
-	}
-	changed := false
-	for _, t := range incoming {
-		if t.Slug == "" || have[t.Slug] {
-			continue
-		}
-		have[t.Slug] = true
-		set.Tags = append(set.Tags, t)
-		changed = true
-	}
-	if changed {
-		set.TagsVersion++
-	}
-	return set, changed
-}
-
 // MergeDuplicates folds one task into another. SEQUENCE 13.
 //
 //	Rk, then take merge/<task> → A on the duplicate (the merge marker and
@@ -976,9 +731,8 @@ func mergeTags(set TagSet, incoming []Tag) (TagSet, bool) {
 //	status → release.
 //
 // CRASH RESIDUE: children partly re-parented. REPAIRER: the tracker duty, and
-// it is idempotent for the same reason the move's walk is — a child already
-// carrying the new parent is not selected, so a completion writes only what is
-// left.
+// it is idempotent BY SELECTION — a child already carrying the new parent is
+// not selected, so a completion writes only what is left.
 //
 // THE MARKER IS CLEARED LAST. While it stands, the duplicate is visibly
 // mid-merge rather than silently half-merged, which is the difference between

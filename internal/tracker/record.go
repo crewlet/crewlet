@@ -105,11 +105,6 @@ const (
 	MaxChecklistItems      = 64
 	MaxChecklistItemsTotal = 256
 
-	// MaxFormerKeys bounds what a task DISPLAYS. Resolution is unbounded:
-	// every former key also has an alias row, and the applier never
-	// deletes one on a task apply.
-	MaxFormerKeys = 16
-
 	// MaxMentions bounds a comment's resolved mentions.
 	MaxMentions = 32
 
@@ -309,9 +304,8 @@ type Task struct {
 	Version       uint64 `json:"version"`
 	ScopedThrough uint64 `json:"scoped_through,omitempty"`
 
-	Key        string   `json:"key"`
-	FormerKeys []string `json:"former_keys,omitempty"`
-	Project    string   `json:"project"`
+	Key     string `json:"key"`
+	Project string `json:"project"`
 
 	// FiledUnit is IMMUTABLE and is a RECORD OF WHAT WAS TRUE: nothing
 	// rewrites it, and it may legitimately name a unit the chart no longer
@@ -501,17 +495,6 @@ type BodyRevision struct {
 	At         time.Time  `json:"at"`
 }
 
-// KeyAlias is a row created by the commit that mints or moves a key.
-//
-// NEVER DELETED BY A TASK APPLY and never lowered from current by a later one:
-// a former key must go on resolving for the life of the deployment, because it
-// is pasted into chat and typed into tool calls.
-type KeyAlias struct {
-	Key     string `json:"key"`
-	TaskID  string `json:"task_id"`
-	Current bool   `json:"current,omitempty"`
-}
-
 // Counter is a project's key sequence, on its own subject so a mint never
 // contends with an edit to that project's settings.
 type Counter struct {
@@ -604,7 +587,6 @@ type TaskPatch struct {
 	Assignee    *string   `json:"assignee,omitempty"`
 	RoutingUnit *string   `json:"routing_unit,omitempty"`
 	Parent      *string   `json:"parent,omitempty"`
-	Project     *string   `json:"project,omitempty"`
 
 	// Mint is the counter value this record took, and THE ONLY WAY A
 	// PATCH MAY WRITE A KEY OR A RANK.
@@ -702,7 +684,6 @@ type TaskPatch struct {
 	Relations     *[]Relation                 `json:"relations,omitempty"`
 	Dependents    *[]string                   `json:"dependents,omitempty"`
 	Checklists    *[]Checklist                `json:"checklists,omitempty"`
-	FormerKeys    *[]string                   `json:"former_keys,omitempty"`
 
 	// Comment rides a task write, because a comment is a mutation of the
 	// task and shares its arbitration.
@@ -1280,23 +1261,8 @@ type Position struct {
 const MaxCommitBytes = 1_279_262
 
 // KeyMint is a counter value a record took, carried on the record that uses it.
-//
-// # Why the RANGE rides the record and is not recomputed
-//
-// A cross-project move re-keys a whole subtree from one range mint, and the
-// base is NOT recoverable afterwards: by the time a duty completes an
-// abandoned walk, other creates have advanced the counter, so a duty that
-// recomputed the base would assign a different key to the same descendant on a
-// different node. The ordering by (depth, id) fixes the ORDER; only the base on
-// the record fixes the ORIGIN — which is what makes the walk's completion a
-// pure function of the record rather than of when it runs.
 type KeyMint struct {
 	// N is the counter value this task took. Its key is "<PROJECT>-<n>"
 	// and its rank is the n-th key of the create lattice.
 	N uint64 `json:"n"`
-
-	// Base and Length describe the whole range, on the ROOT record of a
-	// moving subtree alone. Zero on every other mint.
-	Base   uint64 `json:"base,omitempty"`
-	Length int    `json:"length,omitempty"`
 }

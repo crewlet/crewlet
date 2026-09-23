@@ -419,8 +419,8 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 
 	if task := strings.TrimSpace(q.Task); task != "" {
 		// THE ID, RESOLVED FROM WHATEVER THE CALLER HELD. A feed asked
-		// for by a FORMER key must answer the same rows — the history is
-		// the one place a rename is most likely to be looked up from.
+		// for by the key must answer the same rows as one asked for by
+		// the id, because every history row is filed under the id.
 		id, err := resolveTaskID(ctx, tx, task)
 		if err != nil {
 			return nil, nil, err

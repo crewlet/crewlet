@@ -146,11 +146,10 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
 		Publisher: publisher, DB: db, NodeID: "node-a",
 		// A REAL CLAIM BACKEND, because the WALKING sequences refuse
-		// without one and a harness that could not run them left the
-		// cross-project move — and everything it reads, including the
-		// subtree walk the trash shares — with no test at all. In-memory
-		// is the whole of what a single-node harness needs: the claim is
-		// there to exclude a SECOND node.
+		// without one and a harness that could not run them leaves a
+		// merge with no test at all. In-memory is the whole of what a
+		// single-node harness needs: the claim is there to exclude a
+		// SECOND node.
 		Claims: memory.New(),
 		Actor:  "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return r.at },

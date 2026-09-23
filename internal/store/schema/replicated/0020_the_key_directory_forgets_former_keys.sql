@@ -1,0 +1,24 @@
+-- `tracker_task_keys.current` goes, with the cross-project move it described.
+--
+-- 0002 built the key directory for a task whose key could CHANGE: a move
+-- between projects re-keyed a whole subtree and left each former key behind
+-- as an alias row with `current = 0`, so a key pasted into chat before the move
+-- still opened the task after it. The move never had a caller — no tool, no
+-- route, no duty — and it went in the same commit as this file, taking the
+-- alias record, the former-key list on the task and the scope term that
+-- addressed a key with it.
+--
+-- WITHOUT IT A KEY IS MINTED ONCE AND NEVER CHANGES, so every row here is the
+-- key its task holds now and `current` was 1 on every row anybody could write:
+-- a column written on every task apply, on every node, that no statement has
+-- ever read.
+--
+-- THE TABLE STAYS. It is the key directory — which task FIRST claimed a key —
+-- and the reference graph resolves a body's mentions through it, which is a
+-- question about a key rather than about a task row. Its task-id index stays
+-- too: the purge deletes a task's row through it.
+--
+-- IT IS DROPPED IN THE COMMIT THAT STOPS WRITING IT and not before, for 0018's
+-- reason: a column removed while its writer still fills it is an apply that
+-- fails on every node at once.
+ALTER TABLE tracker_task_keys DROP COLUMN current;

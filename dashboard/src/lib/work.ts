@@ -125,7 +125,7 @@ export function typeName(slug: string | undefined, types?: WorkTypeDef[]): strin
 }
 
 /**
- * The engine's twenty-seven change kinds, each with the mark it is drawn as and
+ * The engine's twenty-six change kinds, each with the mark it is drawn as and
  * the phrase a person reads.
  *
  * A MARK RATHER THAN A HUE, which is this file's own rule for a task type a few
@@ -156,7 +156,6 @@ export const CHANGES: { kind: string; mark: MarkName; phrase: string }[] = [
   { kind: "tags", mark: "tag", phrase: "changed the tags" },
   { kind: "relations", mark: "link", phrase: "changed a relation" },
   { kind: "routed", mark: "fork_right", phrase: "routed it" },
-  { kind: "moved", mark: "move_item", phrase: "moved it to another project" },
   { kind: "reparented", mark: "account_tree", phrase: "changed its parent" },
   { kind: "checklist", mark: "list", phrase: "changed a checklist" },
   { kind: "archived", mark: "package_2", phrase: "archived it" },
@@ -181,7 +180,7 @@ const BY_KIND = new Map(CHANGES.map((change) => [change.kind, change]));
 /**
  * The mark a change of this kind is drawn as.
  *
- * `difference` — "something changed", claimed by none of the twenty-seven — for a
+ * `difference` — "something changed", claimed by none of the twenty-six — for a
  * kind a NEWER PEER wrote. The event envelope evolves additive-only, so a
  * rolling upgrade puts kinds this build has never heard of on the wire, and a
  * row that drew nothing for one would read as a rendering fault.

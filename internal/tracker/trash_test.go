@@ -176,69 +176,16 @@ func TestRemovingAndRestoringAreIdempotent(t *testing.T) {
 	}
 }
 
-// A CROSS-PROJECT MOVE CARRIES THE SUBTREE, and until now it could not read
-// one.
-//
-// readSubtree's recursive CTE named the column `parent`, and the column is
-// `parent_id` — so every walk that had a descendant to carry failed at the
-// first statement with a parse error, and the only reason nothing noticed is
-// that MoveTaskToProject had no test at all. It is the trash's own walk too:
-// a subtree removal reads the same function.
-func TestACrossProjectMoveCarriesTheSubtree(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	if _, err := r.writer.WriteDocument(t.Context(), "op-ops",
-		tracker.ProjectSubject("OPS"), "", tracker.Project{
-			V: 1, Key: "OPS", Name: "Operations",
-			CreatedAt: wednesday, UpdatedAt: wednesday,
-		}, tracker.ChangeProjectCreated, nil); err != nil {
-		t.Fatalf("seed the target project: %v", err)
-	}
-	r.drain()
-
-	if _, err := r.writer.CreateTask(t.Context(), "op-root",
-		newTask("m-root"), nil); err != nil {
-		t.Fatalf("CreateTask root: %v", err)
-	}
-	r.drain()
-	kid := newTask("m-kid")
-	kid.Key = "ENG-2"
-	parent := "m-root"
-	kid.Parent, kid.Depth = &parent, 1
-	if _, err := r.writer.CreateTask(t.Context(), "op-kid", kid, nil); err != nil {
-		t.Fatalf("CreateTask kid: %v", err)
-	}
-	r.drain()
-
-	if _, err := r.writer.MoveTaskToProject(t.Context(), "op-move", "m-root",
-		"OPS", nil); err != nil {
-		t.Fatalf("MoveTaskToProject: %v", err)
-	}
-	r.drain()
-
-	for _, id := range []string{"m-root", "m-kid"} {
-		got := oneTask(t, r, id)
-		if got.Project != "OPS" {
-			t.Errorf("%s is in project %q after the move, want OPS — the "+
-				"descendant walk is what carries a child across", id, got.Project)
-		}
-		if !strings.HasPrefix(got.Key, "OPS-") {
-			t.Errorf("%s keeps the key %q after the move, and a key names the "+
-				"project it is in", id, got.Key)
-		}
-	}
-}
-
-// A WRITE DECIDED ON A PROJECT THE TASK HAS LEFT IS A CONFLICT, not a write.
+// A WRITE DECIDED ON A PROJECT THE TASK IS NOT IN IS A CONFLICT, not a write.
 //
 // Every caller reads a task's project off the row BEFORE the write and decides
 // on it who may act — a removal and a restore are that project lead's, and a
-// re-route is that project's own — so the project it passes is the premise of
-// the authority, not a label. A task moved in between is another project's to
-// remove, restore or re-route, and the write used to land anyway under a scope
-// naming the container the task had left. This moves the task between the
-// caller's read (ENG) and its write, which is exactly that race.
-func TestAWriteDecidedOnTheProjectATaskLeftIsAConflict(t *testing.T) {
+// re-route is that project's own — and the write's scope is formed from it
+// too, before the snapshot exists. So the project it passes is the premise of
+// the authority, not a label: a caller that names OPS for a task filed in ENG
+// decided on the wrong lead and would publish under a scope that does not
+// cover the task it writes.
+func TestAWriteNamingAProjectTheTaskIsNotInIsAConflict(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	if _, err := r.writer.WriteDocument(t.Context(), "op-ops",
@@ -250,66 +197,61 @@ func TestAWriteDecidedOnTheProjectATaskLeftIsAConflict(t *testing.T) {
 	}
 	r.drain()
 	if _, err := r.writer.CreateTask(t.Context(), "op-create",
-		newTask("t-moves"), nil); err != nil {
+		newTask("t-eng"), nil); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	r.drain()
-
-	// THE CALLER READ IT IN ENG — and then it moved.
-	read := oneTask(t, r, "t-moves").Project
-	if read != "ENG" {
-		t.Fatalf("the task was filed under %q, want ENG", read)
+	if got := oneTask(t, r, "t-eng").Project; got != "ENG" {
+		t.Fatalf("the task was filed under %q, want ENG", got)
 	}
-	if _, err := r.writer.MoveTaskToProject(t.Context(), "op-move", "t-moves",
-		"OPS", nil); err != nil {
-		t.Fatalf("MoveTaskToProject: %v", err)
-	}
-	r.drain()
+	// THE CALLER DECIDED ON OPS, which the task is not in.
+	const named = "OPS"
 
 	conflict := func(verb string, err error) {
 		t.Helper()
 		switch {
 		case err == nil:
-			t.Errorf("%s decided on %s landed on a task now in OPS", verb, read)
+			t.Errorf("%s decided on %s landed on a task filed in ENG", verb, named)
 		case !errors.Is(err, statelog.ErrConflict):
-			t.Errorf("%s on a moved task = %v, want statelog.ErrConflict — "+
-				"the caller must read again and decide again", verb, err)
-		case !strings.Contains(err.Error(), "OPS"):
+			t.Errorf("%s naming the wrong project = %v, want "+
+				"statelog.ErrConflict — the caller must read again and decide "+
+				"again", verb, err)
+		case !strings.Contains(err.Error(), "ENG"):
 			t.Errorf("%s's conflict %q does not name the project the task is "+
-				"in now, which is the one the caller must decide on", verb, err)
+				"in, which is the one the caller must decide on", verb, err)
 		}
 	}
 
-	_, err := r.writer.RemoveTask(t.Context(), "op-remove", "t-moves", read,
+	_, err := r.writer.RemoveTask(t.Context(), "op-remove", "t-eng", named,
 		false, nil)
 	conflict("a removal", err)
 	r.drain()
-	if removed(t, r, "t-moves") {
-		t.Fatal("the task is in the trash on the authority of a project it left")
+	if removed(t, r, "t-eng") {
+		t.Fatal("the task is in the trash on the authority of a project it is not in")
 	}
 
-	title := "renamed on ENG's say-so"
-	_, err = r.writer.UpdateTask(t.Context(), "op-edit", "t-moves", read,
+	title := "renamed on OPS's say-so"
+	_, err = r.writer.UpdateTask(t.Context(), "op-edit", "t-eng", named,
 		tracker.NoIfMatch, tracker.TaskPatch{Title: &title},
 		tracker.ChangeFields, nil)
 	conflict("an update", err)
 	r.drain()
-	if got := oneTask(t, r, "t-moves").Title; got == title {
-		t.Error("the task took a patch decided on a project it left")
+	if got := oneTask(t, r, "t-eng").Title; got == title {
+		t.Error("the task took a patch decided on a project it is not in")
 	}
 
 	// AND THE RESTORE, which needs a task in the trash: removed on the
-	// project it IS in, then restored on the one it was read in.
-	if _, err := r.writer.RemoveTask(t.Context(), "op-remove-ops", "t-moves",
-		"OPS", false, nil); err != nil {
+	// project it IS in, then restored on the one the caller named.
+	if _, err := r.writer.RemoveTask(t.Context(), "op-remove-eng", "t-eng",
+		"ENG", false, nil); err != nil {
 		t.Fatalf("RemoveTask on the task's own project: %v", err)
 	}
 	r.drain()
-	_, err = r.writer.RestoreTask(t.Context(), "op-restore", "t-moves", read, nil)
+	_, err = r.writer.RestoreTask(t.Context(), "op-restore", "t-eng", named, nil)
 	conflict("a restore", err)
 	r.drain()
-	if !removed(t, r, "t-moves") {
-		t.Error("the task left the trash on the authority of a project it left")
+	if !removed(t, r, "t-eng") {
+		t.Error("the task left the trash on the authority of a project it is not in")
 	}
 }
 

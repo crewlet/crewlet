@@ -410,42 +410,6 @@ func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, c applyContex
 	return affected(res)
 }
 
-// applyAlias claims a key for a task.
-//
-// UPSERTED, NEVER DELETED BY A TASK APPLY, AND NEVER LOWERED FROM CURRENT: a
-// former key must go on resolving for the life of the deployment, because it
-// is pasted into chat and typed into tool calls. A key another task already
-// holds is LEFT AS IT IS and the newer task carries the collision flag —
-// because the alternative, taking the key, silently re-points every reference
-// anybody ever wrote.
-func (a *Applier) applyAlias(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
-	var alias KeyAlias
-	if err := decodePayload(c.record.Mutation, &alias); err != nil {
-		return 0, fmt.Errorf("tracker: decode the alias at %s: %w", c.position, err)
-	}
-	res, err := tx.ExecContext(ctx, `
-		INSERT INTO tracker_task_keys (key, task_id, current) VALUES (?,?,?)
-		ON CONFLICT (key) DO UPDATE SET current = MAX(current, excluded.current)
-		WHERE tracker_task_keys.task_id = excluded.task_id`,
-		alias.Key, alias.TaskID, boolInt(alias.Current))
-	if err != nil {
-		return 0, fmt.Errorf("tracker: claim key %s at %s: %w", alias.Key, c.position, err)
-	}
-	rows, err := affected(res)
-	if err != nil {
-		return 0, err
-	}
-	if rows == 0 {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tracker_tasks SET key_collision = 1 WHERE id = ?`,
-			alias.TaskID); err != nil {
-			return 0, fmt.Errorf("tracker: flag the key collision on %s: %w",
-				alias.TaskID, err)
-		}
-	}
-	return rows, nil
-}
-
 // The small conversions, in one place so a nil pointer means the same thing at
 // every call site.
 

@@ -338,8 +338,6 @@ func changeLead(meta map[string]string, actor string) string {
 		return "A checklist changed" + by + "."
 	case ChangeReparented:
 		return "The task was re-parented" + by + "."
-	case ChangeMoved:
-		return "The task moved project" + by + "."
 	case ChangeRouted:
 		return "The task was routed to another unit" + by + "."
 	case ChangeArchived:

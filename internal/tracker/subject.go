@@ -53,7 +53,7 @@ import (
 // make the writer's own deferral probe miss the record it is meant to see.
 type ObjectKind string
 
-// The thirteen kinds.
+// The twelve kinds.
 //
 // EXPORTED AND ENUMERATED because four readers that cannot see each other all
 // compare against them: the publisher builds the subject, the wake feed's
@@ -87,10 +87,6 @@ const (
 
 	// KindPerson is one person's inbox, priorities and pins.
 	KindPerson ObjectKind = "person"
-
-	// KindAlias is a cross-project move's create-only claim on a former
-	// key, where the unique tuple IS the subject.
-	KindAlias ObjectKind = "alias"
 
 	// KindTurn is a turn's spend, and the ONE ADDITIVE kind: it carries no
 	// expectation, bumps no object's version, and its apply's running
@@ -127,10 +123,10 @@ const (
 	KindBarrier ObjectKind = "barrier"
 )
 
-// ObjectKinds are the thirteen, in the order they are documented.
+// ObjectKinds are the twelve, in the order they are documented.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
-	KindCatalogue, KindView, KindPerson, KindAlias,
+	KindCatalogue, KindView, KindPerson,
 	KindTurn, KindGeneration, KindEviction, KindRankOrder, KindBarrier,
 }
 
@@ -190,7 +186,7 @@ func (k ObjectKind) Retired() bool { return slices.Contains(RetiredKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// ELEVEN OF THIRTEEN DO. A turn is ADDITIVE — it records spend that happened
+// TEN OF TWELVE DO. A turn is ADDITIVE — it records spend that happened
 // and races nobody — and a barrier is arbitrated by nothing at all: every
 // barrier shares one subject, so an expectation there would serialise the
 // whole company's linearizable reads behind one another and write an anchor
@@ -232,9 +228,9 @@ type Subject struct {
 }
 
 // The subject constructors, ONE PER KIND rather than a single
-// Subject{Kind, ID} literal at every call site, because half the ids are
-// composed — an alias claim's is "<KEY>.<n>" — and a composition written twice
-// is a subject two writers disagree about.
+// Subject{Kind, ID} literal at every call site, because some ids are
+// composed — a generation's is its number, formatted — and a composition
+// written twice is a subject two writers disagree about.
 
 // TaskSubject names one work item by its id. It is the subject every change to
 // that task is published on, so two writers racing on one task contend at the
@@ -283,15 +279,6 @@ func EvictionSubject(nodeID string) Subject {
 // it carries no expectation and bumps no object's version, so writers here
 // never contend — see [ObjectKind.Arbitrated].
 func TurnSubject(id string) Subject { return Subject{Kind: KindTurn, ID: id} }
-
-// AliasSubject names a cross-project move's create-only claim on a former key.
-//
-// The attempt NUMBER is part of the id because the claim is create-only: a
-// second move of the same key is a second claim, and re-using the first
-// subject would make it a lost race rather than a new fact.
-func AliasSubject(formerKey string, attempt int) Subject {
-	return Subject{Kind: KindAlias, ID: fmt.Sprintf("%s.%d", formerKey, attempt)}
-}
 
 // CatalogueSubject names one of the two workspace catalogues.
 func CatalogueSubject(which string) Subject {
@@ -365,8 +352,8 @@ func ParseSubject(wire string) (Subject, bool) {
 // A scope path is a containment hierarchy, so an object's own path sits under
 // its container's — which is what makes a project-wide deferral cover its
 // tasks. Most kinds derive that container from their own subject: a project,
-// counter, tag set or rank order IS a container key; an alias carries the
-// project in its id; a catalogue and a person live in a family;
+// counter, tag set or rank order IS a container key; a catalogue and a person
+// live in a family;
 // and the three fleet-wide kinds are about the whole domain.
 //
 // These three do not. A task's subject is a uuid and its project is a mutable
@@ -394,8 +381,8 @@ func (k ObjectKind) HomedInAProject() bool {
 // assignee, a watcher, a dependent — which is why the parser used to drop it
 // and why it arrives under its own reason instead.
 //
-// EVERY OTHER KIND IS MACHINERY OR IS ANNOUNCED ELSEWHERE. A counter, an alias
-// and a rank order have no audience at all; a catalogue, a view, a tag set and
+// EVERY OTHER KIND IS MACHINERY OR IS ANNOUNCED ELSEWHERE. A counter and a
+// rank order have no audience at all; a catalogue, a view, a tag set and
 // a project's settings are read from their own surfaces rather than woken into
 // somebody's inbox, and a wake per catalogue edit would page the whole company
 // for a renamed dropdown.
@@ -426,7 +413,7 @@ func (k ObjectKind) Routable() bool {
 //
 // The five document kinds and the task are exactly the kinds [Applier.apply]
 // routes to a path that writes one. Everything else — a barrier, a turn, an
-// eviction, a generation, an alias, a rank order, a counter — is machinery
+// eviction, a generation, a rank order, a counter — is machinery
 // with no audience and no entry in anybody's account of what happened, so a
 // change kind on one of those would be a word about a record nobody reads.
 //

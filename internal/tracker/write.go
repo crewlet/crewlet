@@ -472,17 +472,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 		patch.Tags = &tags
 	}
 	subject := TaskSubject(id)
-	// A PROJECT MOVE TOUCHES BOTH CONTAINERS, so it states them: the
-	// task's rows leave one project's closure and arrive in another's, and
-	// a scope naming only the destination would let a write into the
-	// project it left slip past a deferral that covers it.
 	scope := ScopeSet{Subject: true, Container: project}
-	if patch.Project != nil && *patch.Project != project {
-		scope = ScopeSet{Terms: []ScopeTerm{
-			{Kind: TermObject, Container: project, ID: id},
-			{Kind: TermObject, Container: *patch.Project, ID: id},
-		}}
-	}
 	// EVERY PATCH, not only a status one. The apply rewrites every row
 	// naming this task as a blocker on EVERY task apply — `maintainDeps`
 	// runs out of `explodeTask`, which nothing gates — so a patch that
@@ -520,13 +510,12 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
 					"on this node: %w", id, statelog.ErrUnavailable)
 			}
-			// THE PROJECT THE CALLER DECIDED ON IS STILL THIS TASK'S —
-			// see [stillIn]. A re-route is the project's own decision and
+			// THE PROJECT THE CALLER DECIDED ON IS THIS TASK'S — see
+			// [filedUnder]. A re-route is the project's own decision and
 			// the tag set, the scope and every lead check upstream were
-			// formed against it, so a task that moved in between is
-			// another project's write.
-			if moved := stillIn(current, project); moved != nil {
-				return statelog.Decision{}, moved
+			// formed against it.
+			if wrong := filedUnder(current, project); wrong != nil {
+				return statelog.Decision{}, wrong
 			}
 			if current.Removed != nil {
 				// A TOMBSTONED TASK IS FROZEN — no comment, body, field
@@ -556,16 +545,8 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				patch = amended
 			}
 			if patch.Tags != nil {
-				// AGAINST THE TASK'S OWN PROJECT rather than the
-				// argument's, because a move carries the tags into
-				// the destination before it re-homes the task and
-				// this read is the one that sees both.
-				home := current.Project
-				if patch.Project != nil {
-					home = *patch.Project
-				}
 				//nolint:govet // shadow: scoped to this block; see .golangci.yml
-				if err := declaredTags(ctx, tx, home, *patch.Tags); err != nil {
+				if err := declaredTags(ctx, tx, current.Project, *patch.Tags); err != nil {
 					return statelog.Decision{}, err
 				}
 			}

@@ -377,10 +377,10 @@ func (s *Service) patchItemComment(w http.ResponseWriter, r *http.Request) {
 // # The project is the row's
 //
 // The record arbitrates under the item's own project, and the stored row is
-// the one place that says which that is: a key's prefix names where the item
-// was FILED, which a move leaves behind as an alias. The route this replaced
-// took it as a parameter, and a purge filed under the wrong one blocks writes
-// to a project it is not about.
+// the one place that says which that is: the path may name the item by its
+// id, which names no project. The route this replaced took it as a
+// parameter, and a purge filed under the wrong one blocks writes to a project
+// it is not about.
 //
 // # A reason is required, and a retry reuses the operation
 //

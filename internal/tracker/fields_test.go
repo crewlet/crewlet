@@ -469,8 +469,8 @@ func TestAValueOfAFieldThatDoesNotApplyIsHidden(t *testing.T) {
 
 // A VALUE FOR A FIELD NOBODY DECLARES IS RECORDED AS FOREIGN, not dropped.
 //
-// A cross-project move orphans values, and a task that still holds them must
-// not read as one that lost them. With no declaration there is no type and so
+// A declaration withdrawn from the catalogue orphans values, and a task that
+// still holds them must not read as one that lost them. With no declaration there is no type and so
 // no column, which is why the row carries the value's own JSON and is excluded
 // from every filter, total and grouping by its kind rather than by its shape.
 func TestAValueForAnUndeclaredFieldIsRecordedAsForeign(t *testing.T) {

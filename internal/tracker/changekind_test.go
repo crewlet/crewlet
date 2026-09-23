@@ -125,7 +125,7 @@ func TestEveryHistoryRowNamesAKindThisBuildKnows(t *testing.T) {
 // writes none is refused WITH one.
 //
 // Both halves, because the rule is a partition rather than a requirement: a
-// barrier, a turn, a rank move and an alias produce no row for a kind to
+// barrier, a turn, a rank move and a counter produce no row for a kind to
 // describe, and a change kind on one of those would be a word about a record
 // nobody reads. The guard is what makes a kind added later fail the writer
 // rather than publish a row filed under a guess.
@@ -348,7 +348,7 @@ func historyNotified(t *testing.T, r *roundTrip, kind, id string) bool {
 // gets an opener, a key and a **By:** with nothing between them saying what
 // the person did — which is the one thing the wake exists to carry.
 //
-// `changeLead` names twenty of the twenty-seven kinds and nothing connected
+// `changeLead` names nineteen of the twenty-six kinds and nothing connected
 // the two lists, so the gap was invisible from both ends. The seven it does
 // not name never reach it — `Prompt.Build` dispatches on [MetaObject] first,
 // so the two person-subject kinds render through [buildObjectPrompt], and the
@@ -371,9 +371,8 @@ func TestEveryRoutableChangeKindRendersWhatHappened(t *testing.T) {
 		tracker.ChangeStatus: true, tracker.ChangeAssignee: true,
 		tracker.ChangeCollaborators: true, tracker.ChangeWatchers: true,
 		tracker.ChangeTags: true, tracker.ChangeRelations: true,
-		tracker.ChangeRouted: true, tracker.ChangeMoved: true,
-		tracker.ChangeReparented: true,
-		tracker.ChangeChecklist:  true, tracker.ChangeArchived: true,
+		tracker.ChangeRouted: true, tracker.ChangeReparented: true,
+		tracker.ChangeChecklist: true, tracker.ChangeArchived: true,
 		tracker.ChangeComment: true, tracker.ChangeCommentEdited: true,
 		tracker.ChangeCommentResolved: true, tracker.ChangeCommentRemoved: true,
 		tracker.ChangeRemoved: true, tracker.ChangeRestored: true,

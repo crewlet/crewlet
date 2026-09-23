@@ -366,7 +366,6 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	setString(&task.Type, patch.Type)
 	setString(&task.Assignee, patch.Assignee)
 	setString(&task.RoutingUnit, patch.RoutingUnit)
-	setString(&task.Project, patch.Project)
 	if patch.Mint != nil {
 		// THE MINT IS THE AUTHORITY FOR BOTH, derived rather than
 		// carried, so a record cannot claim a key and a rank that
@@ -445,7 +444,6 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	setSlice(&task.Relations, patch.Relations)
 	setSlice(&task.Dependents, patch.Dependents)
 	setSlice(&task.Checklists, patch.Checklists)
-	setSlice(&task.FormerKeys, patch.FormerKeys)
 	if patch.Fields != nil {
 		task.Fields = *patch.Fields
 	}
@@ -679,7 +677,7 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return 0, err
 	}
-	keys, err := a.maintainKeys(ctx, tx, task, c)
+	keys, err := a.maintainKeys(ctx, tx, task)
 	if err != nil {
 		return 0, err
 	}
@@ -845,37 +843,24 @@ func (a *Applier) maintainReferences(ctx context.Context, tx *sql.Tx, task Task)
 	return written, nil
 }
 
-// maintainKeys keeps the key directory, current and former.
-func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task,
-	c applyContext) (int, error) {
-
-	// THE CURRENT KEY AND THE FORMER ONES ARE ONE COLLECTION, with the
-	// empty ones dropped rather than skipped mid-loop — a row template
-	// repeats for every element it is given, so the filtering happens here
-	// instead.
-	//
-	// A key that is in both lists — a rename that came back — is two rows
-	// in one statement, and they agree: `current` is computed from the
-	// entry rather than from its position, so the upsert resolves the pair
-	// to the same value whichever of them lands second.
-	entries := make([]string, 0, 1+len(task.FormerKeys))
-	for _, entry := range append([]string{task.Key}, task.FormerKeys...) {
-		if entry != "" {
-			entries = append(entries, entry)
-		}
+// maintainKeys keeps the key directory: one row per key, naming the task that
+// holds it.
+//
+// A KEY IS MINTED ONCE AND NEVER CHANGES, so a task has exactly one row here
+// for its life and the row is claimed by the first task to hold the key. A
+// key another task already holds is LEFT AS IT IS, because taking it would
+// silently re-point every reference anybody ever wrote.
+func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task) (int, error) {
+	if task.Key == "" {
+		return 0, nil
 	}
-	written, err := insertMany(ctx, tx, c.maxVariables,
-		`INSERT INTO tracker_task_keys (key, task_id, current) VALUES`,
-		`(?,?,?)`,
-		`ON CONFLICT (key) DO UPDATE SET current = excluded.current
-		 WHERE tracker_task_keys.task_id = excluded.task_id`,
-		entries, func(entry string) []any {
-			return []any{entry, task.ID, boolInt(entry == task.Key)}
-		})
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO tracker_task_keys (key, task_id) VALUES (?,?)
+		ON CONFLICT (key) DO NOTHING`, task.Key, task.ID)
 	if err != nil {
-		return 0, fmt.Errorf("tracker: claim the keys of %s: %w", task.ID, err)
+		return 0, fmt.Errorf("tracker: claim the key of %s: %w", task.ID, err)
 	}
-	return written, nil
+	return affected(res)
 }
 
 // maintainProjectCounts moves the three maintained counters.
@@ -892,7 +877,9 @@ func (a *Applier) maintainProjectCounts(ctx context.Context, tx *sql.Tx,
 	if held {
 		was = bucketOf(current)
 	}
-	if was == is && current.Project == next.Project {
+	// A TASK'S PROJECT NEVER CHANGES — it is part of the key, which is
+	// minted once — so a count moves only when the task changes bucket.
+	if was == is {
 		return 0, nil
 	}
 	written := 0
@@ -946,7 +933,7 @@ func bucketOf(task Task) string {
 // EVERYWHERE the task is named.
 //
 // Its own rows and its OUTBOUND references go with it; so do the INBOUND ones,
-// with the alias rows that made the key resolvable at all — because a
+// with the key directory row that made the key resolvable at all — because a
 // reference to a key nothing resolves is a dangling link a reader cannot tell
 // from a typo. All in one transaction, and the marker it writes is what stops
 // a redelivery months later resurrecting any of it.

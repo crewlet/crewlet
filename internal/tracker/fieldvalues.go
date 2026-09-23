@@ -122,9 +122,9 @@ func (a *Applier) explodeFieldValues(ctx context.Context, tx *sql.Tx,
 			// value's own JSON and is both hidden and kinded
 			// `foreign`, which is what [liveFieldValue] excludes it
 			// by. What it buys is that the value has a local
-			// representation: a cross-project move orphans values,
-			// and a task that still holds them must not read as a
-			// task that lost them. A declaration arriving later
+			// representation: a declaration withdrawn from the
+			// catalogue orphans values, and a task that still holds
+			// them must not read as a task that lost them. A declaration arriving later
 			// re-explodes it as native on the task's next write.
 			rows, err := writeForeignValue(ctx, tx, task.ID, id, task.Fields[id])
 			if err != nil {

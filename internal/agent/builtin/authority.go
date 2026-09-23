@@ -218,10 +218,9 @@ var subjectOf = map[string]subject{
 	"save_work_view": {kind: authz.KindView, personal: "personal", container: "container"},
 
 	// THE TRASH IS DECIDED BY THE TASK'S OWN PROJECT, which is a stored row
-	// and never an argument: the tools take a key or an id, and a key's
-	// prefix names the project the item was FILED under, which a move
-	// leaves behind as an alias. So the gate cannot form the object, and
-	// these tools ask the same action themselves once they have read it.
+	// and never an argument: the tools take a key or an id, and an id names
+	// no project. So the gate cannot form the object, and these tools ask
+	// the same action themselves once they have read it.
 	//
 	// Decided here with the empty object they had, every caller but the
 	// holder of the admin grant was refused as naming no project — a

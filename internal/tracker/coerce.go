@@ -460,9 +460,9 @@ func optionList(field FieldDef) string {
 	return strings.Join(out, ", ")
 }
 
-// coerceRelationship stores a task ID, resolved from a key, a former key or an
-// id — for the reason every other relation gives: a key stored in one resolves
-// to nothing on every node, for ever.
+// coerceRelationship stores a task ID, resolved from a key or an id — for the
+// reason every other relation gives: a key stored in one resolves to nothing
+// on every node, for ever.
 func coerceRelationship(field FieldDef, raw json.RawMessage, refs fieldRefs) (coerced, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {

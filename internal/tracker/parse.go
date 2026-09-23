@@ -97,7 +97,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	if !record.Subject.Kind.Routable() {
 		// A PROJECT, A CATALOGUE, A VIEW OR A TAG SET is read from its
 		// own surface rather than woken into somebody's inbox, and a
-		// counter or an alias has no audience at all. See
+		// counter or a rank order has no audience at all. See
 		// [ObjectKind.Routable] for why the set is closed rather than a
 		// negative test.
 		return nil, nil

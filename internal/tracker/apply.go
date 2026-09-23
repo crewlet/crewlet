@@ -207,8 +207,6 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return a.applyEviction(ctx, tx, at)
 	case KindGeneration:
 		return a.applyGeneration(ctx, tx, at)
-	case KindAlias:
-		return a.applyAlias(ctx, tx, at)
 	case KindRankOrder:
 		return a.applyRankOrder(ctx, tx, at)
 	case KindCounter:
