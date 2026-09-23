@@ -3052,11 +3052,12 @@ surface that has a request rather than a turn — this one and the
 
 | Who is calling | Recorded as | Author kind | `operator_id` |
 |---|---|---|---|
-| A person the identity directory binds to a seat | the **seat's handle** | `human` | their login |
-| A person bound to no seat | their **login** (`jane.doe`) | `operator` | their login |
-| A person's own [machine token](#post-iamcredentials-mints-a-machine-token) | the **owner**, as above — their seat when bound | `human` or `operator` | **`pat:<credential id>`** |
-| A service account's machine token | the account's **login** (`svc:ci`), or its seat when bound | `operator` | **`pat:<credential id>`** |
-| A Tier A token | its **whole login** (`token:ops`) | `operator` | its login |
+| A person signed in at a browser, the identity directory binding them to a seat | the **seat's handle** | `human` | **`session:<lineage>`** |
+| A person signed in at a browser, bound to no seat | their **login** (`jane.doe`) | `operator` | **`session:<lineage>`** |
+| A person's own [machine token](#post-iamcredentials-mints-a-machine-token) | the **owner**, as above — their seat when bound | `human` when bound, `operator` otherwise | **`pat:<credential id>`** |
+| A service account's machine token | the account's **login** (`svc:ci`), or its seat when bound | `human` when bound, `operator` otherwise | **`pat:<credential id>`** |
+| A Tier A token | its **whole login** (`token:ops`), or its seat when the directory binds it | `human` when bound, `operator` otherwise | its login (`token:ops`) |
+| A Tier A token's exchanged session ([`POST /auth/token`](#routes)) | as the token, above | as the token | **`session:<lineage>`** |
 
 The seat half is what lets the tracker leave you out of the wake your own
 change sends: nobody is woken about what they just did, and the tracker
@@ -3073,7 +3074,13 @@ authority being exercised, so they are the author — and `operator_id` is what
 tells a write their assistant made through it from one they made themselves;
 before it carried `pat:<id>` the two were the same row, and a token minted on
 somebody's account could file, edit and close their work with nothing saying a
-token was used. The trails with room for one name — a configuration revision's
+token was used. A browser session is the same question asked of a person at a
+dashboard: the author is them, and `session:<lineage>` is which of their
+sign-ins made the write — it used to repeat their login, which the author
+already names, so two browsers, or a tab left open on a shared machine, were
+one name in every trail. The lineage is what an investigation follows from a
+row to the sign-in behind it: `GET /iam/people/{id}/sessions` lists it, and
+`iam_session_started` announced it. The trails with room for one name — a configuration revision's
 `created_by`, a secret's `set_by` — record the credential for the same reason:
 `pat:<id>` for a machine token, whose owner the credential listing and the
 identity trail's mint row name. The identity estate's own audit events

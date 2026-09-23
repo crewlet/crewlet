@@ -112,7 +112,8 @@ func (r *exchangeRig) rebuild(b config.Bootstrap) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"login": p.Login, "kind": p.Kind, "seat": p.Seat,
 			"grants": p.Grants, "colleague": p.Colleague,
-			"fresh": p.Fresh(time.Now()),
+			"fresh":    p.Fresh(time.Now()),
+			"operator": iam.ActorFor(p).OperatorID,
 		})
 	})
 	r.handler = guard.Middleware(mux)
@@ -173,6 +174,16 @@ func TestAnExchangedTierATokenIsASessionThatWorks(t *testing.T) {
 	if who["fresh"] != true {
 		t.Error("the exchanged session is not fresh, so break-glass through " +
 			"a browser could reach no sensitive surface")
+	}
+	// AND ITS WRITES NAME THE SESSION they came through, beside the token
+	// as the author — as a person's session is recorded beside them — so a
+	// break-glass write from a browser says which sign-in made it.
+	// Mutation: drop Via from the exchanged principal and the operator is
+	// the token's login.
+	lineages := r.estate.lineages()
+	if len(lineages) != 1 || who["operator"] != iam.SessionName(lineages[0]) {
+		t.Errorf("the exchanged session writes through %v, want its own "+
+			"session among %v", who["operator"], lineages)
 	}
 }
 
@@ -395,6 +406,17 @@ func newSessionEstate() *sessionEstate {
 		epochs:   map[string]uint64{},
 		bindings: map[string]session.PersonRow{},
 	}
+}
+
+// lineages are the sessions this estate has opened.
+func (e *sessionEstate) lineages() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]string, 0, len(e.sessions))
+	for lineage := range e.sessions {
+		out = append(out, lineage)
+	}
+	return out
 }
 
 func (e *sessionEstate) setApplied(at uint64) {

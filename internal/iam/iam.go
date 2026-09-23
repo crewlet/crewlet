@@ -176,13 +176,25 @@ func ValidLogin(s string) bool { return len(s) <= MaxLogin && loginPattern.Match
 
 // ValidMachineHandle reports whether s is a well-formed machine handle.
 //
-// THE `pat` CLASS IS NOBODY'S: it is how a machine token is named in the
-// operator column ([MachineTokenPrefix]), so a handle in it would be a
-// principal indistinguishable from a credential.
+// THE `pat` AND `session` CLASSES ARE NOBODY'S: they are how a machine token
+// and a browser session are named in the operator column ([MachineTokenPrefix],
+// [SessionPrefix]), so a handle in either would be a principal
+// indistinguishable from a credential.
 func ValidMachineHandle(s string) bool {
-	return len(s) <= MaxLogin && handlePattern.MatchString(s) &&
-		!strings.HasPrefix(s, MachineTokenPrefix)
+	if len(s) > MaxLogin || !handlePattern.MatchString(s) {
+		return false
+	}
+	for _, class := range credentialClasses {
+		if strings.HasPrefix(s, class) {
+			return false
+		}
+	}
+	return true
 }
+
+// credentialClasses are the classes a CREDENTIAL's name carries in the
+// operator column, which no login may take.
+var credentialClasses = []string{MachineTokenPrefix, SessionPrefix}
 
 // TokenLoginPrefix is the class segment a Tier A token's login carries.
 //
@@ -210,10 +222,10 @@ func TokenLogin(id string) string { return TokenLoginPrefix + id }
 //
 // A CLASS NO LOGIN MAY TAKE. It is coloned like a machine handle, so without a
 // reservation a service account enrolled as `pat:<something>` would be a
-// principal whose NAME reads as a credential in every single-column trail —
-// `created_by`, `set_by` — and a reader resolving it would look for a token
-// that never existed. [ValidMachineHandle] refuses the class for exactly that,
-// so the name is a machine token's and nothing else's.
+// principal whose NAME reads as a credential in the operator column, and a
+// reader resolving it would look for a token that never existed.
+// [ValidMachineHandle] refuses the class for exactly that, so the name is a
+// machine token's and nothing else's.
 const MachineTokenPrefix = "pat:"
 
 // MachineTokenName is how a machine token is recorded as the credential a
@@ -224,7 +236,41 @@ func MachineTokenName(id string) string { return MachineTokenPrefix + id }
 // a credential id in its canonical form, which is the only form one is minted
 // in.
 func ValidMachineTokenName(s string) bool {
-	id, ok := strings.CutPrefix(s, MachineTokenPrefix)
+	return validCredential(s, MachineTokenPrefix)
+}
+
+// SessionPrefix is the class a browser SESSION's name carries where the audit
+// trail records which credential a write was made through:
+// `session:<lineage>` in the operator column, beside the person as the author.
+//
+// THE LINEAGE AND NOT THE LOGIN, because the login is already the author (or
+// the seat is, which the binding resolves to them), so recording it again
+// said nothing the row did not — while two browsers signed in as one person,
+// or a tab left open on a shared machine, were one name in the trail. The
+// lineage is what an investigation follows from a row to the sign-in behind
+// it: the session's own row, its `iam_session_started` event, and the
+// `iam_history` entry its start record wrote.
+//
+// A CLASS NO LOGIN MAY TAKE, for [MachineTokenPrefix]'s reason.
+const SessionPrefix = "session:"
+
+// SessionName is how a browser session is recorded as the credential a write
+// was made through ([Principal.Via]).
+func SessionName(lineage string) string { return SessionPrefix + lineage }
+
+// ValidSessionName reports whether s names a browser session: the class and a
+// lineage in its canonical form, which is the only form one is minted in.
+func ValidSessionName(s string) bool { return validCredential(s, SessionPrefix) }
+
+// ValidCredentialName reports whether s names a credential a principal may act
+// THROUGH ([Principal.Via]): a machine token or a browser session.
+func ValidCredentialName(s string) bool {
+	return ValidMachineTokenName(s) || ValidSessionName(s)
+}
+
+// validCredential reports whether s is class followed by a canonical uuid.
+func validCredential(s, class string) bool {
+	id, ok := strings.CutPrefix(s, class)
 	if !ok {
 		return false
 	}

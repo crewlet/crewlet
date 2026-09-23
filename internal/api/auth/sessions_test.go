@@ -33,13 +33,14 @@ const (
 // signedIn is one person with a live cookie, and the two seams a guard
 // resolves them through.
 type signedIn struct {
-	t      *testing.T
-	at     time.Time
-	signer *session.Signer
-	cookie string
-	dir    *fakeDirectory
-	chart  *fakeChart
-	ended  *endings
+	t       *testing.T
+	at      time.Time
+	signer  *session.Signer
+	cookie  string
+	lineage uuid.UUID
+	dir     *fakeDirectory
+	chart   *fakeChart
+	ended   *endings
 }
 
 // sessionKeyring is the fleet keyring every signer in this file is built
@@ -70,7 +71,7 @@ func newSignedIn(t *testing.T) *signedIn {
 		t.Fatalf("mint: %v", err)
 	}
 	return &signedIn{
-		t: t, at: at, signer: signer, cookie: cookie,
+		t: t, at: at, signer: signer, cookie: cookie, lineage: lineage,
 		dir: &fakeDirectory{identity: session.Identity{
 			Applied:    sessionStart,
 			Generation: 1,
@@ -272,6 +273,38 @@ func TestASignedInPersonIsResolvedFromTheirCookie(t *testing.T) {
 	}
 	if !got.principal.Can(iam.GrantConfigRead) {
 		t.Errorf("grants %v do not carry the row's own", got.principal.Grants)
+	}
+}
+
+// A SIGNED-IN PERSON'S WRITES NAME THE SESSION THEY CAME THROUGH.
+//
+// The design's actor table: a person at a browser is the AUTHOR of what they
+// write — their seat, bound — and `session:<lineage>` is the operator column
+// beside them, in the tracker, the knowledge base, the chart and the identity
+// trail alike. It used to repeat their login, which the author already names,
+// so two browsers signed in as one person, or a tab left open on a shared
+// machine, were one name in every trail. Mutation: drop Via from the session
+// arm's principal and the operator is the login again.
+func TestASignedInPersonsWritesNameTheirSession(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	got := rig.call(rig.guard(), http.MethodPost, "/work/items", rig.withCookie)
+	if got.status != http.StatusOK || got.how != iam.Resolved {
+		t.Fatalf("a live session's write answered %d (%s)", got.status, got.how)
+	}
+	want := iam.SessionName(rig.lineage.String())
+	if got.principal.Via != want {
+		t.Errorf("the principal acts through %q, want its own session %q",
+			got.principal.Via, want)
+	}
+	if err := got.principal.Validate(); err != nil {
+		t.Errorf("the principal a session composes does not validate: %v", err)
+	}
+	actor := iam.ActorFor(got.principal)
+	if actor.Name != sessionSeat || actor.Kind != iam.ActorHuman ||
+		actor.OperatorID != want {
+		t.Errorf("the write is recorded as %+v, want the seat as the author "+
+			"and the session as the operator", actor)
 	}
 }
 

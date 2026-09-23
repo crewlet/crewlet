@@ -633,7 +633,8 @@ func callerName(ctx context.Context) string {
 
 // callerOperator is the credential [callerName] acted through, as an event
 // beside it records it: a machine token's `pat:<id>` — which acts as its owner,
-// so the name alone says the owner did it — or the caller's login.
+// so the name alone says the owner did it — a browser session's
+// `session:<lineage>`, or a Tier A token's own login.
 func callerOperator(ctx context.Context) string {
 	principal, how := iam.From(ctx)
 	if how != iam.Resolved {

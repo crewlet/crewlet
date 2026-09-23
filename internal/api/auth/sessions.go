@@ -361,8 +361,11 @@ type sessionAnswer struct {
 	// tierA is the entry a session exchanged from a Tier A token stands
 	// for, set on a served session whose subject is a token rather than a
 	// person. The GUARD composes that principal, through the one function
-	// the token's own bearer is composed through — see [Guard.exchanged].
+	// the token's own bearer is composed through — see [Guard.exchanged] —
+	// and via is the session it arrived through, which the guard records
+	// beside it as a person's session is recorded beside them.
 	tierA *config.APIToken
+	via   string
 
 	// malformed is the cookie value when it is not a bearer of this format
 	// at all — forged, truncated, or signed under a key this deployment
@@ -435,7 +438,8 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 			// Who it is belongs to the guard, which composes it from
 			// the entry exactly as it composes the token's bearer.
 			s.reissue(w, v)
-			return sessionAnswer{how: iam.Resolved, presented: true, tierA: &entry}
+			return sessionAnswer{how: iam.Resolved, presented: true, tierA: &entry,
+				via: iam.SessionName(v.Bearer.Lineage.String())}
 		}
 	}
 
@@ -626,6 +630,13 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		Grants:    intersect(union(person.Grants, v.Session.GroupGrants), ceiling),
 		Colleague: person.Colleague,
 		Stage:     person.Stage,
+		// AND THROUGH WHAT: this session, by its lineage. The person is
+		// the author of what they write, and the operator column beside
+		// them says which sign-in it came through — it used to repeat
+		// their login, which the author already names, so two browsers
+		// or a tab left open on a shared machine were one name in every
+		// trail. The lineage is verified: the bearer reached here signed.
+		Via: iam.SessionName(v.Bearer.Lineage.String()),
 	}
 	// WHEN THIS SESSION'S PROOF STOPS COUNTING, for each window. It used
 	// to be read off a person field nothing ever set, so every session

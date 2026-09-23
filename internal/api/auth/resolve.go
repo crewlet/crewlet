@@ -285,7 +285,7 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 			g.tokenByLogin)
 		if answer.presented {
 			if answer.tierA != nil && answer.how == iam.Resolved {
-				return g.exchanged(r, *answer.tierA)
+				return g.exchanged(r, *answer.tierA, answer.via)
 			}
 			if answer.how == iam.Resolved {
 				return r.WithContext(
@@ -323,7 +323,13 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 // The session was once composed from the directory's row for the token's
 // DERIVED id, which no directory holds: once applied every request answered
 // 401 and cleared the cookie, and before that it served a grantless nobody.
-func (g *Guard) exchanged(r *http.Request, entry config.APIToken) (
+//
+// WHAT IT DIFFERS FROM THE BEARER IN is the one thing that is not the token's:
+// the credential the request came THROUGH, which is the session (via), and
+// which the operator column records beside the token as the author — so a
+// break-glass write from a browser names the sign-in that made it, as a
+// person's does.
+func (g *Guard) exchanged(r *http.Request, entry config.APIToken, via string) (
 	*http.Request, *Refusal) {
 
 	principal, how, refusal := g.principalFor(r.Context(), entry, g.now())
@@ -331,6 +337,7 @@ func (g *Guard) exchanged(r *http.Request, entry config.APIToken) (
 		return r.WithContext(
 			iam.WithUnresolved(r.Context(), errBindingUnavailable)), nil
 	}
+	principal.Via = via
 	ctx := iam.WithPrincipal(r.Context(), principal)
 	return r.WithContext(withTierA(ctx, entry, false)), refusal
 }

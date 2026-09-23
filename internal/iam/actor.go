@@ -71,9 +71,10 @@ type Actor struct {
 	// column the tracker, the knowledge base, the chart and the identity
 	// trail each carry. It is the principal's [Principal.Via] where it acts
 	// through something other than itself (`pat:<id>` for a machine token
-	// acting as its owner) and its login otherwise, so "what did this
-	// credential do" is a question an audit answers without reasoning about
-	// kinds — for a person bound to a seat too, whose author is the seat.
+	// acting as its owner, `session:<lineage>` for a browser session) and
+	// its login otherwise, so "what did this credential do" is a question
+	// an audit answers without reasoning about kinds — for a person bound
+	// to a seat too, whose author is the seat.
 	OperatorID string
 }
 
@@ -111,11 +112,12 @@ type Actor struct {
 // only by a principal no enrolment produced.
 //
 // AND THE OPERATOR IS WHAT IT PRESENTED: [Actor.OperatorID] is the
-// credential beside the name — the machine token a principal acts through
-// ([Principal.Via]) or, where it is its own credential, its login. A token
-// acting as its owner is the owner's AUTHORITY being exercised, so the author
-// is the owner; the operator column is what keeps that write distinguishable
-// from one the owner made themselves.
+// credential beside the name — the machine token or the browser session a
+// principal acts through ([Principal.Via]) or, where it is its own credential,
+// its login. A token acting as its owner is the owner's AUTHORITY being
+// exercised, so the author is the owner; the operator column is what keeps
+// that write distinguishable from one the owner made themselves, and a
+// session's lineage is what says which of their sign-ins made it.
 func ActorFor(p Principal) Actor {
 	name := nameOr(RecordOwner(p))
 	operator := p.Login

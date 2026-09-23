@@ -229,10 +229,10 @@ func TestALoginIsBoundedInItsGrammar(t *testing.T) {
 // A MACHINE TOKEN'S NAME IS NOBODY'S LOGIN.
 //
 // `pat:<credential id>` is what the operator column records when a machine
-// token acts as its owner, and on a single-column trail (`created_by`) it is
-// the whole record — so a service account enrolled under the same class would
-// be a principal whose name reads as a credential nobody minted. Mutation:
-// drop the class from the machine grammar's refusal and `pat:…` enrols.
+// token acts as its owner — so a service account enrolled under the same class
+// would be a principal whose name reads as a credential nobody minted.
+// Mutation: drop the class from the machine grammar's refusal and `pat:…`
+// enrols.
 func TestAMachineTokensNameIsNobodysLogin(t *testing.T) {
 	t.Parallel()
 	const id = "0192f00d-0000-7000-8000-00000000000a"
@@ -268,6 +268,50 @@ func TestAMachineTokensNameIsNobodysLogin(t *testing.T) {
 	if err := p.Validate(); err == nil {
 		t.Error("a principal acting through a credential no machine token " +
 			"names validated")
+	}
+}
+
+// A BROWSER SESSION'S NAME IS NOBODY'S LOGIN EITHER, and a principal acting
+// through one validates.
+//
+// `session:<lineage>` is what the operator column records for a write made
+// through a signed-in browser — the design's own name for it, beside the
+// person as the author — so a service account enrolled under the class would
+// read as somebody's sign-in in every trail that records one. Mutation: drop
+// the class from the machine grammar's refusal and `session:…` enrols; drop it
+// from the credential names and a person's own session fails to validate.
+func TestASessionsNameIsNobodysLogin(t *testing.T) {
+	t.Parallel()
+	const lineage = "0192f00d-0000-7000-8000-00000000000b"
+	name := SessionName(lineage)
+	if !ValidSessionName(name) || !ValidCredentialName(name) {
+		t.Fatalf("%q does not name the session it was built from", name)
+	}
+	for _, s := range []string{name, "session:ci", "session:" + strings.ToUpper(lineage)} {
+		if ValidLoginFor(KindMachine, s) || ValidLoginFor(KindPerson, s) {
+			t.Errorf("%q may be enrolled as somebody's login", s)
+		}
+	}
+	for _, s := range []string{"session:", "session:ci", "token:" + lineage,
+		lineage, MachineTokenName(lineage), "session:" + strings.ToUpper(lineage)} {
+		if ValidSessionName(s) {
+			t.Errorf("%q is taken for a session's name", s)
+		}
+	}
+	// THE TWO CLASSES DO NOT NAME EACH OTHER: a credential is one or the
+	// other, and a reader resolving the name looks in one place.
+	if ValidMachineTokenName(name) {
+		t.Errorf("%q reads as a machine token", name)
+	}
+	p := Principal{ID: uuid.New(), Kind: KindPerson, Login: "jane.doe",
+		Seat: "founder", Stage: StageActive, Via: name}
+	if err := p.Validate(); err != nil {
+		t.Errorf("a person acting through their browser session: %v", err)
+	}
+	if got := ActorFor(p); got.Name != "founder" || got.Kind != ActorHuman ||
+		got.OperatorID != name {
+		t.Errorf("a person signed in through a browser is recorded as %+v, "+
+			"want the seat as the author and the session as the operator", got)
 	}
 }
 

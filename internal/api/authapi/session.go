@@ -299,8 +299,9 @@ func callerName(r *http.Request) string {
 }
 
 // callerOperator is the credential [callerName] acted through — a machine
-// token's `pat:<id>`, which acts as its owner, or the caller's own login — so
-// an event can tell a token's gesture from its owner's.
+// token's `pat:<id>`, which acts as its owner, a browser session's
+// `session:<lineage>`, or a Tier A token's own login — so an event can tell a
+// token's gesture from its owner's, and one sign-in's from another's.
 func callerOperator(r *http.Request) string {
 	principal, resolution := iam.From(r.Context())
 	if resolution != iam.Resolved {

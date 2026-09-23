@@ -89,11 +89,13 @@ acts under `token:<id>`; and an address whose proposed login would run past the
 bound proposes none, leaving the person to type one rather than handing them a
 name cut at an arbitrary letter.
 
-**One machine class is nobody's: `pat`.** `pat:<credential id>` is how a
-[machine token](#machine-tokens-a-persons-own-and-a-service-accounts) is named
-in the operator column beside the owner it acts as, so a service account
-enrolled as `pat:something` would be a principal whose name reads as a
-credential nobody minted. The machine grammar refuses the class.
+**Two machine classes are nobody's: `pat` and `session`.** `pat:<credential
+id>` is how a [machine token](#machine-tokens-a-persons-own-and-a-service-accounts)
+is named in the operator column beside the owner it acts as, and
+`session:<lineage>` is how a browser session is named there beside the person
+signed in with it — so a service account enrolled as `pat:something` or
+`session:something` would be a principal whose name reads as a credential
+nobody minted. The machine grammar refuses both classes.
 
 **Each shape belongs to its kind, and to no other.** A person's login must be
 dotted and a machine's must be coloned — at enrolment, at an invitation's

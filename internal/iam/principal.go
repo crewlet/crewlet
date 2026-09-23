@@ -172,20 +172,24 @@ type Principal struct {
 	// Via is the credential this principal is acting THROUGH, named as the
 	// audit trail records it, when that credential is not the principal
 	// itself: `pat:<id>` for a machine token acting as its owner
-	// ([MachineTokenName]).
+	// ([MachineTokenName]), and `session:<lineage>` for a browser session
+	// ([SessionName]) — whoever it stands for, a Tier A token's exchanged
+	// session included.
 	//
-	// EMPTY FOR A PRINCIPAL THAT IS ITS OWN CREDENTIAL — a Tier A token's
-	// login already names the token, a session's person signed in as
-	// themselves, a seat is its own turn — and that is the meaningful zero:
-	// [ActorFor] then records the login as the operator, which is what every
-	// one of those rows has always carried.
+	// EMPTY FOR A PRINCIPAL THAT IS ITS OWN CREDENTIAL — a Tier A bearer's
+	// login already names the token, a seat is its own turn, the engine is
+	// its node — and that is the meaningful zero: [ActorFor] then records
+	// the login as the operator.
 	//
 	// WHY IT EXISTS: a machine token is composed as its OWNER, so without
 	// this every write one made was recorded exactly as the owner's own, and
 	// a token minted on somebody's account could file, edit and close their
 	// work with no row saying a token was used, let alone which. The author
 	// stays the owner — it is their authority being exercised — and this is
-	// the column beside it that says through what.
+	// the column beside it that says through what. A session is the same
+	// question asked of a browser: the person is the author, and the lineage
+	// is which sign-in — which of their browsers, which shared machine — the
+	// write came through.
 	Via string
 }
 
@@ -312,10 +316,11 @@ func (p Principal) Validate() error {
 	// A CREDENTIAL IT ACTS THROUGH IS ONE THIS BUILD NAMES. Via is written
 	// into every row the principal authors, so a value in no namespace would
 	// be an operator column no reader can resolve back to anything.
-	if p.Via != "" && !ValidMachineTokenName(p.Via) {
-		return fmt.Errorf("%w: via %q does not name a machine token — it is "+
-			"%s followed by the credential's id", ErrInvalidPrincipal, p.Via,
-			MachineTokenPrefix)
+	if p.Via != "" && !ValidCredentialName(p.Via) {
+		return fmt.Errorf("%w: via %q names no credential — a machine token "+
+			"is %s followed by its id, and a browser session %s followed by "+
+			"its lineage", ErrInvalidPrincipal, p.Via, MachineTokenPrefix,
+			SessionPrefix)
 	}
 	return nil
 }

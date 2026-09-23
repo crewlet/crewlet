@@ -319,9 +319,11 @@ type IAMSessionEnded struct {
 
 	// OperatorID is the CREDENTIAL By acted through: a machine token's
 	// `pat:<id>` when it was one — which acts as its owner, so By alone
-	// cannot tell a token's gesture from its owner's — and By's own login
-	// otherwise. Empty wherever By is. The same value, under the same name,
-	// as the `operator_id` column every work, page and chart record carries.
+	// cannot tell a token's gesture from its owner's — a browser session's
+	// `session:<lineage>` when it was one, and By's own login where By is
+	// its own credential (a Tier A token). Empty wherever By is. The same
+	// value, under the same name, as the `operator_id` column every work,
+	// page and chart record carries.
 	OperatorID string `json:"operator_id,omitempty"`
 }
 
