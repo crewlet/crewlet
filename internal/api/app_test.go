@@ -76,18 +76,13 @@ func (f *fakeRuntime) Tools() []api.ToolInfo                     { return f.tool
 func (f *fakeRuntime) ShuttingDown() bool { return f.state.ShuttingDown }
 
 // noRoutes is a surface that mounts nothing, for the cases that are not about
-// /config, /secrets or /setup.
+// /config, /secrets, /setup or /chart. Its Routes RETURNS AN ERROR because the
+// real ones refuse at mount: a route carries its authority with its
+// registration, and one mounted with none is a hole that ships looking
+// correct.
 type noRoutes struct{}
 
-func (noRoutes) Routes(*http.ServeMux) {}
-
-// noChartRoutes is the chart surface mounting nothing. Its Routes RETURNS AN
-// ERROR where noRoutes' does not, because the real one refuses at mount: a
-// chart route carries its authority with its registration, and one mounted
-// with none is a hole that ships looking correct.
-type noChartRoutes struct{}
-
-func (noChartRoutes) Routes(authz.Mux) error { return nil }
+func (noRoutes) Routes(authz.Mux) error { return nil }
 
 // noAppFlow is a GitHub App completer that completes nothing.
 type noAppFlow struct{}
@@ -185,7 +180,7 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 		opts.Setup = noRoutes{}
 	}
 	if opts.Chart == nil {
-		opts.Chart = noChartRoutes{}
+		opts.Chart = noRoutes{}
 	}
 	if opts.Budgets == nil {
 		opts.Budgets = fleet

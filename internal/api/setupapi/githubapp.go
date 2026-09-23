@@ -166,6 +166,14 @@ func (f *AppFlow) spend(ctx context.Context, state string) error {
 // not work out itself: the manifest, the address to POST it to, and the state
 // that ties the answer back to this seat.
 func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
+	// `secrets:write` ON TOP OF THE ROUTE'S VERB: the app this begins has
+	// its private key and webhook secret sealed on the way back, and the
+	// return is a browser redirect carrying no credential of ours — so
+	// this is the one request that can ask whether the caller may write
+	// them.
+	if !s.mayWriteCredentials(w, r) {
+		return
+	}
 	// THROUGH THE PACKAGE'S OWN CAP, like every other route here. A decoder
 	// straight off r.Body reads whatever is sent: this route names one seat,
 	// so the body is tens of bytes, and streaming an unbounded one into a

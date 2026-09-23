@@ -6,14 +6,19 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -34,19 +39,32 @@ func cipherFor(t *testing.T, ids ...string) secrets.Cipher {
 }
 
 // surface builds the routes over a memory fleet, with an operator attached
-// the way the guard attaches one.
+// the way the guard attaches one — carrying every grant, so a case about what
+// the store does is not a case about authority.
 func surface(t *testing.T, cipher secrets.Cipher, keyID string) (http.Handler, coord.Fleet) {
 	t.Helper()
 	fleet := coordmem.NewFleet()
-	svc := newService(t, secretsapi.Options{
+	return mounted(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipher, ActiveKeyID: keyID,
 		Now: func() time.Time { return clock },
-	})
+	}, iam.AllGrants...), fleet
+}
+
+// mounted builds the surface and serves it as the operator `ops` carrying
+// exactly these grants.
+func mounted(t *testing.T, opts secretsapi.Options, grants ...iam.Grant) http.Handler {
+	t.Helper()
 	mux := http.NewServeMux()
-	svc.Routes(mux)
+	if err := newService(t, opts).Routes(mux); err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mux.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
-	}), fleet
+		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), iam.Principal{
+			ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
+			Login: auth.TokenLogin("ops"), Kind: iam.KindMachine,
+			Stage: iam.StageActive, Grants: grants,
+		})))
+	})
 }
 
 // newService builds the surface, failing the test on a wiring mistake.
@@ -233,24 +251,16 @@ func TestAnOversizedValueIsRefused(t *testing.T) {
 func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
-	mux := http.NewServeMux()
-	newService(t, secretsapi.Options{
+	old := mounted(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipherFor(t, "k1", "k2"), ActiveKeyID: "k1",
 		Now: func() time.Time { return clock },
-	}).Routes(mux)
-	old := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mux.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
-	})
+	}, iam.AllGrants...)
 	call(t, old, http.MethodPut, "/secrets/A", "one")
 
-	rotated := http.NewServeMux()
-	newService(t, secretsapi.Options{
+	h := mounted(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipherFor(t, "k2", "k1"), ActiveKeyID: "k2",
 		Now: func() time.Time { return clock },
-	}).Routes(rotated)
-	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rotated.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
-	})
+	}, iam.AllGrants...)
 
 	code, body := call(t, h, http.MethodPost, "/secrets/rekey", "")
 	if code != http.StatusOK || !strings.Contains(body, `"moved":["A"]`) {
@@ -381,5 +391,94 @@ func TestRemovingANameTheWritePathWouldRefuseStillWorks(t *testing.T) {
 	code, body := call(t, h, http.MethodDelete, "/secrets/gitlab-token", "")
 	if code != http.StatusOK || !strings.Contains(body, `"removed":true`) {
 		t.Fatalf("DELETE = %d %s, want 200 with removed:true", code, body)
+	}
+}
+
+// EVERY ROUTE TAKES ITS GRANT, and the value takes one of its own.
+//
+// These routes decided nothing: the guard in front of them answers only
+// whether somebody resolved, which meant "the operator" while an operator
+// token was the only credential this engine had. A person signed in holding
+// `state:read` alone could then list, reveal, overwrite and delete the
+// company's credentials. So each route is stated against a caller holding
+// exactly the grant it needs, and against one holding everything BUT that
+// grant — the most authority a caller can have and still be refused, which is
+// what makes the refusal about the rule. A refusal names the grant.
+func TestEveryRouteTakesTheGrantItsVerbNames(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name         string
+		method, path string
+		body         string
+		// needs is every grant the request takes, all of which the
+		// admitted caller carries; each is then withheld in turn.
+		needs []iam.Grant
+	}{
+		{"the listing", http.MethodGet, "/secrets", "",
+			[]iam.Grant{iam.GrantConfigRead}},
+		{"one row's metadata", http.MethodGet, "/secrets/A", "",
+			[]iam.Grant{iam.GrantConfigRead}},
+		// THE VALUE TAKES BOTH: the route's own grant, because the
+		// metadata is the listing's, and the one the value needs.
+		{"revealing the value", http.MethodGet, "/secrets/A?reveal=true", "",
+			[]iam.Grant{iam.GrantConfigRead, iam.GrantSecretRead}},
+		{"a write", http.MethodPut, "/secrets/B", "two",
+			[]iam.Grant{iam.GrantSecretWrite}},
+		{"a delete", http.MethodDelete, "/secrets/A", "",
+			[]iam.Grant{iam.GrantSecretWrite}},
+		{"a rekey", http.MethodPost, "/secrets/rekey", "",
+			[]iam.Grant{iam.GrantSecretWrite}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			build := func(grants ...iam.Grant) http.Handler {
+				fleet := coordmem.NewFleet()
+				opts := secretsapi.Options{Fleet: fleet, Cipher: cipherFor(t, "k1"),
+					ActiveKeyID: "k1", Now: func() time.Time { return clock }}
+				seed := mounted(t, opts, iam.AllGrants...)
+				if code, body := call(t, seed, http.MethodPut, "/secrets/A", "one"); code != http.StatusOK {
+					t.Fatalf("seed = %d %s", code, body)
+				}
+				return mounted(t, opts, grants...)
+			}
+			if code, body := call(t, build(c.needs...), c.method, c.path, c.body); code >= 400 {
+				t.Errorf("holding %v: %d %s, want it admitted", c.needs, code, body)
+			}
+			for _, withheld := range c.needs {
+				rest := slices.DeleteFunc(slices.Clone(iam.AllGrants),
+					func(g iam.Grant) bool { return g == withheld })
+				code, body := call(t, build(rest...), c.method, c.path, c.body)
+				if code != http.StatusForbidden {
+					t.Errorf("holding everything but %s: %d %s, want 403",
+						withheld, code, body)
+					continue
+				}
+				var refusal map[string]any
+				if err := json.Unmarshal([]byte(body), &refusal); err != nil {
+					t.Fatalf("decode %s: %v", body, err)
+				}
+				grants, _ := refusal[authz.DetailGrants].([]any)
+				if len(grants) != 1 || grants[0] != string(withheld) {
+					t.Errorf("refused naming %v, want %s", refusal[authz.DetailGrants],
+						withheld)
+				}
+			}
+		})
+	}
+}
+
+// AND A REFUSED REVEAL NEVER OPENS THE VALUE: the grant is asked before the
+// store is read, so a caller without it cannot learn even whether the value
+// would have decrypted — the answer is the same 403 for a name that exists and
+// one that does not.
+func TestARefusedRevealIsTheSameForANameThatDoesNotExist(t *testing.T) {
+	t.Parallel()
+	h := mounted(t, secretsapi.Options{Fleet: coordmem.NewFleet(),
+		Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1"}, iam.GrantConfigRead)
+	present, _ := call(t, h, http.MethodGet, "/secrets/NOWHERE?reveal=true", "")
+	if present != http.StatusForbidden {
+		t.Errorf("revealing an absent name without secrets:read = %d, want 403: "+
+			"a 404 would tell a caller without the grant which names exist",
+			present)
 	}
 }

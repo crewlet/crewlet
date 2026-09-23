@@ -1,12 +1,17 @@
 // Package configapi serves /config: the versioned company document, its
 // history, and the write path that activates a new revision.
 //
-// EVERY ROUTE HERE IS GUARDED, reads included, and that is not the usual
-// posture on this API. Reading this surface exposes the whole company
-// document — its org chart, its integrations, and the shape of every
-// credential it holds — and writing it changes the company. The auth package
-// makes /config the one prefix that is never eligible for
-// allow_anonymous_read.
+// EVERY ROUTE HERE TAKES A GRANT, reads included: `config:read` for every
+// read (`config.read`) and `config:write` for every write (`config.write`),
+// mounted through [authz.Router] so a route with no policy fails the boot.
+// Reading this surface exposes the whole company document — its integrations
+// and the name of every credential it holds — and writing it changes the
+// company.
+//
+// THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
+// was an operator token and stopped being sound the day a person could sign in
+// holding `state:read` alone: every one of them could rewrite the company
+// document, revert it to any revision, and read every `${VAR}` it names.
 //
 // A WRITE HERE DOES NOT APPLY ANYTHING. It stores a revision and moves the
 // activation pointer; every node, including this one, applies it on its own
@@ -28,6 +33,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -127,35 +133,50 @@ func New(opts Options) (*Service, error) {
 	}, nil
 }
 
-// Routes registers the surface on the API's mux.
-func (s *Service) Routes(mux *http.ServeMux) {
+// Routes registers the surface on the API's mux, every route through
+// [authz.Router] with the verb it is decided by. A route mounted without one
+// is refused here and fails the boot — see [authz.Router.Handle].
+func (s *Service) Routes(mux authz.Mux) error {
 	// ONE SUB-MUX BEHIND ONE WRAPPER, so no response under /config can be
 	// written without the Cache-Control below: not a route added later, not
-	// an error path, not the 404 or 405 this mux answers for a path or a
-	// method it does not serve.
+	// an error path, not a refusal, and not the 404 or 405 this mux answers
+	// for a path or a method it does not serve.
 	routes := http.NewServeMux()
-	routes.HandleFunc("GET /config", s.getActive)
-	routes.HandleFunc("PUT /config", s.put)
+	router := authz.NewRouter(routes, authz.ContextGuard(authz.NoChart{}))
+	var failures []error
+	mount := func(pattern string, a authz.Action, h http.HandlerFunc) {
+		if err := router.Handle(pattern, authz.Policy{Action: a}, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	read := func(pattern string, h http.HandlerFunc) {
+		mount(pattern, authz.ActionConfigRead, h)
+	}
+	write := func(pattern string, h http.HandlerFunc) {
+		mount(pattern, authz.ActionConfigWrite, h)
+	}
+	read("GET /config", s.getActive)
+	write("PUT /config", s.put)
 	// WHAT THIS RESOURCE TAKES, asked rather than guessed. RFC 5789 §3.1:
 	// a patch format is negotiated, not assumed, and Accept-Patch is where
 	// a server says which ones it speaks.
-	routes.HandleFunc("OPTIONS /config", s.optionsDocument)
+	read("OPTIONS /config", s.optionsDocument)
 	// THE NARROWER WRITE. See merge.go for why one patch route covers
 	// every section rather than one route per section.
-	routes.HandleFunc("PATCH /config", s.patch)
+	write("PATCH /config", s.patch)
 	// RE-PUBLISH THE ACTIVE DOCUMENT UNCHANGED, which is the gesture a
 	// rotated SECRET needs and the one thing no other route on this
 	// surface performs: the pointer in the config is already correct, so
 	// there is no patch to make, and with no activation there is no apply
 	// and no refreshed secret snapshot. See [Service.Reload].
-	routes.HandleFunc("POST /config/reload", s.reload)
+	write("POST /config/reload", s.reload)
 	// WHICH FIELDS NAME A ${VAR}, which is what an operator needs before
 	// they remove a credential. See [Service.References].
-	routes.HandleFunc("GET /config/references", s.references)
-	routes.HandleFunc("GET /config/revisions", s.listRevisions)
-	routes.HandleFunc("GET /config/revisions/{id}", s.getRevision)
-	routes.HandleFunc("GET /config/revisions/{id}/diff", s.diff)
-	routes.HandleFunc("POST /config/revisions/{id}/revert", s.revert)
+	read("GET /config/references", s.references)
+	read("GET /config/revisions", s.listRevisions)
+	read("GET /config/revisions/{id}", s.getRevision)
+	read("GET /config/revisions/{id}/diff", s.diff)
+	write("POST /config/revisions/{id}/revert", s.revert)
 	// THE ENTITY ROUTES, one per addressable collection rather than a
 	// single {kind} wildcard: a wildcard would also match
 	// /config/revisions/{id}, and a route that answers for a path it was
@@ -168,7 +189,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 		// space, answering a {kind, id, entity} envelope that PUT does
 		// not accept. GET here answers the entity itself, so `GET | PUT`
 		// round-trips with nothing in between.
-		routes.HandleFunc("GET /config/"+kind+"/{id}", s.getEntity(kind))
+		read("GET /config/"+kind+"/{id}", s.getEntity(kind))
 	}
 	// AND THE WRITE ONLY WHERE THERE IS ONE. `roles` and `units` are the
 	// org chart, which is a domain of its own with its own routes — so the
@@ -178,17 +199,20 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	// per-entity refusal in chartdoor.go still covers the PATH, because a
 	// caller who reaches it deserves the sentence rather than a 405.
 	for _, kind := range WritableEntityKinds() {
-		routes.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
+		write("PUT /config/"+kind+"/{id}", s.putEntity(kind))
 	}
 	// THE CHART'S OWN COLLECTIONS, answered by NAME rather than by the
 	// method fallthrough: a 405 on `PUT /config/roles/ceo` tells an
 	// operator that the verb is wrong, when what is wrong is the surface.
+	// Decided as the write it attempts, so the sentence pointing at /chart
+	// is read by somebody who could have made the write here.
 	for _, kind := range []string{EntityRoles, EntityUnits} {
-		routes.HandleFunc("PUT /config/"+kind+"/{id}", s.refuseChartWrite(kind))
+		write("PUT /config/"+kind+"/{id}", s.refuseChartWrite(kind))
 	}
 	surface := noStore(routes)
 	mux.Handle("/config", surface)
 	mux.Handle("/config/", surface)
+	return errors.Join(failures...)
 }
 
 // noStore marks every response it wraps as never to be stored.

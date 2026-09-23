@@ -33,10 +33,16 @@ func post(t *testing.T, a *api.App, path, token string) (int, map[string]any) {
 	return res.StatusCode, body
 }
 
-// guarded is a bootstrap carrying one credential.
+// guarded is a bootstrap carrying one credential, and the authority behind it.
+//
+// IT CARRIED NO GRANTS, and every case over it passed: the deployment's own
+// controls asked only whether somebody resolved, so a token declaring nothing
+// under a ceiling of nothing cleared spend ceilings and took backups. They
+// take `fleet:operate` now, so the fixture states the authority its cases are
+// about — and TestThePostureMatrix states what a narrower one is refused.
 func guarded() *config.Bootstrap {
 	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "t0ken"}}
+	authorize(&b, config.APIToken{ID: "ops", Token: "t0ken"})
 	return &b
 }
 

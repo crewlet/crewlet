@@ -69,7 +69,14 @@ type provisionRequest struct {
 }
 
 // provision serves POST /setup/integrations/{kind}/provision.
+//
+// `secrets:write` ON TOP OF THE ROUTE'S VERB, asked before the body is read:
+// a writing pass is handed a sink that mints and seals credentials, so it is a
+// credential write whether or not this particular pass ends up minting one.
 func (s *Service) provision(w http.ResponseWriter, r *http.Request) {
+	if !s.mayWriteCredentials(w, r) {
+		return
+	}
 	s.runPass(w, r, false)
 }
 

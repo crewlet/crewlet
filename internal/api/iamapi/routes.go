@@ -40,7 +40,7 @@ const IdempotencyHeader = "Idempotency-Key"
 // person changes their login, so a self check against a mutable name would
 // open somebody else's row the day they swapped.
 func (s *Service) Routes(mux authz.Mux) error {
-	router := authz.NewRouter(mux, authz.Guard(s.guard))
+	router := authz.NewRouter(mux, guard)
 	var failures []error
 	mount := func(pattern string, p authz.Policy, h http.HandlerFunc) {
 		if err := router.Handle(pattern, p, h); err != nil {
@@ -135,28 +135,16 @@ func (s *Service) subjectOf(r *http.Request) string {
 	return ""
 }
 
-// guard is what [authz.Router] asks before a handler runs.
+// guard is what [authz.Router] asks before a handler runs: the shared
+// [authz.ContextGuard], whose one clause worth getting right — a caller this
+// node could not resolve is UNKNOWN, never the zero principal — is written
+// once there rather than once per surface.
 //
 // NO CHART SEAM. Not one rule this surface mounts asks the chart — the two
 // directory classes decide from the person's own id and two capabilities — so
 // handing one would be wiring a dependency nothing reads, and [authz.NoChart]
 // says exactly that where a nil would have looked like an omission.
-func (s *Service) guard(r *http.Request, p authz.Policy) authz.Decision {
-	principal, how := iam.From(r.Context())
-	if how == iam.Unknown {
-		// THIS NODE'S FAULT, answered as such rather than folded into
-		// the table's refusal: deciding it as the zero principal would
-		// return a 403 naming a capability the caller may very well
-		// hold, on every request, for as long as the estate was
-		// unreadable.
-		return authz.Decision{Err: iam.Reason(r.Context())}
-	}
-	var object authz.Object
-	if p.Object != nil {
-		object = p.Object(r)
-	}
-	return authz.Decide(r.Context(), principal, p.Action, object, authz.NoChart{})
-}
+var guard = authz.ContextGuard(authz.NoChart{})
 
 // retryIdentity is the `Retry-After` on an identity 503, in seconds.
 //

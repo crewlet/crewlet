@@ -263,20 +263,12 @@ func kinded(a authz.Action, kind authz.ObjectKind) authz.Policy {
 	}}
 }
 
-// guard is what [authz.Router] asks before a handler runs.
+// guard is what [authz.Router] asks before a handler runs: the shared
+// [authz.ContextGuard] over this surface's chart, whose one clause worth
+// getting right — a caller this node could not resolve is UNKNOWN, never the
+// zero principal — is written once there rather than once per surface.
 func (s *Service) guard(r *http.Request, p authz.Policy) authz.Decision {
-	principal, how := iam.From(r.Context())
-	if how == iam.Unknown {
-		// THIS NODE'S FAULT, answered as such: deciding it as the zero
-		// principal would be a 403 naming a capability the caller may
-		// well hold, for as long as the estate was unreadable.
-		return authz.Decision{Err: iam.Reason(r.Context())}
-	}
-	var object authz.Object
-	if p.Object != nil {
-		object = p.Object(r)
-	}
-	return authz.Decide(r.Context(), principal, p.Action, object, s.chart)
+	return authz.ContextGuard(s.chart)(r, p)
 }
 
 // refuse renders what the router did not admit.

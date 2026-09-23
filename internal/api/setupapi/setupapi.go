@@ -7,10 +7,25 @@
 // posture it serves without a token. What this surface answers is a different
 // class of thing: the NAMES of the credentials a company holds, which are
 // unset, the third-party app pages an administrator would visit, and the fields a
-// caller can write. Adding that to the anonymous-read answer would hand an
-// unauthenticated reader a map of what to attack. So it is its own prefix,
-// added to the always-guarded list beside /config and /secrets, and every
-// call here needs an operator token, reads included.
+// caller can write — a map of what to attack. So it is its own prefix, and
+// every route takes a grant, reads included.
+//
+// # Connecting is config:write AND secrets:write
+//
+// Each route is mounted through [authz.Router]: the listings and a pass's
+// record are `setup.read` (`config:read`), and every route that changes the
+// company is `setup.connect` (`config:write`). A route that SEALS a credential
+// asks `secrets.write` on top — a submission carrying a secret field, a
+// provisioning pass (which is handed a sink that mints and seals), and a
+// GitHub App (whose private key is sealed on the return) — because this
+// surface performs no write of its own: the credential goes through the store
+// /secrets serves, and a caller who could not write it there must not be
+// able to write it here. The pattern cannot see whether a submission carries
+// one, so that half is asked once the body is read, through the same guard.
+//
+// THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
+// was an operator token and stopped being sound the day a person could sign
+// in holding `state:read` alone.
 //
 // # It never returns a value
 //
@@ -35,6 +50,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
@@ -208,6 +224,10 @@ type Service struct {
 	status    Status
 	clock     func() time.Time
 	appFlow   *AppFlow
+
+	// guard decides every route, and the credential write a route asks
+	// for on top of its own. No chart: not one verb here asks a relation.
+	guard authz.Guard
 }
 
 // New builds the service and the GitHub App flow its begin route and the
@@ -258,6 +278,7 @@ func New(opts Options) (*Service, error) {
 		status:       opts.Status,
 		slackApps:    opts.SlackApps,
 		clock:        now,
+		guard:        authz.ContextGuard(authz.NoChart{}),
 		writer: setup.Writer{
 			Secrets: opts.Secrets,
 			Config:  configWriter{svc: opts.Config, seats: opts.Seats},
@@ -273,23 +294,60 @@ func New(opts Options) (*Service, error) {
 }
 
 // Routes registers the surface.
-func (s *Service) Routes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /setup/integrations", s.list)
-	mux.HandleFunc("GET /setup/integrations/{kind}", s.one)
-	mux.HandleFunc("POST /setup/integrations/{kind}/inputs", s.inputs)
-	mux.HandleFunc("DELETE /setup/integrations/{kind}", s.disconnect)
+func (s *Service) Routes(mux authz.Mux) error {
+	router := authz.NewRouter(mux, s.guard)
+	var failures []error
+	mount := func(pattern string, a authz.Action, h http.HandlerFunc) {
+		if err := router.Handle(pattern, authz.Policy{Action: a}, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	mount("GET /setup/integrations", authz.ActionSetupRead, s.list)
+	mount("GET /setup/integrations/{kind}", authz.ActionSetupRead, s.one)
+	mount("POST /setup/integrations/{kind}/inputs", authz.ActionSetupConnect, s.inputs)
+	mount("DELETE /setup/integrations/{kind}", authz.ActionSetupConnect, s.disconnect)
 	// The two that RUN something at the third-party app, and the read that follows
-	// one. See pass.go for why check and provision are one function.
-	mux.HandleFunc("POST /setup/integrations/{kind}/provision", s.provision)
-	mux.HandleFunc("POST /setup/integrations/{kind}/check", s.check)
+	// one. See pass.go for why check and provision are one function. BOTH
+	// are the connect verb: a check writes nothing at the app, and it is
+	// still a pass run against the company's own credentials at a person's
+	// hand — the gesture of whoever connected it, not of a reader.
+	mount("POST /setup/integrations/{kind}/provision", authz.ActionSetupConnect, s.provision)
+	mount("POST /setup/integrations/{kind}/check", authz.ActionSetupConnect, s.check)
 	// ONE AGENT'S OWN APP. Not a company-wide connect: a GitHub App is one
 	// bot identity, so an app per agent is the only way each acts as itself.
-	mux.HandleFunc("POST /setup/integrations/github/app", s.beginApp)
-	mux.HandleFunc("GET /setup/integrations/{kind}/runs/{id}", s.runByID)
+	mount("POST /setup/integrations/github/app", authz.ActionSetupConnect, s.beginApp)
+	mount("GET /setup/integrations/{kind}/runs/{id}", authz.ActionSetupRead, s.runByID)
 	// The LISTING, which is what makes the route above reachable at all:
 	// nothing could name a run id, so one pass was readable only by the
 	// caller that had just started it.
-	mux.HandleFunc("GET /setup/integrations/{kind}/runs", s.runs)
+	mount("GET /setup/integrations/{kind}/runs", authz.ActionSetupRead, s.runs)
+	return errors.Join(failures...)
+}
+
+// mayWriteCredentials asks the credential write a route performs on top of its
+// own verb, and answers the refusal when there is none. It reports whether the
+// handler may go on.
+//
+// ASKED OF THE SAME GUARD the route was, so it is the route's policy asked a
+// second time rather than a gate with rules of its own — and asked BEFORE
+// anything is sealed or minted, so a refused caller leaves nothing behind.
+func (s *Service) mayWriteCredentials(w http.ResponseWriter, r *http.Request) bool {
+	return authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSecretWrite})
+}
+
+// carriesCredential reports whether a submission writes a value the sealed
+// store will hold: any field its requirements declare a [setup.KindSecret],
+// whether the caller supplied it or asked the engine to mint it.
+func carriesCredential(values map[string]string, against []setup.Requirement) bool {
+	for _, req := range against {
+		if req.Kind != setup.KindSecret {
+			continue
+		}
+		if _, present := values[req.Field]; present {
+			return true
+		}
+	}
+	return false
 }
 
 // configWriter adapts the config surface to what setup.Writer needs.
@@ -1997,6 +2055,12 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
 			"detail": err.Error(),
 		})
+		return
+	}
+	// A CREDENTIAL IN THE SUBMISSION IS `secrets:write` on top of the
+	// route's `config:write`, decided once the body says whether there is
+	// one and before anything is sealed.
+	if carriesCredential(values, against) && !s.mayWriteCredentials(w, r) {
 		return
 	}
 

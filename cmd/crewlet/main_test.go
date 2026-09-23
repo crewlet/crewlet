@@ -601,7 +601,11 @@ func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
-	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token"}}
+	// THE GRANT A BACKUP TAKES, and only that. The token carried none and
+	// took a backup all the same, because the route asked only whether
+	// somebody resolved; it takes `fleet:operate` now.
+	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token",
+		Grants: []iam.Grant{iam.GrantFleetOperate}}}
 	if boot.Node.ID != "" {
 		t.Fatalf("the bootstrap names node %q itself, so this case proves nothing",
 			boot.Node.ID)

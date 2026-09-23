@@ -3,20 +3,26 @@ package api_test
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // THE POSTURE MATRIX: every credential shape this build can present, against
-// one route per authority class.
+// one route per authority class — and against EVERY route that operates the
+// deployment or holds the company's configuration and credentials.
 //
 // # What it is for
 //
@@ -27,18 +33,35 @@ import (
 // something that opens between two of them rather than inside either. Every
 // case here goes through api.App, the way a caller does.
 //
+// And the hole this matrix did not see is the reason it grew. The deployment's
+// own controls — the budget reset, the backup, the retention and capacity
+// gestures — and /secrets asked only whether somebody RESOLVED: the guard in
+// front of them answers that and nothing else, and each route resolved its
+// caller for the audit line and decided no grant. A person signed in holding
+// `state:read` alone could reset spend, copy the node's durable state to a
+// directory of their choosing, evict a machine from the fleet and read back
+// any credential the company holds. Every one of those routes is a row now,
+// against a shape holding every grant BUT the one it takes.
+//
 // # What a row means
 //
-// One credential shape, one route, one expected status. A cell that is wrong
-// is either a surface reachable by somebody who should not (the dangerous
-// direction) or one refused to somebody who should reach it (the direction
-// that gets a guard disabled by whoever is on call).
+// One route, and the status every credential shape gets from it — in the
+// order of [shapes], and in an ARRAY, so a route that leaves a shape out does
+// not compile. A cell that is wrong is either a surface reachable by somebody
+// who should not (the dangerous direction) or one refused to somebody who
+// should reach it (the direction that gets a guard disabled by whoever is on
+// call). An ADMITTED cell carries whatever the route answers once it is
+// reached — a 400 for a missing parameter, a 503 for a tracker this fixture
+// does not run — because what the matrix asserts is that the authority layer
+// let it through, and 401 and 403 are the only two answers that layer gives.
 func TestThePostureMatrix(t *testing.T) {
 	t.Parallel()
 	const (
-		wide   = "a-token-that-carries-every-grant"
-		narrow = "a-token-that-carries-only-state-read"
-		blind  = "a-token-that-carries-only-config-read"
+		wide      = "a-token-that-carries-every-grant"
+		narrow    = "a-token-that-carries-only-state-read"
+		blind     = "a-token-that-carries-only-config-read"
+		notFleet  = "a-token-carrying-every-grant-but-fleet-operate"
+		fleetOnly = "a-token-that-carries-only-fleet-operate"
 	)
 	b := config.DefaultBootstrap()
 	b.API.Host = "127.0.0.1"
@@ -47,6 +70,10 @@ func TestThePostureMatrix(t *testing.T) {
 		{ID: "ops", Token: wide, Grants: iam.AllGrants},
 		{ID: "viewer", Token: narrow, Grants: []iam.Grant{iam.GrantStateRead}},
 		{ID: "auditor", Token: blind, Grants: []iam.Grant{iam.GrantConfigRead}},
+		{ID: "almost", Token: notFleet, Grants: slices.DeleteFunc(
+			slices.Clone(iam.AllGrants),
+			func(g iam.Grant) bool { return g == iam.GrantFleetOperate })},
+		{ID: "sre", Token: fleetOnly, Grants: []iam.Grant{iam.GrantFleetOperate}},
 	}
 	dev, err := auth.NewDevPrincipal("laptop", &b)
 	if err != nil {
@@ -60,157 +87,193 @@ func TestThePostureMatrix(t *testing.T) {
 	// THE COORDINATION SOURCE is supplied so the fleet question is
 	// actually mounted. Without it the row answers 404, which is a route
 	// that is not there rather than one that refused — and a matrix full
-	// of 404s certifies nothing while looking like a pass.
+	// of 404s certifies nothing while looking like a pass. The credential
+	// store is the REAL /secrets surface for the same reason.
 	sources := queries.Sources{Company: active(t), Coord: coordmemory.New()}
-	plain := newApp(t, api.Options{Bootstrap: &b, Sources: sources})
+	store := postureSecrets(t)
+	plain := newApp(t, api.Options{Bootstrap: &b, Sources: sources, Secrets: store})
 	devApp := newApp(t, api.Options{
-		Bootstrap: &b, DevPrincipal: dev, Sources: sources,
+		Bootstrap: &b, DevPrincipal: dev, Sources: sources, Secrets: store,
 	})
-
-	// The routes, one per authority class, each named by what reaching it
-	// discloses rather than by its grant — so a row that moves to a
-	// different grant still has to be read rather than renumbered.
-	//
-	// THE QUESTION SURFACE for all four, because it is the one place every
-	// grant class is reachable through one mount, and because it is the
-	// surface where authority was a single bool until this build: any
-	// credential could ask any question that was not on the config
-	// surface. `/config`, `/secrets`, `/setup` and `/chart` have their own
-	// suites for their own rules; what no one of those covers is the
-	// COMPOSITION this asserts.
-	type route struct{ name, path string }
-	routes := []route{
-		{"the exempt probe", "/health"},
-		{"the dashboard shell", "/dashboard"},
-		{"the company's working state", "/query/stream"},
-		{"an agent's transcripts", "/query/events"},
-		{"the map of what is not configured", "/query/integrations"},
-		{"the deployment's own shape", "/query/fleet"},
-		// THE SNAPSHOT'S REST MIRRORS, decided by the grant their push
-		// kind takes on the socket rather than by being resolved at all.
-		{"the roster mirror", "/agents"},
-		{"the whole snapshot", "/stream/snapshot"},
+	// A VALUE TO REVEAL, written before any shape asks for it.
+	seed := httptest.NewRequest(http.MethodPut, "/secrets/POSTURE_PROBE",
+		strings.NewReader("probe"))
+	seed.Header.Set("Authorization", "Bearer "+wide)
+	seeded := httptest.NewRecorder()
+	plain.ServeHTTP(seeded, seed)
+	if seeded.Code != http.StatusOK {
+		t.Fatalf("seeding the probe secret: %d %s", seeded.Code, seeded.Body.String())
 	}
 
-	// The credential shapes. A session and a personal access token are
-	// deliberately absent: no route mints either at this commit, so a row
-	// for one would assert a shape nothing can produce.
-	const (
-		ok    = http.StatusOK
-		unath = http.StatusUnauthorized
-		forbd = http.StatusForbidden
-	)
-	for _, tc := range []struct {
-		shape  string
+	// The credential shapes, in the order every row states them. A
+	// session and a personal access token are deliberately absent: no
+	// route in this fixture mints either, so a column for one would
+	// assert a shape nothing here can produce.
+	type shape struct {
+		name   string
 		app    *api.App
 		header string
-		want   map[string]int
+	}
+	shapes := [...]shape{
+		{"nothing at all", plain, ""},
+		// A CREDENTIAL THAT IS PRESENT AND WRONG IS NOT ANONYMOUS:
+		// sending one says you meant to be somebody, and quietly
+		// serving you as nobody is how a revoked token goes on
+		// appearing to work.
+		{"a credential this node refuses", plain, "Bearer not-one-of-the-five"},
+		// THE NARROW TOKEN IS THE READER `allow_anonymous_read` was
+		// replaced by.
+		{"a Tier A token carrying state:read alone", plain, "Bearer " + narrow},
+		// RESOLVED AND ABLE TO READ NONE OF THE COMPANY'S STATE.
+		{"a Tier A token carrying config:read alone", plain, "Bearer " + blind},
+		// THE MOST AUTHORITY A CALLER CAN HAVE AND STILL BE REFUSED the
+		// deployment's controls, which is what makes each refusal about
+		// the rule rather than about a caller who holds nothing.
+		{"a Tier A token carrying every grant but fleet:operate", plain, "Bearer " + notFleet},
+		// AND THE OPPOSITE: an SRE who runs the deployment and reads
+		// nothing of the company's.
+		{"a Tier A token carrying fleet:operate alone", plain, "Bearer " + fleetOnly},
+		{"a Tier A token carrying every grant", plain, "Bearer " + wide},
+		// THE DEVELOPMENT PRINCIPAL carries the deployment's ceiling and
+		// no more — which here is everything, because this fixture's
+		// ceiling is. `api.auth.disabled` granted everything REGARDLESS,
+		// which is the difference.
+		{"no credential, on a -dev-principal node", devApp, ""},
+		// AND A WRONG CREDENTIAL IS STILL WRONG THERE. The development
+		// principal covers an ABSENT credential only, or it would hide
+		// the typo somebody is about to spend an afternoon on.
+		{"a refused credential, on a -dev-principal node", devApp, "Bearer not-one-of-the-five"},
+	}
+
+	const (
+		ok     = http.StatusOK
+		unath  = http.StatusUnauthorized
+		forbd  = http.StatusForbidden
+		bad    = http.StatusBadRequest
+		absent = http.StatusNotFound
+		down   = http.StatusServiceUnavailable
+		broken = http.StatusInternalServerError
+	)
+	// The routes, each named by what reaching it discloses or does rather
+	// than by its grant — so a row that moves to a different grant still
+	// has to be read rather than renumbered.
+	//
+	// THE QUESTION SURFACE carries one route per read grant, because it is
+	// the one place every read class is reachable through one mount.
+	// `/config`, `/setup` and `/chart` have their own suites for their own
+	// rules; /secrets is here whole because it is cheap to stand up for
+	// real, and the deployment's controls are here whole because nothing
+	// else composes them.
+	for _, row := range []struct {
+		name         string
+		method, path string
+		body         string
+		// want is the status per shape, in [shapes] order.
+		want [len(shapes)]int
 	}{
-		{
-			shape: "nothing at all", app: plain, header: "",
-			want: map[string]int{
-				"/health": ok, "/dashboard": ok,
-				"/query/stream": unath, "/query/events": unath,
-				"/query/integrations": unath, "/query/fleet": unath, "/agents": unath, "/stream/snapshot": unath,
-			},
-		},
-		{
-			// A CREDENTIAL THAT IS PRESENT AND WRONG IS NOT ANONYMOUS:
-			// sending one says you meant to be somebody, and quietly
-			// serving you as nobody is how a revoked token goes on
-			// appearing to work.
-			shape: "a credential this node refuses", app: plain,
-			header: "Bearer not-one-of-the-two",
-			want: map[string]int{
-				"/health": ok, "/dashboard": ok,
-				"/query/stream": unath, "/query/events": unath,
-				"/query/integrations": unath, "/query/fleet": unath, "/agents": unath, "/stream/snapshot": unath,
-			},
-		},
-		{
-			// THE NARROW TOKEN IS THE READER `allow_anonymous_read`
-			// was replaced by, and the rows below it are what that
-			// posture used to serve to anybody at all.
-			shape: "a Tier A token carrying state:read alone", app: plain,
-			header: "Bearer " + narrow,
-			want: map[string]int{
-				"/health": ok, "/dashboard": ok,
-				"/query/stream": ok, "/query/events": forbd,
-				"/query/integrations": forbd, "/query/fleet": forbd, "/agents": ok, "/stream/snapshot": ok,
-			},
-		},
-		{
-			// RESOLVED AND ABLE TO READ NONE OF THE COMPANY'S STATE:
-			// the mirrors refuse it exactly as the question does, where
-			// they used to serve any resolved caller at all.
-			shape: "a Tier A token carrying config:read alone", app: plain,
-			header: "Bearer " + blind,
-			want: map[string]int{
-				"/health": ok, "/dashboard": ok,
-				"/query/stream": forbd, "/query/events": forbd,
-				"/query/integrations": ok, "/query/fleet": forbd,
-				"/agents": forbd, "/stream/snapshot": forbd,
-			},
-		},
-		{
-			shape: "a Tier A token carrying every grant", app: plain,
-			header: "Bearer " + wide,
-			want: map[string]int{
-				"/health": ok, "/dashboard": ok,
-				"/query/stream": ok, "/query/events": ok,
-				"/query/integrations": ok, "/query/fleet": ok, "/agents": ok, "/stream/snapshot": ok,
-			},
-		},
-		{
-			// THE DEVELOPMENT PRINCIPAL carries the deployment's
-			// ceiling and no more — which here is everything, because
-			// this fixture's ceiling is. `api.auth.disabled` granted
-			// everything REGARDLESS, which is the difference.
-			shape: "no credential, on a -dev-principal node", app: devApp,
-			header: "",
-			want: map[string]int{
-				"/health": ok, "/dashboard": ok,
-				"/query/stream": ok, "/query/events": ok,
-				"/query/integrations": ok, "/query/fleet": ok, "/agents": ok, "/stream/snapshot": ok,
-			},
-		},
-		{
-			// AND A WRONG CREDENTIAL IS STILL WRONG THERE. The
-			// development principal covers an ABSENT credential only,
-			// or it would hide the typo somebody is about to spend an
-			// afternoon on.
-			shape: "a refused credential, on a -dev-principal node", app: devApp,
-			header: "Bearer not-one-of-the-two",
-			want: map[string]int{
-				"/health": ok, "/dashboard": ok,
-				"/query/stream": unath, "/query/events": unath,
-				"/query/integrations": unath, "/query/fleet": unath, "/agents": unath, "/stream/snapshot": unath,
-			},
-		},
+		{"the exempt probe", "GET", "/health", "",
+			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok}},
+		{"the dashboard shell", "GET", "/dashboard", "",
+			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok}},
+		{"the company's working state", "GET", "/query/stream", "",
+			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath}},
+		{"an agent's transcripts", "GET", "/query/events", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath}},
+		{"the map of what is not configured", "GET", "/query/integrations", "",
+			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath}},
+		{"the deployment's own shape", "GET", "/query/fleet", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath}},
+		// THE SNAPSHOT'S REST MIRRORS, decided by the grant their push
+		// kind takes on the socket rather than by being resolved at all.
+		{"the roster mirror", "GET", "/agents", "",
+			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath}},
+		{"the whole snapshot", "GET", "/stream/snapshot", "",
+			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath}},
+
+		// --- the deployment's own controls: fleet:operate ------------ //
+		{"clearing a spend ceiling", "POST", "/budgets/reset", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath}},
+		{"copying the node's durable state", "POST", "/backup?dir=/srv/posture", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath}},
+		// ADMITTED AS A 404: this fixture runs no domain log, so the
+		// stream is unknown — which is the handler speaking, after the
+		// authority layer let the request through.
+		{"moving the trim's backup floor", "POST",
+			"/work/retention/ack?stream=CREWLET_TRACKER_LOG&position=1", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath}},
+		// ADMITTED AS A 503: this fixture runs no tracker to write the
+		// gate with.
+		{"evicting a node", "POST", "/work/retention/evict/n1?confirm=n1", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath}},
+		{"readmitting a node", "POST", "/work/retention/readmit/n1?confirm=n1", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath}},
+		// ADMITTED AS A 400: no target named.
+		{"resizing a stream", "POST", "/work/retention/capacity", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath}},
+		// ADMITTED AS A 500: this fixture's capacity window cannot be read.
+		{"the maintenance window's state", "GET",
+			"/work/retention/maintenance?stream=CREWLET_TRACKER_LOG", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, broken, broken, broken, unath}},
+		{"abandoning a resize", "POST", "/work/retention/maintenance/abandon", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath}},
+		{"excluding a participant", "POST", "/work/retention/maintenance/exclude", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath}},
+		{"the value a reanchor must echo", "GET",
+			"/work/retention/reanchor?stream=CREWLET_TRACKER_LOG", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath}},
+		{"re-anchoring a log", "POST", "/work/retention/reanchor", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath}},
+
+		// --- the company's credentials ------------------------------- //
+		{"which credentials the company holds", "GET", "/secrets", "",
+			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath}},
+		// THE VALUE TAKES config:read AND secrets:read, so the reader
+		// holding the first alone is refused the second.
+		{"a credential's value", "GET", "/secrets/POSTURE_PROBE?reveal=true", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath}},
+		{"overwriting a credential", "PUT", "/secrets/POSTURE_PROBE", "probe",
+			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath}},
 	} {
-		t.Run(tc.shape, func(t *testing.T) {
+		t.Run(row.method+" "+row.path, func(t *testing.T) {
 			t.Parallel()
-			for _, r := range routes {
-				want, stated := tc.want[r.path]
-				if !stated {
-					t.Fatalf("%s has no expectation for %s; every route is "+
-						"stated for every shape, or a hole is an omission "+
-						"nobody reads as one", tc.shape, r.path)
+			for i, s := range shapes {
+				var body io.Reader
+				if row.body != "" {
+					body = strings.NewReader(row.body)
 				}
-				req := httptest.NewRequest(http.MethodGet, r.path, nil)
-				if tc.header != "" {
-					req.Header.Set("Authorization", tc.header)
+				req := httptest.NewRequest(row.method, row.path, body)
+				if s.header != "" {
+					req.Header.Set("Authorization", s.header)
 				}
 				rec := httptest.NewRecorder()
-				tc.app.ServeHTTP(rec, req)
-				if rec.Code != want {
-					t.Errorf("%s reaching %s (%s): %d, want %d\n%s",
-						tc.shape, r.name, r.path, rec.Code, want,
-						rec.Body.String())
+				s.app.ServeHTTP(rec, req)
+				if rec.Code != row.want[i] {
+					t.Errorf("%s reaching %s (%s %s): %d, want %d\n%s",
+						s.name, row.name, row.method, row.path, rec.Code,
+						row.want[i], rec.Body.String())
 				}
 			}
 		})
 	}
+}
+
+// postureSecrets is the real /secrets surface over a memory fleet, so the
+// matrix composes the route the way a running node does rather than an inert
+// stand-in that would admit anybody.
+func postureSecrets(t *testing.T) *secretsapi.Service {
+	t.Helper()
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": []byte("posture-matrix-key-of-32-bytes!!")}})
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	svc, err := secretsapi.New(secretsapi.Options{
+		Fleet: coordmemory.NewFleet(), Cipher: cipher, ActiveKeyID: "k1",
+	})
+	if err != nil {
+		t.Fatalf("secretsapi.New: %v", err)
+	}
+	return svc
 }
 
 // AND THE MATRIX ABOVE IS NOT ONE-SIDED. A cell asserting a refusal proves

@@ -136,16 +136,6 @@ type App struct {
 // everywhere else.
 type EstateFloor func(ctx context.Context) (ok bool, refusal string)
 
-// routeMounter is what the API needs of a surface it mounts and never calls
-// otherwise: its routes.
-//
-// Declared here, by the consumer, so a test can mount an inert one without
-// standing up the store, the plane or the keyring the real surface is built
-// from.
-type routeMounter interface {
-	Routes(mux *http.ServeMux)
-}
-
 // authMounter is the /auth surface's own mount, over a mux it can NAME.
 //
 // [http.ServeMux] satisfies it, which is what the one caller passes. The
@@ -157,15 +147,27 @@ type authMounter interface {
 	Routes(mux auth.Mux)
 }
 
-// chartMounter is the /chart surface's own mount, and it RETURNS AN ERROR
-// where [routeMounter] does not.
+// guardedMounter is what the API needs of a surface it mounts and never calls
+// otherwise: its routes, each mounted through [authz.Router] with the verb it
+// is decided by — and an error where one is not.
 //
-// The difference is real rather than stylistic: every chart route carries an
-// authority policy stated where it is mounted, and a route mounted with none
-// — or naming a verb the authority table has no rule for — is a hole that
-// ships looking correct. Refusing at mount is what turns it into a boot
-// failure, and the boot is the one moment every mistake can be named at once.
-type chartMounter interface {
+// EVERY SURFACE THE API MOUNTS IS ONE, /auth aside. /config, /secrets and
+// /setup were a plain `Routes(*http.ServeMux)` and decided no grant at all:
+// the guard in front of them answers only whether somebody resolved, which
+// meant "the operator" while an operator token was the only credential and
+// meant "anybody" the day a person could sign in holding `state:read`. A
+// surface that cannot state its policy where it mounts has no type to be
+// mounted as here.
+//
+// The error is real rather than stylistic: a route mounted with no policy —
+// or naming a verb the authority table has no rule for — is a hole that ships
+// looking correct. Refusing at mount is what turns it into a boot failure, and
+// the boot is the one moment every mistake can be named at once.
+//
+// Declared here, by the consumer, so a test can mount an inert one without
+// standing up the store, the plane or the keyring the real surface is built
+// from.
+type guardedMounter interface {
 	Routes(mux authz.Mux) error
 }
 
@@ -294,12 +296,12 @@ type Options struct {
 	Inbound Inbound
 
 	// Config serves /config, normally a configapi.Service.
-	Config routeMounter
+	Config guardedMounter
 
 	// Setup serves /setup, normally a setupapi.Service: collecting what
 	// an integration still needs and writing it, half into the sealed store
 	// and half into the company document.
-	Setup routeMounter
+	Setup guardedMounter
 
 	// Auth serves /auth, normally an authapi.Service: how a person
 	// BECOMES a principal. It is the one surface here whose routes are
@@ -330,7 +332,7 @@ type Options struct {
 	// REQUIRED, like Config: a node that served the settings and not the
 	// chart would answer `chart_not_writable_here` on one surface and 404
 	// on the one that refusal points at, which is worse than either alone.
-	Chart chartMounter
+	Chart guardedMounter
 
 	// IAM serves /iam, normally an iamapi.Service: the company's identity
 	// directory.
@@ -341,7 +343,7 @@ type Options struct {
 	// node does not hold the directory; a 503 would say it does and is
 	// broken, and send an operator looking for an outage on the node
 	// least able to help.
-	IAM chartMounter
+	IAM guardedMounter
 
 	// Work serves the human write surface over the company's own tracker
 	// and knowledge base, normally a workapi.Service: the same tools a seat
@@ -355,11 +357,11 @@ type Options struct {
 	// had a route of its own beside the retention gestures, with an
 	// operator check written there, and that check was the second answer
 	// to a question the authority table already answers.
-	Work chartMounter
+	Work guardedMounter
 
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
-	Secrets routeMounter
+	Secrets guardedMounter
 
 	// OtelReceiver serves the sandbox telemetry edge. Nil serves none, and
 	// the route is then ABSENT rather than refusing — an endpoint that
@@ -544,24 +546,12 @@ func New(opts Options) (*App, error) {
 	// The NAMED read routes — the public REST API. Adapters over the same
 	// registry the generic form above reaches; see rest.go.
 	a.mountReads(mux)
-	// The one WRITE outside /config and the webhook edge. A POST, so the
-	// anonymous-read posture never opens it: clearing a company's spend
-	// ceiling is not a read, whatever a laptop deployment allows.
-	mux.Handle("POST /budgets/reset", http.HandlerFunc(a.serveBudgetReset))
-	// Also a POST, and for the same reason: copying every credential and
-	// every seat's memory to a path the caller names is not a read,
-	// whatever the anonymous-read posture allows.
-	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
-	// The three retention gestures that write. POSTs for the same reason:
-	// moving the floor the trim deletes against, stopping a machine
-	// writing and letting it write again are not reads, whatever the
-	// anonymous-read posture allows. See retention.go.
-	a.mountRetention(mux)
-	// The capacity window's own control surface. It is the one thing a
-	// maintenance-mode node serves that a publishing one does not need,
-	// and it is why the verb can run at all on a topology whose broker
-	// binds no socket. See retention.go.
-	a.mountCapacity(mux)
+	// THE DEPLOYMENT'S OWN CONTROLS — the budget reset, the backup, the
+	// retention gestures and the capacity window — each mounted with the
+	// grant it takes, and failing the boot where a policy is missing.
+	if err := a.mountDeployment(mux); err != nil {
+		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
+	}
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
 	// The OPERATOR MCP surface: the same tracker and knowledge tools a
 	// seat holds, offered to a person's own assistant. Under its own
@@ -588,21 +578,31 @@ func New(opts Options) (*App, error) {
 	// whole company. Its per-run token is in the path instead.
 	a.mountOTLP(mux, opts.OtelReceiver)
 	mountBridge(mux, opts.Bridge)
-	// The config surface. GUARDED in full, reads included: the auth
-	// package makes /config one of the two prefixes never eligible for
-	// allow_anonymous_read, because reading it exposes the whole company
-	// document and writing it changes the company.
-	opts.Config.Routes(mux)
-	// The other one. /secrets is how a rotation reaches a fleet at all —
-	// the coordination broker is inside the engine's process on the
-	// default topology, so no second process can write the store — and its
-	// listing alone says which credentials a company holds.
-	opts.Secrets.Routes(mux)
-	// The third, and the newest: connecting an integration without a
-	// shell. Guarded by the same prefix rule for the same reason, and
-	// reads included — the list of which credentials a company has NOT
-	// configured is worth as much to an attacker as the ones it has.
-	opts.Setup.Routes(mux)
+	// The config surface, every route on a grant, reads included:
+	// reading it exposes the whole company document and writing it
+	// changes the company.
+	//
+	// These three, like the chart below, fail the boot on a route mounted
+	// with no policy — see [guardedMounter] for what they decided before.
+	for _, surface := range []struct {
+		name string
+		m    guardedMounter
+	}{
+		{"config", opts.Config},
+		// /secrets is how a rotation reaches a fleet at all — the
+		// coordination broker is inside the engine's process on the
+		// default topology, so no second process can write the store —
+		// and its listing alone says which credentials a company holds.
+		{"secrets", opts.Secrets},
+		// Connecting an integration without a shell, reads included —
+		// the list of which credentials a company has NOT configured is
+		// worth as much to an attacker as the ones it has.
+		{"setup", opts.Setup},
+	} {
+		if err := surface.m.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the %s surface: %w", surface.name, err)
+		}
+	}
 	// AND THE WAY IN. Mounted after the guarded surfaces and before the
 	// chart's, which is a matter of reading order rather than routing:
 	// Go's mux prefers the more specific pattern whichever way round they
@@ -705,6 +705,54 @@ func (o Options) missing() error {
 	return fmt.Errorf("api: %s required: every process that serves the API "+
 		"runs the engine that supplies them, so a missing one is a wiring "+
 		"mistake rather than a narrower node", strings.Join(names, ", "))
+}
+
+// mountDeployment registers the routes that operate the DEPLOYMENT rather
+// than the company: the budget reset, the backup, the retention gestures and
+// the capacity window. Every one takes [iam.GrantFleetOperate], through the
+// authority table's [authz.ActionFleetOperate], stated where it is mounted.
+//
+// # They decided nothing, and the guard in front of them decides nothing either
+//
+// Each handler resolved its CALLER — for the audit line — and asked no grant,
+// because each was written while the only credential this engine had was an
+// operator token and "somebody resolved" meant "the operator". The guard in
+// front of every route answers the same question and no other: is there a
+// principal. So once a person could sign in holding `state:read` alone, or a
+// pipeline hold `work:write`, every one of them could clear a spend ceiling,
+// copy the node's whole durable state to a directory of their choosing,
+// move the floor the trim deletes against, and evict a machine from the
+// fleet. Through [authz.Router] each route is refused `403` naming the
+// grant, and a route mounted without a policy is a boot failure rather than
+// an open door.
+//
+// THE READS TOO — the maintenance status and the reanchor confirmation value
+// — because `/work/retention*` is the deployment's surface whole, which is
+// what the `retention` question already declares: a map of which machine
+// holds what, and the value a reanchor must echo, are not the company's
+// working state.
+func (a *App) mountDeployment(mux *http.ServeMux) error {
+	router := authz.NewRouter(mux, authz.ContextGuard(authz.NoChart{}))
+	operate := authz.Policy{Action: authz.ActionFleetOperate}
+	var failures []error
+	mount := func(pattern string, h http.HandlerFunc) {
+		if err := router.Handle(pattern, operate, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	// POSTs, and a read posture of any kind never opens them: clearing a
+	// company's spend ceiling, and copying every credential and every
+	// seat's memory to a path the caller names, are not reads.
+	mount("POST /budgets/reset", a.serveBudgetReset)
+	mount("POST /backup", a.serveBackup)
+	// The three retention gestures that write. See retention.go.
+	a.mountRetention(mount)
+	// The capacity window's own control surface. It is the one thing a
+	// maintenance-mode node serves that a publishing one does not need,
+	// and it is why the verb can run at all on a topology whose broker
+	// binds no socket. See retention.go.
+	a.mountCapacity(mount)
+	return errors.Join(failures...)
 }
 
 // Inbound is what the webhook edge needs that only the surrounding process

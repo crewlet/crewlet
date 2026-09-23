@@ -3,6 +3,7 @@ package setupapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,17 +14,20 @@ import (
 	"testing"
 	"time"
 
-	"errors"
+	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
@@ -100,6 +104,11 @@ type surface struct {
 	// setup is the service itself, kept so a test can reach the app flow
 	// the webhook callback is served.
 	setup *setupapi.Service
+
+	// grants are what the caller [surface.as] attaches carries: every one,
+	// unless a case about authority narrows them, so a case about what the
+	// surface DOES is never quietly a case about who may.
+	grants []iam.Grant
 }
 
 func newSurface(t *testing.T) *surface {
@@ -278,9 +287,35 @@ func newSurfaceWithApps(t *testing.T, apps map[string]string, externalBase strin
 		StateKeys: runtoken.OneKey("k1", "test-material"),
 		Now:       func() time.Time { return pinned },
 	})
-	s.setup.Routes(s.mux)
-	cfg.Routes(s.mux)
+	mount(t, s.mux, s.setup, cfg)
 	return s
+}
+
+// mount registers the surfaces a case serves, failing it on a route mounted
+// without a policy.
+func mount(t *testing.T, mux *http.ServeMux, surfaces ...interface {
+	Routes(authz.Mux) error
+}) {
+	t.Helper()
+	for _, surface := range surfaces {
+		if err := surface.Routes(mux); err != nil {
+			t.Fatalf("Routes: %v", err)
+		}
+	}
+}
+
+// as attaches the caller the guard would have resolved — the operator `ops`,
+// carrying [surface.grants] — because every route here is decided on a grant,
+// and a request carrying no principal is refused before it reaches one.
+func (s *surface) as(req *http.Request) *http.Request {
+	grants := s.grants
+	if grants == nil {
+		grants = iam.AllGrants
+	}
+	return req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
+		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: auth.TokenLogin("ops"),
+		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: grants,
+	}))
 }
 
 func (s *surface) do(t *testing.T, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
@@ -293,7 +328,7 @@ func (s *surface) do(t *testing.T, method, path, body string, headers map[string
 		req.Header.Set(k, v)
 	}
 	rec := httptest.NewRecorder()
-	s.mux.ServeHTTP(rec, req)
+	s.mux.ServeHTTP(rec, s.as(req))
 	return rec
 }
 
@@ -925,8 +960,7 @@ func (s *surface) withPass(
 		Now:          func() time.Time { return pinned },
 		ExternalBase: s.externalBase,
 	})
-	s.setup.Routes(s.mux)
-	s.config.Routes(s.mux)
+	mount(t, s.mux, s.setup, s.config)
 	return status, runner
 }
 
@@ -1420,7 +1454,7 @@ func TestAPassDoesNotSeeTheRequestBeingCancelled(t *testing.T) {
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
-		s.mux.ServeHTTP(httptest.NewRecorder(), req)
+		s.mux.ServeHTTP(httptest.NewRecorder(), s.as(req))
 	}()
 
 	// IN FLIGHT FIRST. Cancelling before the pass is entered proves nothing:
@@ -2004,4 +2038,83 @@ func (s *seatStore) SetSeatDocument(_ context.Context, handle string, body []byt
 	s.docs[handle] = body
 	s.wrote = append(s.wrote, handle)
 	return statelog.Position{Stream: "CREWLET_CHART_LOG", Seq: uint64(len(s.wrote))}, nil
+}
+
+// CONNECTING IS config:write AND secrets:write, and reading is config:read.
+//
+// These routes decided nothing: the guard in front of them answers only
+// whether somebody resolved, which meant "the operator" while an operator token
+// was the only credential. A person signed in holding `state:read` alone could
+// then seal credentials into the fleet's store and point the company document
+// at them. This surface performs no write of its own — the credential goes
+// through the store /secrets serves — so a caller who could not write it there
+// must not be able to write it here: a submission CARRYING a credential takes
+// `secrets:write` on top of the route's `config:write`, and one carrying none
+// does not.
+func TestConnectingTakesTheConfigWriteAndTheCredentialWrite(t *testing.T) {
+	t.Parallel()
+	sealing := `{
+		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com",
+			"api_key": "dd-api", "app_key": "dd-app"},
+		"generate": ["webhook_token"]
+	}`
+	for _, c := range []struct {
+		name         string
+		grants       []iam.Grant
+		method, path string
+		body         string
+		refusedFor   iam.Grant // "" when the caller is admitted
+	}{
+		{"the listing, as a reader", []iam.Grant{iam.GrantConfigRead},
+			http.MethodGet, "/setup/integrations", "", ""},
+		{"the listing, without the read", []iam.Grant{iam.GrantStateRead},
+			http.MethodGet, "/setup/integrations", "", iam.GrantConfigRead},
+		{"a credential, with only the config write", []iam.Grant{iam.GrantConfigWrite},
+			http.MethodPost, "/setup/integrations/datadog/inputs", sealing,
+			iam.GrantSecretWrite},
+		{"a credential, without the config write",
+			[]iam.Grant{iam.GrantSecretWrite, iam.GrantConfigRead},
+			http.MethodPost, "/setup/integrations/datadog/inputs", sealing,
+			iam.GrantConfigWrite},
+		{"a credential, with both",
+			[]iam.Grant{iam.GrantConfigWrite, iam.GrantSecretWrite},
+			http.MethodPost, "/setup/integrations/datadog/inputs", sealing, ""},
+		{"no credential, with only the config write", []iam.Grant{iam.GrantConfigWrite},
+			http.MethodPost, "/setup/integrations/datadog/inputs",
+			`{"values": {"site": "datadoghq.com"}}`, ""},
+		// A PASS IS HANDED A SINK THAT MINTS AND SEALS, so it is a
+		// credential write whether or not this one mints anything — and
+		// it is refused before its body is read.
+		{"a provisioning pass, with only the config write",
+			[]iam.Grant{iam.GrantConfigWrite},
+			http.MethodPost, "/setup/integrations/datadog/provision", `{}`,
+			iam.GrantSecretWrite},
+		{"a GitHub App, with only the config write", []iam.Grant{iam.GrantConfigWrite},
+			http.MethodPost, "/setup/integrations/github/app", `{"seat": "sre-lead"}`,
+			iam.GrantSecretWrite},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seed(t)
+			s.grants = c.grants
+			res := s.do(t, c.method, c.path, c.body, nil)
+			if c.refusedFor == "" {
+				if res.Code == http.StatusForbidden {
+					t.Errorf("holding %v: refused %s", c.grants, res.Body)
+				}
+				return
+			}
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("holding %v: %d %s, want 403", c.grants, res.Code, res.Body)
+			}
+			grants, _ := decode(t, res)[authz.DetailGrants].([]any)
+			if len(grants) != 1 || grants[0] != string(c.refusedFor) {
+				t.Errorf("refused naming %v, want %s", grants, c.refusedFor)
+			}
+			if _, sealed := s.vault.get("DATADOG_WEBHOOK_TOKEN"); sealed {
+				t.Error("a refused submission sealed a value")
+			}
+		})
+	}
 }

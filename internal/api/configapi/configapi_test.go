@@ -7,19 +7,24 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -70,6 +75,11 @@ type surface struct {
 	plane   coord.Plane
 	svc     *configapi.Service
 	cipher  secrets.Cipher
+
+	// grants are what the caller [surface.do] attaches carries: every one,
+	// unless a case about authority narrows them, so a case about what the
+	// surface DOES is never quietly a case about who may.
+	grants []iam.Grant
 }
 
 func newSurface(t *testing.T, cipher secrets.Cipher) *surface {
@@ -89,7 +99,7 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 
 	s := &surface{
 		mux: http.NewServeMux(), configs: db.Configs(), db: db,
-		plane: coordmemory.NewFleet(),
+		plane: coordmemory.NewFleet(), grants: iam.AllGrants,
 	}
 	opts := configapi.Options{
 		Store: db, Plane: s.plane,
@@ -104,7 +114,9 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 		t.Fatalf("configapi.New: %v", err)
 	}
 	s.svc = svc
-	s.svc.Routes(s.mux)
+	if err := s.svc.Routes(s.mux); err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
 	return s
 }
 
@@ -144,6 +156,13 @@ func (s *surface) do(t *testing.T, method, path, body string, headers map[string
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	// THE CALLER THE GUARD WOULD HAVE RESOLVED, attached the way it
+	// attaches one: every route here is decided on a grant, so a request
+	// carrying no principal is refused before it reaches the surface.
+	req = req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
+		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: auth.TokenLogin("ops"),
+		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: s.grants,
+	}))
 	res := httptest.NewRecorder()
 	s.mux.ServeHTTP(res, req)
 	return res
@@ -1537,5 +1556,59 @@ func TestReferencesCarriesTheDocumentsOwnValidator(t *testing.T) {
 		map[string]string{"If-None-Match": tag})
 	if again.Code != http.StatusNotModified {
 		t.Fatalf("status = %d, want 304: %s", again.Code, again.Body)
+	}
+}
+
+// EVERY ROUTE TAKES ITS GRANT: a read `config:read`, a write `config:write`.
+//
+// They decided nothing: the guard in front of them answers only whether
+// somebody resolved, which meant "the operator" while an operator token was the
+// only credential this engine had. A person signed in holding `state:read`
+// alone could then rewrite the company document, revert it to any revision and
+// read every `${VAR}` it names. Each route is stated against a caller holding
+// exactly its grant and against one holding everything BUT it — the most
+// authority a caller can have and still be refused.
+func TestEveryConfigRouteTakesTheGrantItsVerbNames(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		method, path, body string
+		needs              iam.Grant
+	}{
+		{http.MethodGet, "/config", "", iam.GrantConfigRead},
+		{http.MethodGet, "/config/revisions", "", iam.GrantConfigRead},
+		{http.MethodGet, "/config/references", "", iam.GrantConfigRead},
+		{http.MethodOptions, "/config", "", iam.GrantConfigRead},
+		{http.MethodPut, "/config", companyJSONDoc, iam.GrantConfigWrite},
+		{http.MethodPost, "/config/reload", "", iam.GrantConfigWrite},
+	} {
+		name := c.method + " " + c.path
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t, nil)
+			s.grants = []iam.Grant{c.needs}
+			if res := s.do(t, c.method, c.path, c.body, nil); res.Code == http.StatusForbidden {
+				t.Errorf("holding %s: refused %s", c.needs, res.Body.String())
+			}
+			s.grants = slices.DeleteFunc(slices.Clone(iam.AllGrants),
+				func(g iam.Grant) bool { return g == c.needs })
+			res := s.do(t, c.method, c.path, c.body, nil)
+			if res.Code != http.StatusForbidden {
+				t.Fatalf("holding everything but %s: %d %s, want 403", c.needs,
+					res.Code, res.Body.String())
+			}
+			var refusal map[string]any
+			if err := json.Unmarshal(res.Body.Bytes(), &refusal); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			grants, _ := refusal[authz.DetailGrants].([]any)
+			if len(grants) != 1 || grants[0] != string(c.needs) {
+				t.Errorf("refused naming %v, want %s", refusal[authz.DetailGrants], c.needs)
+			}
+			// AND THE REFUSAL STILL CARRIES THE SURFACE'S no-store: it is
+			// written under the same wrapper as every other answer here.
+			if got := res.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("a refusal answered Cache-Control %q, want no-store", got)
+			}
+		})
 	}
 }

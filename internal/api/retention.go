@@ -32,10 +32,16 @@ import (
 //
 // # Why they are POSTs even though one of them only publishes a number
 //
-// The anonymous-read posture a laptop deployment allows must never reach any
-// of them. An acknowledgement moves the floor the trim deletes against, an
-// eviction stops a machine writing, and a readmission lets it write again —
-// none is a read, whatever the posture says.
+// An acknowledgement moves the floor the trim deletes against, an eviction
+// stops a machine writing, and a readmission lets it write again — none is a
+// read, and nothing about one should be retried by a proxy or prefetched by a
+// browser the way a GET may be.
+//
+// # Who may make them
+//
+// `fleet:operate`, decided by the authority table where [App.mountDeployment]
+// mounts them — every route in this file, the two reads included. The handlers
+// resolve the caller for the audit line and decide nothing themselves.
 
 // retentionWriter is the slice of the fleet these routes need.
 //
@@ -175,11 +181,12 @@ func (a *App) generationOf(ctx context.Context, stream string) (uint32, error) {
 	return generation, nil
 }
 
-// mountRetention registers the write half of the retention surface.
-func (a *App) mountRetention(mux *http.ServeMux) {
-	mux.Handle("POST /work/retention/ack", http.HandlerFunc(a.serveRetentionAck))
-	mux.Handle("POST /work/retention/evict/{node}", a.gate(true))
-	mux.Handle("POST /work/retention/readmit/{node}", a.gate(false))
+// mountRetention registers the write half of the retention surface, through
+// the mount [App.mountDeployment] hands it — which is what decides the grant.
+func (a *App) mountRetention(mount func(string, http.HandlerFunc)) {
+	mount("POST /work/retention/ack", a.serveRetentionAck)
+	mount("POST /work/retention/evict/{node}", a.gate(true))
+	mount("POST /work/retention/readmit/{node}", a.gate(false))
 }
 
 // gate answers the eviction and readmission routes.
@@ -271,13 +278,13 @@ type capacityRunner interface {
 // procedure requires to be stopped. Both cannot hold. What resolves it is that
 // the maintenance-mode node runs its API: these are that mode's own control
 // surface rather than the write routes the mode withholds.
-func (a *App) mountCapacity(mux *http.ServeMux) {
-	mux.Handle("POST /work/retention/capacity", http.HandlerFunc(a.serveSetCapacity))
-	mux.Handle("GET /work/retention/maintenance", http.HandlerFunc(a.serveMaintenanceStatus))
-	mux.Handle("POST /work/retention/maintenance/abandon", http.HandlerFunc(a.serveAbandon))
-	mux.Handle("POST /work/retention/maintenance/exclude", http.HandlerFunc(a.serveExclude))
-	mux.Handle("GET /work/retention/reanchor", http.HandlerFunc(a.serveReanchorStatus))
-	mux.Handle("POST /work/retention/reanchor", http.HandlerFunc(a.serveReanchor))
+func (a *App) mountCapacity(mount func(string, http.HandlerFunc)) {
+	mount("POST /work/retention/capacity", a.serveSetCapacity)
+	mount("GET /work/retention/maintenance", a.serveMaintenanceStatus)
+	mount("POST /work/retention/maintenance/abandon", a.serveAbandon)
+	mount("POST /work/retention/maintenance/exclude", a.serveExclude)
+	mount("GET /work/retention/reanchor", a.serveReanchorStatus)
+	mount("POST /work/retention/reanchor", a.serveReanchor)
 }
 
 // serveReanchorStatus answers GET /work/retention/reanchor: the stream's own
@@ -455,21 +462,26 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what strin
 			map[string]string{"error": "stream_required"})
 		return
 	}
+	// WHO IS ACTING, resolved BEFORE the gesture runs, as every other
+	// write on this surface does. It was resolved after — so an abandon or
+	// an exclusion took effect and only then was asked who had made it,
+	// and a caller the node could not resolve changed the capacity window
+	// and was answered 503 as though nothing had happened.
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	operator := auth.OperatorID(caller)
 	op, err := run(r.Context(), stream)
 	if err != nil {
 		log.Warn("api_capacity_gesture_refused", "gesture", what,
-			"stream", stream, "error", err)
+			"stream", stream, "operator", operator, "error", err)
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error": "capacity_refused", "detail": err.Error(),
 			"operation": operationOrNil(op),
 		})
 		return
 	}
-	caller, ok := auth.Caller(w, r)
-	if !ok {
-		return
-	}
-	operator := auth.OperatorID(caller)
 	log.Info("capacity_gesture", "operator", operator, "gesture", what, "stream", stream)
 	writeJSON(w, http.StatusOK, map[string]any{"operation": operationOrNil(op)})
 }

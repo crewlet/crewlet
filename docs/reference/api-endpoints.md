@@ -125,8 +125,8 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch. **Always needs a token** — it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
-| `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Needs a credential**, like every other guarded route (see [below](#post-budgetsreset)) |
-| `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
+| `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Takes `fleet:operate`** (see [below](#post-budgetsreset)) |
+| `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Takes `fleet:operate`** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
@@ -341,14 +341,14 @@ told they lead nobody goes looking for an authority they already hold.
 |---|---|
 | `state:read` | The company's working state: `/agents`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, the reads under `/work/*` and `/pages/*`, `/containers`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
 | `audit:read` | The record of what happened: `/events*`, the socket's `event` push and the snapshot's `events` section, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, the turn, phase, trace and A2A-channel questions on the socket, and `/iam/audit`. Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
-| `config:read` | `/config*`, `/company/export`, `/integrations`, and the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials, its sandbox cell and its `mcp_env` |
-| `secrets:read` | `/secrets*`. The listing carries no values and still says which credentials a company holds and when each last changed |
+| `config:read` | Every read under `/config*`, `/company/export`, `/integrations`, the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials, its sandbox cell and its `mcp_env` — and the `/setup` and `/secrets` **listings**: they carry no values and still say which credentials a company holds, which it has not set, and when each last changed |
+| `secrets:read` | Revealing a credential's value: `GET /secrets/{name}?reveal=true`, which takes `config:read` as well — the value's grant on top of the row's |
 | `people:manage` | `/iam/*` — inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them. **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
 | `work:write` | Filing and moving work — the [write surface's](#the-human-write-surface) item routes — and `/operator/mcp`'s write half. Some of those verbs also ask a RELATION: re-routing, a project's policy and taking an item out of circulation are its project lead's |
 | `knowledge:write` | Writing the company's own pages. A rename, the trash and a restore are also the container's lead's; see [the write surface](#the-human-write-surface) |
-| `config:write` | `PUT`/`PATCH /config`, `/chart/batch`, the rename and import routes, and `/setup`'s writes — and, on top of the page's own rule, every write to a page in the tool-skills container |
-| `secrets:write` | `POST`/`DELETE /secrets/*` |
-| `fleet:operate` | The deployment rather than the company: `/fleet`, `/work/retention*`, `/backup`, `/budgets/reset`, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`) — which no seat may make whatever it holds. It is also the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
+| `config:write` | Every write under `/config*`, `/chart/batch`, the rename and import routes, and `/setup`'s writes — with `secrets:write` as well wherever the write seals a credential — and, on top of the page's own rule, the create, save, rename, trash, restore and purge of a page in the tool-skills container (a comment on one is not gated: a remark is not the skill) |
+| `secrets:write` | `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, and on top of `config:write` a `/setup` write that seals a credential: a submission carrying one, a provisioning pass, a GitHub App |
+| `fleet:operate` | The deployment rather than the company: `/fleet`, every `/work/retention*` route (the maintenance status and the reanchor value included), `/backup`, `/budgets/reset`, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`) — which no seat may make whatever it holds. It is also the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `sandbox:run` | Starting a coding run |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -650,7 +650,7 @@ quiet directory from a lagging node.
 
 ### `/config/*` — live config management (auth-gated)
 
-All `/config/*` routes require `Authorization: Bearer <token>` matching one of the tokens listed in Tier A `api.auth.tokens`. See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
+Every `/config/*` route takes a grant: `config:read` for the reads below and `config:write` for the writes, whatever the credential — a Tier A token, a session, or the development principal. A caller without it is refused `403 unauthorized` naming the grant (see [Which grant a route needs](#which-grant-a-route-needs)). See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
 
 **Read-only:**
 
@@ -892,11 +892,24 @@ Four rules follow from that:
 
 ### `/secrets/*` — the company's credentials (auth-gated)
 
-All `/secrets/*` routes require `Authorization: Bearer <token>`, reads
-included, for the same reason `/config` does: the listing alone says which
-credentials a company holds and when each last changed. Every node serves
-them, because every node opens the fleet's
+Every `/secrets/*` and `/setup/*` route takes a grant, reads included: the
+listing alone says which credentials a company holds and when each last
+changed. Every node serves them, because every node opens the fleet's
 [coordination store](../concepts/coordination.md) that holds the rows.
+
+| Route | Grant |
+|---|---|
+| `GET /secrets`, `GET /secrets/{name}` | `config:read` |
+| `GET /secrets/{name}?reveal=true` | `config:read` **and** `secrets:read` — decided before the store is read, so a caller without the second is refused alike for a name that exists and one that does not |
+| `PUT /secrets/{name}`, `DELETE /secrets/{name}`, `POST /secrets/rekey` | `secrets:write` |
+| `GET /setup/integrations`, `GET /setup/integrations/{kind}`, the two `runs` reads | `config:read` |
+| `POST /setup/integrations/{kind}/inputs` | `config:write` — and `secrets:write` as well when the submission carries a credential, supplied or to be minted |
+| `DELETE /setup/integrations/{kind}`, `POST /setup/integrations/{kind}/check` | `config:write` |
+| `POST /setup/integrations/{kind}/provision`, `POST /setup/integrations/github/app` | `config:write` **and** `secrets:write`: a writing pass is handed a sink that mints and seals, and an app's private key is sealed on its way back |
+
+**Connecting is `config:write` and `secrets:write`.** `/setup` performs no
+write of its own — a credential goes through the store `/secrets` serves — so
+a caller who could not write a credential there cannot write one here either.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -1139,11 +1152,13 @@ document. `/setup` is the surface that does both, in the one order that is
 safe, so the dashboard never has to sequence it and never holds a credential
 across two requests.
 
-**Guarded in full, reads included**, on the same terms as `/config` and
-`/secrets`: this surface answers with the *names* of the credentials a company
-holds, which of them are unset, and the pages at each third-party app an
-administrator would visit. That is a map of what to attack, and it is not
-something the anonymous-read posture opens.
+**Every route takes a grant, reads included**, on the same terms as `/config`
+and `/secrets`: this surface answers with the *names* of the credentials a
+company holds, which of them are unset, and the pages at each third-party app an
+administrator would visit. That is a map of what to attack. Reading takes
+`config:read`; connecting takes `config:write`, and `secrets:write` as well
+wherever a credential is sealed — see [the grant each route
+takes](#secrets--the-companys-credentials-auth-gated).
 
 ### The requirement list
 
@@ -2963,9 +2978,10 @@ the one alarm an operator cannot ignore fires on.
 
 ### The three retention gestures that write
 
-All three are **POSTs**, so the anonymous-read posture never reaches them:
-moving the floor the trim deletes against, stopping a machine writing and
-letting it write again are not reads, whatever a laptop deployment allows.
+All three are **POSTs**, and all three — like every other `/work/retention*`
+route — take `fleet:operate`: moving the floor the trim deletes against,
+stopping a machine writing and letting it write again are the deployment's own
+controls, and a caller without the grant is refused `403` naming it.
 
 | Route | What it does |
 |---|---|
@@ -2989,7 +3005,8 @@ mismatch that is not there.
 A log's Tier A ceiling is only the value its stream is created with, and these
 routes are the window in which a running log's ceiling changes. The
 [procedure is documented once](../guides/retention.md#changing-a-logs-ceiling);
-what follows is the wire surface.
+what follows is the wire surface. Every route here, the status read included,
+takes `fleet:operate`.
 
 | Route | What it does |
 |---|---|
@@ -3317,10 +3334,11 @@ embedded broker, so a running node is the only thing that can reach it —
 which is why `crewlet budgets reset` is a client of this route rather than a
 command that opens a file.
 
-One refusal, deliberate: **401 without a token.** Every guarded route is on
-by default and opens the whole read surface; a reset is a write, so it is never
-eligible. There is no "no counter here" refusal beside it, because every node
-opens the fleet's coordination store that holds the counter.
+Two refusals, deliberate: **401 without a credential**, and **403 without
+`fleet:operate`** — clearing a spend ceiling is the deployment's own control,
+not something a reader of the board or a pipeline filing work may do. There is
+no "no counter here" refusal beside them, because every node opens the fleet's
+coordination store that holds the counter.
 
 ### `POST /backup`
 
@@ -3369,9 +3387,9 @@ client that gives up leaves an unfinished directory rather than a false one.
 
 Three refusals, each pointing somewhere different:
 
-- **401 without a token.** Every guarded route needs one, and this opens
-  the read surface; this writes every credential the company holds to a path
-  the caller chooses, so it is never eligible.
+- **401 without a credential, and 403 without `fleet:operate`.** This writes
+  every credential the company holds to a path the caller chooses, so it is
+  the deployment's own control and no narrower grant reaches it.
 - **400 for a destination this node cannot use** — relative, already occupied,
   or a path the database engine mishandles. The reason is returned in `detail`
   rather than only logged, unlike every other route here, because it is the

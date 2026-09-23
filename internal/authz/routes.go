@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Policy is what one route requires, declared where the route is mounted.
@@ -40,6 +41,53 @@ type Policy struct {
 // context and the chart from the running engine, neither of which this
 // package holds, and both of which a test wants to write down.
 type Guard func(r *http.Request, p Policy) Decision
+
+// ContextGuard is the [Guard] every surface builds that takes its caller from
+// the request context — the principal internal/api's guard resolved — and its
+// lead relations from chart.
+//
+// ONE FUNCTION RATHER THAN A COPY PER SURFACE. Four surfaces wrote this body
+// for themselves, and the one clause each had to get right is the one that
+// is easy to drop: a caller this node could not RESOLVE is decided UNKNOWN,
+// never as the zero principal. Decided as the zero principal it is a 403
+// naming a grant the caller may very well hold, on every request, for as
+// long as the identity estate is unreadable.
+//
+// A surface whose rules ask no relation — the deployment's own controls, the
+// company document, the credential store — passes [NoChart], which says so
+// where a nil would look like an omission.
+func ContextGuard(chart Chart) Guard {
+	return func(r *http.Request, p Policy) Decision {
+		principal, how := iam.From(r.Context())
+		if how == iam.Unknown {
+			return Decision{Err: iam.Reason(r.Context())}
+		}
+		var object Object
+		if p.Object != nil {
+			object = p.Object(r)
+		}
+		return Decide(r.Context(), principal, p.Action, object, chart)
+	}
+}
+
+// Admit decides one more verb from INSIDE a handler the router already
+// admitted, and answers the refusal itself when there is one. It reports
+// whether the handler may go on.
+//
+// FOR A QUESTION THE PATTERN CANNOT ASK. A route is mounted at the verb its
+// pattern names; whether the request ALSO needs another is sometimes only
+// visible once it is read — `?reveal=true` on a credential, a setup
+// submission that turns out to carry one. Both questions go to the same guard
+// over the same table, so this is the route's policy asked twice rather than
+// a second gate with rules of its own, and its refusal is the router's.
+func Admit(w http.ResponseWriter, r *http.Request, guard Guard, p Policy) bool {
+	d := guard(r, p)
+	if d.Unknown() || !d.Allowed {
+		EnvelopeRefusal(w, r, p, d)
+		return false
+	}
+	return true
+}
 
 // Refusal renders a request the guard did not admit: refused, or undecidable.
 //

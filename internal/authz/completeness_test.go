@@ -2,6 +2,7 @@ package authz_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -434,4 +435,67 @@ func policyFor(pattern string) authz.Policy {
 func grantedOnly(g iam.Grant) iam.Principal {
 	p := person("jane.doe", g)
 	return p
+}
+
+// THE SHARED GUARD DECIDES A CALLER IT COULD NOT RESOLVE AS UNKNOWN.
+//
+// It is the clause four surfaces each wrote for themselves and the one that is
+// easy to drop: decided as the zero principal, an unreadable identity estate is
+// a 403 naming a grant the caller may very well hold, on every request, for as
+// long as the estate is down. Three resolutions, three answers — and the
+// resolved caller is decided on the object the policy builds, so a guard that
+// dropped the object would refuse every relation rule.
+func TestTheContextGuardDecidesAnUnresolvedCallerAsUnknown(t *testing.T) {
+	t.Parallel()
+	guard := authz.ContextGuard(authz.NoChart{})
+	policy := authz.Policy{Action: authz.ActionInboxMark,
+		Object: func(*http.Request) authz.Object {
+			return authz.Object{Kind: authz.KindPerson, Owner: "jane.doe"}
+		}}
+	request := func(ctx func(*http.Request) *http.Request) *http.Request {
+		return ctx(httptest.NewRequest(http.MethodPut, "http://x/work/people/jane.doe/inbox", nil))
+	}
+
+	unknown := guard(request(func(r *http.Request) *http.Request {
+		return r.WithContext(iam.WithUnresolved(r.Context(), errors.New("estate unreadable")))
+	}), policy)
+	if !unknown.Unknown() {
+		t.Errorf("an unresolved caller decided %+v, want UNKNOWN", unknown)
+	}
+
+	anonymous := guard(request(func(r *http.Request) *http.Request {
+		return r.WithContext(iam.WithAnonymous(r.Context()))
+	}), policy)
+	if anonymous.Unknown() || anonymous.Allowed {
+		t.Errorf("an anonymous caller decided %+v, want a refusal", anonymous)
+	}
+
+	self := guard(request(func(r *http.Request) *http.Request {
+		return r.WithContext(iam.WithPrincipal(r.Context(), person("jane.doe")))
+	}), policy)
+	if !self.Allowed || self.Reason != authz.ReasonSelf {
+		t.Errorf("the owner of the record decided %+v, want admitted as self", self)
+	}
+}
+
+// ADMIT ASKS THE SAME GUARD AND ANSWERS THE ROUTER'S REFUSAL.
+func TestAdmitAnswersTheRoutersOwnRefusal(t *testing.T) {
+	t.Parallel()
+	refuse := func(*http.Request, authz.Policy) authz.Decision {
+		return authz.Decision{Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{iam.GrantSecretRead}}
+	}
+	rec := httptest.NewRecorder()
+	if authz.Admit(rec, httptest.NewRequest(http.MethodGet, "http://x/secrets/A", nil),
+		refuse, authz.Policy{Action: authz.ActionSecretReveal}) {
+		t.Fatal("a refused decision was admitted")
+	}
+	body := envelope(t, rec)
+	if rec.Code != http.StatusForbidden || body[authz.DetailReason] != string(authz.ReasonNoGrant) {
+		t.Errorf("answered %d %v, want the router's 403", rec.Code, body)
+	}
+	if !authz.Admit(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://x/", nil),
+		allow, authz.Policy{Action: authz.ActionSecretReveal}) {
+		t.Error("an admitted decision was refused")
+	}
 }

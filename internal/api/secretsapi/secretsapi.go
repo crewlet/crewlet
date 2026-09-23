@@ -9,12 +9,23 @@
 // rows are fleet-wide, and the engine is the only thing that
 // can put one there.
 //
-// # Every route is guarded, reads included
+// # Every route takes a grant, reads included
 //
-// [github.com/crewlet/crewlet/internal/api/auth] names /secrets alongside
-// /config as a prefix that is never eligible for allow_anonymous_read. A
-// listing here says which credentials a company holds and when each last
-// changed, which is reconnaissance even without the values.
+// Each is mounted through [authz.Router] with the verb the authority table
+// decides it by: the listing and one row's metadata are `secrets.list`
+// (`config:read`), revealing a value is `secrets.reveal` (`secrets:read`), and
+// storing, rotating, deleting and re-keying are `secrets.write`
+// (`secrets:write`). A listing says which credentials a company holds and when
+// each last changed, which is reconnaissance even without the values.
+//
+// THE ROUTES USED TO DECIDE NOTHING. They resolved the caller for the audit
+// line and asked no grant, which was sound while the only credential this
+// engine had was an operator token: "somebody resolved" meant "the operator".
+// It stopped being sound the day a person could sign in holding `state:read`
+// alone — every one of them could then read, reveal, overwrite and delete the
+// company's credentials. The split between `secrets:read` and `secrets:write`
+// the grant vocabulary draws, so an automation that reseals keys can hold the
+// write and never the read, meant nothing while no route asked either.
 //
 // # There is exactly one route that returns a value, and it is break-glass
 //
@@ -32,6 +43,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -55,6 +67,10 @@ type Service struct {
 	keyID  string
 	cipher secrets.Cipher
 	now    func() time.Time
+
+	// guard decides every route and the reveal a GET asks for on top of
+	// its route. No chart: not one verb here asks a relation.
+	guard authz.Guard
 }
 
 // Options wire the service.
@@ -103,22 +119,35 @@ func New(opts Options) (*Service, error) {
 		keyID:  opts.ActiveKeyID,
 		cipher: opts.Cipher,
 		now:    now,
+		guard:  authz.ContextGuard(authz.NoChart{}),
 	}, nil
 }
 
-// Routes registers the surface on the API's mux.
-func (s *Service) Routes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /secrets", s.list)
+// Routes registers the surface on the API's mux, every route through
+// [authz.Router] with the verb it is decided by. A route mounted without one
+// is refused here and fails the boot — see [authz.Router.Handle].
+func (s *Service) Routes(mux authz.Mux) error {
+	router := authz.NewRouter(mux, s.guard)
+	var failures []error
+	mount := func(pattern string, a authz.Action, h http.HandlerFunc) {
+		if err := router.Handle(pattern, authz.Policy{Action: a}, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	mount("GET /secrets", authz.ActionSecretList, s.list)
 	// REKEY IS A POST, and that is what keeps it from swallowing a secret
 	// a company legitimately calls "rekey". Registration order is NOT what
 	// separates them — the mux prefers the more specific pattern whichever
 	// way round they are declared — so the method is doing the work: a
 	// GET, PUT or DELETE of that name reaches the {name} routes, and no
 	// spelling of a secret's name can reach the rekey handler.
-	mux.HandleFunc("POST /secrets/rekey", s.rekey)
-	mux.HandleFunc("GET /secrets/{name}", s.get)
-	mux.HandleFunc("PUT /secrets/{name}", s.put)
-	mux.HandleFunc("DELETE /secrets/{name}", s.delete)
+	mount("POST /secrets/rekey", authz.ActionSecretWrite, s.rekey)
+	// THE METADATA'S VERB, and a reveal asks the value's on top — see
+	// [Service.get]. The pattern cannot see `?reveal=true`.
+	mount("GET /secrets/{name}", authz.ActionSecretList, s.get)
+	mount("PUT /secrets/{name}", authz.ActionSecretWrite, s.put)
+	mount("DELETE /secrets/{name}", authz.ActionSecretWrite, s.delete)
+	return errors.Join(failures...)
 }
 
 // list serves GET /secrets — every name, with no values.
@@ -157,6 +186,13 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeJSON(w, http.StatusOK, render(row))
 		}
+		return
+	}
+	// THE VALUE IS ITS OWN GRANT. The route admitted a caller who may see
+	// that the credential exists; revealing it is `secrets:read`, asked
+	// here because the pattern cannot see the flag — and asked BEFORE the
+	// store is read, so a refused caller never has the value in flight.
+	if !authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSecretReveal}) {
 		return
 	}
 	if !s.sealed(w) {
