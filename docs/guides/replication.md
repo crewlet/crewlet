@@ -50,15 +50,18 @@ different with each.
   retry carries the same operation id so the ledger collapses a duplicate.
 
 A gesture made of **several** records in order — a cross-project move, a merge
-of duplicates, a checklist item's promotion, a dependency with its mirror —
-treats a step answered `unknown` as the end of the walk, not as a step that
-landed. Nothing after it is written: no descendant follows a root whose own
-move is unknown, a mid-move or mid-merge mark is not taken down, and a
-dependency's mirror is not written over an authored edge nobody can vouch for
-(a mirror whose own outcome is unknown is reported one-sided, the state the
-tracker duty repairs). The gesture fails naming the operation id, and running it
-again under that id answers each step that landed from the ledger and finishes
-the rest.
+of duplicates, a checklist item's promotion, a dependency with its mirror, a
+subtree's removal or restore — treats a step answered `unknown` as the end of
+the walk, not as a step that landed. Nothing after it is written: no descendant
+follows a root whose own move or removal is unknown, a mid-move or mid-merge
+mark is not taken down, and a dependency's mirror is not written over an
+authored edge nobody can vouch for (a mirror whose own outcome is unknown is
+reported one-sided, the state the tracker duty repairs). The gesture fails
+naming the operation id, and running it again under that id answers each step
+that landed from the ledger and finishes the rest. Every step is named by the
+task it writes rather than by its place in the walk, because a re-run reads
+its list afresh — a restore's is what is still in the trash — and a step named
+by position would carry another task's operation id.
 
 What "under that id" means depends on who is asking. A **seat** derives its
 ids from its turn, the call's arguments and how many different calls to the

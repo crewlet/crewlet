@@ -879,6 +879,18 @@ names the removal that took it — so restoring the parent brings back exactly
 what that gesture removed, and never a child that was already in the trash for
 its own reasons.
 
+Both are one commit per item, parent first, so a subtree gesture can stop part
+of the way through — a step whose outcome is unknown, or the stream refusing an
+append. It then stops there rather than carrying on over it, and the answer
+says so: the item you named is removed (or restored), with
+`subtree_followed` and `subtree_total` counting how many of the items that go
+with it followed, and `subtree_stopped` saying why and what finishes it. What
+finishes it is the same call again — a task already where the gesture leaves it
+is nothing to do, so a second removal takes what the first did not reach, and a
+second restore brings back whatever is still in the trash with a parent that
+is already back. A restore of an item that is not in the trash and has nothing
+in the trash with it says there is nothing to restore.
+
 Neither is `purge`, which destroys every row on every node and has no inverse.
 That one is `crewlet work purge`, with a typed confirmation and a required
 reason, and it is deliberately not a tool at all.

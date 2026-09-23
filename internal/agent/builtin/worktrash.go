@@ -123,7 +123,12 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		tracker.Wake{
 			Kind: tracker.ChangeRemoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
-	if err != nil {
+	var stopped *tracker.SubtreeStopped
+	switch {
+	case errors.As(err, &stopped):
+		return t.deps.subtreeStopped(ctx, actor, tracker.RemoveWorkItemTool,
+			before.Task.Key, "removed", got, stopped)
+	case err != nil:
 		return failed(writeFailure(actor, tracker.RemoveWorkItemTool, err)), nil
 	}
 	t.deps.settle(ctx, got.Position)
@@ -196,10 +201,10 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case err != nil:
 		return failed(readFailure(tracker.RestoreWorkItemTool, err)), nil
 	}
-	if before.Task.Removed == nil {
-		return failed(fmt.Sprintf("%s is not in the trash, so there is "+
-			"nothing to restore.", before.Task.Key)), nil
-	}
+	// A LIVE ITEM IS NOT REFUSED HERE, because it is exactly what a restore
+	// that stopped part of the way through leaves: the root is back and
+	// what went with it is not, and this call is how that is finished. The
+	// tracker says when there is truly nothing to bring back.
 
 	after := before.Task
 	after.Removed = nil
@@ -209,12 +214,65 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		tracker.Wake{
 			Kind: tracker.ChangeRestored, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
-	if err != nil {
+	var stopped *tracker.SubtreeStopped
+	switch {
+	case errors.Is(err, tracker.ErrNothingToRestore):
+		return failed(fmt.Sprintf("%s is not in the trash, and nothing is in "+
+			"the trash with it, so there is nothing to restore.",
+			before.Task.Key)), nil
+	case errors.As(err, &stopped):
+		return t.deps.subtreeStopped(ctx, actor, tracker.RestoreWorkItemTool,
+			before.Task.Key, "restored", got, stopped)
+	case err != nil:
 		return failed(writeFailure(actor, tracker.RestoreWorkItemTool, err)), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(withOperation(map[string]any{
 		"key": before.Task.Key, "restored": true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
+	}, actor))
+}
+
+// subtreeStopped answers a subtree removal or restore whose ROOT landed and
+// whose walk over the rest did not finish.
+//
+// # Why it is not a failure, and not a success either
+//
+// The item the caller named IS in the trash, or out of it — so "the change was
+// NOT made", which is what this answered, was false about the one thing the
+// caller asked about by name, and a retry was refused because the restored
+// root was no longer in the trash. And the gesture is NOT done: the tasks that
+// go with it are split across the trash. So the answer is the root's receipt
+// with the walk's own count beside it and what finishes it, the shape
+// `dependencies_failed` gives a create whose item landed.
+//
+// EITHER VERB FINISHES WHEN MADE AGAIN, under the same operation or a new one
+// — a task already where the gesture leaves it is nothing to do. The one stop
+// that differs is a step this node's ledger cannot vouch for: the same
+// operation stops at the same task here every time, and only a new one decides
+// it afresh — which the operator's surface, the only one these two tools are
+// served on, gets by leaving the op_id out.
+func (d WorkDeps) subtreeStopped(ctx context.Context, actor Actor, tool, key,
+	done string, got tracker.WriteResult,
+	stopped *tracker.SubtreeStopped) (tools.Result, error) {
+
+	next := fmt.Sprintf("Call %s on %s again, with the same arguments, to "+
+		"finish: whatever has not followed yet goes, and what already has is "+
+		"left where it is.", tool, key)
+	if errors.Is(stopped.Err, tracker.ErrStepUnvouched) {
+		next = fmt.Sprintf("This node cannot vouch for the task it stopped at "+
+			"under this operation, so call %s on %s again WITHOUT an op_id: a "+
+			"new operation decides afresh and finishes it.", tool, key)
+	}
+	d.settle(ctx, got.Position)
+	return jsonResult(withOperation(map[string]any{
+		"key": key, done: true,
+		"outcome": string(got.Outcome), "position": positionOf(got.Position),
+		"version":          got.Version,
+		"subtree_followed": stopped.Followed, "subtree_total": stopped.Of,
+		"subtree_stopped": fmt.Sprintf("%s is %s, but only %d of the %d tasks "+
+			"that go with it followed before the walk stopped (%v). Do not "+
+			"report it as done. %s", key, done, stopped.Followed, stopped.Of,
+			stopped.Err, next),
 	}, actor))
 }

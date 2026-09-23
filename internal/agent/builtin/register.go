@@ -399,9 +399,11 @@ func annotationsFor(name string) tools.Annotations {
 		// from a sub-agent acting under its parent's name. Not
 		// destructive: a removal is reversible at any age and destroys
 		// nothing, which is exactly what separates it from a purge. And
-		// each is IDEMPOTENT: a task already in the trash is left there
-		// and reported as success, because a half-finished subtree
-		// removal has to be able to be re-run.
+		// each is IDEMPOTENT: a task already where the gesture leaves it
+		// is nothing to do, because a subtree removal or restore that
+		// stopped part of the way through has to be able to be made
+		// again. (A restore with nothing left to bring back says so, and
+		// changes nothing either.)
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,

@@ -107,7 +107,8 @@ a cache cannot:
   `unknown` rather than applying it twice (see
   [Replication](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
   A gesture that writes **several** records in order — a cross-project move, a
-  merge, a promotion, a dependency change — stops at the first one whose
+  merge, a promotion, a dependency change, a subtree's removal or restore —
+  stops at the first one whose
   outcome is `unknown` rather than carrying on over it: nothing after that
   step is written, a mid-move or mid-merge mark stays up, and the caller is
   told the gesture stopped and under which operation id. Running it again
