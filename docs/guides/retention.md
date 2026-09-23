@@ -286,9 +286,11 @@ refreshing. A skip never erases what is already on disk.
 artefact at the generation each domain is on and refuses any other, so an
 artefact from before a [reanchor](#re-anchoring-a-recreated-or-restored-log) is
 one nobody can adopt however young it is. It does not count as `recent`, and a
-completed reanchor or adoption wakes the loop, so the node takes a new one as
-soon as its gate allows — rather than up to `snapshot_interval` later, while
-every peer the reanchor left behind waits with nothing to adopt.
+completed reanchor or adoption wakes the loop — as does reopening a database a
+failed adoption left closed, since the file it reopens may be the artefact that
+adoption installed — so the node takes a new one as soon as its gate allows,
+rather than up to `snapshot_interval` later, while every peer the reanchor left
+behind waits with nothing to adopt.
 
 ### Sizing the snapshot volume
 

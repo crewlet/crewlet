@@ -197,13 +197,14 @@ type stateLog struct {
 	snapshot atomic.Pointer[snapshotHeld]
 
 	// snapshotNudge wakes the snapshot loop out of its interval, for the
-	// two events that make the artefact this node holds one nobody can
-	// adopt: a reanchor moved one of its domains to a new generation, or an
-	// adoption replaced its rows. A joiner asks for an artefact at the
-	// generation each domain is on, so until the loop takes another the
-	// peers that reanchor left behind have no donor — for up to the
-	// interval, a day by default. Buffered by one: a nudge that finds one
-	// already pending adds nothing to it.
+	// events that make the artefact this node holds one nobody can adopt:
+	// a reanchor moved one of its domains to a new generation, an adoption
+	// replaced its rows, or the restore of an estate a failed adoption left
+	// closed opened the artefact that adoption installed. A joiner asks for
+	// an artefact at the generation each domain is on, so until the loop
+	// takes another the peers that reanchor left behind have no donor — for
+	// up to the interval, a day by default. Buffered by one: a nudge that
+	// finds one already pending adds nothing to it.
 	snapshotNudge chan struct{}
 
 	// run is the context the runtime's loops run under — the heartbeat,
@@ -2593,7 +2594,15 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 // The retry is deliberately not tight. A skip is a state that clears on its
 // own in seconds to minutes, the gate itself is a few reads, and a node that
 // is genuinely unable to snapshot must not spend its life asking.
-func (e *Engine) snapshotLoop(s *stateLog, snap *statelog.Snapshotter,
+//
+// # And a nudge is neither
+//
+// A reanchor, an adoption and the restore of a file a failed adoption
+// installed each leave this node holding an artefact at a generation a joiner
+// will refuse, so each wakes the loop at once ([stateLog.nudgeSnapshot])
+// rather than leaving it to whichever wait it is in — the interval, a day by
+// default, after a taken snapshot.
+func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 	dir string, interval time.Duration) {
 
 	ctx := s.run
@@ -2652,11 +2661,18 @@ func (e *Engine) snapshotLoop(s *stateLog, snap *statelog.Snapshotter,
 			return
 		case <-time.After(wait):
 		case <-s.snapshotNudge:
-			// A REANCHOR OR AN ADOPTION: the next take is a question about
-			// whether the artefact is current, which the gate answers —
-			// see [stateLog.snapshotNudge].
+			// A REANCHOR, AN ADOPTION OR A RESTORE: the next take is a
+			// question about whether the artefact is current, which the
+			// gate answers — see [stateLog.snapshotNudge].
 		}
 	}
+}
+
+// snapshotTaker is the snapshotter as its loop uses it: one attempt, which
+// either took an artefact or says why not. [statelog.Snapshotter] is the
+// implementation.
+type snapshotTaker interface {
+	Take(ctx context.Context) (statelog.Manifest, error)
 }
 
 // nudgeSnapshot wakes the snapshot loop, without waiting for it — see
