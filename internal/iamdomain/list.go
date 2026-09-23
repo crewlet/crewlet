@@ -55,14 +55,14 @@ type PersonRow struct {
 	// their own audit trail for nothing.
 	Login string
 
-	// NameSealed and EmailSealed are ciphertext. Shredded reports that
-	// this person's key was destroyed by a removal, which is what tells
-	// "sealed, and I can open it" from "sealed, and nobody ever will
-	// again" without attempting a decrypt and reading the failure as an
-	// outage.
+	// NameSealed and EmailSealed are ciphertext, under this person's own
+	// key. There is no row for somebody removed — a removal deletes it and
+	// leaves the tombstone in `iam_removed` — so a value that will not open
+	// because its key is gone ([ErrShredded]) is a removal this node has
+	// not applied yet, and one that will not open for any other reason is a
+	// keyring or a store this node cannot reach.
 	NameSealed  []byte
 	EmailSealed []byte
-	Shredded    bool
 
 	// Seat is the chart handle this person is bound to, and SeatAt the
 	// chart position the bind was decided at.
@@ -164,7 +164,7 @@ func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) 
 	query := strings.Builder{}
 	query.WriteString(`
 		SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
-		       p.shredded, p.seat_id, p.chart_position, p.document,
+		       p.seat_id, p.chart_position, p.document,
 		       p.created_at, p.updated_at, MAX(p.version, p.scoped_through),
 		       COALESCE(e.epoch, 0)
 		FROM iam_people p
@@ -220,7 +220,7 @@ func (r *Reader) Person(ctx context.Context, id string) (PersonRow, error) {
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT p.id, p.kind, p.stage, p.login, p.name_sealed, p.email_sealed,
-			       p.shredded, p.seat_id, p.chart_position, p.document,
+			       p.seat_id, p.chart_position, p.document,
 			       p.created_at, p.updated_at, MAX(p.version, p.scoped_through),
 			       COALESCE(e.epoch, 0)
 			FROM iam_people p
@@ -256,20 +256,18 @@ func scanPerson(rows *sql.Rows) (PersonRow, error) {
 		kind     string
 		stage    string
 		document []byte
-		shredded int
 		created  int64
 		updated  int64
 		version  int64
 		epoch    int64
 	)
 	if err := rows.Scan(&out.ID, &kind, &stage, &out.Login, &out.NameSealed,
-		&out.EmailSealed, &shredded, &out.Seat, &out.SeatAt, &document,
+		&out.EmailSealed, &out.Seat, &out.SeatAt, &document,
 		&created, &updated, &version, &epoch); err != nil {
 		return PersonRow{}, fmt.Errorf("iamdomain: scan a directory row: %w", err)
 	}
 	out.Kind = iam.Kind(kind)
 	out.Stage = iam.Stage(stage)
-	out.Shredded = shredded != 0
 	out.Epoch = uint64(epoch)
 	if reservation(kind) {
 		out.Reserved = true
@@ -694,17 +692,13 @@ type SeatBinding struct {
 	// Stage is the bound person's stage, from the column; empty for a
 	// reservation.
 	Stage iam.Stage
-
-	// Shredded marks a person a removal has already shredded, whose row
-	// is kept for the audit trail and binds nobody.
-	Shredded bool
 }
 
 // Binding is the row's seat binding, as [Reader.SeatBindings] answers it.
 func (p PersonRow) Binding() SeatBinding {
 	return SeatBinding{
 		Person: p.ID, Login: p.Login, Seat: p.Seat, SeatAt: p.SeatAt,
-		Stage: p.Stage, Shredded: p.Shredded,
+		Stage: p.Stage,
 	}
 }
 
@@ -727,7 +721,7 @@ func (r *Reader) SeatBindings(ctx context.Context) ([]SeatBinding, error) {
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		out = out[:0]
 		rows, err := tx.QueryContext(ctx, `
-			SELECT id, login, stage, seat_id, chart_position, shredded
+			SELECT id, login, stage, seat_id, chart_position
 			  FROM iam_people
 			 WHERE seat_id != ''
 			 ORDER BY seat_id, id`)
@@ -739,8 +733,8 @@ func (r *Reader) SeatBindings(ctx context.Context) ([]SeatBinding, error) {
 			var b SeatBinding
 			var stage string
 			var at int64
-			if err := rows.Scan(&b.Person, &b.Login, &stage, &b.Seat, &at,
-				&b.Shredded); err != nil {
+			if err := rows.Scan(&b.Person, &b.Login, &stage, &b.Seat,
+				&at); err != nil {
 				return fmt.Errorf("iamdomain: read a seat binding: %w", err)
 			}
 			b.Stage, b.SeatAt = iam.Stage(stage), uint64(max(at, 0))

@@ -414,7 +414,7 @@ func readTokenOwner(ctx context.Context, tx *sql.Tx, id string,
 	)
 	err := tx.QueryRowContext(ctx, `
 		SELECT stage, login, seat_id, chart_position, document
-		  FROM iam_people WHERE id = ? AND shredded = 0`, id).
+		  FROM iam_people WHERE id = ?`, id).
 		Scan(&stage, &login, &seat, &chartPosition, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -618,7 +618,7 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 	)
 	err := tx.QueryRowContext(ctx, `
 		SELECT id, kind, stage, login, seat_id, chart_position, document
-		  FROM iam_people WHERE `+column+` = ? AND shredded = 0`, token).
+		  FROM iam_people WHERE `+column+` = ?`, token).
 		Scan(&out.ID, &kind, &stage, &login, &seat, &chartPosition, &document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -671,8 +671,7 @@ func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		var count int
 		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM iam_people
-			  WHERE shredded = 0 AND kind <> '')`).
+			`SELECT EXISTS(SELECT 1 FROM iam_people WHERE kind <> '')`).
 			Scan(&count); err != nil {
 			return fmt.Errorf("iamdomain: count people: %w", err)
 		}
@@ -899,7 +898,7 @@ func (r *Reader) SeatHeld(ctx context.Context, handle string) bool {
 		return tx.QueryRowContext(ctx, `
 			SELECT EXISTS(
 				SELECT 1 FROM iam_people
-				 WHERE seat_id = ? AND shredded = 0 AND stage = ?)`,
+				 WHERE seat_id = ? AND stage = ?)`,
 			handle, string(iam.StageActive)).Scan(&held)
 	}); err != nil {
 		log.Warn("iam_seat_held_unreadable", "handle", handle, "error", err)
@@ -941,7 +940,7 @@ func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, handle string) (strin
 	var login string
 	err := tx.QueryRowContext(ctx, `
 		SELECT login FROM iam_people
-		 WHERE seat_id = ? AND shredded = 0 AND stage = ?
+		 WHERE seat_id = ? AND stage = ?
 		 LIMIT 1`, handle, string(iam.StageActive)).Scan(&login)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -1024,7 +1023,7 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 		out = out[:0]
 		rows, err := tx.QueryContext(ctx, `
 			SELECT seat_id, id, stage FROM iam_people
-			 WHERE seat_id != '' AND shredded = 0
+			 WHERE seat_id != ''
 			 ORDER BY seat_id, id`)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)

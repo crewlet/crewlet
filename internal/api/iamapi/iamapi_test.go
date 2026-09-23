@@ -517,24 +517,58 @@ func TestTheListingOpensNamesAndNeverCarriesAVerifier(t *testing.T) {
 
 // A REMOVED PERSON IS A STATE, NOT A FAILURE.
 //
-// Their key is destroyed, so the plaintext is unrecoverable in the log, in
-// every artefact and on every node — and a surface that reported that as a
-// decrypt failure would send an operator to look for an outage that cannot
-// end.
+// A removal deletes the row, so the one place a removed person is still read is
+// a node that has not applied the removal yet — while the key, destroyed by the
+// node that applied it first, is already gone everywhere. The plaintext is then
+// unrecoverable in the log, in every artefact and on every node, and a surface
+// that reported that as a decrypt failure would send an operator to look for an
+// outage that cannot end. The control is a value that will not open for any
+// OTHER reason, which is a keyring this node lacks and renders as sealed.
 func TestARemovedPersonRendersAsRemovedRatherThanAsAFailure(t *testing.T) {
 	t.Parallel()
-	r := newRig(t)
-	row := r.directory.people[bob.String()]
-	row.Shredded = true
-	r.directory.people[bob.String()] = row
+	for _, tc := range []struct {
+		name    string
+		fails   error
+		removed bool
+		sealed  bool
+	}{
+		{"a destroyed key", iamdomain.ErrShredded, true, false},
+		{"a keyring this node lacks", errors.New("no key k2 in this keyring"),
+			false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, func(o *iamapi.Options) {
+				o.Opener = failingOpener{person: bob.String(), err: tc.fails}
+			})
+			got := r.as(administrator(), http.MethodGet, "/iam/people/"+bob.String(), nil)
+			if got.status != http.StatusOK {
+				t.Fatalf("status %d (body %v)", got.status, got.body)
+			}
+			removed, _ := got.body["removed"].(bool)
+			sealed, _ := got.body["sealed"].(bool)
+			if removed != tc.removed || sealed != tc.sealed {
+				t.Errorf("rendered removed=%v sealed=%v, want removed=%v "+
+					"sealed=%v: %v", removed, sealed, tc.removed, tc.sealed, got.body)
+			}
+		})
+	}
+}
 
-	got := r.as(administrator(), http.MethodGet, "/iam/people/"+bob.String(), nil)
-	if got.status != http.StatusOK {
-		t.Fatalf("status %d (body %v)", got.status, got.body)
+// failingOpener opens everybody's values but one person's, which it refuses
+// with err.
+type failingOpener struct {
+	person string
+	err    error
+}
+
+func (o failingOpener) Open(ctx context.Context, person string, field iamdomain.Field,
+	sealed string) (string, error) {
+
+	if person == o.person {
+		return "", o.err
 	}
-	if removed, _ := got.body["removed"].(bool); !removed {
-		t.Errorf("a shredded row did not render as removed: %v", got.body)
-	}
+	return fakeOpener{}.Open(ctx, person, field, sealed)
 }
 
 // A READ THIS NODE COULD NOT PERFORM IS 503 AND NEVER AN EMPTY LIST.

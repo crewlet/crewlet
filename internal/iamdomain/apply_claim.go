@@ -169,9 +169,9 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_people
 			(id, kind, stage, login, email_blind, seat_id, chart_position,
-			 name_sealed, email_sealed, shredded, bucket,
+			 name_sealed, email_sealed, bucket,
 			 created_at, updated_at, version, scoped_through, document)
-		VALUES (?, '', '', ?, ?, ?, ?, x'', x'', 0, ?, ?, ?, 0, ?, x'')
+		VALUES (?, '', '', ?, ?, ?, ?, x'', x'', ?, ?, ?, 0, ?, x'')
 		ON CONFLICT(id) DO UPDATE SET
 			`+assign+`,
 			updated_at     = excluded.updated_at,

@@ -1,0 +1,23 @@
+-- `iam_people.shredded` goes, because nothing ever wrote anything but 0 to it.
+--
+-- 0019 shipped it for a removal that "destroys the key and leaves the row": a
+-- reader was to tell "sealed, and I can open it" from "sealed, and nobody ever
+-- will again" by the column rather than by a failed decrypt. The removal that
+-- landed does the opposite — it DELETES the person's row, their sessions,
+-- their credentials and their revocation epoch, and leaves a tombstone in
+-- `iam_removed` that is what every reader asks instead. So every insert wrote
+-- 0, every `AND shredded = 0` filtered nothing, and the one surface that read
+-- it (`identity_shredded` on `GET /iam/check`, and a `removed` rendering on
+-- `GET /iam/people/{id}`) described a row that cannot exist.
+--
+-- What IS reachable, and is answered without it: a node that has not applied a
+-- removal yet still holds the row while the key — destroyed by whichever node
+-- applied it first — is already gone. That value fails to open with
+-- `ErrShredded`, which is a state the surface renders as removed rather than as
+-- an outage, and it needs no column because the key store is the fact.
+--
+-- DROPPED IN THE COMMIT THAT STOPS THE WRITERS NAMING IT, and not before: an
+-- insert naming a column that is gone fails the apply on every node at once,
+-- which in a derived estate is a stalled log rather than one bad row. There is
+-- no data to migrate — the column held 0 on every row of every node.
+ALTER TABLE iam_people DROP COLUMN shredded;

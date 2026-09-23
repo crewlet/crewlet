@@ -82,13 +82,6 @@ func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personVie
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		Version: row.Version, Reserved: row.Reserved,
 	}
-	if row.Shredded {
-		// THE ROW ITSELF SAYS SO, without a fleet-secret read: a
-		// removal writes the column, so asking the key store would be
-		// paying a round trip to learn what the row already states.
-		out.Removed = true
-		return out
-	}
 	name, removedName := s.open(ctx, row.ID, iamdomain.FieldName, row.NameSealed)
 	email, removedEmail := s.open(ctx, row.ID, iamdomain.FieldEmail, row.EmailSealed)
 	out.Name, out.Email = name, email

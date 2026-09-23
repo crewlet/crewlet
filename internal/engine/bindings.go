@@ -130,10 +130,9 @@ func danglingBinding(ctx context.Context, chart session.Chart, b iamdomain.SeatB
 	BindingResidue, bool, error) {
 
 	residue := BindingResidue{Person: b.Person, Login: b.Login, Seat: b.Seat}
-	if b.Seat == "" || b.Shredded {
-		// NO BINDING, or a person a removal has already shredded: the
-		// directory keeps their row so the audit trail resolves, and a
-		// seat named on a row that can never act again binds nobody.
+	if b.Seat == "" {
+		// NO BINDING. A removed person has no row to be asked about at
+		// all: a removal deletes it and leaves the tombstone.
 		return residue, false, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, bindingProbeBudget)

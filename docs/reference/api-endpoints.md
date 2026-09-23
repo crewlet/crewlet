@@ -713,8 +713,10 @@ values this estate holds in the clear. A search over names would have to open
 every person in the company to compare one, which is a fan-out of
 coordination reads per keystroke.
 
-A row whose key a removal destroyed renders as `removed`, and ciphertext this
-deployment's keyring cannot open renders as `sealed`. They are different
+A removal deletes the person's row, so the one row that can still be listed
+with its key destroyed is on a node that has not applied the removal yet; it
+renders as `removed`, and ciphertext this deployment's keyring cannot open
+renders as `sealed`. They are different
 states with different remedies — one is finished, the other is a keyring
 somebody still has — and neither is an outage.
 
@@ -736,7 +738,7 @@ somebody still has — and neither is an outage.
 
 `kind` is one of `no_people_manage_holder` (listed first: nobody left who can
 administer the company except through a Tier A token),
-`person_without_credential`, `binding_dangling`, `identity_shredded`,
+`person_without_credential`, `binding_dangling`,
 `grant_clamped_by_ceiling`, `claim_duplicated`, `claim_orphaned`,
 `removal_key_live` and `key_unowned`. The last two read the company's secret
 store and are left out on a node without one; the table in

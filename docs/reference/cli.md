@@ -564,7 +564,6 @@ repairs: each finding is somebody's decision.
 | `no_people_manage_holder` | No active person holding a credential carries `people:manage`, so nobody can invite, grant or revoke except through a Tier A token | Grant it to somebody, with a token |
 | `person_without_credential` | Somebody active who cannot sign in: an invitation never redeemed, an enrolment nobody finished | Re-invite them, or remove them |
 | `binding_dangling` | Somebody bound to a seat the org chart no longer holds | `unbind`, or `bind` them elsewhere |
-| `identity_shredded` | Somebody removed, whose name and address are gone everywhere | Nothing; it is what a removal is |
 | `grant_clamped_by_ceiling` | A grant somebody's row declares and this node's `api.auth.max_grants` withholds | Legal while a fleet rolls out a ceiling change; otherwise align the row and the ceiling |
 | `claim_duplicated` | An address, a login or a seat more than one person holds. `WHO` is the claim and every holder; an address is named by its kind alone, because the report carries no form of it | Decide who keeps it, and release it from the others |
 | `claim_orphaned` | Claims an enrolment took before it stopped, held for over an hour by nobody who can use them | `remove` the id, which releases them |

@@ -40,11 +40,6 @@ const (
 	// grace.
 	KindDanglingBinding FindingKind = "binding_dangling"
 
-	// KindShredded is a row whose key a removal destroyed. Reported as
-	// INFORMATION rather than as a fault: it is what a removal is, and an
-	// operator reading a directory with blank names needs to know why.
-	KindShredded FindingKind = "identity_shredded"
-
 	// KindClampedGrant is a grant a person's row declares that this
 	// node's `api.auth.max_grants` withholds. A LEGAL state on a fleet
 	// mid-rollout — the ceiling is applied at decision time and never
@@ -82,10 +77,10 @@ const (
 	KindKeyUnowned FindingKind = "key_unowned"
 )
 
-// FindingKinds are the nine, in the order the report renders them.
+// FindingKinds are the eight, in the order the report renders them.
 var FindingKinds = []FindingKind{
 	KindNoManageHolder, KindNoCredential, KindDanglingBinding,
-	KindShredded, KindClampedGrant, KindDuplicateClaim, KindOrphanedClaim,
+	KindClampedGrant, KindDuplicateClaim, KindOrphanedClaim,
 	KindKeyOutlivedRemoval, KindKeyUnowned,
 }
 
@@ -223,14 +218,6 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 func (s *Service) findingsFor(r *http.Request, row iamdomain.PersonRow) (
 	out []Finding, bindingChecked bool) {
 
-	if row.Shredded {
-		out = append(out, Finding{
-			Kind: KindShredded, Person: row.ID, Login: row.Login,
-			Detail: "this person was removed and their key destroyed, so " +
-				"their name and address are unrecoverable everywhere",
-		})
-		return out, true
-	}
 	if row.Stage == iam.StageActive && !s.hasCredential(r, row) {
 		out = append(out, Finding{
 			Kind: KindNoCredential, Person: row.ID, Login: row.Login,

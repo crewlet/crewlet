@@ -65,9 +65,9 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_people
 			(id, kind, stage, login, email_blind, seat_id,
-			 name_sealed, email_sealed, shredded, bucket,
+			 name_sealed, email_sealed, bucket,
 			 created_at, updated_at, version, scoped_through, document)
-		VALUES (?, ?, ?, '', '', '', ?, ?, 0, ?, ?, ?, ?, 0, ?)
+		VALUES (?, ?, ?, '', '', '', ?, ?, ?, ?, ?, ?, 0, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			kind         = excluded.kind,
 			stage        = excluded.stage,

@@ -470,7 +470,7 @@ func (w *Writer) bootstrappable(ctx context.Context, tx *sql.Tx, in Enrolment) e
 	var somebody bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS(SELECT 1 FROM iam_people
-		  WHERE shredded = 0 AND kind != '' AND id != ?)`, in.PersonID).
+		  WHERE kind != '' AND id != ?)`, in.PersonID).
 		Scan(&somebody); err != nil {
 		return fmt.Errorf("iamdomain: read whether anybody is enrolled: %w", err)
 	}

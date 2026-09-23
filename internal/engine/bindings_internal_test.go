@@ -141,19 +141,6 @@ func TestABindingDanglesExactlyWhenTheSeatTableRefusesOrHoldsItsPerson(t *testin
 	}
 }
 
-// A SHREDDED PERSON'S SEAT BINDS NOBODY.
-//
-// A removal keeps the row so the audit trail resolves, and a person who can
-// never act again is not somebody an administrator needs to unbind.
-func TestAShreddedPersonsBindingIsNotAResidue(t *testing.T) {
-	t.Parallel()
-	row := bound("p1", "old-lead", 900)
-	row.Shredded = true
-	if _, dangling, err := danglingBinding(t.Context(), companyChart(), row); err != nil || dangling {
-		t.Errorf("a shredded row's binding: dangling=%v err=%v", dangling, err)
-	}
-}
-
 // bindingsDir is a directory's bindings at a position a case moves by hand —
 // which is what a record landing does to the real one.
 type bindingsDir struct {

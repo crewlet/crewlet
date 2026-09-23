@@ -1612,9 +1612,13 @@ alone**, kept in the company's sealed secret store, and removing them
 **destroys that key**. Every copy of the ciphertext, wherever it already is,
 becomes unreadable at once — nothing has to be found or rewritten.
 
-The row and the id survive on purpose. The authentication trail names them, and
-a history whose authors evaporate is not an audit trail: "who suspended this
-person, and when" has to keep answering after they have gone.
+The id survives on purpose, and the row does not. A removal deletes the
+person's row, their sessions, their credentials and their revocation epoch, and
+leaves a **tombstone** — who removed them, when, and what they held — which is
+what every later question about them reads. The authentication trail keeps
+naming the id, because a history whose authors evaporate is not an audit
+trail: "who suspended this person, and when" has to keep answering after they
+have gone.
 
 Two consequences worth knowing before you see them:
 
@@ -1639,10 +1643,13 @@ Two consequences worth knowing before you see them:
   either. `crewlet iam check` names each one past the hour as `key_unowned`.
   A refused enrolment does not destroy its own key: the id it was handed may
   be a live person's, and only a pass that has proved nobody owns it may.
-- **A value that will not decrypt is not the same as an outage.** A removed
-  person's row reports itself as *shredded*; a decryption failure on somebody
-  who has not been removed is a key-store problem. Rendering the second as the
-  first would tell you somebody had been off-boarded who had not.
+- **A value that will not decrypt is not the same as an outage.** The one
+  place a removed person is still read is a node that has not applied the
+  removal yet, while their key — destroyed by the node that applied it first —
+  is already gone; that value is rendered as *removed*. A decryption failure
+  for any other reason is a keyring or a key store this node cannot use, and
+  is rendered as *sealed*. Rendering the second as the first would tell you
+  somebody had been off-boarded who had not.
 
 ### A stalled identity log does not stop your agents
 
