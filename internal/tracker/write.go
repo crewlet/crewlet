@@ -517,6 +517,15 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			if wrong := filedUnder(current, project); wrong != nil {
 				return statelog.Decision{}, wrong
 			}
+			if patch.Parent != nil && *patch.Parent != "" {
+				// A RE-PARENT IS HELD TO THE CREATE'S RULE — see
+				// [refuseParent] — decided here, in the snapshot the
+				// record's expectation is formed in.
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := refuseParent(ctx, tx, current, *patch.Parent); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
 			if current.Removed != nil {
 				// A TOMBSTONED TASK IS FROZEN — no comment, body, field
 				// or relation of it can change — which is what makes a

@@ -383,6 +383,11 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return nil, nil, fmt.Errorf("tracker: project %s is archived, so it "+
 			"takes no new work; unarchive it first", task.Project)
 	}
+	if task.Parent != nil && *task.Parent != "" {
+		if err := refuseParent(ctx, tx, task, *task.Parent); err != nil {
+			return nil, nil, err
+		}
+	}
 	if err := declaredType(ctx, tx, task); err != nil {
 		return nil, nil, err
 	}
@@ -393,6 +398,47 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return nil, nil, err
 	}
 	return settleFields(ctx, tx, task.Project, task.Type, task.Fields, w.World)
+}
+
+// refuseParent refuses a parent a task cannot be filed under.
+//
+// # A SUBTREE LIVES IN ONE PROJECT
+//
+// A board draws a project's ROOTS and lets their subtrees ride along, and the
+// query carries the container on the outer row as well — so a subtask filed in
+// another project from its root is on neither project's board: its root's
+// filters it out by project, and its own finds no root to hang it from. The
+// attention set's `inconsistent_project` names the shape; this is what keeps
+// a writer from making it. A task's project never changes — its key is minted
+// in it — so the parent's project read in THIS snapshot is the one it will
+// always have, and a refusal here closes the shape rather than flagging it
+// afterwards.
+//
+// # And a parent in the trash takes no new child
+//
+// A live child under a removed parent is the orphan a subtree removal
+// publishes in depth order to avoid, and a restore brings back only what the
+// removal took — so a child filed under the removed parent in between would
+// stay a live row under a parent nobody can see.
+func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) error {
+	parent, held, err := readTask(ctx, tx, parentID)
+	switch {
+	case err != nil:
+		return err
+	case !held:
+		return fmt.Errorf("tracker: parent task %s is not on this node: %w",
+			parentID, statelog.ErrUnavailable)
+	case parent.Removed != nil:
+		return fmt.Errorf("tracker: parent task %s (%s) was removed by %s at "+
+			"%s; restore it before filing anything under it", parent.Key,
+			parent.ID, parent.Removed.By, parent.Removed.At.Format(time.RFC3339))
+	case parent.Project != task.Project:
+		return fmt.Errorf("tracker: task %s is filed under %s and its parent "+
+			"%s under %s — a subtask lives in its parent's project, which is "+
+			"%s", task.ID, task.Project, parent.Key, parent.Project,
+			parent.Project)
+	}
+	return nil
 }
 
 // declaredType refuses a task naming a type the company has not declared.
@@ -543,6 +589,9 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	if subtask.Type == "" {
 		subtask.Type = DefaultTaskType
 	}
+	// STATED BEFORE THE MINT, so the create's own parent check reads the
+	// parent in the mint's snapshot like every other subtask's.
+	subtask.Parent = &parentID
 
 	var parent Task
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), subtask.Project,
@@ -583,7 +632,6 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 	at := w.Now()
 	subtask.Key = fmt.Sprintf("%s-%d", subtask.Project, n)
 	subtask.Rank = rank
-	subtask.Parent = &parentID
 	subtask.CreatedAt, subtask.UpdatedAt = at, at
 	if subtask.Status == "" {
 		subtask.Status = StatusTodo
@@ -775,11 +823,23 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 				current.Removed.By, current.Removed.At.Format(time.RFC3339))
 		}
 		task = current
-		if _, held, err := readTask(ctx, tx, into); err != nil {
+		canonical, held, err := readTask(ctx, tx, into)
+		switch {
+		case err != nil:
 			return err
-		} else if !held {
+		case !held:
 			return fmt.Errorf("tracker: task %s is not on this node: %w",
 				into, statelog.ErrUnavailable)
+		case reparent && canonical.Project != current.Project:
+			// REFUSED BEFORE THE MARK, because every re-parent below
+			// would be refused on its own subject — a subtask lives in
+			// its parent's project — and a mark with nothing that can
+			// finish it is a merge the duty retries for ever.
+			return fmt.Errorf("tracker: %s is filed under %s and %s under "+
+				"%s, so the duplicate's subtasks cannot move onto it — a "+
+				"subtask lives in its parent's project. Merge without "+
+				"moving the subtasks to leave them where they are",
+				current.Key, current.Project, canonical.Key, canonical.Project)
 		}
 		return nil
 	}); err != nil {

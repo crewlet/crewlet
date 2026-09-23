@@ -760,6 +760,38 @@ func TestAReferenceIsResolvedRatherThanStoredAsTyped(t *testing.T) {
 	}
 }
 
+// A SUBTASK FILES INTO ITS PARENT'S PROJECT when the call names none.
+//
+// The default was the CALLER's team, so a seat breaking down a colleague's
+// item filed every piece of it in its own project — on neither project's
+// board, and refused by the tracker now that a subtask has to live in its
+// parent's project. A plain item still takes the caller's team.
+func TestASubtaskFilesIntoItsParentsProjectByDefault(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as,
+		DefaultProject: func(string) string { return "OPS" },
+	})
+	if got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "one piece of it", "parent": "ENG-1",
+	}); got.Failed {
+		t.Fatalf("the subtask failed: %s", got.Output)
+	}
+	if got := trk.created[0].Project; got != "ENG" {
+		t.Errorf("a subtask of ENG-1 was filed under %q, want ENG — its "+
+			"parent's project, not the caller's team", got)
+	}
+	if got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "something else",
+	}); got.Failed {
+		t.Fatalf("the plain item failed: %s", got.Output)
+	}
+	if got := trk.created[1].Project; got != "OPS" {
+		t.Errorf("a plain item was filed under %q, want the caller's team OPS", got)
+	}
+}
+
 // EVERY INERT EDGE ONE CALL STATES TRAVELS IN ONE GESTURE.
 //
 // A patch carries exactly one relation gesture and the writer resolves it

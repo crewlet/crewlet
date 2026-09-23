@@ -99,6 +99,14 @@ func TestACreateIntoAnArchivedProjectMovesNoCounter(t *testing.T) {
 func TestARequiredFieldDoesNotBlockASubtask(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
+	// THE PARENT EXISTS FIRST, filed before the policy that would refuse it
+	// landed: a subtask is filed under a real parent in its own project,
+	// and one naming a parent this node does not hold is refused as such.
+	if _, err := r.writer.CreateTask(t.Context(), "op-parent",
+		newTask("t-parent"), nil); err != nil {
+		t.Fatalf("CreateTask parent: %v", err)
+	}
+	r.drain()
 	requireAField(t, r)
 
 	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err == nil {

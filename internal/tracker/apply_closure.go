@@ -99,10 +99,19 @@ func (a *Applier) rebuildAncestry(ctx context.Context, tx *sql.Tx, id string,
 		at = next
 	}
 
+	// `inconsistent_project` IS DERIVED HERE TOO, against the ROOT's
+	// project: the writer refuses a parent in another project (see
+	// [refuseParent]), and this is what a record that carries the shape
+	// anyway gets instead of a refusal that would stall every node. A root
+	// this node does not hold compares as consistent — there is nothing to
+	// disagree with.
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE tracker_tasks SET root_id = ?, depth = ?, cycle = ?, too_deep = ?
+		UPDATE tracker_tasks SET root_id = ?, depth = ?, cycle = ?, too_deep = ?,
+			inconsistent_project = project_key <> COALESCE(
+				(SELECT r.project_key FROM tracker_tasks r WHERE r.id = ?),
+				project_key)
 		WHERE id = ?`,
-		root, depth, boolInt(cycle), boolInt(depth > MaxDepth), id); err != nil {
+		root, depth, boolInt(cycle), boolInt(depth > MaxDepth), root, id); err != nil {
 		return 0, fmt.Errorf("tracker: stamp the ancestry of %s: %w", id, err)
 	}
 	return written + 1, nil

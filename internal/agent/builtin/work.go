@@ -1123,8 +1123,9 @@ func (t *createWorkItem) Parameters() map[string]any {
 					"catalogue. `task` if you are unsure.",
 			},
 			"project": map[string]any{
-				"type":        "string",
-				"description": "The project key. Defaults to your team's.",
+				"type": "string",
+				"description": "The project key. Defaults to the parent's " +
+					"for a subtask, and to your team's otherwise.",
 			},
 			"assignee": map[string]any{
 				"type": "string",
@@ -1136,8 +1137,9 @@ func (t *createWorkItem) Parameters() map[string]any {
 				"description": "One of: " + priorityList() + ". Default none.",
 			},
 			"parent": map[string]any{
-				"type":        "string",
-				"description": "The id or key of the item this belongs under.",
+				"type": "string",
+				"description": "The id or key of the item this belongs under. " +
+					"A subtask lives in its parent's project.",
 			},
 			"fields": map[string]any{
 				"type": "object",
@@ -1255,11 +1257,19 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	if ref := strings.TrimSpace(argString(args, "parent")); ref != "" {
 		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
-		parent, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`parent`", ref)
+		parent, refusal := t.deps.resolveTask(ctx, CreateWorkItemTool, "`parent`", ref)
 		if refusal != "" {
 			return failed(refusal), nil
 		}
-		task.Parent = &parent
+		task.Parent = &parent.ID
+		// A SUBTASK FILES INTO ITS PARENT'S PROJECT when the call names
+		// none. Defaulted to the caller's own team instead, a seat
+		// breaking down a colleague's item filed every piece of it in
+		// another project — where the tracker now refuses it, and where
+		// before that it was on neither project's board.
+		if task.Project == "" {
+			task.Project = parent.Project
+		}
 	}
 	if task.Project == "" {
 		if t.deps.DefaultProject != nil {
@@ -1382,20 +1392,27 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 // It returns the model-facing refusal rather than an error, because every
 // caller here answers a model rather than a process.
 func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (string, string) {
+	task, refusal := d.resolveTask(ctx, tool, field, ref)
+	return task.ID, refusal
+}
+
+// resolveTask is [WorkDeps.resolveRef] answering the whole task, for a caller
+// that needs more of it than the id — a subtask's project is its parent's.
+func (d WorkDeps) resolveTask(ctx context.Context, tool, field, ref string) (tracker.Task, string) {
 	if d.Reader == nil {
-		return "", unconfiguredText(tool)
+		return tracker.Task{}, unconfiguredText(tool)
 	}
 	got, err := d.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return "", fmt.Sprintf("%s names %s %q and there is no such work item. "+
-			"Check the key with list_work_items rather than guessing — a link "+
-			"to an item that does not exist renders as a dead reference on "+
-			"everybody's board.", tool, field, clip(ref))
+		return tracker.Task{}, fmt.Sprintf("%s names %s %q and there is no "+
+			"such work item. Check the key with list_work_items rather than "+
+			"guessing — a link to an item that does not exist renders as a "+
+			"dead reference on everybody's board.", tool, field, clip(ref))
 	case err != nil:
-		return "", readFailure(tool, err)
+		return tracker.Task{}, readFailure(tool, err)
 	}
-	return got.Task.ID, ""
+	return got.Task, ""
 }
 
 // resolveHandle turns a handle a caller typed into one the company has.
