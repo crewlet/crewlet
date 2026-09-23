@@ -242,6 +242,34 @@ func TestAnOperationIDTheBrokerWouldRewriteIsRefused(t *testing.T) {
 	}
 }
 
+// AN UNKNOWN PURGE CARRIES NO POSITION, and every other outcome does.
+//
+// `unknown` is the one outcome with no acknowledgement: the record may never
+// have reached the log. The route sent the writer's zero position anyway,
+// which reads as a record at the log's origin, and the command printed it as
+// "unknown at  0".
+func TestAnUnknownPurgeCarriesNoPosition(t *testing.T) {
+	for outcome, positioned := range map[statelog.Outcome]bool{
+		statelog.OutcomeApplied: true,
+		statelog.OutcomePending: true,
+		statelog.OutcomeUnknown: false,
+	} {
+		p := &fakePurger{outcome: outcome}
+		code, body := postPurge(t, purgeApp(t, p),
+			"/work/t-1/purge?confirm=ENG-42&project=ENG&reason=why")
+		if code != http.StatusOK {
+			t.Fatalf("an %s purge answered %d %v", outcome, code, body)
+		}
+		if _, has := body["position"]; has != positioned {
+			t.Errorf("an %s purge answered position %v, want present = %v",
+				outcome, body["position"], positioned)
+		}
+		if body["op_id"] == "" || body["op_id"] == nil {
+			t.Errorf("an %s purge answered no op_id — it is what a retry names", outcome)
+		}
+	}
+}
+
 // THE ROUTE IS ABSENT ON A BUILD THAT CANNOT SERVE IT, rather than answering
 // 503: an operator who cannot purge must not be told they can and then find
 // out at the moment they need it.

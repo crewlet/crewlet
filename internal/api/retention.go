@@ -302,12 +302,19 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 	// whose subject no longer exists to be inspected afterwards.
 	log.Info("task_purged", "task", id, "key", key, "project", project,
 		"operator", operator, "reason", reason, "outcome", result.Outcome)
-	writeJSON(w, http.StatusOK, map[string]any{
+	answer := map[string]any{
 		"task": id, "key": key, "project": project,
-		"outcome":  result.Outcome,
-		"position": result.Position,
-		"op_id":    result.OpID,
-	})
+		"outcome": result.Outcome,
+		"op_id":   result.OpID,
+	}
+	// NO POSITION FOR UNKNOWN, which is the whole content of unknown — the
+	// gate routes' rule, for the gate routes' reason: a zero position reads
+	// as a record at the log's origin, and the purge this answers may never
+	// have reached the log at all.
+	if result.Outcome != statelog.OutcomeUnknown {
+		answer["position"] = result.Position
+	}
+	writeJSON(w, http.StatusOK, answer)
 }
 
 // callerOpID is the operation id a caller brought in `?op_id=`, or a fresh one
