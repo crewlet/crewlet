@@ -588,9 +588,28 @@ func (t tables) scopeOf(ctx context.Context, tx *sql.Tx, packed int64) (ScopeSet
 	return ScopeSet{Paths: out}, nil
 }
 
+// holdsDeferred reports whether this node holds any record it could not
+// decode.
+func (t tables) holdsDeferred(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM `+t.deferred+` LIMIT 1`).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("statelog: look for a deferred record: %w", err)
+	}
+	return true, nil
+}
+
 // oldestDeferred is the earliest record this node could not decode, which is
 // what the node's own applied-through position is derived from and what an
 // operator's "which build do I need" question is answered with.
+//
+// WITH ITS SCOPE, which is what [Deferral] promises every holder: it was read
+// without one, so every Deferral the runner handed out carried an empty scope,
+// and a caller asking whether that record was about a given object — the one
+// question a scope exists to answer — was told "no" for every object there is.
 func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool, error) {
 	var packed int64
 	var version int64
@@ -603,6 +622,10 @@ func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool,
 	case err != nil:
 		return Deferral{}, false, fmt.Errorf("statelog: read the oldest deferred record: %w", err)
 	}
+	scope, err := t.scopeOf(ctx, tx, packed)
+	if err != nil {
+		return Deferral{}, false, err
+	}
 	return Deferral{
 		Position: Position{
 			Stream:     t.stream,
@@ -610,6 +633,7 @@ func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool,
 			Seq:        uint64(packed % GenerationStride),
 		},
 		Version: int(version),
+		Scope:   scope,
 	}, true, nil
 }
 

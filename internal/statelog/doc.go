@@ -112,6 +112,14 @@
 // decode it. A deferred gate does not postpone one record's effect on one
 // node; it silently licenses every record above it.
 //
+// The consequence every reader of an ABSENCE inherits: the checkpoint moves
+// past a retained record, so "this node has consumed the log through here" is
+// never "every record through here wrote its rows here". A reader that decides
+// from a row being missing — nobody owns this key, this session has ended —
+// asks [PrefixIn] for the prefix its own snapshot has APPLIED and [DeferredIn]
+// whether a retained record is about what it is reading, both inside the
+// transaction that reads the rows (`prefix.go`).
+//
 // # THE FLOOR THEOREM
 //
 // The trim floor is load-bearing for the WRITE path, not only for recovery,

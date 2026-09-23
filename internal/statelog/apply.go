@@ -1499,9 +1499,12 @@ func (r *Runner) announce(ctx context.Context, notes []applyNote) {
 
 // anyDeferred reports whether this node holds any record it cannot decode, so
 // the per-record probe is skipped entirely on the ordinary path.
+//
+// AN EXISTENCE PROBE rather than [tables.oldestDeferred], which reads the
+// record's scope as well: this runs at the top of every apply transaction, and
+// the scope is nothing it needs.
 func (r *Runner) anyDeferred(ctx context.Context, tx *sql.Tx) (bool, error) {
-	_, ok, err := r.tables.oldestDeferred(ctx, tx)
-	return ok, err
+	return r.tables.holdsDeferred(ctx, tx)
 }
 
 // ack acknowledges every record this transaction consumed, BY IDENTITY.
