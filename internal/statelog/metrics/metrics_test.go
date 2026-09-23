@@ -324,3 +324,57 @@ func TestTheWindowKeepsADistributionRatherThanAPeak(t *testing.T) {
 			"observations at 1 ms and one at 30 s has a p95 near 1 ms", p95)
 	}
 }
+
+// AN UNSET GAUGE IS ABSENT FROM BOTH READERS, and only a gauge can be unset.
+//
+// A gauge holds its last write, so a measurement that became UNKNOWN — a log
+// re-anchored under a running fleet, a corpus that could not be scanned — went
+// on exporting the old figure while every other surface reading the same
+// measurement showed it as absent. Unset is how the gauge follows the
+// reading. A counter is a history rather than a reading, and withdrawing one
+// would rewrite what already happened.
+func TestAnUnsetGaugeIsAbsentFromBothReaders(t *testing.T) {
+	t.Parallel()
+	rec, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := Attrs{"domain": "tracker"}
+	rec.Set(StatelogLogBytesPerDay, 1<<20, at)
+	rec.Set(StatelogLogBytesPerDay, 2<<20, Attrs{"domain": "pages"})
+	rec.Add(StatelogBarrierAppends, 3, Attrs{"domain": "tracker"})
+	rec.Unset(StatelogLogBytesPerDay, at)
+	rec.Unset(StatelogBarrierAppends, Attrs{"domain": "tracker"})
+
+	for name, read := range map[string][]Snapshot{
+		"cumulative": rec.Read(), "windowed": rec.ReadWindow(),
+	} {
+		var gauges, counters int
+		for _, s := range read {
+			switch {
+			case s.Name == StatelogLogBytesPerDay && s.Attrs["domain"] == "tracker":
+				t.Errorf("the %s reader still carries the unset gauge: %+v", name, s)
+			case s.Name == StatelogLogBytesPerDay:
+				gauges++
+			case s.Name == StatelogBarrierAppends:
+				counters++
+			}
+		}
+		if gauges != 1 {
+			t.Errorf("the %s reader lost the gauge nobody unset", name)
+		}
+		if counters != 1 {
+			t.Errorf("the %s reader lost a counter, which is a history", name)
+		}
+	}
+
+	// AND A PEAK FROM BEFORE IT IS NOT READ BACK when it is measured again.
+	rec.Set(StatelogLogBytesPerDay, 10, at)
+	for _, s := range rec.ReadWindow() {
+		if s.Name == StatelogLogBytesPerDay && s.Attrs["domain"] == "tracker" &&
+			s.Value != 10 {
+			t.Errorf("the windowed reading is %v, want the new measurement alone",
+				s.Value)
+		}
+	}
+}

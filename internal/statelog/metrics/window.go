@@ -97,6 +97,17 @@ func (w *Window) Max(key string, v float64) {
 	b[key] = cur
 }
 
+// Forget drops one series from every hour the window holds — what
+// [Recorder.Unset] does to a gauge, so a peak recorded before the measurement
+// became unknown is not read back as though it were still one.
+func (w *Window) Forget(key string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, bucket := range w.ring {
+		delete(bucket, key)
+	}
+}
+
 // Observe contributes one measurement to a distribution in the current hour.
 //
 // Separate from [Window.Max] because a maximum and a distribution answer

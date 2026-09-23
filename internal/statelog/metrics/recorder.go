@@ -195,6 +195,32 @@ func (r *Recorder) Set(name string, v float64, attrs Attrs) {
 	r.record(name, KindGauge, v, attrs)
 }
 
+// Unset withdraws a gauge's series: from the next read on, neither reader —
+// the exporter nor the operator record — carries a value for it at all.
+//
+// FOR A MEASUREMENT THAT BECAME UNKNOWN, which is a different fact from one
+// that became zero and must not be shown as either. A gauge holds its last
+// write, so without this a log re-anchored under a running fleet went on
+// exporting the old stream's daily intake while the report, the CLI and the
+// screen — which read the same measurement — showed it as not measured: one
+// evaluation, two answers. A series that disappears reads as "no data" on a
+// collector's panel, which is exactly what an unmeasured quantity is.
+//
+// Only a gauge can be unset: a counter and a histogram are histories rather
+// than readings, and withdrawing one would rewrite what already happened. An
+// unknown name, a non-gauge and a series never written are all no-ops.
+func (r *Recorder) Unset(name string, attrs Attrs) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	inst, known := r.byName[name]
+	if !known || inst.Kind != KindGauge {
+		return
+	}
+	key := seriesKey(inst.Name, inst.Attributes, attrs)
+	delete(r.series, key)
+	r.window.Forget(key)
+}
+
 // record is the one write path. An unknown name is DROPPED rather than
 // registered on the fly: a typo would otherwise become a time series with no
 // entry in the catalogue and no documentation, which is the state the
