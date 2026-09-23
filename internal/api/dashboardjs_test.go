@@ -11,9 +11,12 @@ package api_test
 // `dashboard` job).
 //
 // What THIS file asserts is the half a rebuild-and-diff cannot see: that the
-// committed tree is a coherent application, and that every byte of it is
-// reachable over HTTP from the server itself, with a content type a browser
-// will accept.
+// committed tree is a coherent application, and that every file a browser is
+// sent to fetch — from the shell, through every static import, every lazy
+// `import()` and the preload list Vite writes beside one, to the faces a
+// stylesheet asks for — is reachable over HTTP from the server itself, with a
+// content type a browser will accept. The crawl that follows them is in
+// dashboardcrawl_test.go, certified there over a bundle with lazy chunks.
 //
 // Those are different failures. A tree can be perfectly in step with its source
 // and still be unservable — an ES module served as text/plain is REFUSED by the
@@ -197,82 +200,54 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	}
 }
 
-// staticRef matches a URL the shell or a stylesheet asks the server for.
-var staticRef = regexp.MustCompile(`["'(](/static/[^"')\s]+)`)
+// staticRef matches a file under /static/ that the shell, a stylesheet or a
+// module names by its absolute path: in a quote of any of the three kinds —
+// Rolldown's minifier writes a module's strings as template literals — or in
+// a url().
+//
+// A FILE, never a directory: the path must end in something other than a
+// slash, with its closing quote right behind it. The preload helper every
+// build with a lazy chunk carries holds the base itself — it returns the
+// template literal /static/dashboard/ with a file name added — which is a
+// prefix a name is joined onto and never a request, and reading it as one
+// would fail the crawl over a fetch no browser makes.
+var staticRef = regexp.MustCompile("[\"'`(](/static/[^\"'`)\\s]*[^/\"'`)\\s])[\"'`)]")
 
 // TestTheShellLoadsFromTheBinary does what a browser does.
 //
-// Fetch /dashboard, then fetch everything it names, then everything THOSE name
-// — all from the server rather than from disk. An asset missing from the embed
-// pattern, or served as the wrong type, takes the whole page with it.
+// Fetch /dashboard, then everything it names, then everything THOSE name —
+// static imports, lazy chunks, the preload lists beside them, the faces a
+// stylesheet asks for — all from the server rather than from disk
+// (crawlDashboard). An asset missing from the embed, or served as the wrong
+// type, takes the page with it, or, for a lazy chunk, the one screen that
+// loads it while every other keeps working, which is the failure a reader
+// finds before a test does.
 func TestTheShellLoadsFromTheBinary(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{})
+	c := crawlDashboard(t, newApp(t, api.Options{}))
 
-	body := mustFetch(t, a, "/dashboard", "text/html")
-	queue := []string{}
-	for _, m := range staticRef.FindAllStringSubmatch(string(body), -1) {
-		queue = append(queue, m[1])
-	}
 	// A bundled shell names few assets by design: an entry module, a vendor
 	// chunk, a stylesheet, an icon. The floor is what distinguishes that from
 	// a shell that names NOTHING, which is what a build with a broken `base`
 	// produces: relative URLs that resolve against whichever of `/` or
 	// `/dashboard` the reader arrived at.
-	if len(queue) < 2 {
+	if c.named < 2 {
 		t.Fatalf("the shell asked for %d assets; it should name at least an "+
-			"entry module and a stylesheet", len(queue))
+			"entry module and a stylesheet", c.named)
+	}
+	for _, p := range c.problems {
+		t.Error(p)
 	}
 
-	done := map[string]bool{"/dashboard": true}
-	scripts, sheets, fonts := 0, 0, 0
-	for len(queue) > 0 {
-		url := queue[0]
-		queue = queue[1:]
-		if done[url] {
-			continue
-		}
-		done[url] = true
-
-		want, known := map[string]string{
-			".js":    "text/javascript",
-			".css":   "text/css",
-			".svg":   "image/svg+xml",
-			".png":   "image/png",
-			".ico":   "image/x-icon",
-			".woff2": "font/woff2",
-		}[strings.ToLower(path.Ext(url))]
-		if !known {
-			t.Errorf("%s: the shell asked for a kind this test does not know "+
-				"how to check; teach it rather than dropping the asset", url)
-			continue
-		}
-		data := mustFetch(t, a, url, want)
-
-		switch path.Ext(url) {
-		case ".js":
-			scripts++
-		case ".css":
-			sheets++
-			// A stylesheet's own references — the font faces above all,
-			// which are the assets most likely to be left out of a commit.
-			for _, m := range staticRef.FindAllStringSubmatch(string(data), -1) {
-				queue = append(queue, m[1])
-			}
-		case ".woff2":
-			fonts++
-		}
-	}
-
-	if scripts < 1 {
+	if len(c.ofKind(".js")) < 1 {
 		t.Errorf("no script reached from the shell")
 	}
-	if sheets < 1 {
+	if len(c.ofKind(".css")) < 1 {
 		t.Errorf("no stylesheet reached from the shell")
 	}
 	// Every face the stylesheet declares has to be servable. One that is not
 	// fails silently in a browser — the text simply renders in the fallback.
-	if fonts < 4 {
+	if fonts := len(c.ofKind(".woff2")); fonts < 4 {
 		t.Errorf("only %d font faces reached from the stylesheet, want 4", fonts)
 	}
 }
@@ -344,8 +319,9 @@ func TestEveryFileUnderAssetsIsContentHashed(t *testing.T) {
 	}
 }
 
-// TestTheShellFitsTheDashboardPolicy checks the committed shell and its
-// stylesheets use nothing the dashboard's Content-Security-Policy refuses.
+// TestTheShellFitsTheDashboardPolicy checks the committed shell and every
+// stylesheet it reaches use nothing the dashboard's Content-Security-Policy
+// refuses.
 //
 // The policy allows scripts, styles, fonts and images from this origin only,
 // and no inline script, inline style or event-handler attribute. A browser
@@ -383,16 +359,21 @@ func TestTheShellFitsTheDashboardPolicy(t *testing.T) {
 		}
 	}
 
-	for _, m := range staticRef.FindAllSubmatch(shell, -1) {
-		if !strings.HasSuffix(string(m[1]), ".css") {
-			continue
-		}
-		sheet := mustFetch(t, a, string(m[1]), "text/css")
-		for _, u := range cssURL.FindAllSubmatch(sheet, -1) {
-			url := strings.Trim(string(u[1]), `"' `)
-			if !sameOrigin(url) && !strings.HasPrefix(url, "data:") {
+	// EVERY stylesheet the shell reaches, a lazy chunk's included: the
+	// policy governs the whole document, so a sheet a screen loads later is
+	// refused exactly as the one the shell links is — and it is refused on
+	// that screen alone, where nothing else here would ever look.
+	sheets := crawlDashboard(t, a).ofKind(".css")
+	if len(sheets) == 0 {
+		t.Error("no stylesheet was reached, so no url() was checked")
+	}
+	for _, sheet := range sheets {
+		for _, u := range cssURL.FindAllSubmatch(sheet.body, -1) {
+			ref := strings.Trim(string(u[1]), `"' `)
+			if resolved, err := resolve(sheet.url, ref); err == nil && resolved == "" &&
+				!strings.HasPrefix(ref, "data:") {
 				t.Errorf("%s loads %s from another origin, which font-src and img-src refuse",
-					m[1], url)
+					sheet.url, ref)
 			}
 		}
 	}
