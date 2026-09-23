@@ -908,9 +908,12 @@ why. The client carries no copy of the split — that is a property of the perso
 and the answer states which one it applied.
 
 **Three viewer states, three sentences.** A reader with no credential, a reader
-whose credential no seat claims, and a bound reader. Only the first is anybody's
-fault; an unbound token is an ordinary state whose remedy is a line of company
-configuration, so the screen names the id to bind rather than reporting a fault.
+whose credential the identity directory binds to no seat, and a bound reader —
+the three `GET /viewer` tells apart (`{login, grants, handle, name, kind}`,
+with an empty `handle` for the second). Only the first is anybody's fault; an
+unbound credential is an ordinary state whose remedy is a row in the directory
+rather than a line of company configuration, so the screen names the login to
+bind and `crewlet iam bind` rather than reporting a fault.
 
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it
