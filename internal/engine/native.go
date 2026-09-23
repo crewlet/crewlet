@@ -677,8 +677,12 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// name, and the writes that need one are refused BY NAME at the
 		// call rather than at boot. A node that refused to start would
 		// take down a fleet over a company setting.
-		Blinder:   e.PersonBlinder(),
-		Sealer:    e.PersonSealer(),
+		Blinder: e.PersonBlinder(),
+		Sealer:  e.PersonSealer(),
+		// WHAT A LANDED RECORD DECIDED — a grant delta, a session
+		// generation — goes on the node's audit feed from here, since
+		// only the decide holds it. Every surface's [Writer.As] keeps it.
+		Events:    e.authEvents,
 		Actor:     nodeID,
 		ActorKind: iam.KindMachine,
 		// THE NODE IS THE DEPLOYMENT, so it authors the classes only the

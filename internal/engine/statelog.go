@@ -237,6 +237,10 @@ type stateLog struct {
 	// loop's instruments are observed rather than merely declared.
 	metrics *metrics.Recorder
 
+	// witness is where every domain's applier reports a record it would
+	// not authenticate. Nil reports nothing beyond the log and the metric.
+	witness statelog.Witness
+
 	// skills is this build's tool-skill parser and nudge, threaded down
 	// because the PAGES APPLIER is what notices a skill page arriving or
 	// leaving: natively there is no page webhook and the change feed
@@ -491,6 +495,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		ring:    recordKeyring(boot),
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
+		witness: e.stateLogWitness(),
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
 		nudgeChart: e.nudgeChart, shredder: e.personKeys(),
 		ceilings: ceilings, volume: streamVolume(boot),
@@ -773,6 +778,9 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		// asymmetry here is real rather than an oversight.
 		DB: replicatedEstate{node: s.db}, Generation: at.Generation,
 		StreamCreatedAt: created, Epoch: epoch, Metrics: s.metrics,
+		// A RECORD THIS NODE WOULD NOT AUTHENTICATE reaches the
+		// company's audit feed as well as this node's log.
+		Witness: s.witness,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: build %s's applier: %w", domain.Name(), err)

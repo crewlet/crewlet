@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
@@ -62,6 +63,11 @@ type Engine struct {
 	chartNudge chan struct{}
 	backends   *Backends
 	node       *node.Node
+
+	// authEvents is this node's authentication audit trail, and
+	// stopAuthTrail ends its loop. See authevents.go.
+	authEvents    *authevents.Trail
+	stopAuthTrail func()
 
 	// externalBase is where a browser and a vendor reach this
 	// DEPLOYMENT: `api.external_url`, without its trailing slash.
@@ -698,6 +704,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 				"admission are stopped, and any backends this engine opened "+
 				"itself are closed")
 	}()
+
+	// THE AUDIT TRAIL BEFORE THE NATIVE BACKENDS, whose identity writer and
+	// appliers announce through it.
+	if err = e.startAuthEvents(); err != nil {
+		return nil, err
+	}
 
 	// THE SKILL SYNC IS BUILT BEFORE THE NATIVE BACKENDS, whose page
 	// projection nudges it from a post-commit hook: a nudge with nothing to
@@ -1398,6 +1410,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// credentials, and one left behind outlives the engine that vouched
 	// for it.
 	e.stopSharedServers(ctx)
+	// AFTER everything that announces through it, and before the broker its
+	// final flush publishes onto is closed.
+	e.stopAuthEvents()
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}
