@@ -165,7 +165,11 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
-	at := opened.Position
+	if !landed(opened.Result) {
+		unresolved(w, r, "api_token_exchange_unresolved", opened.Result)
+		return
+	}
+	at := opened.Result.Position
 	bearer, err := s.signer.Mint(session.Mint{
 		Lineage: lineage, Person: subject,
 		Epoch: opened.Epoch, Generation: opened.Generation,

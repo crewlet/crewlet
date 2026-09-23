@@ -610,8 +610,17 @@ person's own credentials decided in the same snapshot that checked them:
 Two sign-ins presenting the same code at once are arbitrated like any other
 write to the same person: one lands, the other finds the code already spent and
 is refused with the same generic error as a wrong code. A sign-in whose spend
-cannot be recorded — the identity log is unreachable — is answered 503 rather
-than opening a session on a code that would still work afterwards.
+cannot be recorded — the identity log is unreachable — or whose outcome nobody
+can establish — the broker took the append and never answered — is answered
+503 rather than opening a session on a code that would still work afterwards.
+Presenting the code again decides afresh: a spend that did land refuses it as
+spent.
+
+The same rule holds for every write the sign-in surface and the directory
+make: an `unknown` outcome is never built on and never announced. A session
+start nobody can confirm mints no cookie, an invitation no link, a machine token
+no value, and a logout, a revocation, a removal or a reset says nothing on the
+audit feed until its record is durable.
 
 ### A sign-in endpoint is not a roster
 

@@ -65,11 +65,11 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	reason := reasonOr(r.URL.Query().Get("reason"),
 		"every session was ended through /iam")
-	at, err := writer.Revoke(r.Context(), id,
-		s.opIDFor(r, "sessions:revoke:"+id), reason)
-	if err == nil {
+	opID := s.opIDFor(r, "sessions:revoke:"+id)
+	revoked, err := writer.Revoke(r.Context(), id, opID, reason)
+	if err == nil && landed(revoked) {
 		log.InfoContext(r.Context(), "iam_sessions_revoked",
-			"person", id, "position", at.String())
+			"person", id, "position", revoked.Position.String())
 		// SOMEBODY ENDING THEIR OWN is a sign-out everywhere; anybody
 		// else ending them is a revocation, and the trail says which
 		// because the second is the row an investigation looks for.
@@ -82,7 +82,7 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 			Person: id, Reason: why, By: callerName(r.Context()),
 		})
 	}
-	s.answerWrite(w, r, at, err, map[string]any{"id": id})
+	s.answerWrite(w, r, opID, revoked, err, map[string]any{"id": id})
 }
 
 // PostInvalidateAll is `POST /iam/invalidate-all`.
@@ -112,12 +112,13 @@ func (s *Service) PostInvalidateAll(w http.ResponseWriter, r *http.Request) {
 	principal, _ := iam.From(r.Context())
 	reason := reasonOr(r.URL.Query().Get("reason"),
 		"every session in the company was invalidated")
-	at, err := writer.InvalidateAll(r.Context(),
-		s.opIDFor(r, "sessions:invalidate"), reason)
-	if err == nil {
+	opID := s.opIDFor(r, "sessions:invalidate")
+	bumped, err := writer.InvalidateAll(r.Context(), opID, reason)
+	if err == nil && landed(bumped) {
 		log.WarnContext(r.Context(), "iam_generation_bumped",
-			"by", iam.ActorFor(principal).Name, "position", at.String(),
+			"by", iam.ActorFor(principal).Name,
+			"position", bumped.Position.String(),
 			"detail", "every session in this company is now invalid")
 	}
-	s.answerWrite(w, r, at, err, nil)
+	s.answerWrite(w, r, opID, bumped, err, nil)
 }

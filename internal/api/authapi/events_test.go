@@ -94,21 +94,55 @@ type estate struct {
 	// one answers.
 	closes   []closedSession
 	closeErr error
+
+	// revokes records every revocation asked for.
+	revokes []string
+
+	// owner is who this estate says holds any lineage it is asked about.
+	owner string
+
+	// unresolved names the writes whose outcome nothing can establish:
+	// each answers `unknown` under its own op id instead of landing.
+	unresolved map[string]bool
+}
+
+// outcome is what one of this estate's writes answers: applied at a position,
+// or — where the case made it so — unknown, under the write's own op id.
+func (e *estate) outcome(write, opID string, seq uint64) statelog.Result {
+	if e.unresolved[write] {
+		return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: opID}
+	}
+	result := applied(statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: seq})
+	result.OpID = opID
+	return result
+}
+
+func (e *estate) Revoke(_ context.Context, person, opID, _ string) (statelog.Result, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.revokes = append(e.revokes, person)
+	return e.outcome("Revoke", opID, 11), nil
+}
+
+func (e *estate) SessionOwner(context.Context, string) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.owner, nil
 }
 
 // closedSession is one CloseSession call.
 type closedSession struct{ lineage, person, reason, opID string }
 
 func (e *estate) CloseSession(_ context.Context, lineage, person, reason,
-	opID string) (statelog.Position, error) {
+	opID string) (statelog.Result, error) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closeErr != nil {
-		return statelog.Position{}, e.closeErr
+		return statelog.Result{}, e.closeErr
 	}
 	e.closes = append(e.closes, closedSession{lineage, person, reason, opID})
-	return statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 8}, nil
+	return e.outcome("CloseSession", opID, 8), nil
 }
 
 func (e *estate) PersonByLogin(_ context.Context, login string) (iamdomain.Sighting, error) {
@@ -129,12 +163,12 @@ func (e *estate) OpenSession(_ context.Context, in iamdomain.SessionStart) (iamd
 	defer e.mu.Unlock()
 	e.starts = append(e.starts, in)
 	opened := e.counters
-	opened.Position = statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 9}
+	opened.Result = e.outcome("OpenSession", in.OpID, 9)
 	return opened, nil
 }
 
 func (e *estate) SetCredentials(_ context.Context, in iamdomain.CredentialSet) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -142,8 +176,16 @@ func (e *estate) SetCredentials(_ context.Context, in iamdomain.CredentialSet) (
 	if e.before != nil {
 		held = e.before(held)
 	}
+	result := e.outcome("SetCredentials", in.OpID, 10)
+	if result.Outcome == statelog.OutcomeUnknown {
+		// WHETHER IT LANDED IS WHAT NOBODY CAN SAY; the estate here
+		// keeps the set it had, which is the harder of the two for the
+		// surface — a spend it cannot confirm and a code still usable.
+		in.Apply(held)
+		return result, nil
+	}
 	e.person.Credentials = in.Apply(held)
-	return statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 10}, nil
+	return result, nil
 }
 
 const (

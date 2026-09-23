@@ -148,16 +148,22 @@ func (w *openingWriter) OpenSession(_ context.Context, in iamdomain.SessionStart
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.opened = in.Lineage
-	return iamdomain.SessionOpened{Position: w.at}, nil
+	return iamdomain.SessionOpened{Result: applied(w.at)}, nil
 }
 
 func (w *openingWriter) CloseSession(_ context.Context, lineage, _, reason, _ string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.closed, w.reason = lineage, reason
-	return w.at, nil
+	return applied(w.at), nil
+}
+
+// applied is a write that landed at a position and was applied here.
+func applied(at statelog.Position) statelog.Result {
+	return statelog.Result{Outcome: statelog.OutcomeApplied, Position: at,
+		OpID: "op:" + at.String()}
 }
 
 // recordingCustody records what it was handed, or refuses it.

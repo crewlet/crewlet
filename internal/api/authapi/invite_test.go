@@ -134,8 +134,8 @@ type refusingWriter struct {
 	err error
 }
 
-func (w refusingWriter) Enrol(context.Context, iamdomain.Enrolment) (statelog.Position, error) {
-	return statelog.Position{}, w.err
+func (w refusingWriter) Enrol(context.Context, iamdomain.Enrolment) (statelog.Result, error) {
+	return statelog.Result{}, w.err
 }
 
 // A REFUSED REDEMPTION SAYS WHOSE PROBLEM IT IS.
@@ -228,38 +228,45 @@ type recordingWriter struct {
 	enrolled  []iamdomain.Enrolment
 	spent     []iamdomain.InvitationSpend
 	bootstrap []iamdomain.BootstrapSpend
+
+	// unresolved makes every enrolment past the refusals answer `unknown`
+	// under its own op id: nothing can say whether it landed.
+	unresolved bool
 }
 
 func (w *recordingWriter) Enrol(_ context.Context, in iamdomain.Enrolment) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.enrolled = append(w.enrolled, in)
 	if len(w.refusals) == 0 {
-		return statelog.Position{}, nil
+		if w.unresolved {
+			return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: in.OpID}, nil
+		}
+		return applied(statelog.Position{}), nil
 	}
 	err := w.refusals[0]
 	w.refusals = w.refusals[1:]
-	return statelog.Position{}, err
+	return statelog.Result{}, err
 }
 
 func (w *recordingWriter) SpendInvitation(_ context.Context,
-	in iamdomain.InvitationSpend) (statelog.Position, error) {
+	in iamdomain.InvitationSpend) (statelog.Result, error) {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.spent = append(w.spent, in)
-	return statelog.Position{}, nil
+	return applied(statelog.Position{}), nil
 }
 
 func (w *recordingWriter) SpendBootstrap(_ context.Context,
-	in iamdomain.BootstrapSpend) (statelog.Position, error) {
+	in iamdomain.BootstrapSpend) (statelog.Result, error) {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.bootstrap = append(w.bootstrap, in)
-	return statelog.Position{}, nil
+	return applied(statelog.Position{}), nil
 }
 
 // redeem posts one redemption with a login and answers its status.

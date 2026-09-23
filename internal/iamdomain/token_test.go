@@ -75,7 +75,7 @@ func mintFor(t *testing.T, rig *writeRig, w *iamdomain.Writer,
 	})
 	rig.drain()
 	return minted, credential.Token{ID: in.ID,
-		Position: uint64(minted.Position.Packed()), Secret: secret}, err
+		Position: uint64(minted.Result.Position.Packed()), Secret: secret}, err
 }
 
 // checked reads a presented token back and decides it as the guard does.

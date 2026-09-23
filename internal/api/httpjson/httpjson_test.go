@@ -473,3 +473,36 @@ func TestAKnownCallerIsToldAboutTheGrantNotAToken(t *testing.T) {
 			"a credential that works", message)
 	}
 }
+
+// A 503 CARRYING A DETAIL STILL CARRIES ITS RETRY-AFTER.
+//
+// The detail-carrying form exists for the write whose outcome could not be
+// established: the answer has to name the operation id a retry must carry,
+// AND say when to come back. Two writers would be two chances for one of them
+// to drop the header. Mutation: set the header only in Unavailable and the
+// first assertion fails.
+func TestAnUnavailableAnswerWithADetailCarriesBoth(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	httpjson.UnavailableWith(rec, httpjson.CodeUnavailable, 2,
+		httpjson.Detail{"op_id": "close:0192", "error": "not-the-code"})
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "2" {
+		t.Fatalf("answered %d with Retry-After %q, want 503 carrying 2",
+			rec.Code, rec.Header().Get("Retry-After"))
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if body["op_id"] != "close:0192" || body["error"] != string(httpjson.CodeUnavailable) {
+		t.Errorf("body = %v, want the op id beside the envelope's own code", body)
+	}
+
+	// THE CONTROL: the bare form answers the same header with no detail.
+	bare := httptest.NewRecorder()
+	httpjson.Unavailable(bare, httpjson.CodeIdentityUnavailable, 2)
+	if bare.Code != http.StatusServiceUnavailable || bare.Header().Get("Retry-After") != "2" {
+		t.Errorf("the bare form answered %d with Retry-After %q",
+			bare.Code, bare.Header().Get("Retry-After"))
+	}
+}

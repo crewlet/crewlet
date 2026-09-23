@@ -394,18 +394,18 @@ func (e *sessionEstate) OpenSession(_ context.Context, in iamdomain.SessionStart
 	epoch := e.epochs[in.Person]
 	e.sessions[in.Lineage] = sessionRow{person: in.Person, epoch: epoch}
 	return iamdomain.SessionOpened{
-		Position: statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: e.seq},
-		Epoch:    epoch,
+		Result: applied(statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: e.seq}),
+		Epoch:  epoch,
 	}, nil
 }
 
 func (e *sessionEstate) Revoke(_ context.Context, person, _, _ string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.epochs[person]++
-	return statelog.Position{}, nil
+	return applied(statelog.Position{}), nil
 }
 
 func (e *sessionEstate) Resolve(_ context.Context, lineage, person string) (

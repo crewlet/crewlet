@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // AN OIDC SESSION'S REFRESH TOKEN, and the deactivation probe's view of this
@@ -432,12 +433,16 @@ func (p *ProbeSessions) End(ctx context.Context, session oidc.LiveSession,
 	reason string) error {
 
 	lineage := session.Lineage
-	at, err := p.writer.CloseSession(ctx, lineage, session.Person, reason,
+	closed, err := p.writer.CloseSession(ctx, lineage, session.Person, reason,
 		"probe:"+reason+":"+lineage)
 	if err != nil {
 		return err
 	}
-	if at.Seq == 0 {
+	// THE OUTCOME, and never a position standing in for one: an unknown
+	// answer can carry a position (a node that adopted a snapshot finds the
+	// record and cannot resolve it), so a zero-position test let exactly
+	// that close be counted as ended and announced.
+	if closed.Outcome == statelog.OutcomeUnknown {
 		return fmt.Errorf("iamdomain: the close of session %s as %s has an "+
 			"unknown outcome; the next pass asks again", lineage, reason)
 	}

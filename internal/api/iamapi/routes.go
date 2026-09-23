@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -148,12 +149,6 @@ func (s *Service) subjectOf(r *http.Request) string {
 // says exactly that where a nil would have looked like an omission.
 var guard = authz.ContextGuard(authz.NoChart{})
 
-// retryIdentity is the `Retry-After` on an identity 503, in seconds.
-//
-// TWO, which is an apply loop's own scale: what a caller is waiting for is
-// this node's applier to commit one more batch.
-const retryIdentity = 2
-
 // readBody decodes one request body at this surface's bound.
 func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var out T
@@ -194,45 +189,111 @@ func (s *Service) opIDFor(r *http.Request, derived string) string {
 	return derived + ":" + uuid.NewString()
 }
 
-// statelog0 is the zero position, for the arms that refuse before publishing.
-func statelog0() statelog.Position { return statelog.Position{} }
-
 // unavailable answers a read this node could not perform.
 //
 // 503 AND NEVER AN EMPTY LIST. An identity estate that could not be read and
 // a company with nobody in it render identically as `[]`, and the second is
 // an answer somebody acts on — so a failed read says so.
+//
+// THE ONE RETRY HINT every identity 503 carries, [auth.RetryIdentitySeconds]:
+// this surface kept a private copy of the number, which is how four spellings
+// of one hint come to disagree.
 func (s *Service) unavailable(w http.ResponseWriter, r *http.Request,
 	what string, err error) {
 
 	log.WarnContext(r.Context(), "api_iam_read_failed",
 		"what", what, "error", err)
-	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 }
 
-// answerWrite renders one identity write's outcome.
+// sequence folds the answers of a gesture that is several records — a create
+// and its seat binding, an edit's claims, stage and document, a reset and its
+// revocation — into the one the caller is given, under the gesture's own op
+// id.
 //
-// THE SAME SIX ANSWERS /chart GIVES, and for the same reasons — see
-// [chartapi.Service.answerWrite], which states them at length. What is
-// particular here is [iamdomain.ErrRefused] and [iamdomain.ErrClaimed]: the
-// first is authority (403, and it will never land however often it is
-// retried) and the second is a lost race on an address, a login or a seat
-// (409, naming who holds it).
-func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request,
-	at statelog.Position, err error, extra map[string]any) {
-
-	body := map[string]any{"position": at.String()}
-	for k, v := range extra {
-		body[k] = v
+// THE WEAKEST OUTCOME WINS, because the promise is about the whole: `200`
+// says the caller's next read HERE sees what they asked for, which is false
+// while any one record is only pending here, and a step nobody can confirm
+// makes the gesture unconfirmed. The position is the latest any step landed
+// at, which is what a caller reads at to see all of it.
+func sequence(opID string, steps ...statelog.Result) statelog.Result {
+	out := statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}
+	for _, step := range steps {
+		switch {
+		case step.Outcome == statelog.OutcomeUnknown || !step.Outcome.Valid():
+			out.Outcome = statelog.OutcomeUnknown
+		case step.Outcome == statelog.OutcomePending &&
+			out.Outcome == statelog.OutcomeApplied:
+			out.Outcome = statelog.OutcomePending
+		}
+		if step.Position.Packed() > out.Position.Packed() {
+			out.Position = step.Position
+		}
 	}
-	var claimed *iamdomain.ErrClaimed
+	return out
+}
+
+// landed reports whether a write's record is durable — applied here, or
+// pending here and applied everywhere in time — which is the one condition
+// under which this surface builds on it or announces it.
+func landed(result statelog.Result) bool {
+	return result.Outcome == statelog.OutcomeApplied ||
+		result.Outcome == statelog.OutcomePending
+}
+
+// answerWrite renders one identity write's outcome, `200` on success.
+func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID string,
+	result statelog.Result, err error, extra map[string]any) {
+
+	s.answer(w, r, opID, result, err, http.StatusOK, extra)
+}
+
+// answer renders one identity write's outcome, with the status a route that
+// landed answers — `200`, or `201` for one that hands the caller something it
+// created.
+//
+// # Six answers, the same six /chart gives
+//
+// THREE ARE FAILURES and [chartapi.Service.answerWrite] states why each is a
+// different thing to do next. What is particular here is [iamdomain.ErrRefused]
+// and [iamdomain.ErrClaimed]: the first is authority (403, and it will never
+// land however often it is retried) and the second is a lost race on an
+// address, a login or a seat (409, naming who holds it). An estate that could
+// not decide is 503 WITH the Retry-After every identity 503 carries and the
+// operation id: it used to be a bare 503, which a client cannot tell from a
+// node that is gone for good.
+//
+// THREE ARE SUCCESSES, and they are what the writer's answer used to hide —
+// it answered a bare position, so an `unknown` outcome read as 200:
+//
+//   - applied → the route's own status: the next read here sees it.
+//   - pending → 202 with the position: durable, and every node will apply
+//     it; this one has not yet.
+//   - unknown → 503 with the op id: nothing can be established from this
+//     node, and the only safe retry is the SAME id, sent back as the
+//     Idempotency-Key.
+//
+// THE OP ID is the refusal's own where the framework named one, the write's
+// where it answered, and otherwise the one this route published under.
+func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
+	result statelog.Result, err error, success int, extra map[string]any) {
+
+	if result.OpID != "" {
+		opID = result.OpID
+	}
+	var (
+		claimed *iamdomain.ErrClaimed
+		refused *statelog.Unavailable
+	)
 	switch {
 	case errors.Is(err, iamdomain.ErrRefused):
 		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
 			map[string]string{"detail": err.Error()})
+		return
 	case errors.As(err, &claimed):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
 			map[string]string{"detail": err.Error()})
+		return
 	case errors.Is(err, iamdomain.ErrNotFindable),
 		errors.Is(err, iamdomain.ErrNotFound),
 		// A LOGIN OUTSIDE ITS KIND'S GRAMMAR and a kind the directory
@@ -246,16 +307,67 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request,
 		errors.Is(err, iamdomain.ErrInvalid):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{"detail": err.Error()})
+		return
 	case errors.Is(err, statelog.ErrConflict):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
 			map[string]string{"detail": err.Error()})
+		return
 	case errors.Is(err, statelog.ErrUnavailable):
-		httpjson.FailWith(w, http.StatusServiceUnavailable,
-			httpjson.CodeUnavailable, map[string]string{"detail": err.Error()})
+		if errors.As(err, &refused) && refused.OpID != "" {
+			opID = refused.OpID
+		}
+		log.WarnContext(r.Context(), "api_iam_write_unavailable",
+			"op_id", opID, "error", err)
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds,
+			withExtra(extra, httpjson.Detail{"detail": err.Error(), "op_id": opID}))
+		return
 	case err != nil:
 		httpjson.FailWith(w, http.StatusInternalServerError,
 			httpjson.CodeInternalError, map[string]string{"detail": err.Error()})
-	default:
-		httpjson.Write(w, http.StatusOK, body)
+		return
 	}
+
+	body := withExtra(extra, httpjson.Detail{
+		"position": result.Position.String(),
+		"outcome":  string(result.Outcome),
+		"op_id":    opID,
+	})
+	switch result.Outcome {
+	case statelog.OutcomeApplied:
+		httpjson.Write(w, success, body)
+	case statelog.OutcomePending:
+		if _, said := body["detail"]; !said {
+			body["detail"] = "this change is durable at the position above " +
+				"and every node will apply it; this one has not yet. Read at " +
+				"that position to see it."
+		}
+		httpjson.Write(w, http.StatusAccepted, body)
+	default:
+		log.WarnContext(r.Context(), "api_iam_write_unresolved", "op_id", opID)
+		detail := httpjson.Detail{
+			"detail": "this node cannot establish what happened to this " +
+				"change. Retry it with the SAME operation id — send it back " +
+				"as the " + IdempotencyHeader + " header — because a fresh " +
+				"one would defeat the ledger that makes the retry safe.",
+			"op_id": opID,
+		}
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds,
+			withExtra(extra, detail))
+	}
+}
+
+// withExtra is a route's own fields beside the answer's, the answer's winning
+// over a route field of the same name except a route's own `detail`, which
+// says what the route knows about its own half-landed gesture.
+func withExtra(extra map[string]any, answer httpjson.Detail) httpjson.Detail {
+	out := make(httpjson.Detail, len(extra)+len(answer))
+	for k, v := range answer {
+		out[k] = v
+	}
+	for k, v := range extra {
+		if _, taken := out[k]; !taken || k == "detail" {
+			out[k] = v
+		}
+	}
+	return out
 }

@@ -81,30 +81,35 @@ type Directory interface {
 // is how a PARTY is chosen, and a route that could choose one would be a
 // route that could act as somebody else. The engine hands this surface an
 // [Authority] instead, one writer per caller.
+//
+// EVERY WRITE ANSWERS ITS WHOLE [statelog.Result]. It used to answer a bare
+// position, which cannot tell `applied` and `pending` from `unknown` — so an
+// unknown outcome read as 200, and the removal, the revocation and the reset
+// announced beside it had not necessarily happened.
 type Writer interface {
-	Enrol(ctx context.Context, in iamdomain.Enrolment) (statelog.Position, error)
-	UpdatePerson(ctx context.Context, in iamdomain.PersonUpdate) (statelog.Position, error)
+	Enrol(ctx context.Context, in iamdomain.Enrolment) (statelog.Result, error)
+	UpdatePerson(ctx context.Context, in iamdomain.PersonUpdate) (statelog.Result, error)
 	SetStage(ctx context.Context, personID string, stage iam.Stage,
-		opID, reason string) (statelog.Position, error)
-	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Position, error)
+		opID, reason string) (statelog.Result, error)
+	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Result, error)
 	MintToken(ctx context.Context, in iamdomain.TokenMint) (iamdomain.TokenMinted, error)
 	Claim(ctx context.Context, kind iamdomain.ObjectKind, token, personID,
-		opID string) (statelog.Position, error)
+		opID string) (statelog.Result, error)
 	Release(ctx context.Context, kind iamdomain.ObjectKind, token, holder,
-		opID, reason string) (statelog.Position, error)
+		opID, reason string) (statelog.Result, error)
 
 	// Rename and Rebind MOVE a person's login or seat, claiming the new
 	// one before releasing the old — so a refusal changes nothing. A
 	// release followed by a claim, which is what this surface used to
 	// publish, left somebody whose new login was refused with none at all.
 	Rename(ctx context.Context, personID, from, to, opID, reason string) (
-		statelog.Position, error)
+		statelog.Result, error)
 	Rebind(ctx context.Context, personID, from, to, opID, reason string) (
-		statelog.Position, error)
-	Invite(ctx context.Context, in iamdomain.InviteMint) (statelog.Position, error)
-	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Position, error)
-	InvalidateAll(ctx context.Context, opID, reason string) (statelog.Position, error)
-	Remove(ctx context.Context, personID, opID, reason string) (statelog.Position, error)
+		statelog.Result, error)
+	Invite(ctx context.Context, in iamdomain.InviteMint) (statelog.Result, error)
+	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Result, error)
+	InvalidateAll(ctx context.Context, opID, reason string) (statelog.Result, error)
+	Remove(ctx context.Context, personID, opID, reason string) (statelog.Result, error)
 }
 
 // Authority hands this surface one party's [Writer].

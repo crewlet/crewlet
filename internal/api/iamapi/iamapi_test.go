@@ -96,6 +96,7 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 type answered struct {
 	status int
 	body   map[string]any
+	header http.Header
 }
 
 // as runs one request as a principal.
@@ -120,7 +121,7 @@ func (r *rig) as(p iam.Principal, method, target string, body any) answered {
 	r.mux.ServeHTTP(rec, req)
 	result := rec.Result()
 	defer result.Body.Close()
-	out := answered{status: result.StatusCode}
+	out := answered{status: result.StatusCode, header: result.Header}
 	_ = json.NewDecoder(result.Body).Decode(&out.body)
 	return out
 }
@@ -271,35 +272,51 @@ type fakeWriter struct {
 	// after the first — the real decide's round after a lost race, whose
 	// verdict is the one that lands.
 	rerun []iamdomain.Credential
+
+	// outcomes is what a named call answers in place of `applied`: a
+	// write nothing can establish, or one durable and not yet applied
+	// here.
+	outcomes map[string]statelog.Outcome
 }
 
-func (w *fakeWriter) did(what string) (statelog.Position, error) {
+func (w *fakeWriter) did(what string) (statelog.Result, error) {
 	w.calls = append(w.calls, what)
-	return statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 7}, w.err
+	if w.err != nil {
+		return statelog.Result{}, w.err
+	}
+	outcome := statelog.OutcomeApplied
+	if o, set := w.outcomes[what]; set {
+		outcome = o
+	}
+	result := statelog.Result{Outcome: outcome}
+	if outcome != statelog.OutcomeUnknown {
+		result.Position = statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 7}
+	}
+	return result, nil
 }
 
 func (w *fakeWriter) Enrol(_ context.Context, in iamdomain.Enrolment) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	w.enrolled = in
 	return w.did("enrol")
 }
 
 func (w *fakeWriter) UpdatePerson(_ context.Context, in iamdomain.PersonUpdate) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	w.updated = in
 	return w.did("update")
 }
 
 func (w *fakeWriter) SetStage(_ context.Context, _ string, _ iam.Stage,
-	_, _ string) (statelog.Position, error) {
+	_, _ string) (statelog.Result, error) {
 
 	return w.did("stage")
 }
 
 func (w *fakeWriter) SetCredentials(_ context.Context, in iamdomain.CredentialSet) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	w.creds = in
 	if in.Apply != nil {
@@ -316,32 +333,32 @@ func (w *fakeWriter) MintToken(_ context.Context, in iamdomain.TokenMint) (
 
 	w.minted = in
 	at, err := w.did("mint")
-	return iamdomain.TokenMinted{Position: at, Grants: in.Grants,
+	return iamdomain.TokenMinted{Result: at, Grants: in.Grants,
 		Colleague: in.Colleague, ExpiresAt: in.ExpiresAt}, err
 }
 
 func (w *fakeWriter) Claim(_ context.Context, kind iamdomain.ObjectKind,
-	_, _, _ string) (statelog.Position, error) {
+	_, _, _ string) (statelog.Result, error) {
 
 	return w.did("claim:" + string(kind))
 }
 
 func (w *fakeWriter) Release(_ context.Context, kind iamdomain.ObjectKind,
-	_, holder, _, _ string) (statelog.Position, error) {
+	_, holder, _, _ string) (statelog.Result, error) {
 
 	w.releasedFrom = append(w.releasedFrom, holder)
 	return w.did("release:" + string(kind))
 }
 
 func (w *fakeWriter) Rename(_ context.Context, person, from, to, _, _ string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	w.moved = append(w.moved, move{"login", person, from, to})
 	return w.did("rename")
 }
 
 func (w *fakeWriter) Rebind(_ context.Context, person, from, to, _, _ string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	w.moved = append(w.moved, move{"seat", person, from, to})
 	return w.did("rebind")
@@ -351,26 +368,26 @@ func (w *fakeWriter) Rebind(_ context.Context, person, from, to, _, _ string) (
 type move struct{ kind, person, from, to string }
 
 func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	w.invited = in
 	return w.did("invite")
 }
 
 func (w *fakeWriter) Revoke(_ context.Context, _, _, _ string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	return w.did("revoke")
 }
 
 func (w *fakeWriter) InvalidateAll(_ context.Context, _, _ string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	return w.did("invalidate")
 }
 
 func (w *fakeWriter) Remove(_ context.Context, _, _, _ string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	return w.did("remove")
 }

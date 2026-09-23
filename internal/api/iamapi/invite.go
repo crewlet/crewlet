@@ -64,7 +64,12 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		// NAMED RATHER THAN A BROKEN LINK. The alternative is answering
 		// a relative path, which looks like a working invitation right
 		// up to the moment somebody clicks it in their mail client.
-		httpjson.FailWith(w, http.StatusServiceUnavailable,
+		//
+		// A 500 AND NOT A 503: this node's own configuration lacks the
+		// setting, and no amount of waiting supplies it — a 503 told
+		// every client to retry in two seconds for ever, which is the
+		// same reason authapi's provider start answers a fault as one.
+		httpjson.FailWith(w, http.StatusInternalServerError,
 			httpjson.CodeNoExternalURL, map[string]string{
 				"detail": "this deployment has no api.external_url, so there " +
 					"is no address an invitation link could point at. Set it " +
@@ -78,14 +83,17 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := uuid.Must(uuid.NewV7()).String()
-	at, err := writer.Invite(r.Context(), iamdomain.InviteMint{
+	opID := s.opIDFor(r, "invite:"+id)
+	invited, err := writer.Invite(r.Context(), iamdomain.InviteMint{
 		ID: id, Email: address, Grants: in.Grants, Colleague: in.Colleague,
 		ExpiresAt: s.now().Add(InviteWindow),
-		OpID:      s.opIDFor(r, "invite:"+id),
+		OpID:      opID,
 		Reason:    reasonOr(in.Reason, "invited through /iam"),
 	})
-	if err != nil {
-		s.answerWrite(w, r, at, err, nil)
+	if err != nil || !landed(invited) {
+		// NO LINK FOR AN INVITATION NOBODY CAN CONFIRM: it would be a
+		// URL that answers 410 the first time somebody follows it.
+		s.answerWrite(w, r, opID, invited, err, nil)
 		return
 	}
 	// THE ADDRESS IS LOGGED AS A HASH AND NEVER IN THE CLEAR. An
@@ -96,11 +104,10 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 	digest := sha256.Sum256([]byte(iam.NormalizeEmail(address)))
 	log.InfoContext(r.Context(), "iam_invitation_issued",
 		"invitation", id, "address_digest", hex.EncodeToString(digest[:8]),
-		"position", at.String())
-	httpjson.Write(w, http.StatusCreated, map[string]any{
+		"position", invited.Position.String())
+	s.answer(w, r, opID, invited, nil, http.StatusCreated, map[string]any{
 		"id": id, "url": s.inviteURL(id),
 		"expires_at": s.now().Add(InviteWindow),
-		"position":   at.String(),
 		"detail": "this link is shown once and cannot be read back; what the " +
 			"estate holds is the invitation's id, which is what redeeming it " +
 			"presents",

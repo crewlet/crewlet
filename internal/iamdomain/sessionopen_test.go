@@ -181,7 +181,7 @@ func openSession(t *testing.T, rig *writeRig, person string) (*session.Signer, s
 	cookie, err := signer.Mint(session.Mint{
 		Lineage: lineage, Person: person,
 		Epoch: opened.Epoch, Generation: opened.Generation,
-		StartPosition:     uint64(opened.Position.Packed()),
+		StartPosition:     uint64(opened.Result.Position.Packed()),
 		AbsoluteExpiresAt: expires,
 	})
 	if err != nil {

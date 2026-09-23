@@ -110,12 +110,12 @@ type credentialCounter struct {
 }
 
 func (c *credentialCounter) SetCredentials(context.Context, iamdomain.CredentialSet) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.n++
-	return statelog.Position{}, nil
+	return applied(statelog.Position{}), nil
 }
 
 func (c *credentialCounter) count() int {

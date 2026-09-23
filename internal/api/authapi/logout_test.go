@@ -24,12 +24,12 @@ type closingWriter struct {
 }
 
 func (w *closingWriter) CloseSession(_ context.Context, lineage, person, _,
-	_ string) (statelog.Position, error) {
+	_ string) (statelog.Result, error) {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.closed = append(w.closed, [2]string{lineage, person})
-	return statelog.Position{}, nil
+	return applied(statelog.Position{}), nil
 }
 
 // A SIGN-OUT ENDS WHICHEVER COOKIE THE GUARD ACCEPTED.

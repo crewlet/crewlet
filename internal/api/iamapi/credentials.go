@@ -213,20 +213,25 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		OpID:   "credentials:mint:" + id,
 		Reason: reason,
 	})
-	if err != nil {
+	if err != nil || !landed(minted.Result) {
 		if errors.Is(err, iamdomain.ErrInvalidToken) {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 				map[string]string{"detail": err.Error()})
 			return
 		}
-		s.answerWrite(w, r, minted.Position, err, nil)
+		// AN UNKNOWN MINT HANDS OUT NO VALUE: it has no position to carry,
+		// and a value carrying zero is one every node that has applied
+		// anything refuses. The secret is dropped with this answer; the
+		// record that may have landed is a token nobody holds, and it
+		// expires.
+		s.answerWrite(w, r, "credentials:mint:"+id, minted.Result, err, nil)
 		return
 	}
 	// THE VALUE CARRIES WHERE THE MINT LANDED, which is only known now: a
 	// node that has applied past it and holds no row knows the token is
 	// gone, and one below it knows only that it has not seen it yet.
 	token := credential.Token{
-		ID: id, Position: uint64(minted.Position.Packed()), Secret: secret,
+		ID: id, Position: uint64(minted.Result.Position.Packed()), Secret: secret,
 	}
 	principal, _ := iam.From(r.Context())
 	log.InfoContext(r.Context(), "iam_token_minted",
@@ -244,14 +249,17 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	// THE VALUE IS IN THIS ANSWER AND IN NOTHING ELSE. It is not logged,
 	// not stored, and not readable back — a second route that returned it
 	// would make the estate hold a secret, which is the one thing this
-	// package's whole shape is against.
-	httpjson.Write(w, http.StatusCreated, map[string]any{
-		"id": id, "person": owner, "token": token.Value(),
-		"grants": minted.Grants, "colleague": minted.Colleague,
-		"expires_at": minted.ExpiresAt, "position": minted.Position.String(),
-		"detail": "this value is shown once and cannot be read back; what " +
-			"the estate holds is a hash of it",
-	})
+	// package's whole shape is against. A PENDING mint is durable and
+	// handed out with 202: a node below its position answers "not yet"
+	// for the value rather than refusing it.
+	s.answer(w, r, "credentials:mint:"+id, minted.Result, nil, http.StatusCreated,
+		map[string]any{
+			"id": id, "person": owner, "token": token.Value(),
+			"grants": minted.Grants, "colleague": minted.Colleague,
+			"expires_at": minted.ExpiresAt,
+			"detail": "this value is shown once and cannot be read back; " +
+				"what the estate holds is a hash of it",
+		})
 }
 
 // DeleteCredential is `DELETE /iam/credentials/{id}`.
@@ -289,7 +297,8 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	found, withheld := false, false
 	var method iamdomain.CredentialMethod
 	const reason = "a credential was revoked"
-	at, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
+	opID := s.opIDFor(r, "credentials:revoke:"+id)
+	revoked, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
 			// RESET PER RUN: the decide may run again against a fresh
@@ -309,11 +318,15 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 			}
 			return out
 		},
-		OpID:   s.opIDFor(r, "credentials:revoke:"+id),
+		OpID:   opID,
 		Reason: reason,
 	})
-	if err != nil {
-		s.answerWrite(w, r, at, err, map[string]any{"id": id})
+	if err != nil || !landed(revoked) {
+		// NOTHING IS SAID OF A REVOCATION NOTHING CAN CONFIRM — neither
+		// the withheld refusal, nor "nothing changed", nor the event:
+		// each is a verdict the decide reached in a run whose record
+		// may not be on the log.
+		s.answerWrite(w, r, opID, revoked, err, map[string]any{"id": id})
 		return
 	}
 	if withheld {
@@ -328,8 +341,8 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		// answer says so rather than reporting a 404: the revocation
 		// was idempotent and a caller retrying after a timeout must not
 		// be told their credential never existed.
-		httpjson.Write(w, http.StatusOK, map[string]any{
-			"id": id, "position": at.String(),
+		s.answerWrite(w, r, opID, revoked, nil, map[string]any{
+			"id": id,
 			"detail": "no live credential with that id is held by this " +
 				"person; nothing changed",
 		})
@@ -341,5 +354,5 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		Credential: id, Kind: types.CredentialKind(method), Owner: person,
 		By: callerName(r.Context()), Reason: reason,
 	})
-	s.answerWrite(w, r, at, nil, map[string]any{"id": id})
+	s.answerWrite(w, r, opID, revoked, nil, map[string]any{"id": id})
 }

@@ -49,6 +49,16 @@
 // session: signing somebody in on a code that stays usable is the replay the
 // spend exists to close.
 //
+// # Three outcomes stay three, on every write
+//
+// A spend whose outcome nobody can establish is the same 503 as one that could
+// not be recorded, and so is every other write this surface makes: a session
+// start, a close, a revocation, a factor stored, an enrolment. [landed] is the
+// one test — applied or pending — and [unresolved] the one answer, carrying
+// the operation id. Nothing is built on an unknown write and nothing is
+// announced about it, because a row saying a session started, ended or a
+// factor was enrolled is the one row in the trail that must not be false.
+//
 // # What it says about itself
 //
 // Every refusal reaches [Audit.Failed] and never [Audit.Emit]: a failed
@@ -141,27 +151,37 @@ type Directory interface {
 }
 
 // Writer is what this surface writes, defined here for Directory's reason.
+//
+// # Every write answers all three outcomes
+//
+// Each method answers the framework's own [statelog.Result], and never a bare
+// position, because the position alone cannot tell `applied` and `pending`
+// (both durable) from `unknown` (nothing established): a zero position beside
+// a nil error read as success, so a second factor whose spend may not have
+// landed opened a session, and every event this surface announces was said of
+// writes that may not exist. What this surface does on each is [unresolved]'s
+// to say.
 type Writer interface {
-	// OpenSession records a session beginning and returns where the record
-	// landed and the two counters it was opened at. All three travel into
-	// the bearer: the position is what lets a node below it serve on the
-	// signature alone, and the epoch and generation are what a later
-	// revocation or invalidation is compared against.
+	// OpenSession records a session beginning and returns the write's
+	// answer and the two counters it was opened at. The position and both
+	// counters travel into the bearer: the position is what lets a node
+	// below it serve on the signature alone, and the epoch and generation
+	// are what a later revocation or invalidation is compared against.
 	OpenSession(ctx context.Context, in iamdomain.SessionStart) (iamdomain.SessionOpened, error)
 
 	// CloseSession ends one, keeping its row until the sweep collects it.
 	// The person is the session's own, and the record is filed under
 	// their bucket.
 	CloseSession(ctx context.Context, lineage, person, reason,
-		opID string) (statelog.Position, error)
+		opID string) (statelog.Result, error)
 
 	// Revoke bumps a person's revocation epoch, which ends every session
 	// they hold.
-	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Position, error)
+	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Result, error)
 
 	// Enrol creates a person. Reached by the bootstrap route and by
 	// redeeming an invitation, and by nothing else here.
-	Enrol(ctx context.Context, in iamdomain.Enrolment) (statelog.Position, error)
+	Enrol(ctx context.Context, in iamdomain.Enrolment) (statelog.Result, error)
 
 	// MintBootstrap publishes the hash of the one-time code this node
 	// wrote, and SpendBootstrap records it being used.
@@ -170,25 +190,75 @@ type Writer interface {
 	// or redeeming contend — the enrolment beside a redemption arbitrates
 	// on a fresh person id nobody else would name, so two of those would
 	// both succeed and a company would have two founders.
-	MintBootstrap(ctx context.Context, in iamdomain.BootstrapMint) (statelog.Position, error)
-	SpendBootstrap(ctx context.Context, in iamdomain.BootstrapSpend) (statelog.Position, error)
+	MintBootstrap(ctx context.Context, in iamdomain.BootstrapMint) (statelog.Result, error)
+	SpendBootstrap(ctx context.Context, in iamdomain.BootstrapSpend) (statelog.Result, error)
 
 	// WithdrawBootstrap supersedes a code nobody redeemed, which is what
 	// re-issuing one has to do first: two live codes are two ways into an
 	// engine that has no other way in.
 	WithdrawBootstrap(ctx context.Context, id, opID, reason string) (
-		statelog.Position, error)
+		statelog.Result, error)
 
 	// SetCredentials replaces a person's credential set, forming the new
 	// whole from their own row INSIDE the snapshot — which is what keeps
 	// a two-request enrolment from pairing an old decision with a new
 	// expectation.
-	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Position, error)
+	SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (statelog.Result, error)
 
 	// SpendInvitation records a link being used, naming the person it
 	// created. It arbitrates on the ADDRESS BLIND, which is what makes
 	// two nodes redeeming one link contend.
-	SpendInvitation(ctx context.Context, in iamdomain.InvitationSpend) (statelog.Position, error)
+	SpendInvitation(ctx context.Context, in iamdomain.InvitationSpend) (statelog.Result, error)
+}
+
+// landed reports whether a write's record is durable: applied here, or
+// pending here and applied everywhere in time. The one outcome it refuses is
+// `unknown`, of which nothing can be said — so nothing is built on it and
+// nothing is announced about it.
+func landed(result statelog.Result) bool {
+	return result.Outcome == statelog.OutcomeApplied ||
+		result.Outcome == statelog.OutcomePending
+}
+
+// ErrUnresolved reports a write this surface made whose outcome could not be
+// established, to a caller that is not a request — the boot path that mints
+// the first bootstrap code, and `POST /iam/bootstrap-code`, which re-issues
+// one. It is statelog's own ErrUnavailable underneath, so a caller that asks
+// `errors.Is(err, statelog.ErrUnavailable)` answers it as the 503 it is.
+var ErrUnresolved = fmt.Errorf("authapi: the write's outcome is unknown: %w",
+	statelog.ErrUnavailable)
+
+// errText is an error's message, or empty — so a log line carries the field
+// only when there is one.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// unresolved answers a write whose outcome this node could not establish.
+//
+// # 503, the op id, and nothing built on it
+//
+// The record may or may not be on the log, so this surface does exactly what
+// a single write does with `unknown`: it opens no session on it, mints no
+// bearer from it, says no event about it, and answers 503 with the Retry-After
+// every 503 here carries — and the OPERATION ID, which is how the write is
+// found in `iam_history` and, where the gesture derives its id from what the
+// caller presented (a logout of one lineage, an invitation, the bootstrap
+// code), the id the retry lands under by construction.
+func unresolved(w http.ResponseWriter, r *http.Request, event string,
+	result statelog.Result) {
+
+	log.WarnContext(r.Context(), event, "op_id", result.OpID,
+		"outcome", string(result.Outcome))
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds,
+		httpjson.Detail{
+			"detail": "this node cannot establish whether that change landed; " +
+				"nothing was built on it — try again",
+			"op_id": result.OpID,
+		})
 }
 
 // Opener opens one sealed value under the key of whatever it belongs to.

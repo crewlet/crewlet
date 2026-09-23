@@ -1,12 +1,15 @@
 package iamapi
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // PostBootstrapCode is `POST /iam/bootstrap-code`.
@@ -49,11 +52,29 @@ func (s *Service) PostBootstrapCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path, err := s.bootstrap.MintCode(r.Context())
-	if err != nil {
+	switch {
+	case errors.Is(err, statelog.ErrUnavailable):
+		// THE ESTATE COULD NOT BE READ, OR A RECORD COULD NOT BE LANDED
+		// OR CONFIRMED: waiting clears it, so a 503 with the hint every
+		// identity 503 carries. It was a bare 503, which a client cannot
+		// tell from a node that is gone for good.
+		log.WarnContext(r.Context(), "api_iam_bootstrap_mint_unavailable",
+			"error", err)
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+			auth.RetryIdentitySeconds, httpjson.Detail{"detail": err.Error()})
+		return
+	case errors.Is(err, statelog.ErrConflict):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
+			map[string]string{"detail": err.Error()})
+		return
+	case err != nil:
+		// A FAULT WAITING DOES NOT CLEAR — the file beside the store
+		// could not be written, this node's randomness failed — so a 500
+		// rather than a 503 telling a client to retry for ever.
 		log.ErrorContext(r.Context(), "api_iam_bootstrap_mint_failed",
 			"error", err)
-		httpjson.FailWith(w, http.StatusServiceUnavailable,
-			httpjson.CodeUnavailable, map[string]string{"detail": err.Error()})
+		httpjson.FailWith(w, http.StatusInternalServerError,
+			httpjson.CodeInternalError, map[string]string{"detail": err.Error()})
 		return
 	}
 	log.WarnContext(r.Context(), "iam_bootstrap_code_minted", "path", path,

@@ -243,6 +243,22 @@ func (w *Writer) announce(ctx context.Context, result statelog.Result, err error
 	w.events.Emit(ctx, payload)
 }
 
+// unresolved is a SEQUENCE's answer when one of its steps could not be
+// resolved: unknown, under the GESTURE's operation id.
+//
+// # Three outcomes stay three, a step's included
+//
+// An enrolment claims an address, then a login, then writes the person; a
+// rename claims the new login and then releases the old. A step whose outcome
+// nothing can establish may or may not be on the log, and the step after it
+// would be built on a guess — so the gesture stops there and says unknown,
+// exactly as a single write would. It is answered under the gesture's own id
+// because that is what a caller retries under: every step's id is derived
+// from it, so the retry lands exactly the steps that did not.
+func unresolved(opID string) statelog.Result {
+	return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: opID}
+}
+
 // grantDelta is what one write added to a grant set and what it took away,
 // each sorted, so two nodes describing one write describe it identically.
 func grantDelta(before, after []iam.Grant) (added, removed []string) {

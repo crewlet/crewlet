@@ -220,15 +220,25 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 	// THE PERSON COMES OFF THE SAME VERIFIED BEARER as the lineage, and
 	// the record is filed under their bucket — where a node that cannot
 	// decode it has to say it is behind about them.
-	if _, err := s.writer.CloseSession(r.Context(), lineage, bearer.Person,
-		"signed out", "logout:"+lineage); err != nil {
+	closed, err := s.writer.CloseSession(r.Context(), lineage, bearer.Person,
+		"signed out", "logout:"+lineage)
+	switch {
+	case err != nil:
 		log.WarnContext(r.Context(), "api_sign_out_record_failed",
 			"error", err, "lineage", lineage)
-	} else {
-		// ONLY ONCE THE RECORD LANDED. A cleared cookie is this browser
-		// forgetting; the session ending is the record every node reads,
-		// and a row saying it ended when the write did not land would be
-		// the one row in the trail that is false.
+	case !landed(closed):
+		// UNKNOWN IS NOT LANDED. Nothing can say whether the record is on
+		// the log, so nothing is said about it; the op id is derived from
+		// the lineage, so the next sign-out of this session is the same
+		// operation.
+		log.WarnContext(r.Context(), "api_sign_out_record_unresolved",
+			"lineage", lineage, "op_id", closed.OpID)
+	default:
+		// ONLY ONCE THE RECORD LANDED — applied here, or durable and
+		// pending here. A cleared cookie is this browser forgetting; the
+		// session ending is the record every node reads, and a row saying
+		// it ended when the write did not land would be the one row in
+		// the trail that is false.
 		s.audit.Emit(r.Context(), types.IAMSessionEnded{
 			Person: bearer.Person, Lineage: lineage,
 			Reason: types.EndLogout, By: callerName(r),
@@ -268,9 +278,10 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 	// epoch under it is what every session exchanged from that token is
 	// checked against.
 	person := subjectOf(r, principal)
-	if _, err := s.writer.Revoke(r.Context(), person,
+	revoked, err := s.writer.Revoke(r.Context(), person,
 		"logout-all:"+person+":"+s.now().UTC().Format(time.RFC3339Nano),
-		"signed out everywhere"); err != nil {
+		"signed out everywhere")
+	if err != nil {
 		// REPORTED, unlike the single logout above, and the difference
 		// is what the caller asked for: clearing this browser's cookie
 		// does not end the OTHER sessions, so a failure here means the
@@ -279,6 +290,12 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 		log.WarnContext(r.Context(), "api_sign_out_all_failed",
 			"error", err, "person", person)
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		return
+	}
+	if !landed(revoked) {
+		// AND AN UNKNOWN IS NOT A SIGN-OUT EVERYWHERE, for the same
+		// reason: the caller cannot be told their other sessions ended.
+		unresolved(w, r, "api_sign_out_all_unresolved", revoked)
 		return
 	}
 	s.audit.Emit(r.Context(), types.IAMSessionEnded{
@@ -379,11 +396,16 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
 		return
 	}
-	if _, err := s.writer.CloseSession(r.Context(), lineage, owner,
-		"signed out from another session", "logout-one:"+lineage); err != nil {
+	closed, err := s.writer.CloseSession(r.Context(), lineage, owner,
+		"signed out from another session", "logout-one:"+lineage)
+	if err != nil {
 		log.WarnContext(r.Context(), "api_sign_out_one_failed",
 			"error", err, "lineage", lineage)
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		return
+	}
+	if !landed(closed) {
+		unresolved(w, r, "api_sign_out_one_unresolved", closed)
 		return
 	}
 	// A PERSON ENDING THEIR OWN is a logout; an operator ending somebody

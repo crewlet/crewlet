@@ -137,7 +137,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	// event that says which was enrolled.
 	id := uuid.New().String()
 	const reason = "enrolled a second factor"
-	if _, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
+	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
 			return append(without(held, iamdomain.MethodTOTP),
@@ -145,9 +145,17 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 		},
 		OpID:   "totp:" + person + ":" + id,
 		Reason: reason,
-	}); err != nil {
+	})
+	if err != nil {
 		log.ErrorContext(r.Context(), "api_totp_enrol_failed", "error", err)
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		return
+	}
+	if !landed(stored) {
+		// NOT "enrolled": nothing can say the factor is on the log. The
+		// second leg carries its secret, so presenting it again with a
+		// fresh code enrols it — the same factor whichever attempt lands.
+		unresolved(w, r, "api_totp_enrol_unresolved", stored)
 		return
 	}
 	s.audit.Emit(r.Context(), types.IAMCredentialMinted{
@@ -177,7 +185,7 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	person := principal.ID.String()
 	id := uuid.New().String()
 	const reason = "regenerated the recovery codes"
-	if _, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
+	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
 			return append(without(held, iamdomain.MethodRecovery),
@@ -185,9 +193,17 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 		},
 		OpID:   "recovery:" + person + ":" + id,
 		Reason: reason,
-	}); err != nil {
+	})
+	if err != nil {
 		log.ErrorContext(r.Context(), "api_recovery_store_failed", "error", err)
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		return
+	}
+	if !landed(stored) {
+		// THE CODES ARE NOT SHOWN: a set nothing can say is stored is a
+		// set that may not work, handed out as the one way back in. A
+		// retry mints a fresh set, which replaces whichever landed.
+		unresolved(w, r, "api_recovery_store_unresolved", stored)
 		return
 	}
 	s.audit.Emit(r.Context(), types.IAMCredentialMinted{

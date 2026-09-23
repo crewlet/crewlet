@@ -170,7 +170,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.writer.Enrol(r.Context(), iamdomain.Enrolment{
+	enrolled, err := s.writer.Enrol(r.Context(), iamdomain.Enrolment{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: in.Name, Email: email, Login: in.Login,
 		Credentials: []iamdomain.Credential{{
@@ -191,7 +191,8 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		Colleague:  held.Colleague,
 		Invitation: held.ID,
 		OpID:       opID, Reason: "redeemed an invitation",
-	}); err != nil {
+	})
+	if err != nil {
 		if errors.Is(err, iamdomain.ErrRefused) {
 			// SPENT OR AGED OUT between the lookup above and the
 			// record, which is the same answer the lookup gives: one
@@ -202,6 +203,13 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		refuseEnrolment(w, r, "api_invite_enrol_failed", err)
+		return
+	}
+	if !landed(enrolled) {
+		// NO SPEND AND NO SESSION ON AN ENROLMENT NOBODY CAN CONFIRM.
+		// The op id is the invitation's own, so following the link again
+		// is the same enrolment.
+		unresolved(w, r, "api_invite_enrol_unresolved", enrolled)
 		return
 	}
 	s.spendInvitation(r, held, person, opID)
@@ -323,12 +331,15 @@ func (s *Service) refuseSpentInvitation(w http.ResponseWriter, r *http.Request,
 func (s *Service) spendInvitation(r *http.Request, held iamdomain.InvitationRow,
 	person, opID string) {
 
-	if _, err := s.writer.SpendInvitation(r.Context(), iamdomain.InvitationSpend{
+	spent, err := s.writer.SpendInvitation(r.Context(), iamdomain.InvitationSpend{
 		ID: held.ID, Blind: held.Blind, Person: person,
 		OpID: opID + ":spend", Reason: "redeemed",
-	}); err != nil {
+	})
+	if err != nil || !landed(spent) {
 		log.WarnContext(r.Context(), "api_invite_spend_failed",
-			"error", err, "invitation", held.ID, "person", person)
+			"error", errText(err), "op_id", spent.OpID,
+			"outcome", string(spent.Outcome), "invitation", held.ID,
+			"person", person)
 	}
 }
 

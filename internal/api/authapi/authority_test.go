@@ -35,10 +35,13 @@ type enrolmentRecorder struct {
 }
 
 func (w enrolmentRecorder) Enrol(_ context.Context, in iamdomain.Enrolment) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	*w.got = in
-	return statelog.Position{}, w.err
+	if w.err != nil {
+		return statelog.Result{}, w.err
+	}
+	return applied(statelog.Position{}), nil
 }
 
 // A REDEMPTION NAMES ITS INVITATION. Mutation: drop the field and the

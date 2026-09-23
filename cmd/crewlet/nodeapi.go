@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Finding the running node, and authenticating to it.
@@ -270,14 +271,17 @@ func sessionReuse(e *engine.Engine) func(context.Context, string) {
 		// which is this engine's rule for every cleanup.
 		ctx = context.WithoutCancel(ctx)
 		opID := "session-reuse:" + person + ":" + uuid.NewString()
-		if _, err := writer.Revoke(ctx, person, opID,
-			"a session cookie was replayed past the rotation overlap"); err != nil {
-
+		revoked, err := writer.Revoke(ctx, person, opID,
+			"a session cookie was replayed past the rotation overlap")
+		if err != nil || revoked.Outcome == statelog.OutcomeUnknown {
+			// AN UNKNOWN OUTCOME IS NOT A REVOCATION: nothing can say the
+			// epoch moved, so the person's other sessions may be live.
 			logging.Get("api.auth").ErrorContext(ctx,
 				"iam_session_reuse_not_revoked", "person", person,
-				"error", err,
+				"error", err, "op_id", revoked.OpID,
+				"outcome", string(revoked.Outcome),
 				"detail", "the replayed cookie was refused, but this "+
-					"person's other sessions are still live; retry with "+
+					"person's other sessions may still be live; retry with "+
 					"crewlet iam revoke")
 		}
 	}

@@ -59,6 +59,15 @@ type writeRig struct {
 
 func newWriteRig(t *testing.T) *writeRig {
 	t.Helper()
+	return newWriteRigWith(t, nil)
+}
+
+// newWriteRigWith is [newWriteRig] with the publisher's appender wrapped — how
+// a case puts a broker that answers nothing in front of one subject.
+func newWriteRigWith(t *testing.T,
+	wrap func(statelog.Appender) statelog.Appender) *writeRig {
+
+	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
@@ -104,8 +113,12 @@ func newWriteRig(t *testing.T) *writeRig {
 	// an absent anchor really does mean an unclaimed address.
 	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
 	waiter := &rigWaiter{}
+	var appender statelog.Appender = log
+	if wrap != nil {
+		appender = wrap(log)
+	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: iamdomain.Domain{}, Log: log, Rows: rows, Fence: fence,
+		Domain: iamdomain.Domain{}, Log: appender, Rows: rows, Fence: fence,
 		Signer: testSigner(t), Gates: iamdomain.NewGates(db),
 		Waiter: waiter, NodeID: "node-a",
 		Generation:    func() uint32 { return 0 },

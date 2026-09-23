@@ -375,12 +375,16 @@ var errFactorSpent = errors.New("authapi: this second factor was already spent")
 // A FRESH OPERATION ID PER USE, never one derived from the step: two uses of
 // one code under one id would collapse into one record in the operation
 // ledger, and the second would read the first's success as its own.
+//
+// THE WRITE'S OWN ANSWER comes back beside the use, because only a spend that
+// LANDED makes the code single-use: an unknown one may not be on the log, and
+// a session opened on it would be a session on a code that still works.
 func (s *Service) spendSecondFactor(ctx context.Context, person string,
-	use factorUse) (factorUse, error) {
+	use factorUse) (factorUse, statelog.Result, error) {
 
 	spent := false
 	remaining := use.remaining
-	_, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
+	result, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) []iamdomain.Credential {
 			spent = true
@@ -413,13 +417,16 @@ func (s *Service) spendSecondFactor(ctx context.Context, person string,
 		Reason: "spent a " + string(use.factor) + " second factor",
 	})
 	if err != nil {
-		return factorUse{}, err
+		return factorUse{}, result, err
+	}
+	if !landed(result) {
+		return factorUse{}, result, nil
 	}
 	if spent {
-		return factorUse{}, errFactorSpent
+		return factorUse{}, result, errFactorSpent
 	}
 	use.remaining = remaining
-	return use, nil
+	return use, result, nil
 }
 
 // withExtra is a credential with one carried field replaced, on a copy of its
@@ -455,7 +462,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		s.refuseSignIn(w, r, arrived, attempt, "second factor mismatch")
 		return factorUse{}, false
 	}
-	use, err := s.spendSecondFactor(r.Context(), held.ID, use)
+	use, spend, err := s.spendSecondFactor(r.Context(), held.ID, use)
 	switch {
 	case errors.Is(err, errFactorSpent):
 		s.refuseSignIn(w, r, arrived, attempt, "second factor already spent")
@@ -468,6 +475,13 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		log.ErrorContext(r.Context(), "api_second_factor_unspent",
 			"person", held.ID, "error", err)
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+		return factorUse{}, false
+	case !landed(spend):
+		// AND NOT A SPEND EITHER: nothing can establish whether it is on
+		// the log, which for a code is the same as not having recorded
+		// it. A retry presents the code again and is decided afresh — a
+		// spend that did land refuses it as spent.
+		unresolved(w, r, "api_second_factor_unresolved", spend)
 		return factorUse{}, false
 	}
 	if use.factor == types.FactorRecovery {
@@ -537,11 +551,19 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		// may not have applied. This way round a failure changes nothing
 		// and the retry is clean; the one residue, an open that fails
 		// after the close landed, is a person asked to sign in again.
-		if _, err := s.writer.CloseSession(r.Context(), how.replaces, held.ID,
-			"replaced by a step-up", "step-up:"+how.replaces); err != nil {
+		closed, closeErr := s.writer.CloseSession(r.Context(), how.replaces,
+			held.ID, "replaced by a step-up", "step-up:"+how.replaces)
+		if closeErr != nil {
 			log.WarnContext(r.Context(), "api_step_up_close_failed",
-				"error", err, "lineage", how.replaces)
+				"error", closeErr, "lineage", how.replaces)
 			httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
+			return
+		}
+		if !landed(closed) {
+			// THE SAME GESTURE FAILING, for the same reason: opening the
+			// replacement beside a close nothing can confirm is the
+			// second live session this order exists to prevent.
+			unresolved(w, r, "api_step_up_close_unresolved", closed)
 			return
 		}
 	}
@@ -567,7 +589,15 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
-	at := opened.Position
+	if !landed(opened.Result) {
+		// NO BEARER FROM AN UNRESOLVED START. It would carry position
+		// zero, which every node that has applied anything reads as a
+		// session that ended — a cookie that signs its holder out on
+		// their first request, beside an event saying they signed in.
+		unresolved(w, r, "api_sign_in_session_unresolved", opened.Result)
+		return
+	}
+	at := opened.Result.Position
 	if how.refresh != "" && !s.keep(r, lineage.String(), held.ID, how.refresh, at) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
@@ -648,10 +678,12 @@ func (s *Service) keep(r *http.Request, lineage, person, refresh string,
 			"sign-in is refused rather than admitted unprobed")
 	// WITHOUT CANCEL: the request is about to be answered and its context
 	// ended, and a cleanup that inherits a dead context does nothing.
-	if _, err := s.writer.CloseSession(context.WithoutCancel(r.Context()),
-		lineage, person, reasonRefreshUnkept, "close:"+lineage); err != nil {
+	closed, err := s.writer.CloseSession(context.WithoutCancel(r.Context()),
+		lineage, person, reasonRefreshUnkept, "close:"+lineage)
+	if err != nil || !landed(closed) {
 		log.WarnContext(r.Context(), "api_sign_in_session_left_open",
-			"lineage", lineage, "error", err)
+			"lineage", lineage, "error", errText(err), "op_id", closed.OpID,
+			"outcome", string(closed.Outcome))
 	}
 	return false
 }

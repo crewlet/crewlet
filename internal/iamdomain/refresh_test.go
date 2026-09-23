@@ -476,7 +476,7 @@ func (r *writeRig) openSessionAt(person string, expires time.Time) (string,
 			Lineage: lineage, Person: person, AbsoluteExpiresAt: expires,
 			OpID: "session:" + lineage,
 		})
-		at = opened.Position
+		at = opened.Result.Position
 		return err
 	}); err != nil {
 		r.t.Fatalf("open a session: %v", err)

@@ -184,7 +184,7 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	// "that address belongs to somebody" by their own first attempt.
 	person := iamdomain.BootstrappedPersonID(code.ID, code.MintedAt)
 	opID := "bootstrap:" + code.ID
-	if _, err := s.writer.Enrol(r.Context(), iamdomain.Enrolment{
+	enrolled, err := s.writer.Enrol(r.Context(), iamdomain.Enrolment{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: in.Name, Email: in.Email, Login: in.Login,
 		Credentials: []iamdomain.Credential{{
@@ -206,7 +206,8 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		Colleague:     iam.ColleagueWrite,
 		BootstrapCode: bootstrapCodeID(held),
 		OpID:          opID, Reason: "the first operator",
-	}); err != nil {
+	})
+	if err != nil {
 		if errors.Is(err, iamdomain.ErrRefused) {
 			// THE EXEMPTION CLOSED between the route's own check and
 			// the record: somebody else became the first person, or
@@ -221,17 +222,29 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		refuseEnrolment(w, r, "api_bootstrap_enrol_failed", err)
 		return
 	}
+	if !landed(enrolled) {
+		// NOTHING IS BUILT ON AN ENROLMENT NOBODY CAN CONFIRM: no spend,
+		// no file removed, no session. The op id is the code's own, so
+		// presenting the same code again is the same enrolment.
+		unresolved(w, r, "api_bootstrap_enrol_unresolved", enrolled)
+		return
+	}
 
 	// THE CODE IS SPENT ON THE LOG BEFORE THE FILE IS REMOVED, and the
 	// order is the whole of it: the record is what every OTHER node reads
 	// to know the company has started, and a file deleted first leaves a
 	// company that has an operator and a node that cannot prove it.
-	if _, err := s.writer.SpendBootstrap(r.Context(), iamdomain.BootstrapSpend{
+	spent, err := s.writer.SpendBootstrap(r.Context(), iamdomain.BootstrapSpend{
 		ID: bootstrapCodeID(held), Person: person, OpID: opID + ":spend",
 		Reason: "redeemed",
-	}); err != nil {
+	})
+	if err != nil || !landed(spent) {
+		// LOGGED AND NOT REPORTED, an unknown spend included: the person
+		// exists, and the route is closed by the estate whatever the
+		// code's own row says.
 		log.WarnContext(r.Context(), "api_bootstrap_spend_failed",
-			"error", err, "person", person)
+			"error", errText(err), "op_id", spent.OpID,
+			"outcome", string(spent.Outcome), "person", person)
 	}
 	// AND THE FILE GOES LAST. A failure here is logged and never reported:
 	// the operator exists, the route is closed by the estate whatever the
@@ -340,12 +353,22 @@ func (s *Service) WriteBootstrapCode(ctx context.Context, nodeID string) (string
 	if err := os.WriteFile(path, []byte(code+"\n"), 0o600); err != nil {
 		return "", fmt.Errorf("authapi: write the bootstrap code to %s: %w", path, err)
 	}
-	if _, err := s.writer.MintBootstrap(ctx, iamdomain.BootstrapMint{
+	minted, err := s.writer.MintBootstrap(ctx, iamdomain.BootstrapMint{
 		ID: bootstrapCodeID(code), Verifier: bootstrapCodeID(code),
 		MintedBy: nodeID, ExpiresAt: s.now().Add(bootstrapLifetime),
 		OpID: "bootstrap-mint:" + bootstrapCodeID(code), Reason: "a fresh estate",
-	}); err != nil {
+	})
+	if err != nil {
 		return "", fmt.Errorf("authapi: publish the bootstrap code's hash: %w", err)
+	}
+	if !landed(minted) {
+		// A CODE IS LIVE ONLY WHILE ITS MINT IS ON THE LOG, so a path to
+		// one nothing can confirm is a path to a code that may refuse
+		// its first use. The file stays, and a retry under the same op
+		// id — it is the code's own digest — lands this very mint.
+		return "", fmt.Errorf("authapi: the bootstrap code's hash (operation "+
+			"%s) has an unknown outcome; retry: %w", minted.OpID,
+			ErrUnresolved)
 	}
 	return path, nil
 }
@@ -374,12 +397,18 @@ func (s *Service) ReissueBootstrapCode(ctx context.Context, nodeID string) (
 			"codes: %w", err)
 	}
 	for _, code := range outstanding {
-		if _, err := s.writer.WithdrawBootstrap(ctx, code.ID,
-			"bootstrap-withdraw:"+code.ID,
-			"superseded by a re-issued code"); err != nil {
-
+		withdrawn, err := s.writer.WithdrawBootstrap(ctx, code.ID,
+			"bootstrap-withdraw:"+code.ID, "superseded by a re-issued code")
+		if err != nil {
 			return "", fmt.Errorf("authapi: withdraw the bootstrap code "+
 				"%s: %w", code.ID, err)
+		}
+		if !landed(withdrawn) {
+			// MINTING BESIDE A WITHDRAWAL NOBODY CAN CONFIRM could leave
+			// two live codes, which is what the withdrawal is for.
+			return "", fmt.Errorf("authapi: the withdrawal of bootstrap "+
+				"code %s (operation %s) has an unknown outcome; retry: %w",
+				code.ID, withdrawn.OpID, ErrUnresolved)
 		}
 	}
 	path := s.bootstrapCodePath()

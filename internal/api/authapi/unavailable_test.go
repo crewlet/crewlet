@@ -83,8 +83,8 @@ func TestEveryUnavailableAnswerHereCarriesARetryAfter(t *testing.T) {
 // failingRevoke is a writer whose revocation cannot be recorded.
 type failingRevoke struct{ stubWriter }
 
-func (failingRevoke) Revoke(context.Context, string, string, string) (statelog.Position, error) {
-	return statelog.Position{}, errors.New("the broker is unreachable")
+func (failingRevoke) Revoke(context.Context, string, string, string) (statelog.Result, error) {
+	return statelog.Result{}, errors.New("the broker is unreachable")
 }
 
 // AND ONE SITE, END TO END: signing out everywhere on a node that cannot

@@ -162,42 +162,51 @@ func (stubDirectory) OutstandingBootstrapCodes(context.Context, time.Time) (
 
 type stubWriter struct{}
 
+// applied is a write that landed at a position and was applied here — what a
+// stub answers for a write whose outcome is not what its case is about. A
+// zero Result is NOT that: its outcome is none of the three, and this surface
+// builds nothing on a write it cannot call landed.
+func applied(at statelog.Position) statelog.Result {
+	return statelog.Result{Outcome: statelog.OutcomeApplied, Position: at,
+		OpID: "op:" + at.String()}
+}
+
 func (stubWriter) OpenSession(context.Context, iamdomain.SessionStart) (iamdomain.SessionOpened, error) {
-	return iamdomain.SessionOpened{}, nil
+	return iamdomain.SessionOpened{Result: applied(statelog.Position{})}, nil
 }
 
-func (stubWriter) CloseSession(context.Context, string, string, string, string) (statelog.Position, error) {
-	return statelog.Position{}, nil
+func (stubWriter) CloseSession(context.Context, string, string, string, string) (statelog.Result, error) {
+	return applied(statelog.Position{}), nil
 }
 
-func (stubWriter) Revoke(context.Context, string, string, string) (statelog.Position, error) {
-	return statelog.Position{}, nil
+func (stubWriter) Revoke(context.Context, string, string, string) (statelog.Result, error) {
+	return applied(statelog.Position{}), nil
 }
 
-func (stubWriter) Enrol(context.Context, iamdomain.Enrolment) (statelog.Position, error) {
-	return statelog.Position{}, nil
+func (stubWriter) Enrol(context.Context, iamdomain.Enrolment) (statelog.Result, error) {
+	return applied(statelog.Position{}), nil
 }
 
 func (stubWriter) WithdrawBootstrap(context.Context, string, string, string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
-	return statelog.Position{}, nil
+	return applied(statelog.Position{}), nil
 }
 
-func (stubWriter) MintBootstrap(context.Context, iamdomain.BootstrapMint) (statelog.Position, error) {
-	return statelog.Position{}, nil
+func (stubWriter) MintBootstrap(context.Context, iamdomain.BootstrapMint) (statelog.Result, error) {
+	return applied(statelog.Position{}), nil
 }
 
-func (stubWriter) SpendBootstrap(context.Context, iamdomain.BootstrapSpend) (statelog.Position, error) {
-	return statelog.Position{}, nil
+func (stubWriter) SpendBootstrap(context.Context, iamdomain.BootstrapSpend) (statelog.Result, error) {
+	return applied(statelog.Position{}), nil
 }
 
-func (stubWriter) SetCredentials(context.Context, iamdomain.CredentialSet) (statelog.Position, error) {
-	return statelog.Position{}, nil
+func (stubWriter) SetCredentials(context.Context, iamdomain.CredentialSet) (statelog.Result, error) {
+	return applied(statelog.Position{}), nil
 }
 
-func (stubWriter) SpendInvitation(context.Context, iamdomain.InvitationSpend) (statelog.Position, error) {
-	return statelog.Position{}, nil
+func (stubWriter) SpendInvitation(context.Context, iamdomain.InvitationSpend) (statelog.Result, error) {
+	return applied(statelog.Position{}), nil
 }
 
 // fixtureBlinder is a real blinder over a fixture key: the surface resolves one

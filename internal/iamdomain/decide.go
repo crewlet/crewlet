@@ -96,23 +96,23 @@ func (e *ErrClaimed) Error() string {
 // refusal that shredded "its" key would destroy theirs. Only a pass that has
 // proved nobody owns the id may destroy it, which is [ShredKeys]: past
 // [OrphanKeyGrace], on a node that has applied everything the log held.
-func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, error) {
+func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, error) {
 	if err := w.mayAdminister(OpEnrol); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	if err := in.validate(); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	if in.Invitation == "" && in.BootstrapCode == "" {
 		// THE WRITER'S OWN AUTHORITY, checked BEFORE the first claim:
 		// it reads nothing, so there is no reason to leave a claimed
 		// address behind a refusal that was knowable up front.
 		if err := w.mayConfer(nil, in.Grants); err != nil {
-			return statelog.Position{}, err
+			return statelog.Result{}, err
 		}
 	}
 	if w.sealer == nil || (in.Email != "" && w.blinds == nil) {
-		return statelog.Position{}, fmt.Errorf("iamdomain: this node cannot "+
+		return statelog.Result{}, fmt.Errorf("iamdomain: this node cannot "+
 			"enrol anybody: it has %s. An enrolment has to derive the subject "+
 			"the address claim arbitrates on and seal the values that belong "+
 			"to the person, and a node that guessed at either would put two "+
@@ -126,7 +126,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	if in.Email != "" {
 		resolved, err := w.blinds.Blinder(ctx)
 		if err != nil {
-			return statelog.Position{}, fmt.Errorf("iamdomain: this node "+
+			return statelog.Result{}, fmt.Errorf("iamdomain: this node "+
 				"cannot derive the subject an address claim arbitrates on: %w",
 				err)
 		}
@@ -137,11 +137,11 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	// the one before it, whether this writer is shared or a sequence.
 	at := w.gesture()
 	if err := w.sealer.Mint(ctx, in.PersonID, w.Actor, w.Now()); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	sealedName, err := w.sealer.Seal(ctx, in.PersonID, FieldName, in.Name)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	// AN ADDRESS IS OPTIONAL AND A KEY IS NOT. A machine identity has no
 	// mailbox, so there is nothing to blind, nothing to seal and no
@@ -151,19 +151,23 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	var sealedEmail, blind string
 	if in.Email != "" {
 		if blind, err = blinder.Email(in.Email); err != nil {
-			return statelog.Position{}, err
+			return statelog.Result{}, err
 		}
 		if sealedEmail, err = w.sealer.Seal(ctx, in.PersonID, FieldEmail,
 			in.Email); err != nil {
-			return statelog.Position{}, err
+			return statelog.Result{}, err
 		}
 		// THE ADDRESS FIRST. It is the claim most likely to be
 		// contested — two administrators adding one new joiner — so it
 		// is the one that should fail before anything else has
 		// happened.
-		if _, err := w.claim(ctx, at, KindEmail, blind, in.PersonID,
-			sealedEmail, in.OpID+":email", in.Kind); err != nil {
-			return statelog.Position{}, err
+		address, claimErr := w.claim(ctx, at, KindEmail, blind, in.PersonID,
+			sealedEmail, in.OpID+":email", in.Kind)
+		if claimErr != nil {
+			return statelog.Result{}, claimErr
+		}
+		if address.Outcome == statelog.OutcomeUnknown {
+			return unresolved(in.OpID), nil
 		}
 	}
 	// THE LOGIN IS IN ITS OP ID, unlike the address's. A retry of one
@@ -173,9 +177,13 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	// would acknowledge the second claim as the first inside its duplicate
 	// window, and the person would be written holding the login they gave
 	// up rather than the one they chose.
-	if _, err := w.claim(ctx, at, KindLogin, in.Login, in.PersonID, "",
-		in.OpID+":login:"+in.Login, in.Kind); err != nil {
-		return statelog.Position{}, err
+	claimed, err := w.claim(ctx, at, KindLogin, in.Login, in.PersonID, "",
+		in.OpID+":login:"+in.Login, in.Kind)
+	if err != nil {
+		return statelog.Result{}, err
+	}
+	if claimed.Outcome == statelog.OutcomeUnknown {
+		return unresolved(in.OpID), nil
 	}
 
 	person := Person{
@@ -186,12 +194,12 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	}
 	mutation, err := EncodePerson(person)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	rec, err := w.record(PersonSubject(in.PersonID), OpEnrol, in.PersonID,
 		PeopleScope(in.PersonID), mutation, in.Reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	// THE BASIS IS READ IN THE PERSON RECORD'S OWN SNAPSHOT, the one the
 	// grants actually land from — a check against an earlier read would
@@ -226,7 +234,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 			Version: result.Position.Packed(),
 		})
 	}
-	return result.Position, err
+	return result, err
 }
 
 // Enrolment is what creating a person needs.
@@ -564,10 +572,10 @@ var ErrNotFindable = errors.New("iamdomain: nothing could find this identity")
 // is no unique index in this estate and there cannot be one, so two writers
 // claiming one token contend at the broker and exactly one wins.
 func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
-	opID string) (statelog.Position, error) {
+	opID string) (statelog.Result, error) {
 
 	if err := w.mayAdminister(OpClaim); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	// THE HOLDER'S KIND IS READ INSIDE THE SNAPSHOT, never taken from the
 	// caller: a login's grammar is the kind of whoever holds it, and a
@@ -588,21 +596,21 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 // reading. Every other claim reads its holder's kind inside the snapshot.
 func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 	kind ObjectKind, token, personID, sealed, opID string,
-	enrolling iam.Kind) (statelog.Position, error) {
+	enrolling iam.Kind) (statelog.Result, error) {
 
 	if token == "" || personID == "" || opID == "" {
-		return statelog.Position{}, fmt.Errorf("iamdomain: a %s claim needs a "+
+		return statelog.Result{}, fmt.Errorf("iamdomain: a %s claim needs a "+
 			"token, a person and an operation id, and has (%q, %q, %q)",
 			kind, token, personID, opID)
 	}
 	subject, err := claimSubject(kind, token)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	rec, err := w.record(subject, OpClaim, personID, PeopleScope(personID),
 		nil, "")
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	// THE SNAPSHOT READ IS WHAT NAMES THE HOLDER. The broker would refuse
 	// the second claim anyway, but its refusal says "somebody was here
@@ -670,9 +678,8 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 		rec.Mutation = mutation
 		return nil
 	}
-	result, err := w.publishAt(ctx, at,
+	return w.publishAt(ctx, at,
 		w.request(&rec, opID, statelog.PatternCreate, decide))
-	return result.Position, err
 }
 
 // chartPositionOf is the org chart log's checkpoint on THIS node, read inside
@@ -735,10 +742,10 @@ func chartPositionOf(ctx context.Context, tx *sql.Tx) uint64 {
 // instead ([Writer.Rename]), and the release that gesture ends with is its
 // own; a removal gives every claim back in its own record.
 func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
-	opID, reason string) (statelog.Position, error) {
+	opID, reason string) (statelog.Result, error) {
 
 	if kind == KindLogin {
-		return statelog.Position{}, fmt.Errorf("%w: a login is never released "+
+		return statelog.Result{}, fmt.Errorf("%w: a login is never released "+
 			"on its own — every principal holds one, and it is the name their "+
 			"changes are recorded under. Rename it instead", ErrInvalidLogin)
 	}
@@ -756,28 +763,28 @@ func (w *Writer) Release(ctx context.Context, kind ObjectKind, token, holder,
 // and a release publishes a clear of whoever holds the column.
 func (w *Writer) release(ctx context.Context, at *statelog.Position,
 	kind ObjectKind, token, holder, opID, reason string, replaced bool) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	if err := w.mayAdminister(OpRelease); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	if token == "" || holder == "" || opID == "" {
-		return statelog.Position{}, fmt.Errorf("iamdomain: releasing a %s claim "+
+		return statelog.Result{}, fmt.Errorf("iamdomain: releasing a %s claim "+
 			"needs the token, the person it is released from and an operation "+
 			"id, and has (%q, %q, %q)", kind, token, holder, opID)
 	}
 	subject, err := claimSubject(kind, token)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	mutation, err := EncodeClaim(Claim{V: DocumentVersion})
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	rec, err := w.record(subject, OpRelease, holder, PeopleScope(holder),
 		mutation, reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	decide := func(tx *sql.Tx) error {
 		who, held, err := holderOf(ctx, tx, kind, token)
@@ -801,9 +808,8 @@ func (w *Writer) release(ctx context.Context, at *statelog.Position,
 		}
 		return nil
 	}
-	result, err := w.publishAt(ctx, at,
+	return w.publishAt(ctx, at,
 		w.request(&rec, opID, statelog.PatternArbitrated, decide))
-	return result.Position, err
 }
 
 // Rename moves a person from one login to another: the NEW ONE IS CLAIMED
@@ -828,7 +834,7 @@ func (w *Writer) release(ctx context.Context, at *statelog.Position,
 // login in between is not a failure of the rename, and is not reported as
 // one: the name is no longer this person's either way.
 func (w *Writer) Rename(ctx context.Context, personID, from, to, opID,
-	reason string) (statelog.Position, error) {
+	reason string) (statelog.Result, error) {
 
 	return w.replace(ctx, KindLogin, personID, from, to, opID, reason)
 }
@@ -840,50 +846,66 @@ func (w *Writer) Rename(ctx context.Context, personID, from, to, opID,
 //
 // Unbinding is [Writer.Release]; this is only ever a move.
 func (w *Writer) Rebind(ctx context.Context, personID, from, to, opID,
-	reason string) (statelog.Position, error) {
+	reason string) (statelog.Result, error) {
 
 	return w.replace(ctx, KindSeat, personID, from, to, opID, reason)
 }
 
 // replace is the shared body of [Writer.Rename] and [Writer.Rebind].
 func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
-	to, opID, reason string) (statelog.Position, error) {
+	to, opID, reason string) (statelog.Result, error) {
 
 	if err := w.mayAdminister(OpClaim); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	switch {
 	case personID == "" || opID == "":
-		return statelog.Position{}, fmt.Errorf("iamdomain: moving a %s claim "+
+		return statelog.Result{}, fmt.Errorf("iamdomain: moving a %s claim "+
 			"needs the person and an operation id, and has (%q, %q)", kind,
 			personID, opID)
 	case to == "":
-		return statelog.Position{}, fmt.Errorf("%w: moving a %s claim needs "+
+		return statelog.Result{}, fmt.Errorf("%w: moving a %s claim needs "+
 			"the %s to move to — a move to nothing is a release, and a login "+
 			"is never released", ErrInvalid, kind, kind)
 	case to == from:
-		return statelog.Position{}, fmt.Errorf("%w: %s already holds the %s "+
+		return statelog.Result{}, fmt.Errorf("%w: %s already holds the %s "+
 			"%q, so there is nothing to move", ErrInvalid, personID, kind, to)
 	}
 	// ONE MARK FOR THE MOVE, so the release decides from a state holding
 	// the claim that freed its token.
 	mark := w.gesture()
-	at, err := w.claim(ctx, mark, kind, to, personID, "", opID+":"+string(kind), "")
-	if err != nil || from == "" {
-		return at, err
+	claimed, err := w.claim(ctx, mark, kind, to, personID, "", opID+":"+string(kind), "")
+	switch {
+	case err != nil:
+		return statelog.Result{}, err
+	case claimed.Outcome == statelog.OutcomeUnknown:
+		// THE MOVE ITSELF IS UNRESOLVED, so nothing may be built on it:
+		// releasing the old token behind a claim that may not have landed
+		// would leave the person holding neither.
+		return unresolved(opID), nil
+	case from == "":
+		claimed.OpID = opID
+		return claimed, nil
 	}
 	released, err := w.release(ctx, mark, kind, from, personID,
 		opID+":release-"+string(kind), reason, true)
-	var claimed *ErrClaimed
+	var taken *ErrClaimed
 	switch {
-	case errors.As(err, &claimed):
+	case errors.As(err, &taken):
 		// TAKEN BETWEEN THE TWO — see [Writer.Rename]. The move landed.
-		return at, nil
+		claimed.OpID = opID
+		return claimed, nil
 	case err != nil:
-		return at, fmt.Errorf("iamdomain: the %s moved to %q and the record "+
-			"closing %q did not land (retry with the same operation id): %w",
-			kind, to, from, err)
+		return statelog.Result{}, fmt.Errorf("iamdomain: the %s moved to %q and "+
+			"the record closing %q did not land (retry with the same operation "+
+			"id): %w", kind, to, from, err)
+	case released.Outcome == statelog.OutcomeUnknown:
+		// THE CLOSE OF THE OLD TOKEN IS UNRESOLVED, and so is the
+		// gesture: a retry under the same operation id re-derives both
+		// steps' ids from it.
+		return unresolved(opID), nil
 	}
+	released.OpID = opID
 	return released, nil
 }
 
@@ -900,10 +922,10 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 // an arrival order, and two nodes at one checkpoint have seen the same set in
 // a different order.
 func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	if personID == "" || opID == "" {
-		return statelog.Position{}, errors.New("iamdomain: a revocation needs " +
+		return statelog.Result{}, errors.New("iamdomain: a revocation needs " +
 			"a person and an operation id")
 	}
 	// THE RECORD IS FORMED INSIDE THE DECIDE, and that is what the
@@ -914,7 +936,7 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 	rec, err := w.record(PersonSubject(personID), OpRevoke, personID,
 		PeopleScope(personID), nil, reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	decide := func(tx *sql.Tx) error {
 		current, err := epochOf(ctx, tx, personID)
@@ -928,7 +950,7 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 	}
 	result, err := w.publish(ctx,
 		w.request(&rec, opID, statelog.PatternArbitrated, decide))
-	return result.Position, err
+	return result, err
 }
 
 // InvalidateAll ends every session in the company at once, and every machine
@@ -955,13 +977,13 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 // arrival order, and two nodes at one checkpoint have seen the same set in a
 // different order.
 func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	if err := w.mayAdminister(OpInvalidate); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	if opID == "" {
-		return statelog.Position{}, errors.New("iamdomain: invalidating every " +
+		return statelog.Result{}, errors.New("iamdomain: invalidating every " +
 			"session needs an operation id — without one a retry of the " +
 			"gesture bumps the generation twice, which ends the sessions " +
 			"opened between the two")
@@ -969,7 +991,7 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 	rec, err := w.record(InvalidationSubject(), OpInvalidate, "", RootScope(),
 		nil, reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	var generation uint64
 	decide := func(tx *sql.Tx) error {
@@ -991,33 +1013,33 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 	w.announce(ctx, result, err, types.IAMSessionGenerationBumped{
 		Generation: generation, By: w.Actor, Reason: reason,
 	})
-	return result.Position, err
+	return result, err
 }
 
 // SetStage moves a person between enrolment stages.
 func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
-	opID, reason string) (statelog.Position, error) {
+	opID, reason string) (statelog.Result, error) {
 
 	if err := w.mayAdminister(OpStatus); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	if !stage.Valid() {
-		return statelog.Position{}, fmt.Errorf("%w: %q is not an enrolment "+
+		return statelog.Result{}, fmt.Errorf("%w: %q is not an enrolment "+
 			"stage — only `active` may act, which is an allowlist of one, so a "+
 			"stage this build cannot name would suspend somebody by accident",
 			ErrInvalid, stage)
 	}
 	mutation, err := EncodeStatus(StatusChange{V: DocumentVersion, Stage: stage})
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	rec, err := w.record(PersonSubject(personID), OpStatus, personID,
 		PeopleScope(personID), mutation, reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, nil))
-	return result.Position, err
+	return result, err
 }
 
 // Remove is the one operation here with no inverse.
@@ -1027,19 +1049,19 @@ func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
 // held this address" after the fact has only that row to read. It carries the
 // BLINDS rather than the addresses, for the reason the row's own comment gives.
 func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	if err := w.mayAdminister(OpRemove); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	if personID == "" || opID == "" {
-		return statelog.Position{}, errors.New("iamdomain: a removal needs a " +
+		return statelog.Result{}, errors.New("iamdomain: a removal needs a " +
 			"person and an operation id")
 	}
 	rec, err := w.record(PersonSubject(personID), OpRemove, personID,
 		PeopleScope(personID), nil, reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	decide := func(tx *sql.Tx) error {
 		var claims Claims
@@ -1073,7 +1095,7 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 	}
 	result, err := w.publish(ctx,
 		w.request(&rec, opID, statelog.PatternArbitrated, decide))
-	return result.Position, err
+	return result, err
 }
 
 // OpenSession records one session beginning, and answers the two counters the
@@ -1135,16 +1157,20 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 	// [SessionStart.NoWait].
 	req.NoWait = in.NoWait
 	result, err := w.publish(ctx, req)
-	opened.Position = result.Position
+	opened.Result = result
 	return opened, err
 }
 
 // SessionOpened is what a bearer for a session that has just begun carries
 // beside its lineage.
 type SessionOpened struct {
-	// Position is where the start record landed, which the bearer carries
-	// so a node below it can tell "not seen yet" from "ended".
-	Position statelog.Position
+	// Result is the write's own answer, all three outcomes of it. Its
+	// POSITION is where the start record landed, which the bearer carries
+	// so a node below it can tell "not seen yet" from "ended" — and an
+	// UNKNOWN outcome has none, so no bearer may be minted from it: one
+	// carrying position zero is a session every node that has applied
+	// anything reads as ended.
+	Result statelog.Result
 
 	// Epoch is the person's revocation epoch and Generation the fleet's
 	// session generation, both as the snapshot the record was formed in
@@ -1247,20 +1273,20 @@ type SessionStart struct {
 // when there is none — a session opened a moment ago that this node has not
 // applied — the caller's word is all there is, and it is a verified one.
 func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
-	opID string) (statelog.Position, error) {
+	opID string) (statelog.Result, error) {
 
 	if lineage == "" || person == "" || opID == "" {
-		return statelog.Position{}, errors.New("iamdomain: closing a session " +
+		return statelog.Result{}, errors.New("iamdomain: closing a session " +
 			"needs a lineage, the person it belongs to and an operation id")
 	}
 	mutation, err := EncodeSession(Session{V: DocumentVersion, EndedReason: reason})
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	rec, err := w.record(SessionSubject(lineage), OpClose, person,
 		PeopleScope(person), mutation, reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	decide := func(tx *sql.Tx) error {
 		var owner string
@@ -1280,7 +1306,7 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 		return nil
 	}
 	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, decide))
-	return result.Position, err
+	return result, err
 }
 
 // missingKeys names which of the two key-bearing seams this writer lacks, for
@@ -1413,10 +1439,10 @@ func seatExists(ctx context.Context, tx *sql.Tx, seatID string) error {
 // is the only place the question can be asked honestly — this decide runs
 // inside a snapshot that would have to scan a table it has no reason to.
 func (w *Writer) MintBootstrap(ctx context.Context, in BootstrapMint) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	if in.ID == "" || in.Verifier == "" || in.OpID == "" {
-		return statelog.Position{}, errors.New("iamdomain: minting a bootstrap " +
+		return statelog.Result{}, errors.New("iamdomain: minting a bootstrap " +
 			"needs an id, a verifier and an operation id")
 	}
 	mutation, err := EncodeBootstrapDoc(Bootstrap{
@@ -1424,7 +1450,7 @@ func (w *Writer) MintBootstrap(ctx context.Context, in BootstrapMint) (
 		MintedBy: in.MintedBy, ExpiresAt: in.ExpiresAt,
 	})
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	// THE BOOTSTRAP'S OWN BUCKET, which is what the apply writes.
 	//
@@ -1438,11 +1464,11 @@ func (w *Writer) MintBootstrap(ctx context.Context, in BootstrapMint) (
 	rec, err := w.record(BootstrapSubject(), OpBootstrap, "",
 		BucketScope(BootstrapBucket()), mutation, in.Reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	result, err := w.publish(ctx,
 		w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
-	return result.Position, err
+	return result, err
 }
 
 // WithdrawBootstrap supersedes a code nobody redeemed.
@@ -1459,29 +1485,29 @@ func (w *Writer) MintBootstrap(ctx context.Context, in BootstrapMint) (
 // IT IS NOT A REDEMPTION WITH NO PERSON. The two leave the same row state and
 // are opposite events; see [Bootstrap.Withdrawn].
 func (w *Writer) WithdrawBootstrap(ctx context.Context, id, opID,
-	reason string) (statelog.Position, error) {
+	reason string) (statelog.Result, error) {
 
 	if err := w.mayAdminister(OpBootstrap); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	if id == "" || opID == "" {
-		return statelog.Position{}, errors.New("iamdomain: withdrawing a " +
+		return statelog.Result{}, errors.New("iamdomain: withdrawing a " +
 			"bootstrap code needs its id and an operation id")
 	}
 	mutation, err := EncodeBootstrapDoc(Bootstrap{
 		V: DocumentVersion, ID: id, Withdrawn: true,
 	})
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	rec, err := w.record(BootstrapSubject(), OpBootstrap, "",
 		BucketScope(BootstrapBucket()), mutation, reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	result, err := w.publish(ctx,
 		w.request(&rec, opID, statelog.PatternArbitrated, nil))
-	return result.Position, err
+	return result, err
 }
 
 // BootstrapMint is what issuing the one-time code needs.
@@ -1516,17 +1542,17 @@ type BootstrapMint struct {
 // spent code with no person, which a mint against a company holding people
 // refuses anyway.
 func (w *Writer) SpendBootstrap(ctx context.Context, in BootstrapSpend) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	if in.ID == "" || in.Person == "" || in.OpID == "" {
-		return statelog.Position{}, errors.New("iamdomain: spending a bootstrap " +
+		return statelog.Result{}, errors.New("iamdomain: spending a bootstrap " +
 			"needs its id, the person it created and an operation id")
 	}
 	mutation, err := EncodeBootstrapDoc(Bootstrap{
 		V: DocumentVersion, ID: in.ID, Person: in.Person,
 	})
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	// BOTH BUCKETS: the bootstrap's own, because the row it spends lives
 	// there, and the PERSON's, because the same apply is what names them.
@@ -1535,11 +1561,11 @@ func (w *Writer) SpendBootstrap(ctx context.Context, in BootstrapSpend) (
 	rec, err := w.record(BootstrapSubject(), OpBootstrap, in.Person,
 		BucketScope(BootstrapBucket(), BucketOf(in.Person)), mutation, in.Reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	result, err := w.publish(ctx,
 		w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
-	return result.Position, err
+	return result, err
 }
 
 // BootstrapSpend is what redeeming the one-time code needs.
@@ -1614,10 +1640,10 @@ func heldPerson(ctx context.Context, tx *sql.Tx, personID, forming string) (
 // the SURFACE: the route is guarded, step-up applies, and the person id comes
 // off the resolved principal rather than out of a body.
 func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	if in.PersonID == "" || in.OpID == "" {
-		return statelog.Position{}, errors.New("iamdomain: setting credentials " +
+		return statelog.Result{}, errors.New("iamdomain: setting credentials " +
 			"needs a person and an operation id")
 	}
 	var mutation []byte
@@ -1633,7 +1659,7 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 	rec, err := w.record(PersonSubject(in.PersonID), OpUpdate, in.PersonID,
 		PeopleScope(in.PersonID), nil, in.Reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	req := w.request(&rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) error {
 		if err := decide(tx); err != nil {
@@ -1643,7 +1669,7 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 		return nil
 	})
 	result, err := w.publish(ctx, req)
-	return result.Position, err
+	return result, err
 }
 
 // CredentialSet is what changing somebody's credentials needs.
@@ -1816,7 +1842,7 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 	}
 	result, err := w.publish(ctx,
 		w.request(&rec, in.OpID, statelog.PatternArbitrated, decide))
-	minted.Position = result.Position
+	minted.Result = result
 	return minted, err
 }
 
@@ -1851,9 +1877,11 @@ type TokenMint struct {
 
 // TokenMinted is what a mint landed carrying, and where.
 type TokenMinted struct {
-	// Position is where the record landed, which the token's value carries
-	// so a node below it answers "not yet" rather than "no such token".
-	Position statelog.Position
+	// Result is the write's own answer. Its POSITION is where the record
+	// landed, which the token's value carries so a node below it answers
+	// "not yet" rather than "no such token" — and an UNKNOWN outcome has
+	// none, so no value may be formed from it.
+	Result statelog.Result
 
 	Grants     []iam.Grant
 	Colleague  iam.Colleague
@@ -1960,28 +1988,28 @@ func loginOf(ctx context.Context, tx *sql.Tx, personID string) (string, error) {
 // up and donated to joining peers. What is stored is the id, which is the
 // verifier: holding the link is holding the id.
 func (w *Writer) Invite(ctx context.Context, in InviteMint) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	if err := w.mayAdminister(OpInvite); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	// WHAT IT CONFERS IS DECIDED HERE, ONCE, against the issuer — the
 	// redemption reads it back rather than deciding again — so this is
 	// the one place an invitation can be held to the rule every other
 	// grant change is: a caller may not confer what they do not hold.
 	if err := w.mayConfer(nil, in.Grants); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	switch {
 	case in.ID == "" || in.OpID == "":
-		return statelog.Position{}, errors.New("iamdomain: an invitation needs " +
+		return statelog.Result{}, errors.New("iamdomain: an invitation needs " +
 			"its own id and an operation id")
 	case in.Email == "":
-		return statelog.Position{}, errors.New("iamdomain: an invitation needs " +
+		return statelog.Result{}, errors.New("iamdomain: an invitation needs " +
 			"the address it is for — it arbitrates on that address, so one " +
 			"with none would contend with nothing and two would both win")
 	case in.ExpiresAt.IsZero():
-		return statelog.Position{}, errors.New("iamdomain: an invitation needs " +
+		return statelog.Result{}, errors.New("iamdomain: an invitation needs " +
 			"an expiry; one read as `never` is a superuser claim that stays " +
 			"live in somebody's mailbox for the life of the company")
 	case in.Colleague != "" && !in.Colleague.Valid():
@@ -1989,21 +2017,21 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		// redeeming confers is decided here, once, and a level the
 		// enrolment would refuse is a link that can never be redeemed —
 		// found out by the person it was sent to.
-		return statelog.Position{}, fmt.Errorf("%w: %q is not a colleague "+
+		return statelog.Result{}, fmt.Errorf("%w: %q is not a colleague "+
 			"level — want one of %v", ErrInvalid, in.Colleague, iam.Colleagues)
 	}
 	if w.blinds == nil || w.sealer == nil {
-		return statelog.Position{}, fmt.Errorf("iamdomain: this node cannot "+
+		return statelog.Result{}, fmt.Errorf("iamdomain: this node cannot "+
 			"mint an invitation: %s", w.missingKeys())
 	}
 	blinder, err := w.blinds.Blinder(ctx)
 	if err != nil {
-		return statelog.Position{}, fmt.Errorf("iamdomain: this node cannot "+
+		return statelog.Result{}, fmt.Errorf("iamdomain: this node cannot "+
 			"derive the subject an invitation's address arbitrates on: %w", err)
 	}
 	blind, err := blinder.Email(in.Email)
 	if err != nil {
-		return statelog.Position{}, fmt.Errorf("iamdomain: blind an "+
+		return statelog.Result{}, fmt.Errorf("iamdomain: blind an "+
 			"invitation's address: %w", err)
 	}
 	// SEALED UNDER THE INVITATION'S OWN ID rather than a person's, because
@@ -2014,12 +2042,12 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	// cleartext anywhere, which is the same promise a removal makes, one
 	// object earlier.
 	if err := w.sealer.Mint(ctx, in.ID, w.Actor, w.Now()); err != nil {
-		return statelog.Position{}, fmt.Errorf("iamdomain: mint an "+
+		return statelog.Result{}, fmt.Errorf("iamdomain: mint an "+
 			"invitation's key: %w", err)
 	}
 	sealed, err := w.sealer.Seal(ctx, in.ID, FieldEmail, in.Email)
 	if err != nil {
-		return statelog.Position{}, fmt.Errorf("iamdomain: seal an "+
+		return statelog.Result{}, fmt.Errorf("iamdomain: seal an "+
 			"invitation's address: %w", err)
 	}
 	mutation, err := EncodeInvitation(Invitation{
@@ -2028,7 +2056,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		ExpiresAt: in.ExpiresAt,
 	})
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	subject := EmailSubject(blind)
 	// THE BUCKET IS THE ADDRESS'S OWN, matching the apply: an invitation
@@ -2037,7 +2065,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	rec, err := w.record(subject, OpInvite, "",
 		BucketScope(BucketOf(blind)), mutation, in.Reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	// THE ROW READ IS WHAT REFUSES THE SEQUENTIAL CASE, and the broker's
 	// create-at-zero is what settles the concurrent one. Both are needed
@@ -2069,7 +2097,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	}
 	result, err := w.publish(ctx,
 		w.request(&rec, in.OpID, statelog.PatternCreate, decide))
-	return result.Position, err
+	return result, err
 }
 
 // openInvitationFor is the invitation on an address that has not been
@@ -2149,17 +2177,17 @@ type InviteMint struct {
 // [Writer.Enrol] creates the first person, while nobody holds a credential at
 // all.
 func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	if err := w.mayAdminister(OpUpdate); err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	switch {
 	case in.PersonID == "" || in.OpID == "":
-		return statelog.Position{}, errors.New("iamdomain: updating a person " +
+		return statelog.Result{}, errors.New("iamdomain: updating a person " +
 			"needs a person and an operation id")
 	case in.Apply == nil:
-		return statelog.Position{}, errors.New("iamdomain: updating a person " +
+		return statelog.Result{}, errors.New("iamdomain: updating a person " +
 			"needs the function that forms the new document inside the " +
 			"snapshot — a caller holding the current one read it in another " +
 			"transaction, which is the pairing the write authority forbids")
@@ -2172,14 +2200,14 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	sealedName := ""
 	if in.Name != nil {
 		if w.sealer == nil {
-			return statelog.Position{}, fmt.Errorf("iamdomain: this node "+
+			return statelog.Result{}, fmt.Errorf("iamdomain: this node "+
 				"cannot change a name: it has %s, and a name is sealed under "+
 				"the person's own key before it is published", w.missingKeys())
 		}
 		var err error
 		if sealedName, err = w.sealer.Seal(ctx, in.PersonID, FieldName,
 			*in.Name); err != nil {
-			return statelog.Position{}, err
+			return statelog.Result{}, err
 		}
 	}
 	var mutation []byte
@@ -2208,7 +2236,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	rec, err := w.record(PersonSubject(in.PersonID), OpUpdate, in.PersonID,
 		PeopleScope(in.PersonID), nil, in.Reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	req := w.request(&rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) error {
 		if err := decide(tx); err != nil {
@@ -2227,7 +2255,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 			Version: result.Position.Packed(),
 		})
 	}
-	return result.Position, err
+	return result, err
 }
 
 // mayConfer refuses a change that ADDS a grant this writer's party does not
@@ -2298,10 +2326,10 @@ type PersonUpdate struct {
 // decided by whoever issued it, once, rather than again by whoever happens to
 // process the redemption.
 func (w *Writer) SpendInvitation(ctx context.Context, in InvitationSpend) (
-	statelog.Position, error) {
+	statelog.Result, error) {
 
 	if in.ID == "" || in.Blind == "" || in.Person == "" || in.OpID == "" {
-		return statelog.Position{}, errors.New("iamdomain: spending an " +
+		return statelog.Result{}, errors.New("iamdomain: spending an " +
 			"invitation needs its id, the address blind it arbitrates on, " +
 			"the person it created and an operation id")
 	}
@@ -2309,7 +2337,7 @@ func (w *Writer) SpendInvitation(ctx context.Context, in InvitationSpend) (
 		V: DocumentVersion, ID: in.ID, Person: in.Person,
 	})
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	// THE ADDRESS BLIND IS THE SUBJECT, not the invitation's own id, and
 	// the reason is what an invitation IS: a claim on an address by
@@ -2320,11 +2348,11 @@ func (w *Writer) SpendInvitation(ctx context.Context, in InvitationSpend) (
 	rec, err := w.record(EmailSubject(in.Blind), OpRedeem, in.Person,
 		PeopleScope(in.Person), mutation, in.Reason)
 	if err != nil {
-		return statelog.Position{}, err
+		return statelog.Result{}, err
 	}
 	result, err := w.publish(ctx,
 		w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
-	return result.Position, err
+	return result, err
 }
 
 // InvitationSpend is what redeeming an invitation needs.

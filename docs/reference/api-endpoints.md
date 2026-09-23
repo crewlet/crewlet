@@ -165,7 +165,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply |
 | `POST` | `/work/items` `/pages` | **File an item, write a page** — and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded, and absent on a company whose tracker or knowledge base is not native |
 | `PATCH` | `/work/items/{key}` | Change an item — and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
-| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded** and throttled per source. Every failure answers one code at one deadline — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone |
+| `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded** and throttled per source. Every failure answers one code at one deadline — see [below](#every-failed-sign-in-is-one-refusal). A node that cannot read the identity estate or record the session answers `503` — and **every `503` under `/auth` carries a `Retry-After`**, so a client can tell "ask again in a moment" from a node that is gone. A write whose outcome nobody can establish — the second factor's spend, the session's own start — is that `503` with the `op_id`, and **never a session**: a code whose spend may not have landed is a code that still works |
 | `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, whether the first-operator route is still open, the password floor. **Unguarded**, and it carries **no user list and no count of people** |
 | `POST` | `/auth/bootstrap` | **The first person.** Redeems a one-time code this node wrote to a file beside its store, 0600, and creates an operator carrying the whole `max_grants` ceiling — the one stated exemption in the authority model. The enrolment names the code as its authority, and the record honours it only while the code is live on the log and nobody else is enrolled, so a second caller racing the first is `409 bootstrap_closed`. **Unguarded**, and closed for good the moment anybody is enrolled |
 | `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential. Answers the address it is for, who sent it, the password floor, and a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill. Absent, redeemed and expired are one `410`, and every `410` on either invitation route is a **failed attempt counted against the caller's source** — the id in the link is the credential, so walking ids is guessing at one, and it is turned away at the same ceiling as a guessed password |
@@ -174,11 +174,11 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage, grants, colleague level and whether the next sensitive action will ask you to confirm your identity |
 | `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's grants cut to the ceiling, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request, and so do `POST /auth/logout/all` from it and `crewlet iam invalidate-all` |
 | `POST` | `/auth/step-up` | Confirm who you are on a session that is already valid. The only route here that is **both guarded and throttled**: the caller is known, and unbounded retries against a known person is a password oracle with the enumeration already done. It answers a **fresh session cookie** and **ends the session it replaces** first — a close that does not land is `503` with a `Retry-After` and opens nothing, and a presented session that is no longer live is `401`. The replacement confirms the sign-in rather than repeating it, so it keeps the replaced session's absolute deadline and the grants its identity provider's groups conferred |
-| `POST` | `/auth/totp` | Enrol a second factor. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a step-up |
-| `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a step-up |
+| `POST` | `/auth/totp` | Enrol a second factor. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a step-up. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled" |
+| `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a step-up. A set nobody can confirm is stored is `503` with its `op_id`, and the codes are not shown |
 | `POST` | `/auth/logout` | End **this** session. The cookie is cleared whatever the write did — a logout that answered 503 would leave somebody looking at a signed-in page on a shared machine. It reads the session under either cookie name, as the guard does, and clears both |
-| `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node |
-| `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows and compared against the caller the guard resolved; `fleet:operate` may end one they do not own |
+| `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node. A revocation nobody can confirm is `503` with its `op_id` rather than a claim that your other sessions ended |
+| `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows and compared against the caller the guard resolved; `fleet:operate` may end one they do not own. A close nobody can confirm is `503` with its `op_id` — the id is derived from the lineage, so asking again is the same operation |
 | `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they hold, and the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through. An unbound credential is an **ordinary state**, not an error — a pipeline's token acts under its own login, and binding a person to a seat is a directory row rather than a different credential |
 | `GET` | `/chart` | The company's **org chart** — its units, its seats, every `manages:` edge and every unit's lead — with the position the answer was read at. The **runtime half of every object is stripped** unless the caller asks for it AND may read it; the answer says which it got in `runtime`. **Always needs a token** (see [below](#chart--the-org-chart-auth-gated)) |
 | `GET` | `/chart/units` `/chart/seats` | One half each, for a client that renders people constantly and the tree once |
@@ -617,12 +617,29 @@ grant that can lock a company out of its own engine.
 
 #### Every write answers three ways
 
-`applied` is `200` and means this node has the change, so the next read *here*
-sees it. `pending` is `202` with the position, and means the record is durable
-and every node will apply it while this one has not yet — read at that
-position to see it. `unknown` is `503` with the op id, and the only safe retry
+`applied` is `200` (`201` on the two routes that hand back what they created)
+and means this node has the change, so the next read *here* sees it. `pending`
+is `202` with the position, and means the record is durable and every node
+will apply it while this one has not yet — read at that position to see it.
+`unknown` is `503` with a `Retry-After` and the op id, and the only safe retry
 is the **same** one: send it back as `Idempotency-Key`, because a fresh id
-would defeat the ledger that makes the retry safe.
+would defeat the ledger that makes the retry safe. Every body carries its
+`outcome` and `op_id`.
+
+**Nothing is built on, handed out or announced for an `unknown`.** A removal,
+a revocation, a second-factor reset or a credential withdrawn announces its
+event only once the record is durable; an invitation whose outcome is unknown
+hands out no link and a mint hands out no token, because either would be a
+value that answers `410` or `401` the first time somebody uses it. A write this
+node refused to decide at all — it is behind, below the trim floor, or holding
+a record it cannot decode — is `503 unavailable` with the same `Retry-After`
+and op id.
+
+**A gesture that is several records answers its weakest.** A create with a
+seat, an edit that moves a login and a stage, and a reset followed by its
+revocation are each a sequence, and a step answered `unknown` ends the
+sequence there — nothing after it is published over a guess — while a step
+still `pending` here makes the whole answer `202`.
 
 A request **without** an `Idempotency-Key` is a new operation every time, with
 an op id of its own. Two different edits of one person, a second "end every
@@ -699,7 +716,14 @@ administrator lost is re-issued rather than recovered.
 `POST /iam/bootstrap-code` answers the **file path** and never the value. The
 code is written `0600` beside the store, and reading it needs shell on that
 host — which is the point. Re-issuing withdraws every outstanding code first,
-so exactly one is live afterwards.
+so exactly one is live afterwards. A re-issue that could not read the
+outstanding codes, or could not land or confirm a withdrawal or the new code's
+record, is `503` with a `Retry-After`; one that could not write the file on the
+host is `500`, because waiting does not fix a filesystem.
+
+`POST /iam/invitations` on a node with no `api.external_url` is `500
+no_external_url`: there is no address a link could point at, and only the
+node's own configuration file can supply one.
 
 #### `GET /iam/people` pages on a key the applier writes
 
