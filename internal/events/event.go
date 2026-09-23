@@ -625,10 +625,12 @@ func NewTrace() TraceContext {
 // phase's completed record carries it, and a phase record too large for one
 // event is published cut with its whole in parts
 // (internal/agent/runner/phasefit.go). That includes a phase record's own
-// error, which is not bounded here at all: the record's fit cuts it last, and
-// its whole rides in the parts. This is a delivery guarantee for the failure
-// text on every other event, whose length is set by whatever failed rather
-// than by the engine.
+// error, which is not bounded here at all: the record's forms cut it last of
+// all, once every other text is at its mark and every row is given up, and its
+// whole rides in the parts unless a part could not be published, which the
+// record's notes then say. This is a delivery guarantee for the failure text on
+// every other event, whose length is set by whatever failed rather than by the
+// engine.
 //
 // The failure it prevents is worse than a cut. An event over the queue's
 // [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] (8 MiB) is

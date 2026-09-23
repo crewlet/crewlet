@@ -60,10 +60,10 @@ type Blocks struct {
 	// relevance to this task.
 	PersonalMemory string
 
-	// RelevantKnowledge is what the company has written down, searched
-	// live at turn time. There is no local index: procedural knowledge
-	// lives in the team's knowledge base and the engine searches it on the
-	// agent's behalf, so the block always reflects current content.
+	// RelevantKnowledge is what the company has written down, searched at
+	// turn start through the company's one knowledge backend on the agent's
+	// behalf — see the file head of knowledge.go for what answers it on each
+	// backend.
 	RelevantKnowledge string
 
 	// RelevantKnowledgeHits is how many pages went into that block.

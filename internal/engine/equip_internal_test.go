@@ -1,11 +1,11 @@
 package engine
 
 import (
-	"context"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -126,11 +126,11 @@ func TestSearchKnowledgeIsGatedOnConfigAndResolvedPerCall(t *testing.T) {
 //
 // search_knowledge tells "not indexed yet" from "nothing matched" by asking its
 // searcher whether it is building — and what it is handed is this adapter, not
-// the native searcher. An adapter that forwarded only the seam's two methods
-// would hide the question, so a seat's own search on a node on its first build
-// would answer "no team documents match … not everything is written down": the
-// answer the gate exists to prevent, and one a seat acts on by writing a page
-// that already exists.
+// the native searcher. An adapter that forwarded only the rest would hide the
+// question, so a seat's own search on a node on its first build would answer
+// "no team documents match … not everything is written down": the answer the
+// gate exists to prevent, and one a seat acts on by writing a page that
+// already exists.
 func TestSearchKnowledgeHearsTheIndexIsStillBuilding(t *testing.T) {
 	t.Parallel()
 	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
@@ -144,15 +144,12 @@ func TestSearchKnowledgeHearsTheIndexIsStillBuilding(t *testing.T) {
 		t.Fatalf("NewSearcher: %v", err)
 	}
 	e := &Engine{native: &native{searcher: searcher}}
+	// THE DEFAULT COMPANY, which runs the native knowledge base — the epoch
+	// [Engine.Knowledge] answers by.
+	native := &Company{Config: &config.Company{}}
+	e.epoch.current.Store(native)
 
-	// THE SHAPE THE TOOL ASKS: an optional method on what it was handed.
-	adapter, ok := knowledgeSearch(e, &Company{Config: &config.Company{}}).(interface {
-		Building(ctx context.Context) bool
-	})
-	if !ok {
-		t.Fatal("the adapter a seat's search_knowledge holds cannot say whether " +
-			"the index is building")
-	}
+	adapter := knowledgeSearch(e, native)
 	if !adapter.Building(t.Context()) {
 		t.Error("a node whose index has built nothing is not reported as building")
 	}
@@ -167,10 +164,34 @@ func TestSearchKnowledgeHearsTheIndexIsStillBuilding(t *testing.T) {
 	if adapter.Building(t.Context()) {
 		t.Error("a node whose pages are built is still reported as building")
 	}
+}
 
-	// AND A NODE WITH NO SEARCHER, or one that keeps no index, is never
-	// building: there is nothing to wait for.
+// A NODE WITH NOTHING TO WAIT FOR IS NEVER BUILDING: one with no searcher
+// wired, and one whose searcher keeps no index of its own — the live
+// Confluence search, which is the case a company on Confluence is in for its
+// whole life.
+func TestANodeWithNoIndexIsNeverBuilding(t *testing.T) {
+	t.Parallel()
 	if (liveKnowledge{engine: &Engine{}}).Building(t.Context()) {
 		t.Error("a node with no knowledge searcher reported itself building")
+	}
+
+	onConfluence := &Company{Config: &config.Company{
+		Knowledge:    config.Knowledge{Backend: config.KnowledgeConfluence},
+		Integrations: config.Integrations{Confluence: &config.Confluence{}},
+	}}
+	e := &Engine{}
+	e.notify.confluence = confluenceParts{
+		searcher: confluence.NewSearcher(confluence.SearcherOptions{}),
+	}
+	e.epoch.current.Store(onConfluence)
+	adapter := knowledgeSearch(e, onConfluence)
+	// THE CONTROL: this adapter is answering from the Confluence searcher,
+	// so the false below is that searcher's and not an absent one's.
+	if got := e.Knowledge(); got == nil || got.Backend() != confluence.Backend {
+		t.Fatalf("the engine answers with %v, want the Confluence searcher", got)
+	}
+	if adapter.Building(t.Context()) {
+		t.Error("a live search that keeps no index reported itself building")
 	}
 }

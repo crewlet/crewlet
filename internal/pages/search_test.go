@@ -146,6 +146,58 @@ func TestANativeSearchHonoursTheAncestorExclusion(t *testing.T) {
 	}
 }
 
+// A CHAIN THAT RUNS INTO A LOOP IS KNOWN WHOLE.
+//
+// Two moves of two pages, each decided before the other applied, can put each
+// page under the other. The walk up either chain then stops where it meets a
+// page it has already visited, having read every page on the loop — so nothing
+// above it is unknown, and the exclusion judges it by the chain it read. The
+// draft here is on such a loop under no excluded title, so it is returned with
+// its prefix still on; judged unknown instead, the prefix would hide it.
+func TestAChainThatLoopsIsKnownWhole(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	const words = "rotate the signing key"
+	draft := r.write(author("jane"), pages.NewPage{
+		Title: knowledge.AutoDraftTitlePrefix + "Key rotation", Body: words,
+	})
+	runbooks := r.write(author("jane"), pages.NewPage{
+		Title: "Runbooks", Body: "an index of procedures",
+	})
+	// NO DRAIN BETWEEN THEM, so each move is decided against rows where the
+	// other page is still at the top, and neither is refused as a loop.
+	if _, err := r.store.SavePage(t.Context(), author("jane"), draft.Page.ID,
+		pages.Save{BaseVersion: draft.Page.Version, ParentID: &runbooks.Page.ID}); err != nil {
+		t.Fatalf("put the draft under Runbooks: %v", err)
+	}
+	if _, err := r.store.SavePage(t.Context(), author("jane"), runbooks.Page.ID,
+		pages.Save{BaseVersion: runbooks.Page.Version, ParentID: &draft.Page.ID}); err != nil {
+		t.Fatalf("put Runbooks under the draft: %v", err)
+	}
+	r.drain()
+	if got := r.get(runbooks.Page.ID).Page.ParentID; got != draft.Page.ID {
+		t.Fatalf("Runbooks' parent is %q, want the draft — the loop this case is "+
+			"about never formed", got)
+	}
+
+	index := search.NewIndexerOver(r.db, []search.LexicalSource{search.PageSource{}})
+	indexUntilQuiet(t, index)
+	searcher, err := pages.NewSearcher(pages.SearcherOptions{Index: index, DB: r.db})
+	if err != nil {
+		t.Fatalf("NewSearcher: %v", err)
+	}
+	hits := searcher.Search(t.Context(), knowledge.Query{Text: words})
+	if ids := hitIDs(hits); !slices.Equal(ids, []string{draft.Page.ID}) {
+		t.Fatalf("the search returned %v, want the draft on the loop — hidden "+
+			"by its prefix, its chain was judged unknown", hitTitles(hits))
+	}
+	if !hits[0].AncestorsKnown ||
+		!slices.Equal(hits[0].Ancestors, []string{runbooks.Page.Title}) {
+		t.Errorf("the draft's chain is %v known=%v, want [Runbooks] known",
+			hits[0].Ancestors, hits[0].AncestorsKnown)
+	}
+}
+
 // A HIT THE INDEX HAS NOT DROPPED YET IS NOT AN ANSWER.
 //
 // The index is behind this node's own rows by design: a page trashed or purged
@@ -272,7 +324,7 @@ func TestAKnowledgeSearchWaitsForThePagesFirstBuildAlone(t *testing.T) {
 		t.Fatalf("NewSearcher: %v", err)
 	}
 	// THE CONTROL: before any lap it IS building, so the answer below is
-	// the pages' lap finishing rather than a gate that never closes.
+	// the pages' lap finishing rather than a gate that was open all along.
 	if !searcher.Building(t.Context()) {
 		t.Fatal("a searcher over an index that has built nothing says it is not building")
 	}

@@ -134,12 +134,13 @@ const ScopeSubagent = "subagent"
 // change at its end. A task that started hands its whole Result to
 // [Config.Telemetry], which the parent's runner publishes as the worker's
 // agent_phase_completed event with this text as `error`, whole: a record too
-// large for one event is published cut with the error the last text cut, and
-// its whole, the error included, kept in parts under the record's id when
-// every part lands (internal/agent/runner/phasefit.go). A task that never
-// started has no phase event: its text is a skip or stop reason composed here,
-// and a skip names dependencies whose own entries in the same report carry
-// their status and error.
+// large for one event is published cut, the error the last text any of its
+// forms cuts — only once every other text is at its mark and every row is
+// given up — and its whole, the error included, kept in parts under the
+// record's id when every part lands (internal/agent/runner/phasefit.go). A
+// task that never started has no phase event: its text is a skip or stop
+// reason composed here, and a skip names dependencies whose own entries in the
+// same report carry their status and error.
 const errorLimit = 500
 
 // controlDenylist is the first-party engine-control surface a sub-agent never

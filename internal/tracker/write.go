@@ -162,7 +162,7 @@ type Writer struct {
 	// second, which a bulk edit's projection divides its record count by
 	// — and through that projection, the lease the bulk holds and the
 	// retry hint a bulk refused behind it reads. Nil means unmeasured,
-	// which the projection reads as its pessimistic floor rather than as
+	// which the projection reads at [statelog.DrainFloor] rather than as
 	// infinity.
 	Drain func() float64
 

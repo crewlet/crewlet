@@ -124,18 +124,26 @@ func configureMeter(
 				sdkmetric.WithInterval(metricInterval(opts)))))
 	}
 
-	// THE HISTOGRAM BOUNDARIES ARE THE RECORDER'S, so a bucket on a
-	// collector's panel is the bucket the recorder counted into. The SDK's
-	// own default boundaries stop at 10 000 — 10 s for a duration in
-	// milliseconds, well inside the range the recorder's bins resolve — so
-	// anything slower would land in the overflow bucket and read only as
-	// "more than 10 s".
-	providerOpts = append(providerOpts, sdkmetric.WithView(sdkmetric.NewView(
-		sdkmetric.Instrument{Kind: sdkmetric.InstrumentKindHistogram},
-		sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
-			Boundaries: metrics.Bins(),
-		}},
-	)))
+	// EACH HISTOGRAM'S BOUNDARIES ARE ITS OWN, as the catalogue declares
+	// them ([metrics.Instrument.Buckets]), so a bucket on a collector's
+	// panel is the bucket the recorder counted into. ONE VIEW PER
+	// INSTRUMENT, matched on its name, because the boundaries differ
+	// between instruments: a single view over every histogram would hand a
+	// whole backup the default set, which ends near a minute. The SDK's own
+	// default boundaries stop at 10 000 — 10 s for a duration in
+	// milliseconds — so without a view anything slower would land in the
+	// overflow bucket and read only as "more than 10 s".
+	for _, inst := range metrics.Catalogue() {
+		if inst.Kind != metrics.KindHistogram {
+			continue
+		}
+		providerOpts = append(providerOpts, sdkmetric.WithView(sdkmetric.NewView(
+			sdkmetric.Instrument{Name: inst.Name, Kind: sdkmetric.InstrumentKindHistogram},
+			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+				Boundaries: inst.Buckets(),
+			}},
+		)))
+	}
 
 	mp := sdkmetric.NewMeterProvider(providerOpts...)
 

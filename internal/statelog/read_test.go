@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -66,13 +69,24 @@ func newReader(t *testing.T, db interface {
 	Read(context.Context, func(*sql.Tx) error) error
 }, h func() statelog.Health, waiter statelog.Waiter, index *statelog.ReadIndex) *statelog.Reader {
 	t.Helper()
+	return newReaderDraining(t, db, h, waiter, index, 2000)
+}
+
+// newReaderDraining is [newReader] over a node measured draining drain records
+// a second, for the cases about what a backlog is stated as.
+func newReaderDraining(t *testing.T, db interface {
+	Read(context.Context, func(*sql.Tx) error) error
+}, h func() statelog.Health, waiter statelog.Waiter, index *statelog.ReadIndex,
+	drain float64) *statelog.Reader {
+
+	t.Helper()
 	r, err := statelog.NewReader(statelog.ReaderDeps{
 		Domain: probeDomain{},
 		DB:     db,
 		Index:  index,
 		Waiter: waiter,
 		Health: h,
-		Drain:  func() float64 { return 2000 },
+		Drain:  func() float64 { return drain },
 	})
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
@@ -185,16 +199,30 @@ func (c *countingAppends) LastSeq(ctx context.Context, subject string) (uint64, 
 	return c.inner.LastSeq(ctx, subject)
 }
 
-// A STALE READ SURVIVES A FULL LOG, and a linearizable one does not.
+// A STALE READ SURVIVES A FULL LOG, and a linearizable one is told the log is
+// full.
 //
 // A full log refuses appends rather than dropping records, so the barrier a
 // linearizable read rests on cannot be written — but a level that takes no
 // broker call at all is unaffected. That asymmetry is worth stating, because
 // the tempting reading is that a full log stops reads.
+//
+// OVER A REAL LOG AT ITS BYTE CEILING, because what the broker answers there
+// is its own API error naming "maximum bytes exceeded", and no refusal this
+// package made. Read any other way it is a majority that did not agree: a read
+// told to wait out an election, about a log only an operator can empty.
+//
+// Mutation: hand the barrier's append error to the reader unclassified and the
+// code reads no_quorum, with the election's retry hint.
 func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, refusingAppender{}, probeEncode,
+	// A CEILING OF ONE BYTE on an empty log, so the barrier is the append
+	// that meets it.
+	updateProbeStream(t, h, "set its max_bytes", func(cfg *jetstream.StreamConfig) {
+		cfg.MaxBytes = 1
+	})
+	index, err := statelog.NewReadIndex(probeDomain{}, h.log, probeEncode,
 		h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -208,7 +236,10 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 		t.Fatalf("a linearizable read on a full log = %v, want a Refused", err)
 	}
 	if refusal.Code != statelog.RefuseLogFull {
-		t.Fatalf("code = %q, want %q", refusal.Code, statelog.RefuseLogFull)
+		t.Fatalf("code = %q, want %q: %v", refusal.Code, statelog.RefuseLogFull, err)
+	}
+	if !strings.Contains(refusal.Detail, "maximum bytes exceeded") {
+		t.Errorf("the refusal does not carry the broker's words: %v", err)
 	}
 	if refusal.RetryAfter != 0 {
 		t.Errorf("a full log carries a retry hint of %s — waiting does not empty "+
@@ -223,18 +254,45 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	}
 }
 
-// refusingAppender is a broker whose log is at its ceiling.
-type refusingAppender struct{}
-
-func (refusingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
-	return 0, false, &statelog.Unavailable{
-		Reason: statelog.ReasonLogFull,
-		Detail: "maximum bytes exceeded",
+// A BARRIER THE BROKER REFUSES FOR A REASON OF ITS OWN IS NAMED FOR IT.
+//
+// A sealed stream refuses the barrier's append with neither a full log's
+// error nor a quorum's silence, and each of those codes would send somebody to
+// the wrong place: a byte ceiling that is not the limit, or an election that is
+// not happening. The broker's words are the detail, and waiting on this node
+// does not unseal a stream, so there is no hint.
+//
+// Mutation: map a broker refusal to no_quorum and the code reads it, with the
+// election's retry hint.
+func TestABarrierTheBrokerRefusesIsRefusedInItsWords(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	sealProbeStream(t, h)
+	index, err := statelog.NewReadIndex(probeDomain{}, h.log, probeEncode,
+		h.gen.Load, nil)
+	if err != nil {
+		t.Fatalf("NewReadIndex: %v", err)
 	}
-}
+	r := newReader(t, &stubStore{}, healthy, &stubWaiter{at: healthy().Position}, index)
 
-func (refusingAppender) LastSeq(context.Context, string) (uint64, bool, error) {
-	return 0, false, nil
+	_, err = r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
+		func(*sql.Tx) error { return nil })
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBarrierRefused {
+		t.Fatalf("a linearizable read on a sealed log = %v, want %s", err,
+			statelog.RefuseBarrierRefused)
+	}
+	if !strings.Contains(refusal.Detail, "sealed") {
+		t.Errorf("the refusal does not carry the broker's words: %v", err)
+	}
+	if refusal.RetryAfter != 0 {
+		t.Errorf("a refused barrier carries a retry hint of %s — waiting does not "+
+			"change a stream's setting", refusal.RetryAfter)
+	}
+	if _, err := r.Read(t.Context(), pointQuery(statelog.ReadStale),
+		func(*sql.Tx) error { return nil }); err != nil {
+		t.Errorf("a stale read on a sealed log = %v, want it served", err)
+	}
 }
 
 // A SESSION READ WITH NOTHING TO WAIT FOR TAKES NO BROKER CALL.
@@ -374,6 +432,113 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 	}
 	if statelog.ReadRefusal("made_up").Valid() {
 		t.Error("an unknown refusal code reports itself valid")
+	}
+}
+
+// A RETRY HINT IS THE BACKLOG OVER THE DRAIN AS MEASURED, fraction and all.
+//
+// Through the one conversion every backlog stated as a time takes
+// ([statelog.BacklogTime]), so a node's hint and its staleness bound can never
+// state one backlog as two times. The floor stands in for a rate NOBODY
+// MEASURED and for nothing else: a measured rate below one record a second is
+// the rate this node is applying at, and floored it would send the caller back
+// before the backlog has had time to clear.
+//
+// Mutation: floor a measured rate and the quarter-a-second case reads 3 s;
+// truncate the rate and the fractional ones overstate; drop the round-up and
+// the 1.2 s case reads a fraction of a second.
+func TestARetryHintIsTheBacklogOverTheDrainAsMeasured(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		lag   uint64
+		drain float64
+		want  time.Duration
+	}{
+		{name: "a fractional drain between one and two", lag: 3, drain: 1.5,
+			want: 2 * time.Second},
+		{name: "a measured drain below the floor is used as measured", lag: 3,
+			drain: 0.25, want: 12 * time.Second},
+		{name: "an unmeasured drain reads at the floor", lag: 3, drain: 0,
+			want: 3 * time.Second},
+		{name: "rounded up to a whole second", lag: 3, drain: 2.5,
+			want: 2 * time.Second},
+		{name: "nothing to catch up on", lag: 0, drain: 1.5,
+			want: statelog.ElectionRetryHint},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := statelog.RetryHint(statelog.RefuseBehind, c.lag, c.drain); got != c.want {
+				t.Errorf("a %d-record backlog at %v records a second hints %v, "+
+					"want %v", c.lag, c.drain, got, c.want)
+			}
+		})
+	}
+
+	// AND A HINT PAST WHAT A DURATION HOLDS IS STILL A HINT: a drain of a
+	// tiny fraction of a record a second over the largest backlog there is
+	// passes the range, and converted unguarded it is a negative duration —
+	// a retry already due.
+	hint := statelog.RetryHint(statelog.RefuseBehind, math.MaxUint64, 1e-12)
+	if hint <= 0 || hint%time.Second != 0 {
+		t.Errorf("the largest backlog at a vanishing rate hints %v, want the "+
+			"largest whole number of seconds rather than a wrapped duration", hint)
+	}
+}
+
+// A STALENESS BOUND IN SECONDS IS THE RECORD LAG OVER THE DRAIN AS MEASURED.
+//
+// A caller's `max_lag_seconds` is checked against the record lag stated as a
+// time, and the statement is [statelog.BacklogTime]'s. Three records behind at
+// one and a half a second is two seconds behind, which a caller accepting two
+// and a half is served — where a rate truncated to a whole one states it as
+// three and refuses a read inside its bound. And a measured rate below the
+// floor is not raised to it: half a record a second is six seconds for three
+// records, which a caller accepting five is refused.
+//
+// Mutation: truncate the drain and the first case refuses; floor a measured
+// rate and the second is served past its bound.
+func TestAStalenessBoundInSecondsDividesByTheDrainAsMeasured(t *testing.T) {
+	t.Parallel()
+	lagged := func(records uint64) func() statelog.Health {
+		return func() statelog.Health {
+			h := healthy()
+			h.Lag = &records
+			return h
+		}
+	}
+	for _, c := range []struct {
+		name   string
+		lag    uint64
+		drain  float64
+		maxLag time.Duration
+		served bool
+	}{
+		{name: "two seconds behind, accepting two and a half", lag: 3, drain: 1.5,
+			maxLag: 2500 * time.Millisecond, served: true},
+		{name: "six seconds behind at a measured half a record a second", lag: 3,
+			drain: 0.5, maxLag: 5 * time.Second, served: false},
+		{name: "three seconds behind at the floor, unmeasured", lag: 3, drain: 0,
+			maxLag: 2500 * time.Millisecond, served: false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newReaderDraining(t, &stubStore{}, lagged(c.lag),
+				&stubWaiter{at: healthy().Position}, nil, c.drain)
+			q := pointQuery(statelog.ReadStale)
+			q.MaxLag = c.maxLag
+			_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+			if c.served {
+				if err != nil {
+					t.Errorf("a read inside its bound was refused: %v", err)
+				}
+				return
+			}
+			var refusal *statelog.Refused
+			if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseTooStale {
+				t.Errorf("a read past its bound answered %v, want too_stale", err)
+			}
+		})
 	}
 }
 

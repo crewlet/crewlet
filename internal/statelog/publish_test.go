@@ -517,6 +517,16 @@ func TestARecordTooLargeForTheTransportIsRefusedOnceNamingTheLimit(t *testing.T)
 // never does, so the broker refuses a larger record itself.
 func streamMaxMsgSize(t *testing.T, h *harness, limit int32) {
 	t.Helper()
+	updateProbeStream(t, h, "set its max_msg_size", func(cfg *jetstream.StreamConfig) {
+		cfg.MaxMsgSize = limit
+	})
+}
+
+// updateProbeStream changes the harness's log's configuration as the broker
+// holds it, which is how a case puts the log into a state only an operator's
+// hand on the stream reaches.
+func updateProbeStream(t *testing.T, h *harness, what string, change func(*jetstream.StreamConfig)) {
+	t.Helper()
 	broker, err := jetstream.New(h.q.Conn())
 	if err != nil {
 		t.Fatalf("reach the JetStream API: %v", err)
@@ -530,9 +540,9 @@ func streamMaxMsgSize(t *testing.T, h *harness, limit int32) {
 		t.Fatalf("read the log's configuration: %v", err)
 	}
 	cfg := info.Config
-	cfg.MaxMsgSize = limit
+	change(&cfg)
 	if _, err := broker.UpdateStream(t.Context(), cfg); err != nil {
-		t.Fatalf("set the log's max_msg_size: %v", err)
+		t.Fatalf("%s: %v", what, err)
 	}
 }
 
@@ -664,4 +674,106 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 			"an unbounded wait blocks the caller for as long as this node "+
 			"stays behind", waited, 250*time.Millisecond)
 	}
+}
+
+// AN EVICTION THAT LANDS WHILE A WRITE DECIDES IS ANSWERED AS ONE, AT ONCE.
+//
+// The fence runs again before every append, because a write that has spent
+// rounds losing races has been running for as long as they took. What it
+// refuses is the answer: read as no answer at all, the write probes the
+// subject, finds nothing of its own, retakes its snapshot and decides again —
+// round after round, to a conflict a model reads as a colleague editing the
+// same object, counted as one.
+//
+// Mutation: hand the fence's refusal to classify with the broker's errors and
+// the write ends in ErrConflict after sixteen rounds and sixteen probes.
+func TestAnEvictionMidWriteIsRefusedAsOneAtOnce(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	// AN ESTABLISHED OBJECT, so the expectation comes from its anchor and
+	// the write asks the broker nothing before it appends.
+	first, err := h.write(probeSubject("a"), "op-0", "one")
+	if err != nil {
+		t.Fatalf("the first write: %v", err)
+	}
+	h.anchorAt(probeSubject("a"), first.Position.Seq)
+	appended := h.appends.appends.Load()
+	h.appends.probes.Store(0)
+
+	res, err := h.pub.Publish(t.Context(), statelog.Request{
+		Subject:  probeSubject("a"),
+		Scope:    statelog.ScopeSet{Paths: []string{"object.a"}},
+		OpID:     "op-1",
+		MintedAt: time.Now(),
+		Pattern:  statelog.PatternArbitrated,
+		Decide: func(*sql.Tx) (statelog.Decision, error) {
+			// THE EVICTION LANDS HERE, after the fence at the top of
+			// the write has already passed.
+			h.fence.mu.Lock()
+			h.fence.evicted = true
+			h.fence.mu.Unlock()
+			return statelog.Decision{Payload: []byte("two"), Version: 1}, nil
+		},
+	})
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvicted {
+		t.Fatalf("a write evicted while it decided answered %v, want an evicted "+
+			"refusal", err)
+	}
+	if res.Rounds != 1 {
+		t.Errorf("the refusal came after %d round(s), want 1 — the fence's answer "+
+			"is the write's", res.Rounds)
+	}
+	if got := h.appends.probes.Load(); got != 0 {
+		t.Errorf("the write probed the subject %d time(s) — a refusal this node "+
+			"made is not an append whose outcome anybody has to discover", got)
+	}
+	if got := h.appends.appends.Load(); got != appended {
+		t.Errorf("the write appended %d record(s) after its eviction", got-appended)
+	}
+}
+
+// A BROKER REFUSAL THIS FRAMEWORK HAS NO REMEDY FOR IS ANSWERED IN THE BROKER'S
+// OWN WORDS, once.
+//
+// A sealed stream refuses every append with an API error that is neither a lost
+// race, nor a size, nor a store limit. Filed with the full log it carries the
+// full log's remedy — raise a byte ceiling, unblock the trim — for a refusal
+// neither setting causes; the broker's own words say which refusal it was.
+//
+// Mutation: file every other API error with the full log and the reason reads
+// log_full.
+func TestABrokerRefusalIsAnsweredInItsOwnWords(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	sealProbeStream(t, h)
+
+	_, err := h.write(probeSubject("a"), "op-1", "hello")
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) {
+		t.Fatalf("a write on a sealed stream answered %v, want an Unavailable", err)
+	}
+	if refusal.Reason != statelog.ReasonRefused {
+		t.Fatalf("reason = %q, want %q: %v", refusal.Reason, statelog.ReasonRefused, err)
+	}
+	if !strings.Contains(refusal.Detail, "sealed") {
+		t.Errorf("the refusal does not carry the broker's words, which name the "+
+			"sealed stream: %v", err)
+	}
+	if refusal.OpID != "op-1" {
+		t.Errorf("the refusal carries op id %q, want the write's own", refusal.OpID)
+	}
+	if got := h.appends.appends.Load(); got != 1 {
+		t.Errorf("the publisher appended %d times, want 1 — the broker's decision "+
+			"is the same on every attempt", got)
+	}
+}
+
+// sealProbeStream seals the harness's log, which the engine never does, so the
+// broker refuses every append with an error of its own.
+func sealProbeStream(t *testing.T, h *harness) {
+	t.Helper()
+	updateProbeStream(t, h, "seal the log", func(cfg *jetstream.StreamConfig) {
+		cfg.Sealed = true
+	})
 }

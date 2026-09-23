@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // publishedPhases runs rec through an emitter over the in-memory queue — which
@@ -230,10 +231,11 @@ func TestOneTextPastTheCeilingIsFitWithTheNoteSayingSo(t *testing.T) {
 //
 // An error is as long as whatever failed made it. Cut to a fixed bound before
 // the record existed, the whole the parts kept would be the cut text and the
-// rest of the error would be kept nowhere. Built whole, it is the last text the
-// fit reaches — every other text on the record goes to its mark first — and
-// the parts hold it exactly as the phase returned it. For the turn's own phase
-// and for a delegated worker alike, which build their records separately.
+// rest of the error would be kept nowhere. Built whole, it is the last text any
+// form cuts — every other text goes to its mark and every row is given up
+// first — and the parts hold it exactly as the phase returned it. For the
+// turn's own phase and for a delegated worker alike, which build their records
+// separately.
 func TestAPhaseErrorPastOneEventRidesWholeInTheParts(t *testing.T) {
 	t.Parallel()
 	// Past the ceiling on its own, in a three-byte script, so a cut through a
@@ -273,14 +275,14 @@ func TestAPhaseErrorPastOneEventRidesWholeInTheParts(t *testing.T) {
 					len(rec.Error), len(failure), rec.Error[max(0, len(rec.Error)-12):])
 			}
 			// THE ERROR WAS REACHED LAST: every other text went to its mark
-			// before it was touched.
+			// and every row was given up, counted, before it was touched.
 			if rec.Response != "…" {
 				t.Errorf("the response is %q; want its mark, since the error was cut", rec.Response)
 			}
-			for i, row := range rec.ToolExecutions {
-				if row["result"] != "…" {
-					t.Errorf("call %d's result is %q; want its mark, since the error was cut", i, row["result"])
-				}
+			if len(rec.ToolExecutions) != 0 || rec.ToolExecutionsOmitted != len(calls) {
+				t.Errorf("the record carries %d calls and counts %d omitted; want every one of the %d "+
+					"given up, since the error was cut", len(rec.ToolExecutions), rec.ToolExecutionsOmitted,
+					len(calls))
 			}
 			raw, err := json.Marshal(events.New(*rec, events.TraceContext{}))
 			if err != nil {
@@ -308,13 +310,13 @@ func TestAPhaseErrorPastOneEventRidesWholeInTheParts(t *testing.T) {
 	}
 }
 
-// THE ERROR IS THE LAST TEXT THE FIT CUTS.
+// THE FIT LEAVES THE ERROR WHOLE.
 //
 // It is what says why a failed phase failed, so while cutting the other texts
 // can make the room — a tool result, or the prose, each as long as the error —
-// the error goes out whole beside them. Sharing a tier with either, a common
-// level would have cut it with them.
-func TestTheErrorIsTheLastTextTheFitCuts(t *testing.T) {
+// the error goes out whole beside them. Were it among the texts a common
+// level is taken over, it would have been cut with them.
+func TestTheFitLeavesTheErrorWhole(t *testing.T) {
 	t.Parallel()
 	failure := strings.Repeat("the provider refused: ", (5<<20)/22)
 	long := strings.Repeat("x", 5<<20)
@@ -386,21 +388,22 @@ func TestAPhaseRecordThatFitsIsNotTouched(t *testing.T) {
 // and every text at or under it is left whole.
 func TestTheWaterLevelCutsOnlyTheLongest(t *testing.T) {
 	t.Parallel()
+	const mark = 20
 	slots := []*textSlot{
-		{text: strings.Repeat("a", 1000)},
-		{text: strings.Repeat("b", 600)},
-		{text: strings.Repeat("c", 100)},
+		{text: strings.Repeat("a", 1000), mark: mark},
+		{text: strings.Repeat("b", 600), mark: mark},
+		{text: strings.Repeat("c", 100), mark: mark},
 	}
-	// Shedding 500 bytes, with each first cut charged its overhead: the two
-	// longest go to one level and the short one is untouched.
+	// Shedding 500 bytes, each first cut writing its mark beside what it
+	// leaves: the two longest go to one level and the short one is untouched.
 	level, ok := waterLevel(slots, 500)
 	if !ok {
 		t.Fatal("a tier with room to shed reported none")
 	}
 	shed := 0
 	for _, s := range slots {
-		if len(s.text) > level {
-			shed += len(s.text) - level - phaseCutOverhead
+		if short := textcut.Within(s.text, level); s.shortens(short) {
+			shed += len(s.text) - len(short) - mark
 		}
 	}
 	if shed < 500 {
@@ -409,11 +412,55 @@ func TestTheWaterLevelCutsOnlyTheLongest(t *testing.T) {
 	if level <= 100 {
 		t.Errorf("level %d cuts the 100-byte text too, where the two longest could shed it", level)
 	}
-	if level >= 600 {
+	if level >= 600-mark {
 		t.Errorf("level %d leaves the 600-byte text whole; it cannot shed 500 from one text", level)
 	}
 	if _, ok := waterLevel([]*textSlot{{text: "…"}}, 10); ok {
 		t.Error("a tier holding nothing but marks reported room to shed")
+	}
+}
+
+// A TEXT NO LONGER THAN ITS MARK IS NEVER CUT.
+//
+// On a tool call or a round a cut writes its whole length beside the text it
+// leaves, so cutting a short result to "…" puts more bytes on the record than
+// it takes off, and says the result was shortened while the record grew. The
+// water level offers no such text, and the least form leaves it whole, with
+// no `<field>_bytes` beside it.
+func TestATextNoLongerThanItsMarkIsNeverCut(t *testing.T) {
+	t.Parallel()
+	// "the page body" is thirteen bytes; its mark is "…" and a
+	// `,"result_bytes":13` entry, twenty-one.
+	row := types.ToolExecution{"name": "read_page", "result": "the page body"}
+	slot := appendRowSlot(nil, row, "result")[0]
+	if want := len(`,"result_bytes":13`); slot.mark != want {
+		t.Fatalf("the slot's mark weighs %d bytes; the entry its cut writes is %d", slot.mark, want)
+	}
+	if _, ok := waterLevel([]*textSlot{slot}, 1); ok {
+		t.Error("the water level offered a text its own mark outweighs")
+	}
+
+	rec := phaseEvent(toolloop.Result{RoundsUsed: 1, Executions: []toolloop.Execution{
+		{Round: 1, Name: "read_page", Args: map[string]any{"id": 1}, Output: "the page body"},
+		{Round: 1, Name: "read_file", Args: map[string]any{"path": "a.log"}, Output: strings.Repeat("x", 4000)},
+	}})
+	env := events.New(rec, events.TraceContext{})
+	least, err := (&phaseCutter{env: env, original: env.Data.(*types.AgentPhaseCompleted), whole: 1 << 20,
+		kept: wholeKept{parts: 1}}).leastForm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, long := least.rec.ToolExecutions[0], least.rec.ToolExecutions[1]
+	if short["result"] != "the page body" || short["result_bytes"] != nil {
+		t.Errorf("the short result went into the least form as %q (result_bytes %v); want it whole and unmarked",
+			short["result"], short["result_bytes"])
+	}
+	if long["result"] != "…" || long["result_bytes"] != 4000 {
+		t.Errorf("the long result went into the least form as %.20q (result_bytes %v); want its mark",
+			long["result"], long["result_bytes"])
+	}
+	if least.texts != 1 {
+		t.Errorf("the least form counts %d texts shortened; want the one it cut", least.texts)
 	}
 }
 
@@ -571,7 +618,9 @@ func assertTheWalkHalves(t *testing.T, pub *transport) {
 		rec, _ := next.ev.Data.(*types.AgentPhaseCompleted)
 		least := rec != nil && rec.ToolExecutionsOmitted == 0
 		for _, row := range rec.ToolExecutions {
-			if result, _ := row["result"].(string); len(result) > len("…") {
+			// At its least a result is its mark, or whole and unmarked
+			// because it is no longer than its mark: never a head.
+			if _, cut := row["result_bytes"]; cut && row["result"] != "…" {
 				least = false
 			}
 		}
@@ -844,9 +893,10 @@ func TestAFullPartFitsOneEventWithItsReserveToSpare(t *testing.T) {
 // Refused although it is within the contract's ceiling, the record was
 // refused by a server set below it, and no cut to the contract's number
 // answers that. The target is halved on each refusal instead, down through the
-// fitted forms to the least one — every text reduced to its mark, every call
-// still carried — and the record goes out carrying its tokens, its cost and a
-// reference to its whole, which went first as parts the smaller server takes.
+// fitted forms to the least one — every text longer than its mark reduced to
+// it, every call still carried — and the record goes out carrying its tokens,
+// its cost and a reference to its whole, which went first as parts the smaller
+// server takes.
 func TestARecordRefusedWithinTheCeilingGoesOutInItsLeastFormWithItsWhole(t *testing.T) {
 	t.Parallel()
 	const calls = 1500
@@ -907,6 +957,48 @@ func TestARecordRefusedWithinTheCeilingGoesOutInItsLeastFormWithItsWhole(t *test
 		t.Errorf("notes = %q, want them to say where the whole is", got.Notes)
 	}
 	assertTheWalkHalves(t, pub)
+}
+
+// THE LEAST FORM CARRIES THE PHASE'S ERROR WHOLE.
+//
+// A failed phase's record in its least form still says why it failed: its
+// other texts are at their marks, and the error, a few dozen bytes, goes out
+// whole beside every row. Reduced to its mark with them, the record the
+// server took would have said the phase failed and not why, for the sake of
+// bytes the server had room for.
+func TestTheLeastFormCarriesTheErrorWhole(t *testing.T) {
+	t.Parallel()
+	const failure = "provider: 429 rate limited"
+	rec := phaseEvent(heavyResult(1500, 2_000))
+	rec.Failed, rec.Error = true, failure
+	env := events.New(rec, events.TraceContext{})
+	env.Source = "Lead"
+	whole, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	least, err := (&phaseCutter{env: env, original: env.Data.(*types.AgentPhaseCompleted),
+		whole: len(whole), kept: wholeKept{parts: 99}}).leastForm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const server = 200 << 10
+	if least.bytes >= server || len(whole) <= server {
+		t.Fatalf("the fixture's least form is %d bytes and its whole %d; the case needs a whole the "+
+			"%d-byte server refuses and a least form it takes", least.bytes, len(whole), server)
+	}
+	pub := &transport{refuse: tooLargeAbove(server)}
+	account := emitterOver(pub).publishPhase(t.Context(), rec)
+
+	records, _ := pub.accepted()
+	if len(records) != 1 || account.Form != phaseLeast {
+		t.Fatalf("%d records published in form %q (account %+v); want the least form",
+			len(records), account.Form, account)
+	}
+	if got := records[0]; got.Error != failure || len(got.ToolExecutions) != 1501 {
+		t.Errorf("the least form carries the error %q and %d calls; want %q whole beside all 1501",
+			got.Error, len(got.ToolExecutions), failure)
+	}
 }
 
 // EVERY FORM TRIED IS SMALLER THAN EVERY FORM REFUSED, AND THE LARGEST SUCH.
@@ -1001,16 +1093,21 @@ func TestPastTheLeastFormTheFirstRowsGoOutAndTheRestAreCounted(t *testing.T) {
 	}
 }
 
-// A LEAST FORM PAST THE CEILING IS CUT TO THE CEILING, NOT TO HALF OF ITSELF.
+// A LEAST FORM PAST THE CEILING IS CUT TO THE CEILING, NOT TO HALF OF ITSELF —
+// AND ITS ROWS GO BEFORE ITS ERROR DOES.
 //
 // A record of enough rows is past one event even with every text at its mark.
 // The transport refusing that is the contract working, not a server below it,
 // so the rows are cut to what every connection carries — halving instead would
-// throw away rows the transport takes.
+// throw away rows the transport takes. And the rows are what is given up: the
+// phase's error, which says why it failed, goes out whole beside the rows that
+// fit.
 func TestALeastFormPastTheCeilingKeepsTheRowsTheCeilingTakes(t *testing.T) {
 	t.Parallel()
 	const calls = 90_000
+	const failure = "provider: 429 rate limited"
 	rec := phaseEvent(heavyResult(calls, 300))
+	rec.Failed, rec.Error = true, failure
 	pub := &transport{refuse: tooLargeAbove(queue.MaxPayloadBytes)}
 	account := emitterOver(pub).publishPhase(t.Context(), rec)
 
@@ -1018,6 +1115,10 @@ func TestALeastFormPastTheCeilingKeepsTheRowsTheCeilingTakes(t *testing.T) {
 	if len(records) != 1 || account.Form != phaseRowsOmitted || len(parts) == 0 {
 		t.Fatalf("%d records in form %q with %d parts; want the first rows, and the whole in parts",
 			len(records), account.Form, len(parts))
+	}
+	if got := records[0]; got.Error != failure || got.ToolExecutionsOmitted == 0 {
+		t.Errorf("the record's error went out as %q with %d calls omitted; want %q whole beside "+
+			"the rows that fit", got.Error, got.ToolExecutionsOmitted, failure)
 	}
 	var published int
 	for _, a := range pub.attempts {

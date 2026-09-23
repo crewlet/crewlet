@@ -2,9 +2,12 @@ package metrics
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // THE CATALOGUE IS COMPLETE, and every entry says which failure it makes
@@ -39,17 +42,36 @@ func TestEveryInstrumentInTheCatalogueIsRegistered(t *testing.T) {
 func TestAMalformedCatalogueIsRefused(t *testing.T) {
 	t.Parallel()
 	for name, entries := range map[string][]Instrument{
-		"no name": {{Kind: KindCounter, Unit: UnitCount, Shows: "x"}},
+		"no name": {{Kind: KindCounter, Unit: UnitRecords, Shows: "x"}},
 		"no unit": {{Name: "a", Kind: KindCounter, Shows: "x"}},
 		"no reason": {
-			{Name: "a", Kind: KindCounter, Unit: UnitCount},
+			{Name: "a", Kind: KindCounter, Unit: UnitRecords},
 		},
 		"declared twice": {
-			{Name: "a", Kind: KindCounter, Unit: UnitCount, Shows: "x"},
-			{Name: "a", Kind: KindGauge, Unit: UnitCount, Shows: "y"},
+			{Name: "a", Kind: KindCounter, Unit: UnitRecords, Shows: "x"},
+			{Name: "a", Kind: KindGauge, Unit: UnitRecords, Shows: "y"},
 		},
 		"a gauge marked fractional": {
-			{Name: "a", Kind: KindGauge, Unit: UnitCount, Fractional: true, Shows: "x"},
+			{Name: "a", Kind: KindGauge, Unit: UnitRecords, Fractional: true, Shows: "x"},
+		},
+		// A COUNTER IN "1" counts nothing it names, and "1" is a fraction.
+		"a counter declared a fraction": {
+			{Name: "a", Kind: KindCounter, Unit: UnitRatio, Shows: "x"},
+		},
+		"a gauge with buckets": {
+			{Name: "a", Kind: KindGauge, Unit: UnitRecords, Bounds: []float64{1, 2}, Shows: "x"},
+		},
+		"buckets out of order": {
+			{Name: "a", Kind: KindHistogram, Unit: UnitMilliseconds, Bounds: []float64{2, 1}, Shows: "x"},
+		},
+		"a repeated bucket": {
+			{Name: "a", Kind: KindHistogram, Unit: UnitMilliseconds, Bounds: []float64{1, 1}, Shows: "x"},
+		},
+		"no buckets at all": {
+			{Name: "a", Kind: KindHistogram, Unit: UnitMilliseconds, Bounds: []float64{}, Shows: "x"},
+		},
+		"an infinite bucket": {
+			{Name: "a", Kind: KindHistogram, Unit: UnitMilliseconds, Bounds: []float64{1, math.Inf(1)}, Shows: "x"},
 		},
 		"a histogram marked fractional": {
 			{Name: "a", Kind: KindHistogram, Unit: UnitMilliseconds, Fractional: true, Shows: "x"},
@@ -68,13 +90,23 @@ func TestAMalformedCatalogueIsRefused(t *testing.T) {
 		})
 	}
 
-	// THE CONTROL for the two duration cases: the same counter marked
-	// Fractional is accepted, so the rule refuses the integer form of a
-	// summed duration rather than every counter in seconds.
-	if err := Validate([]Instrument{{
-		Name: "a", Kind: KindCounter, Unit: UnitSeconds, Fractional: true, Shows: "x",
-	}}); err != nil {
-		t.Errorf("a fractional counter in seconds was refused: %v", err)
+	// THE CONTROLS: the same counter marked Fractional is accepted, so the
+	// rule refuses the integer form of a summed duration rather than every
+	// counter in seconds; and a histogram with its own increasing buckets is
+	// accepted, so the bucket rules refuse bad buckets rather than any.
+	for name, entry := range map[string]Instrument{
+		"a fractional counter in seconds": {
+			Name: "a", Kind: KindCounter, Unit: UnitSeconds, Fractional: true, Shows: "x",
+		},
+		"a histogram with its own buckets": {
+			Name: "a", Kind: KindHistogram, Unit: UnitMilliseconds,
+			Bounds: []float64{1, 2, 4}, Shows: "x",
+		},
+		"a gauge in 1": {Name: "a", Kind: KindGauge, Unit: UnitRatio, Shows: "x"},
+	} {
+		if err := Validate([]Instrument{entry}); err != nil {
+			t.Errorf("%s was refused: %v", name, err)
+		}
 	}
 }
 
@@ -441,5 +473,94 @@ func TestTheWindowKeepsADistributionRatherThanAPeak(t *testing.T) {
 	if p95 > 16 {
 		t.Errorf("windowed p95 = %v ms, want the fast bucket: ninety-nine "+
 			"observations at 1 ms and one at 30 s has a p95 near 1 ms", p95)
+	}
+}
+
+// A HISTOGRAM IS COUNTED INTO ITS OWN BUCKETS, in the cumulative series and in
+// the window alike.
+//
+// A whole backup outruns the default set, which ends at 2^16 ms, about 65.5 s:
+// counted there, a two-hour copy lands in the overflow bucket and every
+// quantile of a node whose copies all take that long is infinite. Counted into
+// the backup histogram's own buckets it reads as the bucket that holds it.
+//
+// Mutation: count every histogram into the default set and both readings are
+// +Inf; hand the window the default set alone and the windowed one is.
+func TestAHistogramIsCountedIntoItsOwnBuckets(t *testing.T) {
+	t.Parallel()
+	r, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r.Observe(BackupDuration, 2*time.Hour, nil)
+
+	// 2^23 ms is the first of the backup's own boundaries at or above two
+	// hours' 7 200 000 ms, and the quantile is a bucket's upper boundary.
+	const want = 1 << 23
+	for name, read := range map[string]func() []Snapshot{
+		"cumulative": r.Read, "windowed": r.ReadWindow,
+	} {
+		var backup Snapshot
+		for _, s := range read() {
+			if s.Name == BackupDuration {
+				backup = s
+			}
+		}
+		if got := backup.Quantile(0.95); got != want {
+			t.Errorf("the %s p95 of one two-hour backup is %v ms, want %v — "+
+				"the bucket of the backup histogram's own that holds it",
+				name, got, float64(want))
+		}
+		if !slices.Equal(backup.Bounds, backupDurationBounds) {
+			t.Errorf("the %s snapshot carries bounds %v, want the backup "+
+				"histogram's own", name, backup.Bounds)
+		}
+	}
+}
+
+// THE BACKUP HISTOGRAM RESOLVES EVERY COPY UP TO THE DEFAULT BACKUP_MAX_AGE.
+//
+// Its top boundary is the first power of two past a day, because a copy slower
+// than the default policy's interval cannot keep that policy satisfied: past
+// it there is no finer distinction to make, and short of it a copy an
+// operator has to size a window against would read as "longer than the top".
+func TestTheBackupBucketsReachThePolicyTheyAreSizedAgainst(t *testing.T) {
+	t.Parallel()
+	top := backupDurationBounds[len(backupDurationBounds)-1]
+	policy := float64(config.DefaultBackupMaxAge / time.Millisecond)
+	if top < policy {
+		t.Errorf("the backup histogram ends at %v ms, short of the default "+
+			"backup_max_age's %v ms", top, policy)
+	}
+	if below := backupDurationBounds[len(backupDurationBounds)-2]; below >= policy {
+		t.Errorf("the boundary below the top, %v ms, already covers the default "+
+			"backup_max_age's %v ms, so the top resolves nothing an operator "+
+			"acts on", below, policy)
+	}
+	if len(backupDurationBounds) != len(defaultBounds) {
+		t.Errorf("the backup histogram has %d buckets and every other has %d",
+			len(backupDurationBounds), len(defaultBounds))
+	}
+}
+
+// NOTHING THAT COUNTS IS DECLARED A FRACTION.
+//
+// "1" is UCUM's dimensionless unit — a fraction, or a state that is 0 or 1 —
+// and a collector handed it for a count reads the count as a ratio. [Validate]
+// refuses it on a counter, which counts by definition; a gauge or a histogram
+// can be either, so the instruments allowed "1" are named here, because the
+// list IS the claim.
+func TestOnlyAFractionOrAStateIsDeclaredDimensionless(t *testing.T) {
+	t.Parallel()
+	dimensionless := map[string]bool{
+		StatelogLogHeadroomFraction: true, // a fraction of the ceiling
+		TrackerVectorCoverage:       true, // a fraction of the sources
+		AlarmActive:                 true, // 0 or 1
+	}
+	for _, inst := range Catalogue() {
+		if got := inst.Unit == UnitRatio; got != dimensionless[inst.Name] {
+			t.Errorf("%s is declared in %q, and it %s a fraction or a 0/1 state",
+				inst.Name, inst.Unit, map[bool]string{true: "is", false: "is not"}[dimensionless[inst.Name]])
+		}
 	}
 }

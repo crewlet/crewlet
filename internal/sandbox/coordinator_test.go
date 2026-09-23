@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -108,7 +111,14 @@ type coordRig struct {
 
 func newCoordRig(t *testing.T) *coordRig {
 	t.Helper()
-	base := newWaiterRig(t)
+	return newCoordRigOn(t, memory.NewFleet())
+}
+
+// newCoordRigOn is [newCoordRig] over the run records given, for a case that
+// stages what the store answers.
+func newCoordRigOn(t *testing.T, records RunRecords) *coordRig {
+	t.Helper()
+	base := newWaiterRigOn(t, records)
 	rig := &coordRig{
 		waiterRig:  base,
 		resumer:    &resumeSpy{},
@@ -2430,4 +2440,140 @@ func TestAnAnnouncementCarriesTheUnitOfWorkOfAPreSplitRun(t *testing.T) {
 				failed[0].WorkKey, preSplit)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------
+// a suspension its row could not hold
+// ---------------------------------------------------------------------
+
+// suspendLarge writes a conversation past what the run's row keeps one within,
+// so its whole goes to parts, and returns it.
+func (r *coordRig) suspendLarge(turnID string) map[string]any {
+	r.t.Helper()
+	state := map[string]any{
+		"version":              float64(2),
+		"pending_tool_call_id": "call-1",
+		"pending_tool_name":    "run_sandbox",
+		"messages":             []any{map[string]any{"Role": "assistant", "Content": strings.Repeat("w", 5<<20)}},
+	}
+	suspended, err := r.pending.MarkSuspended(r.t.Context(), turnID, state)
+	if err != nil || !suspended {
+		r.t.Fatalf("MarkSuspended(%s) = %v, %v", turnID, suspended, err)
+	}
+	if _, inParts := suspensionRefOf(r.get(turnID).ExecuteState); !inParts {
+		r.t.Fatalf("the row holds the conversation itself, so nothing here reads parts")
+	}
+	return state
+}
+
+// A COMPLETION RESUMES THE CONVERSATION ITS PARTS HOLD, WHOLE. The row holds a
+// reference in its place, and a resume handed the reference would decode it as
+// a conversation of no version this build knows and hand the run back for
+// ever; handed a part of it, it would re-enter a turn missing the call it
+// suspended on.
+func TestACompletionResumesTheWholeOfASuspensionKeptInParts(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launching("t1")
+	state := rig.suspendLarge("t1")
+	rig.coordinator.markBusy("swe")
+	rig.runner.Finish(Result{Success: true, Text: "fixed"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 {
+		t.Fatalf("resumed %d times, want 1", len(calls))
+	}
+	got, err := json.Marshal(calls[0].Run.ExecuteState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("the resume re-entered %d bytes of conversation, want the %d suspended", len(got), len(want))
+	}
+	rig.finished("t1")
+}
+
+// suspensionLost answers every launch's suspension one part short.
+type suspensionLost struct{ *memory.Fleet }
+
+func (s suspensionLost) SuspensionParts(ctx context.Context, turnID, launchID string) ([]coord.Part, error) {
+	parts, err := s.Fleet.SuspensionParts(ctx, turnID, launchID)
+	if len(parts) > 0 {
+		parts = parts[1:]
+	}
+	return parts, err
+}
+
+// A CONVERSATION WHOSE PARTS CANNOT BE READ BACK IS LOST, and the run is ended
+// the way a run with no conversation is: its box reclaimed, its seat freed and
+// the loss announced. A retry reads the same parts, so handing the claim back
+// would redeliver the completion into the same failure for ever, holding the
+// box the whole time.
+func TestASuspensionWhosePartsCannotBeReadBackFailsTheRun(t *testing.T) {
+	rig := newCoordRigOn(t, suspensionLost{memory.NewFleet()})
+	run := rig.launching("t1")
+	rig.suspendLarge("t1")
+	rig.coordinator.markBusy("swe")
+	rig.runner.Finish(Result{Success: true, Text: "fixed"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if len(rig.resumer.calls()) != 0 {
+		t.Fatal("a conversation missing a part was resumed")
+	}
+	rig.finished("t1")
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Errorf("killed %v, want the run's box reclaimed", killed)
+	}
+	failures := rig.failures()
+	if len(failures) != 1 || failures[0].Reason != types.SandboxFailureNoConversation {
+		t.Errorf("announced %+v, want the run lost for want of its conversation", failures)
+	}
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Error("the seat stayed parked on a run that can never continue")
+	}
+}
+
+// suspensionUnreachable cannot read any launch's suspension.
+type suspensionUnreachable struct{ *memory.Fleet }
+
+func (suspensionUnreachable) SuspensionParts(context.Context, string, string) ([]coord.Part, error) {
+	return nil, fmt.Errorf("broker restarting: %w", coord.ErrUnavailable)
+}
+
+// A STORE THAT CANNOT BE READ IS NOT A LOST CONVERSATION. The claim goes back
+// to where it was taken from, so the completion's redelivery can win it again
+// once the store answers, and nothing is resumed or ended in between.
+func TestASuspensionTheStoreCannotReadHandsTheClaimBack(t *testing.T) {
+	rig := newCoordRigOn(t, suspensionUnreachable{memory.NewFleet()})
+	rig.launching("t1")
+	rig.suspendLarge("t1")
+	rig.coordinator.markBusy("swe")
+	rig.runner.Finish(Result{Success: true, Text: "fixed"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); !errors.Is(err, coord.ErrUnavailable) {
+		t.Fatalf("OnCompleted = %v, want the store's refusal handed back for a retry", err)
+	}
+	if len(rig.resumer.calls()) != 0 {
+		t.Fatal("a conversation that could not be read was resumed")
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Errorf("status = %q, want the claim handed back to %q", got.Status, StatusRunning)
+	}
+	if !rig.coordinator.AwaitingSandbox("swe") {
+		t.Error("a run back in running does not hold its seat")
+	}
+	if len(rig.failures()) != 0 {
+		t.Errorf("announced %+v for a run that is not lost", rig.failures())
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -74,10 +75,7 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	opts := store.Options{
-		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout:  boot.Store.BusyTimeout(),
-	}
+	opts := engine.StoreOptions(boot)
 	ctx := context.Background()
 
 	schemas, err := store.Pending(ctx, boot.Store.Path, opts)

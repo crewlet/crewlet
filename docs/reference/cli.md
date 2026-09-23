@@ -587,9 +587,10 @@ reset names only its own scope.
 crewlet backup [<config.yaml>] -dir <absolute path> [-url URL] [-token TOKEN] [-wait DURATION]
 ```
 
-Copies a running node's two durable estates — its store file and every
-JetStream stream and coordination bucket — into one directory, and verifies
-the store copy before calling it a backup.
+Copies everything a running node holds durably — both of its store files (its
+own estate and the replicated estate beside it) and every JetStream stream and
+coordination bucket — into one directory, and verifies each store copy before
+calling it a backup.
 
 **It writes to the engine's host, not yours.** `-dir` is resolved where the
 node runs; nothing is downloaded. A relative path is refused rather than
@@ -597,18 +598,18 @@ guessed at, and a destination that already holds something is refused rather
 than merged, so each run gets a directory of its own.
 
 Like [`budgets`](#crewlet-budgets), this goes through the node rather than
-opening files, and here the reason is doubled. The store is locked to the
-engine's process for the life of the handle and the driver does not support a
-second process on a database file — so no outside tool can read it, and
-copying it anyway is a torn copy, because committed data lives in the file and
-its `-wal` together. The stream estate is worse: on the default topology the
+opening files, and here the reason is doubled. Each store file is locked to
+the engine's process for the life of the handle and the driver does not
+support a second process on a database file — so no outside tool can read
+one, and copying it anyway is a torn copy, because committed data lives in the
+file and its `-wal` together. The stream estate is worse: on the default topology the
 broker is embedded in the engine and **binds no socket**, so there is no
 address to give the `nats` CLI. The one process that can reach both is the
 engine, and this asks it to.
 
 The report names what it captured, per estate. Every node holds its own store
 whatever its `node.roles`, and on the embedded topology its own broker too; a
-node that dialled an external NATS cluster copies the store alone and says so,
+node that dialled an external NATS cluster copies its store files alone and says so,
 naming the cluster as where the stream half is backed up, rather than
 presenting a partial copy as a backup.
 

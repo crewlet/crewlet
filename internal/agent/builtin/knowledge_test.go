@@ -18,31 +18,32 @@ type stubSearcher struct {
 	can     bool
 	hits    []knowledge.Hit
 	queries []knowledge.Query
+
+	// building reports this node's index as still on its first build. A
+	// backend that keeps no index answers false, which is the zero value.
+	building bool
 }
 
 func (s *stubSearcher) CanSearch(*org.Role, *org.Organization) bool { return s.can }
+
+func (s *stubSearcher) Building(context.Context) bool { return s.building }
 
 func (s *stubSearcher) Search(_ context.Context, q knowledge.Query) []knowledge.Hit {
 	s.queries = append(s.queries, q)
 	return s.hits
 }
 
-// indexingSearcher is a backend that keeps an index of its own, and says
-// whether this node's is still on its first build.
-type indexingSearcher struct {
-	stubSearcher
-	building bool
-}
-
-func (s *indexingSearcher) Building(context.Context) bool { return s.building }
-
-// A NODE STILL INDEXING SAYS SO, in the turn-start block's own sentence.
+// A NODE STILL INDEXING SAYS SO, whatever its search found.
 //
-// "No documents match" invites different keywords, which on an index still on
-// its first build find nothing either, and a seat that concludes nothing was
-// written down acts on it by writing a page that already exists. The turn-start
-// block already tells the two apart; a seat's own search has to as well, or the
-// seat that followed the block's advice and searched gets the other answer.
+// Empty, it answers in the turn-start block's own sentence: "no documents
+// match" invites different keywords, which on an index still on its first build
+// find nothing either, and a seat that concludes nothing was written down acts
+// on it by writing a page that already exists.
+//
+// NOT EMPTY, it keeps what it found and says the answer may be missing pages:
+// where the fleet divides a search, a node still building counts its own
+// buckets missing and drops any page a peer ranked that it has not indexed
+// yet, so the hits are real and the list is not whole.
 func TestASearchOnABuildingIndexSaysSo(t *testing.T) {
 	t.Parallel()
 	ask := func(t *testing.T, backend KnowledgeSearcher) string {
@@ -61,7 +62,7 @@ func TestASearchOnABuildingIndexSaysSo(t *testing.T) {
 		return res.Output
 	}
 
-	building := &indexingSearcher{stubSearcher: stubSearcher{can: true}, building: true}
+	building := &stubSearcher{can: true, building: true}
 	if got := ask(t, building); got != prefetch.BuildingKnowledgeHint {
 		t.Errorf("an empty search on a building index answered %q, want the "+
 			"turn-start block's building hint", got)
@@ -71,24 +72,27 @@ func TestASearchOnABuildingIndexSaysSo(t *testing.T) {
 			len(building.queries))
 	}
 
-	// A SEARCH THAT FOUND SOMETHING HAS FOUND IT, whether or not this
-	// node's own index is still catching up — a peer may have answered.
-	found := &indexingSearcher{building: true, stubSearcher: stubSearcher{
-		can: true, hits: []knowledge.Hit{{Title: "Key rotation"}},
-	}}
-	if got := ask(t, found); !strings.Contains(got, "Key rotation") {
+	// A SEARCH THAT FOUND SOMETHING KEEPS IT, and says it may not be all.
+	found := &stubSearcher{can: true, building: true,
+		hits: []knowledge.Hit{{Title: "Key rotation", Container: "ENG", PageID: "p-1"}}}
+	got := ask(t, found)
+	if !strings.Contains(got, "Key rotation") {
 		t.Errorf("a building node discarded the hits it did find: %q", got)
 	}
+	if !strings.Contains(got, partialKnowledgeNote) {
+		t.Errorf("a building node answered its hits as the whole answer: %q", got)
+	}
 
-	// THE CONTROLS: a built index, and a backend that keeps none, answer
-	// an empty search as an empty search.
-	for name, backend := range map[string]KnowledgeSearcher{
-		"built":    &indexingSearcher{stubSearcher: stubSearcher{can: true}},
-		"no index": &stubSearcher{can: true},
-	} {
-		if got := ask(t, backend); !strings.Contains(got, "not everything is written down") {
-			t.Errorf("%s: an empty search answered %q, want the no-match answer", name, got)
-		}
+	// THE CONTROLS: a built index, found or not, answers as itself.
+	if got := ask(t, &stubSearcher{can: true}); !strings.Contains(got,
+		"not everything is written down") {
+		t.Errorf("an empty search on a built index answered %q, want the "+
+			"no-match answer", got)
+	}
+	whole := &stubSearcher{can: true,
+		hits: []knowledge.Hit{{Title: "Key rotation", Container: "ENG", PageID: "p-1"}}}
+	if got := ask(t, whole); strings.Contains(got, partialKnowledgeNote) {
+		t.Errorf("a built index's answer carries the building caveat: %q", got)
 	}
 }
 
@@ -103,10 +107,13 @@ func searchTurn() *turnctx.Turn {
 func TestSearchKnowledgeRendersPointersNotPages(t *testing.T) {
 	t.Parallel()
 	// THE POINTER IS THE POINT: a seat that acted on a snippet would be
-	// acting on the first two hundred characters of a runbook.
+	// acting on the first two hundred characters of a runbook. So every
+	// hit carries what opens it — its container and its page id, which the
+	// page-read tool takes — and the answer ends saying how.
 	backend := &stubSearcher{can: true, hits: []knowledge.Hit{
-		{Title: "Staging runbook", Snippet: "how the proxy is wired"},
-		{Title: "Untitled page"},
+		{Title: "Staging runbook", Container: "ENG", PageID: "p-17",
+			Snippet: "how the proxy is wired"},
+		{Title: "Untitled page", Container: "OPS", PageID: "p-18"},
 	}}
 	tool := &searchKnowledge{search: backend}
 	res, err := tool.CallForTurn(context.Background(), searchTurn(),
@@ -118,12 +125,41 @@ func TestSearchKnowledgeRendersPointersNotPages(t *testing.T) {
 		t.Fatalf("a real search failed: %s", res.Output)
 	}
 	for _, want := range []string{
-		"Staging runbook", "how the proxy is wired", "Untitled page",
-		"look it up by title",
+		prefetch.KnowledgeBullet(backend.hits[0]),
+		prefetch.KnowledgeBullet(backend.hits[1]),
+		"ENG, page id p-17", "OPS, page id p-18",
 	} {
 		if !strings.Contains(res.Output, want) {
 			t.Errorf("the answer is missing %q:\n%s", want, res.Output)
 		}
+	}
+	if !strings.HasSuffix(res.Output, prefetch.KnowledgeReadHint) {
+		t.Errorf("the answer does not end saying how to open a page:\n%s", res.Output)
+	}
+	// THE TOP OF A RANKING, NOT A COUNT OF WHAT MATCHED: "2 documents
+	// match" tells a seat the company has two pages on the subject.
+	if strings.Contains(res.Output, "documents match") {
+		t.Errorf("the answer reports its cut as the number of matches:\n%s", res.Output)
+	}
+	if backend.queries[0].Limit != SearchKnowledgeHits {
+		t.Errorf("the tool asked for %d pages, want %d", backend.queries[0].Limit,
+			SearchKnowledgeHits)
+	}
+}
+
+// THE READER IS WHATEVER THE BACKEND SERVES, and the description says so
+// without naming one: the native reader is the engine's own page tool, not an
+// MCP server's, and a description that sent a native seat to "your
+// knowledge-base MCP tools" sent it looking for a server it does not have.
+func TestSearchKnowledgeDescribesTheReaderByWhatItTakes(t *testing.T) {
+	t.Parallel()
+	desc := (&searchKnowledge{}).Description()
+	if strings.Contains(desc, "MCP") {
+		t.Errorf("the description sends a seat to MCP tools, which the native "+
+			"backend's reader is not: %s", desc)
+	}
+	if !strings.Contains(desc, "page id") {
+		t.Errorf("the description does not say what opens a hit: %s", desc)
 	}
 }
 

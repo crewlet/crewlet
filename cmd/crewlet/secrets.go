@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -324,10 +325,7 @@ func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.Secre
 	// secret read must not depend on the company document, and the vector
 	// columns are only sized when a migration actually runs — which a
 	// running node has already done.
-	db, err := store.Open(ctx, boot.Store.Path, store.Options{
-		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout:  boot.Store.BusyTimeout(),
-	})
+	db, err := store.Open(ctx, boot.Store.Path, engine.StoreOptions(boot))
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}

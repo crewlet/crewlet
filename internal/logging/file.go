@@ -60,13 +60,12 @@ const DefaultMaxBackups = 5
 // DirMode is the mode of a log directory this package creates, and FileMode
 // the mode of the log file itself.
 //
-// A log line is redacted (see internal/redact) but it is not a public
-// document: it carries seat handles, channel names, repository and issue
-// identifiers, and whatever a vendor put in an error string. The engine's own
-// files are 0600 for the same reason — see internal/hostbox — and a deployment
-// that wants its logs readable by a shipper running as another user says so
-// with its own `chmod`, which is a decision an operator makes rather than one
-// a default makes for them.
+// A log line is not a public document: it carries seat handles, channel names,
+// repository and issue identifiers, and whatever a vendor put in an error
+// string. internal/hostbox creates its files 0600 for the same reason, and a
+// deployment that wants its logs readable by a shipper running as another user
+// says so with its own `chmod`, which is a decision an operator makes rather
+// than one a default makes for them.
 const (
 	DirMode  os.FileMode = 0o700
 	FileMode os.FileMode = 0o600

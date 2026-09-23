@@ -240,12 +240,50 @@ func TestTheAlarmTableIsWellFormed(t *testing.T) {
 	}
 }
 
+// THE REFUSAL ALARM'S REMEDY NAMES THE WAITS ITS READING SKIPS, and no other.
+//
+// The reading counts every refusal a code's [statelog.ReadRefusal.OrdinaryLag]
+// calls a fault, and the remedy tells an operator which codes are a wait. A
+// remedy that named a code the reading counts would tell somebody paged for it
+// that their fault is ordinary; one that left a wait out would send them
+// looking for a fault that is lag.
+func TestTheRefusalRemedyNamesExactlyTheWaits(t *testing.T) {
+	t.Parallel()
+	var remedy string
+	for _, a := range statelog.Evaluate(statelog.Reading{RefusalsSince: time.Hour}) {
+		if a.Kind == statelog.KindReadRefusals {
+			remedy = a.Remedy
+		}
+	}
+	if remedy == "" {
+		t.Fatal("read_refusals did not fire an hour into refusals, so this case " +
+			"proves nothing about its remedy")
+	}
+	waits := 0
+	for _, code := range statelog.ReadRefusals {
+		named := strings.Contains(remedy, "`"+string(code)+"`")
+		if named != code.OrdinaryLag() {
+			t.Errorf("%q: the remedy names it as a wait %v, OrdinaryLag %v — the "+
+				"remedy and the reading disagree about which codes are faults",
+				code, named, code.OrdinaryLag())
+		}
+		if code.OrdinaryLag() {
+			waits++
+		}
+	}
+	if waits == 0 {
+		t.Error("no refusal code is ordinary lag, so every refusal — `behind` a " +
+			"moment after every write among them — raises the alarm")
+	}
+}
+
 // AN ALARM IS LOGGED ONCE WHEN IT STARTS AND ONCE WHEN IT ENDS.
 //
-// Not on every tick: evaluated on a fifteen-second heartbeat, a level would
-// write the same line four times a minute for as long as the condition holds,
-// and the one thing an operator needs from a log — when it STARTED — would be
-// buried under thousands of repetitions of the fact that it is still true.
+// Not on every evaluation: evaluated on every tick and on every report an
+// operator asks for, a level would write the same line each time for as long
+// as the condition holds, and the one thing an operator needs from a log —
+// when it STARTED — would be buried under repetitions of the fact that it is
+// still true.
 func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
 	t.Parallel()
 	rec, err := metrics.New()

@@ -557,7 +557,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 //
 // A record is one message, and the records here are sized against the
 // contract's payload ceiling, [queue.MaxPayloadBytes] — a bridged call is
-// accepted up to [coord.MaxBridgeCallBytes], which is derived from it. The
+// accepted up to [coord.MaxRecordBytes], which is derived from it. The
 // embedded broker is configured at exactly that; an EXTERNAL cluster is
 // whatever its operator set, and nats-server's own default is 1 MiB. On such a
 // connection a record between the two is refused by the client at write time,
@@ -2081,9 +2081,16 @@ func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
 
 // CreateSandboxRun writes a new record, ignoring a turn id that already
 // exists.
+//
+// A value the broker refuses as too large is [coord.ErrTooLarge], naming the
+// server's own limit ([FleetStore.writeRefusal]): the same record is refused
+// the same way on every attempt, so it is not a blip to retry.
 func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error) {
 	if turnID == "" {
 		return false, errors.New("coord/kv: a sandbox run needs a turn id")
+	}
+	if err := withinCeiling("a sandbox run", value); err != nil {
+		return false, err
 	}
 	_, err := f.runs.Create(ctx, encodeKey(turnID), value)
 	switch {
@@ -2092,12 +2099,18 @@ func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value 
 	case errors.Is(err, jetstream.ErrKeyExists):
 		return false, nil
 	default:
-		return false, unavailable("create the sandbox run", err)
+		return false, f.writeRefusal(err, "create the sandbox run", "a sandbox run", len(value))
 	}
 }
 
 // UpdateSandboxRun writes at a version, reporting whether that version held.
+//
+// Refused as [FleetStore.CreateSandboxRun] refuses: past the contract's
+// ceiling, or as too large by the broker, it is [coord.ErrTooLarge].
 func (f *FleetStore) UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error) {
+	if err := withinCeiling("a sandbox run", value); err != nil {
+		return false, err
+	}
 	if version == 0 {
 		// NO VERSION IS A LOST RACE, never an unconditional write. The
 		// client reads an expected revision of 0 as "the key must not exist
@@ -2115,7 +2128,7 @@ func (f *FleetStore) UpdateSandboxRun(ctx context.Context, turnID string, value 
 		// deleted key lands here too — the run finished under it.
 		return false, nil
 	default:
-		return false, unavailable("update the sandbox run", err)
+		return false, f.writeRefusal(err, "update the sandbox run", "a sandbox run", len(value))
 	}
 }
 

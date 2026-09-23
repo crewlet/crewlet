@@ -202,11 +202,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		running := sl.Domain(tracker.Domain{}.Name())
 		writer, err := tracker.NewWriter(tracker.WriterDeps{
 			Publisher: running.publisher,
-			// THE APPLIER'S OWN MEASURED RATE, so a refusal's
-			// `retry_after_seconds` is derived from what this node
-			// actually applies rather than from the one-record-a-second
-			// floor a nil reader falls back to — which reported a node
-			// two thousand records behind as half an hour behind.
+			// THE APPLIER'S OWN MEASURED RATE, which a bulk edit's
+			// projection divides its records by: the occupancy it
+			// reports and the lease it holds follow from what this
+			// node actually applies rather than from the floor an
+			// unmeasured drain reads at. A read refusal's
+			// `retry_after_seconds` is the reader's, from the same
+			// runner's drain wired into it.
 			Drain:  running.runner.Drain,
 			DB:     e.backends.Store,
 			Claims: e.backends.Coord,
@@ -1344,18 +1346,23 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 				func(u *org.Unit) string { return u.Space },
 				func(r *org.Role) string { return r.Space })
 		},
-		// THE TWO CONTAINERS A SEAT MAY NOT WRITE TO DIRECTLY: the
-		// tool-skills container, whose pages are machinery the sync
-		// publishes, and the org root, which holds the onboarding tree.
-		// Read off the CURRENT epoch for the reason the defaults are —
-		// and refused by name at the call rather than silently landing
-		// somewhere every search excludes.
-		Reserved: reservedContainers(c.Config),
-		Await:    e.WaitCommitted,
+		// THE TWO CONTAINERS A SEAT MAY NOT WRITE INTO, read off the
+		// CURRENT epoch for the reason the default container is — see
+		// [builtin.PageDeps.Reserved] for why each is closed to a seat.
+		Reserved: func() []string {
+			if current := e.Company(); current != nil {
+				return reservedContainers(current.Config)
+			}
+			return nil
+		},
+		Await: e.WaitCommitted,
 	}
 }
 
-// reservedContainers are the containers a seat's own writes may not target.
+// reservedContainers are the containers a seat's own writes may not target:
+// the tool-skills container, which holds the guidance the engine injects into
+// seats' phases, and the org root, which holds the organisation's own pages.
+// A container the company has switched off (an empty key) reserves nothing.
 func reservedContainers(cfg *config.Company) []string {
 	if cfg == nil {
 		return nil

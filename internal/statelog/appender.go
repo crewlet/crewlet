@@ -72,6 +72,13 @@ const (
 	// setting.
 	faultTooLarge
 
+	// faultRefused is every other decision the broker made and named: an
+	// API error this framework has no remedy of its own for. It is as
+	// definitive as the two above and apart from both, because filed with
+	// either it would carry that one's remedy — a byte ceiling to raise, a
+	// size limit to lift — for a refusal neither setting causes.
+	faultRefused
+
 	// faultUnknown is no answer: the append may or may not have landed,
 	// and nothing here can tell which.
 	faultUnknown
@@ -131,20 +138,21 @@ func classify(err error) (fault, string) {
 				"max_msg_size is smaller than this record and its headers; " +
 				"raise it on the stream, or remove it"
 		case codeStreamStoreFailed:
-			// THE ONE PLACE THE DESCRIPTION TRAVELS RATHER THAN BEING
-			// PARSED. This code covers both "maximum bytes exceeded"
-			// and "message too large", the server carries the reason
-			// only in its own words, and both are an operator's
-			// problem with different remedies — so the words are
+			// THE DESCRIPTION TRAVELS RATHER THAN BEING PARSED. The
+			// server answers this code for every store limit the
+			// record met — the stream's bytes, its message count, a
+			// record past the file store's own maximum — and carries
+			// which one only in its own words, so the words are
 			// handed on verbatim instead of being turned into a
 			// second enum this build would have to keep matching.
 			return faultFull, apiErr.Description
 		}
-		// Any other API error is a decision the server made and named,
-		// so it is not ambiguous — but it is not one this framework
-		// knows how to act on either, so it is reported rather than
-		// retried.
-		return faultFull, apiErr.Description
+		// ANY OTHER API ERROR is a decision the server made and named,
+		// so it is not ambiguous — and it is not one this framework has
+		// a remedy for either, so it is reported in the server's own
+		// words rather than retried or filed under a remedy that is not
+		// its own.
+		return faultRefused, apiErr.Description
 	}
 	// NO ANSWER IS THE THIRD VALUE. The client retries a no-responder
 	// twice on its own before giving up, so reaching here means the

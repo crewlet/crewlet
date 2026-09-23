@@ -3,17 +3,12 @@
 //
 // # Why this package exists
 //
-// The estate it replaces had forty-odd numbers on one operator record, polled
-// once a minute at a stale read level, and nine benchmarks that run on a
-// developer's machine. Not one latency was measured in production. A broker
-// whose fsync drifted from 1 ms to 40 ms, an applier whose drain halved, a
-// barrier that started spending half its read budget: each of them showed up
-// as nothing at all until reads began refusing, and then as a refusal with no
-// number behind it.
-//
 // A number on a page is not a metric. What makes one is that an operator can
 // draw it over time and alarm on it, and that requires it to leave the
-// process.
+// process: a broker whose fsync drifts from 1 ms to 40 ms, an applier whose
+// drain halves, a barrier that starts spending half its read budget — each is
+// a line on a collector's panel long before it is a refusal, and a refusal
+// with no number behind it is all an operator has without one.
 //
 // # One recorder, two readers
 //
@@ -35,7 +30,10 @@
 // one that stops matching.
 package metrics
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // Kind is what an instrument measures.
 type Kind string
@@ -60,13 +58,38 @@ const (
 	UnitMilliseconds = "ms"
 	UnitBytes        = "By"
 	UnitSeconds      = "s"
-	UnitCount        = "1"
+
+	// UnitRatio is "1", UCUM's DIMENSIONLESS unit, for a fraction or a state
+	// that is 0 or 1 — which is what the OpenTelemetry semantic conventions
+	// write a utilization in. It is not how they write a count, so a
+	// collector handed "1" for a count is told the count is a ratio, and
+	// everything that counts something takes one of the annotations below
+	// instead.
+	UnitRatio = "1"
+
+	// The COUNTS, each annotated with what it counts. The braces are UCUM's
+	// annotation: they name the thing without changing the unit, which is
+	// how the same conventions write an integer count of something —
+	// `{thread}`, `{fault}`.
+	UnitRecords    = "{record}"
+	UnitRows       = "{row}"
+	UnitWrites     = "{write}"
+	UnitRounds     = "{round}"
+	UnitRejections = "{rejection}"
+	UnitReads      = "{read}"
+	UnitBarriers   = "{barrier}"
+	UnitYields     = "{yield}"
+	UnitAttempts   = "{attempt}"
+	UnitSequence   = "{sequence}"
+	UnitCallers    = "{caller}"
+	UnitHolds      = "{hold}"
+	UnitScans      = "{scan}"
+	UnitAnswers    = "{answer}"
+	UnitCalls      = "{call}"
 
 	// UnitRecordsPerSecond and UnitCommitsPerSecond are RATES, and UCUM
 	// writes a rate as a quantity over a second: "1" alone declares a
-	// number dimensionless, which a fraction is and a rate is not. The
-	// braces are UCUM's annotation — they name what is counted without
-	// changing the unit.
+	// number dimensionless, which a fraction is and a rate is not.
 	UnitRecordsPerSecond = "{record}/s"
 	UnitCommitsPerSecond = "{commit}/s"
 )
@@ -102,16 +125,62 @@ type Instrument struct {
 	// rather than let it sit there meaning nothing.
 	Fractional bool
 
+	// Bounds are a histogram's own bucket boundaries in its own unit,
+	// strictly increasing, for an instrument whose range the default set
+	// ([DefaultBounds]) does not cover. Nil takes the default.
+	//
+	// DECLARED HERE rather than chosen by whoever records or exports, so
+	// the recorder counts into them, the exporter registers them and every
+	// node agrees on them — a boundary set that differed between nodes
+	// could not be merged. [Validate] refuses them on anything but a
+	// histogram.
+	Bounds []float64
+
 	// Shows is the failure this instrument makes visible. It is the reason
 	// the instrument exists, and an entry that cannot fill it in is an
 	// instrument nobody will alarm on.
 	Shows string
 }
 
-// Catalogue is every instrument this engine records, in name order.
+// Buckets is a copy of the boundaries this histogram counts into: its own
+// [Instrument.Bounds], or [DefaultBounds].
 //
-// ORDERED, so the generated reference is stable and a diff is a change rather
-// than a shuffle.
+// A COPY, because the exporter hands it to an SDK view that keeps it, and the
+// recorder's own counts are indexed by the slice it holds.
+func (i Instrument) Buckets() []float64 { return append([]float64(nil), i.bounds()...) }
+
+// bounds is the boundaries without the copy, for the recorder's own hot path.
+func (i Instrument) bounds() []float64 {
+	if i.Bounds != nil {
+		return i.Bounds
+	}
+	return defaultBounds
+}
+
+// backupDurationBounds are the backup histogram's own buckets, in
+// milliseconds: twenty-one powers of two from 2^7 (128 ms) to 2^27 (about 37
+// hours) — the default set's count and resolution, moved up the scale.
+//
+// THE DEFAULT SET CANNOT HOLD A BACKUP. It tops out at 2^16 ms, about 65.5 s,
+// and a backup is both estates' copies, every stream's snapshot and their
+// verification: every copy slower than that lands past the last boundary and
+// reads only as "longer than a minute", and on a node whose copies all take
+// longer the p95 is infinite.
+//
+// THE TOP IS THE FIRST POWER OF TWO PAST A DAY, which is the default
+// `backup_max_age`: a copy slower than the interval that policy allows
+// between completed backups cannot keep it satisfied on any schedule, so past
+// it there is no finer distinction an operator acts on.
+//
+// THE BOTTOM FOLLOWS FROM KEEPING TWENTY-ONE BUCKETS, the size every other
+// histogram's series is: a copy faster than an eighth of a second reads as
+// exactly that, and no maintenance window is sized against the difference.
+var backupDurationBounds = powersOfTwo(7, 27)
+
+// Catalogue is every instrument this engine records, grouped by subsystem.
+//
+// IN A FIXED ORDER, so the generated reference is stable and a diff is a change
+// rather than a shuffle.
 func Catalogue() []Instrument {
 	return []Instrument{
 		// ---- the write path -------------------------------------------
@@ -119,30 +188,30 @@ func Catalogue() []Instrument {
 			Name: StatelogPublishDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain", "outcome"},
 			Shows: "A write path slowing down before it starts refusing. The " +
-				"outcome dimension separates the three answers a write has, " +
-				"so a rise in `pending` reads as an applier falling behind " +
-				"rather than as a broker getting slower.",
+				"outcome dimension separates the three answers a write has " +
+				"from its refusals, so a rise in `pending` reads as an applier " +
+				"falling behind rather than as a broker getting slower.",
 		},
 		{
-			Name: StatelogPublishRounds, Kind: KindHistogram, Unit: UnitCount,
+			Name: StatelogPublishRounds, Kind: KindHistogram, Unit: UnitRounds,
 			Attributes: []string{"domain"},
 			Shows: "Contention on one subject, which the compare-and-set round " +
-				"cap bounds and nothing measured. A distribution creeping " +
-				"toward the cap is a hot object; reaching it is a refusal a " +
-				"model reads as a colleague editing the same thing.",
+				"cap bounds. A distribution creeping toward the cap is a hot " +
+				"object; reaching it is a refusal a model reads as a colleague " +
+				"editing the same thing.",
 		},
 		{
-			Name: StatelogPublishOutcomes, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogPublishOutcomes, Kind: KindCounter, Unit: UnitWrites,
 			Attributes: []string{"domain", "outcome"},
 			Shows: "The three-valued write outcome, counted, and only the " +
 				"three — a refusal is on `publish.refusals` instead, because " +
 				"it says the write never happened at all. `unknown` is the " +
-				"one that matters most and had no counter: a broker flapping " +
-				"into ambiguity was visible only to the model that received " +
+				"one that matters most: without this count a broker flapping " +
+				"into ambiguity is visible only to the model that received " +
 				"the answer.",
 		},
 		{
-			Name: StatelogPublishConflicts, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogPublishConflicts, Kind: KindCounter, Unit: UnitWrites,
 			Attributes: []string{"domain", "subject_kind"},
 			Shows: "Writes that spent their whole round budget losing races " +
 				"on one subject, BY KIND. The refusal counter beside it " +
@@ -151,21 +220,24 @@ func Catalogue() []Instrument {
 				"design question and a contended kind is a hot subject.",
 		},
 		{
-			Name: StatelogPublishRejections, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogPublishRejections, Kind: KindCounter, Unit: UnitRejections,
 			Attributes: []string{"domain", "subject_kind"},
 			Shows: "How often a write loses a race, per kind of subject. It is " +
 				"what says whether a counter, a rank order or an ordinary " +
 				"object is the contended one.",
 		},
 		{
-			Name: StatelogPublishRefusals, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogPublishRefusals, Kind: KindCounter, Unit: UnitWrites,
 			Attributes: []string{"domain", "reason"},
-			Shows: "Writes refused before or instead of an append, by reason — " +
-				"an evicted node, a deferred record covering the object, a " +
-				"caller waiting on its own previous write, a full log. A " +
-				"refusal is not one of the three outcomes: it says the write " +
-				"never happened, and each reason has a different remedy, so " +
-				"one counter with an outcome dimension would hide all four.",
+			Shows: "Writes refused before or instead of an append, by the " +
+				"refusal's own reason — `evicted`, `deferred`, `behind`, " +
+				"`log_full`, `too_large` and `refused` among them — with " +
+				"`conflict` for a write that lost every round, `exists` for a " +
+				"create over an object that is there, and `error` for a " +
+				"failure that is no refusal at all. A refusal is not one of " +
+				"the three outcomes: it says the write never happened, and " +
+				"each reason has its own remedy, which one counter with an " +
+				"outcome dimension would hide.",
 		},
 		{
 			Name: StatelogWriteSessionWait, Kind: KindHistogram, Unit: UnitMilliseconds,
@@ -181,8 +253,7 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain"},
 			Shows: "The broker round trip under every linearizable read, and " +
 				"the first number a drifting fsync or a degrading quorum " +
-				"moves. It was a benchmark's p50 on an idle loopback cluster " +
-				"and nothing in production.",
+				"moves.",
 		},
 		{
 			Name: StatelogReadWait, Kind: KindHistogram, Unit: UnitMilliseconds,
@@ -193,28 +264,29 @@ func Catalogue() []Instrument {
 				"is too late to be.",
 		},
 		{
-			Name: StatelogReadRefusals, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogReadRefusals, Kind: KindCounter, Unit: UnitReads,
 			Attributes: []string{"domain", "level", "code"},
-			Shows: "Every refusal code, counted. Twelve codes with different " +
-				"remedies had no counter between them, so an operator had no " +
-				"rejection rate for any of them.",
+			Shows: "Every refusal code, counted, which is each code's own " +
+				"rejection rate. The codes have different remedies, so a rate " +
+				"folded across them would say reads are failing and not what " +
+				"to do about it.",
 		},
 		{
-			Name: StatelogReadServed, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogReadServed, Kind: KindCounter, Unit: UnitReads,
 			Attributes: []string{"domain", "level"},
 			Shows: "Reads answered per level, which is the denominator every " +
 				"refusal fraction needs and the check on the assumed read " +
 				"rate the log's own size is derived from.",
 		},
 		{
-			Name: StatelogBarrierAppends, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogBarrierAppends, Kind: KindCounter, Unit: UnitBarriers,
 			Attributes: []string{"domain"},
 			Shows: "Barrier records appended. Against reads served it is the " +
 				"single-flight ratio, which says whether coalescing is doing " +
 				"anything at all.",
 		},
 		{
-			Name: StatelogLingerYields, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogLingerYields, Kind: KindCounter, Unit: UnitYields,
 			Attributes: []string{"domain"},
 			Shows: "How often a waiter cut a batch short. It is the batching " +
 				"the applier gives up to answer a read promptly, and without " +
@@ -227,36 +299,36 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain"},
 			Shows: "THE COMMIT-TO-APPLY GAP: from the broker's own timestamp " +
 				"on a record to this node committing it. Every read level is " +
-				"a policy about this quantity and nothing measured it.",
+				"a policy about this quantity.",
 		},
 		{
 			Name: StatelogApplyTxDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain", "bound_by"},
-			Shows: "How long one apply run takes, and which budget ended it: " +
-				"from asking for the store's writer to acknowledging the " +
-				"run's records, so the wait for the writer before the " +
-				"transaction and the work between its commit and the " +
-				"acknowledgement are inside the figure. A transaction is what " +
-				"every waiter behind it pays, and rows were only ever a proxy " +
-				"for the duration.",
+			Shows: "How long one apply transaction holds the store's writer, " +
+				"and which budget ended it: from the start of the attempt that " +
+				"committed to its commit. It is what every writer queued " +
+				"behind it waits out, which is why the budgets bound it. The " +
+				"wait for the writer before it, an attempt the store rolled " +
+				"back and ran again, and the acknowledgement after it are all " +
+				"outside it — and all inside the drain gauge's span, which is " +
+				"what a backlog costs.",
 		},
 		{
 			Name: StatelogApplyRecordDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain", "kind"},
 			Shows: "One record's apply. A single record past the time budget " +
 				"is still one transaction, so this is the real ceiling on how " +
-				"long a read can be delayed — a sentence in a design document " +
-				"until it was measured.",
+				"long a read can be delayed.",
 		},
 		{
-			Name: StatelogApplyBatchRows, Kind: KindHistogram, Unit: UnitCount,
+			Name: StatelogApplyBatchRows, Kind: KindHistogram, Unit: UnitRows,
 			Attributes: []string{"domain"},
 			Shows: "Rows per apply transaction, as the domain's applier " +
 				"reports writing them, which is what the row budget bounds. " +
 				"Rows, not records: the drain gauge counts records.",
 		},
 		{
-			Name: StatelogApplyRecords, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogApplyRecords, Kind: KindCounter, Unit: UnitRecords,
 			Attributes: []string{"domain", "result"},
 			Shows: "Records consumed, by what happened to them: applied, " +
 				"retained, gated, skipped, or reprocessed by a build that could " +
@@ -264,7 +336,7 @@ func Catalogue() []Instrument {
 				"while its position advances is healthy on lag alone.",
 		},
 		{
-			Name: StatelogApplyRetries, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogApplyRetries, Kind: KindCounter, Unit: UnitAttempts,
 			Attributes: []string{"domain"},
 			Shows: "Attempts the apply loop retried in place after a failure " +
 				"that was not a stop — a fetch the broker did not answer, a " +
@@ -273,19 +345,19 @@ func Catalogue() []Instrument {
 				"stopped moving, and its health says so.",
 		},
 		{
-			Name: StatelogApplyTxAborts, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogApplyTxAborts, Kind: KindCounter, Unit: UnitAttempts,
 			Attributes: []string{"domain"},
-			Shows: "Apply transactions whose body the store ran more than " +
-				"once, because an attempt failed transiently after it began. " +
-				"It reads zero by construction: this database detects write " +
-				"conflicts per file, so every write transaction takes the " +
-				"file's lock at its BEGIN and queues for it, and no commit " +
-				"elsewhere in the file can abort an apply. A non-zero count " +
-				"on the operator's own hardware means the retry budget is " +
-				"being spent rather than held in reserve.",
+			Shows: "Apply attempts the store rolled back and ran again, because " +
+				"the attempt failed transiently after it began. It reads zero " +
+				"by construction: this database detects write conflicts per " +
+				"file, so every write transaction takes the file's lock at its " +
+				"BEGIN and queues for it, and no commit elsewhere in the file " +
+				"can abort an apply. A non-zero count on the operator's own " +
+				"hardware means the retry budget is being spent rather than " +
+				"held in reserve.",
 		},
 		{
-			Name: StatelogRecordsGated, Kind: KindCounter, Unit: UnitCount,
+			Name: StatelogRecordsGated, Kind: KindCounter, Unit: UnitRecords,
 			Attributes: []string{"gate", "subject_kind"},
 			Shows: "Records an apply gate dropped. A dropped commit is " +
 				"recoverable by nothing, and this is the only place anyone " +
@@ -296,12 +368,14 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain"},
 			Shows: "The applier's measured drain in RECORDS a second: every " +
 				"record an apply run moves over, applied or not, over the " +
-				"run's own duration, smoothed across runs. It is the rate this " +
-				"node turns a record backlog into a time with — the apply lag " +
-				"in seconds and a refused read's retry hint among them — so a " +
-				"falling rate is an applier slowing down. Zero until this " +
-				"process has consumed a batch: nothing seeds it, and the first " +
-				"batch's rate is the first reading.",
+				"run's whole span — the wait for the writer and the " +
+				"acknowledgement included — smoothed across runs. It is the " +
+				"rate this node states a record backlog as a time with — a " +
+				"stale read's staleness bound, a refused read's retry hint and " +
+				"a bulk edit's projection — so a falling rate is an applier " +
+				"slowing down. Zero until this process has consumed a batch: " +
+				"nothing seeds it, and the first batch's rate is the first " +
+				"reading.",
 		},
 		{
 			Name: StatelogDrainCommitsPerSecond, Kind: KindGauge, Unit: UnitCommitsPerSecond,
@@ -313,36 +387,36 @@ func Catalogue() []Instrument {
 
 		// ---- position and health --------------------------------------
 		{
-			Name: StatelogApplyLagSeq, Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogApplyLagSeq, Kind: KindGauge, Unit: UnitRecords,
 			Attributes: []string{"domain"},
 			Shows:      "How many records this node is behind the log's head.",
 		},
 		{
 			Name: StatelogApplyLagSeconds, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: []string{"domain"},
-			Shows: "How long this node would take to apply its backlog at its " +
-				"measured drain: the record lag beside it over the drain " +
-				"gauge, with a rate below one record a second — or none " +
-				"measured yet — taken as one. Seconds are what a stall grace, " +
-				"a pending outcome and a seat move all turn on; sequences are " +
-				"not, and a lag of 4 000 says nothing about whether anything " +
-				"is wrong. It is a projection, not an age: an applier that has " +
-				"stopped keeps its last drain, so this stays as small as its " +
-				"backlog does.",
+			Shows: "How old the oldest record this node has not applied is: " +
+				"now less the broker's own timestamp on the first record past " +
+				"its checkpoint, and zero when it is caught up. An AGE rather " +
+				"than the backlog over the drain, because an applier that has " +
+				"stopped keeps its last drain — its projection stays as small " +
+				"as its backlog on a quiet log — while the records it owes go " +
+				"on growing old. It is what the `apply_lag` alarm fires on, at " +
+				"a minute. Exact on a strict log; on the compacted vector log, " +
+				"where that record may have been superseded, it is the age of " +
+				"the newest one instead, which never overstates.",
 		},
 		{
-			Name: StatelogAppliedThrough, Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogAppliedThrough, Kind: KindGauge, Unit: UnitSequence,
 			Attributes: []string{"domain"},
 			Shows: "The prefix this node has actually applied, which is lower " +
 				"than its checkpoint whenever a record was retained.",
 		},
 		{
-			Name: StatelogDeferredCount, Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogDeferredCount, Kind: KindGauge, Unit: UnitRecords,
 			Attributes: []string{"domain"},
-			Shows: "Whether this node holds a record its build could not read " +
-				"and kept, as 1 or 0 — not how many. Non-zero is a rolling " +
-				"upgrade in progress; the oldest one's age beside it says " +
-				"whether the upgrade has stopped.",
+			Shows: "How many records this node holds that its build could not " +
+				"read. Non-zero is a rolling upgrade in progress; the oldest " +
+				"one's age beside it says whether the upgrade has stopped.",
 		},
 		{
 			Name: StatelogDeferredOldestAgeSeconds, Kind: KindGauge, Unit: UnitSeconds,
@@ -351,12 +425,12 @@ func Catalogue() []Instrument {
 				"which is what decides whether this node's seats move.",
 		},
 		{
-			Name: StatelogWaiters, Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogWaiters, Kind: KindGauge, Unit: UnitCallers,
 			Attributes: []string{"domain"},
-			Shows: "Callers blocked on the applier, sampled as each apply run " +
-				"ends. It is the depth of the queue a slow apply is making — " +
-				"and nothing refreshes it between runs, so an applier that has " +
-				"stopped keeps the count its last run saw.",
+			Shows: "Callers blocked on the applier, sampled on the position " +
+				"heartbeat from the waiters themselves. It is the depth of the " +
+				"queue a slow apply is making, and it goes on counting while " +
+				"the applier is stopped — which is when callers pile up.",
 		},
 
 		// ---- retention and capacity -----------------------------------
@@ -373,7 +447,7 @@ func Catalogue() []Instrument {
 				"running one is what refuses the append.",
 		},
 		{
-			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitCount,
+			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitRatio,
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling is left. A full log refuses every " +
 				"write AND every linearizable read, and the remedy is a " +
@@ -403,13 +477,14 @@ func Catalogue() []Instrument {
 		{
 			Name: BackupDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: nil,
+			Bounds:     backupDurationBounds,
 			Shows: "How long a backup took, which is the window the trim " +
 				"hold covers and the I/O the copy spends competing with the " +
 				"applier's own commits. It is what turns the retention " +
 				"guide's worked example into a number for THIS hardware.",
 		},
 		{
-			Name: BackupHolds, Kind: KindGauge, Unit: UnitCount,
+			Name: BackupHolds, Kind: KindGauge, Unit: UnitHolds,
 			Attributes: nil,
 			Shows: "Live trim holds. A pin that outlives its owner stops the " +
 				"trim until the stale bound expires it, so a count that does " +
@@ -421,10 +496,10 @@ func Catalogue() []Instrument {
 			Name: StorePoolWait, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"file"},
 			Shows: "How long callers queued for one of this file's pooled " +
-				"connections, as one observation per reporting tick holding " +
-				"that tick's mean wait: the pool reports a total and a count, " +
-				"not each wait. It is what says the reader pool is too small " +
-				"on this node, which nothing could say before.",
+				"connections: one observation per reporting tick in which a " +
+				"caller queued, holding that tick's mean wait, because the " +
+				"pool reports a total and a count rather than each wait. It " +
+				"is what says the reader pool is too small on this node.",
 		},
 		{
 			Name: StoreWalBytes, Kind: KindGauge, Unit: UnitBytes,
@@ -444,19 +519,19 @@ func Catalogue() []Instrument {
 			Name: TrackerSearchScanDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"path", "rung"},
 			Shows: "The semantic scan, split by whether it ran for a turn's " +
-				"prefetch or for somebody's deliberate search. Only the " +
-				"prefetch had a published percentile, and the interactive " +
-				"path is the one with a target.",
+				"prefetch or for somebody's deliberate search, because the " +
+				"interactive path is the one with a target and a prefetch's " +
+				"scans would dilute it.",
 		},
 		{
-			Name: TrackerSearchConcurrency, Kind: KindGauge, Unit: UnitCount,
+			Name: TrackerSearchConcurrency, Kind: KindGauge, Unit: UnitScans,
 			Attributes: nil,
 			Shows: "Scans in flight, which is the row of the supported-corpus " +
 				"table this node is actually on. The published figure is a " +
 				"single reader on an idle node.",
 		},
 		{
-			Name: TrackerSearchAnswers, Kind: KindCounter, Unit: UnitCount,
+			Name: TrackerSearchAnswers, Kind: KindCounter, Unit: UnitAnswers,
 			Attributes: []string{"coverage", "semantic"},
 			Shows: "What each answer actually covered: whether every bucket " +
 				"of the corpus was scanned, and whether the semantic half " +
@@ -465,7 +540,7 @@ func Catalogue() []Instrument {
 				"corpus without it.",
 		},
 		{
-			Name: TrackerVectorCoverage, Kind: KindGauge, Unit: UnitCount,
+			Name: TrackerVectorCoverage, Kind: KindGauge, Unit: UnitRatio,
 			Attributes: nil,
 			Shows: "The fraction of sources carrying a current vector. It is " +
 				"how a stalled embedding backlog is reported, since it never " +
@@ -474,7 +549,7 @@ func Catalogue() []Instrument {
 
 		// ---- the change feed ------------------------------------------
 		{
-			Name: TrackerFeedUnreadable, Kind: KindCounter, Unit: UnitCount,
+			Name: TrackerFeedUnreadable, Kind: KindCounter, Unit: UnitRecords,
 			Attributes: []string{"source"},
 			Shows: "Change records this build could not translate into a " +
 				"wake. Both domain consumers are deliberately uncapped, so " +
@@ -485,12 +560,11 @@ func Catalogue() []Instrument {
 
 		// ---- bulk -----------------------------------------------------
 		{
-			Name: TrackerBulkCalls, Kind: KindCounter, Unit: UnitCount,
+			Name: TrackerBulkCalls, Kind: KindCounter, Unit: UnitCalls,
 			Attributes: []string{"result"},
-			Shows: "How often a bulk edit is issued and how often one is " +
-				"refused because another is applying. The refusal " +
-				"arithmetic rested on an assumed ten a day, a number with " +
-				"no counter behind it; this is that number.",
+			Shows: "How often a bulk edit is issued, and how often one is " +
+				"refused because another is applying: the rate at which the " +
+				"one-bulk-at-a-time rule actually turns a caller away.",
 		},
 		{
 			Name: TrackerBulkApplySeconds, Kind: KindCounter, Unit: UnitSeconds,
@@ -507,7 +581,7 @@ func Catalogue() []Instrument {
 		},
 		// ---- alarms ---------------------------------------------------
 		{
-			Name: AlarmActive, Kind: KindGauge, Unit: UnitCount,
+			Name: AlarmActive, Kind: KindGauge, Unit: UnitRatio,
 			Attributes: []string{"kind"},
 			Shows: "Whether each named alarm is firing right now, 0 or 1. It " +
 				"is the same table the operator record renders and the CLI " +
@@ -546,6 +620,20 @@ func Validate(entries []Instrument) error {
 			return fmt.Errorf("metrics: %q is a %s marked Fractional: only a "+
 				"counter has an integer form to choose against, so remove the "+
 				"mark", e.Name, e.Kind)
+		case e.Kind == KindCounter && e.Unit == UnitRatio:
+			// A COUNTER COUNTS SOMETHING, and "1" declares a fraction:
+			// a total that only rises is never one.
+			return fmt.Errorf("metrics: %q is a counter in %q, which declares "+
+				"a dimensionless fraction: annotate what it counts instead, "+
+				"as {record} does", e.Name, e.Unit)
+		case e.Bounds != nil && e.Kind != KindHistogram:
+			return fmt.Errorf("metrics: %q is a %s with Bounds: only a "+
+				"histogram has buckets, so remove them", e.Name, e.Kind)
+		case e.Bounds != nil && !increasing(e.Bounds):
+			return fmt.Errorf("metrics: %q declares Bounds that are empty or "+
+				"not strictly increasing and finite: a value is counted into "+
+				"the first boundary at or above it, which only a strictly "+
+				"increasing set answers", e.Name)
 		case e.Kind == KindCounter && !e.Fractional &&
 			(e.Unit == UnitSeconds || e.Unit == UnitMilliseconds):
 			// A SUMMED DURATION IS NOT A COUNT OF WHOLE UNITS, and as an
@@ -558,4 +646,18 @@ func Validate(entries []Instrument) error {
 		seen[e.Name] = true
 	}
 	return nil
+}
+
+// increasing reports a boundary set a value can be counted into: non-empty,
+// finite and strictly increasing.
+func increasing(bounds []float64) bool {
+	if len(bounds) == 0 {
+		return false
+	}
+	for i, b := range bounds {
+		if math.IsNaN(b) || math.IsInf(b, 0) || (i > 0 && b <= bounds[i-1]) {
+			return false
+		}
+	}
+	return true
 }

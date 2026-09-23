@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -236,10 +237,7 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 			return nil, nil, fmt.Errorf("secrets keyring: %w", err)
 		}
 	}
-	db, err := store.Open(ctx, boot.Store.Path, store.Options{
-		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout:  boot.Store.BusyTimeout(),
-	})
+	db, err := store.Open(ctx, boot.Store.Path, engine.StoreOptions(boot))
 	if err != nil {
 		// A LOCKED STORE HAS A ROUTE AROUND IT, and naming it here is the
 		// difference between "you are blocked" and "do this instead": the

@@ -65,10 +65,17 @@ type waiterRig struct {
 
 func newWaiterRig(t *testing.T) *waiterRig {
 	t.Helper()
+	return newWaiterRigOn(t, memory.NewFleet())
+}
+
+// newWaiterRigOn is [newWaiterRig] over the run records given, for a case that
+// stages what the store answers.
+func newWaiterRigOn(t *testing.T, records RunRecords) *waiterRig {
+	t.Helper()
 	rig := &waiterRig{
 		t:        t,
 		queue:    &recorder{},
-		pending:  NewCoordStore(memory.NewFleet()),
+		pending:  NewCoordStore(records),
 		provider: NewFakeProvider(),
 		runner:   NewFakeRunner("claude-code"),
 		now:      time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),

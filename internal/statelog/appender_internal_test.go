@@ -47,6 +47,13 @@ func TestASizeRefusalIsTooLargeFromEitherSide(t *testing.T) {
 			"wrong last sequence: 4"), want: faultRejected},
 		{name: "a full log", err: api(codeStreamStoreFailed, "maximum bytes exceeded"),
 			want: faultFull, says: "maximum bytes exceeded"},
+		// EVERY OTHER API ERROR IS A REFUSAL OF ITS OWN, in the server's
+		// words: filed with the full log it would send an operator to a
+		// byte ceiling that is not what refused the record.
+		{name: "a sealed stream", err: api(10109, "invalid operation on sealed stream"),
+			want: faultRefused, says: "sealed stream"},
+		{name: "a server at its storage limit", err: api(10023, "insufficient resources"),
+			want: faultRefused, says: "insufficient resources"},
 		{name: "no answer", err: errors.New("nats: timeout"), want: faultUnknown},
 		{name: "a PubAck", err: nil, want: faultNone},
 	} {

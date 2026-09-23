@@ -294,7 +294,7 @@ A worker that produced prose and never submitted reports `no_result` **with its 
 
 Statuses: `ok`, `no_result`, `skipped_dependency_failed`, `never_started`, `timed_out`, `budget_exhausted`, `cancelled`, `failed`. A skip is classified **before** the deadline is consulted, so the same graph under the same deadline reports the same statuses — a call that ran out of time reports the broken chain rather than a scattering of timeouts. Results always come back in the order the parent wrote the tasks.
 
-A worker whose model hit its output cap in some round carries **`output_truncated: true`** beside its answer, for the reason a phase record carries [`output_truncated`](#round-cap-extension-judge): its prose or its submission may stop short, and nothing else about it says so. A failed task's `error` is an excerpt — about 500 characters, keeping its **start and its end** with ` … ` marking the gap, because an error chain says what stopped at its start and what to change at its end. For a task that started, the whole text is on the worker's own `agent_phase_completed` event, as `error`. A record too large for one event is published cut, and its error is the last text the cut shortens — only once every other text on the record is at its mark — keeping its start and ending in `…`; the record's whole, the error included, is kept in parts that [`GET /phases/{id}`](../reference/api-endpoints.md#ws-wsstream) reassembles, unless a part could not be published, which the record's `notes` then say. A task that never started (`skipped_dependency_failed`, `never_started`) has no phase event: its status is on the call's `subagent_batched` event, and a skip's reason names the dependencies whose own entries in the same result carry their status and error. A timed-out or cancelled worker still gets its event, and a call whose parent turn was torn down still gets its `subagent_batched`: both are published after the context that ended them, without its cancellation.
+A worker whose model hit its output cap in some round carries **`output_truncated: true`** beside its answer, for the reason a phase record carries [`output_truncated`](#round-cap-extension-judge): its prose or its submission may stop short, and nothing else about it says so. A failed task's `error` is an excerpt — about 500 characters, keeping its **start and its end** with ` … ` marking the gap, because an error chain says what stopped at its start and what to change at its end. For a task that started, the whole text is on the worker's own `agent_phase_completed` event, as `error`. A record too large for one event is published cut, and its error is the last text any of its forms shortens — only once every other text on the record is at its mark and every row is given up, counted in `tool_executions_omitted` and `round_narration_omitted` — keeping its start and ending in `…`; the record's whole, the error included, is kept in parts that [`GET /phases/{id}`](../reference/api-endpoints.md#ws-wsstream) reassembles, unless a part could not be published, which the record's `notes` then say. A task that never started (`skipped_dependency_failed`, `never_started`) has no phase event: its status is on the call's `subagent_batched` event, and a skip's reason names the dependencies whose own entries in the same result carry their status and error. A timed-out or cancelled worker still gets its event, and a call whose parent turn was torn down still gets its `subagent_batched`: both are published after the context that ended them, without its cancellation.
 
 ### Worker templates
 
@@ -750,14 +750,30 @@ answer rather than a running commentary. An endpoint that accepts a streaming
 request and answers without streaming is negotiated down to the unary call,
 once per process.
 
+**A frame is bounded, however long the phase runs.** Past the transport's
+8 MiB ceiling a progress event is refused outright, every later frame of the
+phase would be refused the same way, and the live row would freeze with
+nothing on screen to say why. So a frame carries the phase's **latest 48 tool
+calls** and its **latest 48 narrated rounds**, and counts how many came before
+the first of each in `tool_executions_earlier` and `round_narration_earlier`.
+Every text on it — a call's result and error, a round's reasoning and content,
+the round in flight, the joined `response` — is at most its last 4,000 bytes,
+behind a leading `…` when it was cut, and a call's arguments past 4,000 bytes
+are a one-member object keyed `…` saying how long they are and that they are
+whole on the phase's completed record. 48 is the executor's default round
+ceiling, so an executor phase within its default budget has every narrated
+round on the frame. The completed record carries every call and every round
+whole.
+
 **`response` is a join, so the split travels beside it.** That string is
 every round's assistant turn joined with a blank line, and the join cannot
 be undone — its parts are separated by a blank line and prose contains
 blank lines. A reader that split it on the leading `<think>` tag therefore
 showed the FIRST round's thinking as "the reasoning" and every later
 round's thinking as "the answer", tags and all. So both events also carry
-`round_narration`: one `{round, reasoning, content}` per round, recorded
-where the round's assistant message is appended, which is the last frame
+`round_narration`: one `{round, reasoning, content}` per round (a live frame
+its latest ones, as above), recorded where the round's assistant message is
+appended, which is the last frame
 that knows which round the turn belongs to. Its `round` matches
 `tool_executions[].round`, and that shared number is the whole contract —
 it is what lets a consumer interleave the two lists into one ledger of

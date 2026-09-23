@@ -25,6 +25,7 @@ type stubSearcher struct{}
 
 func (stubSearcher) Backend() string                                         { return "stub" }
 func (stubSearcher) CanSearch(*org.Role, *org.Organization) bool             { return false }
+func (stubSearcher) Building(context.Context) bool                           { return false }
 func (stubSearcher) Search(context.Context, knowledge.Query) []knowledge.Hit { return nil }
 
 // A TURN IS ITS OWN QUESTION, and it is not a slice of the trace.
@@ -455,6 +456,73 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 		t.Errorf("no company and no backend share one reason: %q", none["reason"])
 	}
 
+}
+
+// indexSearcher is a searchable backend with an index of its own: whether it
+// is still on its first build, what it ranks, and what it was asked.
+type indexSearcher struct {
+	building bool
+	hits     []knowledge.Hit
+	asked    *[]knowledge.Query
+}
+
+func (indexSearcher) Backend() string                             { return "native" }
+func (indexSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
+func (s indexSearcher) Building(context.Context) bool             { return s.building }
+func (s indexSearcher) Search(_ context.Context, q knowledge.Query) []knowledge.Hit {
+	*s.asked = append(*s.asked, q)
+	return s.hits
+}
+
+// A NODE STILL INDEXING SAYS SO, and searches nothing.
+//
+// "The company has written nothing down" and "this node has not finished
+// reading what it wrote" are opposite facts, and a screen showing the answer of
+// an index on its first build would state the first for the second. Built, the
+// same backend answers the turn-start block's own number of pages, each with
+// what opens it.
+func TestKnowledgeSaysWhenThisNodeIsStillIndexing(t *testing.T) {
+	t.Parallel()
+	company := func() *config.Company { return &config.Company{Name: "Acme"} }
+	var asked []knowledge.Query
+	hits := []knowledge.Hit{{Title: "Deploy runbook", Container: "ENG", PageID: "p-1"}}
+
+	building := asMap(t, answer(t, queries.Sources{
+		Knowledge: func() knowledge.Searcher {
+			return indexSearcher{building: true, hits: hits, asked: &asked}
+		},
+		Company: company,
+	}, "knowledge", map[string]any{"q": "deploy"}))
+	if building["available"] != false ||
+		building["reason"] != string(queries.KnowledgeBuilding) {
+		t.Errorf("a building index answered %v, want reason %q", building,
+			queries.KnowledgeBuilding)
+	}
+	if len(asked) != 0 {
+		t.Errorf("a building index was searched anyway: %+v", asked)
+	}
+
+	built := asMap(t, answer(t, queries.Sources{
+		Knowledge: func() knowledge.Searcher {
+			return indexSearcher{hits: hits, asked: &asked}
+		},
+		Company: company,
+	}, "knowledge", map[string]any{"q": "deploy"}))
+	if built["available"] != true || built["reason"] != string(queries.KnowledgeRan) {
+		t.Errorf("a built index answered %v, want the search to have run", built)
+	}
+	if len(asked) != 1 || asked[0].Limit != queries.KnowledgeHitLimit {
+		t.Fatalf("the search was asked %+v, want one ask for %d pages", asked,
+			queries.KnowledgeHitLimit)
+	}
+	rows, _ := built["hits"].([]any)
+	var row map[string]any
+	if len(rows) == 1 {
+		row, _ = rows[0].(map[string]any)
+	}
+	if row["id"] != "p-1" || row["container"] != "ENG" {
+		t.Errorf("the hits are %#v, want the page with its id and container", built["hits"])
+	}
 }
 
 // EVERY TRACE THIS TURN TOUCHED, and the capped read is exactly why it is

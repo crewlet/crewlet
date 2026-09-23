@@ -118,11 +118,22 @@ type LiveCall struct {
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 
+	// ToolExecutions is the call's tool calls: a progress frame's window of
+	// the phase's latest, or — on a failed call whose record carries every
+	// call — all of them.
 	ToolExecutions []any `json:"tool_executions"`
-	// RoundNarration is what the model said in each round, so the live view
-	// can put a round's thinking beside the calls it asked for instead of
-	// re-splitting the joined Response and getting it wrong.
+	// ToolExecutionsEarlier is how many of the phase's calls come before the
+	// first one ToolExecutions holds, as the frame counted them: zero while
+	// the list holds every call. Always sent, so a zero replaces a count.
+	ToolExecutionsEarlier int `json:"tool_executions_earlier"`
+	// RoundNarration is what the model said in its rounds, held the same way
+	// as ToolExecutions, so the live view can put a round's thinking beside
+	// the calls it asked for instead of re-splitting the joined Response and
+	// getting it wrong.
 	RoundNarration []any `json:"round_narration"`
+	// RoundNarrationEarlier is how many narrated rounds come before the first
+	// one RoundNarration holds, the same way.
+	RoundNarrationEarlier int `json:"round_narration_earlier"`
 	// PartialRound is the round being written right now, absent when no
 	// round is open. Never merged into RoundNarration: a reader has to be
 	// able to tell arriving text from committed text.

@@ -123,6 +123,12 @@ type runningDomain struct {
 	// [statelog.Health].
 	progress progress
 
+	// floor is how long this node has been unable to read the domain's
+	// published trim floor, observed on the same heartbeat for the same
+	// reason: "how long" is a property of a series of reads, and a failed
+	// read is exactly the state in which a health read has nothing to say.
+	floor floorWatch
+
 	// reader is this domain's READ authority — the four levels, the
 	// refusal ladder, the coverage probe and the barrier wait — and it is
 	// what a domain's own reader answers through.
@@ -132,6 +138,43 @@ type runningDomain struct {
 	// vectors are DERIVED and compacted, so "as of a position" is not a
 	// question that has an answer about them.
 	reader *statelog.Reader
+}
+
+// floorWatch is how long one domain's published trim floor has been
+// unreadable from this node, which is the `floor_unknown` alarm's input.
+//
+// The floor is read LIVE on every health read and a failed read refuses at
+// once, so no single read can say how long the failure has held — and the
+// alarm is about duration, because one failed read during a coordination
+// election is not a fault and failures past [statelog.FloorCacheStale] are.
+// So the heartbeat observes a read each beat and this remembers when the run
+// of failures began, clearing on the first success.
+type floorWatch struct {
+	mu     sync.Mutex
+	lostAt time.Time
+}
+
+// observe records one heartbeat's attempt to read the floor.
+func (w *floorWatch) observe(now time.Time, readable bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	switch {
+	case readable:
+		w.lostAt = time.Time{}
+	case w.lostAt.IsZero():
+		w.lostAt = now
+	}
+}
+
+// unreadableFor is how long the floor has been unreadable as of now, and false
+// when the last observation read it.
+func (w *floorWatch) unreadableFor(now time.Time) (time.Duration, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.lostAt.IsZero() {
+		return 0, false
+	}
+	return max(now.Sub(w.lostAt), 0), true
 }
 
 // stateLog is this node's whole state-log runtime.
@@ -972,8 +1015,11 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 		health.Err = msg
 	}
 	health.Stalled = running.progress.stalled(now)
-	if deferral, ok := running.runner.Deferred(); ok {
-		health.Deferred = 1
+	// EVERY RETAINED RECORD, counted: [statelog.Health.Deferred] is how
+	// many this node holds, and a flag would report one record and a
+	// thousand as the same rolling upgrade.
+	if deferral, held := running.runner.Deferred(); held > 0 {
+		health.Deferred = held
 		health.DeferredFrom = deferral.Position.Seq
 		if deferral.Position.Seq > 0 {
 			health.AppliedThrough = deferral.Position.Seq - 1
@@ -2206,6 +2252,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		EngineVersion: version.String(),
 		Domains:       make(map[string]coord.DomainPosition, len(s.order)),
 	}
+	// THE PUBLISHED FLOORS, read once for every domain the way a health
+	// read reads them, so each domain's [floorWatch] observes the answer
+	// its readers are given — including a floor at a generation this node
+	// has left, which a health read refuses on as it does on no answer.
+	floors, floorsErr := s.fleet.Floors(ctx)
 	below := false
 	for _, name := range s.order {
 		running := s.domains[name]
@@ -2213,13 +2264,20 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		pos := coord.DomainPosition{
 			Seq: at.Seq, Generation: at.Generation, AppliedThrough: at.Seq,
 		}
+		readable := floorsErr == nil
+		if readable {
+			_, err := floorFor(floors, name, at.Generation)
+			readable = err == nil
+		}
+		running.floor.observe(row.At, readable)
 		// APPLIED_THROUGH IS LOWER WHEN SOMETHING IS DEFERRED, and the
 		// two numbers are what tell a lagging node from a stalled one:
 		// a position that advances while nothing is applied is exactly
-		// what a retained record produces.
+		// what a retained record produces. Deferred is the count the
+		// register documents — how many records this node retained.
 		deferral, held := running.runner.Deferred()
-		if held {
-			pos.Deferred = 1
+		if held > 0 {
+			pos.Deferred = int(held)
 			if deferral.Position.Seq > 0 {
 				pos.AppliedThrough = deferral.Position.Seq - 1
 			}
@@ -2270,7 +2328,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 						"reanchor")
 			}
 		}
-		running.progress.observe(row.At, pos.AppliedThrough, behind, held)
+		running.progress.observe(row.At, pos.AppliedThrough, behind, held > 0)
 		row.Domains[name] = pos
 	}
 	if below {
@@ -2298,7 +2356,8 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 // rather than events: what a collector wants is "how far behind is this node
 // now", and setting it per applied batch would make the answer a function of
 // how busy the log is — a quiet log would leave the last burst's lag standing
-// for as long as nothing was published.
+// for as long as nothing was published, and a STOPPED loop, which applies no
+// batch at all, would leave every one of them where its last batch put it.
 func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) {
 	if s.metrics == nil {
 		return
@@ -2311,11 +2370,11 @@ func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) 
 		if running == nil {
 			continue
 		}
-		// ONE READING OF THE DRAIN for this beat, so the lag in seconds
-		// below is computed from the same sample this beat publishes
-		// rather than from one the applier moved in between.
-		drain := running.runner.Drain()
-		s.metrics.Set(metrics.StatelogDrainRecordsPerSecond, drain, attrs)
+		// THE CALLERS BLOCKED ON THE APPLIER, read from the waiters
+		// themselves: a stopped loop ends no run, so a count sampled as
+		// runs end is frozen at the moment the callers begin to pile up.
+		s.metrics.Set(metrics.StatelogWaiters, float64(running.runner.Waiting()), attrs)
+		s.metrics.Set(metrics.StatelogDrainRecordsPerSecond, running.runner.Drain(), attrs)
 		// AND THE COMMIT RATE BESIDE IT, because the two are different
 		// resources: records/s is progress and commits/s is the fsync
 		// rate a device's write budget is spent by. A node whose
@@ -2334,16 +2393,95 @@ func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) 
 			continue
 		}
 		s.metrics.Set(metrics.StatelogApplyLagSeq, float64(*health.Lag), attrs)
-		s.metrics.Set(metrics.StatelogApplyLagSeconds,
-			applyLagOf(health, drain).Seconds(), attrs)
+		age, err := s.applyAge(ctx, running, health, row.At)
+		if err != nil {
+			// THE SAME RULE for the age: left where it was rather
+			// than set to a zero that reads as caught up.
+			continue
+		}
+		s.metrics.Set(metrics.StatelogApplyLagSeconds, age.Seconds(), attrs)
 	}
+}
+
+// applyAge is how old the oldest record this node has not applied is, as of
+// now: now less the broker's own stored instant of the first record past the
+// checkpoint that the log still holds, and zero when nothing is past it.
+//
+// # An age rather than a projection
+//
+// A backlog over the measured drain is how long the backlog would take at the
+// rate the loop last ran — and a loop that has stopped keeps the rate it last
+// measured, so on a quiet log a stopped applier's projection stays as small as
+// its backlog while the records it owes grow old. An age grows with the clock
+// whether the loop runs or not, which is what [statelog.StallGrace] is written
+// against: a stopped node's `apply_lag` fires once the first record it failed
+// to apply is older than the grace.
+//
+// # Beside the health rather than inside it
+//
+// [stateLog.health] runs on every read at every level, and nothing on the read
+// path consumes an age, so the probe — a broker round trip whenever this node
+// is behind — is paid by its two consumers alone: the heartbeat's gauge and
+// the alarm reading. Each hands in the health it already read, so the age is of
+// that snapshot's own checkpoint and bounds.
+//
+// # Exact on a strict log, a floor on a compacted one
+//
+// A strict log is contiguous above the trim, so the record after the
+// checkpoint is there unless the trim removed it — and then the first record
+// that survives is read, on a node that is below the floor and refuses on that
+// account already. A compacted log keeps one record per subject, so the record
+// after the checkpoint may have been superseded by a later one on its subject;
+// then the log's newest record is read instead, and every unapplied record the
+// log still holds is at least as old as that one. The answer can understate
+// there and never overstates, so the alarm it feeds does not fire on a node
+// that is not behind by that much.
+//
+// Measured against this node's clock, so a skew between it and the broker's
+// is in the figure; a skew that would make the age negative reads as zero.
+func (s *stateLog) applyAge(ctx context.Context, running *runningDomain,
+	h statelog.Health, now time.Time) (time.Duration, error) {
+
+	// A HEALTH WITH NO LAG is one whose broker read failed, which
+	// [stateLog.health] reports as an error before either caller gets
+	// here. Answered as an error rather than dereferenced, because the
+	// other honest-looking answer — zero — is a node claiming to be caught
+	// up on a read it could not make.
+	if h.Lag == nil || h.LastSeq == nil {
+		return 0, fmt.Errorf("engine: %s's lag was not read, so its age cannot be",
+			running.domain.Name())
+	}
+	if *h.Lag == 0 {
+		return 0, nil
+	}
+	next := h.Position.Seq + 1
+	if h.FirstSeq != nil && *h.FirstSeq > next {
+		next = *h.FirstSeq
+	}
+	_, _, stored, held, err := running.log.At(ctx, next)
+	if err == nil && !held && *h.LastSeq > next {
+		_, _, stored, held, err = running.log.At(ctx, *h.LastSeq)
+	}
+	switch {
+	case err != nil:
+		return 0, fmt.Errorf("engine: read %s's oldest unapplied record: %w",
+			running.domain.Name(), err)
+	case !held:
+		// NOTHING PAST THE CHECKPOINT SURVIVES to be read: the log lost
+		// what the bounds named between the two reads. There is no age
+		// to state, which is not an age of zero.
+		return 0, fmt.Errorf("engine: %s holds no record past this node's "+
+			"checkpoint %d, though its end was %d a moment ago",
+			running.domain.Name(), h.Position.Seq, *h.LastSeq)
+	}
+	return max(now.Sub(stored), 0), nil
 }
 
 // deferralGauges publishes how long this node has held what it cannot decode.
 //
 // SECONDS RATHER THAN A COUNT, and beside the count rather than instead of it:
-// one record held for an hour and sixty held for a second are the same count
-// and completely different states, and it is the AGE that decides whether this
+// a record held for an hour and one held for a second are the same count and
+// completely different states, and it is the AGE that decides whether this
 // node's seats have moved (D122).
 //
 // It rides the position heartbeat because that is where the deferral is

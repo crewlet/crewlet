@@ -312,7 +312,11 @@ type countingAppender struct {
 	gen     func() uint32
 
 	appends atomic.Int64
-	lastSeq atomic.Int64
+
+	// probes is how many times the publisher asked the broker for a
+	// subject's last sequence — the discriminator's call, which a write
+	// that is answered without one must never make.
+	probes atomic.Int64
 
 	mu sync.Mutex
 	// expects is every expectation an append carried, in order. A nil
@@ -340,7 +344,6 @@ func (c *countingAppender) Append(ctx context.Context, subject, msgID string, ex
 	if err != nil {
 		return seq, dup, err
 	}
-	c.lastSeq.Store(int64(seq))
 	c.applier.landed(msgID, statelog.Position{Stream: probeStream, Generation: c.gen(), Seq: seq})
 	if fail != nil {
 		// THE RECORD LANDED AND THE ANSWER DID NOT, which is the whole
@@ -351,6 +354,7 @@ func (c *countingAppender) Append(ctx context.Context, subject, msgID string, ex
 }
 
 func (c *countingAppender) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
+	c.probes.Add(1)
 	return c.inner.LastSeq(ctx, subject)
 }
 

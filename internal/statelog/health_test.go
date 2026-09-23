@@ -83,8 +83,49 @@ func TestADeferralShedsSeatsOnlyPastTheGrace(t *testing.T) {
 	old := statelog.DeferredSince{Since: now.Add(-statelog.DeferralGrace - time.Second), Held: true}
 	if held.Healthy(now, old) {
 		t.Fatalf("a node holding records it cannot decode for longer than %s is "+
-			"still admitting seats — at that point it fails every call about a "+
+			"still keeps its seats — at that point it fails every call about a "+
 			"growing set of objects", statelog.DeferralGrace)
+	}
+}
+
+// A NODE THAT IS MERELY BEHIND KEEPS ITS SEATS AND CLAIMS NO MORE.
+//
+// [statelog.Health.Healthy] is the holding gate, and being behind is
+// admission's question: records past the checkpoint are what every node has
+// for a moment after every write, so the seat sweep lands on that state
+// routinely, and a holding gate that shed on it would give back every seat on
+// the node over an ordinary write. What holds a behind node back is strict
+// [statelog.Health.Established], which withholds new claims; what sheds a node
+// whose applied prefix has stopped moving is Stalled.
+//
+// Mutation: shed on CaughtUp in Healthy and the first assertion goes red.
+func TestANodeThatIsBehindKeepsItsSeatsAndClaimsNoMore(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	ptr := func(v uint64) *uint64 { return &v }
+	behind := statelog.Health{
+		Position:       statelog.Position{Stream: "S", Generation: 1, Seq: 10},
+		AppliedThrough: 10,
+		Lag:            ptr(3),
+		LastSeq:        ptr(13),
+		FirstSeq:       ptr(1),
+		TrimFloor:      ptr(1),
+		Floor:          statelog.Floor{State: statelog.FloorOK, ReadAt: now},
+	}
+
+	if !behind.Healthy(now, statelog.DeferredSince{}) {
+		t.Error("a node three records behind gives back its seats, so every sweep " +
+			"that lands between a record's append and its apply moves the node's work")
+	}
+	if ok, code := behind.Established(true); ok || code != statelog.RefuseBehind {
+		t.Errorf("strict admission over a node three records behind = (%v, %q), "+
+			"want a refusal as %q", ok, code, statelog.RefuseBehind)
+	}
+	stalled := behind
+	stalled.Stalled = true
+	if stalled.Healthy(now, statelog.DeferredSince{}) {
+		t.Error("a node whose applied prefix has stood still past the grace with " +
+			"records waiting keeps its seats")
 	}
 }
 
@@ -217,16 +258,14 @@ func TestHealthCarriesEveryFieldItsContractsCite(t *testing.T) {
 	}
 }
 
-// EVERY FIELD Refusal AND Healthy READ MUST HAVE A PRODUCER, and nothing said
-// so until this test.
+// EVERY FIELD Refusal AND Healthy READ MUST BE ABLE TO CHANGE THE ANSWER.
 //
-// Four of [statelog.Health]'s fourteen fields — Err, Stalled, Evicted and
-// Floor — were read by both decision functions and assigned by nothing. The
-// consequences were silent in exactly the way a zero value is: every arm of
-// [Health.Refusal] was unreachable, so an evicted node, a node below the trim
-// floor and a node whose applier had STOPPED all went on serving reads as
-// though current; and [Health.Healthy] could never go false, so the shed the
-// `deferred_old` alarm promises an operator never happened.
+// A field a decision reads and nothing assigns fails silently, in exactly the
+// way a zero value does: with Err, Stalled, Evicted or Floor unassigned, the
+// arm of [Health.Refusal] each one drives is unreachable and [Health.Healthy]
+// never sheds on it — so an evicted node, a node below the trim floor and a
+// node whose applier has STOPPED all serve reads as though current and keep
+// their seats.
 //
 // A STRUCTURAL TEST rather than a behavioural one, because the defect is
 // structural: each arm has a behavioural test above that passes a Health

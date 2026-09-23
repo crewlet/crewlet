@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/search"
@@ -44,15 +45,17 @@ func (r itemRanker) RankItems(ctx context.Context, text string,
 	if err != nil {
 		return nil, err
 	}
-	// PARTIAL IS NOT REFUSED, for the reason the knowledge search gives:
-	// an answer over part of the corpus beats none. What differs here is
-	// that the caller is a TOOL rather than a prompt block, so the fact
-	// travels in the log rather than being swallowed — a short result set
-	// is indistinguishable from a short corpus.
+	// A PARTIAL ANSWER IS LOGGED, because a short result set is
+	// indistinguishable from a short corpus to whoever reads it. The one
+	// cause of it that this node can know in advance — its own index still
+	// on its first build, which counts its own buckets missing — the
+	// tracker's searcher refuses on through [itemRanker.Building]; what
+	// remains is a peer that did not answer in time.
 	if answer.Partial() {
 		log.WarnContext(ctx, "work_search_scoped",
 			"buckets_answered", answer.BucketsAnswered,
 			"buckets_missing", answer.BucketsMissing,
+			"absent", strings.Join(answer.Absent, ","),
 			"detail", "the ranking was complete for what was searched and "+
 				"silent about what was not")
 	}
@@ -74,11 +77,18 @@ func (r itemRanker) Building(_ context.Context) bool {
 	return r.index != nil && !r.index.ReadyFor(itemCorpus)
 }
 
-// WorkSearch is this node's ranked item search, or nil when it has no index —
-// a company on another tracker, or a node whose native backends are off.
+// WorkSearch is this node's ranked item search, or nil where this node does
+// not run the engine's own tracker.
+//
+// ASKED OF THE TRACKER, NOT OF THE INDEX. The index is built under either
+// native backend, so a company on another tracker that keeps its knowledge
+// in the engine's own pages holds an index, and a searcher over it, with no
+// work item in it: offered, that search answers every question with nothing,
+// which a reader takes for "no such work" about work that lives in another
+// tracker.
 func (e *Engine) WorkSearch() *tracker.Searcher {
 	n := e.native
-	if n == nil || n.itemSearch == nil {
+	if n == nil || n.itemSearch == nil || n.trackerReader == nil {
 		return nil
 	}
 	return n.itemSearch

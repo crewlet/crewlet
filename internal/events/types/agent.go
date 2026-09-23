@@ -161,7 +161,10 @@ type AgentTurnCompleted struct {
 	// the agent's LLM-history view does not read — so the turn a dashboard
 	// showed had no way to say why it stopped.
 	Failed bool `json:"failed"`
-	// Error is the failure's message, truncated. Empty unless Failed.
+	// Error is the failure's message: whole up to
+	// [events.MaxDiagnosticBytes], and past it its head, marked, with the
+	// whole in the publishing node's log as turn_failure_cut. Empty unless
+	// Failed.
 	Error string `json:"error"`
 	// ErrorKind is the machine-readable failure class: the classified provider
 	// error, or the guard-breach kind.
@@ -484,9 +487,12 @@ type AgentPhaseCompleted struct {
 	// event rather than absent.
 	Failed bool `json:"failed"`
 	// Error is the failure's message, whole on a record published whole.
-	// On a record published cut it is the LAST text the cut shortens —
-	// only once every other text is at its mark — and the record's whole
-	// carries it as the phase returned it. Empty unless Failed.
+	// On a record published cut it is the LAST text any form shortens —
+	// only once every other text is at its mark and every row is given up,
+	// counted in [AgentPhaseCompleted.ToolExecutionsOmitted] and
+	// [AgentPhaseCompleted.RoundNarrationOmitted] — and the record's whole
+	// carries it as the phase returned it, unless a part of that whole
+	// could not be published, which Notes then says. Empty unless Failed.
 	Error string `json:"error"`
 	// ErrorKind is the failure's class, one word a dashboard prints beside
 	// it: on a phase the provider's error kind (a deadline reads as
@@ -507,12 +513,14 @@ type AgentPhaseCompleted struct {
 	// A record the transport refuses as too large is published in the largest
 	// form it accepts: its longest texts shortened to a common level, each
 	// ending in "…" and, on a tool call or a round, with its whole length
-	// beside it as `<field>_bytes`; past that every text reduced to its mark;
-	// and past that its later rows counted rather than carried
+	// beside it as `<field>_bytes` — a text no longer than that mark is left
+	// as it is; past that every other text reduced to its mark; past that its
+	// later rows counted rather than carried
 	// ([AgentPhaseCompleted.ToolExecutionsOmitted],
-	// [AgentPhaseCompleted.RoundNarrationOmitted]). Every form carries the
-	// scalars whole — the tokens, the cost, the model, the decision — and
-	// Notes says which cut was made.
+	// [AgentPhaseCompleted.RoundNarrationOmitted]); and only with no row
+	// left, its Error shortened too. Every form carries the scalars whole —
+	// the tokens, the cost, the model, the decision — and Notes says which
+	// cut was made.
 	//
 	// Set whether or not the whole was kept, which is WholeParts' to say.
 	WholeBytes int `json:"whole_bytes"`
@@ -666,12 +674,26 @@ type AgentTurnProgress struct {
 	// live view can show what the agent was asked while it is still answering.
 	// Consumers read RoundNum+1 as "rounds so far", which is why the sentinel
 	// is -1 rather than 0.
-	RoundNum       int             `json:"round_num"`
+	RoundNum int `json:"round_num"`
+	// ToolExecutions is the phase's LATEST calls, not all of them: a frame
+	// is republished several times a second for the length of the phase, so
+	// it carries a window of the newest calls, each with its result and
+	// error cut to their tails and arguments past a bound replaced by a
+	// one-member object keyed "…" saying where they are whole. The
+	// phase's completed record carries every call whole.
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
-	// RoundNarration is what the model said in each round so far. Free on
-	// this event in storage terms — nothing persists it — and it is what
-	// lets the live view append a round rather than redraw one blob.
+	// ToolExecutionsEarlier is how many of the phase's calls come BEFORE the
+	// first one ToolExecutions carries. Zero while the window holds every
+	// call.
+	ToolExecutionsEarlier int `json:"tool_executions_earlier,omitempty"`
+	// RoundNarration is what the model said in its latest rounds, each text
+	// cut to its tail. Free on this event in storage terms — nothing
+	// persists it — and it is what lets the live view append a round rather
+	// than redraw one blob. The completed record carries every round whole.
 	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
+	// RoundNarrationEarlier is how many narrated rounds come BEFORE the first
+	// one RoundNarration carries. Zero while the window holds every round.
+	RoundNarrationEarlier int `json:"round_narration_earlier,omitempty"`
 	// PartialRound is the round being written RIGHT NOW: `round`,
 	// `reasoning`, `content`, and `abandoned` for attempts a provider gave
 	// up on partway through.

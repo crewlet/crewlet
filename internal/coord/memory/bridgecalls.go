@@ -13,12 +13,12 @@ import (
 
 // The bridged-call log, in memory.
 //
-// Keyed by LAUNCH, with each launch's own numbering beside its records and the
-// parts filed under them, which is the shape the KV backend has: one counter
-// key, one record key per call and one key per part, all under the launch. A
-// purge removes the launch's entry and so all three together, so the next
-// append to a purged launch starts again at 1 on either backend, and no part
-// outlives the purge of its call.
+// Keyed by LAUNCH, with each launch's own numbering beside its records, the
+// parts filed under them and the parts of its suspension, which is the shape
+// the KV backend has: one counter key, one record key per call and one key per
+// part, all under the launch. A purge removes the launch's entry and so all of
+// them together, so the next append to a purged launch starts again at 1 on
+// either backend, and no part outlives the purge of its launch.
 
 // bridgeLaunch is one launch's log.
 type bridgeLaunch struct {
@@ -32,6 +32,10 @@ type bridgeLaunch struct {
 	// Held apart from calls because a part is not a call: nothing that
 	// lists or counts the calls reaches this map.
 	parts map[uint64]map[int][]byte
+
+	// suspension is the parts of the launch's suspended conversation, by
+	// part: apart from both maps above, because they belong to no call.
+	suspension map[int][]byte
 }
 
 // launch returns a launch's entry, creating it: a write to a purged launch
@@ -44,7 +48,10 @@ func (f *Fleet) launch(turnID, launchID string) *bridgeLaunch {
 	key := coord.BridgeLaunch{TurnID: turnID, LaunchID: launchID}
 	launch := f.bridge[key]
 	if launch == nil {
-		launch = &bridgeLaunch{calls: map[uint64][]byte{}, parts: map[uint64]map[int][]byte{}}
+		launch = &bridgeLaunch{
+			calls: map[uint64][]byte{}, parts: map[uint64]map[int][]byte{},
+			suspension: map[int][]byte{},
+		}
 		f.bridge[key] = launch
 	}
 	return launch
@@ -129,6 +136,45 @@ func (f *Fleet) CreateBridgeCallPart(_ context.Context, turnID, launchID string,
 	return true, nil
 }
 
+// CreateSuspensionPart files one part of a launch's suspended conversation.
+func (f *Fleet) CreateSuspensionPart(_ context.Context, turnID, launchID string, part int, value []byte) (bool, error) {
+	if err := validBridgeLaunch(turnID, launchID); err != nil {
+		return false, err
+	}
+	if part < 1 {
+		return false, fmt.Errorf("coord/memory: a part of a suspension is numbered from 1, got %d", part)
+	}
+	if err := withinCeiling("a part of a suspended conversation", value); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	launch := f.launch(turnID, launchID)
+	if _, taken := launch.suspension[part]; taken {
+		return false, nil
+	}
+	launch.suspension[part] = slices.Clone(value)
+	return true, nil
+}
+
+// SuspensionParts returns every part of one launch's suspension, in order.
+func (f *Fleet) SuspensionParts(_ context.Context, turnID, launchID string) ([]coord.Part, error) {
+	if err := validBridgeLaunch(turnID, launchID); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []coord.Part{}
+	launch := f.bridge[coord.BridgeLaunch{TurnID: turnID, LaunchID: launchID}]
+	if launch == nil {
+		return out, nil
+	}
+	for _, part := range slices.Sorted(maps.Keys(launch.suspension)) {
+		out = append(out, coord.Part{Part: part, Value: slices.Clone(launch.suspension[part])})
+	}
+	return out, nil
+}
+
 // BridgeCalls returns every call of one launch, in Seq order, with its parts.
 func (f *Fleet) BridgeCalls(_ context.Context, turnID, launchID string) ([]coord.BridgeCallRecord, error) {
 	if err := validBridgeLaunch(turnID, launchID); err != nil {
@@ -144,7 +190,7 @@ func (f *Fleet) BridgeCalls(_ context.Context, turnID, launchID string) ([]coord
 	for _, seq := range slices.Sorted(maps.Keys(launch.calls)) {
 		record := bridgeRecord(turnID, launchID, seq, launch.calls[seq])
 		for _, part := range slices.Sorted(maps.Keys(launch.parts[seq])) {
-			record.Parts = append(record.Parts, coord.BridgeCallPart{
+			record.Parts = append(record.Parts, coord.Part{
 				Part: part, Value: slices.Clone(launch.parts[seq][part]),
 			})
 		}
@@ -193,8 +239,9 @@ func (f *Fleet) BridgeCallPage(_ context.Context, q coord.BridgeCallQuery) (coor
 // BridgeLaunches returns every launch that holds any key in the log.
 //
 // Every entry in the map, whatever it holds: an entry exists only once
-// something was written under its launch, and a counter, a record or a part
-// alone is each a key the KV backend lists the launch for.
+// something was written under its launch, and a counter, a record or a part —
+// a call's or the suspension's — alone is each a key the KV backend lists the
+// launch for.
 func (f *Fleet) BridgeLaunches(context.Context) ([]coord.BridgeLaunch, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -206,7 +253,7 @@ func (f *Fleet) BridgeLaunches(context.Context) ([]coord.BridgeLaunch, error) {
 }
 
 // PurgeBridgeCalls removes every record of one launch, the parts under them,
-// and its numbering.
+// the parts of its suspension, and its numbering.
 func (f *Fleet) PurgeBridgeCalls(_ context.Context, turnID, launchID string) error {
 	if err := validBridgeLaunch(turnID, launchID); err != nil {
 		return err
@@ -225,16 +272,17 @@ func bridgeRecord(turnID, launchID string, seq uint64, value []byte) coord.Bridg
 	}
 }
 
-// withinCeiling refuses a value the KV backend's broker would refuse.
+// withinCeiling refuses a value the KV backend's broker would refuse: a run's
+// record, a bridged call, or a part.
 //
 // THE KV BACKEND'S CEILING, stated by the contract so that this twin refuses
 // what the real broker refuses rather than storing a record production never
 // could.
 func withinCeiling(what string, value []byte) error {
-	if len(value) > coord.MaxBridgeCallBytes {
+	if len(value) > coord.MaxRecordBytes {
 		return fmt.Errorf("coord/memory: %s of %d bytes is past the %d-byte ceiling one "+
-			"record may hold (coord.MaxBridgeCallBytes): %w",
-			what, len(value), coord.MaxBridgeCallBytes, coord.ErrTooLarge)
+			"record may hold (coord.MaxRecordBytes): %w",
+			what, len(value), coord.MaxRecordBytes, coord.ErrTooLarge)
 	}
 	return nil
 }

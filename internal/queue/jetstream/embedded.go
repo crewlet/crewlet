@@ -609,12 +609,8 @@ func joinURLs(urls []string) string {
 	return out
 }
 
-// Dial opens a NATS connection to an external server with this package's own
-// reconnect policy.
-//
-// The caller owns the connection and must close it.
-func Dial(cfg Config) (*nats.Conn, error) { return dial(cfg) }
-
+// dial opens a NATS connection to an external server with this package's own
+// reconnect policy. The caller owns the connection and must close it.
 func dial(cfg Config) (*nats.Conn, error) {
 	opts, err := dialOptions(cfg)
 	if err != nil {

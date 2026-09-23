@@ -24,10 +24,11 @@ import (
 
 // prefetcher builds the fetcher for the current node.
 //
-// Per CALL rather than held, because two of its sources move: the knowledge
-// searcher is rebuilt whenever the tracker is reconciled, and a node with no
-// store has none of the rest. Building it is assembling six interface values
-// — cheaper than the mutex a cached one would need.
+// Per CALL rather than held, because its knowledge source moves: an apply can
+// rebuild the Confluence searcher or move the company to another backend, and
+// [Engine.Knowledge] answers by the epoch current now. Building it is
+// assembling a handful of interface values — cheaper than the mutex a cached
+// one would need.
 func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 	src := prefetch.Sources{
 		Knowledge: e.Knowledge(),

@@ -2,29 +2,27 @@
 // "recently" rather than "ever".
 //
 // Several tables exist to answer a short-horizon question and are written on
-// every event that asks it: have I already handled this delivery, how many
-// notifications in the last second, has this fire already been claimed, has
-// this trigger already been worked, who is on this agent-to-agent channel,
-// where is each node on the config pointer.
+// every event that asks it. The failure to avoid is a `purge` that exists on
+// every store and on the seam, with NOTHING anywhere calling it — then the
+// table grows for the life of the deployment. The event log is the audit
+// trail and carries its own horizon; the rest are not, and a table nobody
+// sweeps is one that eventually decides how long a question takes to answer.
 //
-// They were all designed to be swept — every one of their migrations says
-// so, and each ships the index a range delete needs. The failure to avoid is
-// a `purge` that exists on every store and on the seam, with NOTHING anywhere
-// calling it — then all of them grow for the life of the deployment. The event log is the audit trail; these are
-// not, and a table nobody sweeps is one that eventually decides how long a
-// question takes to answer.
+// # Where a job runs
 //
-// # A fleet singleton
+// Each job says whose rows it sweeps ([Scope]), and that decides where it
+// runs. A [Fleet] job sweeps state the whole company agrees on and runs once
+// per tick across the fleet, under a singleton duty: not because concurrent
+// deletes would corrupt anything — they are idempotent — but because N nodes
+// each scanning and deleting the same rows every tick is N times the write
+// amplification for one table's worth of benefit. The duty is CLAIMED per
+// tick rather than held, the same shape the sandbox waiter uses: a node that
+// dies mid-sweep releases it by lapsing, and a peer picks it up on its next
+// tick with no handoff protocol. A [NodeLocal] job sweeps a table each node
+// owns its own copy of, and runs on EVERY node every tick, whether or not
+// that node holds the duty, because no peer's sweep can reach its rows.
 //
-// Not because concurrent deletes would corrupt anything — they are
-// idempotent range deletes — but because N nodes each scanning and deleting
-// the same rows every tick is N times the write amplification for one
-// table's worth of benefit. The duty is CLAIMED per tick rather than held,
-// the same shape the sandbox waiter uses: a node that dies mid-sweep
-// releases it by lapsing, and a peer picks it up on its next tick with no
-// handoff protocol.
-//
-// # The one job that is not a range delete
+// # Retiring a removed seat's mailbox
 //
 // A removed seat's MAILBOX is retired here too, once the seat has been absent
 // from the active revision for [MailboxRetirementGrace]. It is the odd one out
@@ -77,16 +75,11 @@ type DutyFunc func(ctx context.Context) (bool, error)
 //
 // # Why this is an enum and not a bool
 //
-// It was `PerNode bool`, and a bool has a zero value that is a valid SETTING
-// rather than an absence — so a job that never mentioned it was silently a
-// fleet job, which is the wrong answer for every table a node owns its own
-// copy of. Six of the seven local sweeps in [StoreJobs], [LearningJobs],
-// [CounterpartyJobs], [ScheduleJobs] and [LedgerJobs] took that default by
-// omission: `crewlet_events`, `chat_thread_follows`, `agent_diary`,
-// `counterparty_profiles`, `scheduled_runs` and `conversation_sessions` were
-// swept only on the node holding the duty and grew for ever on every peer.
-// The audit log was among them, so the event retention an operator configured
-// applied on one node of the fleet.
+// A bool has a zero value that is a valid SETTING rather than an absence, so
+// a job that never mentioned it would silently be one kind or the other — and
+// a node-local table read as a fleet one is swept only on the node holding the
+// duty and grows for ever on every peer. The audit log is such a table, so an
+// operator's configured event retention would apply on one node of the fleet.
 //
 // The two classes are not a spectrum, and the question has exactly one right
 // answer per job: is this state the FLEET agrees on, or state THIS MACHINE
@@ -97,10 +90,9 @@ type DutyFunc func(ctx context.Context) (bool, error)
 // node-local job left as [Fleet] grows a table for ever on every node but
 // one, and looks identical to a sweep that works to the operator who checks
 // the node it ran on. A fleet job left as [NodeLocal] costs N times the write
-// amplification for one table's worth of benefit and is otherwise correct,
-// since these are idempotent range deletes. Neither is acceptable, but only
-// the first is invisible — which is why the refusal is at construction rather
-// than a warning somebody reads later.
+// amplification for one table's worth of benefit. Neither is acceptable, but
+// only the first is invisible — which is why the refusal is at construction
+// rather than a warning somebody reads later.
 type Scope string
 
 const (
@@ -125,11 +117,11 @@ func (s Scope) Valid() bool { return s == Fleet || s == NodeLocal }
 
 // Job is one unit of housekeeping.
 //
-// One shape for both kinds the sweep has: a range delete over a retention
-// horizon, and the state change that closes an agent-to-agent channel
-// nobody ever answered. Both are "do a bounded amount of tidying and say
-// how many rows it touched", and modelling them separately would mean two
-// loops, two error paths and two log lines saying the same thing.
+// One shape for every kind the sweep has — a range delete over a retention
+// horizon, or a state change such as closing an agent-to-agent channel nobody
+// ever answered. Each is "do a bounded amount of tidying and say how many
+// rows it touched", and modelling them separately would mean a loop, an error
+// path and a log line per kind, all saying the same thing.
 type Job struct {
 	// Name is what the log calls it — normally the table.
 	Name string
@@ -156,10 +148,10 @@ type Job struct {
 	// Scope says whether this job's rows are the fleet's or this node's
 	// own, and therefore whether it runs under the duty or on every node.
 	//
-	// It has no default. [New] refuses a job whose scope is not [Valid],
-	// because the answer is a property of the table that only the author of
-	// the job knows and the cost of guessing it wrong is invisible — see
-	// [Scope] for what the guess cost when the field was a bool.
+	// It has no default. [New] refuses a job whose scope is not
+	// [Scope.Valid], because the answer is a property of the table that only
+	// the author of the job knows and the cost of guessing it wrong is
+	// invisible — see [Scope].
 	Scope Scope
 
 	// Gate reports whether this job has anything to do at all.
@@ -217,7 +209,8 @@ type Options struct {
 	Now func() time.Time
 }
 
-// Worker sweeps expired rows from the short-horizon tables, fleet-wide once.
+// Worker sweeps expired rows from the short-horizon tables: the fleet's once
+// per tick under the duty, and this node's own on every tick.
 type Worker struct {
 	jobs      []Job
 	interval  time.Duration
@@ -239,12 +232,11 @@ type Worker struct {
 // silently accepting it would mean a table swept on a schedule that cannot
 // honour its own horizon.
 //
-// A MALFORMED JOB IS REFUSED RATHER THAN DROPPED, and that is the opposite
-// of what this did. It used to skip a job with no Run or no Name and carry
-// on, which is the same silence as the one [Scope] describes: the worker
-// starts, logs the jobs it kept, and the table the dropped job was for grows
-// with nothing anywhere saying a sweep was configured for it. There is no
-// caller for whom "I asked for this job and it is not running" is the
+// A MALFORMED JOB IS REFUSED RATHER THAN DROPPED. Skipping a job with no Run
+// or no Name would be the same silence as the one [Scope] describes: the
+// worker starts, logs the jobs it kept, and the table the dropped job was for
+// grows with nothing anywhere saying a sweep was configured for it. There is
+// no caller for whom "I asked for this job and it is not running" is the
 // outcome they wanted, so it is an error the wiring has to answer for.
 //
 // The error names every offending job in one message rather than the first,
@@ -387,9 +379,9 @@ func (w *Worker) loop(ctx context.Context) {
 // touch counted: dropping them made a tick that retired a mailbox and then hit
 // one unreadable record report that it had retired nothing.
 //
-// Returns a nil map and no error when this node does not hold the duty:
-// "somebody else swept" and "nothing needed sweeping" are different facts,
-// and an empty map would merge them.
+// Returns a nil map and no error when this node does not hold the duty and
+// its own tables needed nothing: "somebody else swept" and "nothing needed
+// sweeping" are different facts, and an empty map would merge them.
 func (w *Worker) Tick(ctx context.Context) (map[string]int64, error) {
 	// THE DUTY IS CLAIMED ONCE AND CONSULTED PER JOB. A [NodeLocal] job
 	// runs whether or not this node holds it, because the table it sweeps

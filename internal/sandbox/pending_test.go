@@ -515,7 +515,9 @@ func (l lowServer) CreateBridgeCallPart(ctx context.Context, turnID, launchID st
 // log a resume reads with nothing to say it is there — a post that the
 // delivery check never counts. Instead its whole goes to parts SPLIT until the
 // server takes them, and its record is its least form beside the reference, so
-// the resume still reads every byte of it.
+// the resume still reads every byte of it. The least form's marks say why its
+// texts are not there: a server refused the record, not that they were too
+// large for one.
 func TestACallAServerBelowTheCeilingRefusesIsKeptWholeInPartsItTakes(t *testing.T) {
 	t.Parallel()
 	const limit = 100 << 10
@@ -538,9 +540,9 @@ func TestACallAServerBelowTheCeilingRefusesIsKeptWholeInPartsItTakes(t *testing.
 		t.Fatalf("BridgeCallPage = %+v, %v", page, err)
 	}
 	record := page.Calls[0]
-	if record.Args != sandbox.ArgsInParts(len(sent.Args)) || record.Output != "…" {
+	if record.Args != sandbox.RefusedArgsInParts(len(sent.Args)) || record.Output != "…" {
 		t.Errorf("the record = args %.60q, output %.40q; want its least form, both texts marked as "+
-			"kept in its parts", record.Args, record.Output)
+			"set aside for the refusal and kept in its parts", record.Args, record.Output)
 	}
 	if record.WholeParts < 4 {
 		t.Errorf("the whole is in %d parts: a part the server refused was not split", record.WholeParts)
@@ -564,20 +566,18 @@ func TestACallAServerBelowTheFloorRefusesSaysItsWholeWasNotKept(t *testing.T) {
 	store := sandbox.NewCoordStore(lowServer{Fleet: memory.NewFleet(), limit: 1 << 10})
 	run := begun(t, store, "t-lower")
 	args := `{"channel":"C1","text":"` + strings.Repeat("x", 4<<10) + `"}`
-	ok, err := store.AppendBridgeCall(t.Context(), "t-lower", sandbox.BridgeCall{
-		Name: "slack_post", Args: args, Output: strings.Repeat("y", 4<<10),
-	})
-	if err != nil || !ok {
+	sent := sandbox.BridgeCall{Name: "slack_post", Args: args, Output: strings.Repeat("y", 4<<10)}
+	if ok, err := store.AppendBridgeCall(t.Context(), "t-lower", sent); err != nil || !ok {
 		t.Fatalf("a call the server refused as too large was not recorded: %v, %v", ok, err)
 	}
 	call := mustBridgeCalls(t, store, run)[0]
 	if call.Name != "slack_post" || call.Failed {
 		t.Errorf("the call kept as %q (failed %v), want the post and its outcome", call.Name, call.Failed)
 	}
-	if call.Args != sandbox.ArgsNotKept(len(args)) || !strings.HasPrefix(call.Output, "…\n[") ||
-		!strings.Contains(call.Output, "could not be kept anywhere else") {
-		t.Errorf("the least form = args %.60q, output %q; want both saying they were not kept",
-			call.Args, call.Output)
+	if call.Args != sandbox.RefusedArgsNotKept(len(args)) || !strings.HasPrefix(call.Output, "…\n[") ||
+		!strings.Contains(call.Output, "set aside when a server refused its record, and could not be kept") {
+		t.Errorf("the least form = args %.60q, output %q; want both saying they were set aside for the "+
+			"refusal and not kept", call.Args, call.Output)
 	}
 	if call.WholeBytes != 0 || call.WholeParts != 0 {
 		t.Errorf("a record whose parts were refused refers to %d bytes in %d parts", call.WholeBytes, call.WholeParts)
@@ -594,6 +594,18 @@ func TestACallAServerBelowTheFloorRefusesSaysItsWholeWasNotKept(t *testing.T) {
 		t.Errorf("the least form of a call with no arguments = args %q, output %.40q; want none, and "+
 			"the output's mark and note", bare.Args, bare.Output)
 	}
+
+	// A TEXT NO LONGER THAN ITS MARK IS KEPT: an output of "ok" is shorter
+	// than the mark and note that would stand for it, and set aside with a
+	// whole that was not kept it would be lost for nothing.
+	short := sandbox.BridgeCall{Name: "slack_post", Args: args, Output: "ok"}
+	if ok, err := store.AppendBridgeCall(t.Context(), "t-lower", short); err != nil || !ok {
+		t.Fatalf("append: %v, %v", ok, err)
+	}
+	if got := mustBridgeCalls(t, store, run)[2]; got.Output != "ok" || got.Args != sandbox.RefusedArgsNotKept(len(args)) {
+		t.Errorf("the least form of a call that returned %q = args %.60q, output %q; want the output "+
+			"as it was beside its arguments' marker", short.Output, got.Args, got.Output)
+	}
 }
 
 // A LARGE CALL AGAINST A SERVER BELOW THE CEILING IS KEPT WHOLE, BESIDE ITS
@@ -604,7 +616,8 @@ func TestACallAServerBelowTheFloorRefusesSaysItsWholeWasNotKept(t *testing.T) {
 // record too. The parts are split until that server takes them — down to the
 // floor, which halving alone from the ceiling steps past — and the refused
 // record gives way to the least form beside the reference, so the resume still
-// reads every byte of the call.
+// reads every byte of the call. Its arguments, eighteen bytes, are shorter
+// than any marker that could stand for them, so the least form keeps them.
 func TestALargeCallAgainstALowServerIsKeptWholeBesideItsLeastForm(t *testing.T) {
 	t.Parallel()
 	for name, limit := range map[string]int{
@@ -632,9 +645,9 @@ func TestALargeCallAgainstALowServerIsKeptWholeBesideItsLeastForm(t *testing.T) 
 			}
 
 			record := mustBridgeCallPage(t, store, run)[0]
-			if record.Args != sandbox.ArgsInParts(len(sent.Args)) || record.Output != "…" {
-				t.Errorf("the record = args %.60q, output %.40q; want its least form, both texts marked "+
-					"as filed in its parts", record.Args, record.Output)
+			if record.Args != sent.Args || record.Output != "…" {
+				t.Errorf("the record = args %.60q, output %.40q; want its least form: the arguments as "+
+					"they were, and the output's mark", record.Args, record.Output)
 			}
 			if record.WholeParts == 0 {
 				t.Fatalf("the record names no parts: its whole was not kept, although the server takes "+
@@ -655,14 +668,126 @@ func TestALargeCallAgainstALowServerIsKeptWholeBesideItsLeastForm(t *testing.T) 
 			}
 
 			// THE LINES SAY WHAT LANDED: the server's refusal of the fitted
-			// record, and no line describing a fitted record, which never did.
+			// record, no line describing a fitted record, which never did,
+			// and one line for the least form that did, naming its parts.
 			if n := len(logs.named(t, "sandbox_bridge_call_refused_within_ceiling")); n != 1 {
 				t.Errorf("the refusal was logged %d times, want once", n)
 			}
 			if fitted := logs.named(t, "sandbox_bridge_call_fitted"); len(fitted) != 0 {
 				t.Errorf("a fitted record the server refused was reported as the call's record: %v", fitted)
 			}
+			filed := logs.named(t, "sandbox_bridge_call_least_form_filed")
+			if len(filed) != 1 || filed[0]["whole_parts"] != float64(record.WholeParts) ||
+				filed[0]["whole_bytes"] != float64(record.WholeBytes) {
+				t.Errorf("the least form was reported as %v; want one line naming its %d bytes in %d parts",
+					filed, record.WholeBytes, record.WholeParts)
+			}
 		})
+	}
+}
+
+// recordUnreachable is a coordination store behind a server set below the
+// contract's ceiling that takes the parts it fits and then cannot be reached
+// for any record the server would take.
+type recordUnreachable struct{ lowServer }
+
+func (r recordUnreachable) CreateBridgeCall(_ context.Context, _, _ string, _ uint64, value []byte) (bool, error) {
+	if err := r.refuses(value); err != nil {
+		return false, err
+	}
+	return false, coord.ErrUnavailable
+}
+
+// A REFUSAL SAYS WHAT WAS REFUSED, AND NOTHING ABOUT A RECORD THAT DID NOT LAND.
+//
+// The line a server's refusal is logged with names the setting to change. What
+// the call's record holds instead is a claim about a record, and one that
+// fails to land holds nothing: a line saying the least form was filed, logged
+// before its create, would tell an operator the call was kept when the append
+// in fact failed.
+func TestARefusalSaysNothingAboutARecordThatDidNotLand(t *testing.T) {
+	t.Parallel()
+	logs := &logLines{}
+	store := sandbox.NewCoordStore(recordUnreachable{lowServer{Fleet: memory.NewFleet(), limit: 100 << 10}}).
+		WithLogger(logs.logger())
+	begun(t, store, "t-least-lost")
+	_, err := store.AppendBridgeCall(t.Context(), "t-least-lost", sandbox.BridgeCall{
+		Name: "slack_post", Args: `{"channel":"C1"}`, Output: strings.Repeat("y", 300<<10),
+		At: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
+	})
+	if !errors.Is(err, coord.ErrUnavailable) {
+		t.Fatalf("an append whose least form could not land = %v, want the store's failure", err)
+	}
+	refusals := logs.named(t, "sandbox_bridge_call_refused_within_ceiling")
+	if len(refusals) != 1 {
+		t.Fatalf("the refusal was logged %d times, want once", len(refusals))
+	}
+	if detail, _ := refusals[0]["detail"].(string); strings.Contains(detail, "least form") ||
+		strings.Contains(detail, "filed") || !strings.Contains(detail, "max_payload") {
+		t.Errorf("the refusal's detail = %q; want the setting to change and nothing about what was filed", detail)
+	}
+	if filed := logs.named(t, "sandbox_bridge_call_least_form_filed"); len(filed) != 0 {
+		t.Errorf("a least form that never landed was reported filed: %v", filed)
+	}
+}
+
+// strayAtTheRecord is a coordination store behind a server set below the
+// contract's ceiling in which the first record the server would take finds its
+// address already holding one: a stray at the number the call reserved. It
+// counts the records the server refused.
+type strayAtTheRecord struct {
+	lowServer
+	stray   atomic.Bool
+	refused atomic.Int32
+}
+
+func (s *strayAtTheRecord) CreateBridgeCall(ctx context.Context, turnID, launchID string, seq uint64, value []byte) (bool, error) {
+	if err := s.refuses(value); err != nil {
+		s.refused.Add(1)
+		return false, err
+	}
+	if s.stray.CompareAndSwap(false, true) {
+		return false, nil
+	}
+	return s.lowServer.CreateBridgeCall(ctx, turnID, launchID, seq, value)
+}
+
+// A REFUSAL IS CARRIED TO THE NEXT NUMBER, AND SAID ONCE.
+//
+// A call whose least form meets a stray takes another number. The server that
+// refused its fitted record at the first number refuses it at the next, so the
+// next pass files the least form without asking again — a second refused
+// publish of a record the size of the ceiling, and a second line saying so,
+// would be the same answer bought twice.
+func TestARefusalIsCarriedToTheNextNumber(t *testing.T) {
+	t.Parallel()
+	logs := &logLines{}
+	fleet := &strayAtTheRecord{lowServer: lowServer{Fleet: memory.NewFleet(), limit: 256 << 10}}
+	store := sandbox.NewCoordStore(fleet).WithLogger(logs.logger())
+	run := begun(t, store, "t-least-stray")
+	sent := sandbox.BridgeCall{
+		Name: "read_file", Args: `{"path":"big.txt"}`, Output: strings.Repeat("z", sandbox.MaxBridgeCallBytes),
+		At: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
+	}
+	if ok, err := store.AppendBridgeCall(t.Context(), "t-least-stray", sent); err != nil || !ok {
+		t.Fatalf("append: %v, %v", ok, err)
+	}
+	if !fleet.stray.Load() {
+		t.Fatal("the least form never met the stray; the case tests nothing")
+	}
+	if n := fleet.refused.Load(); n != 1 {
+		t.Errorf("the server was asked for the fitted record %d times; want once, the refusal carried", n)
+	}
+	if n := len(logs.named(t, "sandbox_bridge_call_refused_within_ceiling")); n != 1 {
+		t.Errorf("the refusal was logged %d times, want once", n)
+	}
+	filed := logs.named(t, "sandbox_bridge_call_least_form_filed")
+	if len(filed) != 1 || filed[0]["seq"] != float64(2) {
+		t.Errorf("the least form was reported as %v; want one line, for the record at the number after "+
+			"the stray's", filed)
+	}
+	if got := mustBridgeCalls(t, store, run); len(got) != 1 || got[0].Output != sent.Output || got[0].Seq != 2 {
+		t.Errorf("the log = %d calls; want the call whole, at the number after the stray's", len(got))
 	}
 }
 
@@ -913,6 +1038,15 @@ func TestAWholeThatDoesNotReassembleIsReadAsItsRecordWithANote(t *testing.T) {
 				t.Errorf("the call read back ends %q; want the record's fitted output and a note saying %q",
 					got.Output[max(0, len(got.Output)-200):], tc.why)
 			}
+			// NOTHING POINTS AT THE PARTS THAT COULD NOT BE READ: the note
+			// carries their length and count, and the reference is gone.
+			if got.WholeBytes != 0 || got.WholeParts != 0 {
+				t.Errorf("the call read back still refers to %d bytes in %d parts, the parts that could "+
+					"not be read", got.WholeBytes, got.WholeParts)
+			}
+			if note := fmt.Sprintf("%d bytes filed in %d parts", record.WholeBytes, record.WholeParts); !strings.Contains(got.Output, note) {
+				t.Errorf("the note does not say %q, the length and count the reference carried", note)
+			}
 		})
 	}
 }
@@ -933,13 +1067,19 @@ func TestACallWhosePartsDoNotReassembleSaysItsArgumentsCouldNotBeReadBack(t *tes
 		// limit is what the server takes, zero for the contract's ceiling.
 		limit  int
 		output string
+		// inParts and unreadable are the record's marker and the one a
+		// read that cannot reassemble the parts puts in its place.
+		inParts, unreadable func(int) string
 	}{
-		"arguments the fit set aside":  {output: "posted"},
-		"a call that returned nothing": {output: ""},
+		"arguments the fit set aside": {output: "posted",
+			inParts: sandbox.ArgsInParts, unreadable: sandbox.ArgsUnreadable},
+		"a call that returned nothing": {output: "",
+			inParts: sandbox.ArgsInParts, unreadable: sandbox.ArgsUnreadable},
 		// Output enough that the fitted record is still too large for the
-		// server, so what it keeps is the least form, whose marker is the
-		// same one.
-		"the least form a server below the ceiling left": {limit: 256 << 10, output: strings.Repeat("y", 4<<20)},
+		// server, so what it keeps is the least form, whose markers say
+		// the arguments were set aside for the server's refusal.
+		"the least form a server below the ceiling left": {limit: 256 << 10, output: strings.Repeat("y", 4<<20),
+			inParts: sandbox.RefusedArgsInParts, unreadable: sandbox.RefusedArgsUnreadable},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -958,7 +1098,7 @@ func TestACallWhosePartsDoNotReassembleSaysItsArgumentsCouldNotBeReadBack(t *tes
 				t.Fatalf("append: %v, %v", ok, err)
 			}
 			record := mustBridgeCallPage(t, store, run)[0]
-			if record.Args != sandbox.ArgsInParts(len(args)) || record.WholeParts < 2 {
+			if record.Args != tc.inParts(len(args)) || record.WholeParts < 2 {
 				t.Fatalf("the record = args %.60q in %d parts; the case needs arguments set aside and a "+
 					"whole of several parts", record.Args, record.WholeParts)
 			}
@@ -967,7 +1107,7 @@ func TestACallWhosePartsDoNotReassembleSaysItsArgumentsCouldNotBeReadBack(t *tes
 				r[0].Parts = r[0].Parts[1:]
 			}})
 			got := mustBridgeCalls(t, reader, run)[0]
-			if got.Args != sandbox.ArgsUnreadable(len(args)) {
+			if got.Args != tc.unreadable(len(args)) {
 				t.Errorf("the arguments read back = %.120q; want the marker saying the %d bytes could "+
 					"not be read back", got.Args, len(args))
 			}
@@ -992,6 +1132,7 @@ func TestACallWhosePartsDoNotReassembleSaysItsArgumentsCouldNotBeReadBack(t *tes
 	for _, own := range []string{
 		strings.Replace(sandbox.ArgsInParts(12), "12", "012", 1),
 		strings.Replace(sandbox.ArgsInParts(12), "filed", "kept", 1),
+		strings.Replace(sandbox.RefusedArgsInParts(12), "refused", "declined", 1),
 		`{"…":"12"}`,
 	} {
 		fleet := memory.NewFleet()
@@ -1106,4 +1247,248 @@ func mustBridgeCalls(t *testing.T, store *sandbox.CoordStore, run sandbox.Pendin
 		t.Fatalf("BridgeCalls: %v", err)
 	}
 	return log.Calls
+}
+
+// --- a suspension its row cannot hold -------------------------------------
+
+// largeState is a suspended conversation past what a run's row keeps one
+// within, which is half the transport's ceiling.
+func largeState() map[string]any {
+	return map[string]any{
+		"version":              float64(2),
+		"messages":             []any{map[string]any{"Role": "assistant", "Content": strings.Repeat("w", 5<<20)}},
+		"pending_tool_call_id": "call_1",
+		"pending_tool_name":    "run_sandbox",
+	}
+}
+
+// suspendedInParts launches a run and suspends it with a conversation its row
+// cannot hold, returning the row.
+func suspendedInParts(t *testing.T, store *sandbox.CoordStore, turnID string, state map[string]any) sandbox.PendingRun {
+	t.Helper()
+	begun(t, store, turnID)
+	if ok, err := store.MarkSuspended(t.Context(), turnID, state); err != nil || !ok {
+		t.Fatalf("MarkSuspended(%s) = %v, %v", turnID, ok, err)
+	}
+	run, found, err := store.Get(t.Context(), turnID)
+	if err != nil || !found {
+		t.Fatalf("Get(%s) = %v, %v", turnID, found, err)
+	}
+	return run
+}
+
+func sameJSON(t *testing.T, got, want map[string]any) bool {
+	t.Helper()
+	g, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bytes.Equal(g, w)
+}
+
+// A SUSPENSION KEPT IN PARTS ENDS WITH ITS RUN, by every path that ends one:
+// the finish, a relaunch that replaces its launch, and the sweep of a launch no
+// run names. Kept past them it would sit in a bucket with no age for the life
+// of the deployment, megabytes at a time.
+func TestASuspensionKeptInPartsEndsWithItsRun(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
+
+	finished := suspendedInParts(t, store, "t-finish", largeState())
+	if parts, err := fleet.SuspensionParts(ctx, finished.TurnID, finished.LaunchID); err != nil || len(parts) == 0 {
+		t.Fatalf("the suspension is in %d parts, %v; want it in parts, which is the premise", len(parts), err)
+	}
+	if gone, err := store.Finish(ctx, "t-finish", sandbox.Fence{}); err != nil || !gone {
+		t.Fatalf("Finish = %v, %v", gone, err)
+	}
+	if parts, err := fleet.SuspensionParts(ctx, finished.TurnID, finished.LaunchID); err != nil || len(parts) != 0 {
+		t.Errorf("the finished run's suspension survived it in %d parts, %v", len(parts), err)
+	}
+
+	replaced := suspendedInParts(t, store, "t-relaunch", largeState())
+	relaunched := begun(t, store, "t-relaunch")
+	if parts, err := fleet.SuspensionParts(ctx, replaced.TurnID, replaced.LaunchID); err != nil || len(parts) != 0 {
+		t.Errorf("the replaced launch's suspension survived the relaunch in %d parts, %v", len(parts), err)
+	}
+
+	// A launch no run names, holding nothing but a suspension's parts: what a
+	// node that died between filing them and the finish leaves behind.
+	if _, err := fleet.CreateSuspensionPart(ctx, "t-gone", "launch-gone", 1, []byte("piece")); err != nil {
+		t.Fatal(err)
+	}
+	if purged, err := store.SweepBridgeCalls(ctx); err != nil || purged != 1 {
+		t.Fatalf("SweepBridgeCalls = %d, %v; want the one launch no run names", purged, err)
+	}
+	if parts, err := fleet.SuspensionParts(ctx, "t-gone", "launch-gone"); err != nil || len(parts) != 0 {
+		t.Errorf("the sweep left an orphaned suspension's %d parts, %v", len(parts), err)
+	}
+	if got := launchesOf(t, fleet); len(got) != 0 {
+		t.Errorf("launches after the sweep = %+v, want none: the relaunch %s has filed nothing yet",
+			got, relaunched.LaunchID)
+	}
+}
+
+// lowRunServer is [lowServer] for what a run keeps outside its calls: a server
+// configured below the contract's ceiling refuses a run's own record, and a
+// suspension's part, past its limit as too large.
+type lowRunServer struct {
+	*memory.Fleet
+	limit int
+}
+
+func (l lowRunServer) refuses(value []byte) error {
+	if len(value) > l.limit {
+		return fmt.Errorf("the server accepts %d bytes: %w", l.limit, coord.ErrTooLarge)
+	}
+	return nil
+}
+
+func (l lowRunServer) CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error) {
+	if err := l.refuses(value); err != nil {
+		return false, err
+	}
+	return l.Fleet.CreateSandboxRun(ctx, turnID, value)
+}
+
+func (l lowRunServer) UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error) {
+	if err := l.refuses(value); err != nil {
+		return false, err
+	}
+	return l.Fleet.UpdateSandboxRun(ctx, turnID, value, version)
+}
+
+func (l lowRunServer) CreateSuspensionPart(ctx context.Context, turnID, launchID string, part int, value []byte) (bool, error) {
+	if err := l.refuses(value); err != nil {
+		return false, err
+	}
+	return l.Fleet.CreateSuspensionPart(ctx, turnID, launchID, part, value)
+}
+
+// A SERVER BELOW THE CEILING DOES NOT LOSE THE CONVERSATION. It refuses a row
+// the contract's ceiling admits — a node does not boot against one, but a
+// reconnect can reach one — and the refusal is permanent, so the conversation
+// goes to parts split until that server takes them, the same split and the
+// same floor a bridged call's whole gets, and the resume reads it back whole.
+func TestASuspensionAServerBelowTheCeilingRefusesIsKeptInPartsItTakes(t *testing.T) {
+	t.Parallel()
+	const limit = 100 << 10
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(lowRunServer{Fleet: fleet, limit: limit})
+	state := map[string]any{
+		"version": float64(2), "pending_tool_call_id": "call_1",
+		"messages": []any{map[string]any{"Role": "assistant", "Content": strings.Repeat("w", 300<<10)}},
+	}
+	run := suspendedInParts(t, store, "t-low", state)
+	got, err := store.Suspension(t.Context(), run)
+	if err != nil || !sameJSON(t, got, state) {
+		t.Fatalf("the conversation read back = %d keys, %v; want the whole one suspended", len(got), err)
+	}
+	parts, err := fleet.SuspensionParts(t.Context(), run.TurnID, run.LaunchID)
+	if err != nil || len(parts) < 4 {
+		t.Fatalf("the conversation is in %d parts, %v: a part the server refused was not split", len(parts), err)
+	}
+	for _, part := range parts {
+		if len(part.Value) > limit {
+			t.Errorf("part %d is %d bytes, past the %d the server takes", part.Part, len(part.Value), limit)
+		}
+	}
+}
+
+// A CONVERSATION NO PART CAN HOLD IS AN ERROR THAT NAMES THE LIMIT, and the
+// run stays launching, where its caller fails it and reclaims its box. A
+// conversation dropped instead would open the run to a resume with nothing to
+// re-enter, and one cut would re-enter the turn without the call it suspended
+// on.
+func TestASuspensionNoPartCanHoldIsRefusedNamingTheLimit(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(lowRunServer{Fleet: memory.NewFleet(), limit: 1 << 10})
+	begun(t, store, "t-lower")
+	state := map[string]any{"version": float64(2), "messages": []any{strings.Repeat("w", 200<<10)}}
+	ok, err := store.MarkSuspended(t.Context(), "t-lower", state)
+	if err == nil || ok {
+		t.Fatalf("MarkSuspended = %v, %v; want the conversation refused", ok, err)
+	}
+	if !errors.Is(err, coord.ErrTooLarge) || !strings.Contains(err.Error(), "not split below 65536 bytes") ||
+		!strings.Contains(err.Error(), "the server accepts 1024 bytes") {
+		t.Errorf("the refusal = %v; want it to name the floor and the server's limit", err)
+	}
+	run, _, err := store.Get(t.Context(), "t-lower")
+	if err != nil || run.Status != sandbox.StatusLaunching || len(run.ExecuteState) != 0 {
+		t.Errorf("the run is %q with %d keys of conversation, %v; want it left launching with none",
+			run.Status, len(run.ExecuteState), err)
+	}
+}
+
+// partLost answers a launch's suspension one part short: a part purged under
+// the read, or lost.
+type partLost struct{ *memory.Fleet }
+
+func (p partLost) SuspensionParts(ctx context.Context, turnID, launchID string) ([]coord.Part, error) {
+	parts, err := p.Fleet.SuspensionParts(ctx, turnID, launchID)
+	if len(parts) > 0 {
+		parts = parts[:len(parts)-1]
+	}
+	return parts, err
+}
+
+// PARTS THAT DO NOT MAKE THE WHOLE ARE NEVER PASSED OFF AS IT. A conversation
+// one part short is not a shorter conversation: re-entered, the turn would be
+// missing the call it suspended on. The read says it cannot, and why.
+func TestASuspensionWhosePartsDoNotReassembleIsUnreadable(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	run := suspendedInParts(t, sandbox.NewCoordStore(fleet), "t-short", largeState())
+	_, err := sandbox.NewCoordStore(partLost{fleet}).Suspension(t.Context(), run)
+	if !errors.Is(err, sandbox.ErrSuspensionUnreadable) || !strings.Contains(err.Error(), "is missing") {
+		t.Errorf("a suspension one part short = %v, want ErrSuspensionUnreadable naming the part", err)
+	}
+}
+
+// A WRITE BY A BUILD THAT PREDATES THE PARTS KEEPS THE REFERENCE.
+//
+// A rolling upgrade puts such a build on the run's row, and it writes the row
+// whole on every step of the lifecycle it takes — a claim of ownership during
+// recovery, a box attached. Its row type has every field this one has, since
+// the reference adds none: it lives in execute_state, a map every build
+// decodes and encodes whole. So what that build writes back still names the
+// parts, and the resume that follows reads the conversation whole.
+func TestAWriteByABuildThatPredatesThePartsKeepsTheReference(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
+	state := largeState()
+	suspendedInParts(t, store, "t-peer", state)
+
+	record, found, err := fleet.SandboxRun(ctx, "t-peer")
+	if err != nil || !found {
+		t.Fatalf("SandboxRun = %v, %v", found, err)
+	}
+	var row sandbox.PendingRun
+	if err := json.Unmarshal(record.Value, &row); err != nil {
+		t.Fatal(err)
+	}
+	row.Owner, row.OwnerEpoch = "peer-incarnation", 7
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := fleet.UpdateSandboxRun(ctx, "t-peer", raw, record.Version); err != nil || !ok {
+		t.Fatalf("the peer's write = %v, %v", ok, err)
+	}
+
+	after, _, err := store.Get(ctx, "t-peer")
+	if err != nil || after.Owner != "peer-incarnation" {
+		t.Fatalf("Get = %+v, %v", after.Owner, err)
+	}
+	if got, err := store.Suspension(ctx, after); err != nil || !sameJSON(t, got, state) {
+		t.Errorf("after the peer's write the conversation reads back as %d keys, %v; want it whole",
+			len(got), err)
+	}
 }

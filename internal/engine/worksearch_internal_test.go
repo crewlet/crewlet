@@ -16,11 +16,11 @@ import (
 //
 // The index covers the pages as well as the work items, and each corpus
 // finishes its first lap on its own. The tracker's searcher asks the ranker
-// whether it is building whenever an answer comes back empty, and a ranker
-// that asked about the whole index would answer every empty work search
-// "the index is still building" for as long as the PAGES were on their first
-// lap — which a seat reads as "ask again" about a corpus that was ready. The
-// second source here stands for the page corpus, and never finishes a lap.
+// whether it is building on every search, and a ranker that asked about the
+// whole index would refuse every work search "the index is still building"
+// for as long as the PAGES were on their first lap — which a seat reads as
+// "ask again" about a corpus that was ready. The second source here stands
+// for the page corpus, and never finishes a lap.
 func TestAWorkSearchWaitsForTheItemsFirstBuildAlone(t *testing.T) {
 	t.Parallel()
 	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
@@ -44,7 +44,8 @@ func TestAWorkSearchWaitsForTheItemsFirstBuildAlone(t *testing.T) {
 	}})
 
 	// THE CONTROL: before any lap the gate is closed, so what opens it
-	// below is the work items' lap rather than a gate that never closes.
+	// below is the work items' lap rather than a gate that was open all
+	// along.
 	if _, err := items.Search(t.Context(), "nothing matches this", 0); !errors.Is(err, tracker.ErrIndexBuilding) {
 		t.Fatalf("a search over an index that has built nothing answered %v, want %v",
 			err, tracker.ErrIndexBuilding)

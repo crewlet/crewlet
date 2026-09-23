@@ -76,6 +76,45 @@ func TestAPartsKeyIsNeverDecodedAsACallAndGoesWithItsLaunch(t *testing.T) {
 	}
 }
 
+// A SUSPENSION PART IS NEVER DECODED AS A CALL OR AS A CALL'S PART, BY THIS
+// BUILD OR ONE THAT PREDATES SUSPENSION PARTS — AND IT GOES WITH ITS LAUNCH.
+//
+// The parts sit under the launch's filter, which every build's purge removes,
+// and at a call part's depth; what keeps them from being read as either is the
+// word where a call part carries its call's number. The decoders checked are
+// this build's, which an older build that has the log runs byte for byte, and
+// the suspension's own filter must select none of the launch's calls, or its
+// read would move them.
+func TestASuspensionPartsKeyIsNeverACallsAndGoesWithItsLaunch(t *testing.T) {
+	t.Parallel()
+	for _, ids := range [][2]string{{"turn-1", "launch-1"}, {"run.a", "launch.b"}, {"t:é", "l 1"}} {
+		turnID, launchID := ids[0], ids[1]
+		part := suspensionPartKey(turnID, launchID, 3)
+
+		if seq, ok := bridgeCallSeq(part); ok {
+			t.Errorf("%s: a suspension part's key decodes as call %d", turnID, seq)
+		}
+		if seq, n, ok := bridgePartAddress(part); ok {
+			t.Errorf("%s: a suspension part's key decodes as part %d of call %d", turnID, n, seq)
+		}
+		if n, ok := suspensionPart(part); !ok || n != 3 {
+			t.Errorf("%s: the suspension part's key decodes as part %d, %v", turnID, n, ok)
+		}
+		for _, other := range []string{bridgeCallKey(turnID, launchID, 3), bridgePartKey(turnID, launchID, 3, 1)} {
+			if _, ok := suspensionPart(other); ok {
+				t.Errorf("%s: the call key %q decodes as a suspension part", turnID, other)
+			}
+			if within := strings.TrimSuffix(suspensionPartFilter(turnID, launchID), ">"); strings.HasPrefix(other, within) {
+				t.Errorf("%s: the suspension's filter selects the call key %q", turnID, other)
+			}
+		}
+		if launch := strings.TrimSuffix(bridgeCallFilter(turnID, launchID), ">"); !strings.HasPrefix(part, launch) {
+			t.Errorf("%s: the suspension part %q is outside the launch's filter, so a purge would leave it",
+				turnID, part)
+		}
+	}
+}
+
 // THE CLIENT'S SIZE REFUSAL IS PERMANENT, NOT A BLIP — AND IT NAMES THE LIMIT
 // THAT REFUSED IT.
 //
@@ -89,8 +128,8 @@ func TestAPartsKeyIsNeverDecodedAsACallAndGoesWithItsLaunch(t *testing.T) {
 // oversized value when a value within it was refused.
 func TestTheClientsSizeRefusalIsPermanent(t *testing.T) {
 	t.Parallel()
-	refused := createRefusal(fmt.Errorf("publish: %w", nats.ErrMaxPayload), "a part of a bridged call",
-		2<<20, 1<<20)
+	refused := refusal(fmt.Errorf("publish: %w", nats.ErrMaxPayload), "record a part of a bridged call",
+		"a part of a bridged call", 2<<20, 1<<20)
 	if !errors.Is(refused, coord.ErrTooLarge) || errors.Is(refused, coord.ErrUnavailable) {
 		t.Errorf("a payload refusal = %v, want coord.ErrTooLarge and not coord.ErrUnavailable", refused)
 	}
@@ -107,14 +146,14 @@ func TestTheClientsSizeRefusalIsPermanent(t *testing.T) {
 	// A LIMIT AT OR ABOVE THE CONTRACT'S IS NOT THE ONE THAT REFUSED: no value
 	// within the ceiling reaches it, so the announcement was replaced after
 	// the refusal, and the error must not present it as the cause.
-	replaced := createRefusal(nats.ErrMaxPayload, "a bridged call", 2<<20, queue.MaxPayloadBytes)
+	replaced := refusal(nats.ErrMaxPayload, "record a bridged call", "a bridged call", 2<<20, queue.MaxPayloadBytes)
 	if !errors.Is(replaced, coord.ErrTooLarge) || strings.Contains(replaced.Error(), "below the") ||
 		!strings.Contains(replaced.Error(), "since replaced") {
 		t.Errorf("a refusal read against a limit the contract fits = %v, want it named as an "+
 			"announcement replaced since", replaced)
 	}
 
-	down := createRefusal(nats.ErrConnectionClosed, "a bridged call", 10, 1<<20)
+	down := refusal(nats.ErrConnectionClosed, "record a bridged call", "a bridged call", 10, 1<<20)
 	if !errors.Is(down, coord.ErrUnavailable) || errors.Is(down, coord.ErrTooLarge) {
 		t.Errorf("a closed connection = %v, want coord.ErrUnavailable", down)
 	}
@@ -124,10 +163,13 @@ func TestTheClientsSizeRefusalIsPermanent(t *testing.T) {
 //
 // What a refusal names is read off the connection the store writes through,
 // not assumed: a cluster member left at nats-server's own 1 MiB default refuses
-// a value the contract's ceiling admits, and every write of the log has to say
-// which limit refused it. The store is built on such a server by hand, because
-// OpenFleet refuses to open on one — which is why production meets it only
-// after a reconnect.
+// a value the contract's ceiling admits, and every write of a detached run's
+// records — its own record included — has to say which limit refused it, as a
+// refusal rather than a blip: read as unavailable, the caller would retry a
+// write that can never land, and a suspension it could have kept in parts would
+// be lost as a store outage. The store is built on such a server by hand,
+// because OpenFleet refuses to open on one — which is why production meets it
+// only after a reconnect.
 func TestAValueARealServerRefusesNamesThatServersLimit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -136,15 +178,38 @@ func TestAValueARealServerRefusesNamesThatServersLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	calls, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket: fmt.Sprintf("c%d_calls", bucketSeq.Add(1)),
-	})
-	if err != nil {
-		t.Fatalf("create the bucket: %v", err)
+	bucket := func(name string) jetstream.KeyValue {
+		t.Helper()
+		kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket: fmt.Sprintf("c%d_%s", bucketSeq.Add(1), name),
+		})
+		if err != nil {
+			t.Fatalf("create the %s bucket: %v", name, err)
+		}
+		return kv
 	}
-	f := &FleetStore{js: js, calls: calls}
+	f := &FleetStore{js: js, calls: bucket("calls"), runs: bucket("runs")}
+	if created, err := f.CreateSandboxRun(ctx, "turn-2", []byte(`{"status":"launching"}`)); err != nil || !created {
+		t.Fatalf("create the run an update refuses over: %v, %v", created, err)
+	}
+	record, _, err := f.SandboxRun(ctx, "turn-2")
+	if err != nil {
+		t.Fatalf("read the run back: %v", err)
+	}
 	value := bytes.Repeat([]byte("p"), 2<<20)
 	for name, write := range map[string]func() error{
+		"a run created": func() error {
+			_, err := f.CreateSandboxRun(ctx, "turn-1", value)
+			return err
+		},
+		"a run updated": func() error {
+			_, err := f.UpdateSandboxRun(ctx, "turn-2", value, record.Version)
+			return err
+		},
+		"a suspension part": func() error {
+			_, err := f.CreateSuspensionPart(ctx, "turn-1", "launch-1", 1, value)
+			return err
+		},
 		"an append": func() error {
 			_, err := f.AppendBridgeCall(ctx, "turn-1", "launch-1", value)
 			return err

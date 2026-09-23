@@ -3,6 +3,8 @@ package search
 import (
 	"cmp"
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"time"
 )
@@ -143,20 +145,24 @@ type FanQuery struct {
 	Model  string
 	Dim    int
 
-	// Limit caps the fused answer. Zero takes [ReturnDepth].
+	// Limit caps the fused answer. Zero or less takes [FuseN].
 	//
 	// BOUNDED ABOVE BY WHAT A PARTICIPANT SENDS, which is a property of
 	// the protocol rather than a policy: each returns its top-[FuseN] per
 	// method, so the fusion sees at most FuseN of each however many the
-	// caller asks for, and a Limit past that is answered short with
-	// nothing on the answer saying so. internal/engine's
-	// TestNoSearchCallerAsksForMoreThanAFanOutCanAnswer holds the tracker's
-	// ceiling and the knowledge seam's default ask under it, where the
-	// searchers and their callers are wired together, rather than two
-	// constants in two packages happening to match. A caller that names a
-	// limit of its own is held under it by that value alone.
+	// caller asks for. A Limit past that would be answered short with
+	// nothing on the answer saying so, so [FanOut.Search] REFUSES it
+	// ([ErrLimit]) — and internal/engine's
+	// TestNoSearchCallerAsksForMoreThanAFanOutCanAnswer holds every real
+	// caller's ask under it, so the refusal is never what a company meets.
+	//
+	// Not on the wire: a participant answers its top FuseN whatever the
+	// coordinator's caller asked for, so only the coordinator reads it.
 	Limit int
 }
+
+// ErrLimit reports a [FanQuery.Limit] above [FuseN].
+var ErrLimit = errors.New("search: a fan-out answers at most FuseN hits")
 
 // Scanner answers one bucket range out of the corpus this process holds.
 //
@@ -287,6 +293,13 @@ func (a Answer) Partial() bool { return a.BucketsMissing > 0 }
 
 // Search runs one query across the fleet and fuses what comes back.
 func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
+	if q.Limit > FuseN {
+		// REFUSED BEFORE ANY SCAN, naming the ceiling: see [FanQuery.Limit].
+		return Answer{}, fmt.Errorf("%w: asked for %d, and each participant "+
+			"returns its top %d per method (search.FuseN), so an answer past "+
+			"that would come back short with nothing saying so — ask for %d "+
+			"or fewer", ErrLimit, q.Limit, FuseN, FuseN)
+	}
 	started := time.Now()
 	if f.Enter != nil {
 		// BEFORE THE PLAN, because the plan is a coordination read and
@@ -528,8 +541,12 @@ func fuseSlices(answers []Slice, table []Assigned, limit int) Answer {
 		keys(MergeByScore(lexical, FuseN)),
 		keys(MergeByScore(semantic, FuseN)),
 	)
+	// THE CALLER'S LIMIT IS THE QUESTION, not a cut of the answer: a caller
+	// asks for the best `limit`, and the rest of the fused list is ranked
+	// below them. The default is FuseN because that is the deepest ask a
+	// fan-out can answer whole — see [FanQuery.Limit].
 	if limit <= 0 {
-		limit = ReturnDepth
+		limit = FuseN
 	}
 	if len(fused) > limit {
 		fused = fused[:limit]

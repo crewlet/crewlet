@@ -125,10 +125,12 @@ This is the sentence the backup schedule hangs on.
 **Above the trim floor**, the log holds every record on R replicas and every
 node holds the applied rows. Losing a node loses nothing.
 
-**Below the trim floor the log holds nothing, and each node's own database file
-is the only copy of that history** — N of them, independent, none replicated.
-Losing history below the floor takes all N disks, and it is covered **only** by
-the backup gate.
+**Below the trim floor the log holds nothing, and each node's replicated
+estate is the only copy of that history** — the database file at
+`store.replicated_path`, which every node derives from the log and which, once
+the records it came from are trimmed, nothing can derive again. N of them, one
+per node's disk. Losing history below the floor takes all N disks, and it is
+covered **only** by the backup gate.
 
 That is why the trim refuses to advance past a floor no backup has reached.
 The backup schedule is a **correctness input**, not hygiene. See
@@ -156,10 +158,11 @@ against it; it is the burst.
 **Rows here are database rows, not records.** Every figure in this section
 counts the rows an apply writes. The `crewlet.statelog.drain.records_per_second`
 gauge in [Metrics](../reference/metrics.md) counts the log's **records**
-instead — the unit a node's backlog is counted in, and so the rate its lag in
-seconds and its retry hints are derived from — and a record writes as many
-rows as its apply needs, so the gauge and these figures are different numbers
-that cannot be compared.
+instead — the unit a node's backlog is counted in, and so the rate a backlog is
+stated as a time through: a `max_lag_seconds` bound, a refused read's retry
+hint, a bulk edit's projection — and a record writes as many rows as its apply
+needs, so the gauge and these figures are different numbers that cannot be
+compared.
 
 The 2 000 rows/s floor is deliberately conservative, and it is the number
 every figure below is derived from. An applier writes a record's child rows —
@@ -190,11 +193,13 @@ it wrote, so this is a measured property of your fleet rather than a surprise.
 **The occupancy is per domain, not per node.** Every domain's applier writes
 the same replicated database, and a node hands that database's write lock to
 its writers in the order they asked for it. A bulk update commits one
-transaction at a time — at most 4 000 rows, about two seconds at the measured
-drain — and a waiting writer takes the lock as soon as the one in front of it
-commits. So a bulk update in the work tracker delays the knowledge base's
-apply by the transactions already queued ahead of it, at most one per other
-writer on that node, never by the whole 16 seconds.
+transaction at a time, and each ends at the first record boundary past either
+budget — 4 000 rows, or 250 ms of holding the writer — so a transaction can
+run over by the one record that crossed it, and at the drain this section
+works from it is the 250 ms that binds. A waiting writer takes the lock as
+soon as the one in front of it commits. So a bulk update in the work tracker
+delays the knowledge base's apply by the transactions already queued ahead of
+it, at most one per other writer on that node, never by the whole 16 seconds.
 
 A writer that does not reach the front within `store.busy_timeout_seconds`
 fails retryably and rejoins the line, logged as `store_tx_retry` naming the
@@ -353,8 +358,8 @@ a thing somebody did once.
 
 ## See also
 
-- **[Read consistency](consistency.md)** — the four levels and the twelve
-  refusals.
+- **[Read consistency](consistency.md)** — the four levels and every refusal
+  code.
 - **[Retention](retention.md)** — the trim, the six terms, snapshots and the
   join runbook.
 - **[Backups & restore](backup.md)** — the artefact, and what its interval

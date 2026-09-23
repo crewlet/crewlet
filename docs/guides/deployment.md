@@ -336,27 +336,33 @@ coordination:
 > that it reaches then refuses the engine's large messages there. Its refusal
 > of an event names that server's own `max_payload`, the 8 MiB the engine
 > sizes against, and the setting to raise. A phase record larger than that
-> server accepts is published cut to what the server takes: the node retries
-> each refused part of the record's whole at half its size, or at 64 KiB of
-> data when half would be smaller; it cuts the record itself to half the
-> smallest message the server has refused, a part or the record, halving again
-> on each further refusal; and it logs `phase_record_refused_within_ceiling`.
-> If the server refuses a part of 64 KiB of data or less, the record goes out
-> with no whole behind it (`phase_record_whole_not_kept`), and if it refuses
-> even the record's smallest form the phase has no record at all
-> (`phase_record_not_published`). A coding run's bridged call whose record
-> that server refuses is filed in its least form instead — its name and
-> outcome, each text it had replaced by its mark — with its whole in parts
-> split the same way (`sandbox_bridge_call_refused_within_ceiling`, and
-> `sandbox_bridge_call_whole_not_kept` when a part of 64 KiB or less is
-> refused). The two `…_refused_within_ceiling` lines name `max_payload`, and
-> so does a `…_whole_not_kept` line whose part was refused for its size; a
+> server accepts is still published. Each part of the record's whole that the
+> server refuses is retried at half its size, or at 64 KiB of data when half
+> would be smaller, and the whole is given up only when a part of 64 KiB of
+> data or less is refused (`phase_record_whole_not_kept`: the record then goes
+> out with no whole behind it). The record itself is cut to half the smallest
+> message the server has refused, a part or the record, halving again on each
+> further refusal, and goes out in the first form the server takes
+> (`phase_record_fitted`); the node logs `phase_record_refused_within_ceiling`
+> once for the record, and if the server refuses even the record's smallest
+> form the phase has no record at all (`phase_record_not_published`). A coding
+> run's bridged call whose record that server refuses has its whole kept in
+> parts split the same way, and its record filed in its least form: its name
+> and outcome, with each text longer than its mark set aside, and marked as set
+> aside because a server refused the record.
+> `sandbox_bridge_call_refused_within_ceiling` says the server refused it —
+> once for the call — `sandbox_bridge_call_least_form_filed` that the least
+> form landed, naming the whole's length and its parts, and
+> `sandbox_bridge_call_whole_not_kept` that a part of 64 KiB or less was
+> refused too. The two `…_refused_within_ceiling` lines name `max_payload`,
+> and so does a `…_whole_not_kept` line whose part was refused for its size; a
 > bridged call's refusal, in the `error` either line carries, also names the
 > `max_payload` the server this node is connected to announces, beside the
-> 8 MiB the engine sizes against. A write to the engine's own tracker, knowledge
-> base or vector index that the server refuses for its size is refused at once
-> as `too_large`, naming the `max_payload` that server announces and, where it
-> is below 8 MiB, the setting to raise, and the engine does not retry it.
+> 8 MiB the engine sizes against. A write to the engine's own tracker,
+> knowledge base or vector index that the server refuses for its size is
+> refused at once as `too_large`, naming the `max_payload` that server
+> announces and, where it is below 8 MiB, the setting to raise, and that write
+> is not retried: the same record would be refused the same way.
 > A payload limit on the NATS account or user the engine connects as caps the
 > same messages, so where one is set (`max_payload` in an account's `limits`,
 > or `payload` in an account or user JWT's limits) it must be at least 8 MiB
@@ -847,7 +853,7 @@ test rather than vanishing quietly.
 
 | Excluded type | Why |
 |---|---|
-| `agent_turn_progress` | Fires once per LLM round as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
+| `agent_turn_progress` | Fires as a live-only signal up to twice per LLM round, and up to five times a second while a round is being written; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
 | `agent_spawned` | Placement moves a seat between nodes on every rebalance, so a durable row per claim would fill the log with a fact about **scheduling** rather than about the company. It still drives the live projection, which is what asks "is this seat running, and where". |
 | `agent_terminated` | The counterpart, excluded for the same reason. It is what returns a released seat to `terminated` on a live screen rather than leaving it showing whatever it last did. |
 | `raw_webhook` | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |

@@ -236,8 +236,8 @@ func (e *Engine) tuneBatching(c *Company) {
 		c.Config.NotificationCoalesceMaxBatch)
 }
 
-// knowledgeSearch wires search_knowledge, or nil where the company has no
-// knowledge base at all.
+// knowledgeSearch wires a seat's search_knowledge, or nil where the company
+// has no knowledge base at all.
 //
 // The GATE reads the company's config; the SEARCHER is resolved per call.
 // Those cannot be the same read: this runs before an apply reconciles the
@@ -254,13 +254,25 @@ func knowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
 		//
 		// THE BACKEND, not the presence of an `integrations.confluence`
 		// block: a company on the native knowledge base configures no
-		// vendor at all, and gating on the vendor block would have left
-		// every native company's seats without search_knowledge while
-		// the pages they were meant to find were sitting in the index.
+		// vendor at all, and gating on the vendor block would leave every
+		// native company's seats without search_knowledge while the pages
+		// they were meant to find sat in the index.
 		return nil
 	}
-	return liveKnowledge{engine: e}
+	return LiveKnowledge(e)
 }
+
+// LiveKnowledge is the node's knowledge search as the tool layer takes it,
+// resolved against [Engine.Knowledge] on every call.
+//
+// ONE ADAPTER FOR EVERY SURFACE: a seat's registry and the operator's own
+// assistant both search through it. Per call, because an apply REPLACES the
+// searcher — a new credential, a new lead map, another backend — and a value
+// captured when a surface was assembled searches as the company it used to
+// be. Its methods are the whole of [builtin.KnowledgeSearcher], which requires
+// each of them, so an adapter cannot answer a search and drop the fact that
+// this node's index is still building.
+func LiveKnowledge(e *Engine) builtin.KnowledgeSearcher { return liveKnowledge{engine: e} }
 
 // liveKnowledge resolves the node's current knowledge searcher per call.
 type liveKnowledge struct{ engine *Engine }
@@ -273,25 +285,17 @@ func (k liveKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
 	return s != nil && s.CanSearch(seat, o)
 }
 
+// Building forwards the current searcher's own answer, and is false with none
+// wired: there is no index to wait for.
+func (k liveKnowledge) Building(ctx context.Context) bool {
+	s := k.engine.Knowledge()
+	return s != nil && s.Building(ctx)
+}
+
 func (k liveKnowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
 	s := k.engine.Knowledge()
 	if s == nil {
 		return nil
 	}
 	return s.Search(ctx, q)
-}
-
-// Building forwards the current searcher's own answer, and is false for one
-// that keeps no index or for none at all.
-//
-// FORWARDED, NOT LEFT OUT, because an adapter that carried only the seam's
-// methods would hide the one fact the tool needs to tell "not indexed yet"
-// from "nothing matched" — and the seat on a freshly joined node would be told
-// the company has written nothing down. Resolved per call like the rest: the
-// searcher it asks is the one the node is running now.
-func (k liveKnowledge) Building(ctx context.Context) bool {
-	builder, ok := k.engine.Knowledge().(interface {
-		Building(ctx context.Context) bool
-	})
-	return ok && builder.Building(ctx)
 }

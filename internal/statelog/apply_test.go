@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -27,17 +28,19 @@ import (
 // probeApplier is a state machine whose whole job is to be observable: it
 // writes one row per record into a table the test can count.
 type probeApplier struct {
-	mu       sync.Mutex
-	applied  []statelog.Position
-	commits  int
-	rows     int
-	gate     statelog.Reason
-	gated    map[uint64]bool
-	failAt   uint64
-	rowsPer  int
-	slowFrom uint64
-	slowFor  time.Duration
-	now      func() time.Time
+	mu      sync.Mutex
+	applied []statelog.Position
+	commits int
+	gate    statelog.Reason
+	gated   map[uint64]bool
+	failAt  uint64
+	rowsPer int
+
+	// onApply, when set, runs first in every Apply — inside the
+	// transaction's body — and what it returns is Apply's answer when it
+	// is an error. It is how a case moves an injected clock inside the
+	// hold or makes one attempt fail the way the store re-runs.
+	onApply func(rec statelog.Record) error
 }
 
 func newProbeApplier() *probeApplier {
@@ -46,18 +49,15 @@ func newProbeApplier() *probeApplier {
 
 func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, opts statelog.ApplyOptions) (int, error) {
 	a.mu.Lock()
-	fail, per, slowFrom, slowFor := a.failAt, a.rowsPer, a.slowFrom, a.slowFor
+	fail, per, hook := a.failAt, a.rowsPer, a.onApply
 	a.mu.Unlock()
+	if hook != nil {
+		if err := hook(rec); err != nil {
+			return 0, err
+		}
+	}
 	if fail != 0 && rec.Position.Seq == fail {
 		return 0, fmt.Errorf("the probe applier refuses sequence %d", fail)
-	}
-	if slowFrom != 0 && rec.Position.Seq >= slowFrom && a.now != nil {
-		// The clock is injected, so "slow" is deterministic rather than
-		// a sleep the scheduler decides the length of.
-		a.mu.Lock()
-		a.rows += 0
-		a.mu.Unlock()
-		_ = slowFor
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO probe_rows (position, kind, stored_at) VALUES (?, ?, ?)
@@ -113,6 +113,11 @@ type probeFetch struct {
 	// that comes back has to arrive in a LATER fetch, while the loop still
 	// holds a higher one in the same run.
 	after map[int]func()
+
+	// onAck, when set, runs on every acknowledgement — which the loop
+	// sends only after its commit — so a case can move an injected clock
+	// outside the transaction.
+	onAck func()
 }
 
 // afterFetch schedules a hook to run once the nth fetch has answered.
@@ -141,8 +146,12 @@ func (f *probeFetch) offer(seq uint64, env statelog.Envelope) {
 		Payload:  body,
 		Ack: func() error {
 			f.mu.Lock()
-			defer f.mu.Unlock()
 			f.acked[seq]++
+			hook := f.onAck
+			f.mu.Unlock()
+			if hook != nil {
+				hook()
+			}
 			return nil
 		},
 	})
@@ -563,8 +572,8 @@ func TestARecordThisBuildCannotDecodeIsRetainedAtItsPosition(t *testing.T) {
 	if got := h.fetch.ackCount(2); got != 1 {
 		t.Fatalf("the retained record was acknowledged %d time(s), want 1", got)
 	}
-	if _, held := h.runner.Deferred(); !held {
-		t.Error("the runner does not report holding a deferred record")
+	if _, held := h.runner.Deferred(); held != 1 {
+		t.Errorf("the runner reports holding %d deferred record(s), want 1", held)
 	}
 }
 
@@ -1358,14 +1367,101 @@ func TestApplyTxAbortsAreCounted(t *testing.T) {
 	}
 }
 
-// TestTheApplierMeasuresItsOwnDrain is the input three answers divide a record
-// backlog by to state a TIME: a bounded stale read's "am I inside the caller's
-// staleness", a refusal's `retry_after_seconds`, and the apply-lag alarm.
+// THE TRANSACTION'S TIME IS ITS HOLD ON THE WRITER, and the drain is the whole
+// run.
 //
-// Unmeasured, all three fall back to one record per second — so a node two
-// thousand records behind, which is about a second of real work, reports
-// itself half an hour behind, refuses reads it should have served and fires an
-// alarm nobody can act on.
+// `apply.tx.duration` is what every writer queued behind an apply waits out, so
+// it runs from the start of the attempt that committed to its commit: not from
+// before an attempt the store rolled back and ran again, and not on past the
+// acknowledgement that follows the commit. The drain states a backlog as a
+// time, so it keeps both — they are time a backlog costs to apply.
+//
+// The clock is injected and moves only in the hooks: ten seconds inside an
+// attempt the store runs again, a tenth of a second inside the one that
+// commits, ten seconds in the acknowledgement.
+//
+// Mutation: time the transaction from the top of the run and it reads the
+// abandoned attempt's ten seconds too; time it to the end of the run and it
+// reads the acknowledgement's; take the drain over the hold alone and it reads
+// ten records a second where the run took twenty seconds.
+func TestTheTransactionTimeIsTheHoldOnTheWriter(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	at := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return at
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		at = at.Add(d)
+	}
+
+	h := newApplyHarness(t, probeDomain{})
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain: probeDomain{}, Applier: h.applier, Fetch: h.fetch,
+		DB: h.db.Replicated(), Generation: 1, Metrics: h.metrics, Now: clock,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	h.runner = runner
+
+	attempts := 0
+	h.applier.onApply = func(statelog.Record) error {
+		attempts++
+		if attempts == 1 {
+			// A FAILURE THE STORE RUNS THE BODY AGAIN FOR: the write
+			// lock's own timeout, as the driver words it.
+			advance(10 * time.Second)
+			return errors.New("database is locked")
+		}
+		advance(100 * time.Millisecond)
+		return nil
+	}
+	h.fetch.onAck = func() { advance(10 * time.Second) }
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	if err := h.run(1); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("the body ran %d time(s), want 2 — the case is about an attempt "+
+			"the store rolled back and ran again", attempts)
+	}
+
+	var held metrics.Snapshot
+	for _, s := range h.metrics.Read() {
+		if s.Name == metrics.StatelogApplyTxDuration {
+			held = s
+		}
+	}
+	if held.Count != 1 || held.Sum != 100 {
+		t.Errorf("apply.tx.duration holds %d observation(s) summing %v ms, want one "+
+			"of 100 ms — the committing attempt's hold, without the abandoned "+
+			"attempt before it or the acknowledgement after it", held.Count, held.Sum)
+	}
+	if got := h.counter(metrics.StatelogApplyTxAborts); got != 1 {
+		t.Errorf("apply.tx.aborts reads %d, want the one attempt the store ran again", got)
+	}
+	// THE DRAIN IS THE WHOLE RUN: one record over the abandoned attempt, the
+	// committing one and the acknowledgement.
+	if want := 1 / (20*time.Second + 100*time.Millisecond).Seconds(); math.Abs(h.runner.Drain()-want) > 1e-9 {
+		t.Errorf("the drain reads %v records a second, want %v — one record over "+
+			"the run's whole 20.1 s", h.runner.Drain(), want)
+	}
+}
+
+// TestTheApplierMeasuresItsOwnDrain is the input every record backlog is divided
+// by to state a TIME ([statelog.BacklogTime]): a bounded stale read's "am I
+// inside the caller's staleness", a refusal's `retry_after_seconds`, and a bulk
+// edit's projection.
+//
+// Unmeasured, all three read at [statelog.DrainFloor], one record a second — so
+// a node two thousand records behind, which may be a second of real work,
+// states itself over half an hour behind and refuses reads it should have
+// served.
 func TestTheApplierMeasuresItsOwnDrain(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1396,14 +1492,13 @@ func TestTheApplierMeasuresItsOwnDrain(t *testing.T) {
 			"measurement", drain)
 	}
 
-	// AND THE COMMIT RATE BESIDE IT, which is a different resource: rows
+	// AND THE COMMIT RATE BESIDE IT, which is a different resource: records
 	// per second is progress, commits per second is the FSYNC rate a
 	// device's write budget is spent by. They move independently by
-	// design — a run is filled toward the transaction budget precisely so
-	// a barrier-heavy stream commits once per two dozen records — so a
-	// node whose rows/s is healthy and whose commits/s has doubled is
-	// doing twice the disk work for the same progress, and neither figure
-	// alone can say it.
+	// design — a run is filled toward the transaction budget so one commit
+	// carries many records — so a node whose records/s is healthy and whose
+	// commits/s has doubled is doing twice the disk work for the same
+	// progress, and neither figure alone can say it.
 	commits := h.runner.Commits()
 	if commits <= 0 {
 		t.Fatalf("after applying twenty records the commit rate is %v, so the "+
@@ -1414,6 +1509,58 @@ func TestTheApplierMeasuresItsOwnDrain(t *testing.T) {
 		t.Errorf("the commit rate (%v/s) is above the record rate (%v/s), "+
 			"which cannot happen: a run is one transaction over at least one "+
 			"record", commits, drain)
+	}
+}
+
+// ONE BACKLOG IS ONE TIME: the record count over the drain as measured, as a
+// float, with the floor standing in for a rate nobody measured and for nothing
+// else.
+//
+// Every backlog this engine states as a time goes through
+// [statelog.BacklogTime] — a staleness bound, a retry hint, a bulk edit's
+// projection — so each case here is all three at once.
+//
+// Mutation: truncate the drain and the fractional case reads 3 s; floor a
+// measured rate and the half-a-record case reads 3 s; drop the ceiling and the
+// last case is a negative duration on amd64.
+func TestOneBacklogIsOneTime(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		records uint64
+		drain   float64
+		want    time.Duration
+	}{
+		{name: "nothing behind", records: 0, drain: 1.5, want: 0},
+		{name: "a fractional drain", records: 3, drain: 1.5, want: 2 * time.Second},
+		{name: "a measured rate below the floor", records: 3, drain: 0.5,
+			want: 6 * time.Second},
+		{name: "an unmeasured drain", records: 3, drain: 0, want: 3 * time.Second},
+		{name: "a drain that is not a rate", records: 3, drain: math.NaN(),
+			want: 3 * time.Second},
+		{name: "a negative drain", records: 3, drain: -4, want: 3 * time.Second},
+		{name: "a fast drain", records: 1_000_000, drain: 4_000_000,
+			want: 250 * time.Millisecond},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := statelog.BacklogTime(c.records, c.drain); got != c.want {
+				t.Errorf("%d records at %v a second is %v, want %v",
+					c.records, c.drain, got, c.want)
+			}
+		})
+	}
+
+	// PAST A DURATION'S RANGE the answer is its ceiling — the largest whole
+	// number of seconds — and never a wrapped value.
+	ceiling := statelog.BacklogTime(math.MaxUint64, 1e-12)
+	if ceiling <= 0 || ceiling%time.Second != 0 {
+		t.Fatalf("the largest backlog at a vanishing rate is %v, want a positive "+
+			"whole number of seconds", ceiling)
+	}
+	if more := statelog.BacklogTime(math.MaxUint64, 1e-15); more != ceiling {
+		t.Errorf("a slower rate states the same backlog as %v, want the same "+
+			"ceiling %v", more, ceiling)
 	}
 }
 
@@ -1532,8 +1679,9 @@ func TestARetainedRecordIsAppliedByTheBuildThatCanReadIt(t *testing.T) {
 			"then 3 — in log order, and the one held back by scope after the one "+
 			"that held it", seen)
 	}
-	if _, held := h.runner.Deferred(); held {
-		t.Fatal("the runner still reports a deferred record after applying them all")
+	if _, held := h.runner.Deferred(); held != 0 {
+		t.Fatalf("the runner still reports %d deferred record(s) after applying "+
+			"them all", held)
 	}
 	if got := h.runner.Committed().Seq; got != 4 {
 		t.Fatalf("the checkpoint moved to %d — a reprocess applies at the "+
@@ -1588,6 +1736,12 @@ func TestAReprocessKeepsWhatAnUnreadableRecordStillCovers(t *testing.T) {
 	if got := h.retainedCount(); got != 4 {
 		t.Fatalf("the old build retained %d record(s), want 4", got)
 	}
+	// THE COUNT IS THE TABLE'S, not a flag: it is what the register row and
+	// the `deferred.count` gauge publish, so four retained records read as
+	// four rather than as "some".
+	if _, held := h.runner.Deferred(); held != 4 {
+		t.Fatalf("the runner reports %d retained record(s) and the table holds 4", held)
+	}
 
 	h.upgrade(upgradedDomain{reads: 9})
 	if err := h.boot(2); err != nil {
@@ -1599,9 +1753,9 @@ func TestAReprocessKeepsWhatAnUnreadableRecordStillCovers(t *testing.T) {
 			"it and 3 is covered by 2", seen)
 	}
 	d, held := h.runner.Deferred()
-	if !held || d.Position.Seq != 2 || d.Version != 12 {
-		t.Fatalf("the runner reports %+v held=%v, want the record at 2 needing "+
-			"version 12", d, held)
+	if held != 2 || d.Position.Seq != 2 || d.Version != 12 {
+		t.Fatalf("the runner reports %+v and %d held, want the 2 the table still "+
+			"holds, the earliest at 2 needing version 12", d, held)
 	}
 
 	// AND THE NEXT UPGRADE FINISHES IT.

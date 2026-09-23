@@ -99,7 +99,7 @@ const ApplyRetryBudget = StallGrace / 2
 
 // Health is one registered domain's readiness.
 //
-// # FOURTEEN FIELDS, DECLARED ONCE
+// # EVERY FIELD, DECLARED ONCE
 //
 // This struct is cited from the framework's contracts, from the readiness
 // gate, from the operator surface and from the register's own heartbeat, and
@@ -270,7 +270,21 @@ func (h Health) AheadOfLog() bool {
 	return h.LastSeq != nil && h.Position.Seq > *h.LastSeq
 }
 
-// Healthy reports whether this domain's state permits admitting seats.
+// Healthy reports whether this domain's state permits this node to KEEP the
+// seats it holds.
+//
+// # A copy that is WRONG, never one that is merely behind
+//
+// It is the holding gate, and it fires only where a seat's work would be
+// wrong: an applier that has stopped or stalled, an eviction, rows below the
+// trim floor or a floor that cannot be seen, a checkpoint on a stream that is
+// not this one. A copy that is BEHIND is admission's question —
+// [Health.Established] with strict set — because it catches up, so withholding
+// claims is the whole remedy. CaughtUp is therefore not read here. Records past
+// the checkpoint are what every node has for a moment after every write, so a
+// holding gate that turned on them would give back every seat on the node
+// whenever a sweep landed in that moment; a node that stays behind because
+// its applied prefix stopped moving is caught by Stalled, one grace later.
 //
 // # What does NOT make it false, and why
 //
@@ -296,7 +310,7 @@ func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
 		h.AheadOfLog() || h.StreamRecreated {
 		return false
 	}
-	if !h.CaughtUp || h.Stalled {
+	if h.Stalled {
 		return false
 	}
 	if h.Deferred > 0 && deferredSince.Held && now.Sub(deferredSince.Since) > DeferralGrace {

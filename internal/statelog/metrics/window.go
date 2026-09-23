@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"math"
 	"sort"
 	"sync"
 	"time"
@@ -15,14 +14,16 @@ import (
 // exactly when somebody is looking because something happened.
 const Buckets = 24
 
-// Window is a rolling 24-hour view over the recorder's counters and maxima.
+// Window is a rolling 24-hour view over the recorder's counters, maxima and
+// distributions.
 //
 // # Why this exists at all
 //
-// The estate it replaces said `_24h` forty-odd times and never said what a
-// `_24h` was: since when, reset how, per node or per fleet. A maximum was
-// "observed", with no window at all, so one sixteen-second transaction last
-// Tuesday masked every transaction after it.
+// A `_24h` reading means nothing until it says since when, reset how, and per
+// node or per fleet — and this is the one definition: the last twenty-four
+// whole hours on this node, plus the current one. A maximum with no window at
+// all lets one sixteen-second transaction last Tuesday mask every transaction
+// after it.
 //
 // # A young window says so
 //
@@ -53,8 +54,9 @@ type Window struct {
 // the single worst observation in the window rather than on a distribution
 // that had actually moved.
 //
-// The bins are the recorder's own, so a windowed quantile and a cumulative one
-// are computed the same way and can be compared.
+// The bins are counted against the instrument's own boundaries — the ones its
+// cumulative series counts against too — so a windowed quantile and a
+// cumulative one are computed the same way and can be compared.
 //
 // total is a float64 for the reason the recorder's series total is: the window
 // sums the same increments the cumulative series does, an
@@ -103,21 +105,22 @@ func (w *Window) Max(key string, v float64) {
 	b[key] = cur
 }
 
-// Observe contributes one measurement to a distribution in the current hour.
+// Observe contributes one measurement to a distribution in the current hour,
+// counted against the histogram's own bounds.
 //
 // Separate from [Window.Max] because a maximum and a distribution answer
 // different questions and the alarms need the second: "the worst barrier in a
 // day" is a fact about one request, and "the p95 barrier over a day" is a fact
 // about the service.
-func (w *Window) Observe(key string, v float64) {
+func (w *Window) Observe(key string, bounds []float64, v float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	b := w.bucket()
 	cur := b[key]
 	if cur.counts == nil {
-		cur.counts = make([]uint64, len(bins)+1)
+		cur.counts = make([]uint64, len(bounds)+1)
 	}
-	cur.counts[binFor(v)]++
+	cur.counts[binFor(bounds, v)]++
 	cur.n++
 	cur.sum += v
 	if v > cur.max {
@@ -126,51 +129,18 @@ func (w *Window) Observe(key string, v float64) {
 	b[key] = cur
 }
 
-// Quantile is the qth quantile of one series over the window.
-//
-// The same upper-boundary reading as [Snapshot.Quantile], for the same reason:
-// accurate to within one bucket and never understating, which is the direction
-// a budget check wants to be wrong in.
-func (w *Window) Quantile(key string, q float64) float64 {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	var total uint64
-	merged := make([]uint64, len(bins)+1)
-	for _, b := range w.live() {
-		v := b[key]
-		total += v.n
-		for i, c := range v.counts {
-			merged[i] += c
-		}
-	}
-	if total == 0 || q <= 0 || q > 1 {
-		return 0
-	}
-	want := uint64(math.Ceil(q * float64(total)))
-	var seen uint64
-	for i, c := range merged {
-		seen += c
-		if seen >= want {
-			if i >= len(bins) {
-				return math.Inf(1)
-			}
-			return bins[i]
-		}
-	}
-	return math.Inf(1)
-}
-
-// Bins is one distribution's merged histogram over the window: its bin counts,
-// how many observations they hold and their sum.
+// Bins is one distribution's merged histogram over the window: its bin counts
+// against bounds, how many observations they hold and their sum. A quantile of
+// it is [Snapshot.Quantile]'s, over the [Recorder.ReadWindow] snapshot that
+// carries them.
 //
 // RETURNED TOGETHER because a [Snapshot] carries all three and a caller that
 // took them in three calls could take them across an hour boundary, pairing
 // counts from one window with a total from another.
-func (w *Window) Bins(key string) (counts []uint64, n uint64, sum float64) {
+func (w *Window) Bins(key string, bounds []float64) (counts []uint64, n uint64, sum float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	counts = make([]uint64, len(bins)+1)
+	counts = make([]uint64, len(bounds)+1)
 	for _, b := range w.live() {
 		v := b[key]
 		n += v.n

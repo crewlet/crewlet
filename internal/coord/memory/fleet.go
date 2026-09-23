@@ -618,9 +618,15 @@ func (f *Fleet) SandboxRuns(context.Context) ([]coord.Record, error) {
 
 // CreateSandboxRun writes a new record, ignoring a turn id that already
 // exists.
+//
+// THE KV BACKEND'S CEILING, as for every record of a detached run: without it
+// this twin would keep a run the real broker refuses.
 func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte) (bool, error) {
 	if turnID == "" {
 		return false, errors.New("coord/memory: a sandbox run needs a turn id")
+	}
+	if err := withinCeiling("a sandbox run", value); err != nil {
+		return false, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -636,6 +642,9 @@ func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte)
 
 // UpdateSandboxRun writes at a version, reporting whether that version held.
 func (f *Fleet) UpdateSandboxRun(_ context.Context, turnID string, value []byte, version uint64) (bool, error) {
+	if err := withinCeiling("a sandbox run", value); err != nil {
+		return false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	record, ok := f.runs[turnID]

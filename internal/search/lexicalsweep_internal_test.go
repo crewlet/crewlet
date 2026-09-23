@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -104,6 +105,102 @@ func TestEachCorpusIsAnnouncedBuiltOnItsOwnLap(t *testing.T) {
 			"count: %v", err)
 	}
 }
+
+// EACH CORPUS'S LINE CARRIES THAT CORPUS'S OWN PENDING COUNT, or the reason it
+// could not be read — and a corpus that never finishes is never announced.
+//
+// The line is the one record of the moment a search over a corpus stops saying
+// "still building", and the count on it is how far behind that corpus started
+// serving. Read over the whole index instead of per corpus, the line about a
+// healthy corpus would carry another corpus's error, or its backlog.
+func TestEachBuiltLineCarriesItsOwnCorpusCount(t *testing.T) {
+	t.Parallel()
+	db := openInternalStore(t)
+	errUncounted := errors.New("this corpus cannot be counted")
+	x := NewIndexerOver(db, []LexicalSource{
+		tallySource{name: string(SourcePage), count: 3},
+		tallySource{name: "archive", countErr: errUncounted},
+		stuckSource{},
+	})
+	// BOTH COUNTABLE CORPORA LAP ON THE FIRST SWEEP, before it reaches the
+	// one that never does — which then fails it.
+	if _, err := x.Sweep(t.Context()); !errors.Is(err, errStuck) {
+		t.Fatalf("the sweep answered %v, want the stuck corpus's %v", err, errStuck)
+	}
+	if !x.ReadyFor(string(SourcePage), "archive") || x.ReadyFor(string(SourceTask)) {
+		t.Fatal("the premise does not hold: two corpora built and one not")
+	}
+
+	announced := map[string]bool{}
+	lines := x.builtLines(t.Context(), announced)
+	if len(lines) != 2 {
+		t.Fatalf("announced %d lines, want one per built corpus: %v", len(lines), lines)
+	}
+	pages, archive := attrsOf(t, lines[0]), attrsOf(t, lines[1])
+	if pages["source"] != string(SourcePage) || pages["pending"] != 3 {
+		t.Errorf("the pages' line is %v, want source=page pending=3", pages)
+	}
+	if _, found := pages["pending_error"]; found {
+		t.Errorf("the pages' line carries another corpus's error: %v", pages)
+	}
+	if archive["source"] != "archive" {
+		t.Errorf("the second line is about %v, want the archive", archive["source"])
+	}
+	if reason, _ := archive["pending_error"].(string); !strings.Contains(reason,
+		errUncounted.Error()) {
+		t.Errorf("the archive's line says %v, want the reason its count failed", archive)
+	}
+	if _, found := archive["pending"]; found {
+		t.Errorf("a count that could not be read was reported as one: %v", archive)
+	}
+	if again := x.builtLines(t.Context(), announced); len(again) != 0 {
+		t.Errorf("a corpus was announced built twice: %v", again)
+	}
+}
+
+// attrsOf reads a log line's key-value attributes into a map.
+func attrsOf(t *testing.T, attrs []any) map[string]any {
+	t.Helper()
+	if len(attrs)%2 != 0 {
+		t.Fatalf("a line with an odd number of attributes: %v", attrs)
+	}
+	out := make(map[string]any, len(attrs)/2)
+	for i := 0; i < len(attrs); i += 2 {
+		key, ok := attrs[i].(string)
+		if !ok {
+			t.Fatalf("attribute %d is keyed by %T", i, attrs[i])
+		}
+		out[key] = attrs[i+1]
+	}
+	return out
+}
+
+// tallySource is a corpus with no documents to walk, so its first lap
+// finishes at once, that reports count documents to the pending tally — or
+// fails to count at all.
+type tallySource struct {
+	name     string
+	count    int
+	countErr error
+}
+
+func (s tallySource) Source() string { return s.name }
+
+func (tallySource) Versions(context.Context, *sql.Tx, string, int) ([]DocVersion, error) {
+	return nil, nil
+}
+
+func (tallySource) Fetch(context.Context, *sql.Tx, []string) ([]Doc, error) { return nil, nil }
+
+func (tallySource) Live(_ context.Context, _ *sql.Tx, ids []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
+}
+
+func (s tallySource) Count(context.Context, *sql.Tx) (int, error) { return s.count, s.countErr }
 
 // ONE CORPUS'S ORPHANS DO NOT HIDE ANOTHER CORPUS'S MISSING DOCUMENTS.
 //

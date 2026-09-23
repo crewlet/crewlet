@@ -179,7 +179,7 @@ an isolated former leader answers with a last sequence it believes and the
 majority has moved past. An append cannot be served that way, because there is
 nothing to commit against.
 
-## The twelve refusals
+## Refusals
 
 A read that cannot be served at the level asked for is **refused with a code**
 rather than downgraded. Each code names a different thing to do.
@@ -187,11 +187,12 @@ rather than downgraded. Each code names a different thing to do.
 | Code | What happened | What to do |
 |---|---|---|
 | `behind` | This node has not reached the position the read needs. | Wait — the answer carries a retry hint derived from this node's measured drain. It clears on its own. |
-| `too_stale` | This node's lag is past what the read said it would accept. | Same, or accept more staleness. |
+| `too_stale` | This node's lag is past what the read said it would accept. | Accept more staleness, or read from a node nearer the log's head. The answer carries no retry hint: this is not one of the codes worth coming back to **this** node for. |
 | `stalled` | This node's applied prefix has stopped moving — its applier halted, or has been retrying a failure it cannot get past for longer than the retry budget. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain, its position and the error it is retrying. A retried failure clears on its own the moment an attempt succeeds. |
 | `no_quorum` | The barrier did not commit: the broker answered and a majority did not agree. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
 | `broker_unreachable` | The broker did not answer at all. | Retry. Not the same as `no_quorum`, and the difference is where to look. |
 | `log_full` | The log is at its byte ceiling and refuses appends, so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
+| `barrier_refused` | The broker refused the barrier for a reason other than a full log — a message-size limit set on the stream below a barrier's own size, a sealed stream, a server at its storage limit. The broker's own words are the detail. | Change the setting the detail names; waiting on this node changes nothing. Like `log_full`, it costs `linearizable` reads alone — `session`, `stale` and `consistent_prefix` append no barrier and keep answering. |
 | `deferred` | This node holds a record it cannot decode covering what this read is about. | Ask another node, or upgrade this one. No amount of waiting changes it. |
 | `deferred_scope_unknown` | The deferred record's own scope could not be read, so nothing can be said about what it covers. | It blocks the whole domain, which is why it is a different code. Upgrade the node that is behind on the record version. |
 | `below_floor` | Records this node never applied have been trimmed. | Its rows are missing state no replay can supply. The node has to adopt a peer's snapshot; see [Retention](retention.md). |

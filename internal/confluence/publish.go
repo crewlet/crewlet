@@ -27,14 +27,13 @@ import (
 // still means a skill, and publishing it there as prose would put an
 // instruction meant for one phase of one turn into every executor's context.
 //
-// # Identity is the TITLE, and that is Confluence's limitation not a choice
+// # Identity is the TITLE
 //
-// The other knowledge backend stamps an external id on every page it
-// publishes and matches on that, so retitling a page in the UI never orphans
-// it. Confluence has no such field: a page is identified by its title within
-// its space, so a re-import after somebody renamed a page publishes a second
-// one. Reported rather than worked around — a hidden marker page or a label
-// convention would be this tool inventing state the instance does not have.
+// A page is matched by its title within its space, which is Confluence's own
+// model of a page's identity, so a re-import after somebody renamed a page in
+// the UI publishes a second one. Reported rather than worked around — a hidden
+// marker page or a label convention would be this tool inventing state the
+// instance does not have.
 
 // Item is one file, routed.
 type Item struct {

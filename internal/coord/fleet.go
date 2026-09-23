@@ -414,14 +414,16 @@ type Activation struct {
 //
 // # Where the whole text is
 //
-// Not here. This record is the LIVE copy, and it is cut because its size is
-// paid on every tick by every reader. The node publishes the same failure text
-// in the same step on its config_revision_applied event, which goes to the
-// audit event log and is kept for the event store's retention horizon; that
-// copy is bounded only by
-// [github.com/crewlet/crewlet/internal/events.MaxDiagnosticBytes] (64 KiB),
-// and is marked where that bound cuts it. The engine's reconciler publishes
-// both, and docs/concepts/control-plane.md shows how to read the event back.
+// In the failing node's own log, at WARN: the engine's reconciler logs every
+// failed tick's error whole, as reconcile_tick_failed — or
+// initial_reconcile_failed for the tick a node runs at boot. This record is
+// the LIVE copy, and it is cut because its size is paid on every tick by every
+// reader. The node publishes the same failure text in the same step on its
+// config_revision_applied event, which goes to the audit event log and is kept
+// for the event store's retention horizon; that copy holds up to
+// [github.com/crewlet/crewlet/internal/events.MaxDiagnosticBytes] (64 KiB) of
+// it, marked where that bound cuts. docs/concepts/control-plane.md shows how
+// to read the event back.
 //
 // Applied by the BACKEND, not the caller, and asserted by the contract suite:
 // a bound one implementation enforced and another did not would be a fleet
@@ -763,6 +765,11 @@ type Record struct {
 // RAISES rather than answering empty, on every read: "there is no run" starts
 // the work again and abandons a box, and a store that could not be read must
 // never be able to say that.
+//
+// A record is one message, so a run's value is bounded by [MaxRecordBytes],
+// on both backends, and a write past it is [ErrTooLarge] — stored neither
+// whole nor cut. What a run's own record cannot hold goes to part records
+// filed under its launch ([BridgeCalls.CreateSuspensionPart]).
 type SandboxRuns interface {
 	// SandboxRun reads one run's record.
 	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)
@@ -779,12 +786,16 @@ type SandboxRuns interface {
 	// CreateSandboxRun writes a new record, reporting whether it was new.
 	// A turn id that already exists is left alone: the id is the kick-off
 	// turn's, so a second create is a retried launch, not a second run.
+	// A value longer than [MaxRecordBytes], or one the transport refuses as
+	// too large, is [ErrTooLarge].
 	CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error)
 
 	// UpdateSandboxRun writes at a version, reporting whether that version
 	// still held. False is a LOST RACE, not a failure — the caller re-reads
 	// and re-decides, because the condition it evaluated may no longer be
-	// true.
+	// true. A value longer than [MaxRecordBytes], or one the transport
+	// refuses as too large, is [ErrTooLarge], and the record keeps what it
+	// held.
 	UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error)
 
 	// DeleteSandboxRun removes a record at a version, reporting whether
@@ -826,12 +837,13 @@ type BridgeCallRecord struct {
 	// and never by [BridgeCalls.BridgeCallPage], whose byte budget bounds
 	// the records it reads and has no room for a whole: a page's records
 	// carry none.
-	Parts []BridgeCallPart
+	Parts []Part
 }
 
-// BridgeCallPart is one piece of a call's whole, filed under the call's own
-// address.
-type BridgeCallPart struct {
+// Part is one piece of a whole that a record could not hold, filed under the
+// address of the record that names it: a bridged call's, or a run's launch for
+// its suspended conversation (see [BridgeCalls]).
+type Part struct {
 	// Part is its place in the whole, from 1.
 	Part int
 
@@ -893,11 +905,12 @@ type BridgeCallPage struct {
 // PERMANENT, and distinguished from [ErrUnavailable] for that reason: the same
 // bytes are refused the same way on every attempt, so a caller that read it as
 // "try again" would retry for ever. Both backends refuse at the contract's own
-// ceiling ([MaxBridgeCallBytes]) before the transport is asked, and the KV
+// ceiling ([MaxRecordBytes]) before the transport is asked, and the KV
 // backend also answers it for the transport's own refusal.
 var ErrTooLarge = errors.New("coord: record too large for the transport")
 
-// MaxBridgeCallBytes is the largest value one call record may hold, in bytes.
+// MaxRecordBytes is the largest value one record of a detached run may hold, in
+// bytes: the run's own record ([SandboxRuns]), a bridged call's, or a part.
 //
 // A record is ONE MESSAGE on its bucket's stream, and the ceiling on a message
 // is the transport's: [queue.MaxPayloadBytes]. The embedded broker is
@@ -905,26 +918,28 @@ var ErrTooLarge = errors.New("coord: record too large for the transport")
 // and internal/coord/kv's OpenFleet refuses a connection whose server accepts
 // less — an external cluster left at nats-server's own 1 MiB default — so the
 // number is true of every connection a fleet store opens on. The NATS client
-// counts a message's HEADERS inside that limit, and a create carries one, so a
-// value at the full payload would be refused by the client; [bridgeCallHeadroom]
-// is what the headers get.
+// counts a message's HEADERS inside that limit, and a create or an update
+// carries one, so a value at the full payload would be refused by the client;
+// [recordHeadroom] is what the headers get.
 //
 // Enforced by BOTH backends, and certified by the contract suite in both
 // directions: a value this long is stored, and a longer one is refused with
 // [ErrTooLarge] rather than stored cut. The memory twin has no transport of
 // its own, so without the ceiling stated here it would accept a record the
 // real broker refuses — the one direction a twin must never be wrong in.
-const MaxBridgeCallBytes = queue.MaxPayloadBytes - bridgeCallHeadroom
+const MaxRecordBytes = queue.MaxPayloadBytes - recordHeadroom
 
-// bridgeCallHeadroom is the room [MaxBridgeCallBytes] leaves under the
-// transport's ceiling for the headers a create's message carries.
+// recordHeadroom is the room [MaxRecordBytes] leaves under the transport's
+// ceiling for the headers a write's message carries.
 //
-// A create sends one header naming the sequence it expects, a few dozen bytes;
-// 64 KiB is three orders of magnitude past that, and under one percent of the
-// payload it is taken from.
-const bridgeCallHeadroom = 64 << 10
+// A create or an update sends one header naming the sequence it expects, a few
+// dozen bytes; 64 KiB is three orders of magnitude past that, and under one
+// percent of the payload it is taken from.
+const recordHeadroom = 64 << 10
 
-// BridgeCalls is the fleet's log of the tool calls bridged coding runs make.
+// BridgeCalls is the fleet's log of the tool calls bridged coding runs make,
+// and of what else a launch keeps outside its run's own record: the parts of
+// its suspended conversation.
 //
 // # Why every call is its own record
 //
@@ -947,7 +962,7 @@ const bridgeCallHeadroom = 64 << 10
 //
 // # A call too large for one record keeps its whole in PARTS
 //
-// A record is one message, so a call's value is bounded by [MaxBridgeCallBytes]
+// A record is one message, so a call's value is bounded by [MaxRecordBytes]
 // and what a tool returns is not. Such a call's record holds the form it was
 // fitted to, and its whole is filed in PART records UNDER THE CALL'S OWN
 // ADDRESS: numbered from 1 beneath the call's number. That placement is the
@@ -963,6 +978,19 @@ const bridgeCallHeadroom = 64 << 10
 // all be filed can still be written without naming any. That is why a number
 // can be reserved with nothing filed at it ([BridgeCalls.ReserveBridgeCall]),
 // and the record then created at it ([BridgeCalls.CreateBridgeCall]).
+//
+// # A suspension its run's record cannot hold keeps its whole in PARTS too
+//
+// A run's record is one message as well ([SandboxRuns]), and the suspended
+// Execute conversation it carries grows with the turn. Its whole goes to part
+// records filed under the run's LAUNCH ([BridgeCalls.CreateSuspensionPart]),
+// before the record that names them, for the calls' reason; and the launch is
+// the right address because a suspension belongs to one launch — a relaunch
+// starts without it. Filed under the launch, the parts go with every purge of
+// it, and a reader of calls or of a call's parts is never handed one: on the
+// KV backend a suspension part sits at a call's depth plus one, where a call
+// part does, behind a segment no call is ever numbered by, and every build
+// that has this log reads that segment as a call's number.
 //
 // # No retention
 //
@@ -983,7 +1011,7 @@ type BridgeCalls interface {
 	// it was filed at.
 	//
 	// An empty turn id or launch id is an error, and a value longer than
-	// [MaxBridgeCallBytes] is [ErrTooLarge]: neither is ever stored, and
+	// [MaxRecordBytes] is [ErrTooLarge]: neither is ever stored, and
 	// neither is ever cut.
 	AppendBridgeCall(ctx context.Context, turnID, launchID string, value []byte) (uint64, error)
 
@@ -1008,13 +1036,14 @@ type BridgeCalls interface {
 	//
 	// A part is numbered from 1, so a part or a Seq of zero is an error, as
 	// is an empty turn id or launch id; a value longer than
-	// [MaxBridgeCallBytes] is [ErrTooLarge], stored neither whole nor cut.
+	// [MaxRecordBytes] is [ErrTooLarge], stored neither whole nor cut.
 	CreateBridgeCallPart(ctx context.Context, turnID, launchID string, seq uint64, part int, value []byte) (bool, error)
 
 	// BridgeCalls returns every call of one launch, in Seq order, each with
 	// the parts filed under it in [BridgeCallRecord.Parts]. A launch with
 	// none answers an empty slice and no error. A part filed under a number
-	// that holds no record belongs to no call and is not returned.
+	// that holds no record belongs to no call and is not returned, and
+	// neither is a part of the launch's suspension.
 	BridgeCalls(ctx context.Context, turnID, launchID string) ([]BridgeCallRecord, error)
 
 	// BridgeCallPage returns one page of one launch's calls. See
@@ -1022,16 +1051,34 @@ type BridgeCalls interface {
 	// neither carries one nor counts one in its Total.
 	BridgeCallPage(ctx context.Context, q BridgeCallQuery) (BridgeCallPage, error)
 
+	// CreateSuspensionPart files one part of the whole of a launch's
+	// suspended conversation, under the launch, reporting false when that
+	// part is already filed — never overwritten, for the reason a call's
+	// record is not.
+	//
+	// A part is numbered from 1, so a part of zero is an error, as is an
+	// empty turn id or launch id; a value longer than [MaxRecordBytes] is
+	// [ErrTooLarge], stored neither whole nor cut.
+	CreateSuspensionPart(ctx context.Context, turnID, launchID string, part int, value []byte) (bool, error)
+
+	// SuspensionParts returns every part filed for one launch's suspension,
+	// in part order. A launch with none answers an empty slice and no error.
+	// How many there should be, and what they reassemble into, is the run
+	// record's business: coordination owns only where they are filed.
+	SuspensionParts(ctx context.Context, turnID, launchID string) ([]Part, error)
+
 	// BridgeLaunches returns every launch that holds any key in the log — a
-	// call, a part or its numbering — ordered by turn id and then launch id:
-	// the orphan sweep's read. A launch holding only parts is listed too, so
-	// a part filed after its launch was purged is found and purged again.
+	// call, a part of one, a part of its suspension or its numbering —
+	// ordered by turn id and then launch id: the orphan sweep's read. A
+	// launch holding only parts is listed too, so a part filed after its
+	// launch was purged is found and purged again.
 	BridgeLaunches(ctx context.Context) ([]BridgeLaunch, error)
 
 	// PurgeBridgeCalls removes every record of one launch, every part filed
-	// under them, and the launch's numbering: an append that lands afterwards
-	// starts again at 1, which is harmless because a purged launch is one no
-	// reader asks about, and the sweep purges what such an append leaves.
+	// under them, the parts of its suspension, and the launch's numbering:
+	// an append that lands afterwards starts again at 1, which is harmless
+	// because a purged launch is one no reader asks about, and the sweep
+	// purges what such an append leaves.
 	PurgeBridgeCalls(ctx context.Context, turnID, launchID string) error
 }
 

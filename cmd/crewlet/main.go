@@ -43,7 +43,6 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
@@ -2578,15 +2577,20 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			Reader: reader, Writer: writer,
 			Actor:    opsmcp.PageActor,
 			Mentions: engine.LiveMentions(e),
-			Reserved: reservedFor(e),
-			Await:    e.WaitCommitted,
+			// NO RESERVED CONTAINERS. A seat's surface closes the
+			// tool-skills container and the org root to its own writes;
+			// this one is a person's own assistant, which is how a
+			// company on the native knowledge base publishes both —
+			// write_page is the only thing that creates a native page.
+			// See [builtin.PageDeps.Reserved].
+			Await: e.WaitCommitted,
 		}
 	}
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
 	// unlike the ten write tools, ranked search over the company's own
 	// wiki is exactly as useful to an operator's assistant on Confluence.
 	if e.Knowledge() != nil {
-		opts.Knowledge = operatorKnowledge{engine: e}
+		opts.Knowledge = engine.LiveKnowledge(e)
 		// AND THE CHART BESIDE IT. An operator has no turn, so the org
 		// the search is scoped against comes from here; resolved per
 		// call, because a config apply replaces it.
@@ -2635,40 +2639,6 @@ func leadsOf(e *engine.Engine) builtin.Leads {
 		}
 		return false
 	}
-}
-
-// reservedFor is the containers an operator's assistant may not write to
-// directly, on the same terms a seat has them.
-func reservedFor(e *engine.Engine) []string {
-	c := e.Company()
-	if c == nil || c.Config == nil {
-		return nil
-	}
-	var out []string
-	for _, key := range []string{c.Config.SkillsContainerKey(), c.Config.RootSpaceKey()} {
-		if key = strings.TrimSpace(key); key != "" {
-			out = append(out, key)
-		}
-	}
-	return out
-}
-
-// operatorKnowledge resolves the node's searcher per call, for the reason the
-// engine's own liveKnowledge does: an apply REPLACES it, and a value captured
-// when the API was assembled searches with a rotated credential's predecessor.
-type operatorKnowledge struct{ engine *engine.Engine }
-
-func (k operatorKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
-	s := k.engine.Knowledge()
-	return s != nil && s.CanSearch(seat, o)
-}
-
-func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
-	s := k.engine.Knowledge()
-	if s == nil {
-		return nil
-	}
-	return s.Search(ctx, q)
 }
 
 // nativeRetention is this node's retention answer, or nil where there is none.

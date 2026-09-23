@@ -32,7 +32,7 @@ const installProbe = "crewlet.test.install_probe"
 // is what the probe is about.
 //
 // Mutation: drop the registerInstruments call from [configureMeter] and no
-// catalogue entry is collected; drop its view and every histogram arrives on
+// catalogue entry is collected; drop its views and every histogram arrives on
 // the SDK's default bounds; drop otel.SetMeterProvider from [Configure] and the
 // probe made through the global provider never arrives.
 func TestTheProviderIsInstalledWithoutAnEndpoint(t *testing.T) {
@@ -121,6 +121,64 @@ func TestAFractionalCounterIsExportedWithItsFraction(t *testing.T) {
 	if len(served.DataPoints) != 1 || served.DataPoints[0].Value != 3 {
 		t.Errorf("exported reads served = %+v, want one point of 3", served.DataPoints)
 	}
+}
+
+// EACH HISTOGRAM REACHES THE COLLECTOR ON ITS OWN BUCKETS, not on one set
+// shared by all of them.
+//
+// A whole backup outruns the default set, which ends near a minute, so the
+// catalogue gives the backup histogram buckets of its own — and a collector
+// that counted it on the default set would read every slow copy as "more than
+// a minute", its p95 infinite, while the recorder's own reading held the real
+// number. The barrier histogram beside it is the control: it declares none and
+// must arrive on the default set.
+//
+// Mutation: register one view over every histogram with the default bounds and
+// the backup duration arrives on them; drop the views and both arrive on the
+// SDK's own.
+func TestEachHistogramIsExportedOnItsOwnBuckets(t *testing.T) {
+	t.Parallel()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	reader := builtProvider(t, rec)
+	rec.Observe(metrics.BackupDuration, 2*time.Hour, nil)
+	rec.Observe(metrics.StatelogBarrierDuration, 3*time.Millisecond,
+		metrics.Attrs{"domain": "tracker"})
+
+	got := collected(t, reader)
+	for name, want := range map[string][]float64{
+		metrics.BackupDuration:          instrument(t, metrics.BackupDuration).Buckets(),
+		metrics.StatelogBarrierDuration: metrics.DefaultBounds(),
+	} {
+		histogram, ok := got[name].Data.(metricdata.Histogram[float64])
+		if !ok || len(histogram.DataPoints) != 1 {
+			t.Fatalf("%s arrived as %+v, want one histogram point", name, got[name].Data)
+		}
+		if bounds := histogram.DataPoints[0].Bounds; !slices.Equal(bounds, want) {
+			t.Errorf("%s arrived on bounds %v, want %v", name, bounds, want)
+		}
+	}
+	// THE CONTROL on the case itself: were the backup's buckets the
+	// default set, the comparison above could not tell one shared view from
+	// a view per instrument.
+	if slices.Equal(instrument(t, metrics.BackupDuration).Buckets(), metrics.DefaultBounds()) {
+		t.Fatal("the backup histogram declares the default buckets, so this case " +
+			"cannot tell a shared view from its own")
+	}
+}
+
+// instrument is one catalogue entry by name.
+func instrument(t *testing.T, name string) metrics.Instrument {
+	t.Helper()
+	for _, inst := range metrics.Catalogue() {
+		if inst.Name == name {
+			return inst
+		}
+	}
+	t.Fatalf("%s is not in the catalogue", name)
+	return metrics.Instrument{}
 }
 
 // builtProvider is the MeterProvider [configureMeter] builds with no endpoint,
@@ -296,11 +354,11 @@ func histogramPoints(t *testing.T, inst metrics.Instrument,
 	}
 	out := make([]attribute.Set, 0, len(histogram.DataPoints))
 	for _, p := range histogram.DataPoints {
-		// THE RECORDER'S BOUNDARIES, so a bucket on a collector's panel is
-		// the bucket the recorder counted into.
-		if !slices.Equal(p.Bounds, metrics.Bins()) {
-			t.Errorf("%s arrived on bounds %v, want the recorder's %v",
-				inst.Name, p.Bounds, metrics.Bins())
+		// THE INSTRUMENT'S OWN BOUNDARIES, so a bucket on a collector's
+		// panel is the bucket the recorder counted into.
+		if !slices.Equal(p.Bounds, inst.Buckets()) {
+			t.Errorf("%s arrived on bounds %v, want its own %v",
+				inst.Name, p.Bounds, inst.Buckets())
 		}
 		out = append(out, p.Attributes)
 	}

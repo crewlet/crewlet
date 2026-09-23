@@ -86,11 +86,34 @@ func (h *fleetHarness) createPart(turnID, launchID string, seq uint64, part int,
 
 // partsOf renders a record's parts as "<part>=<value>", in the order read.
 func partsOf(record coord.BridgeCallRecord) []string {
-	out := make([]string, 0, len(record.Parts))
-	for _, p := range record.Parts {
+	return renderParts(record.Parts)
+}
+
+// renderParts renders parts as "<part>=<value>", in the order given.
+func renderParts(parts []coord.Part) []string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
 		out = append(out, fmt.Sprintf("%d=%s", p.Part, p.Value))
 	}
 	return out
+}
+
+func (h *fleetHarness) createSuspensionPart(turnID, launchID string, part int, value string) bool {
+	h.t.Helper()
+	created, err := h.f.CreateSuspensionPart(h.ctx, turnID, launchID, part, []byte(value))
+	if err != nil {
+		h.t.Fatalf("CreateSuspensionPart(%s/%s#%d): %v", turnID, launchID, part, err)
+	}
+	return created
+}
+
+func (h *fleetHarness) suspensionParts(turnID, launchID string) []coord.Part {
+	h.t.Helper()
+	got, err := h.f.SuspensionParts(h.ctx, turnID, launchID)
+	if err != nil {
+		h.t.Fatalf("SuspensionParts(%s/%s): %v", turnID, launchID, err)
+	}
+	return got
 }
 
 var bridgeCallCases = []fleetCase{{
@@ -384,10 +407,10 @@ var bridgeCallCases = []fleetCase{{
 	// accepted by the twin when the broker would refuse it.
 	name: "a call at the ceiling is stored whole, and one past it is refused",
 	fn: func(h *fleetHarness) {
-		whole := bytes.Repeat([]byte("y"), coord.MaxBridgeCallBytes)
+		whole := bytes.Repeat([]byte("y"), coord.MaxRecordBytes)
 		seq, err := h.f.AppendBridgeCall(h.ctx, "turn-1", "launch-1", whole)
 		if err != nil {
-			h.t.Fatalf("a call of exactly coord.MaxBridgeCallBytes was refused: %v", err)
+			h.t.Fatalf("a call of exactly coord.MaxRecordBytes was refused: %v", err)
 		}
 		got := h.calls("turn-1", "launch-1")
 		if len(got) != 1 || got[0].Seq != seq || !bytes.Equal(got[0].Value, whole) {
@@ -399,7 +422,7 @@ var bridgeCallCases = []fleetCase{{
 		_, err = h.f.AppendBridgeCall(h.ctx, "turn-1", "launch-1", append(whole, 'z'))
 		switch {
 		case err == nil:
-			h.t.Error("a call one byte past coord.MaxBridgeCallBytes was accepted")
+			h.t.Error("a call one byte past coord.MaxRecordBytes was accepted")
 		case !errors.Is(err, coord.ErrTooLarge) || errors.Is(err, coord.ErrUnavailable):
 			h.t.Errorf("the refusal = %v, want coord.ErrTooLarge and not coord.ErrUnavailable", err)
 		}
@@ -605,15 +628,15 @@ var bridgeCallCases = []fleetCase{{
 	// as permanently too large, never stored cut.
 	name: "a part at the ceiling is stored whole, and one past it is refused",
 	fn: func(h *fleetHarness) {
-		whole := bytes.Repeat([]byte("p"), coord.MaxBridgeCallBytes)
+		whole := bytes.Repeat([]byte("p"), coord.MaxRecordBytes)
 		seq := h.reserveCall("turn-1", "launch-1")
 		if created, err := h.f.CreateBridgeCallPart(h.ctx, "turn-1", "launch-1", seq, 1, whole); err != nil || !created {
-			h.t.Fatalf("a part of exactly coord.MaxBridgeCallBytes = %v, %v", created, err)
+			h.t.Fatalf("a part of exactly coord.MaxRecordBytes = %v, %v", created, err)
 		}
 		_, err := h.f.CreateBridgeCallPart(h.ctx, "turn-1", "launch-1", seq, 2, append(whole, 'z'))
 		switch {
 		case err == nil:
-			h.t.Error("a part one byte past coord.MaxBridgeCallBytes was accepted")
+			h.t.Error("a part one byte past coord.MaxRecordBytes was accepted")
 		case !errors.Is(err, coord.ErrTooLarge) || errors.Is(err, coord.ErrUnavailable):
 			h.t.Errorf("the refusal = %v, want coord.ErrTooLarge and not coord.ErrUnavailable", err)
 		}
@@ -669,8 +692,136 @@ var bridgeCallCases = []fleetCase{{
 		}
 	},
 }, {
+	// A SUSPENSION'S PARTS ARE NOT CALLS. A run whose own record cannot hold
+	// its suspended conversation keeps the whole in parts filed under its
+	// launch, beside that launch's calls, and every read of the calls has to
+	// pass them over: a part read as a call would be a call the run never
+	// made, and one read as a call's part would corrupt a call's whole. The
+	// suspension's own read hands them back in part order however they were
+	// filed.
+	name: "a suspension's parts come back in order, and never as a call",
+	fn: func(h *fleetHarness) {
+		first := h.appendCall("turn-1", "launch-1", "small")
+		seq := h.reserveCall("turn-1", "launch-1")
+		h.createPart("turn-1", "launch-1", seq, 1, "call-piece")
+		h.createCall("turn-1", "launch-1", seq, "fitted")
+		for _, part := range []int{3, 1, 2} {
+			if !h.createSuspensionPart("turn-1", "launch-1", part, fmt.Sprintf("state-%d", part)) {
+				h.t.Fatalf("suspension part %d was reported already filed", part)
+			}
+		}
+
+		got := h.suspensionParts("turn-1", "launch-1")
+		if want := []string{"1=state-1", "2=state-2", "3=state-3"}; !slices.Equal(renderParts(got), want) {
+			h.t.Errorf("the suspension's parts = %q, want %q", renderParts(got), want)
+		}
+		calls := h.calls("turn-1", "launch-1")
+		if len(calls) != 2 || calls[0].Seq != first || calls[1].Seq != seq {
+			h.t.Fatalf("the calls read back = %q: a suspension part was read as a call", callValues(calls))
+		}
+		if len(calls[0].Parts) != 0 || !slices.Equal(partsOf(calls[1]), []string{"1=call-piece"}) {
+			h.t.Errorf("the calls' parts = %q and %q: a suspension part was read as a call's",
+				partsOf(calls[0]), partsOf(calls[1]))
+		}
+		page := h.callPage(coord.BridgeCallQuery{TurnID: "turn-1", LaunchID: "launch-1", Limit: 10, MaxBytes: 1 << 20})
+		if page.Total != 2 || len(page.Calls) != 2 {
+			h.t.Errorf("a page counted %d calls and carried %d, want the launch's 2", page.Total, len(page.Calls))
+		}
+		if got := h.suspensionParts("turn-1", "launch-2"); len(got) != 0 {
+			h.t.Errorf("another launch of the run read this one's suspension: %q", renderParts(got))
+		}
+	},
+}, {
+	// Written once, like every key of the log: a part already filed is one a
+	// previous attempt left, and overwriting it could splice two wholes.
+	name: "a suspension part is filed once and never overwritten",
+	fn: func(h *fleetHarness) {
+		if !h.createSuspensionPart("turn-1", "launch-1", 1, "first") {
+			h.t.Fatal("a new suspension part was reported already filed")
+		}
+		if h.createSuspensionPart("turn-1", "launch-1", 1, "second") {
+			h.t.Error("a suspension part already filed was reported created again")
+		}
+		if got := renderParts(h.suspensionParts("turn-1", "launch-1")); !slices.Equal(got, []string{"1=first"}) {
+			h.t.Errorf("the part = %q, want the first write kept", got)
+		}
+	},
+}, {
+	// THE PARTS END WITH THE LAUNCH. Every path that removes a run purges its
+	// launch, and a suspension left behind would be kept for the life of the
+	// deployment in a bucket with no age — so the purge takes the parts, and
+	// a launch holding nothing but them is one the sweep can find.
+	name: "a suspension's parts go with their launch, and a launch holding only them is listed",
+	fn: func(h *fleetHarness) {
+		h.createSuspensionPart("turn-1", "launch-1", 1, "state")
+		h.createSuspensionPart("turn-2", "launch-2", 1, "kept")
+		listed := h.launches()
+		if !slices.Contains(listed, coord.BridgeLaunch{TurnID: "turn-1", LaunchID: "launch-1"}) {
+			h.t.Fatalf("a launch holding only suspension parts was not listed: %+v", listed)
+		}
+		if err := h.f.PurgeBridgeCalls(h.ctx, "turn-1", "launch-1"); err != nil {
+			h.t.Fatalf("PurgeBridgeCalls: %v", err)
+		}
+		if got := h.suspensionParts("turn-1", "launch-1"); len(got) != 0 {
+			h.t.Errorf("the purge left the suspension's parts: %q", renderParts(got))
+		}
+		if slices.Contains(h.launches(), coord.BridgeLaunch{TurnID: "turn-1", LaunchID: "launch-1"}) {
+			h.t.Error("a purged launch is still listed")
+		}
+		if got := renderParts(h.suspensionParts("turn-2", "launch-2")); !slices.Equal(got, []string{"1=kept"}) {
+			h.t.Errorf("the purge of one launch reached another's suspension: %q", got)
+		}
+	},
+}, {
+	name: "a suspension part at the ceiling is stored whole, and one past it is refused",
+	fn: func(h *fleetHarness) {
+		whole := bytes.Repeat([]byte("s"), coord.MaxRecordBytes)
+		if created, err := h.f.CreateSuspensionPart(h.ctx, "turn-1", "launch-1", 1, whole); err != nil || !created {
+			h.t.Fatalf("a suspension part of exactly coord.MaxRecordBytes = %v, %v", created, err)
+		}
+		_, err := h.f.CreateSuspensionPart(h.ctx, "turn-1", "launch-1", 2, append(whole, 'z'))
+		switch {
+		case err == nil:
+			h.t.Error("a suspension part one byte past coord.MaxRecordBytes was accepted")
+		case !errors.Is(err, coord.ErrTooLarge) || errors.Is(err, coord.ErrUnavailable):
+			h.t.Errorf("the refusal = %v, want coord.ErrTooLarge and not coord.ErrUnavailable", err)
+		}
+		got := h.suspensionParts("turn-1", "launch-1")
+		if len(got) != 1 || !bytes.Equal(got[0].Value, whole) {
+			h.t.Fatalf("the part at the ceiling did not come back whole, or the refused one was kept "+
+				"(%d parts)", len(got))
+		}
+	},
+}, {
+	name: "an unaddressed suspension part is an error, not an empty suspension",
+	fn: func(h *fleetHarness) {
+		for _, ids := range [][2]string{{"", "launch-1"}, {"turn-1", ""}} {
+			if _, err := h.f.CreateSuspensionPart(h.ctx, ids[0], ids[1], 1, []byte("x")); err == nil {
+				h.t.Errorf("CreateSuspensionPart(%q, %q) was accepted", ids[0], ids[1])
+			}
+			if _, err := h.f.SuspensionParts(h.ctx, ids[0], ids[1]); err == nil {
+				h.t.Errorf("SuspensionParts(%q, %q) answered", ids[0], ids[1])
+			}
+		}
+		if _, err := h.f.CreateSuspensionPart(h.ctx, "turn-1", "launch-1", 0, []byte("x")); err == nil {
+			h.t.Error("a suspension part numbered 0 was accepted: nothing numbers from zero")
+		}
+		if got := h.suspensionParts("turn-1", "launch-1"); len(got) != 0 {
+			h.t.Errorf("a refused part was filed: %q", renderParts(got))
+		}
+	},
+}, {
 	name: "a caller mutating a read value cannot reach the store",
 	fn: func(h *fleetHarness) {
+		h.createSuspensionPart("turn-1", "launch-1", 1, "state")
+		for _, p := range h.suspensionParts("turn-1", "launch-1") {
+			for i := range p.Value {
+				p.Value[i] = 'x'
+			}
+		}
+		if got := renderParts(h.suspensionParts("turn-1", "launch-1")); !slices.Equal(got, []string{"1=state"}) {
+			h.t.Errorf("the store took a caller's mutation of a suspension part: %q", got)
+		}
 		seq := h.reserveCall("turn-1", "launch-1")
 		h.createPart("turn-1", "launch-1", seq, 1, "piece")
 		h.createCall("turn-1", "launch-1", seq, "original")
