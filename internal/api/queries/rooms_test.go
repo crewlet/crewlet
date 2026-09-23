@@ -2,9 +2,6 @@ package queries_test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -21,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -36,55 +32,36 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return nil, nil
 }
 
-// roomQueries scans the dashboard for every query kind a room asks for.
+// roomQueries is every query kind a room asks for, mapped to the files that
+// ask — found in the rooms' own source, never a list kept here: a
+// hand-maintained one is exactly what drifts, and it would drift towards
+// claiming the server answers more than it does.
 //
-// FROM THE ROOMS' OWN SOURCE, never a list kept here: a hand-maintained one
-// is exactly what drifts, and it would drift towards claiming the server
-// answers more than it does.
+// BOTH CALL SHAPES: the `useQuery` hook a screen renders from, and the direct
+// `socket.query` a pager or an action uses. Read by [clientsource.Calls], so a
+// call a formatter wrapped across lines, one with type arguments and one
+// inside markup are the calls they are. The sweep this replaced was a regular
+// expression whose name class once could not match `a2a_channels` and whose
+// paren once could not be followed by a line break — a sweep whose whole job
+// is to notice a missing name, twice silently narrowed by the shape of a
+// pattern — and it keyed each hit on the file's BASE name, so two rooms named
+// alike collapsed into one.
 func roomQueries(t *testing.T) map[string][]string {
 	t.Helper()
-	// Both call shapes: the `useQuery` hook a screen renders from, and the
-	// direct `socket.query` a pager or an action uses.
-	//
-	// DIGITS IN THE NAME. The class was `[a-z_]+`, which cannot match
-	// `a2a_channels` — so the one kind whose name carries a number was
-	// invisible to a sweep whose whole job is to notice a missing name.
-	// `\s*` after the paren: a formatter wraps a call whose arguments do not
-	// fit, and `useQuery(\n  "config_diff",` is the same call as the one that
-	// fits on a line. Without it the sweep reported a live reader as missing.
-	calls := regexp.MustCompile(`\b(?:useQuery|query)\(\s*"([a-z0-9_]+)"`)
-	tree := clientsource.Tree(t)
-	out := map[string][]string{}
-	err := sourcetree.Walk(tree, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() ||
-			(!strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx")) ||
-			strings.HasSuffix(path, ".test.ts") || strings.HasSuffix(path, ".test.tsx") {
-			return err
-		}
-		source, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for _, m := range calls.FindAllStringSubmatch(string(source), -1) {
-			room := filepath.Base(path)
-			if !slices.Contains(out[m[1]], room) {
-				out[m[1]] = append(out[m[1]], room)
-			}
-		}
-		return nil
-	})
+	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "query")
 	if err != nil {
 		// FAILS rather than skips. The dashboard source is committed, so it
 		// is always in a checkout — and a skip here is indistinguishable
 		// from a pass, which is how this gate went quiet the last time the
-		// tree moved.
-		t.Fatalf("the dashboard source at %s could not be read, so this gate "+
-			"certifies nothing: %v", tree, err)
+		// tree moved: it pointed at `static/dashboard/js`, the hand-written
+		// bundle the React rewrite deleted, and certified nothing for the
+		// whole of that rewrite.
+		t.Fatal(err)
 	}
-	if len(out) == 0 {
+	if len(calls) == 0 {
 		t.Fatal("the sweep found no query calls at all, so it certifies nothing")
 	}
-	return out
+	return calls
 }
 
 // everySeam is a Sources with every seam present, which is what makes the
@@ -298,33 +275,25 @@ func registeredKinds(t *testing.T) []string {
 //
 // The other direction, and the one that goes quiet rather than breaking: an
 // answer nobody calls is code with tests, no readers, and no way to notice
-// it stopped being right. The exceptions are named rather than assumed.
+// it stopped being right.
+//
+// NO EXCEPTIONS. This carried a map of kinds "read by name from somewhere that
+// is not a room" — `stream` through a header poll in a file the React rewrite
+// deleted, `config_entities` through a guide — and both had long since gained
+// a room that reads them, so the map was consulted for nothing and excused
+// nothing. An exemption nobody reaches is how the next unread answer gets
+// waved through with a reason that stopped being true; a kind that genuinely
+// has no room reader is a decision this gate should make someone take in the
+// open.
 func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 	t.Parallel()
-	// Read by name from somewhere that is not a room's query() call.
-	nonRoom := map[string]string{
-		"stream": "the header's health poll reads it through api.js, not a room",
-		// A documented PUBLIC read: docs/guides/configure-via-api.md drives
-		// it as GET /query/config_entities?kind=roles, and configapi's own
-		// comment points at it as the fetch a config loop makes. The
-		// dashboard's Config screen is a viewer of the whole document rather
-		// than an entity browser, so no room asks — which is not the same as
-		// nobody reading it.
-		"config_entities": "docs/guides/configure-via-api.md reads it over REST, not a room",
-	}
-
 	asked := roomQueries(t)
 	for _, kind := range registeredKinds(t) {
-		if _, ok := asked[kind]; ok {
-			continue
+		if _, ok := asked[kind]; !ok {
+			t.Errorf("this build answers %q and no room asks for it — either a "+
+				"reader was lost, or the answer should go with whatever used to "+
+				"call it", kind)
 		}
-		if why, exempt := nonRoom[kind]; exempt {
-			t.Logf("%s: %s", kind, why)
-			continue
-		}
-		t.Errorf("this build answers %q and no room asks for it — either a "+
-			"reader was lost, or the answer should go with whatever used to "+
-			"call it", kind)
 	}
 }
 
@@ -343,20 +312,24 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // behind and a live one missing.
 func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 	t.Parallel()
-	// FOUND RATHER THAN ADDRESSED — see [clientsource.Declaration]. This
-	// table has not moved, but a gate that names a path is one more thing a
-	// reorganisation breaks, and it breaks by reporting a drift that did not
-	// happen.
-	table, err := clientsource.Declaration(clientsource.Tree(t),
-		`(?s)const PHRASES: Record<[^>]*> = \{(.*?)\n\};`)
+	// FOUND RATHER THAN ADDRESSED, and read by its syntax: the table's KEYS
+	// are the reasons it phrases, whatever the layout. The pattern this
+	// replaced wanted each key at exactly two spaces of indent, so a key a
+	// formatter moved, or one that had to be quoted, was a reason read as
+	// unphrased; and the private walk it went through matched once per FILE,
+	// so a second PHRASES table beside the first — the one a screen might
+	// actually render — passed unseen.
+	table, err := clientsource.Literal(clientsource.Tree(t), "PHRASES")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The table is `key: { short: …, why: … }`, one per line.
-	entry := regexp.MustCompile(`(?m)^\s{2}([a-z_]+):\s*\{`)
+	keys, err := clientsource.Keys(table)
+	if err != nil {
+		t.Fatal(err)
+	}
 	phrased := map[string]bool{}
-	for _, m := range entry.FindAllStringSubmatch(table, -1) {
-		phrased[m[1]] = true
+	for _, key := range keys {
+		phrased[key] = true
 	}
 	if len(phrased) == 0 {
 		t.Fatal("no phrases were found at all, so this gate certifies nothing")
@@ -398,15 +371,13 @@ func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
 	// workspace, reporting a drift between two lists that had not changed.
 	// A gate over a constant is a gate over the constant, and the file it
 	// happens to sit in is not the subject.
-	block, err := clientsource.Declaration(clientsource.Tree(t),
-		`(?s)const GROUPS = \[(.*?)\] as const;`)
+	block, err := clientsource.Literal(clientsource.Tree(t), "GROUPS")
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry := regexp.MustCompile(`value: "([a-z_]+)"`)
 	offered := map[string]bool{}
-	for _, m := range entry.FindAllStringSubmatch(block, -1) {
-		offered[m[1]] = true
+	for _, value := range clientsource.Field(block, "value") {
+		offered[value] = true
 	}
 	if len(offered) == 0 {
 		t.Fatal("no dimensions were found at all, so this gate certifies nothing")

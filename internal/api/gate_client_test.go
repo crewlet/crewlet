@@ -1,6 +1,9 @@
 package api_test
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,8 +27,7 @@ import (
 // command line's flags. The other direction is a branch nothing can reach.
 func TestTheDashboardKnowsEveryGateAction(t *testing.T) {
 	t.Parallel()
-	holdList(t, `export const GATE_ACTIONS = \[([^\]]*)\] as const;`,
-		statelog.GateActions(), "remedy")
+	holdList(t, "GATE_ACTIONS", statelog.GateActions(), "remedy")
 }
 
 // AND AGREES WHICH OF THEM KEEP THE GESTURE'S OWN ID.
@@ -36,8 +38,8 @@ func TestTheDashboardKnowsEveryGateAction(t *testing.T) {
 // eviction. The dialog's copy decides whether it offers "Finish this gesture".
 func TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes(t *testing.T) {
 	t.Parallel()
-	holdList(t, `export const GATE_ACTIONS_KEEPING_OPERATION = \[([^\]]*)\] as const;`,
-		statelog.GateActionsKeepingOperation(), "operation-keeping action")
+	holdList(t, "GATE_ACTIONS_KEEPING_OPERATION", statelog.GateActionsKeepingOperation(),
+		"operation-keeping action")
 }
 
 // THE DIALOG WAITS PAST THE NODE'S OWN BOUND ON A GESTURE.
@@ -48,11 +50,18 @@ func TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes(t *testing.T) {
 // on to finish.
 func TestTheDashboardWaitsPastTheGateBudget(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Declaration(clientsource.Tree(t),
-		`export const GATE_REQUEST_TIMEOUT_MS = ([0-9_]+);`)
+	// A number is not a literal [clientsource] has a reader for, so the one
+	// file that declares it is read directly.
+	gate := filepath.Join(clientsource.Tree(t), "protocol", "gate.ts")
+	source, err := os.ReadFile(gate)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read %s: %v", gate, err)
 	}
+	m := regexp.MustCompile(`export const GATE_REQUEST_TIMEOUT_MS = ([0-9_]+);`).FindSubmatch(source)
+	if m == nil {
+		t.Fatalf("%s declares no GATE_REQUEST_TIMEOUT_MS", gate)
+	}
+	body := string(m[1])
 	ms, err := strconv.ParseInt(strings.ReplaceAll(body, "_", ""), 10, 64)
 	if err != nil {
 		t.Fatalf("GATE_REQUEST_TIMEOUT_MS = %q is not a number: %v", body, err)
@@ -64,9 +73,9 @@ func TestTheDashboardWaitsPastTheGateBudget(t *testing.T) {
 }
 
 // holdList compares the dashboard's declared list with the engine's, both ways.
-func holdList(t *testing.T, pattern string, want []statelog.GateAction, what string) {
+func holdList(t *testing.T, name string, want []statelog.GateAction, what string) {
 	t.Helper()
-	body, err := clientsource.Declaration(clientsource.Tree(t), pattern)
+	body, err := clientsource.Literal(clientsource.Tree(t), name)
 	if err != nil {
 		t.Fatal(err)
 	}

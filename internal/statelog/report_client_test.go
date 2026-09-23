@@ -21,18 +21,14 @@ func TestTheDashboardKnowsEveryRetentionReportState(t *testing.T) {
 		declaration string
 		engine      []string
 	}{
-		{`export type RetentionTrimFloorState =([^;]*);`,
-			stringsOf(statelog.TrimFloorStates())},
-		{`export type RetentionGenerationState =([^;]*);`,
-			stringsOf(statelog.GenerationStates())},
-		{`export type RetentionIdentityCause =([^;]*);`,
-			stringsOf(statelog.IdentityCauses())},
+		{"RetentionTrimFloorState", stringsOf(statelog.TrimFloorStates())},
+		{"RetentionGenerationState", stringsOf(statelog.GenerationStates())},
+		{"RetentionIdentityCause", stringsOf(statelog.IdentityCauses())},
 	} {
-		body, err := clientsource.Declaration(clientsource.Tree(t), gate.declaration)
+		client, err := clientsource.Union(clientsource.Tree(t), gate.declaration)
 		if err != nil {
 			t.Fatal(err)
 		}
-		client := clientsource.Strings(body)
 		if len(client) == 0 {
 			t.Fatalf("%s names nothing, so this gate certifies nothing", gate.declaration)
 		}
