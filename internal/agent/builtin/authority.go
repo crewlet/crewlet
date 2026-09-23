@@ -185,12 +185,19 @@ var subjectOf = map[string]subject{
 	// handle, because a model that could name whose day to read could
 	// read anybody's. An unnamed owner is the CALLER — see
 	// [subject.objectFor].
-	"get_person":     {kind: authz.KindPerson, owner: "handle"},
-	"work_inbox":     {kind: authz.KindPerson, owner: "handle"},
-	"set_priorities": {kind: authz.KindPerson, owner: "handle"},
-	"my_work":        {kind: authz.KindPerson},
-	"mark_inbox":     {kind: authz.KindPerson},
-	"set_pins":       {kind: authz.KindPerson},
+	"get_person": {kind: authz.KindPerson, owner: "handle"},
+	"work_inbox": {kind: authz.KindPerson, owner: "handle"},
+	"my_work":    {kind: authz.KindPerson},
+	"mark_inbox": {kind: authz.KindPerson},
+	"set_pins":   {kind: authz.KindPerson},
+
+	// SETTING SOMEBODY'S PRIORITIES IS DECIDED ON WHO THEY ARE, NOT ON WHAT
+	// WAS TYPED: the tool resolves its `handle` against the chart — a model
+	// types a name, a role or an email — and asks the lead relation of the
+	// seat that resolves to. Decided here on the raw argument, a lead who
+	// named their report by role was refused as leading nobody called
+	// that, before the tool ever resolved it.
+	"set_priorities": {kind: authz.KindPerson, inTool: true},
 
 	// A SAVED VIEW IS EITHER, and its own class reads whichever it
 	// names. Its container is a kind plus a key in ONE argument
@@ -210,8 +217,8 @@ var subjectOf = map[string]subject{
 	// holder of the admin grant was refused as naming no project — a
 	// project's own lead could not take an item out of their own board,
 	// which is the one thing [authz.ClassDestructive] exists to let them do.
-	"remove_work_item":  {kind: authz.KindTask, fromRow: true},
-	"restore_work_item": {kind: authz.KindTask, fromRow: true},
+	"remove_work_item":  {kind: authz.KindTask, inTool: true},
+	"restore_work_item": {kind: authz.KindTask, inTool: true},
 }
 
 // subject is what one tool is about, as the names of its own arguments.
@@ -227,13 +234,16 @@ type subject struct {
 	// the call is inside.
 	container string
 
-	// fromRow marks a verb whose object is a STORED ROW: the gate does not
-	// decide it, and the tool asks the same action through
-	// [WorkDeps.mayWrite] once it has read that row. A tool marked so and
-	// asking nothing would be ungated — which is why
-	// [TestARowDecidedToolAsksAfterItReads] calls each one as a caller the
-	// table refuses and requires the refusal.
-	fromRow bool
+	// inTool marks a verb whose object its arguments do not STATE — a
+	// stored row (which project a task is filed under), or a name the tool
+	// resolves against the chart (whose priorities a typed `handle`
+	// means). The gate does not decide it, and the tool asks the same
+	// action through [WorkDeps.mayWrite] once it knows the object. A tool
+	// marked so and asking nothing would be ungated — which is why
+	// [TestARowDecidedToolAsksAfterItReads] and
+	// [TestALeadNamesAReportTheWayAModelTypesThem] call each one as a
+	// caller the table refuses and require the refusal.
+	inTool bool
 }
 
 // objectFor is one call's object, from the caller and the arguments.
@@ -447,10 +457,11 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 	// about — and a read that answers nothing leaves the owner empty,
 	// which is exactly what [Authorizer] is about to refuse on.
 	subject := subjectOf[g.Name()]
-	if subject.fromRow {
-		// THE TOOL ASKS, with the same action and the row's own object —
-		// see [subject.fromRow]. Deciding here as well, on an object with
-		// no container, would refuse everybody the tool is about to admit.
+	if subject.inTool {
+		// THE TOOL ASKS, with the same action and the object it resolved
+		// — see [subject.inTool]. Deciding here as well, on an object the
+		// arguments do not state, would refuse everybody the tool is
+		// about to admit.
 		return nil
 	}
 	principal, _ := iam.From(ctx)

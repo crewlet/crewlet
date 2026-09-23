@@ -150,8 +150,9 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// decision taken on what was typed is a decision about a string
 	// nobody's record is under — it refuses a lead who wrote their
 	// report's NAME, and names the relation rather than the spelling.
-	// [subjectOf] leaves this verb's owner unnamed for exactly that
-	// reason, and this is the ask it defers to.
+	// [subjectOf] marks this verb `inTool` for exactly that reason, so the
+	// gate decides nothing on the typed name and this is the one relation
+	// decision the call gets.
 	if refused := t.deps.mayWrite(ctx, authz.ActionPrioritiesSet,
 		authz.Object{Kind: authz.KindPerson, Owner: handle}); refused != nil {
 

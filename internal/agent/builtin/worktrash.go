@@ -107,7 +107,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return readFailed(tracker.RemoveWorkItemTool, err), nil
 	}
 	// THE PROJECT IT IS FILED UNDER DECIDES, read off the row — see the
-	// `fromRow` entries in authority.go for why the gate could not ask.
+	// `inTool` entries in authority.go for why the gate could not ask.
 	if refused := t.deps.mayWrite(ctx, authz.ActionWorkRemove, authz.Object{
 		Kind: authz.KindTask, Container: before.Task.Project,
 	}); refused != nil {
