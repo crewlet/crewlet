@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,13 +17,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
+// invitationID is the one invitation these cases redeem: a uuid7, which is
+// what this build mints for every invitation and what the person a redemption
+// creates is derived from.
+const invitationID = "018f3a9c-4d2e-7000-8000-0000000001d1"
+
 // liveInvitation is a directory holding one invitation that can still be
 // redeemed.
 type liveInvitation struct{ stubDirectory }
 
 func (liveInvitation) InvitationByID(context.Context, string) (iamdomain.InvitationRow, error) {
 	return iamdomain.InvitationRow{
-		ID: "inv-1", Blind: "email:dana@example.com", InvitedBy: "founder",
+		ID: invitationID, Blind: "email:dana@example.com", InvitedBy: "founder",
 		ExpiresAt: clock.Add(time.Hour),
 	}, nil
 }
@@ -61,7 +67,7 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 		o.Opener = addressOpener{address: "Dana.SRE+invites@example.com"}
 	}).Routes(mux)
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/invite/inv-1", nil))
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/invite/"+invitationID, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
 	}
@@ -146,7 +152,7 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 			}).Routes(mux)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-				"/auth/invite/inv-1", strings.NewReader(
+				"/auth/invite/"+invitationID, strings.NewReader(
 					`{"login":"token:ops","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
 			if rec.Code != tc.status {
 				t.Fatalf("status %d, want %d (body %s)", rec.Code, tc.status,
@@ -161,6 +167,178 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 			if strings.Contains(rec.Body.String(), holder) {
 				t.Errorf("the refusal names the holder %s to somebody holding "+
 					"only an invitation link: %s", holder, rec.Body.String())
+			}
+		})
+	}
+}
+
+// recordingWriter records every enrolment and spend, answering each enrolment
+// with the next error in refusals (nil once they run out).
+type recordingWriter struct {
+	stubWriter
+	mu        sync.Mutex
+	refusals  []error
+	enrolled  []iamdomain.Enrolment
+	spent     []iamdomain.InvitationSpend
+	bootstrap []iamdomain.BootstrapSpend
+}
+
+func (w *recordingWriter) Enrol(_ context.Context, in iamdomain.Enrolment) (
+	statelog.Position, error) {
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.enrolled = append(w.enrolled, in)
+	if len(w.refusals) == 0 {
+		return statelog.Position{}, nil
+	}
+	err := w.refusals[0]
+	w.refusals = w.refusals[1:]
+	return statelog.Position{}, err
+}
+
+func (w *recordingWriter) SpendInvitation(_ context.Context,
+	in iamdomain.InvitationSpend) (statelog.Position, error) {
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.spent = append(w.spent, in)
+	return statelog.Position{}, nil
+}
+
+func (w *recordingWriter) SpendBootstrap(_ context.Context,
+	in iamdomain.BootstrapSpend) (statelog.Position, error) {
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.bootstrap = append(w.bootstrap, in)
+	return statelog.Position{}, nil
+}
+
+// redeem posts one redemption with a login and answers its status.
+func redeem(t *testing.T, mux *http.ServeMux, login string) int {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/auth/invite/"+invitationID, strings.NewReader(
+			`{"login":"`+login+`","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
+	return rec.Code
+}
+
+// A REDEMPTION TOLD ITS LOGIN IS TAKEN CAN TRY ANOTHER.
+//
+// The person a redemption creates used to be minted per request, and the
+// enrolment claims the ADDRESS before the login — so an attempt refused on a
+// taken login left the address claimed for an id no later attempt named, and
+// the retry with another login was refused as "that address belongs to
+// somebody" by its own first attempt, for ever. The person is DERIVED from the
+// invitation now, so every attempt names one person and the retry finishes the
+// sequence the first one started.
+func TestARedemptionToldItsLoginIsTakenCanTryAnother(t *testing.T) {
+	t.Parallel()
+	writer := &recordingWriter{refusals: []error{&iamdomain.ErrClaimed{
+		Kind: iamdomain.KindLogin, Token: "dana.sre",
+		Holder: "018f3a9c-0000-7000-8000-0000000000a1"}}}
+	mux := http.NewServeMux()
+	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+		o.Directory = liveInvitation{}
+		o.Writer = writer
+	}).Routes(mux)
+
+	if got := redeem(t, mux, "dana.sre"); got != http.StatusConflict {
+		t.Fatalf("the first attempt answered %d, want 409 for the taken login", got)
+	}
+	if got := redeem(t, mux, "dana.ops"); got != http.StatusOK {
+		t.Fatalf("the retry with another login answered %d, want 200", got)
+	}
+	want, err := iamdomain.InvitedPersonID(invitationID)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	if len(writer.enrolled) != 2 {
+		t.Fatalf("enrolments %d, want 2", len(writer.enrolled))
+	}
+	for i, in := range writer.enrolled {
+		if in.PersonID != want {
+			t.Errorf("attempt %d enrolled person %s, want %s — every attempt "+
+				"at one redemption must name the person its first attempt "+
+				"claimed the address for", i+1, in.PersonID, want)
+		}
+		if in.OpID != writer.enrolled[0].OpID {
+			t.Errorf("attempt %d ran under op %q, want the first's %q", i+1,
+				in.OpID, writer.enrolled[0].OpID)
+		}
+	}
+	if got := writer.enrolled[1].Login; got != "dana.ops" {
+		t.Errorf("the retry enrolled login %q, want the one it chose", got)
+	}
+	if len(writer.spent) != 1 || writer.spent[0].Person != want {
+		t.Errorf("the spend named %+v, want one naming %s", writer.spent, want)
+	}
+}
+
+// enrolledAddress is a directory whose invitation's address is held by one
+// sighting.
+type enrolledAddress struct {
+	liveInvitation
+	holder iamdomain.Sighting
+}
+
+func (d enrolledAddress) PersonByEmailBlind(context.Context, string) (
+	iamdomain.Sighting, error) {
+
+	return d.holder, nil
+}
+
+// A LINK WHOSE ADDRESS IS ENROLLED IS SPENT, EVEN WHEN ITS SPEND NEVER LANDED.
+//
+// With the person derived from the invitation, a re-redemption of a link whose
+// enrolment landed and whose spend did not would re-enrol the same person —
+// resetting their password with nothing but the link. So an address somebody
+// is ENROLLED under answers 410 before anything is written, and when it is
+// this link's own person the spend it missed is published then. A RESERVATION
+// is not somebody: it is this redemption's own stopped attempt, which the
+// retry finishes.
+func TestALinkWhoseAddressIsEnrolledIsSpent(t *testing.T) {
+	t.Parallel()
+	person, err := iamdomain.InvitedPersonID(invitationID)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		holder iamdomain.Sighting
+		status int
+		enrols int
+		spends int
+	}{
+		{"this link's person, enrolled", iamdomain.Sighting{ID: person,
+			Kind: "person", Stage: "active", Login: "dana.sre"},
+			http.StatusGone, 0, 1},
+		{"somebody else, enrolled", iamdomain.Sighting{
+			ID: "018f3a9c-0000-7000-8000-0000000000b2", Kind: "person",
+			Stage: "active", Login: "eli.sre"},
+			http.StatusGone, 0, 0},
+		{"this link's own stopped attempt", iamdomain.Sighting{ID: person,
+			Login: "dana.sre", Reserved: true},
+			http.StatusOK, 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			writer := &recordingWriter{}
+			mux := http.NewServeMux()
+			buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+				o.Directory = enrolledAddress{holder: tc.holder}
+				o.Writer = writer
+			}).Routes(mux)
+			if got := redeem(t, mux, "dana.sre"); got != tc.status {
+				t.Errorf("answered %d, want %d", got, tc.status)
+			}
+			if len(writer.enrolled) != tc.enrols {
+				t.Errorf("enrolled %d times, want %d", len(writer.enrolled), tc.enrols)
+			}
+			if len(writer.spent) != tc.spends {
+				t.Errorf("spent %d times, want %d", len(writer.spent), tc.spends)
 			}
 		})
 	}

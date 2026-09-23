@@ -141,6 +141,25 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		}, "bootstrap code mismatch")
 		return
 	}
+	// THE FILE IS HALF OF IT, AND THE LOG IS THE OTHER. A code is live only
+	// while its mint record says so — not withdrawn by a re-issue, not
+	// aged out, not spent — and the file on its own said none of that: a
+	// code a day past its lifetime, or one `crewlet iam bootstrap-code`
+	// had superseded while its file survived on another node, still
+	// created the company's first operator. Refused exactly as a wrong code
+	// is, because to the caller it is one.
+	code, found, err := s.outstandingCode(r.Context(), bootstrapCodeID(held))
+	if err != nil {
+		log.WarnContext(r.Context(), "api_bootstrap_codes_unreadable", "error", err)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		return
+	}
+	if !found {
+		s.refuseSignIn(w, r, arrived, authevents.Failure{
+			Client: source, Method: types.FailBootstrap,
+		}, "bootstrap code is not outstanding on the log")
+		return
+	}
 	if err := credential.CheckStrength(in.Password); err != nil {
 		// SPECIFIC, because the caller has already proved they hold the
 		// code and the remedy is theirs to act on: a password refused
@@ -157,8 +176,13 @@ func (s *Service) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
-	person := uuid.New().String()
-	opID := "bootstrap:" + person
+	// THE FIRST OPERATOR IS THE CODE'S, DERIVED rather than minted — see
+	// [iamdomain.BootstrappedPersonID]. Minted per request, a bootstrap
+	// that stopped after its address claim left that address held for an
+	// id no retry named, and the founder's corrected retry was refused as
+	// "that address belongs to somebody" by their own first attempt.
+	person := iamdomain.BootstrappedPersonID(code.ID, code.MintedAt)
+	opID := "bootstrap:" + code.ID
 	if _, err := s.writer.Enrol(r.Context(), iamdomain.Enrolment{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: in.Name, Email: in.Email, Login: in.Login,
@@ -247,6 +271,23 @@ func (s *Service) bootstrapOpen(r *http.Request) (bool, error) {
 		return false, err
 	}
 	return !held, nil
+}
+
+// outstandingCode is the live code whose id is this, as the log has it: minted,
+// not withdrawn, not spent and not aged out, at this surface's clock.
+func (s *Service) outstandingCode(ctx context.Context, id string) (
+	iamdomain.BootstrapCode, bool, error) {
+
+	outstanding, err := s.directory.OutstandingBootstrapCodes(ctx, s.now())
+	if err != nil {
+		return iamdomain.BootstrapCode{}, false, err
+	}
+	for _, code := range outstanding {
+		if code.ID == id {
+			return code, true, nil
+		}
+	}
+	return iamdomain.BootstrapCode{}, false, nil
 }
 
 // bootstrapCodePath is where this node writes the one-time code.

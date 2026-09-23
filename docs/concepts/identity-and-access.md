@@ -385,6 +385,14 @@ Three things about that sequence are load-bearing:
   file whose hash never reached the log is one no node accepts, and a second
   caller racing the first is answered `409 bootstrap_closed`.
 
+Two more keep it honest. **The file is half the check and the log is the
+other:** a code is accepted only while its mint record is outstanding — not
+withdrawn by a re-issue, not spent, not past its 24 hours — so a stale file on
+a host proves nothing. And **the founder is derived from the code** (a uuid7 at
+the instant the log minted it), so a bootstrap refused halfway — a login outside
+the grammar, a record that did not land — is finished by the corrected retry
+rather than blocked by the address its own first attempt claimed.
+
 It **closes for good** the moment anybody is enrolled, whatever the
 configuration says, because what it creates is an operator carrying the whole
 ceiling. `api.auth.bootstrap: closed` shuts it from the start, which is right
@@ -420,6 +428,17 @@ one, and somebody following a link has typed nothing yet, so the GET answers
 whatever login the person settled on — the proposal or their own — and an
 absent one is refused `400`, as a login somebody else holds is refused `409`
 without saying who.
+
+**A redemption can be retried until it lands.** It is a sequence — the address
+claim, the login claim, the person — so one refused halfway leaves the address
+claimed. The person it creates is therefore **derived from the invitation**
+(a uuid7 at the invitation's own instant) rather than minted per request:
+every attempt names the same person, a claim the first attempt took is one the
+retry already holds, and somebody told their login was taken simply chooses
+another. What keeps the link single-use is the link, not the id — a redeemed or
+expired invitation is refused before anything is written, and so is one whose
+address somebody is already enrolled under (if that is the person this link
+created and its spend never landed, the spend is published then).
 
 Absent, redeemed and expired are **one refusal**, because the remedy is the same
 and telling them apart would say "this was already used" to somebody whose link

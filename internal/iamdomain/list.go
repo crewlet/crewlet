@@ -622,6 +622,11 @@ type BootstrapCode struct {
 	ID        string
 	MintedBy  string
 	ExpiresAt time.Time
+
+	// MintedAt is the broker's instant for the record that minted it —
+	// identical on every node, which is what lets the person a redemption
+	// creates be derived from it ([BootstrappedPersonID]).
+	MintedAt time.Time
 }
 
 // OutstandingBootstrapCodes are the codes that are neither spent nor aged out.
@@ -640,7 +645,7 @@ func (r *Reader) OutstandingBootstrapCodes(ctx context.Context, now time.Time) (
 	var out []BootstrapCode
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT id, minted_by, expires_at FROM iam_bootstrap_codes
+			SELECT id, minted_by, expires_at, created_at FROM iam_bootstrap_codes
 			WHERE redeemed_at = 0 AND expires_at > ?
 			ORDER BY created_at`, now.UnixMilli())
 		if err != nil {
@@ -650,13 +655,15 @@ func (r *Reader) OutstandingBootstrapCodes(ctx context.Context, now time.Time) (
 		defer rows.Close()
 		for rows.Next() {
 			var (
-				row     BootstrapCode
-				expires int64
+				row              BootstrapCode
+				expires, created int64
 			)
-			if err := rows.Scan(&row.ID, &row.MintedBy, &expires); err != nil {
+			if err := rows.Scan(&row.ID, &row.MintedBy, &expires,
+				&created); err != nil {
 				return fmt.Errorf("iamdomain: scan a bootstrap code: %w", err)
 			}
 			row.ExpiresAt = fromMillis(expires)
+			row.MintedAt = fromMillis(created)
 			out = append(out, row)
 		}
 		return rows.Err()

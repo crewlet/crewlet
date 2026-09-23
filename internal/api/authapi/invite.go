@@ -114,6 +114,45 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"detail": err.Error()})
 		return
 	}
+	// THE PERSON IS THE INVITATION'S, DERIVED rather than minted, so every
+	// attempt at one redemption names one person. Minted per request, a
+	// redemption refused halfway — a login somebody else holds, a record
+	// that did not land — left its address claim holding the invitation's
+	// address for an id no later attempt named, and the retry was refused
+	// as "that address belongs to somebody" by its own first attempt. A
+	// redeemer told their login was taken could never choose another.
+	person, err := iamdomain.InvitedPersonID(held.ID)
+	if err != nil {
+		log.ErrorContext(r.Context(), "api_invite_person_underivable",
+			"error", err, "invitation", held.ID)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return
+	}
+	opID := "invite:" + held.ID
+	// AN ADDRESS SOMEBODY IS ENROLLED UNDER IS A LINK ALREADY USED — and
+	// with the person derived, it is what keeps the link single-use when
+	// the spend did not land: a re-redemption would otherwise re-enrol the
+	// same person and reset their password with nothing but the link. A
+	// RESERVATION is not somebody: it is this redemption's own stopped
+	// attempt when it names this person, which the enrolment below
+	// finishes, and a claim the enrolment refuses by name when it does not.
+	holder, err := s.directory.PersonByEmailBlind(r.Context(), held.Blind)
+	if err != nil {
+		log.WarnContext(r.Context(), "api_invite_holder_unreadable",
+			"error", err, "invitation", held.ID)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		return
+	}
+	if holder.ID != "" && !holder.Reserved {
+		if holder.ID == person {
+			// THIS LINK ENROLLED THEM AND ITS SPEND NEVER LANDED, so the
+			// row still reads redeemable. Close it now — the same op id
+			// as the first attempt's, so the ledger collapses the two.
+			s.spendInvitation(r, held, person, opID)
+		}
+		s.refuseSpentInvitation(w, r)
+		return
+	}
 	email, err := s.openSealed(r, held)
 	if err != nil {
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
@@ -126,8 +165,6 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	person := uuid.New().String()
-	opID := "invite:" + held.ID + ":" + person
 	if _, err := s.writer.Enrol(r.Context(), iamdomain.Enrolment{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: in.Name, Email: email, Login: in.Login,
@@ -162,17 +199,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		refuseEnrolment(w, r, "api_invite_enrol_failed", err)
 		return
 	}
-	if _, err := s.writer.SpendInvitation(r.Context(), iamdomain.InvitationSpend{
-		ID: held.ID, Blind: held.Blind, Person: person,
-		OpID: opID + ":spend", Reason: "redeemed",
-	}); err != nil {
-		// LOGGED AND NOT REPORTED. The person exists and can sign in;
-		// the residue is an invitation row that still reads unspent,
-		// which the address claim their enrolment took already prevents
-		// anybody else from using.
-		log.WarnContext(r.Context(), "api_invite_spend_failed",
-			"error", err, "invitation", held.ID, "person", person)
-	}
+	s.spendInvitation(r, held, person, opID)
 	log.InfoContext(r.Context(), "api_invite_redeemed",
 		"invitation", held.ID, "person", person, "login", in.Login)
 	s.throttle.Flush(r.Context(), source)
@@ -246,10 +273,36 @@ func (s *Service) invitation(w http.ResponseWriter, r *http.Request) (
 		return iamdomain.InvitationRow{}, false
 	}
 	if held.ID == "" || held.Spent(s.now()) {
-		httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
+		s.refuseSpentInvitation(w, r)
 		return iamdomain.InvitationRow{}, false
 	}
 	return held, true
+}
+
+// refuseSpentInvitation is every 410 this surface answers: an invitation
+// nobody issued, one redeemed, one aged out, and one whose address somebody is
+// already enrolled under. ONE ANSWER for all of them, for [Service.invitation]'s
+// reason.
+func (s *Service) refuseSpentInvitation(w http.ResponseWriter, _ *http.Request) {
+	httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
+}
+
+// spendInvitation records a link being used, naming the person it created.
+//
+// LOGGED AND NOT REPORTED. The person exists and can sign in; the residue of a
+// spend that did not land is an invitation row that still reads redeemable,
+// and the next redemption of it finds the address enrolled, answers 410 and
+// publishes this again under the same op id — so the row closes then.
+func (s *Service) spendInvitation(r *http.Request, held iamdomain.InvitationRow,
+	person, opID string) {
+
+	if _, err := s.writer.SpendInvitation(r.Context(), iamdomain.InvitationSpend{
+		ID: held.ID, Blind: held.Blind, Person: person,
+		OpID: opID + ":spend", Reason: "redeemed",
+	}); err != nil {
+		log.WarnContext(r.Context(), "api_invite_spend_failed",
+			"error", err, "invitation", held.ID, "person", person)
+	}
 }
 
 // openSealed opens the invitation's address for this one answer.

@@ -152,8 +152,15 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 			return statelog.Position{}, err
 		}
 	}
+	// THE LOGIN IS IN ITS OP ID, unlike the address's. A retry of one
+	// enrolment names the same address — it is the invitation's, or the
+	// administrator's typing — but may name a DIFFERENT login: a redeemer
+	// told theirs was taken chooses another. Under one op id the broker
+	// would acknowledge the second claim as the first inside its duplicate
+	// window, and the person would be written holding the login they gave
+	// up rather than the one they chose.
 	if _, err := w.claim(ctx, KindLogin, in.Login, in.PersonID, "",
-		in.OpID+":login", in.Kind); err != nil {
+		in.OpID+":login:"+in.Login, in.Kind); err != nil {
 		return statelog.Position{}, err
 	}
 
@@ -214,7 +221,10 @@ type Enrolment struct {
 	// BY THE CALLER because an enrolment is a sequence of appends and
 	// every one of them has to name the same person: an id minted inside
 	// the first would not be available to form the second's payload, and
-	// an id minted per append would enrol three people.
+	// an id minted per append would enrol three people. A redemption
+	// DERIVES it from the credential rather than minting it
+	// ([InvitedPersonID], [BootstrappedPersonID]), so a retry names the
+	// person its first attempt already claimed for.
 	PersonID string
 
 	Kind  iam.Kind
