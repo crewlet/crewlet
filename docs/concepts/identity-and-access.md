@@ -703,7 +703,11 @@ A Tier A token minting one names the owner (`?person=`, or `-person` on the
 CLI): it is the deployment's credential and owns no tokens itself.
 
 **What ends one.** Revoking it (`crewlet iam revoke-credential <id> -person
-<owner>`, or `DELETE /iam/credentials/{id}`); its expiry; its owner being
+<owner>`, or `DELETE /iam/credentials/{id}`) — on each node the moment the
+revocation's record applies there, whatever instant it is stamped with: the
+stamp is the revoking node's clock, kept so the listing can say when, and a
+node whose own clock ran behind would otherwise go on serving the token until
+it caught up; its expiry; its owner being
 suspended, retired or removed; its owner being **signed out everywhere**
 (`crewlet iam revoke`), because a token is minted at its owner's revocation
 epoch and refused once that moves — which is what makes offboarding complete;

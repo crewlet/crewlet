@@ -157,7 +157,14 @@ func CheckToken(presented Token, row TokenRow, now time.Time,
 			"not a machine token"}
 	case !matched:
 		return TokenCheck{TokenRefused, "the secret does not verify"}
-	case !row.RevokedAt.IsZero() && !now.Before(row.RevokedAt):
+	case !row.RevokedAt.IsZero():
+		// A REVOCATION IS A FACT AND NOT A SCHEDULE. The stamp is the
+		// REVOKING node's clock, kept for the listing's "withdrawn on the
+		// 3rd"; compared against THIS node's clock, a token revoked by a
+		// node running ahead went on working here for as long as the two
+		// disagreed — after its record had applied, on the one gesture
+		// that has to end a credential the instant it lands. Set is
+		// revoked, whatever instant it names.
 		return TokenCheck{TokenRefused, "the token was revoked"}
 	case !now.Before(row.ExpiresAt):
 		// A ZERO EXPIRY LANDS HERE TOO, which is the point: a token with

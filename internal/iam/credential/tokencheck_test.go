@@ -78,6 +78,12 @@ func TestAPresentedTokenIsDecidedByTheTable(t *testing.T) {
 		{"a revoked token", func(r *credential.TokenRow, _ *credential.Token) {
 			r.RevokedAt = checkAt.Add(-time.Minute)
 		}, credential.TokenRefused},
+		// THE REVOKING NODE'S CLOCK RUNS AHEAD OF THIS ONE: its stamp names
+		// an instant this node has not reached, and the record carrying it
+		// has applied here all the same. Revoked is revoked.
+		{"a token revoked by a node whose clock runs ahead", func(r *credential.TokenRow, _ *credential.Token) {
+			r.RevokedAt = checkAt.Add(time.Hour)
+		}, credential.TokenRefused},
 		{"an expired token", func(r *credential.TokenRow, _ *credential.Token) {
 			r.ExpiresAt = checkAt
 		}, credential.TokenRefused},
