@@ -247,9 +247,9 @@ func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 //
 // The obvious home is the per-route wrapper, beside the decision it protects,
 // and that home does not work — which this package's own test is what showed.
-// ServeMux cleans the path and answers 301 ITSELF, before it matches, so a
-// check inside any handler never sees an uncanonical path at all: every case
-// came back 307 with the route's guard never entered. So this is the one
+// ServeMux cleans a literal `..`, `.` or `//` and answers a 307 ITSELF,
+// before it matches, so a check inside any handler never sees that path at
+// all: every such case came back 307 with the route's guard never entered. So this is the one
 // authority concern that belongs in the OUTER middleware, and it earns that
 // place by the same rule the principal resolution does — it needs no route
 // identity, and `r.Pattern` is empty out there anyway.
@@ -260,10 +260,19 @@ func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 // alone. A surface that means to be strict about what it matched has to stop
 // the first one.
 //
-// BOTH SPELLINGS OF THE PATH ARE CHECKED. The escaped one catches
-// `/work/items/../config` as it was sent; the decoded one catches
-// `/work/items/%2e%2e/config`, whose escaped form is already clean and which
-// ServeMux decodes, cleans and redirects exactly as it does the first.
+// BOTH SPELLINGS OF THE PATH ARE CHECKED, because two readers of one request
+// read different ones. The escaped check catches `/work/items/../config` as it
+// was sent. The decoded check catches `/work/items/%2e%2e/config`, whose
+// escaped form is already clean — and which ServeMux does NOT redirect
+// (measured on go1.27): it MATCHES on the escaped path, segment by segment, so
+// `/work/items/%2e%2e` reaches the `{key}` route with a key of `..`. What
+// makes that a hole is everything that decides OUTSIDE the mux on the DECODED
+// `r.URL.Path`: the cross-site write check's exemption list
+// (`auth.Unguarded`) and the drain gate both read `/webhooks/%2e%2e/config`
+// as `/webhooks/../config`, a path under an exempt prefix, while the mux
+// routes it by segments that name something else.
+// A decision made on one spelling and a dispatch made on the other are two
+// readers disagreeing about one request, which is the thing this refuses.
 //
 // IN THE ENVELOPE, like every other refusal on this API, rather than
 // [net/http.Error]'s `text/plain`.

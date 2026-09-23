@@ -194,9 +194,17 @@ func TestEveryGrantIsAskedForBySomeVerb(t *testing.T) {
 // still unmade, and the access log shows only the clean path.
 //
 // AND THEREFORE OUTSIDE THE MUX. Written inside the per-route wrapper, beside
-// the decision it protects, every case here came back 307: ServeMux cleans
-// and redirects BEFORE it matches, so the guard was never entered at all.
-// That is what put [authz.CanonicalPath] in the outer middleware.
+// the decision it protects, every LITERAL case here came back 307: ServeMux
+// cleans `..`, `.` and `//` and redirects BEFORE it matches, so the guard
+// was never entered at all. That is what put [authz.CanonicalPath] in the
+// outer middleware.
+//
+// THE ENCODED CASE IS A DIFFERENT DISAGREEMENT. ServeMux does not redirect
+// `%2e%2e` (measured on go1.27): it matches the escaped path, so the request
+// reaches a route with a segment of `..`, while the cross-site write check's
+// exemption list and the drain gate decide on the DECODED path, which reads
+// as a traversal. The
+// escaped form is clean, so only the decoded check refuses it.
 func TestACleanedPathDifferingFromTheRawOneIsRefused(t *testing.T) {
 	t.Parallel()
 	mux := http.NewServeMux()
@@ -215,7 +223,8 @@ func TestACleanedPathDifferingFromTheRawOneIsRefused(t *testing.T) {
 		{"/work//items", http.StatusBadRequest},
 		{"/./work/items", http.StatusBadRequest},
 		// ENCODED, so the escaped path is already clean and only the
-		// decoded one — which ServeMux cleans and redirects — is not.
+		// decoded one — which the outer middleware reads and ServeMux
+		// does not redirect — is not.
 		{"/work/items/%2e%2e/work/items", http.StatusBadRequest},
 	} {
 		t.Run(c.path, func(t *testing.T) {
