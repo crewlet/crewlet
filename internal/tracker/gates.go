@@ -213,16 +213,21 @@ type Gates struct {
 // NewGates builds the gate reader for one node.
 func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
 
-// GatedAt reports the gate that dropped a record at a position.
+// GatedAt reports whether a record at a position applies nowhere, and the
+// gate that answers for it, by the rule [statelog.Gates] states — which the
+// knowledge base's reader keeps too, and statelogtest.RunGates certifies for
+// both.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID string,
 	p statelog.Position) (statelog.Reason, bool, error) {
 
 	var reason statelog.Reason
 	var gated bool
 	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		// THE DELETION GATE FIRST, because it is permanent where an
-		// eviction can be reversed: a caller told "evicted" retries after
-		// a readmission, and a caller told "deleted" never should.
+		// THE DELETION GATE FIRST, by the rule [statelog.Gates] states: the
+		// marker holds the task for every writer for ever, where an
+		// eviction is one writer's and a readmission ends it, so `deleted`
+		// is the answer that stays true. The applier's opposite order
+		// decides only which gate a drop is COUNTED under.
 		if ObjectKind(subj.Kind) == KindTask {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx,

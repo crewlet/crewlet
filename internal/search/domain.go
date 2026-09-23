@@ -244,7 +244,9 @@ func (Fence) ClearForZero(context.Context, statelog.Position) error { return nil
 // NOTHING GATES A VECTOR, which [Applier.Gated] states from the applier's side
 // and this states from the publisher's. The two must agree: a resolution that
 // looked for a gate the applier never installs would read every unapplied
-// record as "somebody else won".
+// record as "somebody else won". It is also why this domain does not run
+// statelogtest.RunGates: the rule that family certifies is the order of two
+// gates, and there is no gate here to order.
 type Gates struct{}
 
 // NewGates builds it.

@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE PAGES DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, and it is the
@@ -137,3 +139,79 @@ const suiteContainer = "SUITE"
 
 // marshal is json.Marshal, named so the encode path reads as one step.
 func marshal(v any) ([]byte, error) { return json.Marshal(v) }
+
+// THE KNOWLEDGE BASE'S GATE READER KEEPS THE RULE EVERY READER SHARES,
+// certified by the same family as the tracker's.
+//
+// This reader answered the eviction before the deletion until it took the
+// tracker's shape, and nothing noticed, because each reader was tested — where
+// it was tested at all — against its own idea of the rule.
+func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
+	t.Parallel()
+	statelogtest.RunGates(t, func(t *testing.T) statelogtest.GateCandidate {
+		return statelogtest.GateCandidate{
+			Candidate: statelogtest.Candidate{
+				Domain:  pages.Domain{},
+				Applier: pages.NewApplier("suite-node", nil, nil),
+				Encode:  encodeSuiteRecord,
+				Kinds:   suiteKinds(),
+			},
+			Reader: func(db *store.DB) statelog.Gates { return pages.NewGates(db) },
+			Kind:   string(pages.KindPage),
+			Create: func(id, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(pages.TitleSubject(suiteContainer, "Page "+id),
+					pages.OpCreate, writer, opID, pages.CreatePayload{
+						V: pages.DocumentVersion, PageID: id, Container: suiteContainer,
+						Title: "Page " + id, Body: "# " + id + "\n",
+						Status: pages.StatusPublished, Author: "suite",
+					})
+			},
+			Write: func(id, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(pages.PageSubject(id), pages.OpPatch, writer, opID,
+					pages.PagePatch{V: pages.DocumentVersion, Labels: []string{opID}})
+			},
+			Purge: func(id, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(pages.PageSubject(id), pages.OpPurge, writer, opID,
+					pages.StatusPayload{V: pages.DocumentVersion, Reason: "the gate suite"})
+			},
+			Evict: func(node, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(pages.EvictionSubject(node), pages.OpEviction,
+					writer, opID, gateSuiteEviction(node, false))
+			},
+			Readmit: func(node, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(pages.EvictionSubject(node), pages.OpEviction,
+					writer, opID, gateSuiteEviction(node, true))
+			},
+		}
+	})
+}
+
+// gateSuiteRecord is one record the gate family applies, written by writer.
+func gateSuiteRecord(subject pages.Subject, op pages.OpKind, writer, opID string,
+	payload any) ([]byte, error) {
+
+	body, err := marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	scope := pages.ScopeSet{Subject: true, Container: suiteContainer}
+	if subject.Kind == pages.KindEviction {
+		scope = pages.ScopeSet{Subject: true}
+	}
+	return pages.Encode(pages.MutationRecord{
+		RecordEnvelope: pages.RecordEnvelope{
+			V: pages.RecordVersion, OpID: opID, Subject: subject, Op: op,
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1, Writer: writer,
+			Scope: scope,
+		},
+		Mutation: body, Actor: "suite", ActorKind: pages.AuthorOperator,
+	})
+}
+
+// gateSuiteEviction is an eviction of node, or its readmission.
+func gateSuiteEviction(node string, readmitted bool) pages.Eviction {
+	return pages.Eviction{
+		V: pages.GateRecordVersion, NodeID: node, EvictedBy: "suite",
+		EvictedAt: time.Unix(1_700_000_000, 0).UTC(), Readmitted: readmitted,
+	}
+}

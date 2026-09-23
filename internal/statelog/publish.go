@@ -96,9 +96,38 @@ type Fence interface {
 // this seam the resolution rule reads "absent, so somebody else won", the
 // writer re-decides, republishes, is dropped again, and burns its whole round
 // budget to a conflict a model reads as a colleague editing the same object.
+//
+// # The rule every reader keeps
+//
+// Each domain spells its own two queries, and every one of them answers by
+// ONE rule — certified for all of them by the same family,
+// statelogtest.RunGates, because two readers that agree only by looking alike
+// have already drifted apart once:
+//
+//   - THE DELETION GATE IS REPORTED FIRST. A marker is a fact about the
+//     OBJECT, holding for every writer on every node for ever; an eviction is
+//     a fact about one WRITER, and a readmission ends it. So a record both
+//     gates hold is reported `deleted`: that is the answer that stays true,
+//     and a caller told `evicted` who waited out a readmission would only
+//     meet the marker on its next write. (The applier checks the eviction
+//     first; its order decides only which gate a drop is COUNTED under.)
+//   - THE MARKER HAS NO POSITION, exactly as the applier's does not: it gates
+//     every record on its object that did not apply, whenever that record is
+//     processed — one deferred past the purge and reprocessed after it
+//     included. So once an object is purged, a record the eviction dropped
+//     below the purge is reported `deleted` too. What is reported is the gate
+//     that holds the record NOW, which is the one a caller can act on; which
+//     gate fired first at p is the applier's `statelog_record_gated` line.
+//   - THE PURGE'S OWN RECORD IS EXEMPT FROM ITS OWN MARKER, by operation id,
+//     and from that gate alone: it still falls through to the eviction
+//     window, because the exemption says nothing about its writer.
+//   - THE EVICTION WINDOW IS HALF-OPEN AT BOTH ENDS, as the applier's is: a
+//     record is gated when the eviction's position is below it and no
+//     readmission is at or below it.
 type Gates interface {
-	// GatedAt reports the gate that dropped a record at p on this
-	// subject, published by writer under opID.
+	// GatedAt reports whether a record at p on this subject, published by
+	// writer under opID, applies nowhere, and the gate that answers for it
+	// by the rule above.
 	//
 	// THE OPERATION ID IS NOT DECORATION. A gate that destroys an object
 	// is written BY a record, and that record must not be gated by the
@@ -730,7 +759,11 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 // is contiguous: passing p forces applying everything below it, an eviction
 // gate drops a record only when the eviction commit is strictly below it, and
 // a deletion marker that could gate p is on the record's own subject and
-// therefore below it, or the broker would have refused the append.
+// therefore below it, or the broker would have refused the append. So a gate
+// that DID drop p is in the rows the wait already covered. The converse is
+// not claimed: a marker can also land ABOVE p, after an eviction dropped the
+// record, and the reader then reports `deleted` by the rule [Gates] states.
+//
 // mine says whether the caller KNOWS the record at at is its own — true when
 // the broker acknowledged it, false when the ambiguous path merely found
 // something above the anchor. The two differ in one arm and it matters: an

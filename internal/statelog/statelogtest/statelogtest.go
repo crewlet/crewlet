@@ -42,6 +42,15 @@
 // through the same cases. A suite that reports a problem in everything it
 // touches is a suite nobody reads, and the control is what says the cases can
 // come back clean at all.
+//
+// # The gates, for the domains that have them
+//
+// [RunGates] is a second family, called beside [Run] by every domain whose
+// applier installs a deletion marker and an eviction window: it holds the
+// publisher-side reader, [statelog.Gates], to the one rule that interface
+// states. It has no control domain of its own, so it bends the candidate's own
+// reader each way a reader could break the rule and requires every bend to be
+// reported.
 package statelogtest
 
 import (
