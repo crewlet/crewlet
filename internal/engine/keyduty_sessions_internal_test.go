@@ -1,12 +1,15 @@
 package engine
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -152,5 +155,85 @@ func TestARefreshGrantWhoseSessionThisNodeRetainedIsKept(t *testing.T) {
 	}
 	if len(grants) != 1 || grants[0].Lineage != lineage {
 		t.Errorf("custody holds %+v, want the retained session's grant alone", grants)
+	}
+}
+
+// A MACHINE TOKEN IS VOUCHED FOR ONLY WHERE NOTHING RETAINED COVERS ITS OWNER,
+// read in the SAME SNAPSHOT as the token's row.
+//
+// A token is checked on every request a pipeline makes, and the rows that say
+// whether it still stands — the credential, the owner's epoch — are exactly
+// what a retained record about the owner may have changed: a newer peer's
+// revocation, or one signed under a keyring key this node was not restarted
+// with. The deferral was the runner's, read beside the transaction — after the
+// rows first, which paired rows from before a reprocessed revocation with
+// "nothing deferred", then before them — and it carried no scope, so it covered
+// nobody in either order. It is now the deferral index inside the row's own
+// snapshot, which is a verdict that held at one instant.
+//
+// Two service accounts in different buckets each hold a token and the node
+// retains a record about the first. The first token is not vouched for, the
+// second is, and a token this node holds no row for is covered by any record
+// retained at all, since nothing can say whose it is. The CONTROL is the same
+// three reads before anything was retained.
+func TestAMachineTokenIsVouchedForOnlyWhereNothingRetainedCoversItsOwner(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, b := retentionNode(t)
+	machines := peopleInBuckets(2)
+	tokens := make([]string, len(machines))
+	for i, id := range machines {
+		login := fmt.Sprintf("ci:bucket-%d", i)
+		if _, err := e.native.iamWriter.Enrol(ctx, iamdomain.Enrolment{
+			PersonID: id, Kind: iam.KindMachine, Stage: iam.StageActive,
+			Login: login, OpID: "enrol-" + login, Reason: "a pipeline",
+		}); err != nil {
+			t.Fatalf("enrol %s: %v", login, err)
+		}
+		secret, err := credential.NewTokenSecret()
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens[i] = uuid.Must(uuid.NewV7()).String()
+		if _, err := e.native.iamWriter.MintToken(ctx, iamdomain.TokenMint{
+			PersonID: id, ID: tokens[i],
+			Verifier:  credential.TokenVerifier(tokens[i], secret),
+			ExpiresAt: time.Now().Add(credential.DefaultTokenLifetime),
+			OpID:      "mint-" + login, Reason: "a pipeline's token",
+		}); err != nil {
+			t.Fatalf("mint %s's token: %v", login, err)
+		}
+	}
+	unknown := uuid.Must(uuid.NewV7()).String()
+
+	reader := e.native.iamReader
+	deferredOf := func(id string) bool {
+		t.Helper()
+		row, err := reader.MachineToken(ctx, id)
+		if err != nil {
+			t.Fatalf("MachineToken(%s): %v", id, err)
+		}
+		return row.Deferred
+	}
+	for _, id := range append(slices.Clone(tokens), unknown) {
+		if deferredOf(id) {
+			t.Fatalf("token %s is not vouched for on a node that retained nothing", id)
+		}
+	}
+
+	retain(t, e, b, retainedFromNewerBuild,
+		claimRecord(t, machines[0], "ci:successor"))
+	for _, tc := range []struct {
+		name string
+		id   string
+		want bool
+	}{
+		{"the token whose owner a retained record is about", tokens[0], true},
+		{"a token whose owner no retained record touches", tokens[1], false},
+		{"a token this node holds no row for", unknown, true},
+	} {
+		if got := deferredOf(tc.id); got != tc.want {
+			t.Errorf("%s: deferred %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
