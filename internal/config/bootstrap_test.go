@@ -95,6 +95,16 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"token with no value", "api:\n  auth:\n    tokens:\n      - id: founder\n        token: \"\"\n", "api.auth.tokens[0].token", ErrMissing},
 		{"duplicate token id", "api:\n  auth:\n    tokens:\n      - {id: founder, token: a}\n      - {id: founder, token: b}\n", "api.auth.tokens[1].id", ErrConflict},
 
+		// A TOKEN IS A MACHINE, AND ITS LOGIN `token:<id>` IS HELD TO THE
+		// MACHINE GRAMMAR. Each of these composed an author name outside
+		// every grammar the three namespaces are kept apart by, and a login
+		// no directory row can hold — so the token could never be bound to
+		// a seat, and nothing said so until somebody tried.
+		{"token id with a capital", "api:\n  auth:\n    tokens:\n      - {id: Founder, token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
+		{"token id with an underscore", "api:\n  auth:\n    tokens:\n      - {id: ci_bot, token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
+		{"token id with a dot", "api:\n  auth:\n    tokens:\n      - {id: ci.bot, token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
+		{"token id with an empty segment", "api:\n  auth:\n    tokens:\n      - {id: \"ci:\", token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
+
 		// A CORS ALLOW-LIST IS COMPARED AGAINST THE BROWSER'S `Origin`
 		// HEADER EXACTLY, and that header is always `scheme://host[:port]`
 		// with no path and no trailing slash. Every shape below is one an

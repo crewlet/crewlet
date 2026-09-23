@@ -476,7 +476,7 @@ func OperatorOf(ctx context.Context) string {
 // for the columns that predate it, so the day those two tables take their
 // author kind from that function nothing migrates.
 func OperatorID(p iam.Principal) string {
-	return strings.TrimPrefix(p.Login, TokenLoginPrefix)
+	return strings.TrimPrefix(p.Login, iam.TokenLoginPrefix)
 }
 
 // WithOperator attaches a principal carrying one operator id and NO GRANTS.
@@ -502,7 +502,7 @@ func WithOperator(ctx context.Context, operatorID string) context.Context {
 	}
 	return iam.WithPrincipal(ctx, iam.Principal{
 		ID:    uuid.NewSHA1(TokenNamespace, []byte(operatorID)),
-		Login: TokenLogin(operatorID),
+		Login: iam.TokenLogin(operatorID),
 		Kind:  iam.KindMachine,
 		Stage: iam.StageActive,
 	})

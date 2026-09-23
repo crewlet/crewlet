@@ -125,6 +125,35 @@ func ValidLogin(s string) bool { return loginPattern.MatchString(s) }
 // ValidMachineHandle reports whether s is a well-formed machine handle.
 func ValidMachineHandle(s string) bool { return handlePattern.MatchString(s) }
 
+// TokenLoginPrefix is the class segment a Tier A token's login carries.
+//
+// The machine grammar joins segments with a COLON, which is the one separator
+// a seat handle can never contain and a person's dotted login never uses — so
+// `token:ops` cannot collide with either namespace by construction. It is what
+// [ActorFor] writes into an audit row, and it is deliberately the WHOLE name
+// rather than a prefix the store strips: the author kind is already a column,
+// and a name half the rows carry a prefix on is a name a reader filtering on
+// it matches half of.
+//
+// HERE, WITH THE GRAMMAR, because two layers have to agree on it: the API
+// guard composes the login a token acts under, and internal/config refuses a
+// token id that would compose one outside the machine grammar — see
+// [ValidTokenID].
+const TokenLoginPrefix = "token:"
+
+// TokenLogin is the login a Tier A token acts under.
+func TokenLogin(id string) string { return TokenLoginPrefix + id }
+
+// ValidTokenID reports whether a Tier A token id composes a login in the
+// machine grammar.
+//
+// A TOKEN IS A MACHINE, so its login is held to the machine's grammar like
+// every other. An id outside it — `Founder`, `ci_bot`, `ci.bot` — composes a
+// name no directory row can hold (so the token can never be bound to a seat,
+// and the refusal arrives only when somebody tries) and an author name
+// outside every grammar the three namespaces are kept apart by.
+func ValidTokenID(id string) bool { return ValidMachineHandle(TokenLogin(id)) }
+
 // ValidLoginFor reports whether s is a well-formed login for a principal of
 // kind k: a person's must be dotted and a machine's coloned, and no other kind
 // holds a login at all.

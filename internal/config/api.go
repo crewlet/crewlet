@@ -956,7 +956,7 @@ func (o *APIOIDC) validate(path Path, ceiling []iam.Grant) error {
 type APIToken struct {
 	// ID is a short label stamped into revision audit rows (created_by):
 	// "founder", "ops", "ci-pipeline".
-	ID string `yaml:"id" json:"id" js:"required" desc:"Short label recorded as the author of writes made with this token."`
+	ID string `yaml:"id" json:"id" js:"required;pattern=^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)*$" desc:"Short label; the token acts under the login token:<id>, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons."`
 
 	// Token is the value, or a ${VAR} reference to it. Resolved once at
 	// startup and never stored.
@@ -1138,6 +1138,21 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 					"a write nobody could be identified for, so a real "+
 					"credential under that name is indistinguishable from one. "+
 					"Pick a different id", iam.AnonymousActor)
+		}
+		// A TOKEN IS A MACHINE, so the login it acts under is held to the
+		// machine grammar — see [iam.ValidTokenID]. An id outside it
+		// composes an author name outside every grammar the namespaces
+		// are kept apart by, and a login no directory row can hold, so
+		// the token could never be bound to a seat and the refusal
+		// would arrive only when somebody tried.
+		if t.ID != "" && !iam.ValidTokenID(t.ID) {
+			p.add(at(tp, "id"), ErrUnknownValue,
+				"token id %q would act under the login %q, which is not a "+
+					"machine handle: use lowercase letters, digits and hyphens, "+
+					"optionally joined by colons (founder, ci-pipeline, "+
+					"ci:release). It is recorded as the author of every write "+
+					"made with the token, and a login outside the grammar can "+
+					"never be bound to a seat", t.ID, iam.TokenLogin(t.ID))
 		}
 		seen[t.ID] = struct{}{}
 

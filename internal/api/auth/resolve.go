@@ -40,20 +40,6 @@ import (
 // stable across both are this constant and the token's own id.
 var TokenNamespace = uuid.MustParse("6f1c2d5e-9a34-5b7c-8e10-4d2f6a8b3c91")
 
-// TokenLoginPrefix is the class segment a Tier A token's login carries.
-//
-// internal/iam's machine grammar joins segments with a COLON, which is the one
-// separator a seat handle can never contain and a person's dotted login never
-// uses — so `token:ops` cannot collide with either namespace by construction.
-// It is what [iam.ActorFor] writes into an audit row, and it is deliberately
-// the WHOLE name rather than a prefix the store strips: the author kind is
-// already a column, and a name half the rows carry a prefix on is a name a
-// reader filtering on it matches half of.
-const TokenLoginPrefix = "token:"
-
-// TokenLogin is the login a Tier A token acts under.
-func TokenLogin(id string) string { return TokenLoginPrefix + id }
-
 // SeatBindings is what a Tier A token's seat binding is resolved through.
 //
 // # Two halves, and the second is the SESSION's
@@ -129,7 +115,7 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 
 	p := iam.Principal{
 		ID:        uuid.NewSHA1(TokenNamespace, []byte(entry.ID)),
-		Login:     TokenLogin(entry.ID),
+		Login:     iam.TokenLogin(entry.ID),
 		Kind:      iam.KindMachine,
 		Grants:    intersect(entry.Grants, g.ceiling),
 		Colleague: entry.Level(),

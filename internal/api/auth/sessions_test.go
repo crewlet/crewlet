@@ -291,7 +291,7 @@ func TestAnExplicitBearerWinsOverAnAmbientCookie(t *testing.T) {
 		r.Header.Set("Authorization", "Bearer a-tier-a-token")
 		rig.withCookie(r)
 	})
-	if got.how != iam.Resolved || got.principal.Login != auth.TokenLogin("ci") {
+	if got.how != iam.Resolved || got.principal.Login != iam.TokenLogin("ci") {
 		t.Errorf("resolved as %q/%v, want the Tier A token",
 			got.principal.Login, got.how)
 	}

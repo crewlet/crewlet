@@ -181,6 +181,24 @@ func TestALoginsGrammarBelongsToItsKind(t *testing.T) {
 	}
 }
 
+// A TIER A TOKEN'S ID COMPOSES A MACHINE LOGIN, and only one that does is an
+// id — the rule internal/config refuses a token by.
+func TestATierATokenIDComposesAMachineLogin(t *testing.T) {
+	for id, want := range map[string]bool{
+		"founder": true, "ci-pipeline": true, "ci:release": true, "ops2": true,
+		"Founder": false, "ci_bot": false, "ci.bot": false, "ci:": false,
+		"": false, "-ops": false, "ops-": false, "a b": false,
+	} {
+		if got := ValidTokenID(id); got != want {
+			t.Errorf("ValidTokenID(%q) = %v, want %v", id, got, want)
+		}
+		if want && !ValidLoginFor(KindMachine, TokenLogin(id)) {
+			t.Errorf("%q is a valid id whose login %q no machine may hold", id,
+				TokenLogin(id))
+		}
+	}
+}
+
 // nameCorpus is every string of length 1..4 over the characters that decide a
 // name's shape, plus deterministic longer ones over a wider alphabet so the
 // rejection paths are exercised too.

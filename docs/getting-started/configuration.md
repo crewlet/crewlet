@@ -787,7 +787,9 @@ api:
     #     crewlet-ops: [fleet:operate, state:read]
     tokens:             # the DEPLOYMENT's machine credentials. At least one
                         #   is required once port is set, on every backend
-      - id: founder
+      - id: founder     # acts under the login token:founder — lowercase
+                        #   letters, digits and hyphens, optionally joined
+                        #   by colons (ci-pipeline, ci:release)
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26+ chars, on the RESOLVED value
         grants: [state:read, config:read, config:write, secrets:read,
                  secrets:write, work:write, knowledge:write, fleet:operate]

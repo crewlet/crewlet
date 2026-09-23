@@ -202,7 +202,7 @@ func TestTheDevPrincipalResolvesARequestThatPresentedNothing(t *testing.T) {
 	// A REAL CREDENTIAL STILL WINS, so a developer testing what a narrow
 	// token can reach is not silently answered as the wide principal.
 	run("Bearer a-real-credential-long-enough")
-	if seen.Login != auth.TokenLogin("founder") {
+	if seen.Login != iam.TokenLogin("founder") {
 		t.Errorf("a presented credential resolved as %q, want the token's own "+
 			"principal", seen.Login)
 	}
