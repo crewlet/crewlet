@@ -65,9 +65,29 @@ func TestRecallScansOneSeatRatherThanTheTable(t *testing.T) {
 	}
 	width := len(probe)
 
-	lines := plan(t, db, recallStatement([]Kind{KindRaw}),
-		1, probe, "ceo", width, width, width, probe, "ceo", width, 0.7, 5)
+	// EVERY SHAPE THE FILTER MAKES, because each is its own statement text
+	// and so its own plan: a filter that tempted the planner onto another
+	// index would pass the unfiltered case and scan the table on the one a
+	// seat asks with.
+	for name, filter := range map[string]EpisodeFilter{
+		"unfiltered":   {},
+		"conversation": {Conversation: "slack:C1"},
+		"outcome":      {Outcome: "failed"},
+		"both":         {Conversation: "slack:C1", Outcome: "failed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			statement, filterArgs := recallStatement([]Kind{KindRaw}, filter)
+			assertSeatScopedRecall(t, plan(t, db, statement,
+				recallArgs(filterArgs, 1, probe, "ceo", width, 0.7, 5, 0)...))
+		})
+	}
+}
 
+// assertSeatScopedRecall fails a recall plan that walks the table, or that
+// does not seek the multi-window rows through their own index.
+func assertSeatScopedRecall(t *testing.T, lines []string) {
+	t.Helper()
 	seatScoped, longRowsSought := false, false
 	for _, line := range lines {
 		// A SEARCH names an index and visits the rows it points at; a
@@ -77,16 +97,22 @@ func TestRecallScansOneSeatRatherThanTheTable(t *testing.T) {
 			t.Errorf("the recall plan walks the whole table: %q\n(full plan: %v)",
 				line, lines)
 		}
-		if strings.Contains(line, "episodes_agent_ended_at_idx") {
-			seatScoped = true
-		}
-		if strings.Contains(line, "episodes_agent_windows_idx") {
+		// THE ONE-WINDOW BRANCH SEEKS ON THE SEAT. Unfiltered that is
+		// episodes_agent_ended_at_idx; narrowed to a conversation the
+		// planner may prefer episodes_agent_conversation_idx, which leads
+		// with the seat as well. What must not happen is a seek led by
+		// anything else — episodes_outcome_ended_at_idx reads every
+		// seat's rows with that outcome.
+		switch {
+		case strings.Contains(line, "episodes_agent_windows_idx"):
 			longRowsSought = true
+		case strings.Contains(line, "(agent_handle=?"):
+			seatScoped = true
 		}
 	}
 	if !seatScoped {
-		t.Errorf("no step of the recall plan uses episodes_agent_ended_at_idx, so "+
-			"nothing scopes the scan to one seat\n(full plan: %v)", lines)
+		t.Errorf("no step of the recall plan's one-window branch seeks on the "+
+			"seat, so nothing scopes the scan to one seat\n(full plan: %v)", lines)
 	}
 	// THE MULTI-WINDOW ROWS ARE SOUGHT, NOT FILTERED OUT OF THE REST. That
 	// is what keeps the ordinal subquery off the one-window rows, which are
@@ -124,4 +150,43 @@ func TestTheOrdinalCountIsAnsweredFromThePartialIndex(t *testing.T) {
 	t.Errorf("the ordinal-count read does not use episodes_agent_windows_idx, so "+
 		"every recall pays a per-seat scan to learn a number that is almost "+
 		"always 1\n(full plan: %v)", lines)
+}
+
+// A LISTING SEEKS ONE SEAT, whatever it filters on.
+//
+// The episodes table carries an index that begins with the OUTCOME rather than
+// the seat (episodes_outcome_ended_at_idx, from schema/node/0002), and an
+// outcome filter is exactly the predicate that makes it look usable: a plan
+// that took it would read every seat's failures to find one seat's, with every
+// answer still correct. So each filter shape is held to a seek whose first
+// term is the seat.
+func TestAListingSeeksOneSeatWhateverItFilters(t *testing.T) {
+	t.Parallel()
+	db := planStore(t)
+	for name, filter := range map[string]EpisodeFilter{
+		"unfiltered":   {},
+		"conversation": {Conversation: "slack:C1"},
+		"outcome":      {Outcome: "failed"},
+		"both":         {Conversation: "slack:C1", Outcome: "failed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			statement, filterArgs := listStatement(filter)
+			args := append([]any{"ceo"}, filterArgs...)
+			lines := plan(t, db, statement, append(args, 6, 0)...)
+			seat := false
+			for _, line := range lines {
+				if strings.HasPrefix(line, "SCAN") && strings.Contains(line, "episodes") {
+					t.Errorf("the listing walks the whole table: %q\n(full plan: %v)",
+						line, lines)
+				}
+				if strings.Contains(line, "(agent_handle=?") {
+					seat = true
+				}
+			}
+			if !seat {
+				t.Errorf("no step of the listing seeks on the seat\n(full plan: %v)", lines)
+			}
+		})
+	}
 }

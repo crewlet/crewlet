@@ -466,7 +466,37 @@ var queryAliases = []queryAlias{
 	{Arg: "project", Key: "container", Shape: "`project:ENG`, or `workspace` for the whole company"},
 	{Arg: "text", Key: "q"},
 	{Arg: "label", Key: "tag"},
-	{Arg: "open_only", Key: "status_group", Shape: "`not_started,active`"},
+	{Arg: "open_only", Key: "status_group", Shape: "`not_started,active` — and " +
+		"`open_only: false` is `show_closed: true`"},
+}
+
+// listPassthrough is every `list_work_items` argument that IS the grammar's
+// key, forwarded under its own name. See [listWorkItems.CallForTurn] for why
+// each is on it.
+//
+// A LIST rather than a literal at the forwarding loop because a second reader
+// needs it and it is prose: save_work_view tells a model which of its keys are
+// the same word in both vocabularies ([SameWordSentence]), and a sentence
+// written beside the loop is one that stops matching it.
+var listPassthrough = []string{
+	"assignee", "limit", "removed", "archived",
+	"type", "priority", "due", "updated", "created",
+	"reporter", "watcher", "collaborator", "asked_of", "checklist_assignee",
+	"blocked", "has_dependencies", "unit", "goal",
+	"sort", "cursor", "view",
+}
+
+// SameWordSentence names the view keys that are `list_work_items`' own
+// arguments under the same name: every forwarded one but `view` and `cursor`,
+// which are about the caller's own read and which a saved view refuses.
+func SameWordSentence() string {
+	words := make([]string, 0, len(listPassthrough))
+	for _, key := range listPassthrough {
+		if key != "view" && key != "cursor" {
+			words = append(words, key)
+		}
+	}
+	return strings.Join(words, ", ")
 }
 
 // AliasSentence names every rename, for a tool description that has to tell a
@@ -498,8 +528,12 @@ func (t *listWorkItems) Description() string {
 		"summaries — call get_work_item for one item's full description, " +
 		"comments and links. An answer is one page: when it carries " +
 		"`next_cursor` there are more, and passing it back as `cursor` " +
-		"reads them. A saved `view` that groups a board answers as a list " +
-		"too; one pinned to a single column is refused, naming the column."
+		"reads them. Done and cancelled work is left out unless you pass " +
+		"`open_only: false`, and archived work unless you pass " +
+		"`archived: true` — pass both when checking whether something was " +
+		"already filed, since the earlier one may be finished or archived. " +
+		"A saved `view` that groups a board answers as a list too; one " +
+		"pinned to a single column is refused, naming the column."
 }
 
 func (t *listWorkItems) Parameters() map[string]any {
@@ -516,14 +550,16 @@ func (t *listWorkItems) Parameters() map[string]any {
 				"description": "A project key, e.g. ENG. Omit for every project.",
 			},
 			"status": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Statuses to include: " + statusList() + ".",
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+				"description": "Statuses to include: " + statusList() + ". A " +
+					"finished status matches only with `open_only: false`.",
 			},
 			"open_only": map[string]any{
 				"type": "boolean",
-				"description": "True lists only items that are not done or " +
-					"cancelled. Default false, which lists everything.",
+				"description": "False lists done and cancelled items too. " +
+					"Omitted, only items that are not done or cancelled are " +
+					"listed — or, with a `view`, whatever that view keeps.",
 			},
 			"preset": map[string]any{
 				"type": "string",
@@ -546,6 +582,13 @@ func (t *listWorkItems) Parameters() map[string]any {
 					"— and nothing else. This is the only way to see them: a " +
 					"removed item is out of every other list. They are not " +
 					"destroyed and an operator can restore one at any age.",
+			},
+			"archived": map[string]any{
+				"type": "boolean",
+				"description": "True also lists ARCHIVED work: a task somebody " +
+					"archived, and every task in an archived project. False " +
+					"leaves both out, and so does omitting it — or, with a " +
+					"`view`, whatever that view keeps.",
 			},
 			"text": map[string]any{
 				"type": "string",
@@ -593,6 +636,31 @@ func (t *listWorkItems) Parameters() map[string]any {
 			"watcher": map[string]any{
 				"type":        "string",
 				"description": "Who is following it. Your own handle is what you follow.",
+			},
+			"collaborator": map[string]any{
+				"type": "string",
+				"description": "Who was brought onto it without owning it. Your " +
+					"own handle is the work you collaborate on.",
+			},
+			"asked_of": map[string]any{
+				"type": "string",
+				"description": "Whose answer an open question on it is waiting " +
+					"for. Your own handle is the work holding questions for you.",
+			},
+			"checklist_assignee": map[string]any{
+				"type": "string",
+				"description": "Who holds a checklist item on it. Your own handle " +
+					"is the work carrying items you claimed.",
+			},
+			"blocked": map[string]any{
+				"type": "boolean",
+				"description": "True: it waits on a blocker that is still open. " +
+					"False: none of its blockers is open.",
+			},
+			"has_dependencies": map[string]any{
+				"type": "boolean",
+				"description": "True: it waits, or once waited, on another item. " +
+					"With `blocked: false`, what became workable.",
 			},
 			"unit": map[string]any{
 				"type": "string",
@@ -665,22 +733,23 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// the grammar's, so forwarding is the whole translation. The three that
 	// differ are below, each with its own reason.
 	//
-	// THE SET IS WHAT A SEAT CANNOT ASK ANOTHER WAY. The grammar has
-	// forty-odd keys and this tool is deliberately few, so what earns a
-	// place here is a question a seat actually has and no other argument
-	// answers — "the bugs", "what is due this week", "what moved since
-	// yesterday", "the subtasks of ENG-4", "what I filed", "what I follow",
-	// "that team's board", and the next page of any of them. Board
+	// THE SET IS WHAT A SEAT CANNOT ASK ANOTHER WAY. The grammar reads far
+	// more keys ([tracker.QueryKeys]) and this tool is deliberately few, so
+	// what earns a place here is a question a seat actually has and no
+	// other argument answers — "the bugs", "what is due this week", "what
+	// moved since yesterday", "what I filed", "what I follow", "that team's
+	// board", and the next page of any of them. Board
 	// FURNITURE — group, subgroup, group_limit, totals — is not on it: a
 	// model reads rows, and a grouped answer costs it a shape to unpack for
 	// a heading nobody renders. A `view` that carries a grouping is
 	// flattened below, for that reason and one more.
-	for _, key := range []string{
-		"assignee", "limit", "removed",
-		"type", "priority", "due", "updated", "created",
-		"reporter", "watcher", "unit", "goal",
-		"sort", "cursor", "view",
-	} {
+	//
+	// `collaborator`, `asked_of`, `checklist_assignee`, `blocked`,
+	// `has_dependencies` and `archived` are also what `my_work`'s `rest` is
+	// written in: each of its blocks is cut at [tracker.MyWorkRows] and names
+	// arguments here whose answer holds every row the block cut — for some
+	// blocks beside rows it leaves out, and [myWorkRest] says why.
+	for _, key := range listPassthrough {
 		if v, held := args[key]; held {
 			params[key] = v
 		}
@@ -731,13 +800,21 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if v := strings.TrimSpace(argString(args, "preset")); v != "" {
 		params["preset"] = v
 	}
-	if open, held := args["open_only"].(bool); held && open {
+	switch open, held := args["open_only"].(bool); {
+	case held && open:
 		// THE TWO OPEN GROUPS, named from the constants rather than
 		// typed: there are FOUR status groups and neither `in_progress`
 		// nor `blocked` is one of them, so a literal naming either is a
 		// filter the parser refuses — which made `open_only` fail the
 		// whole call rather than narrow it.
 		params["status_group"] = strings.Join(openGroups(), ",")
+	case held:
+		// FALSE IS A REQUEST FOR FINISHED WORK, and it has to be said to
+		// the grammar: its own default leaves done and cancelled work out
+		// of every answer, so a false that sent nothing listed exactly
+		// what true did — and a model checking whether something had
+		// already been filed and finished was told it had not.
+		params["show_closed"] = "true"
 	}
 
 	// THROUGH THE EXPANSION, with the SEAT as the viewer — which is what

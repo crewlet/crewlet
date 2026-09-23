@@ -175,15 +175,7 @@ func TestTheAuditQueryListsRevisions(t *testing.T) {
 	t.Parallel()
 	surface, ids := configSurface(t, companyDoc,
 		strings.Replace(companyDoc, "name: Acme", "name: Acme Two", 1))
-	data := answer(t, queries.Sources{Config: surface}, "config_audit", nil)
-	raw, err := json.Marshal(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var revisions []map[string]any
-	if err := json.Unmarshal(raw, &revisions); err != nil {
-		t.Fatal(err)
-	}
+	revisions := auditOf(t, answer(t, queries.Sources{Config: surface}, "config_audit", nil)).Revisions
 	if len(revisions) != 2 {
 		t.Fatalf("%d revisions, want 2", len(revisions))
 	}
@@ -192,6 +184,52 @@ func TestTheAuditQueryListsRevisions(t *testing.T) {
 	}
 	if _, present := revisions[0]["payload"]; present {
 		t.Error("the audit listing carries payloads")
+	}
+}
+
+// auditOf decodes one config_audit answer as a client receives it.
+func auditOf(t *testing.T, data any) configapi.RevisionHistory {
+	t.Helper()
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out configapi.RevisionHistory
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("config_audit is not a RevisionHistory: %v: %s", err, raw)
+	}
+	return out
+}
+
+// THE SOCKET'S HISTORY SAYS WHETHER IT IS A PAGE, as the REST route's does:
+// they are one answer, and a screen reading `config_audit` that could not tell
+// a history of exactly `limit` revisions from a longer one would count the page
+// as the history.
+func TestTheAuditQuerySaysWhetherOlderRevisionsExist(t *testing.T) {
+	t.Parallel()
+	surface, _ := configSurface(t, companyDoc,
+		strings.Replace(companyDoc, "name: Acme", "name: Acme Two", 1),
+		strings.Replace(companyDoc, "name: Acme", "name: Acme Three", 1))
+	sources := queries.Sources{Config: surface}
+	for _, tc := range []struct {
+		params    map[string]any
+		rows      int
+		truncated bool
+	}{
+		{map[string]any{"limit": 2}, 2, true},
+		{map[string]any{"limit": 3}, 3, false},
+		{map[string]any{"limit": 2, "offset": 2}, 1, false},
+		// THE REST ROUTE'S BOUNDS, because they are one rule: a limit of
+		// zero or below named no size and takes the default page.
+		{map[string]any{"limit": 0}, 3, false},
+		{map[string]any{"limit": -3}, 3, false},
+		{map[string]any{"limit": 2, "offset": -1}, 2, true},
+	} {
+		got := auditOf(t, answer(t, sources, "config_audit", tc.params))
+		if len(got.Revisions) != tc.rows || got.Truncated != tc.truncated {
+			t.Errorf("%v: %d revisions, truncated=%t; want %d, truncated=%t",
+				tc.params, len(got.Revisions), got.Truncated, tc.rows, tc.truncated)
+		}
 	}
 }
 

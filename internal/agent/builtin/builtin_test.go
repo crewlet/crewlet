@@ -653,24 +653,25 @@ func TestRefreshReadsOnlyThisSeatsNotes(t *testing.T) {
 
 type episodeStore struct{ episodes []learning.Episode }
 
-func (e *episodeStore) Recent(_ context.Context, handle string, limit int) ([]learning.Episode, error) {
-	var out []learning.Episode
+// List answers as the store does: the filter narrows before the page is cut,
+// and a row past the page is what sets Truncated.
+func (e *episodeStore) List(_ context.Context, q learning.EpisodeQuery) (learning.EpisodePage, error) {
+	var matched []learning.Episode
 	for _, ep := range e.episodes {
-		if ep.Handle == handle && len(out) < limit {
-			out = append(out, ep)
+		switch {
+		case ep.Handle != q.Handle:
+		case q.Filter.Conversation != "" && ep.ConversationKey != q.Filter.Conversation:
+		case q.Filter.Outcome != "" && ep.ReviewOutcome != q.Filter.Outcome:
+		default:
+			matched = append(matched, ep)
 		}
 	}
-	return out, nil
-}
-
-func (e *episodeStore) ForConversation(_ context.Context, handle, conv string, limit int) ([]learning.Episode, error) {
-	var out []learning.Episode
-	for _, ep := range e.episodes {
-		if ep.Handle == handle && ep.ConversationKey == conv && len(out) < limit {
-			out = append(out, ep)
-		}
+	matched = matched[min(q.Offset, len(matched)):]
+	page := learning.EpisodePage{Episodes: matched}
+	if len(matched) > q.Limit {
+		page.Episodes, page.Truncated = matched[:q.Limit], true
 	}
-	return out, nil
+	return page, nil
 }
 
 func TestRecallIsBoundedByWhatAModelWillRead(t *testing.T) {
@@ -696,7 +697,7 @@ func TestRecallIsBoundedByWhatAModelWillRead(t *testing.T) {
 
 func TestNoEarlierTurnsIsAnAnswerNotAFailure(t *testing.T) {
 	t.Parallel()
-	// "This is new work" is useful. A failed result would make the model
+	// An empty history is an answer. A failed result would make the model
 	// treat its own fresh start as a broken tool.
 	tool := registered(t, builtin.Deps{Episodes: &episodeStore{}}, builtin.QueryEpisodesTool)
 	res := callFor(t, tool, turnFor(t, "agent-ceo"), nil)

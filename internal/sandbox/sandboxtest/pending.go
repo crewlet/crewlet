@@ -12,11 +12,15 @@ package sandboxtest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -77,7 +81,12 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"BridgeCallsAreAppendedInOrder", testBridgeCallsAreAppendedInOrder},
 		{"BridgeCallsSurviveWithoutAFence", testBridgeCallsSurviveWithoutAFence},
 		{"BridgeCallsForAMissingRunAreDropped", testBridgeCallsForAMissingRunAreDropped},
-		{"BridgeCallsDropTheMiddleNotTheStart", testBridgeCallsDropTheMiddleNotTheStart},
+		{"EveryBridgedCallIsReadBackPastTheRowsBound", testEveryBridgedCallIsReadBackPastTheRowsBound},
+		{"ABridgedCallsOutputIsCutToFitItsRecordAndMarked", testABridgedCallsOutputIsCutToFitItsRecordAndMarked},
+		{"ABridgedCallsArgumentsAreKeptWholeOrNotAtAll", testABridgedCallsArgumentsAreKeptWholeOrNotAtAll},
+		{"ABridgedCallsArgumentsOutrankItsOutput", testABridgedCallsArgumentsOutrankItsOutput},
+		{"BridgedCallsPageWithACursor", testBridgedCallsPageWithACursor},
+		{"AFirstPageCarriesTheEndOfTheLog", testAFirstPageCarriesTheEndOfTheLog},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -192,7 +201,8 @@ func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingSto
 // round that in fact submitted nothing would report the PREVIOUS round's
 // outcome instead of being rescued as incomplete, and the previous round's
 // deliveries would satisfy this round's delivery check. The same reset the
-// suspension beside it gets, for the same reason.
+// suspension beside it gets, for the same reason — in the log this build
+// reads, and in the row's list older builds read.
 func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.PendingStore) {
 	first := run("t-relaunch-bridge")
 	mustBeginLaunch(t, s, first)
@@ -201,19 +211,40 @@ func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.Pend
 	}); err != nil {
 		t.Fatalf("AppendBridgeCall: %v", err)
 	}
-	if got := mustGet(t, s, first.TurnID); len(got.BridgeCalls) != 1 {
-		t.Fatalf("the first round recorded %d calls, want 1", len(got.BridgeCalls))
+	if got := mustCalls(t, s, first.TurnID); len(got) != 1 {
+		t.Fatalf("the first round recorded %d calls, want 1", len(got))
 	}
 
 	mustBeginLaunch(t, s, run("t-relaunch-bridge"))
+	if got := mustCalls(t, s, first.TurnID); len(got) != 0 {
+		t.Errorf("the second round inherited %d calls from the first: %+v", len(got), got)
+	}
 	got := mustGet(t, s, first.TurnID)
 	if len(got.BridgeCalls) != 0 {
-		t.Errorf("the second round inherited %d calls from the first: %+v",
-			len(got.BridgeCalls), got.BridgeCalls)
+		t.Errorf("the row's list, which older builds read, inherited %d calls from the first round",
+			len(got.BridgeCalls))
 	}
 	if got.BridgeCallsElided != 0 {
 		t.Errorf("the elision count survived the relaunch: %d", got.BridgeCallsElided)
 	}
+}
+
+// mustCalls reads a run's whole bridged-call log, the way a resume does.
+//
+// Every run this suite launches is one this build records, so its log drops
+// nothing — and a log that reported a drop here would be reporting a gap the
+// per-call records cannot have.
+func mustCalls(t *testing.T, s sandbox.PendingStore, turnID string) []sandbox.BridgeCall {
+	t.Helper()
+	log, err := s.BridgeCalls(t.Context(), mustGet(t, s, turnID))
+	if err != nil {
+		t.Fatalf("BridgeCalls(%s): %v", turnID, err)
+	}
+	if log.Dropped != 0 || log.DroppedAfter != 0 {
+		t.Errorf("BridgeCalls(%s) reports %d calls dropped after %d, from a log that drops nothing",
+			turnID, log.Dropped, log.DroppedAfter)
+	}
+	return log.Calls
 }
 
 func testALaunchNeedsATurnID(t *testing.T, s sandbox.PendingStore) {
@@ -1254,24 +1285,33 @@ func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
 		}
 	}
 
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != 3 {
-		t.Fatalf("%d calls recorded: %+v", len(got.BridgeCalls), got.BridgeCalls)
+	got := mustCalls(t, s, r.TurnID)
+	if len(got) != 3 {
+		t.Fatalf("%d calls recorded: %+v", len(got), got)
 	}
 	want := []string{"read_page", "post_message", "read_page"}
 	for i, name := range want {
-		if got.BridgeCalls[i].Name != name {
-			t.Errorf("call %d = %q, want %q", i, got.BridgeCalls[i].Name, name)
+		if got[i].Name != name {
+			t.Errorf("call %d = %q, want %q", i, got[i].Name, name)
+		}
+		// NUMBERED, which is what a page's cursor is.
+		if got[i].Seq != uint64(i+1) {
+			t.Errorf("call %d is numbered %d, want %d", i, got[i].Seq, i+1)
 		}
 	}
 	// The ARGUMENTS and the OUTCOME ride along, because a log of bare
 	// names does not tell a reviewer whether the turn delivered anything.
-	if got.BridgeCalls[0].Args != `{"id":1}` || got.BridgeCalls[0].Output != "read_page ok" {
-		t.Errorf("the call does not carry what it did: %+v", got.BridgeCalls[0])
+	if got[0].Args != `{"id":1}` || got[0].Output != "read_page ok" {
+		t.Errorf("the call does not carry what it did: %+v", got[0])
 	}
 	// STAMPED, so a reader can see the shape of a run that stalled.
-	if got.BridgeCalls[0].At.IsZero() {
+	if got[0].At.IsZero() {
 		t.Error("the call has no timestamp")
+	}
+	// And the row's list, which is what an older build on the same store
+	// reads, carries the same calls.
+	if row := mustGet(t, s, r.TurnID); len(row.BridgeCalls) != 3 {
+		t.Errorf("the row's list for older builds holds %d calls, want 3", len(row.BridgeCalls))
 	}
 }
 
@@ -1292,8 +1332,8 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 	if err != nil || !ok {
 		t.Fatalf("a log append was refused by ownership: %v, %v", ok, err)
 	}
-	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 1 {
-		t.Errorf("%d calls recorded", len(got.BridgeCalls))
+	if got := mustCalls(t, s, r.TurnID); len(got) != 1 {
+		t.Errorf("%d calls recorded", len(got))
 	}
 }
 
@@ -1311,36 +1351,281 @@ func testBridgeCallsForAMissingRunAreDropped(t *testing.T, s sandbox.PendingStor
 	}
 }
 
-// THE MIDDLE IS WHAT GETS DROPPED. How a run began and how it ended are what
-// explain it, and a log truncated to its last N loses the former entirely.
-func testBridgeCallsDropTheMiddleNotTheStart(t *testing.T, s sandbox.PendingStore) {
+// EVERY CALL IS READ BACK, however many the run made — and in particular a
+// delivery in the middle of a long run.
+//
+// The run's row keeps a bounded list, for older builds, that drops its middle
+// past [sandbox.MaxBridgeCalls]. A resume that read that list could not see a
+// delivery made in the middle of a long run: its submission's citation of
+// that delivery was refused, its delivery check counted nobody reached, and
+// the turn could be sent round to post to a person a second time. The log a
+// resume reads drops nothing, so the delivery is there.
+func testEveryBridgedCallIsReadBackPastTheRowsBound(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
-	r := run("t-bridge-cap")
+	r := run("t-bridge-long")
 	mustLaunched(t, s, r)
 
-	total := sandbox.MaxBridgeCalls + 10
+	total := sandbox.MaxBridgeCalls + 50
+	delivery := total / 2
 	for i := range total {
-		if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
-			Name: fmt.Sprintf("call-%03d", i),
-		}); err != nil {
-			t.Fatalf("append %d: %v", i, err)
+		call := sandbox.BridgeCall{Name: fmt.Sprintf("call-%03d", i)}
+		if i == delivery {
+			call = sandbox.BridgeCall{Name: "slack_post", Args: `{"channel":"C1","text":"done"}`,
+				Output: `{"ts":"1718000000.000100"}`}
+		}
+		if ok, err := s.AppendBridgeCall(ctx, r.TurnID, call); err != nil || !ok {
+			t.Fatalf("append %d = %v, %v", i, ok, err)
 		}
 	}
 
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != sandbox.MaxBridgeCalls {
-		t.Fatalf("%d calls kept, want %d", len(got.BridgeCalls), sandbox.MaxBridgeCalls)
+	got := mustCalls(t, s, r.TurnID)
+	if len(got) != total {
+		t.Fatalf("the log read back %d calls, want all %d", len(got), total)
 	}
-	if first := got.BridgeCalls[0].Name; first != "call-000" {
-		t.Errorf("the first call was dropped: %q — a log cut to its tail loses how the run began", first)
+	if got[delivery].Name != "slack_post" || got[delivery].Output != `{"ts":"1718000000.000100"}` {
+		t.Errorf("call %d = %+v, want the delivery the run made there", delivery, got[delivery])
 	}
-	last := got.BridgeCalls[len(got.BridgeCalls)-1].Name
-	if want := fmt.Sprintf("call-%03d", total-1); last != want {
-		t.Errorf("the last call = %q, want %q", last, want)
+	for i, call := range got {
+		if call.Seq != uint64(i+1) {
+			t.Fatalf("call %d is numbered %d: the log is out of order or has a hole", i, call.Seq)
+		}
 	}
-	// AND THE GAP IS REPORTED: a log that silently skips is a log that
-	// lies about what the run did.
-	if got.BridgeCallsElided != 10 {
-		t.Errorf("elided = %d, want 10", got.BridgeCallsElided)
+
+	// THE ROW'S LIST IS STILL OLDER BUILDS' BOUNDED VIEW. A peer on an
+	// older build reads only this, so it keeps the shape it always had —
+	// the first and last halves, and a count of the middle it dropped.
+	row := mustGet(t, s, r.TurnID)
+	if len(row.BridgeCalls) != sandbox.MaxBridgeCalls {
+		t.Errorf("the row's list keeps %d calls, want %d", len(row.BridgeCalls), sandbox.MaxBridgeCalls)
 	}
+	if row.BridgeCallsElided != total-sandbox.MaxBridgeCalls {
+		t.Errorf("the row counts %d dropped calls, want %d", row.BridgeCallsElided, total-sandbox.MaxBridgeCalls)
+	}
+}
+
+// A CALL TOO LARGE FOR ONE RECORD IS STILL RECORDED — cut to fit, and marked.
+//
+// Refusing it would leave the call out of the only log a resume reads, which
+// is the failure the per-call records exist to end; storing it whole is
+// impossible, because a record is one message on the transport. So its output
+// is cut, on a character boundary, ending in "…" — and the arguments, which
+// the output alone can make room for here, are kept whole.
+func testABridgedCallsOutputIsCutToFitItsRecordAndMarked(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-huge")
+	mustLaunched(t, s, r)
+
+	// Three-byte characters, so a byte cut through one would show.
+	whole := strings.Repeat("あ", sandbox.MaxBridgeCallBytes/3+1000)
+	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
+		Name: "read_file", Args: `{"path":"big.txt"}`, Output: whole,
+	}); err != nil || !ok {
+		t.Fatalf("a call too large for one record was not recorded: %v, %v", ok, err)
+	}
+	got := mustCalls(t, s, r.TurnID)
+	if len(got) != 1 {
+		t.Fatalf("%d calls recorded, want the one", len(got))
+	}
+	call := got[0]
+	if !strings.HasSuffix(call.Output, "…") || !strings.HasPrefix(whole, strings.TrimSuffix(call.Output, "…")) {
+		t.Error("the cut output is not a marked head of the whole")
+	}
+	if len(call.Output) < sandbox.MaxBridgeCallBytes-1024 {
+		t.Errorf("the cut kept %d bytes of output, far short of the %d-byte record it had room in",
+			len(call.Output), sandbox.MaxBridgeCallBytes)
+	}
+	if !utf8.ValidString(call.Output) {
+		t.Error("the cut went through a character")
+	}
+	if call.Args != `{"path":"big.txt"}` {
+		t.Errorf("the arguments were touched while the output alone could make room: %q", call.Args)
+	}
+	assertRecordFits(t, call)
+	// And a call that fits is left exactly as it was.
+	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
+		Name: "read_file", Output: "small…",
+	}); err != nil || !ok {
+		t.Fatalf("append: %v, %v", ok, err)
+	}
+	if small := mustCalls(t, s, r.TurnID)[1]; small.Output != "small…" || small.Args != "" {
+		t.Errorf("a call that fits was changed: %+v", small)
+	}
+}
+
+// assertRecordFits holds a call as read back to the ceiling its record had.
+func assertRecordFits(t *testing.T, call sandbox.BridgeCall) {
+	t.Helper()
+	raw, err := json.Marshal(call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The call as read carries its Seq, which the stored record does not
+	// (the record's key does); the rest is what the record holds. HTML
+	// escaping, which this encoder does and the store's does not, is not
+	// something these calls carry.
+	if len(raw) > sandbox.MaxBridgeCallBytes+len(`,"seq":1`) {
+		t.Errorf("the recorded call encodes to %d bytes, past the %d a record may hold",
+			len(raw), sandbox.MaxBridgeCallBytes)
+	}
+}
+
+// ARGUMENTS ARE JSON, and a cut through JSON is text nothing can parse — so
+// when they alone overfill the record, they are not kept, and the marker that
+// takes their place says so in the field every reader shows.
+//
+// AND THE OUTPUT KEEPS THE ROOM THEY GAVE BACK. The arguments are decided
+// before the output is cut, so a small output beside them — "posted", after a
+// nine-megabyte message body — is kept whole rather than cut for room the
+// arguments were about to give up.
+func testABridgedCallsArgumentsAreKeptWholeOrNotAtAll(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-huge-args")
+	mustLaunched(t, s, r)
+
+	args := `{"text":"` + strings.Repeat("x", sandbox.MaxBridgeCallBytes) + `"}`
+	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
+		Name: "slack_post", Args: args, Output: "posted",
+	}); err != nil || !ok {
+		t.Fatalf("a call whose arguments alone overfill a record was not recorded: %v, %v", ok, err)
+	}
+	call := mustCalls(t, s, r.TurnID)[0]
+	if call.Args != sandbox.ArgsNotKept(len(args)) {
+		t.Errorf("arguments = %.80q…, want the marker saying %d bytes were not kept", call.Args, len(args))
+	}
+	var marker map[string]any
+	if err := json.Unmarshal([]byte(call.Args), &marker); err != nil || len(marker) != 1 {
+		t.Errorf("the marker is not the one-member JSON object a reader decodes: %q (%v)", call.Args, err)
+	}
+	if call.Output != "posted" {
+		t.Errorf("output = %q, want %q kept whole: the record had room for it once the "+
+			"arguments were set aside", call.Output, "posted")
+	}
+	if call.Name != "slack_post" {
+		t.Errorf("the call lost its name: %+v", call)
+	}
+	assertRecordFits(t, call)
+}
+
+// ARGUMENTS THAT FIT ONCE THE OUTPUT IS CUT ARE KEPT. Only a record over the
+// ceiling with an output of nothing but its mark drops them: arguments are
+// what the call DID, and an output is what it was told back.
+func testABridgedCallsArgumentsOutrankItsOutput(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-both-large")
+	mustLaunched(t, s, r)
+
+	args := `{"body":"` + strings.Repeat("a", sandbox.MaxBridgeCallBytes/2) + `"}`
+	output := strings.Repeat("b", sandbox.MaxBridgeCallBytes/2+1000)
+	if ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
+		Name: "create_page", Args: args, Output: output,
+	}); err != nil || !ok {
+		t.Fatalf("append: %v, %v", ok, err)
+	}
+	call := mustCalls(t, s, r.TurnID)[0]
+	if call.Args != args {
+		t.Errorf("the arguments were not kept whole (%d bytes of %d) although the output "+
+			"could make room for them", len(call.Args), len(args))
+	}
+	if !strings.HasSuffix(call.Output, "…") || !strings.HasPrefix(output, strings.TrimSuffix(call.Output, "…")) {
+		t.Error("the output is not a marked head of the whole")
+	}
+	assertRecordFits(t, call)
+}
+
+// THE CURSOR. A dashboard pages a long log rather than asking for all of it in
+// one answer, and every call has to be reachable exactly once.
+func testBridgedCallsPageWithACursor(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-pages")
+	mustLaunched(t, s, r)
+	for i := range 5 {
+		if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{Name: fmt.Sprintf("c%d", i)}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	var seen []string
+	after := uint64(0)
+	for range 5 {
+		page, err := s.BridgeCallPage(ctx, mustGet(t, s, r.TurnID), after, 2)
+		if err != nil {
+			t.Fatalf("BridgeCallPage: %v", err)
+		}
+		if page.Total != 5 || page.Dropped != 0 {
+			t.Errorf("total = %d, dropped = %d; want 5 and none", page.Total, page.Dropped)
+		}
+		if after != 0 && (len(page.End) != 0 || page.Between != 0) {
+			t.Errorf("a later page carried the log's end: %d calls, %d between", len(page.End), page.Between)
+		}
+		for _, call := range page.Calls {
+			seen = append(seen, call.Name)
+		}
+		if page.Next == 0 {
+			break
+		}
+		after = page.Next
+	}
+	if want := []string{"c0", "c1", "c2", "c3", "c4"}; !slices.Equal(seen, want) {
+		t.Errorf("paged %q, want %q", seen, want)
+	}
+	if _, err := s.BridgeCallPage(ctx, mustGet(t, s, r.TurnID), 0, 0); err == nil {
+		t.Error("a page with no room for a call was answered")
+	}
+}
+
+// A FIRST PAGE SHOWS HOW THE LOG ENDS. A bridged run finishes by submitting,
+// so a reader shown only a long run's first page would see neither its
+// submission nor its last delivery, and could not tell that from a run that
+// made neither. The first page carries the newest calls too, and counts the
+// middle it leaves for paging to.
+func testAFirstPageCarriesTheEndOfTheLog(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-ends")
+	mustLaunched(t, s, r)
+	for i := range 7 {
+		if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{Name: fmt.Sprintf("c%d", i)}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	page, err := s.BridgeCallPage(ctx, mustGet(t, s, r.TurnID), 0, 2)
+	if err != nil {
+		t.Fatalf("BridgeCallPage: %v", err)
+	}
+	if got := names(page.Calls); !slices.Equal(got, []string{"c0", "c1"}) {
+		t.Errorf("the first page = %q, want c0 and c1", got)
+	}
+	if got := names(page.End); !slices.Equal(got, []string{"c5", "c6"}) {
+		t.Errorf("the log's end = %q, want c5 and c6, in the order they were made", got)
+	}
+	if page.Between != 3 || page.Next != page.Calls[1].Seq {
+		t.Errorf("between = %d, next = %d; want the 3 calls in the middle, reached from %d",
+			page.Between, page.Next, page.Calls[1].Seq)
+	}
+
+	// A first page that reaches the end carries nothing beside it.
+	whole, err := s.BridgeCallPage(ctx, mustGet(t, s, r.TurnID), 0, 7)
+	if err != nil {
+		t.Fatalf("BridgeCallPage: %v", err)
+	}
+	if len(whole.Calls) != 7 || len(whole.End) != 0 || whole.Between != 0 || whole.Next != 0 {
+		t.Errorf("a first page holding the whole log = %d calls, %d at the end, %d between, next %d; "+
+			"want all 7 and nothing else", len(whole.Calls), len(whole.End), whole.Between, whole.Next)
+	}
+
+	// A page whose end would overlap it carries only what it does not.
+	near, err := s.BridgeCallPage(ctx, mustGet(t, s, r.TurnID), 0, 4)
+	if err != nil {
+		t.Fatalf("BridgeCallPage: %v", err)
+	}
+	if got := names(near.End); !slices.Equal(got, []string{"c4", "c5", "c6"}) || near.Between != 0 {
+		t.Errorf("the end beside a 4-call first page = %q with %d between, want c4 to c6 and none",
+			got, near.Between)
+	}
+}
+
+func names(calls []sandbox.BridgeCall) []string {
+	out := make([]string, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, call.Name)
+	}
+	return out
 }

@@ -203,6 +203,21 @@ func (r *roundTrip) applyWhileWriting() {
 	r.waiter.advance = r.drain
 }
 
+// order is a project's manual order version as this node holds it — what a
+// caller placing tasks by hand states it decided against.
+func (r *roundTrip) order(project string) int64 {
+	r.t.Helper()
+	var version int64
+	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+		var err error
+		version, err = tracker.OrderVersion(r.t.Context(), tx, project)
+		return err
+	}); err != nil {
+		r.t.Fatalf("read %s's order version: %v", project, err)
+	}
+	return version
+}
+
 // drain consumes every record the broker holds beyond what this node has
 // applied, exactly as the framework's own loop does — one transaction per
 // record, carrying the rows and the checkpoint together.
@@ -537,7 +552,7 @@ func TestARankMoveArbitratesOnTheOrder(t *testing.T) {
 		r.drain()
 	}
 
-	moved, err := r.writer.MoveTasks(t.Context(), "op-move", "ENG",
+	moved, err := r.writer.MoveTasks(t.Context(), "op-move", "ENG", r.order("ENG"),
 		[]tracker.Placement{{Task: "t-2", Rank: "a1"}})
 	if err != nil {
 		t.Fatalf("MoveTasks: %v", err)

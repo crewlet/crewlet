@@ -5,17 +5,18 @@
 //
 // A company running Crewlet needs somewhere to write things down, and until
 // now that somewhere had to be Confluence. This is the first-party
-// alternative, on exactly the terms [internal/tracker] is the tracker's: every
-// change is ONE RECORD on an ordered stream, arbitrated at the broker on the
-// subject of the object it changes and applied into N identical SQL copies
-// with the checkpoint in the same transaction as the rows. It is the state
+// alternative, on exactly the terms
+// [github.com/crewlet/crewlet/internal/tracker] is the tracker's: every change
+// is ONE RECORD on an ordered stream, arbitrated at the broker on the subject
+// of the object it changes and applied into N identical SQL copies with the
+// checkpoint in the same transaction as the rows. It is the state
 // log's THIRD domain, and it is refused by the config beside an
 // `integrations.confluence` block — pages in two places with nothing keeping
 // them in step is the cache-with-no-invalidation the whole design is against.
 //
 // That shape is ADR-0002 — the stream is the write-ahead log, these SQL tables
-// are derived from it — and [internal/statelog] is the record's authority. What
-// is particular to a wiki is below.
+// are derived from it — and [github.com/crewlet/crewlet/internal/statelog] is
+// the record's authority. What is particular to a wiki is below.
 //
 // # The three things a wiki has that a tracker does not
 //
@@ -33,18 +34,18 @@
 //     version+1 and this repo's own /config 409 enforce, because a wiki's
 //     worst failure is silently overwriting somebody's paragraph.
 //   - A PAGE IS SEARCHED, not filtered. The applied rows feed the lexical
-//     index in [internal/search], and a published page is what an agent's
-//     "what do we already know about this" reads.
+//     index in [github.com/crewlet/crewlet/internal/search], and a published
+//     page is what an agent's "what do we already know about this" reads.
 //
 // # The reserved containers
 //
-// Two, and both are excluded from search and from routing. The SKILLS
-// container holds tool-skill pages: machinery, and a seat told to read one
-// would follow an instruction written for a different phase of a different
-// turn. The ROOT container holds the organisation's own pages, starting with
-// the Onboarding page every seat reads first. Both are refused as a unit's
-// own space by the config loader, and both are named there rather than here
-// so an operator can move either.
+// Two. The SKILLS container holds tool-skill pages, and [Searcher] never
+// returns one: they are machinery, and a seat told to read one would follow an
+// instruction written for a different phase of a different turn. The ROOT
+// container holds the organisation's own pages, starting with the Onboarding
+// page every seat reads first. Both are refused as a unit's own space by the
+// config loader, and both are named there rather than here so an operator can
+// move either.
 //
 // # The two-key sequences this no longer has
 //
@@ -117,7 +118,27 @@ const (
 	// MaxComment bounds one comment on a page.
 	MaxComment = 32 << 10
 
-	// MaxExcerpt bounds the excerpt a change record carries.
+	// MaxExcerpt bounds the excerpt a change carries: the text its card and
+	// a woken seat's notification show, cut rune-safely and marked inside
+	// this cap by [excerpt]. The one content cap here that CUTS rather than
+	// refuses, because it bounds a copy rather than the content.
+	//
+	// Six hundred bytes, the same card size as the tracker's
+	// [github.com/crewlet/crewlet/internal/tracker.MaxExcerpt] — a
+	// judgement, a paragraph of prose, on a value written into every
+	// history row and every record that notifies anybody.
+	//
+	// WHERE THE WHOLE TEXT IS. A save's message and a title are capped
+	// below this ([MaxMessage], [MaxTitle]) and never reach the cut; what
+	// can is a body's first line and a comment.
+	//   - A create's or a save's first line is in the body of the version
+	//     the change produced: [Reader.Revision] with the page and that
+	//     version — which a wake carries, and which is 1 for a create — for
+	//     as long as the page keeps it ([RevisionsKept]).
+	//   - A comment is whole on its own row, which the page's detail read
+	//     returns and the change names by its comment id. Only its latest
+	//     form, though: a comment keeps no past versions, so the text of an
+	//     edit that a later edit replaced survives only as this excerpt.
 	MaxExcerpt = 600
 
 	// MaxLabels bounds a page's labels.

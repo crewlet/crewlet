@@ -99,6 +99,13 @@ type InboxNotice struct {
 
 	Excerpt string `json:"excerpt,omitempty"`
 
+	// ContentPurged marks a notice about a task that was later PURGED: the
+	// purge emptied its excerpt, so an empty one here says nothing about
+	// what the change was. The kind, the reason and who made it are what is
+	// left. The project lead's notice of the purge itself is not marked —
+	// its excerpt is the purge's line, kept whole.
+	ContentPurged bool `json:"content_purged,omitempty"`
+
 	// Actor is who made the change, joined from the history row. A notice
 	// whose history row has been reanchored away carries none rather than
 	// dropping the notice: what was said outlives who said it.
@@ -359,7 +366,10 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation,
 		       n.created_at, n.reason, n.addressed, n.fallback_only,
 		       n.kind, n.subject_id, n.subject_key, n.excerpt,
-		       COALESCE(h.actor, ''), COALESCE(h.actor_kind, '')
+		       COALESCE(h.actor, ''), COALESCE(h.actor_kind, ''),
+		       EXISTS (SELECT 1 FROM tracker_deletions d
+		               WHERE d.task_id = n.subject_id
+		                 AND d.purge_record_id <> n.record_id)
 		  FROM tracker_notifications n
 		  LEFT JOIN tracker_history h ON h.id = n.record_id
 		 WHERE `+strings.Join(where, " AND ")+`
@@ -384,11 +394,11 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		var packed int64
 		var at int64
 		var reason, kind, actorKind string
-		var addressed, fallback int
+		var addressed, fallback, purged int
 		if err := rows.Scan(&notice.RecordID, &packed, &notice.LogStream,
 			&notice.LogGeneration, &at, &reason, &addressed, &fallback,
 			&kind, &notice.SubjectID, &notice.SubjectKey, &notice.Excerpt,
-			&notice.Actor, &actorKind); err != nil {
+			&notice.Actor, &actorKind, &purged); err != nil {
 
 			return nil, "", fmt.Errorf("tracker: scan %s's inbox: %w", handle, err)
 		}
@@ -399,6 +409,7 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		notice.ActorKind = AuthorKind(actorKind)
 		notice.Addressed = addressed != 0
 		notice.Fallback = fallback != 0
+		notice.ContentPurged = purged != 0
 		out = append(out, notice)
 	}
 	if err := rows.Err(); err != nil {

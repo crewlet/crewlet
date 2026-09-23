@@ -52,7 +52,12 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// anywhere called it — expired short-term memories stayed rows
 		// every recall scanned, forever.
 		"agent_diary",
-		"agent_diary_long",
+		// A BRIDGED RUN'S CALL LOG, in the coordination store rather than
+		// a table, and on this list for the list's own reason: its bucket
+		// has no age, the run's lifecycle purges it, and what the
+		// lifecycle misses — a node that died between a run's delete and
+		// its purge — nothing else would ever end.
+		"bridge_calls",
 		"conversation_sessions",
 		// Added the same way the diary was: the table shipped with a
 		// memsync entry that republishes every row to every peer on

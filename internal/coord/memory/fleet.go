@@ -40,6 +40,7 @@ type Fleet struct {
 	follows      map[string]followEntry
 	fires        map[string]time.Time
 	runs         map[string]coord.Record
+	bridge       map[coord.BridgeLaunch]*bridgeLaunch
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 	mailboxes    map[string]coord.MailboxRecord

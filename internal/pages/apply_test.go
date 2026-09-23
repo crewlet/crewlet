@@ -287,7 +287,7 @@ func TestAPurgedPageStaysPurgedHoweverLateARecordArrives(t *testing.T) {
 
 	// A LATER RECORD ABOUT THE SAME PAGE IS DROPPED.
 	save := record(pages.PageSubject("page-1"), pages.OpPatch, "op-save",
-		pages.PagePatch{V: pages.DocumentVersion, Labels: []string{"x"}},
+		pages.PagePatch{V: pages.DocumentVersion, Labels: &[]string{"x"}},
 		pages.ScopeSet{Subject: true, Container: "ENG"})
 	_, gate, err := h.apply(save)
 	if err != nil {
@@ -659,7 +659,7 @@ func TestAPagesChildSetsCrossAChunkBoundaryUnchanged(t *testing.T) {
 		}
 		rows, gate, err := h.apply(record(pages.PageSubject("page-1"),
 			pages.OpPatch, "op-sets", pages.PagePatch{
-				V: pages.DocumentVersion, Labels: labels,
+				V: pages.DocumentVersion, Labels: &labels,
 				Watchers: watchers, Muted: muted,
 			}, pages.ScopeSet{Subject: true, Container: "ENG"}))
 		if err != nil || gate != "" {

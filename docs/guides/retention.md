@@ -504,12 +504,12 @@ The confirmation is the task's **key**, not its id: the id is already on the
 command line, so repeating it confirms nothing, while the key has to be looked
 up — which is the point of asking. The **reason is required** because the rows
 are destroyed and it is what explains the gap. It travels whole on the line a
-purge leaves — the project lead's notification, whose excerpt the purge's row
-in the activity feed carries — and on the deletion marker, and a reason too
-long for that line is refused, naming how many bytes fit, rather than cut. A
-purge is an
-**operator gesture** — a person or an operator token, never an agent and never
-the engine — because nothing else can be asked to confirm it.
+purge leaves — the purge's own row in the activity feed, and the project
+lead's notification when the project has a lead — and on the deletion marker,
+and a reason too long for that line is refused, naming how many bytes fit,
+rather than cut. A purge is an **operator gesture** — a person or an operator
+token, never an agent and never the engine — because nothing else can be asked
+to confirm it.
 
 It answers the same three-valued outcome every write here has. `pending` means
 the record is on the log and each node's rows go as it reaches them; do not run
@@ -523,6 +523,22 @@ root when the purged task was one, and the subtree's depths and ancestry are
 rebuilt with it. Destroying the subtree would destroy work nobody confirmed,
 and leaving it alone would leave every child pointing at an id that resolves to
 nothing.
+
+A purge **empties the task's history rather than deleting it**: every change
+it had stays in the activity feed as who, when, what kind of change and in
+which project, with its text and field changes removed and the row marked
+`content_purged`, and the inbox notices about it keep who was told and why but
+not what was said. [The work tracker guide](work-tracker.md#removing-deleting-and-purging)
+lists everything a purge removes and everything it leaves.
+
+What it cannot reach is anything outside the live tables. The **log** keeps
+every record about the task — its title and body among them — until it is
+trimmed past them, so how long that copy lives is decided by the trim this
+page describes, not by the purge. A node's [snapshot](#snapshots) taken before
+the purge keeps its copy until the next one replaces it, and a **backup** for
+as long as the backup is kept. And a node holding a record it cannot read yet,
+because a newer build wrote it, keeps that record until a build that can read
+it arrives.
 
 The report deliberately gives **no time guarantee**. An offline or evicted
 disk retains its copy until replay, adoption, replacement or destruction, and

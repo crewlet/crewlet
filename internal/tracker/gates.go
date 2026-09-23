@@ -327,8 +327,8 @@ type PurgeResult struct {
 //
 // Because it did not, and the absence was invisible from both ends. Every
 // purge published with a nil notification, so nobody was ever told that a
-// task and every comment, revision, history row and turn record on it had
-// been destroyed — while [Candidates] carried a `ChangePurged` branch and
+// task, its comments and its revisions had been destroyed — while
+// [Candidates] carried a `ChangePurged` branch and
 // [ReasonPurged] sat in the reason list, neither of which any record could
 // ever reach. Dead code on one side, silence on the other, and the two looked
 // like each other's explanation.
@@ -345,7 +345,9 @@ type PurgeResult struct {
 //
 // NIL WHEN THERE IS NO LEAD: a company with nobody to
 // tell is told nothing, and the record still names itself `purged` because the
-// kind is the writer's and not the notification's.
+// kind is the writer's and not the notification's. The purge's row in the feed
+// carries the same line either way — with no notification to bring it, the
+// applier writes it ([Applier.purgeLine]).
 func purgeWake(task Task, reason, actor string, leads Leads) *Notify {
 	if leads == nil {
 		return nil
@@ -398,8 +400,9 @@ const purgeReasonSeparator = ": "
 // this number so the operator knows how much to shorten by.
 //
 // THE REASON IS REFUSED RATHER THAN CUT because the excerpt is where it is
-// read: the lead's notification carries it, and the purge's row in the
-// activity feed carries that notification's excerpt. The whole reason is also
+// read: the lead's notification carries it, and so does the purge's row in
+// the activity feed — from that notification, or written by the applier when
+// there was no lead to notify ([Applier.purgeLine]). The whole reason is also
 // on the purge record's payload and in the deletion marker's `reason` column,
 // but no read surface returns either, so a reason cut on the excerpt would
 // have no way back.
@@ -435,7 +438,9 @@ func (e *ErrPurgeReasonTooLong) Error() string {
 		"nothing is purged until it fits; shorten it", e.Key, e.Bytes, e.Room)
 }
 
-// PurgeTask destroys a task and every row it produced.
+// PurgeTask destroys a task: every row it owns, every row through which
+// another task refers to it, and the CONTENT of its history and inbox rows —
+// who, when and what kind of change stay. [Applier.purgeTask] is the list.
 //
 // THE ONE SEQUENCE NO DUTY EVER COMPLETES, because nothing may destroy data
 // without the confirmation present at that moment. A purge interrupted is a

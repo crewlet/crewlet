@@ -30,14 +30,24 @@ import (
 // `refresh_memory` dumped the newest notes, so the documented escape hatch for
 // the exact case the gate exists for was advertised and absent.
 
-// RecallEpisodes returns the seat's past turns most similar to text.
+// RecallEpisodes returns the seat's past turns most similar to text, among
+// those the filter keeps: `limit` of them, starting `offset` into the ranking.
+//
+// THE FILTER NARROWS WHAT IS RANKED, in the store's own statement, so the
+// limit is taken over the turns that match it — see [learning.EpisodeFilter]
+// for what a filter applied to the hits would answer instead. The offset is
+// what lets a caller read the ranking on past a page it was told was not the
+// whole of it.
 //
 // NO FALLBACK TO RECENCY, matching the block: episode recall's whole claim is
 // "this resembles what you are doing now", the three most recent turns carry
 // no such claim, and an executor told they are similar work treats them as
-// precedent. A company with no embeddings gets (nil, nil) and the caller says
-// so — which is a different sentence from "you have done nothing like this".
-func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) ([]learning.Hit, error) {
+// precedent. A company with no embeddings gets [ErrNoSimilarity] and the
+// caller says so — which is a different sentence from "you have done nothing
+// like this".
+func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text string,
+	filter learning.EpisodeFilter, offset, limit int,
+) ([]learning.Hit, error) {
 	if f == nil || f.src.Episodes == nil || seat == nil {
 		return nil, nil
 	}
@@ -45,12 +55,26 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 	if handle == "" || strings.TrimSpace(text) == "" {
 		return nil, nil
 	}
-	vector, ok := f.embed(ctx, text)
-	if !ok {
+	// NOT [Fetcher.embed], which folds "nothing is configured" and "the
+	// provider failed" into one false because a block has nothing to say
+	// about either. A caller that asked has something to say: the first
+	// is [ErrNoSimilarity] and a reason to use another mode, the second is
+	// an outage worth retrying, and naming one as the other sends the
+	// model the wrong way.
+	if f.src.Embed == nil {
 		return nil, ErrNoSimilarity
 	}
+	vector, err := f.src.Embed(ctx, text)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("prefetch: embed the search text for %s: %w", handle, err)
+	case len(vector) == 0:
+		return nil, fmt.Errorf("prefetch: the embeddings provider answered no "+
+			"vector for %s's search text", handle)
+	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
-		Handle: handle, Embedding: vector, Limit: limit,
+		Handle: handle, Embedding: vector, Limit: limit, Offset: offset,
+		Filter: filter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("prefetch: recall episodes for %s: %w", handle, err)

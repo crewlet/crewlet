@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -83,14 +84,17 @@ func (t *taskActivity) Parameters() map[string]any {
 			},
 			"q": map[string]any{
 				"type": "string",
-				"description": "Text to find in a change's own excerpt. It " +
-					"needs either `task`, or `project` with a `since` inside " +
-					"90 days — at company scope it would read every change " +
-					"ever made.",
+				"description": fmt.Sprintf("Text to find in a change's own excerpt. It "+
+					"needs either `task`, or `project` with a `since` inside "+
+					"%d days — at company scope it would read every change "+
+					"ever made.", tracker.ActivityQuerySpanDays),
 			},
 			"limit": map[string]any{
-				"type":        "integer",
-				"description": "At most 200, which is also the default.",
+				"type": "integer",
+				"description": fmt.Sprintf("Changes per page: at most %d, which "+
+					"is also the default. A smaller page costs more calls, "+
+					"never any changes — `next_cursor` reads on.",
+					tracker.MaxActivityRows),
 			},
 			"cursor": map[string]any{
 				"type": "string",
@@ -211,15 +215,19 @@ var _ tools.SeatCallable = (*myWork)(nil)
 func (t *myWork) Name() string { return tracker.MyWorkTool }
 
 func (t *myWork) Description() string {
-	return "Everything you are expected to look at, in one call: your " +
-		"priorities in the order somebody put them, the work you hold, the " +
-		"questions waiting on your answer with the call that answers each, " +
-		"the checklist items you claimed on other people's tasks, what you " +
-		"were brought onto, what moved on what you follow, and what just " +
-		"became workable. Call this first. Each block carries its newest " +
-		"rows only: a block named under `truncated` holds more than it " +
-		"shows, and `" + tracker.ListWorkItemsTool + "` is what lists the " +
-		"rest with a filter of your own."
+	return fmt.Sprintf("Everything you are expected to look at, in one call: your "+
+		"priorities in the order somebody put them, the work you hold, the "+
+		"questions waiting on your answer with the call that answers each, "+
+		"the checklist items you claimed on other people's tasks, what you "+
+		"were brought onto, what moved on what you follow, and what just "+
+		"became workable. Call this first. Each block carries at most %d "+
+		"rows: a block named under `truncated` holds more, and `rest` gives "+
+		"`%s` arguments that list every row of it — for some blocks beside "+
+		"rows the block leaves out, such as your own work among what you "+
+		"watch. A question's `body` is its opening, ending in `…` where it "+
+		"was cut; `%s` with its `key` as `item` and its `comment` as "+
+		"`comment` reads it whole.",
+		tracker.MyWorkRows, tracker.ListWorkItemsTool, GetWorkItemTool)
 }
 
 func (t *myWork) Parameters() map[string]any {
@@ -254,5 +262,89 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return failed(readFailure(tracker.MyWorkTool, err)), nil
 	}
-	return jsonResult(out)
+	return jsonResult(myWorkResult{MyWork: out, Rest: myWorkRest(actor.Handle, out.Truncated)})
+}
+
+// myWorkResult is `my_work` as this tool answers it: the tracker's own answer,
+// plus where the rest of each cut block is.
+type myWorkResult struct {
+	tracker.MyWork
+
+	// Rest is, for each block [tracker.MyWork.Truncated] names, the
+	// `list_work_items` arguments whose answer holds every row of it. See
+	// [myWorkRest].
+	Rest map[string]map[string]any `json:"rest,omitempty"`
+}
+
+// myWorkRest names, for each cut block, `list_work_items` arguments whose
+// answer holds every row the block cut.
+//
+// A CUT BLOCK NAMES ITS REST OR IT IS A SILENT ONE. Each block stops at
+// [tracker.MyWorkRows] and says so under `truncated`; without a way to reach
+// the rows past it, a seat holding thirty questions reads the twenty it was
+// shown as its queue.
+//
+// THE LIST ANSWERS TASKS, so for the questions and the checklist claims it
+// names the tasks that hold them, and `get_work_item` opens each.
+//
+// A SUPERSET WHERE THE LIST CANNOT NARROW AS FAR. The collaborations and the
+// watches leave out the seat's own work, the watches leave out the muted ones,
+// the claims leave out the items already done, and the unblocked work needs a
+// dependency that was CLEARED where `has_dependencies` takes any. The list has
+// a key for none of those, so for those blocks its answer holds rows the
+// block does not — and every row it does.
+//
+// EVERY ENTRY CARRIES `archived: true`, because no block reads the archive —
+// neither a task's own flag nor its project's — and the list leaves both out
+// unless asked. Without it an open task the seat holds in an archived project,
+// or a watched one somebody archived, can sit past a block's cut and be listed
+// by no `rest` at all.
+//
+// `open_only: false` is there wherever the block does not stop at open work:
+// an open question can sit on a finished task, the claims include finished
+// tasks, and a watch outlives the work finishing.
+//
+// Where the list can page in the block's own order, the arguments ask for it:
+// a `sort` for the blocks ordered by priority or by the last change, and the
+// priorities preset, which keeps the stored order itself. The questions are
+// ordered by when each was asked and the claims by their task's key, and the
+// list sorts on neither.
+//
+// THE HANDLE IS THE SEAT'S OWN, from the same actor the answer was read for —
+// never an argument, for the reason [myWork.CallForTurn] gives.
+func myWorkRest(handle string, cut tracker.MyWorkTruncated) map[string]map[string]any {
+	blocks := []struct {
+		cut  bool
+		name string
+		args map[string]any
+	}{
+		{cut.Priorities, "priorities", map[string]any{"preset": tracker.PresetPriorities}},
+		{cut.Assigned, "assigned", map[string]any{
+			"assignee": handle, "sort": "-priority,due"}},
+		{cut.AskedOfMe, "asked_of_me", map[string]any{
+			"asked_of": handle, "open_only": false}},
+		{cut.ChecklistItems, "checklist_items", map[string]any{
+			"checklist_assignee": handle, "open_only": false}},
+		{cut.Collaborating, "collaborating", map[string]any{
+			"collaborator": handle, "sort": "-updated"}},
+		{cut.WatchingRecent, "watching_recent", map[string]any{
+			"watcher": handle, "open_only": false, "sort": "-updated"}},
+		{cut.UnblockedRecent, "unblocked_recent", map[string]any{
+			"assignee": handle, "has_dependencies": true, "blocked": false,
+			"sort": "-updated"}},
+	}
+	var rest map[string]map[string]any
+	for _, block := range blocks {
+		if !block.cut {
+			continue
+		}
+		if rest == nil {
+			rest = map[string]map[string]any{}
+		}
+		// HERE RATHER THAN IN EACH LITERAL, because it is true of every
+		// block and a block added without it is the silent cut again.
+		block.args["archived"] = true
+		rest[block.name] = block.args
+	}
+	return rest
 }

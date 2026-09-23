@@ -581,7 +581,7 @@ func (s Sources) phaseHistory(ctx context.Context, seat, role string,
 	if s.Events == nil {
 		return []store.EventRecord{}, nil
 	}
-	records, err := s.Events.AgentPhases(ctx, s.agentIDOf(seat), role, before)
+	records, more, err := s.Events.AgentPhases(ctx, s.agentIDOf(seat), role, before)
 	if err != nil {
 		log.WarnContext(ctx, "agent_history_unavailable", "seat", seat, "error", err)
 		return []store.EventRecord{}, nil
@@ -596,9 +596,10 @@ func (s Sources) phaseHistory(ctx context.Context, seat, role string,
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
 	// from a rendered timestamp would lose the sub-second precision the
 	// tiebreak depends on. IN THE SHAPE THIS QUESTION READS, so it goes back
-	// as it came. Offered only on a FULL page — a short one is the end of the
-	// record, and a cursor there would page for ever.
-	if len(records) < store.AgentPhaseLimit {
+	// as it came. Offered only when the store READ a row past this page —
+	// not when the page merely filled, which a seat with exactly a page of
+	// history also does, and a cursor there leads to an empty page.
+	if !more {
 		return records, nil
 	}
 	return records, cursorOf(records)

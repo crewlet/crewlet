@@ -1,9 +1,11 @@
 package sandbox
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -12,6 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // CoordStore is the pending-run store, on the FLEET's coordination store.
@@ -43,13 +47,22 @@ import (
 // caller that loses re-reads, which is what makes the SECOND writer see the
 // first one's decision instead of overwriting it.
 type CoordStore struct {
-	runs coord.SandboxRuns
-	now  func() time.Time
+	runs  coord.SandboxRuns
+	calls coord.BridgeCalls
+	now   func() time.Time
 }
 
-// NewCoordStore wraps the fleet's run records.
-func NewCoordStore(runs coord.SandboxRuns) *CoordStore {
-	return &CoordStore{runs: runs}
+// RunRecords is the slice of the fleet's coordination store a [CoordStore]
+// reads and writes: the run records, and the log of the calls a bridged run
+// makes. Declared here, by the consumer.
+type RunRecords interface {
+	coord.SandboxRuns
+	coord.BridgeCalls
+}
+
+// NewCoordStore wraps the fleet's run records and bridged-call log.
+func NewCoordStore(records RunRecords) *CoordStore {
+	return &CoordStore{runs: records, calls: records}
 }
 
 var _ PendingStore = (*CoordStore)(nil)
@@ -109,10 +122,12 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// or a redelivered kick-off. Only the LAUNCH-SCOPED state is reset: the
 	// identity fields stay the existing row's, and so does the box
 	// reference, which the caller is about to reattach to.
-	_, _, err = s.mutate(ctx, run.TurnID, func(existing *PendingRun) bool {
+	var replaced string
+	_, reset, err := s.mutate(ctx, run.TurnID, func(existing *PendingRun) bool {
 		if outranked(*existing, fence) {
 			return false
 		}
+		replaced = existing.LaunchID
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		// The previous job's suspension is not this job's. Left in place
@@ -125,14 +140,16 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// reply arriving now belongs to the new job, not the old one.
 		existing.Question, existing.Audience = "", ""
 		// NOR ARE THE PREVIOUS JOB'S TOOL CALLS THIS JOB'S. The bridged
-		// log is what an agent-mode resume rebuilds its phase from (all it
-		// has, though not always every call — see [MaxBridgeCalls]),
-		// and a second executor round under the same turn id — what
-		// a reviewer's self_iterate produces — would otherwise replay the
+		// log is what an agent-mode resume rebuilds its phase from, and a
+		// second executor round under the same turn id — what a
+		// reviewer's self_iterate produces — would otherwise replay the
 		// FIRST round's submit_work: a round that in fact submitted
 		// nothing would report the previous round's outcome instead of
 		// being rescued, and its deliveries would satisfy this round's
-		// delivery check.
+		// delivery check. The per-call records are keyed by launch, so
+		// the new launch id is already a new, empty log; the row's list
+		// is older builds' view of the same thing and is cleared for
+		// them.
 		existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
 		// AND THE PREVIOUS JOB'S CHARGE IS NOT THIS JOB'S. Carried over,
 		// it would tell this job's completion that its spend is already
@@ -140,7 +157,16 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.Charged = false
 		return true
 	})
-	return err
+	if err != nil || !reset || replaced == "" {
+		return err
+	}
+	// The replaced launch's calls are read by nothing now: every reader
+	// asks for the run's CURRENT launch. Purged here rather than left for
+	// the sweep so a relaunching turn does not carry its previous rounds
+	// until it finishes; a purge that fails costs only that wait, since
+	// the sweep purges every launch no run names.
+	s.purgeCalls(ctx, run.TurnID, replaced)
+	return nil
 }
 
 // Get returns one run by turn id.
@@ -305,36 +331,446 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 
 // AppendBridgeCall records one tool call a bridged run made.
 //
+// THE RECORD FIRST, AND IT IS THE CALL. The call is filed as its own record
+// under the launch the run's row names at this moment, and once that lands
+// the append has succeeded: every reader in this build reads the records.
+// Only then is the row's bounded list written, for older builds that read
+// nothing else (see [MaxBridgeCalls]). A failure there is logged and
+// swallowed, because the call is already recorded everywhere this build looks,
+// and failing the append would tell the bridge it was not. A record
+// that fails to land is an error, and the row is then left alone, so the list
+// never holds a call the records do not: that is what lets a reader tell a
+// launch an older build recorded (no records at all) from one this build did.
+//
 // NO FENCE, and that is deliberate. Every other mutation here is an ownership
 // decision — a claim, a status flip, a pause — and a node whose lease has
 // moved must not make one. This is a LOG APPEND: the call already ran and its
 // effect already happened, and refusing to record it because the seat moved
-// mid-run would lose evidence of something that is true either way. The row's
-// own version still guards the write, so two concurrent appends serialise
-// rather than clobbering each other.
+// mid-run would lose evidence of something that is true either way.
 //
 // A run whose row is gone is not an error: the run ended while a late call was
 // in flight, which is the ordinary shape of a box shutting down. The append is
 // simply dropped, and the caller — which must not fail the box's call over
-// telemetry — treats false the same as true.
+// telemetry — treats false the same as true. A late call that read the row a
+// moment before the run ended can still land a record under a launch nothing
+// reads any more; [CoordStore.SweepBridgeCalls] is what purges it.
 func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, call BridgeCall) (bool, error) {
 	if call.At.IsZero() {
 		call.At = s.clock()
 	}
-	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		run.BridgeCalls, run.BridgeCallsElided = appendBounded(
-			run.BridgeCalls, run.BridgeCallsElided, call)
+	run, _, found, err := s.read(ctx, turnID)
+	if err != nil || !found {
+		return false, err
+	}
+	if run.LaunchID == "" {
+		// Every launch this build begins names itself, and only the
+		// build that began a launch serves its bridge — so a row with no
+		// launch is one this build did not launch and has no key to file
+		// a call under. Said rather than filed somewhere a resume would
+		// never look.
+		return false, fmt.Errorf("sandbox: run %s names no launch, so its bridged call %q has "+
+			"no log to be recorded in", turnID, call.Name)
+	}
+	fitted, raw, cut, err := fitBridgeCall(call)
+	if err != nil {
+		return false, fmt.Errorf("sandbox: record bridged call %q of run %s: %w", call.Name, turnID, err)
+	}
+	if cut != (bridgeCallCut{}) {
+		log.WarnContext(ctx, "sandbox_bridge_call_fitted",
+			"turn_id", turnID, "launch_id", run.LaunchID, "tool", call.Name,
+			"output_bytes", cut.outputBytes, "args_bytes", cut.argsBytes,
+			"record_limit_bytes", MaxBridgeCallBytes,
+			"detail", "the call's record could not hold it whole; the coding agent was "+
+				"handed the whole output, and the record keeps what fits, marked")
+	}
+	seq, err := s.calls.AppendBridgeCall(ctx, turnID, run.LaunchID, raw)
+	if err != nil {
+		return false, fmt.Errorf("sandbox: record bridged call %q of run %s: %w", call.Name, turnID, err)
+	}
+	fitted.Seq = seq
+
+	// OLDER BUILDS' VIEW, and conditional on the SAME launch: a relaunch
+	// between the record and this write has a new job on the row, and this
+	// call belongs to the one before it.
+	_, _, viewErr := s.mutate(ctx, turnID, func(latest *PendingRun) bool {
+		if latest.LaunchID != run.LaunchID {
+			return false
+		}
+		latest.BridgeCalls, latest.BridgeCallsElided = appendBounded(
+			latest.BridgeCalls, latest.BridgeCallsElided, fitted)
+		latest.BridgeCalls, latest.BridgeCallsElided = fitRowView(*latest)
 		return true
 	})
-	return won, err
+	if viewErr != nil {
+		log.WarnContext(ctx, "sandbox_bridge_row_view_append_failed",
+			"turn_id", turnID, "launch_id", run.LaunchID, "seq", seq, "tool", call.Name,
+			"error", viewErr.Error(),
+			"detail", "the call is recorded in its own record, which every reader in this "+
+				"build reads; only an older build reading the run's row will not see it")
+	}
+	return true, nil
 }
 
-// appendBounded adds one call and drops from the MIDDLE past the cap.
+// fitBridgeCall encodes a call as its record, fitted to [MaxBridgeCallBytes],
+// and reports what it did not keep whole.
 //
-// The start and the end are what explain a run — how it set about the work and
-// how it finished — so a log truncated to its last N loses the half a reader
-// most often needs. The count of what was dropped rides along on the row; see
-// [MaxBridgeCalls] for which reader shows it and which does not.
+// MEASURED ON THE ENCODED BYTES, not on the output's length: JSON escapes a
+// control character to six bytes, so what a string costs in the record is a
+// property of its bytes rather than of its length. HTML escaping is off, so
+// '<', '>' and '&' — which a tool's output is full of — cost one byte each
+// rather than six; the result is still JSON every decoder reads.
+//
+// THE ARGUMENTS ARE DECIDED FIRST, against an output of nothing but its mark:
+// the most room the output can ever give back. Over the ceiling even then,
+// they are replaced by [ArgsNotKept]; otherwise they stay whole. Deciding them
+// after the output instead would cut the output for room the arguments were
+// about to give back, and a small output — "created 123" beside a nine-megabyte
+// page body — would be lost although the record had room for it.
+//
+// THE OUTPUT IS THEN FIT FROM THE WHOLE OF IT, cut by the encoded excess and
+// re-measured until the record fits. No character encodes to fewer bytes than
+// it has, so cutting the excess from the output removes at least the excess
+// from the record, and what a pass adds back — the mark — is measured by the
+// next. What is left when the output is down to its mark is the tool's name,
+// which is one the seat's surface registered; the last check stays so that
+// the size of what this returns is a guarantee rather than an assumption
+// about names, and it refuses rather than cuts, because a cut name is a
+// different tool.
+func fitBridgeCall(call BridgeCall) (BridgeCall, []byte, bridgeCallCut, error) {
+	raw, err := encodeBridgeCall(call)
+	if err != nil || len(raw) <= MaxBridgeCallBytes {
+		return call, raw, bridgeCallCut{}, err
+	}
+	var cut bridgeCallCut
+	whole := call.Output
+	if call.Args != "" {
+		probe := call
+		if probe.Output != "" {
+			probe.Output = bridgeCallCutMarker
+		}
+		least, err := encodeBridgeCall(probe)
+		if err != nil {
+			return BridgeCall{}, nil, bridgeCallCut{}, err
+		}
+		if len(least) > MaxBridgeCallBytes {
+			cut.argsBytes = len(call.Args)
+			call.Args = ArgsNotKept(len(call.Args))
+			if raw, err = encodeBridgeCall(call); err != nil {
+				return BridgeCall{}, nil, bridgeCallCut{}, err
+			}
+		}
+	}
+	for len(raw) > MaxBridgeCallBytes && call.Output != "" && call.Output != bridgeCallCutMarker {
+		over := len(raw) - MaxBridgeCallBytes
+		call.Output = textcut.Within(call.Output, len(call.Output)-over)
+		cut.outputBytes = len(whole)
+		if raw, err = encodeBridgeCall(call); err != nil {
+			return BridgeCall{}, nil, bridgeCallCut{}, err
+		}
+	}
+	if len(raw) > MaxBridgeCallBytes {
+		return BridgeCall{}, nil, bridgeCallCut{}, fmt.Errorf("the call is %d bytes as a record with "+
+			"its output and arguments set aside, past the %d-byte ceiling one record may hold",
+			len(raw), MaxBridgeCallBytes)
+	}
+	return call, raw, cut, nil
+}
+
+// bridgeCallCut is what [fitBridgeCall] did not keep whole: the whole length
+// of an output it cut and of arguments it replaced, zero for each it kept.
+// For the log line that says so; the record's own fields carry the marks.
+type bridgeCallCut struct{ outputBytes, argsBytes int }
+
+// bridgeCallCutMarker is what [textcut.Within] ends a cut output with.
+const bridgeCallCutMarker = "…"
+
+func encodeBridgeCall(call BridgeCall) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(call); err != nil {
+		return nil, fmt.Errorf("encode the call: %w", err)
+	}
+	// The encoder ends every value with a newline, which is not part of it.
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+// BridgeCalls returns the run's current launch's log. See the contract on
+// [PendingStore].
+func (s *CoordStore) BridgeCalls(ctx context.Context, run PendingRun) (BridgeLog, error) {
+	if run.LaunchID == "" {
+		// A launch no build of this one began: whatever was recorded of
+		// it is on the row.
+		return rowLog(run), nil
+	}
+	records, err := s.calls.BridgeCalls(ctx, run.TurnID, run.LaunchID)
+	if err != nil {
+		return BridgeLog{}, fmt.Errorf("sandbox: read the bridged calls of run %s: %w", run.TurnID, err)
+	}
+	if len(records) == 0 {
+		// NO RECORDS IS AN OLDER BUILD'S LAUNCH, or a launch that made no
+		// calls — and the row answers both: this build never writes the
+		// row's list without the record, so a list here is one only the
+		// row ever held.
+		return rowLog(run), nil
+	}
+	calls, err := decodeBridgeCalls(records)
+	if err != nil {
+		return BridgeLog{}, err
+	}
+	return BridgeLog{Calls: calls}, nil
+}
+
+// rowLog is the log an older build kept on the run's row: the list, and the
+// calls it dropped from between the list's two halves.
+//
+// The place is [appendBounded]'s rule, which the older builds' own is the
+// same as: the first MaxBridgeCalls/2 calls are kept, and a drop is always
+// after them.
+func rowLog(run PendingRun) BridgeLog {
+	log := BridgeLog{Calls: slices.Clone(run.BridgeCalls), Dropped: run.BridgeCallsElided}
+	if log.Dropped > 0 {
+		log.DroppedAfter = min(len(log.Calls), MaxBridgeCalls/2)
+	}
+	return log
+}
+
+// BridgeCallPage returns one page of the log [CoordStore.BridgeCalls] reads.
+// See the contract on [PendingStore].
+func (s *CoordStore) BridgeCallPage(ctx context.Context, run PendingRun, after uint64, limit int) (BridgeCallPage, error) {
+	if limit < 1 {
+		return BridgeCallPage{}, fmt.Errorf("sandbox: a page of bridged calls needs a limit of at least one, got %d", limit)
+	}
+	if run.LaunchID != "" {
+		page, found, err := s.recordPage(ctx, run, after, limit)
+		if err != nil || found {
+			return page, err
+		}
+	}
+	// The row's list, for a launch an older build recorded. It numbers
+	// nothing, so its cursor is a POSITION in the list, counted from 1 the
+	// way a Seq is — and the whole list is one row, so this is paging what
+	// is already in hand rather than bounding a read.
+	calls := run.BridgeCalls
+	out := BridgeCallPage{Calls: []BridgeCall{}, Total: len(calls), Dropped: run.BridgeCallsElided}
+	if after >= uint64(len(calls)) {
+		return out, nil
+	}
+	stop := min(len(calls), int(after)+limit)
+	out.Calls = slices.Clone(calls[after:stop])
+	if stop < len(calls) {
+		out.Next = uint64(stop)
+		if after == 0 {
+			from := max(stop, len(calls)-limit)
+			out.End = slices.Clone(calls[from:])
+			out.Between = from - stop
+		}
+	}
+	return out, nil
+}
+
+// recordPage is [CoordStore.BridgeCallPage] over the per-call records,
+// reporting false when the launch has none — the row then answers.
+func (s *CoordStore) recordPage(ctx context.Context, run PendingRun, after uint64, limit int) (BridgeCallPage, bool, error) {
+	q := coord.BridgeCallQuery{
+		TurnID: run.TurnID, LaunchID: run.LaunchID,
+		After: after, Limit: limit, MaxBytes: BridgeCallPageBytes,
+	}
+	page, err := s.calls.BridgeCallPage(ctx, q)
+	if err != nil {
+		return BridgeCallPage{}, false, fmt.Errorf("sandbox: read the bridged calls of run %s: %w", run.TurnID, err)
+	}
+	if page.Total == 0 {
+		return BridgeCallPage{}, false, nil
+	}
+	out := BridgeCallPage{Total: page.Total}
+	if out.Calls, err = decodeBridgeCalls(page.Calls); err != nil {
+		return BridgeCallPage{}, false, err
+	}
+	if !page.More || len(out.Calls) == 0 {
+		return out, true, nil
+	}
+	out.Next = out.Calls[len(out.Calls)-1].Seq
+	if after != 0 {
+		return out, true, nil
+	}
+	// THE END OF THE LOG, on the first page that does not reach it: the
+	// newest calls past this page, read back from the newest.
+	q.After, q.Last = out.Next, true
+	end, err := s.calls.BridgeCallPage(ctx, q)
+	if err != nil {
+		return BridgeCallPage{}, false, fmt.Errorf("sandbox: read the bridged calls of run %s: %w", run.TurnID, err)
+	}
+	if out.End, err = decodeBridgeCalls(end.Calls); err != nil {
+		return BridgeCallPage{}, false, err
+	}
+	if end.More {
+		// Counted off the end read's own total, which is the later of
+		// the two: a call that landed between the reads is newer than
+		// the page, so it is in End or between, never in Calls.
+		out.Between = max(0, end.Total-len(out.Calls)-len(out.End))
+	}
+	return out, true, nil
+}
+
+func decodeBridgeCalls(records []coord.BridgeCallRecord) ([]BridgeCall, error) {
+	out := make([]BridgeCall, 0, len(records))
+	for _, record := range records {
+		call, err := decodeBridgeCall(record)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, call)
+	}
+	return out, nil
+}
+
+func decodeBridgeCall(record coord.BridgeCallRecord) (BridgeCall, error) {
+	var call BridgeCall
+	if err := json.Unmarshal(record.Value, &call); err != nil {
+		// RAISED, never skipped: a call the resume cannot read is a call
+		// the delivery check cannot count.
+		return BridgeCall{}, fmt.Errorf("sandbox: decode bridged call %d of run %s: %w",
+			record.Seq, record.TurnID, err)
+	}
+	// The KEY is the call's place, not anything the value says.
+	call.Seq = record.Seq
+	return call, nil
+}
+
+// SweepBridgeCalls purges the call log of every launch no run names, and
+// reports how many launches it purged.
+//
+// What the lifecycle's own purges can miss: a run finished on a node that died
+// before its purge, a purge that failed, a late call that landed after one, a
+// run an older build finished (it knows nothing of the records). Each leaves
+// records under a launch no reader will ever ask for.
+//
+// THE LAUNCHES ARE LISTED BEFORE THE RUNS, and the order is the whole of its
+// safety. A launch's first record is filed only after its row names it, so a
+// launch listed first was on a row before the listing — and if the rows read
+// afterwards no longer name it, it has been replaced or finished, and nothing
+// will read its calls again. Read the other way round, a launch begun between
+// the two reads would be listed with no row to vouch for it, and a live run's
+// log would be purged under it.
+func (s *CoordStore) SweepBridgeCalls(ctx context.Context) (int64, error) {
+	launches, err := s.calls.BridgeLaunches(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("sandbox: list the bridged-call launches: %w", err)
+	}
+	if len(launches) == 0 {
+		return 0, nil
+	}
+	runs, err := s.list(ctx, func(PendingRun) bool { return true })
+	if err != nil {
+		return 0, err
+	}
+	live := make(map[coord.BridgeLaunch]bool, len(runs))
+	for _, run := range runs {
+		live[coord.BridgeLaunch{TurnID: run.TurnID, LaunchID: run.LaunchID}] = true
+	}
+	var purged int64
+	var errs []error
+	for _, launch := range launches {
+		if live[launch] {
+			continue
+		}
+		if err := s.calls.PurgeBridgeCalls(ctx, launch.TurnID, launch.LaunchID); err != nil {
+			errs = append(errs, fmt.Errorf("purge the calls of run %s launch %s: %w",
+				launch.TurnID, launch.LaunchID, err))
+			continue
+		}
+		purged++
+	}
+	return purged, errors.Join(errs...)
+}
+
+// purgeCalls purges one launch's calls on the lifecycle's own path, where a
+// failure is a wait for the sweep rather than an error for the caller.
+func (s *CoordStore) purgeCalls(ctx context.Context, turnID, launchID string) {
+	if launchID == "" {
+		return
+	}
+	// WITHOUT CANCEL, like every teardown: the caller's context may be the
+	// very thing that is ending, and a purge that inherits it does nothing.
+	if err := s.calls.PurgeBridgeCalls(context.WithoutCancel(ctx), turnID, launchID); err != nil {
+		log.WarnContext(ctx, "sandbox_bridge_calls_purge_failed",
+			"turn_id", turnID, "launch_id", launchID, "error", err.Error(),
+			"detail", "the maintenance sweep purges the calls of every launch no run names")
+	}
+}
+
+// rowViewBytes bounds what the run's row may weigh, encoded, once older builds'
+// view of its calls is on it.
+//
+// HALF THE TRANSPORT'S CEILING ([queue.MaxPayloadBytes]), and the other half is
+// the point. The row is one message, rewritten whole by every mutation, and the
+// mutations that matter are the lifecycle's own — the claim that resumes the
+// run, the park on a person's question, the release a failed resume hands back.
+// A row the view had filled to the ceiling refuses every one of them, for every
+// build: a run no node can claim or finish, beside a billed box nobody
+// reclaims. So the view is kept to half, and the fields the lifecycle writes —
+// a question, a branch, a suspended conversation — keep the rest.
+const rowViewBytes = queue.MaxPayloadBytes / 2
+
+// rowViewFraming is what the view's two fields cost around their contents on
+// the encoded row: two keys, the list's brackets and a count, a few dozen
+// bytes, which this covers with room.
+const rowViewFraming = 128
+
+// fitRowView keeps a row's list of calls within [rowViewBytes], dropping from
+// the MIDDLE and counting what it drops, as [appendBounded] does for the count.
+//
+// Each entry is measured once, by the encoder that writes the row, so one
+// pass decides the whole cut. Two calls left over the budget keep the newer,
+// because a run ends by submitting and the submission is what an older
+// build's resume replays; a lone call heavier than the budget is dropped and
+// counted too.
+func fitRowView(run PendingRun) ([]BridgeCall, int) {
+	calls, elided := run.BridgeCalls, run.BridgeCallsElided
+	bare := run
+	bare.BridgeCalls, bare.BridgeCallsElided = nil, 0
+	base, err := encodeRun(bare)
+	if err != nil {
+		// encodeRun fails only on a value JSON cannot hold, which the
+		// mutation's own encode reports; nothing here can decide by it.
+		return calls, elided
+	}
+	room := rowViewBytes - len(base) - rowViewFraming
+	sizes := make([]int, len(calls))
+	total := 0
+	for i, call := range calls {
+		raw, err := json.Marshal(call)
+		if err != nil {
+			return calls, elided
+		}
+		sizes[i] = len(raw) + len(",")
+		total += sizes[i]
+	}
+	if total <= room {
+		return calls, elided
+	}
+	kept := slices.Clone(calls)
+	for total > room && len(kept) > 0 {
+		drop := len(kept) / 2
+		if len(kept) == 2 {
+			drop = 0
+		}
+		total -= sizes[drop]
+		kept = slices.Delete(kept, drop, drop+1)
+		sizes = slices.Delete(sizes, drop, drop+1)
+		elided++
+	}
+	return kept, elided
+}
+
+// appendBounded adds one call to the row's list and drops from the MIDDLE past
+// [MaxBridgeCalls].
+//
+// That list is older builds' view (see [MaxBridgeCalls]); the start and the
+// end are what explain a run to them, so a list truncated to its last N would
+// lose the half a reader most often needs. The count of what was dropped rides
+// along on the row.
 func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int) {
 	calls = append(calls, next)
 	if len(calls) <= MaxBridgeCalls {
@@ -416,6 +852,10 @@ func (s *CoordStore) Finish(ctx context.Context, turnID string, fence Fence) (bo
 			return false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
 		}
 		if gone {
+			// AFTER the record, never before: a run whose calls went
+			// first would be one a resume could still claim and find
+			// with an empty log.
+			s.purgeCalls(ctx, turnID, run.LaunchID)
 			return true, nil
 		}
 	}

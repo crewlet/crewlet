@@ -242,6 +242,23 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		httpjson.Fail(w, http.StatusConflict, codeNotProvisionable)
 		return
 	}
+	if run == nil && err != nil {
+		// THE PASS NEVER STARTED. [setup.Runner.Execute] refuses a context
+		// that is already done BEFORE it creates a run, so there is no run
+		// to record or to return, and the failure log below reads its id.
+		// With the deadline Hold has only just set that is not expected
+		// here — but it is Execute's own answer, and without this branch it
+		// is a nil dereference. Nothing was observed and nothing was
+		// written at the third-party app, which is what the reply says.
+		log.ErrorContext(r.Context(), "setup_pass_not_started",
+			"integration", kind, "error", err.Error(), "operator", operatorOf(r))
+		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeInternalError,
+			map[string]string{
+				"hint": "the pass's deadline had passed before it started; nothing " +
+					"was done at the third-party app, and re-running is safe",
+			})
+		return
+	}
 
 	// THE STATUS IS WRITTEN WHETHER OR NOT THE PASS SUCCEEDED, through the
 	// fold the loop uses. A pass that failed is a fact about the

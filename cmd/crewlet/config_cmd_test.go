@@ -147,6 +147,41 @@ func TestTheRevisionListingMarksTheActiveOne(t *testing.T) {
 	}
 }
 
+// A LISTING THAT LEFT REVISIONS OUT SAYS SO. A table of exactly `-limit` rows
+// reads the same whether the node holds that many or a thousand, and the
+// operator reading it for the active revision would find no `*` and conclude
+// nothing is running. The line comes from the store's evidence row, so a
+// history that exactly fills the page is not reported as cut.
+func TestTheRevisionListingSaysWhenOlderRevisionsAreNotShown(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	for i, name := range []string{"Nimbus One", "Nimbus Two", "Nimbus Three"} {
+		path := companyFile(t, dir, fmt.Sprintf("c%d.yaml", i), func(doc string) string {
+			return strings.Replace(doc, "name: Nimbus", "name: "+name, 1)
+		})
+		if _, _, err := configCmd(t, cfg, "import", path); err != nil {
+			t.Fatalf("import %s: %v", name, err)
+		}
+	}
+	const note = "older revisions are not listed"
+	for _, tc := range []struct {
+		limit string
+		cut   bool
+	}{
+		{"2", true},
+		{"3", false},
+	} {
+		out, _, err := configCmd(t, cfg, "revisions", "-limit", tc.limit)
+		if err != nil {
+			t.Fatalf("revisions -limit %s: %v", tc.limit, err)
+		}
+		if got := strings.Contains(out, note); got != tc.cut {
+			t.Errorf("-limit %s over three revisions: says older ones are not "+
+				"listed = %t, want %t:\n%s", tc.limit, got, tc.cut, out)
+		}
+	}
+}
+
 // A DIFF IS ALWAYS REDACTED, with no flag to turn it off: a diff is what an
 // operator pastes into a ticket to ask whether a change looks right, and
 // that is the single most likely way a credential leaves the machine.

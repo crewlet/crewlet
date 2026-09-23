@@ -48,10 +48,10 @@ type (
 		MarkUsed(ctx context.Context, skillID string, at time.Time) learning.Use
 	}
 
-	// EpisodeStore is the per-turn memory half.
+	// EpisodeStore is the per-turn memory half: one page of a seat's
+	// episodes, filtered in the store before its limit.
 	EpisodeStore interface {
-		Recent(ctx context.Context, handle string, limit int) ([]learning.Episode, error)
-		ForConversation(ctx context.Context, handle, conversation string, limit int) ([]learning.Episode, error)
+		List(ctx context.Context, q learning.EpisodeQuery) (learning.EpisodePage, error)
 	}
 
 	// DiaryStore is the durable-notes half.
@@ -208,8 +208,8 @@ type queryEpisodes struct {
 
 	// recall is the turn-start prefetch's own similarity search, re-run on
 	// demand.
-	// Nil leaves the tool on the recency and conversation paths, which is
-	// what a company with no embeddings has.
+	// Nil leaves the tool on the listing path, which is what a company
+	// with no embeddings has.
 	recall Recaller
 
 	// limit is the company's configured default hit count. Bounded by
@@ -227,9 +227,10 @@ func (t *queryEpisodes) Description() string {
 		"did, how it went. Pass `query` to search by MEANING once you know " +
 		"what this task actually involves; that is the one to use after " +
 		"recon on a thin trigger, when the block at the top of your prompt " +
-		"said it found nothing. Pass `conversation` to narrow to one thread, " +
-		"issue or pull request instead. With neither, you get your most " +
-		"recent turns."
+		"said it found nothing. Without it you get your most recent turns. " +
+		"`conversation` and `outcome_filter` narrow either kind of answer. " +
+		"An answer that is not every matching turn says so, and names the " +
+		"`offset` that reads on."
 }
 
 func (t *queryEpisodes) Parameters() map[string]any {
@@ -248,16 +249,23 @@ func (t *queryEpisodes) Parameters() map[string]any {
 			},
 			"outcome_filter": map[string]any{
 				"type": "string",
+				"enum": toAny(learning.SettledOutcomes()),
 				"description": "Optional: keep only turns that ended this " +
-					"way — done or failed. Those are the only two a turn " +
-					"is remembered for: a turn that looped back on itself " +
-					"is remembered as its own reattempt, and one where " +
-					"nobody was asking writes no episode at all",
+					"way. Those are the only outcomes a turn is remembered " +
+					"with: a turn that looped back on itself is remembered " +
+					"as its own reattempt, and one where nobody was asking " +
+					"writes no episode at all",
 			},
 			"limit": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf("How many turns to recall (default %d, max %d)",
 					t.defaultLimit(), maxEpisodeLimit),
+			},
+			"offset": map[string]any{
+				"type": "integer",
+				"description": "How many matching turns to skip, in the " +
+					"answer's own order. An answer that did not list them all " +
+					"names the offset to pass for the rest.",
 			},
 		},
 	}
@@ -276,19 +284,28 @@ func (t *queryEpisodes) defaultLimit() int {
 // The REFUSAL is a message rather than an empty answer: "nothing resembles
 // this" and "this deployment cannot search by meaning" send a model to
 // opposite places, and the second one has a fallback it can still use.
-func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query string, limit int) ([]learning.Episode, error) {
+//
+// ONE HIT PAST THE PAGE IS ASKED FOR, as evidence that the ranking goes on,
+// and never shown — see [learning.EpisodePage.Truncated].
+func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query string,
+	filter learning.EpisodeFilter, offset, limit int,
+) (learning.EpisodePage, error) {
 	if t.recall == nil {
-		return nil, errNoSimilarity
+		return learning.EpisodePage{}, errNoSimilarity
 	}
-	hits, err := t.recall.RecallEpisodes(ctx, turn.Seat, query, limit)
+	hits, err := t.recall.RecallEpisodes(ctx, turn.Seat, query, filter, offset, limit+1)
 	if err != nil {
-		return nil, err
+		return learning.EpisodePage{}, err
 	}
-	out := make([]learning.Episode, 0, len(hits))
+	found := make([]learning.Episode, 0, len(hits))
 	for _, hit := range hits {
-		out = append(out, hit.Episode)
+		found = append(found, hit.Episode)
 	}
-	return out, nil
+	page := learning.EpisodePage{Episodes: found}
+	if len(found) > limit {
+		page.Episodes, page.Truncated = found[:limit], true
+	}
+	return page, nil
 }
 
 func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -304,58 +321,111 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return failed("Episode memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", t.defaultLimit()), 1, maxEpisodeLimit)
-	outcome := strings.TrimSpace(argString(args, "outcome_filter"))
+	offset := max(argInt(args, "offset", 0), 0)
+	// NORMALISED AND CHECKED HERE, because the store compares exactly and
+	// an outcome no episode is written with would otherwise be answered
+	// with "none of your turns ended that way" — true, and useless to a
+	// model that capitalised a word or guessed one.
+	outcome := strings.ToLower(strings.TrimSpace(argString(args, "outcome_filter")))
+	if outcome != "" && !learning.Settled(outcome) {
+		return failed(fmt.Sprintf("`outcome_filter` is one of %s — a turn is "+
+			"remembered with no other outcome — and %q is none of them.",
+			strings.Join(learning.SettledOutcomes(), ", "), clip(outcome))), nil
+	}
+	filter := learning.EpisodeFilter{
+		Conversation: strings.TrimSpace(argString(args, "conversation")),
+		Outcome:      outcome,
+	}
 
 	var (
-		found []learning.Episode
+		page  learning.EpisodePage
 		err   error
 		scope string
+		order string
 	)
-	switch query := strings.TrimSpace(argString(args, "query")); {
-	case query != "":
-		// OVER-FETCHED when an outcome filter is set, because the search
-		// ranks by similarity and the filter is applied to what came
-		// back: asking for five and keeping only the failures would
-		// otherwise return one. Bounded, so a filter that matches
-		// nothing costs one wider search rather than the whole history.
-		want := limit
-		if outcome != "" {
-			want = clampInt(limit*outcomeOverfetch, 1, maxEpisodeLimit)
-		}
-		found, err = t.similar(ctx, turn, query, want)
-		scope = fmt.Sprintf(" like %s", clip(query))
-	case argString(args, "conversation") != "":
-		conversation := strings.TrimSpace(argString(args, "conversation"))
-		found, err = t.episodes.ForConversation(ctx, handle, conversation, limit)
-		scope = fmt.Sprintf(" in %s", clip(conversation))
-	default:
-		found, err = t.episodes.Recent(ctx, handle, limit)
+	query := strings.TrimSpace(argString(args, "query"))
+	if query != "" {
+		page, err = t.similar(ctx, turn, query, filter, offset, limit)
+		scope, order = fmt.Sprintf(" like %s", clip(query)), "nearest first"
+	} else {
+		page, err = t.episodes.List(ctx, learning.EpisodeQuery{
+			Handle: handle, Filter: filter, Offset: offset, Limit: limit,
+		})
+		order = "newest first"
 	}
 	if err != nil {
 		return failed(fmt.Sprintf("Could not recall your turns: %v", err)), nil
 	}
-	if outcome != "" {
-		found = keepOutcome(found, outcome, limit)
-		scope += fmt.Sprintf(" that ended %s", clip(outcome))
+	if filter.Conversation != "" {
+		scope += fmt.Sprintf(" in %s", clip(filter.Conversation))
 	}
-	if len(found) == 0 {
-		return tools.Result{Output: fmt.Sprintf(
-			"No earlier turns of yours%s. This is new work.", scope)}, nil
+	if filter.Outcome != "" {
+		scope += fmt.Sprintf(" that ended %s", filter.Outcome)
 	}
+	return renderEpisodes(page, scope, order, offset), nil
+}
 
+// renderEpisodes prints one page of recalled turns.
+//
+// A PAGE THAT IS NOT EVERY MATCHING TURN SAYS SO, and names the offset that
+// reads on — the page came back with one row past it as evidence (see
+// [learning.EpisodePage.Truncated]), so the sentence is only ever said when a
+// further turn exists. Without it a seat holding more matching turns than one
+// page reads the page as its whole history, and concludes it has never done
+// what it did the turn before the page began.
+func renderEpisodes(page learning.EpisodePage, scope, order string, offset int) tools.Result {
+	if len(page.Episodes) == 0 {
+		if offset > 0 {
+			return tools.Result{Output: fmt.Sprintf(
+				"No more recorded turns of yours%s from offset %d on.", scope, offset)}
+		}
+		return tools.Result{Output: fmt.Sprintf("No recorded turns of yours%s.", scope)}
+	}
+	end := offset + len(page.Episodes)
 	var b strings.Builder
-	fmt.Fprintf(&b, "Your %d most recent turns%s:\n\n", len(found), scope)
-	for _, ep := range found {
-		fmt.Fprintf(&b, "- %s", ep.StartedAt.Format(time.RFC3339))
-		if ep.TaskSummary != "" {
-			fmt.Fprintf(&b, " — %s", ep.TaskSummary)
+	if offset == 0 && !page.Truncated {
+		fmt.Fprintf(&b, "Your %d recorded turns%s, %s:\n\n", len(page.Episodes), scope, order)
+	} else {
+		fmt.Fprintf(&b, "Your recorded turns%s, %s, %d to %d:\n\n", scope, order, offset+1, end)
+	}
+	for _, ep := range page.Episodes {
+		renderEpisode(&b, ep)
+	}
+	if page.Truncated {
+		fmt.Fprintf(&b, "\nMore of your turns match. Call %s again with the same "+
+			"arguments and offset %d to read them.", QueryEpisodesTool, end)
+	}
+	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}
+}
+
+// renderEpisode prints one episode as a bullet.
+//
+// A COMPACTED ROW IS NOT A TURN, and it is printed as what it is: the pattern
+// the lifecycle wrote when it folded that many of the seat's turns together.
+// It has no task summary — the fold leaves the turn-shaped columns empty — so
+// printed as a turn it read as a timestamp that said nothing, which is the one
+// record left of those turns reading as none.
+func renderEpisode(b *strings.Builder, ep learning.Episode) {
+	fmt.Fprintf(b, "- %s", ep.StartedAt.Format(time.RFC3339))
+	switch {
+	case ep.Kind == learning.KindCompacted:
+		fmt.Fprintf(b, " — %d earlier turns folded into one pattern", ep.Count)
+		if ep.CommonTaskPattern != "" {
+			fmt.Fprintf(b, ": %s", ep.CommonTaskPattern)
 		}
 		b.WriteString("\n")
-		if ep.ReviewOutcome != "" {
-			fmt.Fprintf(&b, "    outcome: %s\n", ep.ReviewOutcome)
+		if ep.CommonOutcome != "" {
+			fmt.Fprintf(b, "    how they went: %s\n", ep.CommonOutcome)
 		}
+	default:
+		if ep.TaskSummary != "" {
+			fmt.Fprintf(b, " — %s", ep.TaskSummary)
+		}
+		b.WriteString("\n")
 	}
-	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
+	if ep.ReviewOutcome != "" {
+		fmt.Fprintf(b, "    outcome: %s\n", ep.ReviewOutcome)
+	}
 }
 
 // --- refresh_memory ------------------------------------------------------- //
@@ -594,7 +664,7 @@ func (t *reflectAndPersist) Name() string { return ReflectAndPersistTool }
 
 func (t *reflectAndPersist) Description() string {
 	return "Keep something you learned, so a later turn of yours can read " +
-		"it. Use it for a durable FACT about how this company works — a " +
+		"it. Use it for a FACT about how this company works — a " +
 		"convention, a person's preference, where a thing lives — not for " +
 		"what you did this turn, which is recorded for you. Keep it short: " +
 		"you pay for it in every turn that recalls it."
@@ -611,8 +681,20 @@ func (t *reflectAndPersist) Parameters() map[string]any {
 			"kind": map[string]any{
 				"type": "string",
 				"enum": []any{string(learning.DiaryLong), string(learning.DiaryShort)},
-				"description": "`long` for something durable, `short` for " +
-					"something that expires. Defaults to long.",
+				"description": fmt.Sprintf("`%s` for a fact that stays true, "+
+					"`%s` for one that stops being true — a sprint, an "+
+					"incident, someone's leave. Defaults to `%s`, or to `%s` "+
+					"when `ttl_days` is given.",
+					learning.DiaryLong, learning.DiaryShort, learning.DiaryLong,
+					learning.DiaryShort),
+			},
+			"ttl_days": map[string]any{
+				"type": "integer",
+				"description": fmt.Sprintf("How many days the fact stays true, "+
+					"1 to %d; no turn reads the note after that. It makes the "+
+					"note `%s`, and a `%s` note without it gets %d.",
+					learning.ShortTTLMaxDays, learning.DiaryShort,
+					learning.DiaryShort, learning.ShortTTLDefaultDays),
 			},
 		},
 		"required": []any{"content"},
@@ -643,23 +725,82 @@ func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"the knowledge base where colleagues can read it too.",
 			len(content), diaryNoteMax)), nil
 	}
-
-	kind := learning.DiaryKind(strings.TrimSpace(argString(args, "kind")))
-	if kind != learning.DiaryShort {
-		kind = learning.DiaryLong
+	now := time.Now().UTC()
+	kind, deadline, refusal := noteKind(args, now)
+	if refusal != "" {
+		return failed(refusal), nil
 	}
 	entry := learning.DiaryEntry{
 		ID: uuid.NewString(), AgentID: agentID, Kind: kind, Content: content,
+		TTLUntil: deadline,
 		// Attributed to the tool, not to the reflection worker: an
 		// operator reading the diary has to be able to tell what the
 		// agent chose to keep from what a worker decided for it.
 		Source: "tool:" + ReflectAndPersistTool,
-		TurnID: turn.RunID, CreatedAt: time.Now().UTC(),
+		TurnID: turn.RunID, CreatedAt: now,
 	}
 	if err := t.diary.Write(ctx, entry); err != nil {
 		return failed(fmt.Sprintf("Could not keep that note: %v", err)), nil
 	}
-	return tools.Result{Output: "Kept. You will see it in later turns."}, nil
+	// WHAT HAPPENS TO IT, and no more. A kept note is not shown to every
+	// later turn: the turn-start block shows the notes a relevance filter
+	// picks for that turn, and refresh_memory reads any of them back.
+	kept := fmt.Sprintf("Kept. A later turn of yours is shown it at its start "+
+		"when the relevance filter picks it for that turn, and %s reads it "+
+		"back at any time.", RefreshMemoryTool)
+	if !deadline.IsZero() {
+		kept = fmt.Sprintf("Kept until %s; no turn reads it after that. Until "+
+			"then a later turn of yours is shown it at its start when the "+
+			"relevance filter picks it for that turn, and %s reads it back.",
+			deadline.Format(time.DateOnly), RefreshMemoryTool)
+	}
+	return tools.Result{Output: kept}, nil
+}
+
+// noteKind reads which of the diary's two kinds a note is, and the deadline a
+// short one carries — or a refusal naming what to send instead.
+//
+// THE KIND IS REFUSED, NEVER GUESSED. An unknown value used to become a
+// durable note, and the description named values the enum did not: a model
+// that wrote `short`, as it was told to, kept a note that never expired and was
+// told nothing — while one that wrote the enum's own `diary_short` was refused
+// by the store, because the tool gave the note no deadline. So no note could be
+// kept short through this tool at all.
+//
+// A DURATION WITH NO KIND IS A SHORT NOTE: saying how long a fact stays true
+// is saying it stops, and it is how the company's own guidance tells a seat to
+// keep one. A short note with no `ttl_days` takes the default the post-turn
+// writer gives the same tier ([learning.ShortTTLDefaultDays]), and the result
+// names the date it lands on. A duration past [learning.ShortTTLMaxDays], or on
+// a note declared durable, is refused rather than clamped, because the model
+// can choose again and a clamp would keep a note for a different time than
+// the one it asked for.
+func noteKind(args map[string]any, now time.Time) (learning.DiaryKind, time.Time, string) {
+	kind := learning.DiaryKind(strings.TrimSpace(argString(args, "kind")))
+	_, named := args["ttl_days"]
+	if kind == "" && named {
+		kind = learning.DiaryShort
+	}
+	switch kind {
+	case "", learning.DiaryLong:
+		if named {
+			return "", time.Time{}, fmt.Sprintf("`ttl_days` is for a `%s` note, and "+
+				"this one is `%s`, which has no deadline. Drop `ttl_days`, or send "+
+				"`kind: %s` if the fact stops being true.",
+				learning.DiaryShort, learning.DiaryLong, learning.DiaryShort)
+		}
+		return learning.DiaryLong, time.Time{}, ""
+	case learning.DiaryShort:
+		days := argInt(args, "ttl_days", learning.ShortTTLDefaultDays)
+		if days < 1 || days > learning.ShortTTLMaxDays {
+			return "", time.Time{}, fmt.Sprintf("`ttl_days` is 1 to %d, and %d is "+
+				"not. A fact true for longer than that is a `%s` note.",
+				learning.ShortTTLMaxDays, days, learning.DiaryLong)
+		}
+		return learning.DiaryShort, now.Add(time.Duration(days) * 24 * time.Hour), ""
+	}
+	return "", time.Time{}, fmt.Sprintf("`kind` is `%s` or `%s`, and %q is neither.",
+		learning.DiaryLong, learning.DiaryShort, clip(string(kind)))
 }
 
 // --- mark_onboarded ------------------------------------------------------- //
@@ -761,36 +902,7 @@ func clampInt(v, lo, hi int) int { //nolint:unparam // see the doc comment
 	return min(max(v, lo), hi)
 }
 
-// outcomeOverfetch widens a similarity search when an outcome filter is set.
-//
-// Four: the filter is applied to what the search returned, so asking for five
-// and keeping only the failures would routinely return one. Wide enough that a
-// filter matching a quarter of a seat's turns still fills the answer, bounded
-// so one that matches none costs a single wider search rather than a scan.
-const outcomeOverfetch = 4
-
 // errNoSimilarity is what a deployment with no embeddings answers a `query`
 // with. Its own sentinel so the tool can say which of two very different
 // things happened.
 var errNoSimilarity = errors.New("no embeddings are configured on this deployment")
-
-// keepOutcome filters recalled turns by how they ended, preserving order.
-//
-// Case-insensitive on the operator's side of the comparison, because the
-// outcomes are a closed set the model is told about in the parameter
-// description and a model that capitalised one should not silently get an
-// empty answer.
-func keepOutcome(found []learning.Episode, outcome string, limit int) []learning.Episode {
-	want := strings.ToLower(strings.TrimSpace(outcome))
-	out := make([]learning.Episode, 0, min(len(found), limit))
-	for _, ep := range found {
-		if strings.ToLower(ep.ReviewOutcome) != want {
-			continue
-		}
-		out = append(out, ep)
-		if len(out) == limit {
-			break
-		}
-	}
-	return out
-}

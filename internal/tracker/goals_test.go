@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -454,20 +455,18 @@ func TestAGoalSaveNamesTheProjectItStopsCounting(t *testing.T) {
 	}
 }
 
-// AN EVICTED GOAL UPDATE IS REPORTED, never dropped in silence.
+// A GOAL THAT HOLDS ITS CAP OF UPDATES REFUSES THE NEXT ONE, AND DROPS NONE.
 //
-// A goal keeps a rolling window of its updates, which is right — a goal must
-// keep accepting them — but the oldest went with no warning, no history row
-// and no reader, under `outcome: applied`. That is the argument this same
-// function makes twelve lines up against CUTTING an over-long update: "an
-// update is the STORED value rather than a preview of one — there is nowhere
-// to go and read the rest". It applies word for word to the one that falls off
-// the FRONT, and a quarter's worth of a goal's health narrative disappeared.
-func TestAnEvictedGoalUpdateIsReported(t *testing.T) {
+// A goal kept a rolling window: the oldest update went to make room for the
+// newest, with a warning saying it was readable nowhere. An update is the
+// stored value rather than a preview of one, so that is a blind cut of what
+// somebody wrote. The save is refused instead, naming the cap — and the health
+// still moves, because it is the goal's own field rather than an update.
+func TestAFullGoalRefusesAnUpdateAndDropsNone(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	// FILL THE WINDOW EXACTLY, and nothing is evicted.
+	// FILL IT EXACTLY, and that is accepted.
 	fill := aGoal("g-1", func(g *tracker.Goal) {
 		for i := range tracker.MaxGoalUpdates {
 			g.Updates = append(g.Updates, tracker.GoalUpdate{
@@ -476,53 +475,120 @@ func TestAnEvictedGoalUpdateIsReported(t *testing.T) {
 			})
 		}
 	})
-	full, err := r.writer.WriteGoal(t.Context(), "op-fill", fill)
-	if err != nil {
-		t.Fatalf("fill: %v", err)
-	}
-	if len(full.Warnings) != 0 {
-		t.Errorf("a goal filled exactly to the window warns: %v", full.Warnings)
+	if _, err := r.writer.WriteGoal(t.Context(), "op-fill", fill); err != nil {
+		t.Fatalf("a goal filled exactly to its cap was refused: %v", err)
 	}
 	r.drain()
 
-	// ONE MORE, and the oldest goes — which the caller is now told.
+	// ONE MORE IS REFUSED, naming the cap and what to do instead.
 	over := aGoal("g-1", func(g *tracker.Goal) {
+		g.Health = string(tracker.HealthAtRisk)
 		g.Updates = []tracker.GoalUpdate{{
 			Health: string(tracker.HealthAtRisk), Text: "the quarter slipped",
 		}}
 	})
-	got, err := r.writer.WriteGoal(t.Context(), "op-over", over)
-	if err != nil {
-		t.Fatalf("over: %v", err)
+	_, err := r.writer.WriteGoal(t.Context(), "op-over", over)
+	if !errors.Is(err, tracker.ErrGoalUpdatesFull) {
+		t.Fatalf("an update past the cap answered %v, want ErrGoalUpdatesFull "+
+			"— the alternative is an update dropped where nobody can read it", err)
 	}
-	if len(got.Warnings) == 0 {
-		t.Fatal("an update was evicted and the write reported nothing, so a " +
-			"quarter's assessment left with `outcome: applied`")
-	}
-	for _, want := range []string{"dropped", "not", "readable"} {
-		if !strings.Contains(got.Warnings[0], want) {
-			t.Errorf("the warning does not mention %q: %q", want, got.Warnings[0])
+	for _, want := range []string{fmt.Sprint(tracker.MaxGoalUpdates), "health",
+		"nothing was saved"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
 		}
 	}
 	r.drain()
+	updates := r.goals(tracker.GoalQuery{ID: "g-1"}).Goals[0].Updates
+	if len(updates) != tracker.MaxGoalUpdates || updates[0].Text != "week 0" {
+		t.Fatalf("after the refusal the goal holds %d updates starting %q — "+
+			"every one it had, oldest first, is what a refusal leaves",
+			len(updates), updates[0].Text)
+	}
 
-	// AND THE WINDOW HELD: the newest survived and the oldest is gone.
-	listing, err := r.reader.Goals(t.Context(), tracker.GoalQuery{
-		ID: "g-1", Level: statelog.ReadStale,
+	// AND THE HEALTH STILL MOVES, with no update beside it.
+	health := aGoal("g-1", func(g *tracker.Goal) {
+		g.Health = string(tracker.HealthAtRisk)
 	})
-	if err != nil || len(listing.Goals) != 1 {
-		t.Fatalf("read the goal: %v", err)
+	if _, err := r.writer.WriteGoal(t.Context(), "op-health", health); err != nil {
+		t.Fatalf("a health change with no update was refused at the cap: %v", err)
 	}
-	updates := listing.Goals[0].Updates
-	if len(updates) != tracker.MaxGoalUpdates {
-		t.Fatalf("the goal holds %d updates, want the window of %d",
-			len(updates), tracker.MaxGoalUpdates)
+	r.drain()
+	if got := r.goals(tracker.GoalQuery{ID: "g-1"}).Goals[0]; got.Health != tracker.HealthAtRisk ||
+		len(got.Updates) != tracker.MaxGoalUpdates {
+		t.Fatalf("the goal reads health %q with %d updates, want at_risk and "+
+			"all %d", got.Health, len(got.Updates), tracker.MaxGoalUpdates)
 	}
-	if updates[len(updates)-1].Text != "the quarter slipped" {
-		t.Errorf("the newest update is %q", updates[len(updates)-1].Text)
+}
+
+// A GOAL AT EVERY CAP FITS ONE RECORD.
+//
+// A goal is saved whole, updates and all, so [tracker.MaxGoalUpdates] is not a
+// number of its own: it is what is left of [tracker.MaxCommitBytes] once
+// everything else a goal may carry is at its own cap, at the six-fold JSON
+// escaping the task patch's maximum is measured at. A cap past that is a save
+// the writer refuses as oversized with nothing in the refusal about updates.
+// The case runs the maximal SECOND save — the one whose notification carries
+// every delta — through the real writer.
+func TestAGoalAtEveryCapFitsOneRecord(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	escaping := func(n int) string { return strings.Repeat("\x01", n) }
+	targets := make([]tracker.GoalTarget, 0, tracker.MaxGoalTargets)
+	for i := range tracker.MaxGoalTargets {
+		tasks := make([]string, 0, tracker.MaxTasksPerTarget)
+		projects := make([]string, 0, tracker.MaxTasksPerTarget)
+		for j := range tracker.MaxTasksPerTarget {
+			tasks = append(tasks, fmt.Sprintf("%08d-0000-4000-8000-%012d", i, j))
+			projects = append(projects, fmt.Sprintf("P%02dX%04d", i, j))
+		}
+		targets = append(targets, tracker.GoalTarget{
+			ID: fmt.Sprintf("target-%02d", i), Name: escaping(tracker.MaxGoalName),
+			Type: tracker.TargetTasks, Tasks: tasks, Projects: projects,
+		})
 	}
-	if updates[0].Text == "week 0" {
-		t.Error("the oldest update survived, so nothing was actually evicted " +
-			"and the warning describes a drop that did not happen")
+	update := func(label string) tracker.GoalUpdate {
+		return tracker.GoalUpdate{
+			Health: string(tracker.HealthOffTrack),
+			Text:   label + escaping(tracker.MaxGoalUpdateText-len(label)),
+		}
 	}
+	due := wednesday.Add(90 * 24 * time.Hour)
+	first := aGoal("g-max", func(g *tracker.Goal) {
+		g.Name = escaping(tracker.MaxGoalName)
+		g.Description = escaping(tracker.MaxGoalDescription)
+		g.Group = escaping(tracker.MaxGoalGroup)
+		g.Owners = longHandles(tracker.MaxGoalOwners, 64)
+		g.Members = longHandles(tracker.MaxGoalMembers, 64)
+		g.Targets = targets
+		for i := range tracker.MaxGoalUpdates - 1 {
+			g.Updates = append(g.Updates, update(fmt.Sprintf("%d ", i)))
+		}
+	})
+	if _, err := r.writer.WriteGoal(t.Context(), "op-max-1", first); err != nil {
+		t.Fatalf("a goal one update short of every cap was refused: %v", err)
+	}
+	r.drain()
+
+	// EVERY DELTA MOVES, so the notification is as large as a goal's gets.
+	second := first
+	second.Name = "x" + escaping(tracker.MaxGoalName-1)
+	second.Owners = longHandles(tracker.MaxGoalOwners, 63)
+	second.Members = longHandles(tracker.MaxGoalMembers, 63)
+	second.Health = string(tracker.HealthOffTrack)
+	second.StartAt, second.DueAt = &wednesday, &due
+	second.Archived = true
+	second.Updates = []tracker.GoalUpdate{update("last ")}
+	if _, err := r.writer.WriteGoal(t.Context(), "op-max-2", second); err != nil {
+		t.Fatalf("a goal at every cap was refused: %v — MaxGoalUpdates is sized "+
+			"from what MaxCommitBytes leaves, and this is a save the caps "+
+			"promise to accept", err)
+	}
+	r.drain()
+	bytes := r.strings(`SELECT CAST(length(document) AS TEXT) FROM tracker_history
+		WHERE subject_kind = 'goal' AND subject_id = 'g-max'
+		ORDER BY log_seq DESC LIMIT 1`)
+	t.Logf("the maximal goal's document is %s bytes against a %d-byte record",
+		bytes, tracker.MaxCommitBytes)
 }

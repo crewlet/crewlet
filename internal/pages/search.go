@@ -3,12 +3,16 @@ package pages
 import (
 	"cmp"
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Searcher answers the company's knowledge search over its own pages.
@@ -57,6 +61,11 @@ type Searcher struct {
 	// returning every page of the one that is now machinery, for as long
 	// as the process ran.
 	skills func() string
+
+	// db holds the page rows a hit's parent chain is read from, which is
+	// what [knowledge.Query.ExcludeAncestors] is judged against. Nil
+	// reads no chain — see [SearcherOptions.DB].
+	db *store.DB
 }
 
 // SearcherOptions configure a searcher.
@@ -89,11 +98,23 @@ type SearcherOptions struct {
 	// or one returning empty, excludes nothing — which is the company that
 	// has turned tool skills off.
 	SkillsContainer func() string
+
+	// DB is the store whose replicated estate holds `pages_heads`. Each
+	// hit's parent chain is read from it, as titles outermost first, and
+	// [knowledge.Query.ExcludeAncestors] drops a hit whose chain names an
+	// excluded page — which is how an unreviewed page under
+	// [knowledge.AutoDraftedParent] stays out of every seat's search.
+	//
+	// NIL READS NO CHAIN, so every hit reaches [knowledge.Excludes] with
+	// none and only its title-prefix backstop can hide a draft: a page
+	// under the draft parent whose title does not carry
+	// [knowledge.AutoDraftTitlePrefix] is returned.
+	DB *store.DB
 }
 
 // NewSearcher builds the native knowledge searcher.
 func NewSearcher(opts SearcherOptions) *Searcher {
-	s := &Searcher{index: opts.Index, skills: opts.SkillsContainer}
+	s := &Searcher{index: opts.Index, skills: opts.SkillsContainer, db: opts.DB}
 	if opts.Index != nil {
 		s.fan = &search.FanOut{
 			Self:   cmp.Or(opts.Node, soloNode),
@@ -186,18 +207,39 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 			"detail", "the fused answer could not be read back")
 		return nil
 	}
+	ids := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		ids = append(ids, hit.ID)
+	}
+	// AN UNREADABLE CHAIN IS AN EMPTY ANSWER rather than hits with no
+	// chain: the chain is what keeps a draft under the excluded parent out,
+	// and an answer served without it is the one that would carry that
+	// draft into a seat's prompt.
+	chains, err := s.ancestry(ctx, ids)
+	if err != nil {
+		log.WarnContext(ctx, "pages_search_failed", "error", err.Error(),
+			"detail", "the hits' parent chains could not be read, so the "+
+				"ancestor exclusion could not be judged")
+		return nil
+	}
 
+	excluded := q.Excluded()
 	out := make([]knowledge.Hit, 0, q.Hits())
 	for _, hit := range hits {
 		if s.isExcluded(hit.Container) {
 			continue
 		}
-		out = append(out, knowledge.Hit{
+		found := knowledge.Hit{
 			Title:     hit.Title,
 			Container: hit.Container,
 			PageID:    hit.ID,
 			Snippet:   hit.Snippet,
-		})
+			Ancestors: chains[hit.ID],
+		}
+		if knowledge.Excludes(found, excluded) {
+			continue
+		}
+		out = append(out, found)
 		if len(out) == q.Hits() {
 			break
 		}
@@ -205,17 +247,106 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 	return out
 }
 
+// ancestry is each page's parent chain as titles, outermost first, read in one
+// transaction. A page with no parent has no entry, and so does every page when
+// there is no store to read.
+//
+// EACH CHAIN IS WALKED WHOLE, with a record of what it has visited, for the
+// reason [Reader.ancestors] walks a breadcrumb that way: nothing bounds a
+// tree's depth, and two concurrent moves can close a loop no single write
+// could. A parent this node has no row for ends the chain.
+func (s *Searcher) ancestry(ctx context.Context, ids []string) (map[string][]string, error) {
+	if s.db == nil || len(ids) == 0 {
+		return nil, nil
+	}
+	out := make(map[string][]string, len(ids))
+	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		walk := chainWalk{tx: tx, read: map[string]chainLink{}}
+		for _, id := range ids {
+			chain, err := walk.titlesAbove(ctx, id)
+			if err != nil {
+				return err
+			}
+			if len(chain) > 0 {
+				out[id] = chain
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pages: read the parent chains of %d hits: %w",
+			len(ids), err)
+	}
+	return out, nil
+}
+
+// chainWalk reads parent chains inside one transaction, reading each page at
+// most once however many hits share it as an ancestor.
+type chainWalk struct {
+	tx   *sql.Tx
+	read map[string]chainLink
+}
+
+// chainLink is one page as a chain needs it.
+type chainLink struct{ title, parent string }
+
+// titlesAbove is one page's parent chain as titles, outermost first.
+func (w chainWalk) titlesAbove(ctx context.Context, id string) ([]string, error) {
+	page, held, err := w.link(ctx, id)
+	if err != nil || !held {
+		return nil, err
+	}
+	var chain []string
+	seen := map[string]bool{id: true}
+	for above := page.parent; above != "" && !seen[above]; above = page.parent {
+		seen[above] = true
+		if page, held, err = w.link(ctx, above); err != nil {
+			return nil, err
+		}
+		if !held {
+			break
+		}
+		chain = append(chain, page.title)
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain, nil
+}
+
+// link reads one page's title and parent, or reports it absent.
+func (w chainWalk) link(ctx context.Context, id string) (chainLink, bool, error) {
+	if l, ok := w.read[id]; ok {
+		return l, true, nil
+	}
+	var l chainLink
+	err := w.tx.QueryRowContext(ctx,
+		`SELECT title, parent_id FROM pages_heads WHERE id = ?`, id).
+		Scan(&l.title, &l.parent)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return chainLink{}, false, nil
+	case err != nil:
+		return chainLink{}, false, fmt.Errorf("pages: read page %s: %w", id, err)
+	}
+	w.read[id] = l
+	return l, true, nil
+}
+
 // SearchOverfetch is how many times the limit is asked for before exclusions.
 //
-// Three. The exclusions drop a bounded fraction — tool-skill pages in one
-// reserved container — so a wider factor buys nothing and a narrower one
-// returns short result sets on a company with many skills.
+// Three, a judgement. The exclusions are the tool-skills container and the
+// caller's excluded ancestors, so they alone leave an answer SHORT of the
+// limit only when more than two in three of the hits the fan-out ranked are
+// excluded — and short silently, because the seam's answer is a list of hits
+// with nothing beside it.
 //
 // EXPORTED BECAUSE IT IS HALF OF AN INVARIANT NOTHING ELSE CAN SEE: it
 // multiplies the caller's limit into what the fan-out is asked for, and a
 // fan-out answers at most [github.com/crewlet/crewlet/internal/search.FuseN]
-// per method. internal/engine, where the two are wired, is what holds the
-// product under that ceiling — which it can only do if it can name this.
+// per method. internal/engine's TestNoSearchCallerAsksForMoreThanAFanOutCanAnswer
+// holds the seam's DEFAULT limit times this under that ceiling; a caller that
+// passes a limit of its own is held there by nothing but its value.
 const SearchOverfetch = 3
 
 // isExcluded reports a container a search never returns.

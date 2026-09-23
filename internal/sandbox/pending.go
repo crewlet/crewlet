@@ -2,8 +2,10 @@ package sandbox
 
 import (
 	"context"
+	"strconv"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -181,15 +183,131 @@ var Active = []string{
 // it — so the json tags are a wire format and the type must not carry a
 // dependency the store layer has no business on. Same rule the rest of
 // [PendingRun] follows: add fields, never rename one.
+//
+// It is the value of the call's own record ([coord.BridgeCalls]) and, for
+// builds that read the run's row, an entry of [PendingRun.BridgeCalls].
 type BridgeCall struct {
+	// Seq is the call's place in its launch's log, from 1, in the order the
+	// appends were numbered. Set by the store on the way out of a record: the
+	// record's KEY carries it, so the record's value never does. On the
+	// run's row a call carries it when this build appended it, and is zero
+	// when an older build did.
+	Seq uint64 `json:"seq,omitempty"`
+
 	Name string `json:"name"`
 	// Args is what the caller passed, as JSON text rather than a decoded
 	// map: the map's values would round-trip through the store's own
 	// encoder a second time, and a large id survives one pass and not two.
-	Args   string    `json:"args,omitempty"`
-	Output string    `json:"output,omitempty"`
+	//
+	// Arguments too large for the call's record are not kept, and Args then
+	// holds the marker [ArgsNotKept] writes in their place — still JSON, so
+	// every reader that decodes Args shows the marker where the arguments
+	// would be. See [MaxBridgeCallBytes].
+	Args string `json:"args,omitempty"`
+
+	// Output is what the tool returned. Cut to fit the call's record when it
+	// could not be kept whole, and then it ends in "…"; see
+	// [MaxBridgeCallBytes].
+	Output string `json:"output,omitempty"`
+
 	Failed bool      `json:"failed,omitempty"`
 	At     time.Time `json:"at"`
+}
+
+// MaxBridgeCallBytes bounds one bridged call as the store keeps it: the whole
+// record, encoded, in bytes.
+//
+// It is [coord.MaxBridgeCallBytes], the most one coordination record may hold,
+// because each call is one record. A call the record cannot hold whole is FIT
+// rather than refused: refusing it would leave the call out of the only log a
+// resume reads, which is the failure the per-call records exist to end.
+//
+// THE ARGUMENTS ARE DECIDED FIRST, whole or not at all, because they are JSON
+// and a cut through JSON is text no reader can parse. They are kept unless the
+// record would be over the ceiling with them and an output of nothing but its
+// mark; only then does [ArgsNotKept] take their place. THE OUTPUT IS FIT TO
+// WHAT IS LEFT, from the whole of it — cut on a character boundary and ending
+// in "…" when it does not fit, and left exactly as it was when it does.
+//
+// WHERE THE WHOLE OF IT WENT: the bridge returns the tool's whole output to
+// the coding agent inside the box, which is what called the tool, and the
+// arguments reached the tool whole. Neither is kept whole anywhere the engine
+// can read back — everything downstream of the record, the resumed phase's own
+// event included, is built from the record — which is why the cut is marked
+// in the record's own fields, where every reader of them sees it.
+const MaxBridgeCallBytes = coord.MaxBridgeCallBytes
+
+// ArgsNotKept is the [BridgeCall.Args] a call is recorded with when its
+// arguments were too large for its record: a JSON object whose one member,
+// keyed "…", says how many bytes of arguments were not kept.
+//
+// JSON rather than an empty string, because empty arguments are what a call
+// made with none looks like, and every reader — the resumed phase, the
+// reviewer's tool log, the run board — renders Args as it finds it. A marker
+// in the field itself is the one mark all of them show without being taught
+// to look for it.
+func ArgsNotKept(bytes int) string {
+	return `{"…":"` + strconv.Itoa(bytes) + ` bytes of arguments were too large for the record ` +
+		`this call is kept in, and were not kept"}`
+}
+
+// BridgeCallPageBytes bounds the calls one page of a run's log carries, by
+// what their records weigh.
+//
+// ONE RECORD'S CEILING, so the heaviest page is no heavier than the heaviest
+// single call, which already had to be carried whole to be recorded at all. A
+// count alone cannot bound a page: a call's output can be megabytes, and a
+// page bounded only by a count weighs whatever its calls sum to. No record is
+// heavier than this, so a page always carries at least the call it starts at.
+// A first page that also carries the log's end ([BridgeCallPage.End]) is two
+// such pages, each bounded by this.
+const BridgeCallPageBytes = coord.MaxBridgeCallBytes
+
+// BridgeCallPage is one page of a run's bridged-call log.
+type BridgeCallPage struct {
+	// Calls are in the order the run made them.
+	Calls []BridgeCall
+
+	// Next is the cursor for the page after this one: the Seq to pass as
+	// `after`. Zero when this page ends the log.
+	Next uint64
+
+	// End is the log's NEWEST calls, carried by a FIRST page (after zero)
+	// that does not reach them: how the run ended — a bridged run finishes by
+	// submitting — without reading its middle. In the order the run made
+	// them, none of them in Calls, and bounded as a page is. Empty on every
+	// later page, and on a first page that reaches the end itself.
+	End []BridgeCall
+
+	// Between is how many calls fall after Calls and before End: the middle
+	// a first page does not carry, which paging on from Next reaches.
+	Between int
+
+	// Total is how many calls the log holds, whatever this page carries.
+	Total int
+
+	// Dropped is how many calls the run made that the log does not hold at
+	// all, which only a log an older build kept on the run's row can have;
+	// see [BridgeLog.Dropped]. No page reaches them.
+	Dropped int
+}
+
+// BridgeLog is a run's whole bridged-call log, as a resume reads it.
+type BridgeLog struct {
+	// Calls are every call the log holds, in the order the run made them.
+	Calls []BridgeCall
+
+	// Dropped is how many calls the run made that Calls does not hold, and
+	// DroppedAfter how many of Calls come before the place they were.
+	//
+	// ZERO ON EVERY LAUNCH THIS BUILD RECORDED: its per-call records drop
+	// nothing. A launch an older build recorded kept its calls only on the
+	// run's row, in a list that holds its first MaxBridgeCalls/2 calls and
+	// its newest and drops the ones between them ([MaxBridgeCalls] states
+	// the rule); those calls are kept nowhere, so this is a count of what
+	// is missing rather than a cursor to it.
+	Dropped      int
+	DroppedAfter int
 }
 
 // UnitOfWork is the identity this run's once-per-unit-of-work writes collapse
@@ -215,28 +333,36 @@ func (r PendingRun) UnitOfWork() string {
 	return ""
 }
 
-// MaxBridgeCalls bounds how many calls the durable log of a bridged run keeps.
+// MaxBridgeCalls bounds [PendingRun.BridgeCalls], the list of a bridged run's
+// calls on the run's own row, and bounds nothing else.
 //
-// The row is ONE VALUE in the coordination store, read and written whole on
-// every mutation, so every status change and every append rewrites every call
-// it keeps.
+// That list is OLDER BUILDS' VIEW of the log. This build records every call as
+// its own record ([coord.BridgeCalls]) and reads them back from there, whole;
+// the list stays on the row because a rolling upgrade puts builds that know
+// only the row on the same coordination store, and one of them can be the
+// node that collects the run.
 //
-// The MIDDLE is what gets dropped, never the start: how a run began and how it
-// ended are what explain it, and a log truncated to its last N loses the
-// former entirely.
+// For those readers the row is ONE VALUE, read and written whole on every
+// mutation, so its list keeps the first and last MaxBridgeCalls/2 calls and
+// counts the middle it drops in [PendingRun.BridgeCallsElided]. It is kept to
+// a byte budget as well, dropping from the middle and counting the same way,
+// so the view never fills the row the run's own lifecycle has to go on
+// writing (see rowViewBytes in coordstore.go). A write of the view that fails
+// all the same — a store that cannot be reached — loses the call from that
+// view with nothing counting it, and the append logs
+// `sandbox_bridge_row_view_append_failed`. None of this reaches this build,
+// which never reads the list while the records hold the launch's calls.
 //
-// A DROPPED CALL'S ARGUMENTS AND OUTPUT ARE KEPT NOWHERE. This row is the only
-// durable record of them the bridge writes, and a call that falls out of the
-// middle is only counted, in [PendingRun.BridgeCallsElided]. The dashboard's
-// run detail shows that count; an agent-mode resume never reads it, so its
-// submission replay, its delivery check and its reviewer all take the kept
-// calls as the whole run.
+// THE ONE PLACE THIS BUILD READS THE LIST is a launch an older build
+// recorded, which has no records at all — and there the middle the older
+// build dropped is gone for good. [PendingStore.BridgeCalls] hands its count
+// and its place to the resume as [BridgeLog.Dropped], rather than handing
+// over the kept calls as though they were every call.
 //
-// IT BOUNDS THE COUNT, NOT THE BYTES. [BridgeCall.Args] and [BridgeCall.Output]
-// have no bound of their own, and on the JetStream backend the row is one
-// message, so an append that would take the row past the broker's maximum
-// payload is refused by the client. The bridge logs that as
-// mcp_bridge_ledger_append_failed and the call is neither kept nor counted.
+// TWO HUNDRED because it is the count the older builds themselves keep that
+// list to: they append to it with the same rule, and a peer reading a run's
+// row sees the shape its own appends would have made. Nothing in this build
+// is sized by it.
 const MaxBridgeCalls = 200
 
 // PendingRun is one detached job's durable state, keyed by its kick-off turn.
@@ -308,7 +434,7 @@ type PendingRun struct {
 	OwnerEpoch int64  `json:"owner_epoch"`
 
 	// TaskDescription is the ask the suspended turn was working on, so a
-	// resume days later has the brief even when the trigger that produced
+	// resume days later has the task even when the trigger that produced
 	// it is long gone.
 	TaskDescription string `json:"task_description"`
 
@@ -357,23 +483,25 @@ type PendingRun struct {
 	// than resuming into nothing.
 	ExecuteState map[string]any `json:"execute_state"`
 
-	// BridgeCalls is what a run made through the MCP bridge, in order.
+	// BridgeCalls is OLDER BUILDS' BOUNDED VIEW of what a run made through
+	// the MCP bridge, in order.
 	//
-	// DURABLE, because this is the one tool log that has nowhere else to
-	// live. A native tool loop keeps its calls on a surface in memory and
-	// the turn writes them when it ends; a bridged run's calls are made by
-	// a process outside the engine, minutes or hours apart, and possibly
-	// across a restart. Without this the reviewer of a resumed run judges a
-	// turn whose entire tool log is gone — and "it called nothing" is
-	// exactly the shape the delivery check reads as a turn that did not act.
+	// This build does not read it while the launch has records. Every call
+	// is its own record ([coord.BridgeCalls]), written FIRST and read back
+	// whole by [PendingStore.BridgeCalls]; this list is written after it,
+	// for the builds a rolling upgrade leaves on the same store that know
+	// only the row, and it is kept to [MaxBridgeCalls] for their sake. It is
+	// read here only for a launch that has no records at all, which is a
+	// launch an older build recorded, and then with its dropped middle
+	// reported beside it — see [PendingStore.BridgeCalls].
 	//
-	// Bounded: see [MaxBridgeCalls]. Empty on every run that is not
-	// bridged, which is every ordinary coding run.
+	// Empty on every run that is not bridged, which is every ordinary
+	// coding run.
 	BridgeCalls []BridgeCall `json:"bridge_calls,omitempty"`
 
 	// BridgeCallsElided counts the calls dropped from the middle of that
-	// list, so a reader of it can tell a short run from a long one whose
-	// middle was cut. See [MaxBridgeCalls] for which readers do.
+	// list, so its readers can tell a short run from a long one whose
+	// middle was cut. The per-call records drop nothing and carry no count.
 	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
 
 	// Charged is whether this launch's collected tokens are on the fleet's
@@ -550,8 +678,15 @@ type PendingStore interface {
 	MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error)
 
 	// AppendBridgeCall records one tool call a bridged run made through the
-	// MCP bridge, so the reviewer of a run that outlived its process still
-	// has the tool log. See [BridgeCall].
+	// MCP bridge, so the resume of a run that outlived its process still
+	// has every call it made. See [BridgeCall].
+	//
+	// The call becomes its own record under the run's CURRENT launch,
+	// fitted to [MaxBridgeCallBytes], and that record is the authoritative
+	// copy. The run row's bounded list ([PendingRun.BridgeCalls]) is
+	// written after it for older builds; a failure there is logged and
+	// does not fail the append, because the call is already recorded
+	// everywhere this build reads.
 	//
 	// NO FENCE, unlike every other mutation here: this is a log append
 	// rather than an ownership decision, and refusing to record a call that
@@ -563,6 +698,34 @@ type PendingStore interface {
 	// box that is shutting down, and the caller must not fail the box's
 	// call over it.
 	AppendBridgeCall(ctx context.Context, turnID string, call BridgeCall) (bool, error)
+
+	// BridgeCalls returns the run's current launch's log, in the order the
+	// calls were made: the whole record an agent-mode resume rebuilds its
+	// phase from.
+	//
+	// From the per-call records, which hold EVERY call the launch made.
+	// From the row's list only when the launch has NO records — which is a
+	// launch an older build recorded, since this build writes the record
+	// before the row and never the row without the record — and that list
+	// is the one log that can be missing calls: past [MaxBridgeCalls] the
+	// older build kept only its two ends. Those are counted and placed in
+	// [BridgeLog.Dropped] and [BridgeLog.DroppedAfter], never passed off as
+	// a complete log.
+	//
+	// A read that fails is an error, never an empty log: "this run called
+	// nothing" is exactly what the delivery check reads as a turn that
+	// reached nobody.
+	BridgeCalls(ctx context.Context, run PendingRun) (BridgeLog, error)
+
+	// BridgeCallPage returns one page of the same log: the calls after the
+	// cursor `after` (zero for the first page), at most limit of them, and
+	// stopping before a call whose record would take the page past
+	// [BridgeCallPageBytes] — the first call always carried. A FIRST page
+	// that does not reach the end of the log also carries the log's newest
+	// calls, at most limit of them and bounded the same way, in
+	// [BridgeCallPage.End], and counts the calls between the two. A limit
+	// below one is an error.
+	BridgeCallPage(ctx context.Context, run PendingRun, after uint64, limit int) (BridgeCallPage, error)
 
 	// ListActive returns every run that still owns engine-side state.
 	ListActive(ctx context.Context) ([]PendingRun, error)

@@ -52,23 +52,44 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 			return nil, badParams("failed", raw, []string{"true", "false"})
 		}
 	}
-	before, err := instantParam(p, "before")
+	// THE CURSOR IS A PAIR, (start, turn id), for the reason
+	// [store.TurnQuery.Before] gives: a start is an event's time and is not
+	// unique, so a cursor on it alone steps over every other turn that began
+	// at the boundary's instant. [beforeCursor] refuses half of one rather
+	// than reading it as the first page, which a pager would follow for ever.
+	before, err := beforeCursor(p)
 	if err != nil {
 		return nil, err
 	}
 	q.Before = before
 
-	rows, err := s.Events.Turns(ctx, q)
+	rows, more, err := s.Events.Turns(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{"turns": rows, "next": nil}
-	if len(rows) > 0 {
+	out := map[string]any{
+		"turns": rows,
+		// WHETHER THE WINDOW HOLDS MORE than this page, read by the store as
+		// one row past the limit rather than inferred from a page that
+		// filled: a window of exactly `limit` turns and one of ten thousand
+		// answer with the same rows. Anything a reader draws from the page —
+		// a count, a histogram — describes the newest `limit` turns when
+		// this is true, and the rest is `next`.
+		"truncated": more,
+		"next":      nil,
+	}
+	if more {
 		// THE CURSOR THE CALLER RESUMES FROM, echoed rather than left for
 		// a client to assemble — the same rule the event list follows,
 		// because a client that built it from the last row's fields would
-		// be reimplementing the one thing that must not drift.
-		out["next"] = rows[len(rows)-1].StartedAt.UTC().Format(time.RFC3339Nano)
+		// be reimplementing the one thing that must not drift. Offered only
+		// when the store read a row past this page, so a pager stops at the
+		// end of the window rather than asking for an empty page.
+		last := rows[len(rows)-1]
+		out["next"] = map[string]string{
+			"before_time": last.StartedAt.UTC().Format(time.RFC3339Nano),
+			"before_id":   last.TurnID,
+		}
 	}
 	return out, nil
 }

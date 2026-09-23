@@ -90,9 +90,8 @@ func TestAPurgeWithoutTheTasksKeyIsRefused(t *testing.T) {
 	}
 }
 
-// A REASON IS REQUIRED because it is the only thing that survives: the rows
-// are destroyed, and the marker's reason is the entire account of what used to
-// be at that key for whoever reads it a year later.
+// A REASON IS REQUIRED because the rows are destroyed and the reason is the
+// only account of why.
 func TestAPurgeWithNoReasonIsRefusedBeforeItIsSent(t *testing.T) {
 	node := newFakePurgeNode(t)
 	if _, _, err := cli(t, "work", "purge", "t-1", "-project", "ENG",

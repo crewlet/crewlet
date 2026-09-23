@@ -182,17 +182,16 @@ type DiaryStore interface {
 	// Expire deletes short-term entries whose deadline has passed,
 	// reporting how many went.
 	Expire(ctx context.Context, now time.Time) (int64, error)
-
-	// TrimLong drops a seat's least-useful durable entries once it holds
-	// more than cap of them. Zero takes the shipped cap.
-	TrimLong(ctx context.Context, cap int) (int64, error)
 }
 
 // LearningJobs is the sweep for the learning subsystem's diary.
 //
 // No Horizon: every short-term entry carries its own deadline (`ttl_until`,
 // stamped at write), so the job needs now rather than a cutoff, and long-term
-// entries — NULL deadline — are never touched. The read path already filters
+// entries — NULL deadline — are never touched. No sweep touches them at all:
+// a durable note is bounded where it is written, by a refusal the seat reads
+// (learning.DiaryLongCap), and an eviction here would be one no seat is told
+// of and that memsync's next hydration would undo. The read path already filters
 // expired rows out of recall, but reads cannot delete: without this job every
 // expired short-term memory stays a row the per-agent vector scan pays for on
 // every turn start, for the life of the deployment.
@@ -214,18 +213,6 @@ func LearningJobs(d DiaryStore) []Job {
 			Name: "agent_diary", Scope: NodeLocal,
 			Run: func(ctx context.Context, now, _ time.Time) (int64, error) {
 				return d.Expire(ctx, now)
-			},
-		},
-		{
-			// The DURABLE half, and the only sweep here bounded by a
-			// count rather than a clock: a diary_long row is a fact
-			// the agent marked durable, so it has no deadline to
-			// pass — but recall scans every one of them on every
-			// turn start, so it cannot be unbounded either. See
-			// learning.DiaryLongCap.
-			Name: "agent_diary_long", Scope: NodeLocal,
-			Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
-				return d.TrimLong(ctx, 0)
 			},
 		},
 	}
@@ -276,6 +263,39 @@ func ChannelJobs(s a2a.Store) []Job {
 		},
 		Purge("a2a_channels", Fleet, ChannelRetention, s.Purge),
 	}
+}
+
+// BridgeCallSweeper is the slice of the sandbox's run store this sweep calls.
+// Declared here, by the consumer, like every other seam in this tree.
+type BridgeCallSweeper interface {
+	// SweepBridgeCalls purges the call log of every launch no run names,
+	// reporting how many launches went.
+	SweepBridgeCalls(ctx context.Context) (int64, error)
+}
+
+// SandboxJobs is the sweep for bridged coding runs' call logs.
+//
+// Each call a bridged run makes is its own record in the coordination store,
+// in a bucket with no age, and a run's own lifecycle purges them — when the
+// run finishes, and when a second launch replaces the first. This job is what
+// ends the records the lifecycle missed: a run finished on a node that died
+// between its delete and its purge, a purge that failed, a late call that
+// landed after one, a run finished by a build that knows nothing of the
+// records. Without it each is kept for the life of the deployment.
+//
+// No Horizon, because the question is not an age: a launch's calls are
+// garbage exactly when no run names the launch, and a parked run's calls can
+// be days old and still be what its resume will be judged on.
+//
+// [Fleet]: the records are the fleet's, so one node sweeping them per tick is
+// the whole job.
+func SandboxJobs(s BridgeCallSweeper) []Job {
+	if s == nil {
+		return nil
+	}
+	return []Job{{Name: "bridge_calls", Scope: Fleet, Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
+		return s.SweepBridgeCalls(ctx)
+	}}}
 }
 
 // ScheduleJobs is the sweep for the scheduled-run ledger.

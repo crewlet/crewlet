@@ -50,7 +50,23 @@ var log = logging.Get("api.config")
 // mistake rather than on an attacker.
 const MaxBodyBytes = 4 << 20
 
-// DefaultPage and MaxPage bound a history listing.
+// DefaultPage and MaxPage bound ONE PAGE of the revision history. Both
+// surfaces that list it — GET /config/revisions and the socket's
+// `config_audit` — hand [Service.Revisions] the limit and offset the caller
+// sent, and it applies these through [pageBounds], so the two cannot answer
+// one limit with different pages. Only parsing differs: a value that is not a
+// number is a 400 on REST (see [page]) and absent on the socket.
+//
+// A PAGE, NOT WHAT CAN BE REACHED: the answer's `truncated` says older
+// revisions exist, `offset` reaches them, and GET /config/revisions/{id}
+// answers any one directly. A caller asking for more than MaxPage is clamped
+// rather than refused, because it has made no mistake worth a 400.
+//
+// WHAT MaxPage BOUNDS IS WHOLE DOCUMENTS, not metadata rows. The history is
+// answered as metadata, but [store.Configs.List] reads every revision with its
+// payload and [meta] drops the document only after the read — so a full page
+// moves up to MaxPage company documents through the process to answer a table
+// of summaries. That read, not the size of the answer, is the request's cost.
 const (
 	DefaultPage = store.DefaultRevisionPage
 	MaxPage     = 500
@@ -375,9 +391,9 @@ func (s *Service) checkPatchMediaType(w http.ResponseWriter, r *http.Request) bo
 
 // listRevisions serves GET /config/revisions — metadata only, newest first.
 //
-// METADATA ONLY. A listing that carried every payload would move the whole
-// history through the process to render a table of summaries, and the
-// documents are the largest rows in the database.
+// METADATA ONLY IN THE ANSWER: a listing that carried every payload would put
+// the largest rows in the database on the wire to render a table of
+// summaries. The READ still carries them — see [MaxPage].
 func (s *Service) listRevisions(w http.ResponseWriter, r *http.Request) {
 	limit, offset, ok := page(w, r)
 	if !ok {
@@ -1021,9 +1037,14 @@ func meta(revision store.Revision) map[string]any {
 	return body
 }
 
-// page reads and clamps the listing window.
+// page reads the listing window off the query string, as the caller sent it.
+//
+// PARSED, NOT CLAMPED: the bounds are [pageBounds], applied by
+// [Service.Revisions] for this route and the socket's `config_audit` alike. A
+// value that is not a number is refused here, because silently substituting a
+// default would hide a broken client.
 func page(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
-	limit, ok = intParam(w, r, "limit", DefaultPage)
+	limit, ok = intParam(w, r, "limit", 0)
 	if !ok {
 		return 0, 0, false
 	}
@@ -1031,11 +1052,22 @@ func page(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
 	if !ok {
 		return 0, 0, false
 	}
-	// CLAMPED, not refused. A caller asking for more than the ceiling has
-	// made no mistake worth a 400 — they want everything — and a page size
-	// nobody bounds is one tab pulling the whole history through a process
-	// every other tab shares.
-	return min(max(limit, 1), MaxPage), max(offset, 0), true
+	return limit, offset, true
+}
+
+// pageBounds is the ONE rule a page of the revision history is clamped by.
+//
+// A limit of zero or below is a caller who named no size and takes
+// [DefaultPage] — not one row, which no caller sending 0 meant. A limit past
+// [MaxPage] is clamped to it: the caller wants everything, which is no mistake
+// worth a 400, and a page size nobody bounds is one tab pulling the whole
+// history through a process every other tab shares. A negative offset is
+// zero.
+func pageBounds(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = DefaultPage
+	}
+	return min(limit, MaxPage), max(offset, 0)
 }
 
 func intParam(w http.ResponseWriter, r *http.Request, name string, fallback int) (int, bool) {

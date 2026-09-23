@@ -34,8 +34,8 @@ nothing else:
 | | Episodes | Conversation sessions |
 |---|---|---|
 | Keyed by | agent + vector similarity | agent + `conversation_key` |
-| Holds | two ≤2000-char summaries, tool names | plan, reasoning, calls, the reply, the verdict |
-| Retrieval | cosine top-3, `done` only, no recency | the newest N of *this* conversation |
+| Holds | the task and plan summaries, the tools called, the outcome | the trigger, what the turn set out to do, the calls, the reply, the verdict |
+| Retrieval | the three nearest by cosine at turn start; `query_episodes` also by recency | every kept entry of *this* conversation that fits the render bound |
 | On thin triggers | prefetch gated **off** | always rendered |
 | Compaction | clusters collapse per-turn detail | none; trimmed by count and age |
 
@@ -324,21 +324,19 @@ included.
 
 ## Reading it
 
-**There is no read surface, deliberately.** The ledger is prompt context: the
-engine renders it into the next turn of the same conversation and nothing else
-consumes it.
+The ledger is prompt context first: the engine renders it into the next turn
+of the same conversation. A person reads it through
+`GET /agents/{id}/conversations` — the `conversations` query on the socket —
+which lists the threads a seat holds entries in and, given
+`conversation=<key>`, every entry the ledger holds for that thread, each with
+its `ordinal`, so a reader can see how many earlier turns the trim and the
+sweep no longer hold. The seat page's thread list is drawn from it. See
+[API endpoints](../reference/api-endpoints.md) for the page on the thread
+roster.
 
-A dashboard tab and a `/conversations` endpoint did exist, and both were
-removed. They were a viewer for somebody ELSE's threads — a Slack channel, a
-Jira issue — reconstructed from what the engine happened to record about them,
-always a worse version of the thread than the surface it lives on, and a
-conversations screen in this product is meant to be Crewlet's own messaging
-when there is one to show. Keeping a half-view until then would have promised
-a chat system the engine does not have.
-
-The entries reach a person through the prompt they shape, and through the
-`conversation_key` shown on a phase, which names the external thread a turn
-served so a reader can go to it.
+What it shows is what the engine recorded, not the thread: the thread itself
+is on the surface it lives on, and the `conversation_key` shown on a phase
+names it so a reader can go to it.
 
 ---
 

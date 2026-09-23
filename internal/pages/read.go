@@ -3,6 +3,7 @@ package pages
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"slices"
@@ -101,11 +102,53 @@ type Filter struct {
 	// Onboarding narrows to the pages a seat's reading chain starts at.
 	Onboarding bool
 
-	Limit  int
+	Limit int
+
+	// After resumes a listing strictly after the last page of a previous
+	// one: it takes that listing's [Listing.NextCursor], and a value that
+	// does not decode as one is refused naming the field.
+	//
+	// A KEYSET over the listing's own order — container, title, id — so
+	// the next page starts where the last one ended whatever happened in
+	// between: every page that matched on both reads and did not move in
+	// that order is returned exactly once. A page renamed or trashed
+	// between the two reads moves itself, and nothing else.
+	After string
+
+	// Offset skips that many matching pages, counted from After when it is
+	// set and from the start when it is not. Unlike After it counts rows
+	// rather than naming one, so a page that leaves the rows it skips
+	// between two reads — trashed out of a status filter, renamed past
+	// them, purged — moves every later page up by one, and a caller that
+	// pages by offset silently misses one.
 	Offset int
 }
 
-// DefaultLimit and MaxLimit bound a listing, on [work]'s reasoning.
+// DefaultLimit is the page a listing that names no limit gets, and MaxLimit
+// the largest page any listing gets — a larger limit is lowered to it, not
+// refused.
+//
+// THEY BOUND A PAGE, NEVER WHAT A LISTING REACHES. [Reader.list] reads one row
+// past the page and reports it as [Listing.Truncated] and
+// [Listing.NextCursor], and [Filter.After] with that cursor reaches the rows
+// after it; a page's children, which a detail read carries at DefaultLimit,
+// are the same read with a parent and a status filter, and
+// [Detail.ChildrenTruncated] and [Detail.ChildrenCursor] say when they went
+// past it and where to resume.
+//
+// FIFTY is a judgement about the callers that did not choose: a seat's
+// `list_pages` with no limit, and every page detail's children. A summary
+// carries no body and encodes to about 300 bytes on a representative row, and
+// to about 2.7 KB with a title at [MaxTitle] and [MaxLabels] labels at
+// [MaxLabelLength] — so a default page is about 15 KB, and under 140 KB with
+// every row at those caps.
+//
+// MaxLimit HAS A CEILING OF ITS OWN: [Reader.attachLabels] binds every id on
+// the page in ONE statement, so a page has to stay under the parameter count
+// internal/store falls back to when its probe of the engine cannot tell — 999.
+// Past that, a full page on such an engine would be a refused statement rather
+// than a slow one. Five hundred sits under it with room, and at the sizes
+// above is at most about 1.4 MB.
 const (
 	DefaultLimit = 50
 	MaxLimit     = 500
@@ -137,8 +180,11 @@ type Summary struct {
 type Listing struct {
 	Pages []Summary `json:"pages"`
 
-	// Truncated says the listing filled its limit and the container holds
-	// more, which `offset` is how a caller reaches.
+	// Truncated says more pages match the filter than this listing carries,
+	// and [Listing.NextCursor] is how a caller reaches them. It is read from
+	// one row past the limit, so a filter matching exactly the limit is not
+	// truncated. A RENDERER THAT DRAWS [Listing.Pages] MUST READ IT: the
+	// length of the list is the page, not the count of what matched.
 	//
 	// DISTINCT FROM [Listing.Complete], which covers the OTHER kind of
 	// incompleteness — a deferred record's scope meeting this read — so a
@@ -148,6 +194,10 @@ type Listing struct {
 	// short list as the whole truth writes the duplicate"; a full page it
 	// cannot see is full is the same mistake with nothing to check.
 	Truncated bool `json:"truncated,omitempty"`
+
+	// NextCursor is the [Filter.After] that resumes this listing strictly
+	// after its last page, set exactly when Truncated is.
+	NextCursor string `json:"next_cursor,omitempty"`
 
 	// Level is what the read was SERVED at, which is the level asked for
 	// or a refusal — never the level requested, which is how a level
@@ -227,6 +277,14 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 		where = append(where, "COALESCE(k.onboarding, 0) = 1")
 	}
 
+	if f.After != "" {
+		after, err := decodeListCursor(f.After)
+		if err != nil {
+			return Listing{}, err
+		}
+		where, args = after.resume(where, args)
+	}
+
 	limit := f.Limit
 	if limit <= 0 {
 		limit = DefaultLimit
@@ -235,19 +293,84 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 		limit = MaxLimit
 	}
 	var out []Summary
-	var more bool
+	var next string
 	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container, ""), true), func(tx *sql.Tx) error {
 		var err error
-		out, more, err = r.list(ctx, tx, where, args, limit, max(f.Offset, 0))
+		out, next, err = r.list(ctx, tx, where, args, limit, max(f.Offset, 0))
 		return err
 	})
 	if err != nil {
 		return Listing{}, err
 	}
 	return Listing{
-		Pages: out, Truncated: more, Level: served.Level, Complete: served.Complete,
+		Pages: out, Truncated: next != "", NextCursor: next,
+		Level: served.Level, Complete: served.Complete,
 		Position: served.Position, LogLag: served.Lag,
 	}, nil
+}
+
+// listCursor is a listing's position in its own order: the container, title
+// and id of the last page a listing returned.
+//
+// THE ID IS PART OF THE KEY although a title is its container's address,
+// because nothing in `pages_heads` enforces that: the address is held in
+// `pages_titles`, and a keyset over a pair two rows could share would skip
+// the second of them. The id makes the order total whatever the table holds.
+type listCursor struct {
+	Container string
+	Title     string
+	ID        string
+}
+
+// encode renders the cursor a caller hands back as [Filter.After].
+//
+// OPAQUE — each value base64-encoded, joined by a dot the encoding's own
+// alphabet never produces — because a title is prose carrying any character,
+// and a cursor a caller could read as a title is one they would start
+// composing by hand.
+func (c listCursor) encode() string {
+	return strings.Join([]string{
+		base64.RawURLEncoding.EncodeToString([]byte(c.Container)),
+		base64.RawURLEncoding.EncodeToString([]byte(c.Title)),
+		base64.RawURLEncoding.EncodeToString([]byte(c.ID)),
+	}, ".")
+}
+
+// decodeListCursor reads a [Filter.After] back, refusing a value that does not
+// decode as one.
+func decodeListCursor(after string) (listCursor, error) {
+	parts := strings.Split(after, ".")
+	var values [3][]byte
+	ok := len(parts) == len(values)
+	for i := 0; ok && i < len(values); i++ {
+		var err error
+		values[i], err = base64.RawURLEncoding.DecodeString(parts[i])
+		ok = err == nil
+	}
+	// AN ID IS NEVER EMPTY, so a cursor without one was not minted by
+	// [listCursor.encode] — and resuming after an empty id would repeat the
+	// page the cursor names.
+	if !ok || len(values[2]) == 0 {
+		return listCursor{}, invalid("after", "%q is not a cursor a page "+
+			"listing returned — pass a listing's `next_cursor` unchanged", after)
+	}
+	return listCursor{
+		Container: string(values[0]), Title: string(values[1]), ID: string(values[2]),
+	}, nil
+}
+
+// resume adds the predicate that starts a listing strictly after the cursor,
+// in the listing's own ORDER BY.
+//
+// SPELLED OUT rather than as a row-value comparison, so it does not depend on
+// the engine supporting `(a, b, c) > (?, ?, ?)`. The columns compare under
+// the same collation the ORDER BY sorts them in, which is what makes
+// "strictly after" and "the next row" the same row.
+func (c listCursor) resume(where []string, args []any) ([]string, []any) {
+	where = append(slices.Clip(where), `(p.container > ? OR (p.container = ? AND `+
+		`(p.title > ? OR (p.title = ? AND p.id > ?))))`)
+	args = append(slices.Clip(args), c.Container, c.Container, c.Title, c.Title, c.ID)
+	return where, args
 }
 
 // list is the listing inside one transaction, so [Reader.Get] can take the
@@ -257,15 +380,17 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 // so a caller that appended the page window to `args` itself would be one
 // reordering away from paging the listing by a filter value — and the caller
 // that got it right would still be stating the same two numbers twice.
-// The second return says the page FILLED — one row past the limit is read as
-// evidence and dropped, the same shape [Reader.Activity] uses beside it.
+// The second return is the cursor past this page, or empty when the page did
+// not FILL — one row past the limit is read as evidence and dropped, the same
+// shape [Reader.Activity] uses beside it, and the cursor is minted from the
+// last row kept.
 //
-// Without it a listing of fifty pages and a container holding exactly fifty
-// answered identically, and `Listing.Complete` covers only the OTHER kind of
-// incompleteness (a deferred record's scope), so a caller checking it was told
-// the answer was whole while half the container was missing.
+// Without the probe a listing of fifty pages and a container holding exactly
+// fifty answered identically, and `Listing.Complete` covers only the OTHER
+// kind of incompleteness (a deferred record's scope), so a caller checking it
+// was told the answer was whole while half the container was missing.
 func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
-	args []any, limit, offset int) ([]Summary, bool, error) {
+	args []any, limit, offset int) ([]Summary, string, error) {
 
 	args = append(slices.Clip(args), limit+1, offset)
 	rows, err := tx.QueryContext(ctx, `
@@ -275,10 +400,10 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 		  FROM pages_heads p
 		  LEFT JOIN pages_skills k ON k.page_id = p.id
 		 WHERE `+strings.Join(where, " AND ")+`
-		 ORDER BY p.container, p.title
+		 ORDER BY p.container, p.title, p.id
 		 LIMIT ? OFFSET ?`, args...)
 	if err != nil {
-		return nil, false, fmt.Errorf("pages: list pages: %w", err)
+		return nil, "", fmt.Errorf("pages: list pages: %w", err)
 	}
 	defer rows.Close()
 
@@ -291,7 +416,7 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 		)
 		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
 			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision); err != nil {
-			return nil, false, fmt.Errorf("pages: scan page: %w", err)
+			return nil, "", fmt.Errorf("pages: scan page: %w", err)
 		}
 		s.Skill, s.Onboarding = skill != 0, onboarding != 0
 		s.Updated = store.DecodeTime(updated)
@@ -299,15 +424,17 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, where []string,
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, fmt.Errorf("pages: list pages: %w", err)
+		return nil, "", fmt.Errorf("pages: list pages: %w", err)
 	}
 	// THE PROBE ROW IS EVIDENCE, never an answer: the page stays at the
-	// bound and the caller is told there is more.
-	more := len(out) > limit
-	if more {
+	// bound and the caller is told there is more, and where it starts.
+	var next string
+	if len(out) > limit {
 		out = out[:limit]
+		last := out[limit-1]
+		next = listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.encode()
 	}
-	return out, more, r.attachLabels(ctx, tx, out)
+	return out, next, r.attachLabels(ctx, tx, out)
 }
 
 func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) error {
@@ -345,19 +472,28 @@ type Detail struct {
 	Revision uint64            `json:"revision"`
 	Comments []Comment         `json:"comments,omitempty"`
 	History  []RevisionSummary `json:"history,omitempty"`
-	Children []Summary         `json:"children,omitempty"`
 
-	// ChildrenTruncated says this page has more children than the read
-	// carries. There is no paging parameter on a detail read, so this is
-	// the whole of what a caller gets — `list_pages` with `parent` is where
-	// the rest is, and without it the fifty-first child of a container
-	// index page was unreachable through the read that claims to answer a
-	// page in full and invisible to whoever asked.
+	// Children are this page's PUBLISHED children, the first [DefaultLimit]
+	// of them in a listing's order. Published only for the reason
+	// [Status.Readable] gives: a trashed page is deleted as far as any
+	// reader is concerned and a draft is somebody's unfinished thought, and
+	// a detail read is served to seats as well as to people.
+	Children []Summary `json:"children,omitempty"`
+
+	// ChildrenTruncated says this page has more published children than the
+	// read carries. There is no paging parameter on a detail read, so the
+	// rest are a listing's: [Filter] with this page as ParentID, Status
+	// published and ChildrenCursor as After is the children after the last
+	// one here — the same filter and the same order, so it neither repeats
+	// nor skips a child that stayed where it was.
 	ChildrenTruncated bool `json:"children_truncated,omitempty"`
 
-	// Ancestors are the parent chain, outermost first. Carried because
-	// the auto-draft exclusion is by ancestor and a reader wants the
-	// breadcrumb.
+	// ChildrenCursor is that [Filter.After], set exactly when
+	// ChildrenTruncated is.
+	ChildrenCursor string `json:"children_cursor,omitempty"`
+
+	// Ancestors are the parent chain, outermost first, and all of it —
+	// see [Reader.ancestors] for why the walk has no depth cap.
 	Ancestors []Summary `json:"ancestors,omitempty"`
 
 	// Level is what the read was SERVED at, and Position the point on the
@@ -373,8 +509,8 @@ type Detail struct {
 
 // RevisionSummary is one past version as the history list renders it.
 //
-// METADATA ONLY, because the projection keeps only that — reading one
-// revision's body is a coordination read, on demand.
+// METADATA ONLY, because a detail read that carried bodies would carry up to
+// [RevisionsKept] of them. [Reader.Revision] reads one version's body.
 type RevisionSummary struct {
 	Version   int       `json:"version"`
 	Author    string    `json:"author,omitempty"`
@@ -417,16 +553,15 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 		if detail.History, err = r.history(ctx, tx, id); err != nil {
 			return err
 		}
-		// THIS READ HAS NO PAGING PARAMETER OF ITS OWN, so the marker is
-		// the whole of what a caller gets: `list_pages` with `parent` is
-		// where the rest is, and without the flag the fifty-first child
-		// of a container index page was unreachable through the tool
-		// that claims to read a page in full AND invisible to the reader.
-		if detail.Children, detail.ChildrenTruncated, err = r.list(ctx, tx,
-			[]string{"1 = 1", "p.parent_id = ?"}, []any{id},
-			DefaultLimit, 0); err != nil {
+		// THIS READ HAS NO PAGING PARAMETER OF ITS OWN, so the marker and
+		// the cursor are the whole of what a caller gets — see
+		// [Detail.ChildrenTruncated] for where the rest is.
+		if detail.Children, detail.ChildrenCursor, err = r.list(ctx, tx,
+			[]string{"p.parent_id = ?", "p.status = ?"},
+			[]any{id, string(StatusPublished)}, DefaultLimit, 0); err != nil {
 			return err
 		}
+		detail.ChildrenTruncated = detail.ChildrenCursor != ""
 		detail.Ancestors, err = r.ancestors(ctx, tx, page.ParentID)
 		return err
 	})
@@ -494,10 +629,18 @@ func (r *Reader) comments(ctx context.Context, tx *sql.Tx, pageID string) ([]Com
 	return out, rows.Err()
 }
 
+// history is every revision the page still holds, newest first.
+//
+// NO LIMIT, because the table is already bounded: every save that writes a
+// revision beyond the first [RevisionsKept] carries the one it retires
+// ([retiredRevisions]), and the apply deletes it in the same transaction, so a
+// page holds at most RevisionsKept rows here. A LIMIT of that size could only
+// ever hide rows a correct writer never leaves, and it would hide them
+// silently.
 func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]RevisionSummary, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT edit_version, author, message, created_at FROM pages_revisions
-		  WHERE page_id = ? ORDER BY version DESC LIMIT ?`, pageID, RevisionsKept)
+		  WHERE page_id = ? ORDER BY version DESC`, pageID)
 	if err != nil {
 		return nil, fmt.Errorf("pages: read the history of %s: %w", pageID, err)
 	}
@@ -515,24 +658,27 @@ func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]Revi
 	return out, rows.Err()
 }
 
-// ancestorDepth bounds the parent walk.
+// ancestors walks the parent chain, one primary-key read per page.
 //
-// Sixteen. A page tree that deep is already unnavigable, and the cap is here
-// so a cycle — which a save that set a page's parent to its own descendant
-// would create — terminates rather than hanging the read that found it.
-const ancestorDepth = 16
-
+// NO DEPTH CAP, because nothing at write bounds a tree's depth and a cap here
+// would drop the outermost pages of a deep chain with nothing on the answer
+// saying so. What bounds the walk is `seen`: a write refuses a parent that
+// would close a loop ([checkParent]), but two saves on two different pages,
+// each decided before the other applied, can still close one between them —
+// and the walk stops at the first page it has already visited, so it reads
+// each distinct page on the chain once and the chain it returns is every one
+// of them.
 func (r *Reader) ancestors(ctx context.Context, tx *sql.Tx, parentID string) ([]Summary, error) {
 	var chain []Summary
 	seen := map[string]bool{}
-	for id := parentID; id != "" && len(chain) < ancestorDepth; {
+	for id := parentID; id != ""; {
 		if seen[id] {
-			// A CYCLE. Reported rather than looped: the chain so far is
-			// still useful for a breadcrumb, and hanging the read would
-			// take the page down with the bad parent.
+			// A CYCLE. Reported rather than looped, and nothing is
+			// missing from the chain: every page on it has been read
+			// once, and walking on would only repeat them.
 			log.WarnContext(ctx, "pages_ancestor_cycle", "page", id,
 				"detail", "a page's parent chain reaches itself; the breadcrumb "+
-					"is truncated rather than walked forever")
+					"lists each page on the loop once")
 			break
 		}
 		seen[id] = true

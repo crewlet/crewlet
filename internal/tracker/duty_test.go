@@ -137,7 +137,7 @@ func TestTheDutyClearsADuplicateRank(t *testing.T) {
 	}
 	// ONE RECORD PUTTING BOTH AT ONE KEY, which is what two concurrent
 	// drags into the same gap produce on two nodes.
-	if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "ENG",
+	if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "ENG", r.order("ENG"),
 		[]tracker.Placement{
 			{Task: "t-1", Rank: "a0V"}, {Task: "t-2", Rank: "a0V"},
 		}); err != nil {
@@ -182,7 +182,7 @@ func TestARepairedDuplicateStaysWhereSomebodyPutIt(t *testing.T) {
 		r.drain()
 	}
 	// THREE AT ONE KEY, with a neighbour just above them.
-	if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "ENG",
+	if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "ENG", r.order("ENG"),
 		[]tracker.Placement{
 			{Task: "t-1", Rank: "a0V"}, {Task: "t-2", Rank: "a0V"},
 			{Task: "t-4", Rank: "a0V"}, {Task: "t-3", Rank: "a0X"},
@@ -238,7 +238,7 @@ func TestASweepCutShortLeavesTheBoardInItsOwnOrder(t *testing.T) {
 	for from := 0; from < len(placements); from += tracker.MaxBulkTasks {
 		batch := placements[from:min(from+tracker.MaxBulkTasks, len(placements))]
 		if _, err := r.writer.MoveTasks(t.Context(),
-			fmt.Sprintf("op-collide-%d", from), "ENG", batch); err != nil {
+			fmt.Sprintf("op-collide-%d", from), "ENG", r.order("ENG"), batch); err != nil {
 			t.Fatalf("MoveTasks: %v", err)
 		}
 		r.drain()
@@ -304,7 +304,7 @@ func TestADuplicateAtTheTopIsRepairedBelowTheNextCreate(t *testing.T) {
 		r.drain()
 	}
 	top := boardRanks(t, r)[1]
-	if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "ENG",
+	if _, err := r.writer.MoveTasks(t.Context(), "op-collide", "ENG", r.order("ENG"),
 		[]tracker.Placement{{Task: "t-1", Rank: top}}); err != nil {
 		t.Fatalf("MoveTasks: %v", err)
 	}
@@ -928,7 +928,7 @@ func TestADuplicateRankSweepSaysWhenItCutItsRead(t *testing.T) {
 			for from := 0; from < len(placements); from += tracker.MaxBulkTasks {
 				batch := placements[from:min(from+tracker.MaxBulkTasks, len(placements))]
 				if _, err := r.writer.MoveTasks(t.Context(),
-					fmt.Sprintf("op-collide-%d", from), "ENG", batch); err != nil {
+					fmt.Sprintf("op-collide-%d", from), "ENG", r.order("ENG"), batch); err != nil {
 					t.Fatalf("MoveTasks: %v", err)
 				}
 				r.drain()

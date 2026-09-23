@@ -178,31 +178,122 @@ func TestRecentIsNewestFirstAndBounded(t *testing.T) {
 	}
 }
 
-func TestConversationLookupDoesNotMatchTurnsWithNoConversation(t *testing.T) {
-	t.Parallel()
-	// No conversation is not "every conversation". Querying for it would
-	// match the NULLs — the turns that HAVE no conversation — and a seat
-	// then reads unrelated work as this thread's history.
-	e := episodes(t)
-	unkeyed := ep("a", "ceo", base)
-	keyed := ep("b", "ceo", base)
-	keyed.ConversationKey = "slack:C1"
-	mustAppend(t, e, unkeyed)
-	mustAppend(t, e, keyed)
+// listed reads one page, failing the test on an error.
+func listed(t *testing.T, e *learning.Episodes, q learning.EpisodeQuery) learning.EpisodePage {
+	t.Helper()
+	page, err := e.List(t.Context(), q)
+	if err != nil {
+		t.Fatalf("List(%+v): %v", q, err)
+	}
+	return page
+}
 
-	got, err := e.ForConversation(context.Background(), "ceo", "", 10)
-	if err != nil {
-		t.Fatalf("ForConversation: %v", err)
+// THE FILTER RUNS BEFORE THE LIMIT. Applied to what a LIMIT returned, "the
+// newest failure" is the failures among the newest few turns — so a seat whose
+// recent turns all succeeded is told it has never failed, which is the answer
+// query_episodes gave before the filter moved into the statement.
+func TestAnOlderFailureIsFoundPastAPageOfNewerSuccesses(t *testing.T) {
+	t.Parallel()
+	e := episodes(t)
+	failure := ep("old-failure", "ceo", base)
+	failure.ReviewOutcome = "failed"
+	mustAppend(t, e, failure)
+	for i := range 5 {
+		mustAppend(t, e, ep(fmt.Sprintf("success-%d", i), "ceo",
+			base.Add(time.Duration(i+1)*time.Hour)))
 	}
-	if len(got) != 0 {
-		t.Errorf("an empty conversation key matched %v", ids(got))
+
+	page := listed(t, e, learning.EpisodeQuery{
+		Handle: "ceo", Filter: learning.EpisodeFilter{Outcome: "failed"}, Limit: 2,
+	})
+	if got := ids(page.Episodes); len(page.Episodes) != 1 || got[0] != "old-failure" {
+		t.Errorf("failed turns = %v, want the one failure behind five successes", got)
 	}
-	got, err = e.ForConversation(context.Background(), "ceo", "slack:C1", 10)
-	if err != nil {
-		t.Fatalf("ForConversation: %v", err)
+	if page.Truncated {
+		t.Error("a page holding every match reported more")
 	}
-	if len(got) != 1 || got[0].ID != "b" {
-		t.Errorf("conversation lookup = %v, want just the keyed episode", ids(got))
+}
+
+// TRUNCATED IS EVIDENCE, NOT ARITHMETIC. A page exactly as long as the limit
+// is what a seat holding exactly that many turns reads, and telling it there
+// are more would send it paging for rows that do not exist.
+func TestAPageIsTruncatedOnlyWhenARowLiesPastIt(t *testing.T) {
+	t.Parallel()
+	e := episodes(t)
+	for i := range 3 {
+		mustAppend(t, e, ep(fmt.Sprintf("e%d", i), "ceo", base.Add(time.Duration(i)*time.Minute)))
+	}
+
+	exact := listed(t, e, learning.EpisodeQuery{Handle: "ceo", Limit: 3})
+	if len(exact.Episodes) != 3 || exact.Truncated {
+		t.Errorf("limit 3 over 3 turns = %v truncated=%v, want all three and no more",
+			ids(exact.Episodes), exact.Truncated)
+	}
+	short := listed(t, e, learning.EpisodeQuery{Handle: "ceo", Limit: 2})
+	if got := ids(short.Episodes); len(got) != 2 || got[0] != "e2" || got[1] != "e1" || !short.Truncated {
+		t.Errorf("limit 2 over 3 turns = %v truncated=%v, want the newest two and more",
+			got, short.Truncated)
+	}
+	// And the rest is the next page, which is what the flag promises.
+	rest := listed(t, e, learning.EpisodeQuery{Handle: "ceo", Offset: 2, Limit: 2})
+	if got := ids(rest.Episodes); len(got) != 1 || got[0] != "e0" || rest.Truncated {
+		t.Errorf("the page after = %v truncated=%v, want the oldest turn and no more",
+			got, rest.Truncated)
+	}
+}
+
+// Both filters narrow together, and no conversation is not "every
+// conversation's turns and none of the unkeyed ones": the zero filter keeps
+// everything, and a conversation keeps only its own.
+func TestAConversationAndAnOutcomeNarrowTogether(t *testing.T) {
+	t.Parallel()
+	e := episodes(t)
+	unkeyed := ep("unkeyed", "ceo", base)
+	doneHere := ep("done-here", "ceo", base.Add(time.Minute))
+	doneHere.ConversationKey = "slack:C1"
+	failedHere := ep("failed-here", "ceo", base.Add(2*time.Minute))
+	failedHere.ConversationKey = "slack:C1"
+	failedHere.ReviewOutcome = "failed"
+	failedElsewhere := ep("failed-elsewhere", "ceo", base.Add(3*time.Minute))
+	failedElsewhere.ConversationKey = "slack:C2"
+	failedElsewhere.ReviewOutcome = "failed"
+	otherSeat := ep("other-seat", "cto", base.Add(4*time.Minute))
+	otherSeat.ConversationKey = "slack:C1"
+	otherSeat.ReviewOutcome = "failed"
+	for _, episode := range []learning.Episode{unkeyed, doneHere, failedHere, failedElsewhere, otherSeat} {
+		mustAppend(t, e, episode)
+	}
+
+	for _, tc := range []struct {
+		filter learning.EpisodeFilter
+		want   []string
+	}{
+		{learning.EpisodeFilter{}, []string{"failed-elsewhere", "failed-here", "done-here", "unkeyed"}},
+		{learning.EpisodeFilter{Conversation: "slack:C1"}, []string{"failed-here", "done-here"}},
+		{learning.EpisodeFilter{Outcome: "failed"}, []string{"failed-elsewhere", "failed-here"}},
+		{learning.EpisodeFilter{Conversation: "slack:C1", Outcome: "failed"}, []string{"failed-here"}},
+	} {
+		page := listed(t, e, learning.EpisodeQuery{Handle: "ceo", Filter: tc.filter, Limit: 10})
+		if got := ids(page.Episodes); !slices.Equal(got, tc.want) {
+			t.Errorf("filter %+v = %v, want %v", tc.filter, got, tc.want)
+		}
+	}
+}
+
+// A listing states its own size. Zero has no honest default here — the
+// caller is the one that knows what the rows are for — and a negative offset
+// is a position that does not exist.
+func TestAListingRefusesWhatItCannotAnswer(t *testing.T) {
+	t.Parallel()
+	e := episodes(t)
+	for _, q := range []learning.EpisodeQuery{
+		{Limit: 5},
+		{Handle: "ceo"},
+		{Handle: "ceo", Limit: 5, Offset: -1},
+	} {
+		if _, err := e.List(t.Context(), q); err == nil {
+			t.Errorf("List(%+v) answered, want a refusal", q)
+		}
 	}
 }
 
@@ -286,6 +377,64 @@ func TestRecallRanksBySimilarity(t *testing.T) {
 		if h.Episode.ID == "far" {
 			t.Error("an orthogonal memory passed the relevance floor")
 		}
+	}
+}
+
+// THE FILTER NARROWS WHAT IS RANKED, NOT WHAT THE RANKING RETURNED. The
+// failure here is the least similar row the seat has, so a filter applied to
+// the top of the ranking — which is what `query_episodes` did, four times over
+// the limit — never reaches it, and the seat is told nothing like this ever
+// failed. Both row shapes are covered: a filter that reached only the
+// one-window branch would miss the multi-window failure.
+func TestRecallFiltersBeforeItRanks(t *testing.T) {
+	t.Parallel()
+	e := episodes(t)
+	for i := range 4 {
+		success := ep(fmt.Sprintf("success-%d", i), "ceo", base.Add(time.Duration(i)*time.Minute))
+		success.Embeddings = win(1, 0, 0, 0)
+		mustAppend(t, e, success)
+	}
+	failure := ep("failure", "ceo", base.Add(time.Hour))
+	failure.ReviewOutcome = "failed"
+	failure.Embeddings = win(0.8, 0.6, 0, 0)
+	mustAppend(t, e, failure)
+	longFailure := ep("long-failure", "ceo", base.Add(2*time.Hour))
+	longFailure.ReviewOutcome = "failed"
+	longFailure.ConversationKey = "slack:C1"
+	longFailure.Embeddings = [][]float32{{0, 1, 0, 0}, {0.7, 0.71, 0, 0}}
+	mustAppend(t, e, longFailure)
+	// The nearest row of all, and a multi-window one that matches no
+	// filter below: a filter missing from that branch lets it through.
+	longSuccess := ep("long-success", "ceo", base.Add(3*time.Hour))
+	longSuccess.ConversationKey = "slack:C2"
+	longSuccess.Embeddings = [][]float32{{0, 1, 0, 0}, {1, 0, 0, 0}}
+	mustAppend(t, e, longSuccess)
+
+	recall := func(f learning.EpisodeFilter, limit, offset int) []string {
+		t.Helper()
+		hits, err := e.Recall(t.Context(), learning.RecallQuery{
+			Handle: "ceo", Embedding: []float32{1, 0, 0, 0},
+			Limit: limit, Offset: offset, Filter: f,
+		})
+		if err != nil {
+			t.Fatalf("Recall(%+v): %v", f, err)
+		}
+		return hitIDs(hits)
+	}
+
+	if got := recall(learning.EpisodeFilter{Outcome: "failed"}, 1, 0); len(got) != 1 || got[0] != "failure" {
+		t.Errorf("the nearest failure = %v, want the one ranked behind four successes", got)
+	}
+	if got := recall(learning.EpisodeFilter{Outcome: "failed"}, 5, 0); !slices.Equal(got, []string{"failure", "long-failure"}) {
+		t.Errorf("every failure = %v, want both, the multi-window one included", got)
+	}
+	if got := recall(learning.EpisodeFilter{Conversation: "slack:C1"}, 5, 0); !slices.Equal(got, []string{"long-failure"}) {
+		t.Errorf("one conversation = %v, want only its own episode", got)
+	}
+	// AND THE RANKING READS ON: the page after the first failure is the
+	// second one, which is where a caller told there is more goes next.
+	if got := recall(learning.EpisodeFilter{Outcome: "failed"}, 1, 1); !slices.Equal(got, []string{"long-failure"}) {
+		t.Errorf("the second failure = %v, want the next one in the ranking", got)
 	}
 }
 

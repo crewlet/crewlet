@@ -15,12 +15,26 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // embeddedNATS starts a nats-server inside the test process with no listener,
 // the same topology internal/queue/jetstream boots for a solo node. Nothing
 // outside this process can reach it, and it dies with the test.
+//
+// AT THE PRODUCTION PAYLOAD CEILING, which the embedded broker is configured
+// with: a record is one message, so a suite run against the server's own
+// default would certify a smaller store than the one that ships — and the
+// contract's coord.MaxBridgeCallBytes case is written against the real one.
 func embeddedNATS(t *testing.T) *nats.Conn {
+	t.Helper()
+	return embeddedNATSAt(t, queue.MaxPayloadBytes)
+}
+
+// embeddedNATSAt is [embeddedNATS] with the server's payload ceiling set to
+// maxPayload, for the case that needs a server configured below the one that
+// ships.
+func embeddedNATSAt(t *testing.T, maxPayload int32) *nats.Conn {
 	t.Helper()
 	dir := t.TempDir()
 	ns, err := server.NewServer(&server.Options{
@@ -29,6 +43,7 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 		Port:       -1,
 		DontListen: true,
 		StoreDir:   dir,
+		MaxPayload: maxPayload,
 	})
 	if err != nil {
 		t.Fatalf("configure embedded server: %v", err)

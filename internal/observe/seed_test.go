@@ -246,15 +246,15 @@ func (h *slowFeed) List(ctx context.Context, _ store.ListQuery) ([]store.EventRe
 	return nil, ctx.Err()
 }
 
-func (h *slowFeed) PhaseTokens(ctx context.Context, _ store.PhaseTokenQuery) ([]tokens.Record, error) {
+func (h *slowFeed) PhaseTokenTail(ctx context.Context, _ store.PhaseTokenQuery, _ int) ([]tokens.Record, bool, error) {
 	h.spendAsked, h.spendCtxErr = true, ctx.Err()
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, false, ctx.Err()
 	}
 	return []tokens.Record{{
 		EventID: "p1", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		AgentRole: "Lead", Phase: "execute", TotalTokens: 10,
-	}}, nil
+	}}, false, nil
 }
 
 // halfBroken answers one read and fails the other.
@@ -269,14 +269,14 @@ func (h halfBroken) List(_ context.Context, _ store.ListQuery) ([]store.EventRec
 	}}, nil
 }
 
-func (h halfBroken) PhaseTokens(_ context.Context, _ store.PhaseTokenQuery) ([]tokens.Record, error) {
+func (h halfBroken) PhaseTokenTail(_ context.Context, _ store.PhaseTokenQuery, _ int) ([]tokens.Record, bool, error) {
 	if h.spend != nil {
-		return nil, h.spend
+		return nil, false, h.spend
 	}
 	return []tokens.Record{{
 		EventID: "p1", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		AgentRole: "Lead", Phase: "execute", TotalTokens: 10,
-	}}, nil
+	}}, false, nil
 }
 
 // THE SEED READS NO MORE SPEND THAN THE PROJECTION KEEPS. A day busier than
@@ -289,9 +289,9 @@ func TestTheSpendSeedStopsAtTheProjectionsRecordCap(t *testing.T) {
 	if err := observe.Seed(t.Context(), history, livestate.New()); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
-	if history.spend.Limit != livestate.SpendRecordLimit {
+	if history.spendLimit != livestate.SpendRecordLimit {
 		t.Errorf("spend read limit = %d, want the projection's record cap %d",
-			history.spend.Limit, livestate.SpendRecordLimit)
+			history.spendLimit, livestate.SpendRecordLimit)
 	}
 	// AS AN INSTANT, so the read covers the projection's window whatever
 	// that window is. Asked for in whole days it would agree only while
@@ -311,10 +311,15 @@ func TestTheSpendSeedStopsAtTheProjectionsRecordCap(t *testing.T) {
 	}
 }
 
-// recordingHistory answers nothing and remembers what it was asked.
+// recordingHistory remembers what it was asked, and answers the spend read
+// with whatever it was given.
 type recordingHistory struct {
-	feed  store.ListQuery
-	spend store.PhaseTokenQuery
+	feed       store.ListQuery
+	spend      store.PhaseTokenQuery
+	spendLimit int
+
+	records []tokens.Record
+	more    bool
 }
 
 func (r *recordingHistory) List(_ context.Context, q store.ListQuery) ([]store.EventRecord, error) {
@@ -322,7 +327,46 @@ func (r *recordingHistory) List(_ context.Context, q store.ListQuery) ([]store.E
 	return nil, nil
 }
 
-func (r *recordingHistory) PhaseTokens(_ context.Context, q store.PhaseTokenQuery) ([]tokens.Record, error) {
-	r.spend = q
-	return nil, nil
+func (r *recordingHistory) PhaseTokenTail(_ context.Context, q store.PhaseTokenQuery, limit int) ([]tokens.Record, bool, error) {
+	r.spend, r.spendLimit = q, limit
+	return r.records, r.more, nil
+}
+
+// THE STORE'S "THERE IS MORE" REACHES THE PROJECTION. The tail read answers
+// whether the window held records past the cap, and that answer is the only
+// thing that can head the rollup with the span the kept records cover: a page
+// of records says nothing about what was left behind it. A seed that dropped
+// the flag would head a rollup over the newest records with the whole window,
+// which on a money figure is a wrong total nobody can see.
+func TestTheSeedCarriesTheStoresTruncationToTheProjection(t *testing.T) {
+	t.Parallel()
+	oldest := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	records := []tokens.Record{
+		{EventID: "p2", Timestamp: oldest.Add(time.Minute).Format(time.RFC3339Nano),
+			AgentRole: "Lead", Phase: "execute", TotalTokens: 10},
+		{EventID: "p1", Timestamp: oldest.Format(time.RFC3339Nano),
+			AgentRole: "Lead", Phase: "execute", TotalTokens: 10},
+	}
+	for _, tc := range []struct {
+		name string
+		more bool
+		want time.Time
+	}{
+		// Nothing was left behind: the kept records are the whole window,
+		// so the window's own heading is the true one.
+		{"the window was read whole", false, time.Time{}},
+		// Older records were left in the store: the rollup covers from the
+		// earliest record kept, and says so.
+		{"older records were left behind", true, oldest},
+	} {
+		live := livestate.New()
+		history := &recordingHistory{records: records, more: tc.more}
+		if err := observe.Seed(t.Context(), history, live); err != nil {
+			t.Fatalf("%s: Seed: %v", tc.name, err)
+		}
+		if _, covered := live.SpendRecords(); !covered.Equal(tc.want) {
+			t.Errorf("%s: the rollup covers from %v, want %v (zero is the whole window)",
+				tc.name, covered, tc.want)
+		}
+	}
 }

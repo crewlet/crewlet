@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -48,7 +49,10 @@ func (t *listProjects) Name() string { return tracker.ListProjectsTool }
 func (t *listProjects) Description() string {
 	return "The projects this company files work into, with how much open " +
 		"work each holds and who leads it. " +
-		"create_work_item refuses a project that is not here."
+		"create_work_item refuses a project that is not here. When the " +
+		"answer says `truncated`, `total` is how many match and the rest " +
+		"are past the page: narrow with `q` or `unit`, or read any one " +
+		"project by key with " + tracker.DescribeProjectTool + "."
 }
 
 func (t *listProjects) Parameters() map[string]any {
@@ -70,8 +74,9 @@ func (t *listProjects) Parameters() map[string]any {
 					"false — no new work is filed into one.",
 			},
 			"limit": map[string]any{
-				"type":        "integer",
-				"description": "At most 200, which is also the default.",
+				"type": "integer",
+				"description": fmt.Sprintf("At most %d, which is also the default.",
+					tracker.MaxProjectsPerAnswer),
 			},
 		},
 	}

@@ -81,10 +81,13 @@ func skillUsed(turn *turnctx.Turn, name, skillID, file string,
 // "which of this seat's memories bear on this text" would drift from the block
 // the model was shown at turn start, in the direction nobody looks.
 type Recaller interface {
-	// RecallEpisodes returns past turns similar to text. An error means the
-	// search could not run — a deployment with no embeddings, or a store
-	// that could not be read — which is a different answer from none.
-	RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) ([]learning.Hit, error)
+	// RecallEpisodes returns past turns similar to text among those the
+	// filter keeps: limit of them, offset into the ranking. An error means
+	// the search could not run — a deployment with no embeddings, a
+	// provider that failed, or a store that could not be read — which is a
+	// different answer from none.
+	RecallEpisodes(ctx context.Context, seat *org.Role, text string,
+		filter learning.EpisodeFilter, offset, limit int) ([]learning.Hit, error)
 
 	// RecallMemories re-runs the personal-memory relevance filter against a
 	// hint, returning what it picked.

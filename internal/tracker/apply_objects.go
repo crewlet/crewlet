@@ -302,15 +302,7 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 		return 0, nil
 	}
 	for _, placement := range order.Placements {
-		moved, err := tx.ExecContext(ctx, `
-			UPDATE tracker_tasks SET rank = ?, scoped_through = ?
-			WHERE id = ? AND ? > MAX(version, scoped_through)`,
-			string(placement.Rank), c.packed, placement.Task, c.packed)
-		if err != nil {
-			return 0, fmt.Errorf("tracker: move task %s at %s: %w",
-				placement.Task, c.position, err)
-		}
-		n, err := affected(moved)
+		n, err := placeTask(ctx, tx, c, c.subject().ID, placement)
 		if err != nil {
 			return 0, err
 		}
@@ -364,6 +356,58 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 			order.Project, err)
 	}
 	return rows, nil
+}
+
+// placeTask writes one placement onto the task it names — the `rank` column
+// AND the document.
+//
+// # The document, because the document is what every later commit starts from
+//
+// The columns beside a task's document are extracted from it, and a task
+// commit writes them again from the document it merges into ([upsertTask]).
+// A placement that moved only the column was therefore undone by the task's
+// next commit of any kind — a comment, a status change, a restore — which put
+// the card back at whatever key its document still carried: the one it was
+// created or last re-keyed with. So the key goes into the document too,
+// through the same decode and encode a task commit uses.
+//
+// # Only a task still in this order's project, and only forward
+//
+// A cross-project move writes the task's own subject and not the order's, so
+// nothing arbitrates it against a placement decided before it — and a key
+// minted for this project's order, written onto a task now filed in another,
+// puts it wherever that key happens to fall on the other project's board. And
+// a placement at or below a position the task has already been written at is
+// one this row already reflects: applying it would move the key backwards on
+// a redelivery. Both are decided from the row at this position, which every
+// node holds identically.
+func placeTask(ctx context.Context, tx *sql.Tx, c applyContext, project string,
+	placement Placement) (int, error) {
+
+	task, held, err := readTask(ctx, tx, placement.Task)
+	switch {
+	case err != nil:
+		return 0, err
+	case !held, task.Project != project,
+		c.packed <= int64(max(task.Version, task.ScopedThrough)):
+		return 0, nil
+	}
+	task.Rank = placement.Rank
+	task.ScopedThrough = uint64(c.packed)
+	document, err := json.Marshal(task)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: encode task %s at %s: %w",
+			placement.Task, c.position, err)
+	}
+	moved, err := tx.ExecContext(ctx, `
+		UPDATE tracker_tasks SET rank = ?, scoped_through = ?, document = ?
+		WHERE id = ?`,
+		string(placement.Rank), c.packed, document, placement.Task)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: move task %s at %s: %w",
+			placement.Task, c.position, err)
+	}
+	return affected(moved)
 }
 
 // applyEviction writes the gate that drops a node's records.

@@ -114,7 +114,7 @@ func suitePayload(kind pages.ObjectKind, id string) (pages.OpKind, any, pages.Sc
 		body := "# " + id + "\n\nedited\n"
 		return pages.OpPatch, pages.PagePatch{
 			V: pages.DocumentVersion, Body: &body,
-			Labels: []string{"runbook", "suite"},
+			Labels: &[]string{"runbook", "suite"},
 		}, pages.ScopeSet{Subject: true, Container: suiteContainer}
 	case pages.KindEviction:
 		return pages.OpEviction, pages.Eviction{

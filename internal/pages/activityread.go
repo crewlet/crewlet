@@ -80,8 +80,14 @@ type PageChange struct {
 
 // PageActivity is a page of the change feed.
 type PageActivity struct {
-	Changes    []PageChange `json:"changes"`
-	NextCursor string       `json:"next_cursor,omitempty"`
+	Changes []PageChange `json:"changes"`
+
+	// NextCursor resumes strictly before this page's oldest change, and is
+	// empty when nothing older matches. It is minted from one row read past
+	// the page, so a feed that ends exactly at the limit mints none. A
+	// RENDERER THAT DRAWS [PageActivity.Changes] MUST READ IT: the length of
+	// the list is the page, not the history.
+	NextCursor string `json:"next_cursor,omitempty"`
 
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
@@ -89,7 +95,10 @@ type PageActivity struct {
 	Complete       bool               `json:"complete"`
 }
 
-// MaxPageChanges is how many changes one page of the feed carries.
+// MaxPageChanges is how many changes one page of the feed carries — a larger
+// limit is lowered to it — and it bounds a PAGE, never what the feed reaches:
+// [PageActivity.NextCursor] walks back through every change the page history
+// holds.
 //
 // ONE HUNDRED, half the tracker's activity feed and twice its inbox, because
 // this list sits between them: it is SCROLLED like a feed rather than worked
@@ -174,10 +183,10 @@ func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivit
 
 // readPageActivity reads one page of the change feed.
 //
-// THE JOIN IS LEFT, for the reason the tracker's inbox gives about the same
-// shape: a history entry outlives the page it names — a purge destroys the
-// head and the entries are what say it ever existed — and a feed that dropped
-// those rows would lose exactly the changes somebody is looking for.
+// THE JOIN IS LEFT so a history row is never dropped for want of a head. Every
+// row has one today: a purge deletes a page's history in the same transaction
+// as its head ([Applier.applyPurge]), so what a purged page leaves behind is
+// its deletion marker rather than entries in this feed.
 func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 	limit int) ([]PageChange, string, error) {
 

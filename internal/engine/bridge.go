@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -15,24 +16,50 @@ import (
 // A native tool loop keeps its calls on a surface in memory, and the turn
 // writes them when it ends. A BRIDGED run cannot: its calls are made by a
 // process outside the engine, minutes or hours apart, and the run can outlive
-// the node that started it. So each one is appended to the run's own row in
-// the coordination store, which is the same row the resume reads — and without
-// it a restart mid-run leaves the reviewer judging a turn whose entire tool log
-// is gone, which the delivery check reads as a turn that acted on nothing. The
-// row does not always keep every call: see [sandbox.MaxBridgeCalls].
+// the node that started it. So each one is recorded in the fleet's
+// coordination store as a record of its own, under the run and its launch —
+// see [sandbox.PendingStore.AppendBridgeCall] — and the resume reads every one
+// of them back. Without that log a restart mid-run leaves the reviewer judging
+// a turn whose entire tool log is gone, which the delivery check reads as a
+// turn that acted on nothing.
+
+// resumeBridged reads what an agent-mode run called over the bridge, for the
+// phase its resume rebuilds.
+//
+// EVERY CALL, from the run's own log in the coordination store — the whole
+// record, since the process collecting a run may not be the one that launched
+// it and its surface has executed nothing. A native resume replays its own
+// conversation instead and reads nothing here, so a store it cannot reach does
+// not stop it.
+//
+// A READ THAT FAILS FAILS THE RESUME, which the coordinator hands back for a
+// retry. Resuming on an empty log instead would have the delivery check read a
+// turn that answered somebody as one that reached nobody, and send it round to
+// answer them again.
+func (e *Engine) resumeBridged(ctx context.Context, in resumeInput) ([]ledger.Call, error) {
+	if !in.State.AgentRun {
+		return nil, nil
+	}
+	if e.sandboxPending == nil {
+		return nil, fmt.Errorf("%w: run %s is an agent-mode run and this node holds no run "+
+			"store to read its bridged calls from", sandbox.ErrResumeUnavailable, in.Run.TurnID)
+	}
+	logged, err := e.sandboxPending.BridgeCalls(ctx, in.Run)
+	if err != nil {
+		return nil, err
+	}
+	return bridgedCalls(logged), nil
+}
 
 // bridgedCalls turns a run's durable bridged-call log into the ledger shape
 // the resumed phase reads.
 //
-// THE ONLY RECORD AN AGENT-MODE RESUME HAS. The process collecting a run may
-// not be the one that launched it, so its tool surface is fresh and has
-// executed nothing: the delivery check, the submission's citations and the
-// iteration ledger all read this list. It is what the row kept, which is not
-// always every call (see [sandbox.MaxBridgeCalls]), and the count of the calls
-// the row dropped ([sandbox.PendingRun.BridgeCallsElided]) is not passed on —
-// so each of those readers takes this list as the whole run. A call whose arguments
-// cannot be decoded keeps its name and loses its arguments, which renders one
-// ledger line worse — failing the resume over it would lose the whole turn.
+// The delivery check, the submission's citations and the iteration ledger all
+// read the result, so it keeps every field they read. A call whose arguments
+// cannot be decoded — or that the store did not keep, see
+// [sandbox.BridgeCall.ArgsBytes] — keeps its name and loses its arguments,
+// which renders one ledger line worse; failing the resume over it would lose
+// the whole turn.
 func bridgedCalls(logged []sandbox.BridgeCall) []ledger.Call {
 	out := make([]ledger.Call, 0, len(logged))
 	for _, call := range logged {
@@ -58,7 +85,7 @@ func decodeBridgeArgs(raw string) map[string]any {
 	return args
 }
 
-// bridgeLedger appends a bridged run's calls to its pending-run row.
+// bridgeLedger records a bridged run's calls in the run's durable log.
 type bridgeLedger struct{ store sandbox.PendingStore }
 
 var _ mcpbridge.Ledger = bridgeLedger{}
@@ -71,9 +98,9 @@ func (l bridgeLedger) Append(ctx context.Context, runID string, call tools.Call)
 	}
 	_, err := l.store.AppendBridgeCall(ctx, runID, sandbox.BridgeCall{
 		Name: call.Name,
-		// ENCODED HERE, once. The row is JSON in the coordination store,
-		// so a decoded map would be re-encoded by the store's own pass —
-		// and a large id survives one round trip through a
+		// ENCODED HERE, once. The record is JSON in the coordination
+		// store, so a decoded map would be re-encoded by the store's own
+		// pass — and a large id survives one round trip through a
 		// json.Number-aware decode and not two through the default one.
 		Args:   encodeArgs(call.Args),
 		Output: call.Output,
@@ -82,7 +109,7 @@ func (l bridgeLedger) Append(ctx context.Context, runID string, call tools.Call)
 	return err
 }
 
-// encodeArgs renders a call's arguments as the JSON text the row holds.
+// encodeArgs renders a call's arguments as the JSON text the record holds.
 //
 // An UNENCODABLE argument is not an error worth failing a log append over: the
 // call already ran. It records as empty, with the name and outcome intact,

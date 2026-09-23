@@ -111,23 +111,59 @@ func TestAnUnsetValueIsItsOwnColumn(t *testing.T) {
 	}
 }
 
-// A COLUMN FILTER NARROWS THE WHOLE QUERY, which is how a board loads one
-// column further — and why a grouped answer mints no cursor.
-func TestAColumnFilterNarrowsToThatColumn(t *testing.T) {
+// ONE COLUMN IS A LIST, AND IT PAGES TO THE END.
+//
+// A board carries a bounded slice of each column and no cursor, so the rows past
+// a column's slice are reachable only by asking for that column on its own —
+// and when that question answered as a one-column board it stopped at the same
+// slice, so the rest of a long column was reachable nowhere. `group=` is a flat
+// query with a cursor: every row of the column arrives, page by page, and none
+// from any other.
+func TestOneColumnIsAListThatPagesToTheEnd(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	seedBoard(t, r)
 
-	answer := r.ask(map[string]any{
-		"container": "project:ENG", "group_by": "status",
-		"group": string(tracker.StatusTodo), "show_closed": "true",
-	})
-	if len(answer.Groups) != 1 {
-		t.Fatalf("naming one column answered %d of them", len(answer.Groups))
+	var walked []string
+	cursor := ""
+	for page := 0; ; page++ {
+		if page > 3 {
+			t.Fatalf("a three-row column was still paging after %d pages", page)
+		}
+		params := map[string]any{
+			"container": "project:ENG", "group_by": "status",
+			"group": string(tracker.StatusTodo), "show_closed": "true",
+			"limit": 1,
+		}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		answer := r.ask(params)
+		if len(answer.Groups) != 0 {
+			t.Fatalf("naming one column answered %d columns — a column "+
+				"answered as a board stops at its slice and mints no cursor",
+				len(answer.Groups))
+		}
+		if answer.TotalHint != 3 {
+			t.Fatalf("the column's hint is %d, want its own 3", answer.TotalHint)
+		}
+		for _, row := range answer.Rows {
+			if row.Status != tracker.StatusTodo {
+				t.Fatalf("the todo column answered %s, which is %s", row.ID,
+					row.Status)
+			}
+			walked = append(walked, row.ID)
+		}
+		if answer.NextCursor == "" {
+			break
+		}
+		cursor = answer.NextCursor
 	}
-	if answer.Groups[0].Count != 3 {
-		t.Fatalf("the named column counts %d, want 3", answer.Groups[0].Count)
+	if len(walked) != 3 {
+		t.Fatalf("paging the todo column reached %v, want all three of its rows",
+			walked)
 	}
+
 	// AND THE TOTALS FOLLOW IT, because `group` narrows the predicate
 	// rather than filtering the answer afterwards.
 	scoped := r.ask(map[string]any{
@@ -138,6 +174,123 @@ func TestAColumnFilterNarrowsToThatColumn(t *testing.T) {
 	if len(scoped.Totals) != 1 || scoped.Totals[0].Value == nil ||
 		*scoped.Totals[0].Value != 3 {
 		t.Fatalf("the total over one column is %v, want 3", scoped.Totals)
+	}
+}
+
+// ONE LANE IS A LIST TOO, narrowed on both axes.
+func TestOneLaneIsAListNarrowedOnBothAxes(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	seedBoard(t, r)
+
+	answer := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "status", "group_by2": "assignee",
+		"group": string(tracker.StatusTodo), "subgroup": "ana",
+		"show_closed": "true",
+	})
+	if len(answer.Groups) != 0 {
+		t.Fatalf("naming one lane answered %d columns", len(answer.Groups))
+	}
+	if len(answer.Rows) != 2 || answer.TotalHint != 2 {
+		t.Fatalf("ana's todo lane answered %d rows and a hint of %d, want 2 "+
+			"and 2", len(answer.Rows), answer.TotalHint)
+	}
+	for _, row := range answer.Rows {
+		if row.Status != tracker.StatusTodo || row.Assignee != "ana" {
+			t.Fatalf("ana's todo lane answered %s, which is %s and %q",
+				row.ID, row.Status, row.Assignee)
+		}
+	}
+}
+
+// ONE COLUMN WITH ITS LANES IS STILL A BOARD — AND ON A LABEL AXIS IT IS ONLY
+// THAT COLUMN.
+//
+// `group=` beside a second axis and no `subgroup=` asks for the lanes inside one
+// column. The column is named in the query's join-free form, which on a label
+// axis says only that a task HAS the label — so grouping what it admitted by
+// the joined value drew a column for every other label those tasks carry.
+func TestOneColumnWithItsLanesDrawsOnlyThatColumn(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.declareTags("api", "ui")
+	for i, spec := range []struct {
+		tags     []string
+		assignee string
+	}{
+		{[]string{"api", "ui"}, "ana"},
+		{[]string{"api"}, "bob"},
+		{[]string{"ui"}, "bob"},
+	} {
+		task := newTask("t-" + itoa(i))
+		task.Tags, task.Assignee = spec.tags, spec.assignee
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+itoa(i), task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+
+	answer := r.ask(map[string]any{
+		"container": "project:ENG", "group_by": "tag", "group_by2": "assignee",
+		"group": "api",
+	})
+	if len(answer.Groups) != 1 || answer.Groups[0].Key != "api" {
+		var keys []string
+		for _, group := range answer.Groups {
+			keys = append(keys, group.Key)
+		}
+		t.Fatalf("the api column with its lanes drew columns %v, want api alone",
+			keys)
+	}
+	if got := answer.Groups[0].Count; got != 2 {
+		t.Fatalf("the api column counts %d, want the 2 tasks carrying it", got)
+	}
+	if got := len(answer.Groups[0].Subgroups); got != 2 {
+		t.Fatalf("the api column has %d lanes, want ana's and bob's", got)
+	}
+}
+
+// A BOARD REFUSES A CURSOR, AND ONE COLUMN REFUSES A PER-COLUMN BOUND.
+//
+// A grouped read never applied a cursor, so a caller paging a board was handed
+// its first page again, for ever, with nothing saying so. And one column is a
+// list, bounded by `limit` — `group_limit` would be a second spelling of it that
+// the answer ignored.
+func TestTheGroupingKeysThatWouldBeIgnoredAreRefused(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		params map[string]any
+		want   string
+	}{
+		"a cursor on a board": {
+			map[string]any{"group_by": "status", "cursor": "abc"},
+			"a board has no cursor"},
+		"a cursor on one column's lanes": {
+			map[string]any{"group_by": "status", "group_by2": "assignee",
+				"group": "todo", "cursor": "abc"},
+			"a board has no cursor"},
+		"a per-column bound on one column": {
+			map[string]any{"group_by": "status", "group": "todo",
+				"group_limit": 5},
+			"answers as a flat page"},
+		"a per-column bound on one lane": {
+			map[string]any{"group_by": "status", "group_by2": "assignee",
+				"group": "todo", "subgroup": "ana", "group_limit": 5},
+			"answers as a flat page"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			params := map[string]any{"container": "project:ENG"}
+			for key, value := range tc.params {
+				params[key] = value
+			}
+			_, err := tracker.ParseQuery(tracker.MapParams(params), wednesday, berlin)
+			if err == nil {
+				t.Fatalf("%v was accepted", tc.params)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("the refusal %q does not say %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -322,8 +475,9 @@ func TestAColumnFilterOnAJoinedAxisNarrowsTheTotals(t *testing.T) {
 		"container": "project:ENG", "group_by": "f.impact",
 		"group": "o-high", "totals": "points:sum,tasks:count",
 	})
-	if len(byField.Groups) != 1 || byField.Groups[0].Count != 2 {
-		t.Fatalf("naming one field column answered %v", byField.Groups)
+	if len(byField.Groups) != 0 || len(byField.Rows) != 2 {
+		t.Fatalf("naming one field column answered %d columns and %d rows, "+
+			"want a list of its 2 rows", len(byField.Groups), len(byField.Rows))
 	}
 	if got := totalOf(t, byField, "points:sum"); got.Value == nil || *got.Value != 8 {
 		t.Fatalf("the total over one field column is %v, want 8 — the third "+

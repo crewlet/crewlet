@@ -259,6 +259,16 @@ const TotalHintCeiling = 10_000
 // must read `next_cursor` or `total_hint` beside it: the length of `rows` is
 // the page, not the answer.
 //
+// PageDefault IS SIZED FOR THE READER THAT TAKES IT MOST: a seat's
+// `list_work_items`, which names no limit unless the model does, and whose
+// answer is refused past the 64 KiB one tool answer may weigh
+// (internal/agent/builtin's ToolAnswerBytes). A typical row — a sixty-byte
+// title, an assignee, a due date, no blockers — is about 470 bytes of the
+// indented JSON that tool sends, so fifty are about 23 KiB: a third of the
+// ceiling, the rest left for rows carrying blockers and long titles. No page
+// size keeps every page under it — a row at every cap is about 8.7 KiB, both
+// measured on this row type — and past it the tool refuses rather than cuts.
+//
 // PageMax HAS A CEILING OF ITS OWN: [loadBlockers] binds the whole page's ids,
 // plus one, in ONE statement, so it has to stay under the parameter limit
 // internal/store states every engine it runs on accepts — 999, its
@@ -386,13 +396,14 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			return err
 		}
 		rowWhere, rowArgs := andPage(where, args, page, pageArgs)
-		if q.GroupBy != "" {
+		if q.Grouped() {
 			// A GROUPED ANSWER IS A DIFFERENT SHAPE, and the flat
 			// rows stay empty — see [Answer.Groups].
-			// A GROUPED ANSWER MINTS NO CURSOR AND TAKES NONE —
-			// see [Answer.Groups] — so it reads the unpaged
-			// predicate, which is also what its per-column counts
-			// are over.
+			// A GROUPED ANSWER MINTS NO CURSOR AND TAKES NONE — the
+			// grammar refuses one, see [Query.Grouped] — so it reads
+			// the unpaged predicate, which is also what its
+			// per-column counts are over. A PINNED column is not
+			// this branch: it is a list, see [Query.Pinned].
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			groups, err := readGroups(ctx, tx, q, fields, where, args, terms)
 			if err != nil {
@@ -921,6 +932,18 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			return "", nil, err
 		}
 		clause, values := axis.filter(q.Group)
+		add(clause, values...)
+	}
+	// AND A LANE FILTER IS ONE TOO, for the same reason and in the same
+	// form: `subgroup=` names a cell on the second axis, and a pinned lane
+	// answers as a list ([Query.Pinned]) whose rows, hint and totals all
+	// have to be that lane's.
+	if q.Subgroup != "" && !branch {
+		axis, err := compileGroup(q.GroupBy2, fields)
+		if err != nil {
+			return "", nil, err
+		}
+		clause, values := axis.filter(q.Subgroup)
 		add(clause, values...)
 	}
 

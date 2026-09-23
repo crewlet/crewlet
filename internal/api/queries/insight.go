@@ -128,7 +128,7 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	//
 	// DEGRADES like the two reads above, and for the same reason: the rows
 	// are what the caller came for.
-	key, siblings := s.attemptsOf(ctx, id, records)
+	key, siblings, more := s.attemptsOf(ctx, id, records)
 	return map[string]any{
 		"turn_id": id,
 		// The unit of work this run was an attempt at, and every run of it
@@ -137,7 +137,17 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// which is a trigger with nothing to collapse on.
 		"work_key": key,
 		"attempts": siblings,
-		"events":   records,
+		// TRUE WHEN `attempts` IS NOT EVERY RUN: the store held more than
+		// [store.MaxTurnPage] runs of this work key, and `attempts` is the
+		// NEWEST of them, oldest first — so its first element is not the
+		// first attempt and a position counted from it is wrong. Every run
+		// is the `turns` answer with `work_key=` AND `days=`
+		// [store.MaxTurnDays], paged by its `next` cursor: the runs left
+		// out here are the OLDEST, and `turns` without `days` reads only
+		// [store.DefaultTurnDays] back — the window the oldest runs are
+		// the likeliest to have left.
+		"attempts_truncated": more,
+		"events":             records,
 		// SAYS WHAT IS MISSING, exactly as `trace` does. Additive, so a
 		// client that predates the field is unaffected — and one that has it
 		// can say the gap is the middle rather than warning that the page
@@ -170,9 +180,13 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 // and thirty days old found its work key and then reported no attempt at all,
 // including the one being read. MaxTurnDays is that same horizon, so the two
 // halves of this answer describe one window.
+//
+// THE THIRD RETURN SAYS THE LIST IS NOT EVERY RUN — the store read a run past
+// the page. Reported rather than assumed away, because the list is reversed
+// below and a cut one would silently renumber every attempt in it.
 func (s Sources) attemptsOf(ctx context.Context, id string,
 	records []store.EventRecord,
-) (string, []store.Turn) {
+) (string, []store.Turn, bool) {
 	key := ""
 	for _, rec := range records {
 		if rec.WorkKey != "" {
@@ -181,7 +195,7 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 		}
 	}
 	if key == "" {
-		return "", []store.Turn{}
+		return "", []store.Turn{}, false
 	}
 	// EVERY RUN, which is why the page is the ceiling rather than the
 	// default. This is an enumeration bounded by the broker's own delivery
@@ -191,7 +205,12 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 	// DefaultTurnPage would have tied "attempt 3 of 4" to a knob sized for
 	// a scannable list, so shrinking that list would silently start
 	// miscounting attempts.
-	rows, err := s.Events.Turns(ctx, store.TurnQuery{
+	//
+	// THE PAGE IS STILL READ WITH ITS EVIDENCE ROW although that budget sits
+	// far below it, because the budget is the broker's per-message count and
+	// nothing in this read can see or enforce it: the flag is what reports a
+	// work key that outran it, rather than a list that silently renumbers.
+	rows, more, err := s.Events.Turns(ctx, store.TurnQuery{
 		WorkKey:   key,
 		SinceDays: store.MaxTurnDays,
 		Limit:     store.MaxTurnPage,
@@ -199,12 +218,16 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 	if err != nil {
 		log.WarnContext(ctx, "turn_attempts_unavailable", "turn", id,
 			"work_key", key, "error", err)
-		return key, []store.Turn{}
+		return key, []store.Turn{}, false
+	}
+	if more {
+		log.WarnContext(ctx, "turn_attempts_truncated", "turn", id,
+			"work_key", key, "limit", store.MaxTurnPage)
 	}
 	// OLDEST FIRST, which the listing is not: "attempt 2 of 3" has to count
 	// from the one that ran first, whatever order the list was built in.
 	slices.Reverse(rows)
-	return key, rows
+	return key, rows, more
 }
 
 // TurnClosingEvents is how many of a long turn's last rows are recovered
@@ -290,17 +313,18 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	limit := Clamp(p.Int("limit", 0), DefaultPhasePage, store.MaxPhasePage)
-	records, err := s.Events.Phases(ctx, p.String("role"), limit, before)
+	records, more, err := s.Events.Phases(ctx, p.String("role"), limit, before)
 	if err != nil {
 		return nil, err
 	}
 	// The cursor is the LAST row's key, echoed rather than left for a client
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
 	// from a rendered timestamp would lose the sub-second precision the
-	// tiebreak depends on. It is offered only on a FULL page — a short one is
-	// the end of the record, and a cursor there would page forever.
+	// tiebreak depends on. It is offered only when the store READ a row past
+	// this page — a page that merely filled is also what a record of exactly
+	// `limit` phases answers, and a cursor there leads to an empty page.
 	next := map[string]string{}
-	if len(records) == limit {
+	if more {
 		last := records[len(records)-1]
 		next = map[string]string{
 			"before_time": last.Time.UTC().Format(time.RFC3339Nano),

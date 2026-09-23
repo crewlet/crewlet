@@ -63,6 +63,14 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// closed one are decisions, so they are taken under the same
 		// singleton duty as every other sweep rather than by a clock.
 		jobs = append(jobs, maintenance.ChannelJobs(a2a.NewCoordStore(fleet))...)
+		// And the bridged coding runs' call logs, for the same reason:
+		// their bucket has no age, because a parked run's calls are what
+		// its resume is judged on days later, so the records a run's own
+		// lifecycle failed to purge are found by asking which launches no
+		// run names. Contributed whether or not this node runs a sandbox:
+		// the records are the fleet's, and a peer that did may have died
+		// holding some.
+		jobs = append(jobs, maintenance.SandboxJobs(sandbox.NewCoordStore(fleet))...)
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can

@@ -1,13 +1,16 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
@@ -530,5 +533,87 @@ func TestARunRecordsTheAgentIDOfItsPinnedTurn(t *testing.T) {
 	}
 	if got := launcher.runTurnRef(t.Context()).AgentID; got != want.String() {
 		t.Errorf("the run records agent id %q, want %q: the id of the turn's own organization", got, want)
+	}
+}
+
+// A DELIVERY IN THE MIDDLE OF A LONG RUN IS ONE THE RESUME SEES.
+//
+// The run's row keeps a bounded list of a bridged run's calls, for older
+// builds, that drops its middle once a run makes more than
+// [sandbox.MaxBridgeCalls]. A resume that read that list could not see a Slack
+// post made in the middle of a long run: the delivery check counted nobody
+// reached, and a turn that had answered somebody could be sent round to answer
+// them again. What the resume reads is every call.
+func TestTheResumeSeesADeliveryInTheMiddleOfALongRun(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(coordmemory.NewFleet())
+	ctx := t.Context()
+	if err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "t-long", AgentHandle: "swe"},
+		sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	total := sandbox.MaxBridgeCalls + 50
+	delivery := total / 2
+	for i := range total {
+		call := sandbox.BridgeCall{Name: "read_page", Output: "a page"}
+		if i == delivery {
+			call = sandbox.BridgeCall{Name: "slack_post", Args: `{"channel":"C1"}`, Output: "posted"}
+		}
+		if ok, err := store.AppendBridgeCall(ctx, "t-long", call); err != nil || !ok {
+			t.Fatalf("append %d = %v, %v", i, ok, err)
+		}
+	}
+	run, _, err := store.Get(ctx, "t-long")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	// THE PREMISE: the row's own list lost the delivery. Were it still
+	// there, this test could not tell the two sources apart.
+	for _, kept := range run.BridgeCalls {
+		if kept.Name == "slack_post" {
+			t.Fatal("the row's bounded list kept the middle call, so this case proves nothing")
+		}
+	}
+
+	e := &Engine{sandboxPending: store}
+	calls, err := e.resumeBridged(ctx, resumeInput{
+		Run: run, State: execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+	})
+	if err != nil {
+		t.Fatalf("resumeBridged: %v", err)
+	}
+	if len(calls) != total {
+		t.Fatalf("the resume read %d calls, want all %d the run made", len(calls), total)
+	}
+	surface := turn.Surface{Deliveries: map[string]string{"slack_post": "slack"}}
+	if !turn.DeliveredTo(calls, surface, turn.ToolReply("slack")) {
+		t.Error("the delivery check does not count the post the run made, so the turn would " +
+			"be sent round to post it again")
+	}
+}
+
+// failingCalls is a run store whose bridged-call log cannot be read.
+type failingCalls struct{ sandbox.PendingStore }
+
+func (failingCalls) BridgeCalls(context.Context, sandbox.PendingRun) ([]sandbox.BridgeCall, error) {
+	return nil, errors.New("coordination store unreachable")
+}
+
+// A LOG THAT CANNOT BE READ FAILS THE RESUME, which the coordinator hands back
+// for a retry. Resumed on nothing instead, the turn would be judged to have
+// reached nobody. A NATIVE resume reads no log at all, so it is not stopped by
+// one it does not need.
+func TestAResumeWhoseLogCannotBeReadIsHandedBack(t *testing.T) {
+	t.Parallel()
+	e := &Engine{sandboxPending: failingCalls{sandbox.NewCoordStore(coordmemory.NewFleet())}}
+	in := resumeInput{Run: sandbox.PendingRun{TurnID: "t-1", LaunchID: "l-1"}}
+
+	in.State = execstate.State{Version: execstate.Version, AgentRun: true, Round: 1}
+	if _, err := e.resumeBridged(t.Context(), in); err == nil {
+		t.Error("an agent-mode resume went ahead on a log it could not read")
+	}
+	in.State = execstate.State{Version: execstate.Version, Round: 1}
+	if calls, err := e.resumeBridged(t.Context(), in); err != nil || calls != nil {
+		t.Errorf("a native resume read the bridged log: %v, %v", calls, err)
 	}
 }

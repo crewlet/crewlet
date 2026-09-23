@@ -93,25 +93,41 @@ func eachEntryUnder(ctx context.Context, kv jetstream.KeyValue,
 	return watchWalk(ctx, kv, keys, what, visit)
 }
 
+// eachKeyUnder is [eachEntryUnder] without the values: the broker sends each
+// matching key's headers and no body.
+//
+// For a listing whose answer is the KEYS — which records exist, how many,
+// what their numbers are — over records whose values can each be megabytes.
+// Reading those values to throw them away would move the whole log to answer
+// a question about its shape.
+func eachKeyUnder(ctx context.Context, kv jetstream.KeyValue,
+	keys, what string, visit func(key string) error) error {
+
+	return watchWalk(ctx, kv, keys, what, func(kve jetstream.KeyValueEntry) error {
+		return visit(kve.Key())
+	}, jetstream.MetaOnly())
+}
+
 // watchWalk walks a bucket over an ordered ephemeral consumer.
 //
-// The transport for a broker that cannot answer a batched read — see the file
-// doc for the three conditions. It carries the key AND the value together, so
-// there is still no Get per name here, and its honesty rule is the one
-// [directWalk] copies: the nil entry — and ONLY the nil entry — ends the walk,
-// and a CLOSED CHANNEL is a failure named as one.
+// The one transport every listing in this package takes; the file doc says
+// why the batched direct read is not another. It carries each key with its
+// value (or, with [jetstream.MetaOnly] in opts, with its headers alone), so
+// there is no Get per name here, and its honesty rule is that the nil entry —
+// and ONLY the nil entry — ends the walk, and a CLOSED CHANNEL is a failure
+// named as one.
 //
 // It also owns the watcher, so there is no early-return path that leaks one —
 // the abandoned-listing case the client's blocking 256-entry handoff could
 // park a goroutine and a server-side consumer on for ever.
 func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string,
-	visit func(jetstream.KeyValueEntry) error) error {
+	visit func(jetstream.KeyValueEntry) error, opts ...jetstream.WatchOpt) error {
 
 	// Watch rather than WatchAll, so this transport narrows server-side too.
 	// A filter both walks honour is what keeps them interchangeable: one that
 	// narrowed and one that did not would hand a caller a different bucket
 	// depending on which answered.
-	w, err := kv.Watch(ctx, keys, jetstream.IgnoreDeletes())
+	w, err := kv.Watch(ctx, keys, append([]jetstream.WatchOpt{jetstream.IgnoreDeletes()}, opts...)...)
 	if err != nil {
 		return unavailable("read "+what, err)
 	}

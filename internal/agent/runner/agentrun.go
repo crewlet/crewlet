@@ -173,11 +173,6 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // calling submit_work over the bridge, and replaying that call through a fresh
 // submission tool is what recovers the outcome it declared.
 //
-// THE LOG IS WHAT THE RUN'S ROW KEPT, which is not always every call.
-// [Resume.Bridged] says which calls it can be missing; nothing here can tell
-// that it is, so a submission or a delivery among them is treated as never
-// made.
-//
 // An absent submission is NOT a value — the same rule a native pass follows.
 // A run that stopped without saying what it did is rescued as incomplete and
 // judged on its record, rather than having a delivery inferred from the prose

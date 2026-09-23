@@ -450,6 +450,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	if err != nil {
 		return err
 	}
+	bridged, err := e.resumeBridged(ctx, in)
+	if err != nil {
+		return err
+	}
 	tel := e.describeResume(ctx, company, in)
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply)
@@ -508,12 +512,12 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 					CostUSD:       in.CostUSD,
 					DeliveredRefs: in.DeliveredRefs,
 				},
-				// THE RUN'S OWN TOOL CALLS, off its durable row. An
-				// agent-mode executor called them over the bridge, possibly
-				// in another process, so this list is the only record of
-				// what the phase did — its submission included — though
-				// not always every call; see [bridgedCalls].
-				Bridged: bridgedCalls(in.Run.BridgeCalls),
+				// THE RUN'S OWN TOOL CALLS, every one, off its durable
+				// log. An agent-mode executor called them over the bridge,
+				// possibly in another process, so this list is the only
+				// record of what the phase did — its submission included.
+				// See [Engine.resumeBridged].
+				Bridged: bridged,
 			},
 		})
 	if err != nil {
@@ -824,9 +828,9 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 			// history that stopped at the moment the run detached and
 			// planned as though the coding work had never happened.
 			ConversationKey: t.ConversationKey,
-			// The brief and the delivery obligation, so the resumed turn
-			// has both when the trigger is long gone. Neither can be
-			// recovered from the row any other way.
+			// The delivery obligation, so the resumed turn has it when
+			// the trigger is long gone. It cannot be recovered any other
+			// way; see [resumeReply].
 			Reply: t.Reply,
 		},
 		Brief:      brief,

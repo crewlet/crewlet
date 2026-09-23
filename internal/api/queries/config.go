@@ -15,9 +15,6 @@ import (
 // reference by name — which is what makes /config the one prefix never
 // eligible for anonymous read.
 
-// ConfigAuditLimit bounds the revision history a dashboard asks for.
-const ConfigAuditLimit = 50
-
 // configDocument answers the active company, redacted.
 //
 // NULL when nothing is active, not an error: a deployment before its first
@@ -75,10 +72,16 @@ func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 	return map[string]any{"kind": kind, "ids": ids}, nil
 }
 
-// configAudit answers the revision history.
+// configAudit answers one page of the revision history — the same
+// [configapi.RevisionHistory] GET /config/revisions serves, with its
+// `truncated` flag.
+//
+// UNCLAMPED HERE: [configapi.Service.Revisions] applies the page bounds for
+// both surfaces, so a limit is not clamped twice by two rules that can drift.
+// What differs is parsing alone — a `limit` that is not a number is absent
+// here, as [Params.Int] reads every integer parameter, and a 400 on REST.
 func (s Sources) configAudit(ctx context.Context, p Params) (any, error) {
-	limit := Clamp(p.Int("limit", ConfigAuditLimit), ConfigAuditLimit, configapi.MaxPage)
-	return s.Config.Revisions(ctx, limit, p.Int("offset", 0))
+	return s.Config.Revisions(ctx, p.Int("limit", 0), p.Int("offset", 0))
 }
 
 // configDiff compares one revision against the active one.

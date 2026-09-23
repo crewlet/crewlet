@@ -26,8 +26,8 @@ const EpisodistSource = "episodist"
 // sent), so everything past that cut reached no vector, and therefore no
 // `query_episodes` result and no `## Similar prior work` prefetch. What was
 // lost was SEARCHABILITY and never the text: `task_summary` holds the whole
-// summary, and [Episodes.Recent], [Episodes.ForConversation] and the recent
-// and conversation modes of `query_episodes` all return it in full.
+// summary, and [Episodes.Recent], [Episodes.List] and every mode of
+// `query_episodes` return it in full.
 //
 // The fix is the one internal/search made for the knowledge corpus — split
 // into overlapping windows, embed every one, score the row as its NEAREST
@@ -333,8 +333,8 @@ func (w *Episodist) vector(ctx context.Context, summary string) [][]float32 {
 		log.WarnContext(ctx, "episode_embedding_partial", "error", failure.Error(),
 			"windows_embedded", len(out), "windows", len(windows),
 			"detail", "recall reaches the part of task_summary that was "+
-				"embedded; the whole summary is still on the row and in "+
-				"query_episodes' recent and conversation modes")
+				"embedded; the whole summary is still on the row, and "+
+				"query_episodes without a query lists it")
 	}
 	return out
 }

@@ -32,8 +32,10 @@ import (
 // groups there is no single order to be after. What a board actually does is
 // load ONE column further, and that has a spelling already: `group=<value>`
 // narrows the query to that group, and it is an ordinary flat query with an
-// ordinary cursor. So a grouped answer mints no cursor and says how many rows
-// each group is holding back rather than pretending to page.
+// ordinary cursor ([Query.Pinned]) — `group=` and `subgroup=` together name
+// one lane the same way. So a grouped answer mints no cursor, refuses one
+// ([Query.Grouped]), and says how many rows each group holds — [Group.Count]
+// beside the rows it carries — rather than pretending to page.
 //
 // # Why the counts come from their own statement
 //
@@ -48,8 +50,11 @@ import (
 // SIXTY-FOUR, which is above every closed set this grammar groups on — six
 // statuses, four status groups, five priorities — and is a real bound only for
 // the open ones: assignee, tag, type and a custom field's options. A board
-// with more columns than that is not a board, and the count of what was left
-// out is on the answer rather than silently dropped.
+// with more columns than that is not a board, and the answer says columns were
+// left out — [Answer.GroupsTruncated], a flag and not a count, for the reason
+// that field gives — rather than dropping them in silence. The columns past it
+// are reached by narrowing the query until they fit, or one at a time with
+// `group=<key>`, which is a list ([Query.Pinned]).
 const MaxGroups = 64
 
 // MaxGroupsWithSubgroups and MaxSubgroups bound a SWIMLANE board, which costs
@@ -71,9 +76,9 @@ const MaxGroups = 64
 // Sixteen by sixteen is 256 cells, which is already more than a person reads
 // at once — a board wide enough to need scrolling in both directions is a
 // board nobody is using as a board. The first axis is therefore capped LOWER
-// when a second one is asked for, and the count that did not fit is reported
-// as it is for a single axis ([grouped.Truncated] and
-// [Group.SubgroupsTruncated]) rather than silently cut.
+// when a second one is asked for, and columns or lanes that did not fit are
+// reported as they are for a single axis — by flag, [grouped.Truncated] and
+// [Group.SubgroupsTruncated] — rather than silently cut.
 //
 // 1 + 16 × 18 = 289 statements, down from 4 225.
 const (
@@ -154,7 +159,7 @@ type groupAxis struct {
 	Order []string
 
 	// Exists is the JOIN-FREE form of this axis as a predicate, used when
-	// `group=<value>` narrows the whole query. It has to be join-free
+	// `group=<value>` or `subgroup=<value>` narrows the whole query. It has to be join-free
 	// because the narrowed predicate is shared with the count hint and
 	// the totals, and neither of those carries a join — so an axis
 	// expressed only as one would leave a header adding up the whole
@@ -525,7 +530,19 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if q.GroupBy2 != "" {
 		columns = MaxGroupsWithSubgroups
 	}
-	groups, truncated, err := groupCounts(ctx, tx, axis, where, args, columns)
+	// ONE COLUMN WITH ITS LANES is the one board that names a column, and
+	// the column has to be named in the JOINED form as well. `where`
+	// carries the join-free one, which says the task HAS that value — and
+	// on a label axis a task has several, so grouping what it admitted by
+	// the joined value drew a column for every other label those tasks
+	// carry.
+	counted, countArgs := where, args
+	if q.Group != "" {
+		clause, values := axis.joinedFilter(q.Group)
+		counted = "(" + where + ") AND " + clause
+		countArgs = append(append([]any{}, args...), values...)
+	}
+	groups, truncated, err := groupCounts(ctx, tx, axis, counted, countArgs, columns)
 	if err != nil {
 		return grouped{}, err
 	}
@@ -578,8 +595,12 @@ func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	// BOTH JOINS' ARGUMENTS RIDE ON THE AXIS, in statement order: the
 	// count statement writes its joins before its WHERE, so the outer
 	// join's binding comes first, then the inner's, then the predicate's.
-	// A NAMED SUBGROUP NARROWS THE INNER AXIS, exactly as `group` narrows
-	// the outer one — which is how a board loads one swimlane further.
+	// A NAMED SUBGROUP NARROWS THE INNER AXIS HERE in its JOINED form,
+	// beside the join-free one [compile] already put in `where`: on a label
+	// axis the join-free form says only that the task HAS the value, and
+	// grouping by the joined value would draw every other label too. Loading
+	// one lane further is `group=` with `subgroup=`, which is a list
+	// ([Query.Pinned]) rather than this.
 	if q.Subgroup != "" {
 		innerClause, innerArgs := inner.joinedFilter(q.Subgroup)
 		scoped += " AND " + innerClause

@@ -264,12 +264,29 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// that explain it — and a detail that left them out rendered a task
 	// filed with a severity as one that carried none, beside a board that
 	// had just filtered on that very field.
+	//
+	// THE THREAD IS A PAGE AND EACH BODY ON IT AN EXCERPT, so the two reads
+	// that reach the rest travel here too — the same two `get_work_item`
+	// takes, through the same [tracker.DetailWants]. `comments_cursor` is
+	// the answer's own `comments_cursor`, handed back for the page of older
+	// comments; `comment` names one comment by id and answers it WHOLE in
+	// place of the page, which is the only read that returns a body past
+	// [tracker.CommentBodyShown]. Without them a screen could show a
+	// thread's newest [tracker.DetailComments] comments and the opening of
+	// each, and nothing more of either.
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
+		CommentCursor: strings.TrimSpace(p.String("comments_cursor")),
+		Comment:       strings.TrimSpace(p.String("comment")),
 	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
+	case errors.Is(err, tracker.ErrNoComment):
+		// A COMMENT THIS TASK DOES NOT HOLD, which is a dead link rather
+		// than a broken node — the tracker scopes the id to the task, so
+		// an id from another item lands here too.
+		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
 	case err != nil:
 		return nil, err
 	}

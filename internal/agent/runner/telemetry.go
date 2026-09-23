@@ -660,8 +660,13 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		// The grant's refusals, which is what Notes is documented to
 		// carry for this phase. A child that asked for a tool it could
 		// not have is the first thing to look at when its answer is thin.
-		Notes:   rejectedNote(res.Rejected),
-		Backend: types.BackendNative,
+		Notes: rejectedNote(res.Rejected),
+		// A worker round that ended at its model's output cap, carried
+		// from the worker's own result so its card says its text or its
+		// submission may stop short — the flag the executor's own phases
+		// carry, from the same stop reason.
+		OutputTruncated: res.Truncated,
+		Backend:         types.BackendNative,
 		// The task's own status — ok / no_result / timed_out / skipped —
 		// which is the one field that says what became of it. It is a
 		// phase's structured verdict, so it rides the same field the
@@ -679,7 +684,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		Error:     events.ClipDiagnostic(res.Error),
 		ErrorKind: string(res.Status),
 	}
-	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
+	e.publishPhase(ctx, ev)
 }
 
 // rejectedNote renders a grant's refusals for the event's Notes field.
@@ -761,7 +766,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.Error = events.ClipDiagnostic(rec.Err.Error())
 		ev.ErrorKind = classifyError(rec.Err)
 	}
-	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
+	e.publishPhase(ctx, ev)
 }
 
 // classifyError names a failure's CLASS, for the one-word reason a dashboard
