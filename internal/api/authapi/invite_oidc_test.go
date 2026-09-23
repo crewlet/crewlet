@@ -192,6 +192,33 @@ func TestAnInvitationRedeemedThroughTheProviderLinksItsSubject(t *testing.T) {
 	}
 }
 
+// A PROVIDER REDEMPTION NOBODY CAN CONFIRM SPENDS NOTHING AND SIGNS NOBODY IN.
+//
+// The enrolment is a sequence of records, and one whose outcome could not be
+// established may not exist. The password redemption answers that with a 503
+// carrying the op id and no session; the provider redemption used to discard
+// the outcome and go on to spend the invitation, announce the link and open a
+// session for a person who may never have been written.
+//
+// Mutation: drop the landed check after the enrolment and a session opens.
+func TestAProviderRedemptionNobodyCanConfirmSignsNobodyIn(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	unknown := statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op-unknown"}
+	writer := &redemptionWriter{outcome: &unknown}
+	_, finished := roundTrip(t, idp, offeredInvitation{id: invitationID},
+		writer, &recordingAudit{}, "invite="+invitationID+"&login=dana.ops", "")
+	if finished == nil || finished.Code != http.StatusServiceUnavailable ||
+		finished.Header().Get("Retry-After") == "" {
+		t.Fatalf("an unconfirmed enrolment answered %+v, want 503 with a "+
+			"Retry-After", finished)
+	}
+	if len(writer.spent) != 0 || len(writer.starts) != 0 {
+		t.Errorf("an unconfirmed enrolment spent %+v and opened %+v, want neither",
+			writer.spent, writer.starts)
+	}
+}
+
 // THE INVITATION REDEEMED IS THE ONE SEALED INTO THE FLIGHT.
 //
 // The callback is a URL the provider sends a browser to, and anybody can add
@@ -374,7 +401,10 @@ func TestTheInvitationOffersTheProviderOnlyWhereThereIsOne(t *testing.T) {
 // with refusal when one is set.
 type redemptionWriter struct {
 	stubWriter
-	refusal  error
+	refusal error
+	// outcome, when set, is what every enrolment answers in place of a
+	// landed one — an unknown outcome is the case it exists for.
+	outcome  *statelog.Result
 	enrolled []iamdomain.Enrolment
 	spent    []iamdomain.InvitationSpend
 	starts   []iamdomain.SessionStart
@@ -384,8 +414,11 @@ func (w *redemptionWriter) Enrol(_ context.Context, in iamdomain.Enrolment) (
 	statelog.Result, error) {
 
 	w.enrolled = append(w.enrolled, in)
-	if w.refusal != nil {
+	switch {
+	case w.refusal != nil:
 		return statelog.Result{}, w.refusal
+	case w.outcome != nil:
+		return *w.outcome, nil
 	}
 	return applied(statelog.Position{}), nil
 }

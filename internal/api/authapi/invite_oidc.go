@@ -149,7 +149,7 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	attempt.Person = person
-	_, err = s.writer.Enrol(r.Context(), iamdomain.Enrolment{
+	enrolled, err := s.writer.Enrol(r.Context(), iamdomain.Enrolment{
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		// THE NAME THE PROVIDER ASSERTS is a display name the person can
 		// change, and nothing is keyed on it; the ADDRESS is the
@@ -178,6 +178,14 @@ func (s *Service) redeemThroughProvider(w http.ResponseWriter, r *http.Request,
 		default:
 			refuseEnrolment(w, r, "api_invite_enrol_failed", err)
 		}
+		return
+	}
+	if !landed(enrolled) {
+		// NO SPEND, NO LINK ANNOUNCED AND NO SESSION on an enrolment
+		// nobody can confirm, as the password redemption answers it: the
+		// op id is the invitation's own, so following the link again is
+		// the same enrolment.
+		unresolved(w, r, "api_invite_enrol_unresolved", enrolled)
 		return
 	}
 	s.spendInvitation(r, held, person, opID)
