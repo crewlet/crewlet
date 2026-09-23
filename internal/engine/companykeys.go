@@ -36,16 +36,26 @@ import (
 // guard rather than taking a nil for "mint whatever happens" — which is exactly
 // how the chart's key came to have none.
 //
-// # Why the mint is held, and why a read-back alone was not enough
+// # Why the mint is a create, and what the hold is still for
 //
-// The company's secret store is last-write-wins. Two nodes that each found the
-// key absent each minted one, and each read its own back when the other's
-// write had not landed yet, so both went on computing under different keys
-// while the store held one of them. A fresh fleet booting every node at once
-// is exactly when that happens. So the mint is taken under a fleet hold AND an
-// in-process gate: the hold keeps two nodes apart, and the gate keeps two
-// goroutines of this process apart, since a hold claimed again by the owner
-// that holds it answers yes.
+// The company's secret store is last-write-wins for a PUT. Two nodes that each
+// found the key absent each minted one, and each read its own back when the
+// other's write had not landed yet, so both went on computing under different
+// keys while the store held one of them. A fresh fleet booting every node at
+// once is exactly when that happens.
+//
+// The key is therefore written with a CREATE, which the store refuses over a
+// key that exists: whichever mint lands first is THE key, and every other
+// minter reads that one back. That is the whole of the correctness, and it is
+// the store's own — a lease cannot give it, because a holder paused past its
+// lease (a GC stop, a coordination write that hangs and then lands) writes
+// after a second holder has minted and read its key back, and a put then
+// splits the company exactly as it did with no hold at all.
+//
+// The fleet hold and the in-process gate stay, as the COURTESY they are: they
+// keep two nodes — and two goroutines of this process, since a hold claimed
+// again by the owner that holds it answers yes — from each running the mint's
+// guard and generating a key only one of them can keep.
 
 // companyKeyHoldTTL bounds how long a node that died while minting keeps every
 // other node from minting.
@@ -157,7 +167,9 @@ func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Estate, name,
 	if err != nil {
 		return "", fmt.Errorf("engine: mint %s: %w", name, err)
 	}
-	if err := store.Set(ctx, name, secrets.EncodeKey(minted), e.id, source,
+	// A CREATE, which a key that landed first refuses — see the file's
+	// header — and whoever's landed is the one read back.
+	if _, err := store.Create(ctx, name, secrets.EncodeKey(minted), e.id, source,
 		time.Now().UTC()); err != nil {
 		return "", fmt.Errorf("engine: store %s: %w", name, err)
 	}
@@ -171,7 +183,9 @@ func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Estate, name,
 	if err != nil {
 		return "", fmt.Errorf("engine: read back %s: %w", name, err)
 	}
-	log.Info("company_key_minted", "name", name, "source", source)
+	if value == secrets.EncodeKey(minted) {
+		log.Info("company_key_minted", "name", name, "source", source)
+	}
 	return value, nil
 }
 

@@ -33,6 +33,7 @@ type racingFleet struct {
 	mu     sync.Mutex
 	writes int
 	second chan struct{}
+	once   sync.Once
 }
 
 func newRacingFleet() *racingFleet {
@@ -40,25 +41,43 @@ func newRacingFleet() *racingFleet {
 }
 
 func (f *racingFleet) PutSecret(ctx context.Context, rec coord.SecretRecord) error {
-	if rec.Name != racedKey {
-		return f.sharedFleet.PutSecret(ctx, rec)
+	_, err := f.race(ctx, rec.Name, func() (bool, error) {
+		return true, f.sharedFleet.PutSecret(ctx, rec)
+	})
+	return err
+}
+
+// CreateSecret is held back exactly as a put is, so a mint written either way
+// meets the same interleaving.
+func (f *racingFleet) CreateSecret(ctx context.Context, rec coord.SecretRecord) (bool, error) {
+	return f.race(ctx, rec.Name, func() (bool, error) {
+		return f.sharedFleet.CreateSecret(ctx, rec)
+	})
+}
+
+// race holds the first write of the raced key back until a second has landed.
+func (f *racingFleet) race(ctx context.Context, name string, write func() (bool, error)) (
+	bool, error) {
+
+	if name != racedKey {
+		return write()
 	}
 	f.mu.Lock()
 	f.writes++
 	first := f.writes == 1
 	f.mu.Unlock()
 	if !first {
-		err := f.sharedFleet.PutSecret(ctx, rec)
-		close(f.second)
-		return err
+		wrote, err := write()
+		f.once.Do(func() { close(f.second) })
+		return wrote, err
 	}
 	select {
 	case <-f.second:
 	case <-time.After(300 * time.Millisecond):
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
 	}
-	return f.sharedFleet.PutSecret(ctx, rec)
+	return write()
 }
 
 // keyNode is a hand-built node over a shared fleet and coordination store:
@@ -127,6 +146,35 @@ func TestACompanyKeyIsMintedOnceWhenTwoNodesRaceForIt(t *testing.T) {
 		if key != stored {
 			t.Errorf("node %d derives under a key the store does not hold, so "+
 				"no peer can match anything it blinds", i)
+		}
+	}
+}
+
+// AND WHEN THE HOLD KEEPS NOBODY APART, THE STORE STILL DOES.
+//
+// The hold is a lease, and a lease cannot fence a write: a holder paused past
+// it — a GC stop, a coordination write that hangs and then lands — writes after
+// a second holder has minted and read its own key back. Two nodes with no
+// coordination store between them are that state with the timing removed: each
+// holds, each mints, and the first write lands after the second. A mint that
+// PUT its key split the company there; a mint that CREATES it leaves the second
+// write refused and both nodes deriving under the one key the store holds.
+func TestACompanyKeyIsMintedOnceWhenTheHoldKeepsNobodyApart(t *testing.T) {
+	t.Parallel()
+	fleet := newRacingFleet()
+	nodes := []*Engine{
+		keyNode(t, "node-a", fleet, nil),
+		keyNode(t, "node-b", fleet, nil),
+	}
+	if nodes[0].workerHold("company-key-"+racedKey, companyKeyHoldTTL) != nil {
+		t.Fatal("a node with no coordination store holds something, so this " +
+			"case is not the one it names")
+	}
+	got, stored := mintConcurrently(t, nodes, fleet)
+	for i, key := range got {
+		if key != stored {
+			t.Errorf("node %d derives under a key the store does not hold — a "+
+				"mint that put its key over the one that landed first", i)
 		}
 	}
 }
