@@ -200,6 +200,11 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 			"missing records are all still on the log — it halts its appliers to " +
 			"fetch what it could simply replay")
 	}
+	// AND A WRITE AT ZERO IS REFUSED WITH THE SAME WORD: the floor theorem
+	// does not hold until the node has applied up to the floor, so it
+	// refuses — but as a wait, through the fence as the engine wires it,
+	// and never as the snapshot the node does not need.
+	requireZeroRefused(t, e, "op-replaying", "node-replaying", statelog.ReasonBehind)
 
 	// AND THE PURGE IT LICENSED LANDS: the next record this node needs is
 	// gone, and only a snapshot can bring it back.
@@ -225,6 +230,29 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	if !rejoinRequested() {
 		t.Fatalf("the heartbeat did not ask for a snapshot for a node whose next "+
 			"record %d is gone", at.Seq+1)
+	}
+	requireZeroRefused(t, e, "op-below", "node-below", statelog.ReasonBelowFloor)
+}
+
+// requireZeroRefused publishes an eviction of a node nobody has ever evicted —
+// a subject with no anchor, so the write reaches the expectation-zero fence —
+// and requires the fence's refusal under want, with nothing appended.
+func requireZeroRefused(t *testing.T, e *Engine, opID, nodeID string, want statelog.Reason) {
+	t.Helper()
+	running := e.native.log.Domain(tracker.Domain{}.Name())
+	_, before, err := running.log.Bounds(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	_, err = e.native.writer.EvictNode(t.Context(), opID, nodeID)
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != want {
+		t.Fatalf("a write at an expectation of zero answered %v, want an "+
+			"Unavailable naming %q", err, want)
+	}
+	if _, after, err := running.log.Bounds(t.Context()); err != nil || after != before {
+		t.Fatalf("the log's last record is %d (err %v), want %d — a write the "+
+			"fence refused was appended", after, err, before)
 	}
 }
 
@@ -496,11 +524,12 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 	}
 
 	_, err = writer.EvictNode(t.Context(), "op-below", "node-below")
-	if !errors.Is(err, statelog.ErrUnavailable) {
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonBelowFloor {
 		t.Fatalf("a node at %d against a log whose first record is %d wrote at "+
-			"an expectation of zero (err %v), want %v — record %d is gone and "+
-			"it never applied it", at.Seq, missed+1, err, statelog.ErrUnavailable,
-			missed)
+			"an expectation of zero (err %v), want a %s refusal — record %d is "+
+			"gone and it never applied it", at.Seq, missed+1, err,
+			statelog.ReasonBelowFloor, missed)
 	}
 	if _, last, err := running.log.Bounds(t.Context()); err != nil || last != missed {
 		t.Fatalf("the log's last record is %d (err %v), want %d — an append "+

@@ -227,6 +227,38 @@ type Runner struct {
 	// which nothing inside the process moves. See [Runner.StreamIdentity].
 	foreign *foreignStream
 
+	// ahead is the verdict of the last reading that found this applier's
+	// checkpoint PAST the log's end ([Runner.ObserveEnd]), nil while none
+	// has or once a later one found the end at or past that checkpoint.
+	//
+	// # Why it is kept at all, when [Health.AheadOfLog] reads the end live
+	//
+	// Because the write path cannot afford the read. Fence 0 runs on every
+	// append and answers from what this node already knows, and this is
+	// what it knows: the heartbeat's reading every interval, the zero
+	// fence's reading within every write that reaches it, and the boot's.
+	//
+	// # Why it is NOT sticky, unlike foreign
+	//
+	// Because of what each reading can establish. A creation instant that
+	// moved is a fact about the broker, and nothing the process does moves
+	// it back. An end below the checkpoint can be one member's STALE view: a
+	// stream group without a leader lets a member answer with its own state,
+	// which trails the truth, so a verdict nothing could clear would stop a
+	// healthy node's writes over one election for the life of the process. So
+	// a later reading clears it — but only one whose end has reached THIS
+	// verdict's checkpoint, never merely one paired with a lower checkpoint:
+	// the first heartbeat of a boot reads the runner before its loop has
+	// loaded the row, and that zero says nothing about the checkpoint the row
+	// holds. A checkpoint this runner no longer stands at — a re-run over an
+	// adopted snapshot — drops it in [Runner.loadCursor] instead.
+	//
+	// What that costs is stated rather than hidden: once a restored log has
+	// been written past this node's checkpoint, nothing observable separates
+	// it from the history this node applied, the verdict clears, and so does
+	// the read side's — see [Runner.ObserveEnd].
+	ahead *aheadOfLog
+
 	// drain is this loop's measured records per second, smoothed.
 	//
 	// # Why it is measured rather than a constant
@@ -365,12 +397,70 @@ func (r *Runner) ObserveStream(live time.Time) bool {
 	return true
 }
 
+// ObserveEnd takes one LIVE reading of the log's last sequence, paired with
+// this applier's checkpoint as the caller read it BEFORE it asked the broker,
+// and reports what the reading changed: established is true the one time a
+// reading finds the checkpoint past the end, reached the one time a later
+// reading finds the end at or past the checkpoint an earlier one was
+// established on.
+//
+// # Why the caller pairs them, and in that order
+//
+// Because the verdict is a property of a PAIR, and only that order makes the
+// pair mean anything. On a healthy log the end only grows and the checkpoint
+// only follows it, so a checkpoint read before the end can never exceed it —
+// while one read AFTER can, whenever a record lands and is applied between the
+// two reads, which on a busy company is every few milliseconds. Paired the
+// wrong way round, a healthy node refuses its own writes.
+//
+// # What it cannot see, stated where it is decided
+//
+// A broker restored from an older copy is caught here only while its log ends
+// below this node's checkpoint. Once something writes it past that — a peer
+// whose own checkpoint was not ahead — its sequences are ordinary sequences
+// again, the reading clears the verdict, and this applier resumes from a
+// checkpoint in a history the log does not hold. [Runner.StreamIdentity]'s
+// recreation half does not have that gap because a creation instant never
+// comes back; this half has nothing else to read, and a verdict that could
+// not clear would turn one stale member's answer into a permanent outage.
+// reached is what makes the transition visible rather than silent.
+func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if pastEnd(at.Seq, last) {
+		established = r.ahead == nil
+		r.ahead = &aheadOfLog{at: at, last: last}
+		return established, false
+	}
+	if r.ahead == nil {
+		return false, false
+	}
+	if pastEnd(r.ahead.at.Seq, last) {
+		// STILL PAST IT: this reading was paired with a lower checkpoint —
+		// the zero a runner reports before its loop has loaded the row —
+		// and says nothing about the one the verdict is about, except
+		// where the log now ends. A NEW value, never a write through the
+		// shared pointer: [Runner.StreamIdentity] reads it after the lock
+		// is released.
+		r.ahead = &aheadOfLog{at: r.ahead.at, last: last}
+		return false, false
+	}
+	r.ahead = nil
+	return false, true
+}
+
 // StreamIdentity is nil while every position this applier holds — its
 // checkpoint, every anchor it wrote, every version — is a sequence on the
-// stream the broker serves under this domain's name, and an error wrapping
-// [ErrStreamRecreated] once that is known not to be so: at boot, where the
-// checkpoint names another stream, or while running, where
-// [Runner.ObserveStream] found the stream rebuilt.
+// stream the broker serves under this domain's name, and an error once that is
+// known not to be so. Two findings answer it, in this order:
+//
+//   - wrapping [ErrStreamRecreated]: the stream was rebuilt — at boot, where the
+//     checkpoint names another stream, or while running, where
+//     [Runner.ObserveStream] found a new creation instant. Permanent.
+//   - wrapping [ErrAheadOfLog]: the last reading of the log's end found it below
+//     this applier's checkpoint ([Runner.ObserveEnd]) — a stream rebuilt and
+//     not yet re-read, or a broker restored from an older copy, which keeps its
+//     instant. For as long as the end stays below.
 //
 // # One answer, for the reads and the writes alike
 //
@@ -382,12 +472,15 @@ func (r *Runner) ObserveStream(live time.Time) bool {
 // node to apply.
 func (r *Runner) StreamIdentity() error {
 	r.mu.Lock()
-	foreign := r.foreign
+	foreign, ahead := r.foreign, r.ahead
 	r.mu.Unlock()
-	if foreign == nil {
-		return nil
+	switch {
+	case foreign != nil:
+		return foreign.err(r.domain.Name(), r.spec.Name)
+	case ahead != nil:
+		return ahead.err(r.spec.Name)
 	}
-	return foreign.err(r.domain.Name(), r.spec.Name)
+	return nil
 }
 
 // Fault is the transient failure this applier has been retrying for longer
@@ -810,6 +903,17 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		defer r.mu.Unlock()
 		if found {
 			r.cursor = at
+		}
+		// A VERDICT ABOUT A CHECKPOINT THIS RUNNER NO LONGER STANDS AT is
+		// dropped. The runner is re-run over an adopted snapshot, whose
+		// checkpoint is the donor's — one it applied from the live log —
+		// and a reading of the end paired with the old checkpoint says
+		// nothing about the new one; kept, it would refuse every write until
+		// the log happened to reach a number this node has left behind. The
+		// boot's own reading is paired with the row this loads, so it
+		// survives the first load exactly as it should.
+		if r.ahead != nil && r.ahead.at != r.cursor {
+			r.ahead = nil
 		}
 		r.deferred, r.hasDefer = d, hasDefer
 		// A RECREATED STREAM IS DETECTED HERE and nowhere else, and IT

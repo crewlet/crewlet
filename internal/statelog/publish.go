@@ -92,6 +92,26 @@ type Waiter interface {
 // though it continued a history it was never arbitrated in. So every pattern
 // refuses, not only the retry at zero the floor theorem names.
 //
+// # And a checkpoint past the log's end is the same failure, without the instant
+//
+// A broker restored from a copy older than this node's rows keeps its stream,
+// creation instant and all, so the rebuild check passes — and the log ENDS
+// below this node's checkpoint. That is the premise failing just as surely:
+// the sequences between the log's end and the checkpoint are ones this node
+// applied records at and the log will issue to different ones. And it has a
+// consequence of its own that decides the question for every pattern at once:
+// whatever this node appends lands at the log's next sequence, which is at or
+// below its own checkpoint — a record its applier has already passed and will
+// never apply. The resolution then has nothing true to say: an arbitrated or
+// created record is absent from a ledger the applier never wrote, which reads
+// as a contract violation, and a ledgerless one is reported applied because
+// the wait is already past it — while the record is on the log for every other
+// node. An expectation above the end is refused by the broker into the retry at
+// zero, the lost update the floor theorem names, and one at or below it is
+// accepted on a subject whose history on this log the node's rows may not
+// contain. So [Runner.StreamIdentity] answers for both findings, and every
+// pattern refuses on either.
+//
 // The answer is what this node has ESTABLISHED, and a reading that could not
 // be taken establishes nothing in either direction — the next one decides. On
 // the zero branch that costs nothing, because it reads the log within the call
@@ -120,11 +140,19 @@ type Fence interface {
 	Evicted(ctx context.Context) (bool, error)
 
 	// ClearForZero verifies, freshly, that publishing at an expectation
-	// of ZERO is safe from this node: that it is not evicted, and that
+	// of ZERO is safe from this node: that it is not evicted, that its
+	// applier's checkpoint is not past the log's end, and that
 	// [Replayable](cursor, F) holds for F the HIGHER of the published trim
 	// floor and the log's own first surviving sequence — the F the floor
 	// theorem in this package's doc is stated over. Either bound alone
-	// clears a node the other refuses.
+	// clears a node the other refuses. [ZeroFence] is that check, written
+	// once; a domain that can reach an expectation of zero supplies its
+	// four reads to it.
+	//
+	// EVERY REFUSAL IS AN [*Unavailable] NAMING ITS REASON — evicted,
+	// floor_unknown, wrong_stream, below_floor, or behind for a node
+	// replaying up to the floor — and never [ErrConflict], which a caller
+	// reads as a colleague editing the same object.
 	//
 	// cursor is the write's own [Snap.Checkpoint] — the position the rows
 	// its decision was made from are at — and the published floor is read
@@ -133,6 +161,10 @@ type Fence interface {
 	// decision predates a record it has since applied and the trim has
 	// since removed. And a floor read at another generation is a number
 	// in another sequence space, which says nothing about this cursor.
+	// The END is the exception, and is compared with the applier's live
+	// checkpoint rather than with cursor: it asks where a record this node
+	// appends will land relative to where its applier stands, which is a
+	// property of the node and not of the decision.
 	//
 	// A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is a deliberate
 	// departure from the fail-open rule a delivery claim uses. Failing
@@ -140,13 +172,14 @@ type Fence interface {
 	// open here is a lost update, which is not.
 	//
 	// THE READ OF THE LOG IS ALSO THE IDENTITY CHECK, and the publisher
-	// relies on it: the answer that carries the first surviving sequence
-	// carries the stream's creation instant beside it, so an
-	// implementation that reads the live log hands that instant to this
-	// node's applier ([Runner.ObserveStream]) — and the publisher asks
-	// [Identity] again the moment this returns. That is what makes the
-	// zero branch's identity as fresh as its floor, within the call,
-	// rather than as fresh as the last heartbeat.
+	// relies on it: the answer that carries the log's ends carries the
+	// stream's creation instant beside it, so an implementation that reads
+	// the live log hands both to this node's applier
+	// ([Runner.ObserveStream], [Runner.ObserveEnd]) — and whatever the
+	// publisher does next asks [Identity] after that read: over a refusal
+	// from this, at once, and otherwise in the fence 0 it runs before the
+	// append. That is what makes the zero branch's identity as fresh as its
+	// floor, within the call, rather than as fresh as the last heartbeat.
 	ClearForZero(ctx context.Context, cursor Position) error
 }
 
@@ -763,8 +796,9 @@ func (p *Publisher) afterRejection(ctx context.Context, req Request, snap Snap, 
 		// nothing in this branch's own arithmetic can tell the two
 		// apart: the anchor, the checkpoint and the floor are all
 		// sequences on the stream this node's rows came from. That is
-		// why the clearance re-asks the identity after its own read of
-		// the log — see [Publisher.clearForZero].
+		// why the identity is asked after the clearance's own read of
+		// the log, before the retry is appended — see
+		// [Publisher.clearForZero].
 		//
 		// AT THE SNAPSHOT'S CHECKPOINT, not the applier's live one: the
 		// retry publishes the decision this round's snapshot made, and
@@ -996,25 +1030,36 @@ func (p *Publisher) fence0(ctx context.Context, req Request) error {
 	return p.checkEvicted(ctx)
 }
 
-// clearForZero is the fence on an expectation of zero, and the identity asked
-// again after it.
+// clearForZero is the fence on an expectation of zero, with the identity asked
+// over any refusal the fence makes.
 //
 // cursor is the checkpoint of the snapshot the write decided from — see
 // [Snap.Checkpoint] — and never the applier's live position, which only moves
-// forward and so clears a decision against records it never read.
+// forward and so clears a decision against records it never read. The one
+// comparison the fence makes against the live position instead is its own,
+// with the log's end, because that one is about the NODE rather than the
+// decision: whether what this node appends lands where its applier will apply
+// it depends on where the applier stands now — see [ZeroFence].
 //
-// # Why again, and why here
+// # How a rebuild the fence's own read finds is refused within the call
 //
-// Fence 0 answers from the last reading of the stream's instant, and the
-// reading that sets it on a running node is the position heartbeat — so a log
-// rebuilt since the last beat passes fence 0, and on this branch that window
-// is a lost update rather than a refused write: the rebuilt log holds nothing
-// on the subject, the expectation of zero is accepted, and the floor the fence
-// clears against is a number from the old history. The fence's own read of the
-// log is the one read on the write path that carries the stream's creation
-// instant (see [Fence.ClearForZero]), so asking after it costs nothing and
-// closes that window within the call, for exactly the branch where it is not
-// recoverable.
+// Fence 0 answers from the last reading of the stream's instant and its end,
+// and the reading that sets them on a running node is the position heartbeat
+// — so a log rebuilt since the last beat passes the fence 0 at the top of the
+// write, and on this branch that window is a lost update rather than a refused
+// write: the rebuilt log holds nothing on the subject, the expectation of zero
+// is accepted, and the floor the fence clears against is a number from the old
+// history. What closes it is the fence's own read of the log, the one read on
+// the write path that carries the stream's creation instant: it hands the
+// instant to this node's applier (see [Fence.ClearForZero]), and the fence 0
+// the attempt runs before its append ([Publisher.attempt]) asks the identity
+// after that read — so the write is refused in the round that found the
+// rebuild, before anything reaches the broker at zero, for exactly the branch
+// where letting it through is not recoverable. A checkpoint past the log's END
+// does not wait for that: the fence compares this node's checkpoint with the
+// end it just read and refuses on the spot ([ZeroFence]), because that answer
+// is its own and must not depend on what a concurrent reading made of the
+// shared verdict in between.
 //
 // The other branches keep the heartbeat's window, and the trade is stated
 // rather than hidden. An expectation above zero is accepted on a rebuilt log
@@ -1024,12 +1069,38 @@ func (p *Publisher) fence0(ctx context.Context, req Request) error {
 // contradict; what is wrong about it is its resolution, and only for the
 // seconds until the next beat. Checking the instant on every append would put
 // a broker round trip on the hottest path the write authority has, to close a
-// window that bounded.
+// window that bounded. A checkpoint past the end has no such window at boot,
+// which is when a restored broker is met: the engine's boot hands the applier
+// the end it read beside the checkpoint before any write can run.
+//
+// # And why the identity OUTRANKS the fence's refusal, and is asked only there
+//
+// The fence's read that establishes a rebuild also finds the checkpoint past
+// the rebuilt log's end — a log counting from 1 again ends below almost any
+// checkpoint — and the fence refuses on the end, so the write never reaches
+// the attempt whose fence 0 would have named the rebuild. Both are
+// `wrong_stream`, but only one is the finding: a rebuild is permanent and is
+// what an operator has to act on, and a checkpoint past the end of a log that
+// was rebuilt is its consequence. So over any refusal the fence makes, the
+// identity is asked and answers first — the order fence 0 asks in, and the
+// order [Runner.StreamIdentity] reports in. Where it finds nothing the fence's
+// refusal stands, which is what keeps the end check within the call even when
+// a concurrent reading has cleared the shared verdict in between.
+//
+// Over a fence that CLEARED, nothing is asked here. The attempt's fence 0 is
+// the next thing this write does, and it asks the same identity after the
+// same read — so a second ask on that path could never be the one that
+// refused, and a check nothing can ever find doing anything is a claim rather
+// than a guard.
 func (p *Publisher) clearForZero(ctx context.Context, req Request, cursor Position) error {
-	if err := p.fence.ClearForZero(ctx, cursor); err != nil {
+	fenced := p.fence.ClearForZero(ctx, cursor)
+	if fenced == nil {
+		return nil
+	}
+	if err := p.checkIdentity(req); err != nil {
 		return err
 	}
-	return p.checkIdentity(req)
+	return fenced
 }
 
 // checkIdentity is fence 0's identity half: a node whose log is not the one
@@ -1049,26 +1120,11 @@ func (p *Publisher) checkIdentity(req Request) error {
 	}
 }
 
-// checkEvicted is fence 0's eviction half.
+// checkEvicted is fence 0's eviction half, answered in the one sentence the
+// zero fence answers the same finding with ([evictionRefusal]).
 func (p *Publisher) checkEvicted(ctx context.Context) error {
 	evicted, err := p.fence.Evicted(ctx)
-	if err != nil {
-		// THE THIRD VALUE BLOCKS. An eviction that cannot be read is
-		// not an eviction that did not happen, and publishing under it
-		// produces durable records every node drops.
-		return &Unavailable{
-			Reason: ReasonEvicted,
-			Detail: fmt.Sprintf("this node's own eviction state could not be read: %v", err),
-		}
-	}
-	if evicted {
-		return &Unavailable{
-			Reason: ReasonEvicted,
-			Detail: "this node has been removed from the fleet; nothing it " +
-				"publishes will be applied anywhere. An operator readmits it",
-		}
-	}
-	return nil
+	return evictionRefusal(ctx, evicted, err)
 }
 
 // waitSession waits for this node's applier to reach the caller's own

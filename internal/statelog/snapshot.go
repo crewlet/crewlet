@@ -123,8 +123,9 @@ const (
 	// to a sequence space the live stream no longer has — the signature of
 	// a stream that was deleted and recreated — and the artefact would
 	// name a position no recipient can ever replay from. The same state
-	// refuses reads, refuses writes and refuses readiness through
-	// [Health.AheadOfLog]; a donor is the one place it was still allowed.
+	// refuses reads and readiness through [Health.AheadOfLog] and writes
+	// through [Runner.ObserveEnd] and [ZeroFence]; a donor is the one place
+	// it was still allowed.
 	SkipAheadOfLog SkipReason = "ahead_of_log"
 
 	// SkipFailed — the attempt RAN and errored, which is the one reason

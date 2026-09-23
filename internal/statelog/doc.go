@@ -166,7 +166,12 @@
 // fifteen-second cadence leaves admits a genuine LOST UPDATE rather than a
 // stale read or a refused write. The heartbeat check stays, demoted to what
 // it actually is: the mechanism that stops a below-floor node SERVING, which
-// is a readiness concern.
+// is a readiness concern. A writer that fails the check is refused either way;
+// WHICH refusal is the log's first sequence's to say, of this node's live
+// position, exactly as it is for a read — `behind` while the log still holds
+// everything the node lacks, since the floor is published before the purge it
+// licenses and the node is replaying up to it, and `below_floor` once the
+// node's next record is gone ([ZeroFence]).
 //
 // (iii) An evicted node's records are dropped by the applier's eviction gate
 // whatever it manages to publish, so the conclusion holds even when (i) and
@@ -231,13 +236,24 @@
 // as a trimmed anchor, and an expectation still equals the rebuilt log's last
 // sequence wherever the two histories happen to meet. So the premise is
 // enforced like the clauses rather than assumed: every write asks the
-// applier's stream identity ([Identity]) before anything else and before every
-// append, and a write at an expectation of zero asks it AGAIN after its fence's
-// own read of the log, which is the read that carries the stream's creation
-// instant — so on the branch where a rebuild is a lost update, it is caught
-// within the call, as (ii) is. A node that knows its log is not the one its
-// rows are keyed to refuses every write, `wrong_stream`, and every read with
-// the same word.
+// applier's stream identity ([Identity]) before anything else and again before
+// every append, and on a write at an expectation of zero the ask before the
+// append comes after the fence's own read of the log, which is the read that
+// carries the stream's creation instant to the applier — so on the branch where
+// a rebuild is a lost update, it is caught within the call, as (ii) is. A node
+// that knows its log is not the one its rows are keyed to refuses every write,
+// `wrong_stream`, and every read with the same word.
+//
+// The instant is not the only way the premise fails. A broker restored from a
+// copy older than this node's rows keeps its stream, instant and all, and the
+// log ENDS below this node's checkpoint: then C clears every bound for the
+// very reason that it is past all of them, and the retry at zero lands at a
+// sequence this node's applier has already passed. The same read of the log
+// carries the end, so the zero fence compares it within the call
+// ([ZeroFence]) — against the applier's LIVE checkpoint rather than C, because
+// where an append lands against where the applier stands is a property of the
+// node, and the applier only leads C — and the identity answers for it on
+// every other pattern ([Runner.ObserveEnd]).
 //
 // # The alarm table borrows every threshold it fires at
 //

@@ -1,10 +1,12 @@
 package statelog_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -232,6 +234,115 @@ func TestTheZeroFenceIsAskedAboutTheCheckpointTheDecisionRead(t *testing.T) {
 					"decision's rows were at; %s is where the applier moved after "+
 					"the snapshot, and a record in between is one the decision "+
 					"published at zero never saw", asked[0], decided, moved)
+			}
+		})
+	}
+}
+
+// THE ZERO FENCE READS ITS BOUNDS ONLY AFTER THE LOG HAS SAID THE SUBJECT IS
+// EMPTY, on both roads to an expectation of zero — which is what excludes the
+// purge of a record the decision never read.
+//
+// The applied term bounds a purge by what this node had APPLIED, and a node
+// applies past its own snapshot while a write runs. So a peer's record R on
+// this subject, above the snapshot's checkpoint, can be applied here, licensed
+// and purged before the write learns the subject is empty — and the decision
+// published at zero never saw R. What refuses it is the order of the write's
+// own reads: the floor that licensed the purge was published before it, and
+// the fence reads that floor, and the log's first sequence, only after LastSeq
+// has answered. Read the other way round, the fence clears against bounds from
+// before the purge, LastSeq then finds nothing, and the write lands at zero over
+// R. Each case purges R at the one instant that tells the two orders apart: as
+// the publisher asks the broker for the subject's last message.
+func TestTheZeroFenceReadsItsBoundsOnlyAfterTheLogSaysTheSubjectIsEmpty(t *testing.T) {
+	t.Parallel()
+	subject := probeSubject("contended")
+	wire := probePrefix + "." + subject.String()
+	for name, stage := range map[string]func(t *testing.T, h *harness){
+		// This node has applied nothing on the subject: the expectation
+		// itself is zero, and LastSeq is what forms it.
+		"a subject this node has never written": func(*testing.T, *harness) {},
+		// This node's row names its own record, the peer's record R sits
+		// above it, so the append at the anchor is refused and LastSeq is
+		// what tells a trimmed anchor from a lost race.
+		"an anchor the broker refuses": func(t *testing.T, h *harness) {
+			own, err := h.write(subject, "op-own", "mine")
+			if err != nil {
+				t.Fatalf("this node's own write: %v", err)
+			}
+			h.anchorAt(subject, own.Position.Seq)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			stage(t, h)
+			decided := h.applier.Committed()
+
+			// A PEER'S RECORD this node has not applied when it decides.
+			r, _, err := h.log.Append(t.Context(), wire, "peer-op", nil, []byte("peer"))
+			if err != nil {
+				t.Fatalf("the peer's write: %v", err)
+			}
+			if r <= decided.Seq {
+				t.Fatalf("the peer's record landed at %d, not above the decision's "+
+					"checkpoint %d", r, decided.Seq)
+			}
+
+			// THE REAL ZERO FENCE, over a published floor and the log's own
+			// ends as they stand when it reads them.
+			var floor atomic.Uint64
+			h.fence.zero = &statelog.ZeroFence{
+				Evicted: func(context.Context) (bool, error) { return false, nil },
+				Floor: func(context.Context, uint32) (uint64, error) {
+					return floor.Load(), nil
+				},
+				Ends: func(ctx context.Context) (statelog.LogEnds, error) {
+					first, last, err := h.log.Bounds(ctx)
+					return statelog.LogEnds{First: first, Last: last}, err
+				},
+				Committed: h.applier.Committed,
+			}
+
+			// AND THE TRIM, as the write asks what the subject holds: this
+			// node applies R and reports it, a tick publishes a floor past
+			// R, and then purges below it.
+			var once sync.Once
+			h.appends.mu.Lock()
+			h.appends.beforeLastSeq = func() {
+				once.Do(func() {
+					h.applier.advance(statelog.Position{
+						Stream: probeStream, Generation: decided.Generation, Seq: r,
+					})
+					floor.Store(r + 1)
+					h.purgeBelow(r + 1)
+				})
+			}
+			h.appends.mu.Unlock()
+
+			before := len(h.appends.expectations())
+			_, err = h.write(subject, "op-after", "decided without R")
+			if !errors.Is(err, statelog.ErrUnavailable) || errors.Is(err, statelog.ErrConflict) {
+				t.Fatalf("write = %v, want the zero fence's refusal — R was purged "+
+					"after this node's snapshot, and the floor that licensed it "+
+					"was published first", err)
+			}
+			for _, expect := range h.appends.expectations()[before:] {
+				if expect != nil && *expect == 0 {
+					t.Fatalf("appended at an expectation of zero over R at %d, which "+
+						"the decision never read", r)
+				}
+			}
+			first, last, err := h.log.Bounds(t.Context())
+			if err != nil {
+				t.Fatalf("read the log's bounds: %v", err)
+			}
+			if first != r+1 {
+				t.Fatalf("the log starts at %d, want %d — the trim never ran as the "+
+					"write asked for the subject, so this case staged nothing", first, r+1)
+			}
+			if last != r {
+				t.Fatalf("the log ends at %d, want %d — a record landed over R", last, r)
 			}
 		})
 	}

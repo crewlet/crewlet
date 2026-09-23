@@ -82,14 +82,18 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an unclaimed address. The log's own
-	// first sequence is the fence's other bound, read from the stream the
-	// way the engine reads it.
+	// first sequence is the fence's other bound and its last the check that
+	// this node is on this log at all, both read from the stream the way
+	// the engine reads them.
 	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
-	fence.First = func(ctx context.Context) (uint64, error) {
-		first, _, err := log.Bounds(ctx)
-		return first, err
+	fence.Ends = func(ctx context.Context) (statelog.LogEnds, error) {
+		first, last, err := log.Bounds(ctx)
+		return statelog.LogEnds{First: first, Last: last}, err
 	}
 	waiter := &testWaiter{}
+	// THIS NODE'S CHECKPOINT IS THE WAITER'S, which is what the harness's
+	// own applier advances — the position the end is compared against.
+	fence.Committed = waiter.Committed
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: pages.Domain{}, Log: log, Rows: rows, Fence: fence,
 		Gates: pages.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: "node-a",

@@ -12,6 +12,7 @@ import (
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // The fakes below are the framework's own seams and nothing else. A real
@@ -311,6 +312,12 @@ type fakeFence struct {
 
 	// cursors is every cursor ClearForZero was asked about, in order.
 	cursors []statelog.Position
+
+	// zero, when set, is the REAL zero fence this fake answers
+	// ClearForZero with, over whatever reads a case composes — so the
+	// refusal the publisher receives is the one a domain's fence produces,
+	// not one a test typed out.
+	zero *statelog.ZeroFence
 }
 
 func (f *fakeFence) Evicted(context.Context) (bool, error) {
@@ -319,14 +326,17 @@ func (f *fakeFence) Evicted(context.Context) (bool, error) {
 	return f.evicted, f.evictErr
 }
 
-func (f *fakeFence) ClearForZero(_ context.Context, cursor statelog.Position) error {
+func (f *fakeFence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
 	f.zeroes.Add(1)
 	f.mu.Lock()
 	f.cursors = append(f.cursors, cursor)
-	reads, err := f.reads, f.zeroErr
+	reads, err, zero := f.reads, f.zeroErr, f.zero
 	f.mu.Unlock()
 	if reads != nil {
 		reads()
+	}
+	if zero != nil {
+		return zero.ClearForZero(ctx, cursor)
 	}
 	return err
 }
@@ -380,6 +390,11 @@ type countingAppender struct {
 	// swallow drops the append silently and returns failNext, so the
 	// record genuinely never lands.
 	swallow bool
+	// beforeLastSeq, when set, runs as the publisher asks the broker for a
+	// subject's last message and before the broker answers — which is how
+	// a case moves the log between the write's snapshot and the moment it
+	// learns what the subject holds.
+	beforeLastSeq func()
 }
 
 func (c *countingAppender) Append(ctx context.Context, subject, msgID string, expect *uint64, body []byte) (uint64, bool, error) {
@@ -407,6 +422,12 @@ func (c *countingAppender) Append(ctx context.Context, subject, msgID string, ex
 }
 
 func (c *countingAppender) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
+	c.mu.Lock()
+	before := c.beforeLastSeq
+	c.mu.Unlock()
+	if before != nil {
+		before()
+	}
 	return c.inner.LastSeq(ctx, subject)
 }
 
@@ -428,6 +449,7 @@ type harness struct {
 	t       *testing.T
 	q       *js.Queue
 	pub     *statelog.Publisher
+	metrics *metrics.Recorder
 	rows    *fakeRows
 	fence   *fakeFence
 	gates   *fakeGates
@@ -476,6 +498,12 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	h.fence = &fakeFence{}
 	h.gates = &fakeGates{}
 	h.appends = &countingAppender{inner: log, applier: h.applier, gen: h.gen.Load}
+	// A REAL RECORDER, because what the publisher counts a refusal as is an
+	// operator's only view of which remedy a fleet needs, and a case that
+	// asserts it has no other witness.
+	if h.metrics, err = metrics.New(); err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
 
 	pub, err := statelog.NewPublisher(statelog.Deps{
 		Domain:        domain,
@@ -485,6 +513,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 		Gates:         h.gates,
 		Waiter:        h.applier,
 		Identity:      h.applier,
+		Metrics:       h.metrics,
 		NodeID:        "node-a",
 		Generation:    h.gen.Load,
 		ResolveBudget: 250 * time.Millisecond,

@@ -648,6 +648,21 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	if err != nil {
 		return nil, fmt.Errorf("engine: build %s's applier: %w", domain.Name(), err)
 	}
+	// AND WHERE THE LOG ENDS, against the checkpoint the loop is about to
+	// load — at boot, before any write can reach the publisher, because boot
+	// is when a broker restored from an older copy is met: the embedded one
+	// runs in this process, so bringing its store back IS a restart. Its
+	// stream keeps its creation instant, so the comparison the runner makes
+	// against `created` passes, and without this the only thing refusing an
+	// ordinary write was the first heartbeat that happened to read a loaded
+	// checkpoint.
+	//
+	// THE ONE PAIRING READ END-FIRST, and sound anyway: nothing writes the
+	// checkpoint row between the two reads — the boot's join has finished
+	// before any domain is started, and no applier runs yet — and on a
+	// healthy log the row was committed under an end at least as high as the
+	// one read now, because the end only grows.
+	s.observeEnd(ctx, domain.Name(), runner, at, stats.LastSeq)
 
 	publisher, evicted, err := s.publisherFor(domain, appendTo, runner)
 	if err != nil {
@@ -710,7 +725,8 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		}
 		fence := tracker.NewFence(s.db, s.nodeID)
 		fence.Floor = s.floorOf(domain.Name())
-		fence.First = s.firstSeqOf(domain.Name(), appendTo, runner)
+		fence.Ends = s.logEndsOf(domain.Name(), appendTo, runner)
+		fence.Committed = runner.Committed
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, tracker.NewGates(s.db)
 		evicted = fence.Evicted
 	case search.Domain{}.Name():
@@ -730,7 +746,8 @@ func (s *stateLog) publisherFor(domain statelog.Domain, appendTo *jetstream.Doma
 		}
 		fence := pages.NewFence(s.db, s.nodeID)
 		fence.Floor = s.floorOf(domain.Name())
-		fence.First = s.firstSeqOf(domain.Name(), appendTo, runner)
+		fence.Ends = s.logEndsOf(domain.Name(), appendTo, runner)
+		fence.Committed = runner.Committed
 		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.db)
 		evicted = fence.Evicted
 	default:
@@ -937,35 +954,44 @@ func floorFor(floors []coord.TrimFloor, domain string, generation uint32) (uint6
 	return 0, nil
 }
 
-// firstSeqOf is a domain log's own first surviving sequence, as the write
-// fences read it beside [stateLog.trimFloor].
+// logEndsOf is a domain log's two ends, as the write fences read them beside
+// [stateLog.trimFloor].
 //
-// IT MAY ONLY RAISE THE FLOOR, for the reason [statelog.Health.FirstSeq]
-// gives: a stale answer is LOWER than the truth, never higher. That is why the
-// published floor is written before the purge — it is what covers a purge the
-// stream's own answer has not caught up with — and why this is still read: it
-// covers what the floor cannot see. An unreadable stream is an error the fence
-// refuses on, for the reason every unreadable floor is.
+// THE FIRST END MAY ONLY RAISE THE FLOOR, for the reason
+// [statelog.Health.FirstSeq] gives: a stale answer is LOWER than the truth,
+// never higher. That is why the published floor is written before the purge —
+// it is what covers a purge the stream's own answer has not caught up with —
+// and why this is still read: it covers what the floor cannot see — and it is
+// what the fence asks, of this node's own checkpoint rather than the
+// decision's, whether the node is below the log or only replaying up to the
+// floor. THE LAST END is what says this node is on this log at all: the fence
+// refuses a node whose checkpoint is past it. An unreadable stream is an error
+// the fence refuses on, for the reason every unreadable floor is.
 //
 // AND IT REPORTS THE STREAM'S IDENTITY, because the one answer that carries the
-// first sequence carries the creation instant beside it. This read is the only
-// one an expectation of zero takes of the live log, and the publisher asks the
-// runner's identity again the moment the fence returns — so a log rebuilt since
-// the last heartbeat is refused here, within the write, on the one branch where
-// letting it through is a lost update rather than a refusal (see
+// ends carries the creation instant beside them. This read is the only one an
+// expectation of zero takes of the live log, and the publisher asks the
+// runner's identity after it and before anything is appended — so a log
+// rebuilt since the last heartbeat is refused within the write, on the one
+// branch where letting it through is a lost update rather than a refusal (see
 // [statelog.Fence.ClearForZero]). Thrown away, the zero branch's identity would
 // be only as fresh as the heartbeat, which is ten seconds of a rebuilt log
-// accepting records at zero from a node whose floor names the old one.
-func (s *stateLog) firstSeqOf(domain string, l *jetstream.DomainLog,
-	runner *statelog.Runner) func(context.Context) (uint64, error) {
+// accepting records at zero from a node whose floor names the old one. The end
+// goes to the runner too, so what this write found is what the next ordinary
+// write's fence 0 refuses on.
+func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
+	runner *statelog.Runner) func(context.Context) (statelog.LogEnds, error) {
 
-	return func(ctx context.Context) (uint64, error) {
+	return func(ctx context.Context) (statelog.LogEnds, error) {
+		// THE CHECKPOINT BEFORE THE READ, which is the only order in which
+		// the pair can say anything — see [statelog.Runner.ObserveEnd].
+		at := runner.Committed()
 		stats, err := l.Stats(ctx)
 		if err != nil {
-			return 0, fmt.Errorf("engine: read the log's first surviving sequence: %w", err)
+			return statelog.LogEnds{}, fmt.Errorf("engine: read the log's ends: %w", err)
 		}
-		s.observeStream(ctx, domain, runner, stats.CreatedAt)
-		return stats.FirstSeq, nil
+		s.observeStream(ctx, domain, runner, at, stats)
+		return statelog.LogEnds{First: stats.FirstSeq, Last: stats.LastSeq}, nil
 	}
 }
 
@@ -1027,30 +1053,71 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 	return statelog.PermitReadmission(nodeID, register, bounds)
 }
 
-// observeStream hands one live reading of a domain log's creation instant to
-// its runner, and names the rebuild the one time a reading establishes it.
+// observeStream hands one live reading of a domain log's state to its runner —
+// the creation instant, and the end paired with the checkpoint at, which the
+// caller read BEFORE it asked the broker — and names what the reading changed.
 //
-// ONE PLACE FOR BOTH READERS, the position heartbeat and the zero fence,
-// because whichever reads the rebuilt log first is the one that establishes it
-// and the other then finds it established — so the line is written here, once,
-// by whoever got there, rather than by the heartbeat alone and never when the
-// fence was first.
+// ONE PLACE FOR EVERY READER, the position heartbeat and the zero fence,
+// because whichever reads the log first is the one that establishes a finding
+// and the other then finds it established — so each line is written here,
+// once, by whoever got there, rather than by the heartbeat alone and never when
+// the fence was first.
 func (s *stateLog) observeStream(ctx context.Context, domain string,
-	runner *statelog.Runner, live time.Time) {
+	runner *statelog.Runner, at statelog.Position, stats jetstream.LogStats) {
 
-	if !runner.ObserveStream(live) {
-		return
+	if runner.ObserveStream(stats.CreatedAt) {
+		log.ErrorContext(ctx, "statelog_stream_recreated",
+			"node", s.nodeID, "domain", domain,
+			"live", stats.CreatedAt.UTC(),
+			"error", runner.StreamIdentity().Error(),
+			"detail", "this domain's log was deleted and rebuilt under a running "+
+				"node, so its sequences name a history this node's rows are not "+
+				"keyed to; this node refuses every read and every write of it — "+
+				"each refusal names `wrong_stream` — for as long as this process "+
+				"runs against it, and an operator re-anchors it: crewlet retention "+
+				"reanchor")
 	}
-	log.ErrorContext(ctx, "statelog_stream_recreated",
-		"node", s.nodeID, "domain", domain,
-		"live", live.UTC(),
-		"error", runner.StreamIdentity().Error(),
-		"detail", "this domain's log was deleted and rebuilt under a running "+
-			"node, so its sequences name a history this node's rows are not "+
-			"keyed to; this node refuses every read and every write of it — "+
-			"each refusal names `wrong_stream` — for as long as this process "+
-			"runs against it, and an operator re-anchors it: crewlet retention "+
-			"reanchor")
+	s.observeEnd(ctx, domain, runner, at, stats.LastSeq)
+}
+
+// observeEnd hands one reading of a domain log's end to its runner, paired
+// with the checkpoint read before it, and names both transitions.
+//
+// BOTH, and the second is the one that would otherwise be silent. Past the end
+// is logged as the error it is. The end reaching the checkpoint again is either
+// nothing — a stale member's answer corrected by the next one — or the one
+// state this engine cannot see: a restored log written past this node's
+// checkpoint, which it now resumes from in a history the log does not hold.
+// Nothing observable separates the two, so the line says both and names the
+// remedy for the second.
+func (s *stateLog) observeEnd(ctx context.Context, domain string,
+	runner *statelog.Runner, at statelog.Position, last uint64) {
+
+	established, reached := runner.ObserveEnd(at, last)
+	switch {
+	case established:
+		log.ErrorContext(ctx, "statelog_ahead_of_log",
+			"node", s.nodeID, "domain", domain,
+			"checkpoint", at.Seq, "last_seq", last,
+			"detail", "this node's checkpoint is past the log's end, so its rows "+
+				"hold records at sequences the log has never issued — a stream "+
+				"rebuilt under it, or a broker restored from a copy older than "+
+				"those rows; this node refuses every read and every write of it, "+
+				"each naming `wrong_stream`, while the end stays below the "+
+				"checkpoint, and an operator re-anchors it: crewlet retention "+
+				"reanchor")
+	case reached:
+		log.WarnContext(ctx, "statelog_ahead_of_log_cleared",
+			"node", s.nodeID, "domain", domain, "last_seq", last,
+			"detail", "the log's end has reached this node's checkpoint again, so "+
+				"its writes are no longer refused on it. If the earlier reading "+
+				"came from a member that had not caught up, nothing was wrong. If "+
+				"the broker was restored from an older copy and has since been "+
+				"written past this checkpoint, this node's rows hold records the "+
+				"log does not and it is now applying a different history on top "+
+				"of them — re-anchor it with crewlet retention reanchor, or adopt "+
+				"a peer's snapshot")
+	}
 }
 
 // Domain answers one running domain by name, or nil.
@@ -1227,7 +1294,14 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	// is OBSERVED rather than derived, because nothing this node holds can
 	// show a rebuilt log. From the runner, which is where the write path
 	// asks it too: one answer, so the reads and the writes refuse together.
-	health.StreamRecreated = running.runner.StreamIdentity() != nil
+	//
+	// ITS RECREATION HALF ONLY. The runner's identity also answers for a
+	// checkpoint past the end, and that half is decided on the line above
+	// from this health's own end rather than from whichever reading the
+	// runner last had — reported as recreated, a node whose broker merely
+	// came back from an older copy would name a rebuild that never happened.
+	health.StreamRecreated = errors.Is(running.runner.StreamIdentity(),
+		statelog.ErrStreamRecreated)
 	lag := uint64(0)
 	if end > at.Seq {
 		lag = end - at.Seq
@@ -2671,7 +2745,14 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			// not the only reader: an expectation of zero reads the
 			// log within the write and hands its instant over too, so
 			// that branch does not wait for this interval.
-			s.observeStream(ctx, name, running.runner, stats.CreatedAt)
+			//
+			// AND THE END, paired with `at` — read above, BEFORE this
+			// answer, which is the only order in which a checkpoint past
+			// the end means the log is not this node's history rather
+			// than that a record landed between the two reads. It is
+			// what fence 0 refuses an ordinary write on, on a node whose
+			// broker came back from an older copy with its instant.
+			s.observeStream(ctx, name, running.runner, at, stats)
 		}
 		running.progress.observe(row.At, pos.AppliedThrough, behind, held)
 		row.Domains[name] = pos

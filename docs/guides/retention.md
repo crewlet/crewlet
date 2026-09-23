@@ -186,11 +186,29 @@ gone. So every such write first checks, freshly, that the rows it decided
 from — as they stood when it decided, not wherever the node has got to since —
 hold every record up to the one just before the **higher of the floor and the
 log's own first record**, and a write that does not is refused `unavailable`
-rather than allowed to overwrite a change it never saw. Reads make the same
-comparison: a node below the floor whose missing records the log still holds
-refuses them as `behind` while it replays them, and a node whose missing
-records are gone from the log itself refuses them as `below_floor` and
-[adopts a snapshot](#the-join-runbook).
+rather than allowed to overwrite a change it never saw. The refusal names its
+reason, and makes the same split reads do:
+
+- `behind` when the log still holds every record the node lacks — it is
+  replaying up to the floor, or it has already applied past the state the
+  write decided from. It clears on its own; retry on the same node.
+- `below_floor` when the node's next record is gone from the log itself. No
+  replay can supply it, so the node [adopts a snapshot](#the-join-runbook);
+  another node can make the write meanwhile.
+- `floor_unknown` when the floor or the log could not be read. An unknown
+  bound refuses rather than guessing.
+- `evicted` for a node the fleet has removed.
+- `wrong_stream` when the node's own checkpoint is past the log's end — judged
+  on where the node's applier stands rather than on the state the write
+  decided from, because whatever it appends lands relative to the former. See
+  [Re-anchoring a recreated stream](#re-anchoring-a-recreated-stream).
+
+None of them is a conflict: a conflict tells a caller somebody else is editing
+and to re-read, and every one of these is about this node rather than the
+object. Reads make the same comparison: a node below the floor whose missing
+records the log still holds refuses them as `behind` while it replays them,
+and a node whose missing records are gone from the log itself refuses them as
+`below_floor` and adopts a snapshot.
 
 ## The cross-field rule
 
@@ -521,6 +539,30 @@ reads and writes refuse `wrong_stream` with that reason, its seats move to a
 peer, and `crewlet retention status` shows the domain as not ready, naming the
 recreation. A checkpoint past the log's end is caught as `wrong_stream` too,
 because a position the log has never reached is a position on another stream.
+
+**A broker restored from an older copy is the case the instant cannot see.**
+Bringing back the broker's store directory from a disk snapshot — or, for the
+embedded broker, restarting the engine on yesterday's volume — keeps the stream
+it had, creation instant and all, so every identity check passes. What differs
+is where the log **ends**: below the checkpoint of a node whose own database is
+newer. Such a node refuses every read and every write of that domain with
+`wrong_stream` from the moment it boots, logs `statelog_ahead_of_log` with both
+numbers, and shows as not ready in `crewlet retention status`. Its writes have
+to refuse, not only its reads: whatever it appended would land at the log's
+next sequence, which is one its own applier has already passed and will never
+apply.
+
+That refusal lasts only while the log ends below the node's checkpoint — an end
+read from a stream member that has not caught up looks exactly the same, and a
+refusal nothing could lift would take a healthy node out over one leader
+election. So if anything writes the restored log past that checkpoint — a node
+whose own database was not ahead of it — the refusal lifts and the node carries
+on from rows the log does not contain. The engine cannot tell that from the
+harmless case, so it logs `statelog_ahead_of_log_cleared` saying both. **After
+restoring a broker, deal with every node whose checkpoint was past the restored
+log's end before anything else writes to it** — re-anchor it with the verb
+below, or have it adopt a peer's snapshot through [the join
+runbook](#the-join-runbook).
 
 **A rebuild under a node that never restarts is caught too**, wherever the node
 reads the stream's state: the position heartbeat does every ten seconds, and a

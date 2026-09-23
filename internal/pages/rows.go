@@ -103,16 +103,22 @@ type Fence struct {
 	db     *store.DB
 	nodeID string
 
-	// Floor is the fleet's published trim floor at a generation and First
-	// the log's own first surviving sequence — the two bounds
-	// [Fence.ClearForZero] takes the higher of, for the reason the
-	// tracker's fence gives. The cursor they are compared against is
-	// passed per call, and the floor is read at that cursor's generation,
-	// because the cursor has to be the checkpoint the write's own snapshot
-	// read ([statelog.Snap.Checkpoint]) — see the tracker's fence for why
+	// Floor is the fleet's published trim floor at a generation and Ends
+	// the log's two ends, read live — the first surviving sequence is the
+	// other bound [Fence.ClearForZero] takes the higher of, for the reason
+	// the tracker's fence gives, and the last is what says this node is on
+	// this log at all. The cursor the floor is compared against is passed
+	// per call, and the floor is read at that cursor's generation, because
+	// the cursor has to be the checkpoint the write's own snapshot read
+	// ([statelog.Snap.Checkpoint]) — see the tracker's fence for why
 	// neither may be the applier's live position.
 	Floor func(ctx context.Context, generation uint32) (uint64, error)
-	First func(ctx context.Context) (uint64, error)
+	Ends  func(ctx context.Context) (statelog.LogEnds, error)
+
+	// Committed is this node's applier's live checkpoint, which the end is
+	// compared against instead of the cursor, for the reason
+	// [statelog.ZeroFence] gives.
+	Committed func() statelog.Position
 }
 
 // NewFence builds it.
@@ -164,47 +170,16 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 // the fail-open rule a delivery claim uses: failing open there is a duplicate
 // delivery, which is recoverable; failing open here is a lost update, which is
 // not.
+//
+// THE CHECK IS [statelog.ZeroFence], the one the tracker's fence runs too:
+// this supplies the four reads. Written out here it refused an evicted node
+// with [statelog.ErrConflict], which the page tools translate into "somebody
+// else is editing this page", and a node below the floor with prose rather
+// than a reason; every refusal is now an [*statelog.Unavailable] naming it.
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
-	evicted, err := f.Evicted(ctx)
-	if err != nil {
-		return err
-	}
-	if evicted {
-		return fmt.Errorf("pages: this node is evicted, so a write at an "+
-			"expectation of zero would be dropped by every peer: %w",
-			statelog.ErrConflict)
-	}
-	if f.Floor == nil || f.First == nil {
-		return fmt.Errorf("pages: this fence reads no published trim floor or " +
-			"no first sequence of the log, so this node cannot establish that " +
-			"an absent anchor means an unclaimed address rather than a claim " +
-			"trimmed beneath it")
-	}
-	floor, err := f.Floor(ctx, cursor.Generation)
-	if err != nil {
-		return fmt.Errorf("pages: read the published trim floor: %w — a floor "+
-			"that cannot be read is not a floor that is low, and publishing at "+
-			"zero on the guess is a lost update nothing recovers", err)
-	}
-	first, err := f.First(ctx)
-	if err != nil {
-		return fmt.Errorf("pages: read the log's first surviving sequence: %w — "+
-			"a log that cannot be read is not one that has lost nothing, and "+
-			"publishing at zero on the guess is a lost update nothing recovers", err)
-	}
-	// EVERYTHING BELOW THE HIGHER OF THE TWO MAY BE GONE, so a node that
-	// has consumed through the one before it has consumed everything that
-	// may be gone — see the tracker's fence, which makes the same
-	// comparison for the same reason, through the same
-	// [statelog.Replayable].
-	if held := max(floor, first); !statelog.Replayable(cursor.Seq, held) {
-		return fmt.Errorf("pages: records below %d may have been removed from "+
-			"the log (published floor %d, first surviving sequence %d) and this "+
-			"node has consumed through %d, so an absent anchor may be a claim "+
-			"trimmed beneath it rather than an address that was never taken: %w",
-			held, floor, first, cursor.Seq, statelog.ErrUnavailable)
-	}
-	return nil
+	return statelog.ZeroFence{
+		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
+	}.ClearForZero(ctx, cursor)
 }
 
 // Gates answers whether a durable record produced rows on NO node.

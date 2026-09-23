@@ -342,10 +342,13 @@ type Health struct {
 	// instant. The boot compares it once, and a running node sees the live one
 	// wherever it reads the stream's state — the position heartbeat every ten
 	// seconds, and the write fence on every expectation of zero. Every one of
-	// those lands in [Runner.StreamIdentity], and this is that answer: the SAME
-	// one the write path refuses on, so a node can never refuse its reads over a
-	// rebuilt log while its writes go on landing there. The remedy is the same
-	// either way, an operator's re-anchor.
+	// those lands in [Runner.StreamIdentity], and this is that answer's
+	// RECREATION half — errors.Is against [ErrStreamRecreated] — the SAME one
+	// the write path refuses on, so a node can never refuse its reads over a
+	// rebuilt log while its writes go on landing there. The identity's other
+	// half, a checkpoint past the end, is [Health.AheadOfLog] here, read live
+	// from this health's own end rather than from the runner's last reading.
+	// The remedy is the same either way, an operator's re-anchor.
 	StreamRecreated bool
 
 	// Coverage is COMPACTED domains only: the fraction of rows present
@@ -396,8 +399,12 @@ func (h Health) Refusal(now time.Time) ReadRefusal {
 // this node's rows. Nothing this node holds above the end can be reconciled
 // with what the log will now produce, so it is a refusal on every path rather
 // than a lag of zero — which is exactly what a clamped lag would report.
+//
+// The WRITE path refuses on the same fact with the same word — see
+// [Runner.ObserveEnd] and [ZeroFence] — so a node can never refuse its reads
+// over a checkpoint past the end while its writes go on landing there.
 func (h Health) AheadOfLog() bool {
-	return h.LastSeq != nil && h.Position.Seq > *h.LastSeq
+	return h.LastSeq != nil && pastEnd(h.Position.Seq, *h.LastSeq)
 }
 
 // Healthy reports whether this domain's state permits KEEPING the seats this

@@ -401,17 +401,25 @@ func requireEvicted(t *testing.T, err error) {
 	}
 }
 
-// THE ZERO BRANCH ASKS THE IDENTITY AGAIN AFTER ITS OWN READ OF THE LOG.
+// A REBUILD THE ZERO FENCE'S OWN READ FINDS IS REFUSED IN THAT ROUND, before
+// anything is appended at zero.
 //
-// Fence 0 answers from the last reading of the stream's instant, which on a
-// running node is the heartbeat's — so a log rebuilt since the last beat passes
-// it. On an ordinary expectation that window needs a coincidence to do harm; on
-// an expectation of zero it needs nothing, because a rebuilt log holds nothing
-// on any subject and the floor the fence clears against is a number from the
-// old history. The fence's read of the log is where a real node first sees the
-// rebuild (it carries the creation instant), so the publisher must ask after
-// it: a check made only BEFORE it is the heartbeat's window again.
-func TestTheZeroBranchAsksTheIdentityAfterItsOwnReadOfTheLog(t *testing.T) {
+// The fence 0 at the top of a write answers from the last reading of the
+// stream's instant, which on a running node is the heartbeat's — so a log
+// rebuilt since the last beat passes it. On an ordinary expectation that window
+// needs a coincidence to do harm; on an expectation of zero it needs nothing,
+// because a rebuilt log holds nothing on any subject and the floor the fence
+// clears against is a number from the old history. The zero fence's read of the
+// log is where a real node first sees the rebuild (it carries the creation
+// instant to the applier), and the fence 0 the attempt runs before its append
+// asks the identity after that read — so the write is refused in the round that
+// found it. Without the read reaching the applier, or without the check at the
+// append, both cases below land at zero on the rebuilt log.
+//
+// What this does NOT exercise is the identity the publisher asks over the zero
+// fence's own REFUSAL: here the fence clears, and that ask is what
+// [TestARebuildOutranksTheZeroFencesEndCheck] holds.
+func TestARebuildTheZeroFencesOwnReadFindsIsRefusedInThatRound(t *testing.T) {
 	t.Parallel()
 
 	// THE CONTROL: the same writes on a log nobody rebuilt land at zero,
@@ -433,12 +441,13 @@ func TestTheZeroBranchAsksTheIdentityAfterItsOwnReadOfTheLog(t *testing.T) {
 		// with no append attempted — and the fence's read of the log is
 		// what finds the rebuild.
 		h.fence.reads = h.applier.rebuilt
-		_, err := h.write(probeSubject("fresh"), "op-1", "hello")
+		res, err := h.write(probeSubject("fresh"), "op-1", "hello")
 		requireWrongStream(t, err)
 		if got := h.fence.zeroes.Load(); got != 1 {
 			t.Fatalf("the zero fence ran %d time(s), want 1 — this case is about "+
 				"what happens after it", got)
 		}
+		requireRefusedInTheRoundThatFoundIt(t, h, res)
 		if got := h.appends.appends.Load(); got != 0 {
 			t.Fatalf("appended %d time(s) at zero onto a log the fence's own "+
 				"read found rebuilt", got)
@@ -452,8 +461,9 @@ func TestTheZeroBranchAsksTheIdentityAfterItsOwnReadOfTheLog(t *testing.T) {
 		// rebuilt log's shape, and a trimmed anchor's.
 		h.anchorAt(probeSubject("quiet"), 7)
 		h.fence.reads = h.applier.rebuilt
-		_, err := h.write(probeSubject("quiet"), "op-1", "again")
+		res, err := h.write(probeSubject("quiet"), "op-1", "again")
 		requireWrongStream(t, err)
+		requireRefusedInTheRoundThatFoundIt(t, h, res)
 		for _, expect := range h.appends.expectations() {
 			if expect != nil && *expect == 0 {
 				t.Fatal("the write was retried at zero after the fence's own read " +
@@ -465,6 +475,19 @@ func TestTheZeroBranchAsksTheIdentityAfterItsOwnReadOfTheLog(t *testing.T) {
 			t.Fatalf("the log ends at %d (err %v), want 0", last, err)
 		}
 	})
+}
+
+// requireRefusedInTheRoundThatFoundIt is a refusal made in the first round,
+// from its one snapshot — never one the write reached after retaking it.
+func requireRefusedInTheRoundThatFoundIt(t *testing.T, h *harness, res statelog.Result) {
+	t.Helper()
+	if res.Rounds != 1 {
+		t.Fatalf("the write ran %d round(s), want 1 — the rebuild was found in "+
+			"the first", res.Rounds)
+	}
+	if got := h.rows.snapshots(); got != 1 {
+		t.Fatalf("the write took %d snapshot(s), want 1", got)
+	}
 }
 
 // requireWrongStream is the refusal a rebuilt log earns, in all three forms a

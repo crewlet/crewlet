@@ -137,10 +137,17 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain", "reason"},
 			Shows: "Writes refused before or instead of an append, by reason — " +
 				"an evicted node, a deferred record covering the object, a " +
-				"caller waiting on its own previous write, a full log. A " +
-				"refusal is not one of the three outcomes: it says the write " +
-				"never happened, and each reason has a different remedy, so " +
-				"one counter with an outcome dimension would hide all four.",
+				"node that has not applied a position the write needs " +
+				"(`behind`: the caller's own previous write, or a trim floor it " +
+				"is replaying up to), a full log, a node below the log or " +
+				"unable to read the floor (`below_floor`, `floor_unknown`), a " +
+				"log that is not the one this node's rows " +
+				"came from (`wrong_stream`: rebuilt, or ending below this " +
+				"node's checkpoint) — plus `conflict` for a write that lost " +
+				"every round, which nothing else is counted as. A refusal is " +
+				"not one of the three outcomes: it says the write never " +
+				"happened, and each reason has a different remedy, so one " +
+				"counter with an outcome dimension would hide them all.",
 		},
 		{
 			Name: StatelogWriteSessionWait, Kind: KindHistogram, Unit: UnitMilliseconds,

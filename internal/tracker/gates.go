@@ -80,12 +80,13 @@ type Fence struct {
 	db     *store.DB
 	nodeID string
 
-	// Floor is the fleet's published trim floor at a generation and First
-	// the log's own first surviving sequence: the two bounds the one check
-	// that costs a round trip takes the higher of — see
+	// Floor is the fleet's published trim floor at a generation and Ends
+	// the log's two ends, read live: the first surviving sequence is the
+	// other bound the one check that costs a round trip takes the higher
+	// of, and the last is what says this node is on this log at all — see
 	// [Fence.ClearForZero].
 	//
-	// The cursor it compares them against is the caller's, passed per
+	// The cursor the floor is compared against is the caller's, passed per
 	// call, and the floor is read at THAT CURSOR'S GENERATION. The cursor
 	// is the checkpoint the write's own snapshot read
 	// ([statelog.Snap.Checkpoint]), because the floor theorem concludes
@@ -97,7 +98,13 @@ type Fence struct {
 	// before an adoption moved this node would be compared against numbers
 	// that say nothing about it.
 	Floor func(ctx context.Context, generation uint32) (uint64, error)
-	First func(ctx context.Context) (uint64, error)
+	Ends  func(ctx context.Context) (statelog.LogEnds, error)
+
+	// Committed is this node's applier's live checkpoint, which the end is
+	// compared against instead of the cursor — where a record this node
+	// appends lands against where its applier stands is a property of the
+	// node rather than of one decision. See [statelog.ZeroFence].
+	Committed func() statelog.Position
 }
 
 // NewFence builds the write fence for one node.
@@ -165,50 +172,19 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 // floor alone, this check cleared a node below the log whenever the floor
 // said zero; asked of the stream alone, it cleared one a purge was about to
 // pass. The floor theorem in [statelog] is stated over the higher of the two.
+//
+// # Why the check itself is not here
+//
+// It is [statelog.ZeroFence], and this supplies the four reads. It was
+// written here and again in the pages fence, and both copies refused an
+// evicted node with [statelog.ErrConflict] — the refusal a model reads as a
+// colleague editing the item — and a node below the floor with prose rather
+// than a reason, so neither `below_floor` nor `floor_unknown` was ever
+// produced. Every refusal is now an [*statelog.Unavailable] naming its reason.
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
-	evicted, err := f.Evicted(ctx)
-	if err != nil {
-		return err
-	}
-	if evicted {
-		return fmt.Errorf("tracker: this node is evicted, so a write at an "+
-			"expectation of zero would be dropped by every peer: %w",
-			statelog.ErrConflict)
-	}
-	if f.Floor == nil || f.First == nil {
-		return fmt.Errorf("tracker: this fence reads no published trim floor or " +
-			"no first sequence of the log, so this node cannot establish that " +
-			"an absent anchor means an empty subject rather than a record " +
-			"trimmed beneath it")
-	}
-	floor, err := f.Floor(ctx, cursor.Generation)
-	if err != nil {
-		return fmt.Errorf("tracker: read the published trim floor: %w — a floor "+
-			"that cannot be read is not a floor that is low, and publishing at "+
-			"zero on the guess is a lost update nothing recovers", err)
-	}
-	first, err := f.First(ctx)
-	if err != nil {
-		return fmt.Errorf("tracker: read the log's first surviving sequence: %w — "+
-			"a log that cannot be read is not one that has lost nothing, and "+
-			"publishing at zero on the guess is a lost update nothing recovers", err)
-	}
-	// EVERYTHING BELOW THE HIGHER OF THE TWO MAY BE GONE, so a node that
-	// has consumed through the one before it has consumed everything that
-	// may be gone. Compared against the cursor itself the check refused a
-	// node ONE BELOW that bound although it holds everything it needs —
-	// which is where a node that has just adopted a snapshot sits, since
-	// the snapshot term licenses trimming through the artefact's own
-	// position — and [statelog.Replayable] is the one place that boundary
-	// is written.
-	if held := max(floor, first); !statelog.Replayable(cursor.Seq, held) {
-		return fmt.Errorf("tracker: records below %d may have been removed from "+
-			"the log (published floor %d, first surviving sequence %d) and this "+
-			"node has consumed through %d, so an absent anchor may be a record "+
-			"trimmed beneath it rather than a subject that was never written: %w",
-			held, floor, first, cursor.Seq, statelog.ErrUnavailable)
-	}
-	return nil
+	return statelog.ZeroFence{
+		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
+	}.ClearForZero(ctx, cursor)
 }
 
 // Gates answers whether a durable record produced rows on NO node.

@@ -137,6 +137,60 @@ func (f foreignStream) err(domain, stream string) error {
 		stream, f.live.UTC().Format(time.RFC3339Nano), stream)
 }
 
+// ErrAheadOfLog reports a checkpoint past the log's own last sequence: a
+// position the log has never reached, and therefore a position in a history
+// the log does not hold.
+//
+// ITS OWN SENTINEL BESIDE [ErrStreamRecreated], because the creation instant
+// cannot show it. A broker restored from a copy older than this node's rows —
+// a disk snapshot of the store directory, an embedded broker brought back from
+// yesterday's volume — keeps the stream it had, instant and all, so every
+// identity check passes, and the one thing that differs is where the log ENDS.
+// Both refuse with the one word `wrong_stream` and take the one remedy; the
+// sentinel is what lets a caller tell which finding it was without parsing
+// prose.
+var ErrAheadOfLog = errors.New("statelog: this node's checkpoint is past the log's end")
+
+// pastEnd reports a checkpoint past a log's last sequence — [Health.AheadOfLog],
+// the zero fence's own reading and [Runner.ObserveEnd] ask it in one spelling.
+//
+// ONE PREDICATE for the reason [Replayable] is one: the question is asked on
+// the read path, on the write path and by the verdict both consult, and three
+// spellings of one inequality are three places for its boundary to drift. A
+// checkpoint EQUAL to the end is not past it — it is a node that has applied
+// the log's last record, which is every caught-up node there is.
+func pastEnd(checkpoint, last uint64) bool { return checkpoint > last }
+
+// aheadOfLog is one reading that found an applier's checkpoint past its log's
+// end: the checkpoint the reading was paired with, and the end it reported.
+type aheadOfLog struct {
+	at   Position
+	last uint64
+}
+
+// err is the one sentence every refusal over a checkpoint past the log's end
+// carries — a write's at fence 0 and at the zero fence alike — so an operator
+// reads the same two numbers and the same remedy wherever they meet it.
+//
+// IT NAMES WHY NO WRITE CAN BE ANSWERED, not only that the rows are old:
+// whatever the log appends next lands at a sequence this node's applier has
+// already passed, so it is a record this node will never apply and its own
+// resolution can never find — an arbitrated write is reported as a ledger
+// contract violation, an additive one as applied, and either way the record is
+// on the log for every other node. The remedy is the operator's for the reason
+// [foreignStream.err] gives.
+func (a aheadOfLog) err(stream string) error {
+	return fmt.Errorf("%w: this node's checkpoint on %s is at sequence %d and the "+
+		"log ends at %d, so its rows hold records at sequences the log has never "+
+		"issued — the stream was rebuilt under it, or the broker was restored from "+
+		"a copy older than those rows, which keeps the stream's creation instant — "+
+		"and whatever the log appends next lands at a sequence this node has "+
+		"already passed and will never apply; neither a read nor a write can be "+
+		"answered from these rows, and an operator re-anchors them with `crewlet "+
+		"retention reanchor -stream %s`",
+		ErrAheadOfLog, stream, a.at.Seq, a.last, stream)
+}
+
 // RecordedIdentity reads the creation instant this node last recorded for a
 // stream, from its OWN estate.
 //

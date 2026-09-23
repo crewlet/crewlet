@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -328,6 +329,269 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 				"the recreation — caught up on a sequence the rebuilt log merely "+
 				"reached is not caught up", row)
 		}
+	}
+}
+
+// A NODE WHOSE CHECKPOINT IS PAST THE LOG'S END REFUSES TO WRITE, as well as to
+// read — on a real embedded stream that KEEPS its creation instant, which is
+// what a broker restored from an older copy looks like to the node, and the
+// one shape the rebuild check above cannot see.
+//
+// # What a write did before
+//
+// Reads refused, `wrong_stream`, because the health compares the checkpoint
+// against the log's end. Writes consulted nothing that could see it, and both
+// shapes below LANDED:
+//
+//   - AN ORDINARY EXPECTATION. The row's anchor is a record the restored log
+//     still holds, so the broker accepted it — at the log's next sequence,
+//     which is below this node's checkpoint. Its applier had already passed
+//     that sequence and never applies the record, so the resolution found no
+//     ledger row and reported a contract violation, while the record sat on the
+//     log for every other node.
+//   - AN EXPECTATION OF ZERO. The zero fence cleared it, because a checkpoint
+//     past the end is past the floor and the first sequence too: a fence that
+//     asks only whether the cursor is HIGH ENOUGH passes one that is too high.
+func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	stream := tracker.Domain{}.Stream().Name
+
+	// FIRST BOOT: an object with history on the log, and the log's end.
+	back, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	if err != nil {
+		back.Close(context.Background())
+		t.Fatalf("New: %v", err)
+	}
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	if res, err := e.native.writer.EvictNode(t.Context(), "op-evict-x", "node-x"); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		e.Stop(context.Background())
+		back.Close(context.Background())
+		t.Fatalf("the write before the restore: %+v, %v", res, err)
+	}
+	end := endOf(t, e.native.log.Domain(tracker.Domain{}.Name()))
+	e.Stop(context.Background())
+
+	// THE CHECKPOINT MOVES PAST THE LOG'S END, and nothing else does: the
+	// row keeps the instant it was committed under, so the stream the second
+	// boot finds is — by every identity check — the one it started against.
+	// This is a node whose rows are newer than the broker it came back to.
+	ahead := end + 5
+	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			`UPDATE statelog_cursor SET seq = ? WHERE stream = ?`, ahead, stream)
+		return err
+	}); err != nil {
+		back.Close(context.Background())
+		t.Fatalf("stage the checkpoint: %v", err)
+	}
+	back.Close(context.Background())
+
+	// SECOND BOOT.
+	back2, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends again: %v", err)
+	}
+	t.Cleanup(func() { back2.Close(context.Background()) })
+	e2, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back2})
+	if err != nil {
+		t.Fatalf("New again: %v", err)
+	}
+	t.Cleanup(func() { e2.Stop(context.Background()) })
+	running := e2.native.log.Domain(tracker.Domain{}.Name())
+	if running == nil {
+		t.Fatal("the tracker domain is not running after the second boot")
+	}
+
+	// THE BOOT ESTABLISHED IT, before any heartbeat could have read a loaded
+	// checkpoint: the first beat reads the runner before its loop has loaded
+	// the row, so without the boot's own reading an ordinary write had a
+	// whole interval to land.
+	if identity := running.runner.StreamIdentity(); !errors.Is(identity, statelog.ErrAheadOfLog) {
+		t.Fatalf("right after boot the runner's identity is %v, want %v",
+			identity, statelog.ErrAheadOfLog)
+	}
+	if err := running.runner.Stopped(); err != nil {
+		t.Fatalf("the applier stopped (%v) — the stream is the same stream, and "+
+			"what refuses here is the write path, not the loop", err)
+	}
+	waitUntil(t, 10*time.Second, "the applier to load its checkpoint", func() bool {
+		return running.runner.Committed().Seq == ahead
+	})
+
+	// AN ORDINARY EXPECTATION the log would accept: node-x's last record is
+	// one the restored log holds, at exactly the sequence this node's row
+	// names.
+	_, err = e2.native.writer.EvictNode(t.Context(), "op-evict-x-again", "node-x")
+	requireAheadOfLogRefusal(t, err)
+	if got := endOf(t, running); got != end {
+		t.Fatalf("the log ends at %d, want %d — an ordinary write from a node "+
+			"past the end landed at a sequence its own applier had passed", got, end)
+	}
+
+	// AN EXPECTATION OF ZERO, WITH NOTHING ESTABLISHED BEFORE IT. The verdict
+	// is cleared as a reading reaching the checkpoint would clear it, so what
+	// refuses this write is the zero fence's own read of the log, within the
+	// call.
+	running.runner.ObserveEnd(statelog.Position{}, ahead)
+	if err := running.runner.StreamIdentity(); err != nil {
+		t.Fatalf("the verdict did not clear for the zero case: %v", err)
+	}
+	_, err = e2.native.writer.EvictNode(t.Context(), "op-evict-z", "node-z")
+	requireAheadOfLogRefusal(t, err)
+	if got := endOf(t, running); got != end {
+		t.Fatalf("the log ends at %d, want %d — a retry at zero was cleared by a "+
+			"fence that asked only whether the cursor was high enough", got, end)
+	}
+
+	// AND THE READS, FROM THE SAME FACT, and the operator surface with them.
+	health, err := e2.native.log.health(t.Context(), running)
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if code := health.Refusal(time.Now()); code != statelog.RefuseWrongStream {
+		t.Errorf("reads past the log's end refuse with %q, want %q", code,
+			statelog.RefuseWrongStream)
+	}
+	if health.StreamRecreated {
+		t.Error("the health names a rebuild — this stream kept its instant, and " +
+			"an operator told it was recreated looks for a delete that never happened")
+	}
+	for _, row := range e2.NativeStatus(t.Context()) {
+		if row.Name != (tracker.Domain{}).Name() {
+			continue
+		}
+		if row.Ready || !strings.Contains(row.Detail, "past the log's end") {
+			t.Errorf("the tracker's status row is %+v, want not ready and naming "+
+				"the checkpoint past the end", row)
+		}
+	}
+}
+
+// THE BOOT HANDS THE APPLIER WHERE THE LOG ENDS, beside the checkpoint, before
+// its loop or any write has run.
+//
+// Boot is when a broker restored from an older copy is met — the embedded one
+// runs in this process, so bringing its store back IS a restart — and nothing
+// else establishes the verdict in time: the first heartbeat reads the runner
+// before its loop has loaded the row, and that zero says nothing. Driven
+// through [stateLog.start] itself, which launches no loop and no heartbeat, so
+// the only reading that can have established it is the boot's own.
+func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		past uint64
+		want error
+	}{
+		"control: a checkpoint at the log's end": {past: 0},
+		"a checkpoint past the log's end":        {past: 5, want: statelog.ErrAheadOfLog},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, q, appendTo := aProvisionedTrackerLog(t)
+			// Records nobody will apply — the loop never starts here —
+			// so their bytes do not matter, only where the log ends.
+			subject := tracker.Domain{}.Stream().SubjectPrefix + ".probe.x"
+			for i := range 2 {
+				if _, _, err := appendTo.Append(t.Context(), subject,
+					fmt.Sprintf("op-%d", i), nil, []byte("{}")); err != nil {
+					t.Fatalf("append: %v", err)
+				}
+			}
+			stats, err := appendTo.Stats(t.Context())
+			if err != nil {
+				t.Fatalf("stats: %v", err)
+			}
+			if err := s.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), `
+					INSERT INTO statelog_cursor
+						(stream, generation, seq, stream_created_at, updated_at)
+					VALUES (?, 0, ?, ?, ?)`,
+					tracker.Domain{}.Stream().Name, stats.LastSeq+tc.past,
+					store.EncodeTime(stats.CreatedAt.UTC()),
+					store.EncodeTime(time.Now().UTC()))
+				return err
+			}); err != nil {
+				t.Fatalf("stage the checkpoint: %v", err)
+			}
+
+			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo, nil)
+			if err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			identity := running.runner.StreamIdentity()
+			if tc.want == nil {
+				if identity != nil {
+					t.Fatalf("a node at the log's end reads as %v — it would refuse "+
+						"every write it makes", identity)
+				}
+				return
+			}
+			if !errors.Is(identity, tc.want) {
+				t.Fatalf("after boot, before any loop or heartbeat, the identity is "+
+					"%v, want %v — every ordinary write would land until a later "+
+					"reading caught up", identity, tc.want)
+			}
+		})
+	}
+}
+
+// aProvisionedTrackerLog is the tracker's log provisioned on a fresh embedded
+// broker, over a fresh store, by a state log that has started nothing.
+func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstream.DomainLog) {
+	t.Helper()
+	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open the broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "crewlet.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ceilings, err := sizeCeilings(t.Context(), q, config.DefaultBootstrap().Stream,
+		64<<30, "/var/lib/crewlet/stream")
+	if err != nil {
+		t.Fatalf("sizeCeilings: %v", err)
+	}
+	s := &stateLog{
+		domains: map[string]*runningDomain{}, nodeID: "node-a", db: db,
+		ceilings: ceilings, run: t.Context(),
+	}
+	appendTo, err := s.provision(t.Context(), q, tracker.Domain{})
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	return s, q, appendTo
+}
+
+// requireAheadOfLogRefusal is the refusal a write from a node past the log's
+// end earns: the framework's `wrong_stream`, recognisable by its own cause and
+// NOT as a rebuild, and naming what the operator has to do.
+func requireAheadOfLogRefusal(t *testing.T, err error) {
+	t.Helper()
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonWrongStream {
+		t.Fatalf("write = %v, want a %s refusal", err, statelog.ReasonWrongStream)
+	}
+	if !errors.Is(err, statelog.ErrAheadOfLog) || errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("write = %v, want errors.Is(%v) and not a rebuild",
+			err, statelog.ErrAheadOfLog)
+	}
+	if !strings.Contains(err.Error(), "crewlet retention reanchor") {
+		t.Fatalf("write = %v, which does not name the verb that repairs it", err)
 	}
 }
 

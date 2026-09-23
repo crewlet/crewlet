@@ -1747,6 +1747,159 @@ func TestALiveReadingOfARebuiltLogIsTheRunnersVerdict(t *testing.T) {
 	}
 }
 
+// A CHECKPOINT PAST THE LOG'S END IS THE RUNNER'S VERDICT FOR AS LONG AS THE
+// END STAYS BELOW IT — and no longer, and not on a reading that says nothing
+// about it.
+//
+// A broker restored from an older copy keeps its creation instant, so the
+// rebuild check above never fires, and the only thing that shows it is the log
+// ending below this node's checkpoint. Fence 0 refuses every write on this
+// verdict, so each of its rules is a way a node either goes on publishing
+// records its own applier has already passed, or stops writing for good:
+//
+//   - a reading AT the end is a caught-up node, and one past it a busy one;
+//     neither establishes anything;
+//   - a reading paired with a LOWER checkpoint — the zero a runner reports
+//     before its loop has loaded the row, which is what the first heartbeat of
+//     a boot reads — does not clear it;
+//   - a run that starts again over the same checkpoint keeps it;
+//   - an end that has reached the checkpoint clears it, because an end below
+//     it may be one member's stale answer, and a verdict nothing could clear
+//     would stop a healthy node's writes over one election;
+//   - a checkpoint the runner no longer stands at — a re-run over an adopted
+//     snapshot — drops it.
+func TestACheckpointPastTheEndIsTheRunnersVerdictWhileTheEndStaysBelow(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	for seq := uint64(1); seq <= 3; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprint(seq), fmt.Sprintf("op-%d", seq), 1))
+	}
+	if err := h.run(3); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	at := h.runner.Committed()
+	unloaded := statelog.Position{Stream: at.Stream, Generation: at.Generation}
+
+	for name, last := range map[string]uint64{
+		"a reading at the end": 3,
+		"a reading past it":    10,
+	} {
+		if established, reached := h.runner.ObserveEnd(at, last); established || reached {
+			t.Fatalf("%s changed the verdict (established %v, reached %v)",
+				name, established, reached)
+		}
+		if err := h.runner.StreamIdentity(); err != nil {
+			t.Fatalf("after %s the identity is %v — a caught-up node would "+
+				"refuse every write it makes", name, err)
+		}
+	}
+
+	if established, _ := h.runner.ObserveEnd(at, 2); !established {
+		t.Fatal("a log ending at 2 under a checkpoint of 3 did not establish " +
+			"anything, so fence 0 would let every ordinary write through")
+	}
+	identity := h.runner.StreamIdentity()
+	if !errors.Is(identity, statelog.ErrAheadOfLog) {
+		t.Fatalf("StreamIdentity = %v, want %v", identity, statelog.ErrAheadOfLog)
+	}
+	if errors.Is(identity, statelog.ErrStreamRecreated) {
+		t.Fatalf("StreamIdentity = %v names a rebuild — a broker restored from "+
+			"an older copy kept its stream, and naming a rebuild sends an "+
+			"operator looking for a delete that never happened", identity)
+	}
+	for _, want := range []string{"at sequence 3", "ends at 2", "reanchor"} {
+		if !strings.Contains(identity.Error(), want) {
+			t.Errorf("the refusal %q does not name %q", identity, want)
+		}
+	}
+	if established, _ := h.runner.ObserveEnd(at, 2); established {
+		t.Fatal("a second reading of the same state reported it again, so the " +
+			"line naming it would be written on every beat")
+	}
+
+	if established, reached := h.runner.ObserveEnd(unloaded, 2); established || reached {
+		t.Fatalf("a reading paired with an unloaded checkpoint changed the verdict "+
+			"(established %v, reached %v)", established, reached)
+	}
+	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrAheadOfLog) {
+		t.Fatal("a reading paired with the zero a runner reports before it loads " +
+			"its row cleared the verdict — the first heartbeat of every boot " +
+			"would reopen the writes a restored broker must refuse")
+	}
+
+	// A RUN THAT STARTS AGAIN OVER THE SAME CHECKPOINT keeps it: the
+	// record it applies is only there to prove the loop loaded the row.
+	h.fetch.offer(4, env(4, "edit", "4", "op-4", 1))
+	if err := h.run(4); err != nil {
+		t.Fatalf("run again: %v", err)
+	}
+	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrAheadOfLog) {
+		t.Fatal("a re-run over the same checkpoint cleared the verdict")
+	}
+
+	// THE END REACHING THE CHECKPOINT the verdict names clears it, once.
+	if _, reached := h.runner.ObserveEnd(unloaded, 3); !reached {
+		t.Fatal("an end that reached the checkpoint did not clear the verdict — " +
+			"one stale member's answer would stop this node's writes for good")
+	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("after the end reached the checkpoint the identity is %v", err)
+	}
+	if _, reached := h.runner.ObserveEnd(unloaded, 3); reached {
+		t.Fatal("the end reaching the checkpoint was reported twice")
+	}
+
+	// A CHECKPOINT THIS RUNNER NO LONGER STANDS AT drops the verdict: the
+	// row is rewritten to a donor's position below the log's end, as an
+	// adoption leaves it, and the loop loads it.
+	if established, _ := h.runner.ObserveEnd(h.runner.Committed(), 2); !established {
+		t.Fatal("the verdict was not re-established for the adoption case")
+	}
+	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			`UPDATE statelog_cursor SET seq = 1 WHERE stream = ?`, probeStream)
+		return err
+	}); err != nil {
+		t.Fatalf("rewrite the checkpoint: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	for h.runner.Committed().Seq != 1 && ctx.Err() == nil {
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	<-errs
+	if got := h.runner.Committed().Seq; got != 1 {
+		t.Fatalf("the loop loaded checkpoint %d, want the adopted 1", got)
+	}
+	if err := h.runner.StreamIdentity(); err != nil {
+		t.Fatalf("after adopting a checkpoint below the log's end the identity is "+
+			"%v — a verdict about a position the runner left would refuse every "+
+			"write until the log happened to reach it", err)
+	}
+}
+
+// A REBUILD OUTRANKS A CHECKPOINT PAST THE END: it is permanent where the other
+// clears, and it is the finding an operator has to act on first.
+func TestARebuildOutranksACheckpointPastTheEnd(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	born := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	h.rebuild(probeDomain{}, born)
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	if err := h.run(1); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	h.runner.ObserveEnd(h.runner.Committed(), 0)
+	h.runner.ObserveStream(born.Add(time.Hour))
+	identity := h.runner.StreamIdentity()
+	if !errors.Is(identity, statelog.ErrStreamRecreated) || errors.Is(identity, statelog.ErrAheadOfLog) {
+		t.Fatalf("StreamIdentity = %v, want the rebuild alone", identity)
+	}
+}
+
 // A RUNNER RUNS AGAIN FROM THE CHECKPOINT IT NOW HOLDS.
 //
 // An adoption on a running node ends every apply loop, replaces the file, and
