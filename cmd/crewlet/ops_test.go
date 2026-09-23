@@ -20,6 +20,16 @@ import (
 
 func cli(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
+	// THE CREDENTIAL COMES FROM THE ENVIRONMENT, exactly as it does for
+	// an operator: the CLI no longer helps itself to the first entry of
+	// the Tier A `api.auth.tokens` list, because that list is what a node
+	// ACCEPTS and a write authored by whichever entry came first landed
+	// under a name nobody chose.
+	// SET ONLY WHERE A CASE HAS NOT, so a case about the environment
+	// beating something else still controls its own.
+	if os.Getenv(apiTokenEnv) == "" {
+		t.Setenv(apiTokenEnv, cliFixtureToken)
+	}
 	var out, errs bytes.Buffer
 	err := run(args, &out, &errs)
 	return out.String(), errs.String(), err

@@ -298,7 +298,7 @@ already have:
 
 Holding a credential is not the same as being allowed to use it here. Every
 route and every socket question declares one of the
-[ten grants](../concepts/identity-and-access.md#grants-the-ten-things-there-are-to-allow),
+[eleven grants](../concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow),
 and a principal that does not carry it is refused — including a Tier A token,
 whose declared grants are intersected with `api.auth.max_grants` on every
 request.
@@ -315,6 +315,7 @@ as the first, which tells them to go and get a new credential.
 | `audit:read` | The record of what happened: `/events*`, `/agents/{id}/memory`, the turn, phase, trace, A2A-channel and conversation questions on the socket, and `/iam/audit`. Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
 | `config:read` | `/config*`, `/company/export`, `/integrations`, and the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials, its sandbox cell and its `mcp_env` |
 | `secrets:read` | `/secrets*`. The listing carries no values and still says which credentials a company holds and when each last changed |
+| `people:manage` | `/iam/*` — inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them. **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
 | `work:write` | Filing and moving work, and `/operator/mcp`'s write half |
 | `knowledge:write` | Writing the company's own pages |
 | `config:write` | `PUT`/`PATCH /config`, `/chart/batch`, the rename and import routes, and `/setup`'s writes |
@@ -510,6 +511,99 @@ seat into an outage.
 chart view, or has applied no settings epoch. Check it before the count:
 `findings: 0` from a node that read nothing is the most misleading answer this
 surface could give.
+
+### `/iam/*` — the company's people, credentials and sessions (auth-gated)
+
+**Always guarded, reads included**, for the reason `/secrets` guards its
+listing: a map of who can reach a company and how is worth as much to an
+attacker as the grants themselves. Nothing under `/iam` is on the exemption
+list and nothing ever will be.
+
+| Route | Who |
+|---|---|
+| `GET /iam/people` | `people:manage` or `audit:read` |
+| `POST /iam/people` | `people:manage` |
+| `GET /iam/people/{id}` | the person themselves, `people:manage` or `audit:read` |
+| `PATCH /iam/people/{id}` | `people:manage` |
+| `DELETE /iam/people/{id}` | `people:manage` |
+| `POST /iam/invitations` | `people:manage` |
+| `GET /iam/people/{id}/sessions` | the person themselves, `people:manage` or `audit:read` |
+| `DELETE /iam/people/{id}/sessions` | the person themselves or `people:manage` |
+| `POST /iam/people/{id}/mfa/reset` | `people:manage` |
+| `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
+| `POST /iam/credentials` | the person themselves or `people:manage` |
+| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage` |
+| `POST /iam/invalidate-all` | `fleet:operate` |
+| `GET /iam/check` | `people:manage` or `audit:read` |
+| `POST /iam/bootstrap-code` | `people:manage`; refused once anybody can administer this company |
+| `GET /iam/audit` | `audit:read` |
+
+**The object a route names is a person ID, never a login.** The identity
+estate keys on an id precisely because a person changes their login, so a self
+check against a mutable name would open somebody else's row the day they
+swapped.
+
+**Editing your own row is not a self gesture.** Changing your own grants is
+the escalation this estate exists to close, so `PATCH /iam/people/{id}` has no
+self path at all — unlike the credential mint and the session end beside it,
+which are the two gestures a person legitimately makes about themselves. The
+record layer refuses it a second time: a caller may not confer a grant they do
+not hold, on anybody, themselves included.
+
+**An auditor reads and never writes.** `audit:read` opens the directory
+because "who can reach this company, and how" is the audit question — and it
+opens nothing that changes it, because a grant that could end a session is a
+grant that can lock a company out of its own engine.
+
+#### Every write answers three ways
+
+`applied` is `200` and means this node has the change, so the next read *here*
+sees it. `pending` is `202` with the position, and means the record is durable
+and every node will apply it while this one has not yet — read at that
+position to see it. `unknown` is `503` with the op id, and the only safe retry
+is the **same** one: send it back as `Idempotency-Key`, because a fresh id
+would defeat the ledger that makes the retry safe.
+
+A lost race on an address, a login or a seat is `409` **naming who holds it**.
+An authority refusal is `403` and will never land however often it is retried.
+
+#### Values that are shown once
+
+`POST /iam/invitations` answers the invitation URL and `POST /iam/credentials`
+answers the token. Neither is stored and neither can be read back: what the
+estate holds is the invitation's id (which *is* the verifier — holding the
+link is holding the id) and a SHA-256 of the token. An invitation an
+administrator lost is re-issued rather than recovered.
+
+`POST /iam/bootstrap-code` answers the **file path** and never the value. The
+code is written `0600` beside the store, and reading it needs shell on that
+host — which is the point. Re-issuing withdraws every outstanding code first,
+so exactly one is live afterwards.
+
+#### `GET /iam/people` pages on a key the applier writes
+
+A person's id is a uuid7, so ordering by it is creation order and `next` is
+the last id of the page. Nothing sorts on a name or an address: both are
+ciphertext in every row, so ordering by one would be ordering by the
+ciphertext.
+
+`?q=` narrows on the **login and the seat**, which are the only two identity
+values this estate holds in the clear. A search over names would have to open
+every person in the company to compare one, which is a fan-out of
+coordination reads per keystroke.
+
+A row whose key a removal destroyed renders as `removed`, and ciphertext this
+deployment's keyring cannot open renders as `sealed`. They are different
+states with different remedies — one is finished, the other is a keyring
+somebody still has — and neither is an outage.
+
+#### `GET /iam/audit` pages by position, never by time
+
+Two nodes' clocks are compared nowhere in this engine, so `since` and `before`
+are log positions. A caller holding a timestamp passes `at=` instead and the
+route resolves it **once**, against the rows' own instants. The answer carries
+the position this node had applied when it answered, so a reader can tell a
+quiet directory from a lagging node.
 
 ### `/config/*` — live config management (auth-gated)
 

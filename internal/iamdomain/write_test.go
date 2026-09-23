@@ -116,7 +116,7 @@ func newWriteRig(t *testing.T) *writeRig {
 		Actor: "ana.admin", ActorKind: iam.KindPerson,
 		// THE RIG'S PARTY AUTHORS EVERYTHING, so every case here is
 		// about the rule it names rather than about the grant gate.
-		Grants: []iam.Grant{iam.GrantConfigWrite},
+		Grants: []iam.Grant{iam.GrantPeopleManage},
 		Now:    func() time.Time { return brokerAt },
 	})
 	if err != nil {
@@ -875,5 +875,214 @@ func (r *writeRig) seatOnly(handle string) {
 		return err
 	}); err != nil {
 		r.t.Fatalf("seed a seat: %v", err)
+	}
+}
+
+// THE ADMINISTRATIVE GRANT IS people:manage, AND IT IS NOT config:write.
+//
+// Both halves matter and the second is what was broken. A party holding the
+// COMPANY's own grant could enrol itself a colleague, which is the escalation
+// this estate exists to close; and the node's own writer — which authors the
+// bootstrap enrolment and the invite redemption on behalf of people with no
+// principal yet — holds fleet:operate, so every one of those paths was
+// refused on a real deployment while the surface's own suite, built on a stub
+// writer, stayed green.
+func TestAnAdministrativeRecordNeedsPeopleManageAndNotTheCompanysGrant(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	person := "018f3a9c-0000-7000-8000-0000000000b1"
+	enrol := func(w *iamdomain.Writer, op string) error {
+		_, err := w.Enrol(rig.t.Context(), iamdomain.Enrolment{
+			PersonID: person + op, Kind: iam.KindMachine,
+			Stage: iam.StageActive, Login: "svc:" + op,
+			OpID: op, Reason: "a hire",
+		})
+		return err
+	}
+	company := rig.writer.As("automation", iam.KindMachine,
+		[]iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate})
+	if err := enrol(company, "op-company"); !errors.Is(err, iamdomain.ErrRefused) {
+		t.Errorf("a party holding the company's own grants enrolled somebody "+
+			"(%v) — config:write rebuilds a company's tools and must not also "+
+			"decide who may do that tomorrow", err)
+	}
+	directory := rig.writer.As("ana.admin", iam.KindPerson,
+		[]iam.Grant{iamdomain.AdminGrant})
+	if err := enrol(directory, "op-directory"); errors.Is(err, iamdomain.ErrRefused) {
+		t.Errorf("a party holding %s was refused an enrolment: %v",
+			iamdomain.AdminGrant, err)
+	}
+}
+
+// A CALLER MAY NOT CONFER A GRANT THEY DO NOT HOLD, on anybody.
+//
+// One rule rather than the two the design states — "not onto your own record"
+// and "not onto somebody else's" — because the two have the same answer, and
+// splitting them is how one arm comes to be checked and the other not. Taking
+// a grant AWAY is always allowed: nobody escalates by narrowing, and an
+// administrator who cannot hold secrets:reveal must still be able to withdraw
+// it from a leaver.
+func TestACallerCannotConferAGrantTheyDoNotHold(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	person := "018f3a9c-0000-7000-8000-0000000000c2"
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Dana Okafor", Email: "dana@example.com", Login: "dana.sre",
+		Grants: []iam.Grant{iam.GrantSecretRead, iam.GrantWorkWrite},
+		OpID:   "op-enrol", Reason: "a hire",
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	rig.drain()
+
+	// A narrow administrator: they manage people and hold nothing else.
+	narrow := rig.writer.As("ana.admin", iam.KindPerson,
+		[]iam.Grant{iamdomain.AdminGrant})
+	grant := func(w *iamdomain.Writer, op string, to []iam.Grant) error {
+		_, err := w.UpdatePerson(rig.t.Context(), iamdomain.PersonUpdate{
+			PersonID: person,
+			Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
+				p.Grants = to
+				return p, nil
+			},
+			OpID: op, Reason: "a change of authority",
+		})
+		return err
+	}
+	if err := grant(narrow, "op-widen",
+		[]iam.Grant{iam.GrantSecretRead, iam.GrantSecretWrite}); !errors.Is(
+		err, iamdomain.ErrRefused) {
+		t.Errorf("a party holding neither secrets:write nor it conferred it "+
+			"(%v)", err)
+	}
+	// AND NARROWING IS ALWAYS ALLOWED, which is the control — and it KEEPS
+	// a grant the caller does not hold, because that is the arm being
+	// exercised. Narrowing to nothing would pass whatever the rule said:
+	// the check walks what the row will CARRY, and an empty set carries
+	// nothing to object to.
+	if err := grant(narrow, "op-narrow",
+		[]iam.Grant{iam.GrantSecretRead}); err != nil {
+		t.Errorf("withdrawing one grant while keeping another the caller does "+
+			"not hold was refused: %v — an administrator must be able to "+
+			"strip a leaver without first being given everything they hold",
+			err)
+	}
+	rig.drain()
+	if got := rig.column(
+		`SELECT document FROM iam_people WHERE id = '` + person + `'`); len(got) != 1 {
+		t.Fatalf("the person's row is %v", got)
+	}
+}
+
+// AN INVITATION ARBITRATES ON THE ADDRESS, so two administrators inviting one
+// person produce ONE invitation and one refusal naming what is already there.
+//
+// The obvious subject — the invitation's own fresh id — would make both
+// succeed, and the company would hold two links either of which creates the
+// same person.
+func TestTwoInvitationsToOneAddressYieldOneWinner(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	invite := func(id, op string) error {
+		_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
+			ID: id, Email: "sarah@example.com",
+			Grants:    []iam.Grant{iam.GrantStateRead},
+			ExpiresAt: brokerAt.Add(168 * time.Hour),
+			OpID:      op, Reason: "onboarding",
+		})
+		return err
+	}
+	if err := invite("018f3a9c-0000-7000-8000-0000000000d1", "op-1"); err != nil {
+		t.Fatalf("the first invitation: %v", err)
+	}
+	rig.drain()
+	err := invite("018f3a9c-0000-7000-8000-0000000000d2", "op-2")
+	if err == nil {
+		t.Fatal("a second invitation to the same address was accepted, so " +
+			"the company holds two links that each create one person")
+	}
+	var claimed *iamdomain.ErrClaimed
+	if !errors.As(err, &claimed) {
+		t.Errorf("the refusal is %v, want one naming what already holds the "+
+			"address", err)
+	}
+	if got := rig.column(`SELECT id FROM iam_invites`); len(got) != 1 {
+		t.Errorf("iam_invites holds %v, want exactly one row", got)
+	}
+}
+
+// AN INVITATION NEEDS AN EXPIRY, because one read as `never` is a superuser
+// claim that stays live in somebody's mailbox for the life of the company.
+func TestAnInvitationWithNoExpiryIsRefused(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	if _, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
+		ID:    "018f3a9c-0000-7000-8000-0000000000e1",
+		Email: "sarah@example.com", OpID: "op-1",
+	}); err == nil {
+		t.Error("an invitation with no expiry was accepted")
+	}
+}
+
+// A MACHINE IDENTITY ENROLS WITH NO ADDRESS, AND A PERSON MAY NOT.
+//
+// `svc:ci` has no login page and no mailbox — it proves itself with a token —
+// so requiring an address would mean inventing one, and a row that is neither
+// addressable nor named is a credential holder nobody can list, revoke or
+// audit. A PERSON is the opposite case: the address IS the interactive login
+// key, so one without it could never sign in.
+//
+// This was refused outright until the rule was split, which meant a company
+// could not declare a service account at all.
+func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: "018f3a9c-0000-7000-8000-0000000000f1",
+		Kind:     iam.KindMachine, Stage: iam.StageActive,
+		Name: "Release pipeline", Login: "svc:ci",
+		OpID: "op-machine", Reason: "the pipeline",
+	}); err != nil {
+		t.Fatalf("enrol a machine with no address: %v", err)
+	}
+	rig.drain()
+	if got := rig.column(
+		`SELECT login FROM iam_people WHERE email_blind = ''`); len(got) != 1 ||
+		got[0] != "svc:ci" {
+		t.Errorf("the address-less rows are %v, want exactly [svc:ci]", got)
+	}
+	// AND IT IS STILL SEALED. A machine's NAME is a person's words —
+	// "Release pipeline, raised by Dana" — so a removal has to be able to
+	// shred it exactly as it shreds anybody else's.
+	if got := rig.column(
+		`SELECT length(name_sealed) FROM iam_people WHERE login = 'svc:ci'`); //
+	len(got) != 1 || got[0] == "0" {
+		t.Errorf("the machine's name_sealed is %v, want ciphertext", got)
+	}
+
+	// THE REFUSALS ARE ASSERTED ON THE SENTINEL and never on "an error
+	// happened": an enrolment that reaches the publisher fails for
+	// unrelated reasons in a rig that is not draining, which would make
+	// both of these pass whatever the rule said.
+	if _, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
+		PersonID: "018f3a9c-0000-7000-8000-0000000000f2",
+		Kind:     iam.KindPerson, Stage: iam.StageActive,
+		Login: "dana.sre", OpID: "op-person", Reason: "a hire",
+	}); !errors.Is(err, iamdomain.ErrNotFindable) {
+		t.Errorf("a person with no address was refused with %v, want %v — "+
+			"nothing they hold is an interactive login key, so they can "+
+			"never sign in", err, iamdomain.ErrNotFindable)
+	}
+	// AND A MACHINE WITH NEITHER IS REFUSED TOO, which is the control:
+	// the rule is "findable", not "no address needed".
+	if _, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
+		PersonID: "018f3a9c-0000-7000-8000-0000000000f3",
+		Kind:     iam.KindMachine, Stage: iam.StageActive,
+		OpID: "op-nameless", Reason: "a pipeline",
+	}); !errors.Is(err, iamdomain.ErrNotFindable) {
+		t.Errorf("a machine with neither an address nor a login was refused "+
+			"with %v, want %v — it is a credential holder nobody can list "+
+			"or revoke", err, iamdomain.ErrNotFindable)
 	}
 }

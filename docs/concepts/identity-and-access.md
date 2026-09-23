@@ -69,7 +69,7 @@ colon, is refused when it is written rather than discovered later.
 
 ---
 
-## Grants: the ten things there are to allow
+## Grants: the eleven things there are to allow
 
 A grant is one capability. There are ten, each covering a surface the engine
 actually serves, and each is either a **read** or a **write**. The class is
@@ -134,7 +134,8 @@ map of what to attack, which is why those surfaces are guarded even for reads.
 | `knowledge:write` | Authoring the company's own pages: write, save, comment |
 | `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children |
 | `secrets:write` | Sealing, rotating, deleting and re-keying the fleet's credentials |
-| `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, `POST /budgets/reset`, a work item's purge |
+| `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, `POST /budgets/reset`, a work item's purge, and `POST /iam/invalidate-all` |
+| `people:manage` | Authority over **person rows**: inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them |
 | `sandbox:run` | Starting a detached coding run, and holding the per-run credential its MCP bridge mints |
 
 **Connecting an integration has no grant of its own.** `/setup` performs no
@@ -143,13 +144,35 @@ the `${VAR}` pointer through the merge and compare-and-set `/config` performs �
 so connecting a vendor is exactly `config:write` plus `secrets:write`. A third
 grant beside them would be a second answer to one question.
 
-Two splits are worth knowing because they follow a real deployment shape:
+Three splits are worth knowing because they follow a real deployment shape:
 
 - `secrets:read` is separate from `secrets:write` so an automation that
   reseals keys on a schedule can hold the write and never the read.
 - `sandbox:run` is separate from `work:write` because a coding run puts
   generated code on a machine and hands it a seat's whole tool surface, which
   is a different risk from filing a ticket.
+- `people:manage` is separate from `config:write` although both are
+  administrative. Changing the company document rebuilds every seat's tools
+  and providers; changing a person's row decides who may do that tomorrow. An
+  automation that applies a configuration must not be able to enrol itself a
+  colleague, and the person who onboards a team has no business editing
+  `mcp_servers`.
+
+**`people:manage` bounds itself.** A caller may not confer a grant they do not
+hold — on anybody, themselves included — so holding it does not reach past
+whatever else the holder carries. That rule lives at the **record** rather
+than at the route, because a record can be published by a CLI, a duty and a
+migration, none of which passes through one. Taking a grant *away* is always
+allowed: nobody escalates by narrowing, and an administrator who cannot hold
+`secrets:read` must still be able to withdraw it from a leaver.
+
+**`POST /iam/invalidate-all` takes `fleet:operate` rather than both.** It is
+the restore runbook's last step, run by whoever runs the deployment; requiring
+`people:manage` as well would mean every SRE who can restore also holds the
+grant that can grant, which is worse for least privilege than the blast radius
+it was meant to bound. Anybody with `people:manage` can already revoke every
+person one at a time — what this adds is doing it *without knowing who was
+affected*, which is exactly what a restore needs.
 
 ### A grant this build has never heard of
 
@@ -289,6 +312,23 @@ and changes nothing; the POST is the person, having typed a password.
 Absent, redeemed and expired are **one refusal**, because the remedy is the same
 and telling them apart would say "this was already used" to somebody whose link
 merely aged out, and send them looking for who used it.
+
+**The link is shown once and nothing can read it back.** What the estate holds
+is the invitation's id, which *is* the verifier: holding the link is holding
+the id. An invitation an administrator lost is re-issued with one more call
+rather than recovered — and the address it was for is sealed under the
+invitation's own key, minted for it and shredded when it is collected, so an
+address somebody typed and never sent leaves no cleartext anywhere.
+
+**The engine never sends mail.** `crewlet iam invite` and `POST
+/iam/invitations` hand the inviter the URL; getting it to the person is
+theirs. A seat holder already has contact identities, so it can also be sent
+over the notification spine the company already runs.
+
+**It stays redeemable for one week.** That is the security horizon rather than
+a convenience: the link is a bearer credential sitting in somebody's mailbox,
+so the window is how long a compromised mailbox yields an account. A week
+survives somebody being away without making the link a standing way in.
 
 ## The binding has two ends, and only one of them arbitrates
 

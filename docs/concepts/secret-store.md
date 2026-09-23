@@ -226,7 +226,7 @@ Reading a value back is **break-glass on both sides**. `crewlet secrets get` ref
 
 A write made while the node was stopped is not stranded: at its next start the engine **migrates** those rows onto the fleet and removes them locally, preserving the original author and stamping `source=migrated`. That is the bootstrap path — the equivalent of `crewlet config import` against a stopped node — and the CLI says which of the two it used after every write.
 
-`-api URL` writes through a named node instead, which is how the command works from a machine that is not the node at all. It authenticates with `CREWLET_API_TOKEN` when set, and otherwise with the first entry in the Tier A `api.auth.tokens` list; the token's id is recorded as the author of the write.
+`-api URL` writes through a named node instead, which is how the command works from a machine that is not the node at all. It authenticates with `CREWLET_API_TOKEN`, and with nothing else: `api.auth.tokens` is what a node **accepts**, not a wallet the CLI helps itself from, and a write whose author was whichever credential happened to be listed first landed under a name the operator had not chosen. Export the variable, or mint yourself a machine token with `crewlet iam token`. The credential's own identity is recorded as the author of the write.
 
 `crewlet secrets keygen` needs no config and no store: it is what an operator runs *before* either exists, and it prints the base64 form the keyring's `material` field takes.
 

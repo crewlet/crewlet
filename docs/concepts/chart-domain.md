@@ -122,6 +122,13 @@ can sign in and act as. On a node that runs no identity domain that arm is
 legitimately empty, so reading it would report every human seat in the company
 as unheld. A report that cannot ask does not guess.
 
+**And the seats nobody holds are listable.** `GET /chart/seats?kind=human&unheld=true`
+answers the same question as a filter, which is what an invite screen needs
+before it asks who to send a link to. On a node with no identity domain the
+filter is **refused with `503`** rather than applied to an empty directory —
+returning every human seat in the company under a parameter that promised the
+opposite is the one failure a screen renders as a finished answer.
+
 **Removing a seat somebody holds is refused, and the refusal is advisory.** The
 chart's removal decide reads the directory inside its own snapshot and names
 the person, because the ordinary mistake is a reorganisation that takes out a

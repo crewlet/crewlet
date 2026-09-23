@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -118,5 +120,27 @@ func TestTheObservedLagIsWhatTheRequestPathReads(t *testing.T) {
 	d.lagNanos.Store(int64(7 * time.Second))
 	if got := d.Lag(); got != 7*time.Second {
 		t.Errorf("lag %s, want 7s", got)
+	}
+}
+
+// THE NODE'S OWN WRITER MAY ENROL SOMEBODY WHO HAS NO PRINCIPAL YET.
+//
+// Two identity gestures are performed on behalf of a person who does not
+// exist: the first person a bootstrap code creates, and the person an
+// invitation redeems into. Both go through this node's own writer, and the
+// domain refuses an administrative record from a party without
+// [iamdomain.AdminGrant].
+//
+// This pairing had already drifted: the writer held fleet:operate and the
+// domain asked for config:write, so every bootstrap and every redemption was
+// refused on a real deployment — invisibly, because the surface that drives
+// them is exercised against a stub writer.
+func TestTheNodesOwnWriterMayEnrolOnSomebodysBehalf(t *testing.T) {
+	t.Parallel()
+	if !slices.Contains(nodeWriterGrants, iamdomain.AdminGrant) {
+		t.Errorf("the node writes identity records as %v, which does not "+
+			"carry %s — so a fresh deployment cannot create its first person "+
+			"and an invitation cannot be redeemed",
+			nodeWriterGrants, iamdomain.AdminGrant)
 	}
 }

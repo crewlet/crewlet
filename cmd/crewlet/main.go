@@ -175,6 +175,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runSecrets(rest, stdout, stderr)
 	case "config":
 		return runConfig(rest, stdout, stderr)
+	case "iam":
+		return runIAM(rest, stdout, stderr)
 	case "chart":
 		return runChart(rest, stdout, stderr)
 	case "migrate":
@@ -220,6 +222,8 @@ Usage:
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet chart <cmd>         The company's org chart: show it, check it against
                               the settings, read its history, export it
+  crewlet iam <cmd>           The company's people, credentials and sessions:
+                              invite, grant, bind, suspend, revoke, audit
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
@@ -1548,6 +1552,22 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
+	// AND THE WAY IN FOR A COMPANY THAT HAS NOBODY IN IT. A fresh estate
+	// holds no person, so the one-time code is what creates the first —
+	// written 0600 beside the store, its hash published so any ingress
+	// node validates any node's, and its PATH in the log line rather than
+	// its value. A node whose rows already hold somebody mints nothing,
+	// which is what stops an established fleet of a hundred nodes leaving
+	// a superuser-claim file on every machine.
+	if err := openBootstrap(ctx, boot, e, nodeID, authSurface); err != nil {
+		return nil, err
+	}
+	// AND THE DIRECTORY, which is nil on exactly the nodes the sign-in
+	// surface is nil on.
+	directory, err := directorySurface(boot, e, nodeID, authSurface)
+	if err != nil {
+		return nil, err
+	}
 
 	// The fleet's integration status, which both the reconcile loop and a
 	// pass run from the dashboard write.
@@ -1845,6 +1865,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// AND THE OTHER END OF THE COOKIE IT MINTS. Nil exactly when
 		// Auth is: a node that cannot sign one has none to check.
 		Sessions: sessions,
+		// THE COMPANY'S IDENTITY DIRECTORY, nil on a node that runs no
+		// identity domain — see [directorySurface].
+		IAM: directory,
 		// WHETHER THIS NODE'S REPLICATED COPY IS FIT TO ANSWER FROM, for
 		// /ready. The ENGINE's own verdict rather than a second one built
 		// here: it is the same question that decides whether this node may

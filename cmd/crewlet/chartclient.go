@@ -36,7 +36,7 @@ func newChartClient(boot *config.Bootstrap, override string) (*chartClient, erro
 	if err != nil {
 		return nil, err
 	}
-	token, err := nodeAPIToken(boot, "/chart")
+	token, err := nodeAPIToken("/chart")
 	if err != nil {
 		return nil, err
 	}

@@ -108,7 +108,7 @@ func suitePayload(kind iamdomain.ObjectKind, id string) (
 			V: iamdomain.DocumentVersion, Kind: iam.KindPerson,
 			Stage:      iam.StageActive,
 			NameSealed: "sealed:name", EmailSealed: "sealed:email",
-			Grants: []iam.Grant{iam.GrantConfigWrite},
+			Grants: []iam.Grant{iam.GrantPeopleManage},
 		}, iamdomain.PeopleScope(id)
 	case iamdomain.KindEmail:
 		return iamdomain.OpClaim, suitePerson, iamdomain.Claim{

@@ -9,19 +9,24 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
+	"github.com/crewlet/crewlet/internal/api/iamapi"
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Finding the running node, and authenticating to it.
@@ -83,20 +88,24 @@ func nodeBaseURL(boot *config.Bootstrap, override, surface string) (string, erro
 
 // nodeTokenOrEmpty is the bearer token to send, or "" when there is none.
 //
-// The environment FIRST, then Tier A's first token. The order matters: a
-// checked-in config carries ${VAR} references that resolve to the same place
-// the environment does, and an operator who exported one deliberately means
-// that one. Tier A's list is what THIS node accepts, so any entry
-// authenticates; the id is stamped as the author of the write, which is why
-// the environment variable exists at all.
-func nodeTokenOrEmpty(boot *config.Bootstrap) string {
-	if fromEnv := strings.TrimSpace(os.Getenv(apiTokenEnv)); fromEnv != "" {
-		return fromEnv
-	}
-	if len(boot.API.Auth.Tokens) > 0 {
-		return boot.API.Auth.Tokens[0].Token
-	}
-	return ""
+// # The environment, and nothing else
+//
+// It used to fall back to Tier A's FIRST token, which was wrong in a way the
+// identity estate makes plain: a write's author is now a person or a machine
+// with a row, a trail and grants of its own, and picking whichever credential
+// happened to be listed first meant an operator's `crewlet secrets set` landed
+// under a name they had not chosen and might not hold. `api.auth.tokens` is
+// what this node ACCEPTS; it is not a wallet the CLI helps itself from.
+//
+// It also read a value out of the config file it had just parsed — a resolved
+// `${VAR}`, in the clear, in a process that had no other reason to hold one —
+// which is the shape a credential leaks from.
+//
+// So the CLI carries its own credential or says so. `CREWLET_API_TOKEN` is
+// where it comes from, never a flag: a token on a command line lands in shell
+// history and in `ps`.
+func nodeTokenOrEmpty() string {
+	return strings.TrimSpace(os.Getenv(apiTokenEnv))
 }
 
 // nodeAPIToken is [nodeTokenOrEmpty] for the surfaces that are always guarded.
@@ -109,13 +118,14 @@ func nodeTokenOrEmpty(boot *config.Bootstrap) string {
 // token legitimate here, and it is gone: every guarded route now needs a
 // credential on every posture, so an empty token is always the 401 this
 // message describes.
-func nodeAPIToken(boot *config.Bootstrap, surface string) (string, error) {
-	if token := nodeTokenOrEmpty(boot); token != "" {
+func nodeAPIToken(surface string) (string, error) {
+	if token := nodeTokenOrEmpty(); token != "" {
 		return token, nil
 	}
 	return "", fmt.Errorf(
-		"this node lists no api.auth.tokens, so nothing can authenticate to "+
-			"its %s surface; add one, or export %s", surface, apiTokenEnv)
+		"nothing can authenticate to this node's %s surface: export %s with "+
+			"one of the values in api.auth.tokens, or a machine token minted "+
+			"by `crewlet iam token`", surface, apiTokenEnv)
 }
 
 // signInSurface builds /auth, or reports that this node serves none.
@@ -299,4 +309,160 @@ func seatHeld(e *engine.Engine) chartapi.Held {
 		// bound to a cancelled request would make a page half-answer.
 		return reader.SeatHeld(context.Background(), handle)
 	}
+}
+
+// directorySurface builds /iam, or reports that this node serves none.
+//
+// NIL IS A REAL POSTURE, exactly as [signInSurface]'s is and for the same
+// reason: a node that runs no identity domain holds a legitimately empty copy
+// of that estate, and a surface over it would serve an empty directory as
+// though the company had nobody in it. The routes are ABSENT rather than
+// answering an error.
+func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
+	auth *authapi.Service) (*iamapi.Service, error) {
+
+	reader, writer := e.IAM(), e.IAMWriter()
+	if reader == nil || writer == nil {
+		logging.Get("cli").Info("api_directory_absent",
+			"reason", "this node runs no identity domain",
+			"hint", "node.roles narrows which domains a node applies; a "+
+				"seats-only satellite serves no directory")
+		return nil, nil
+	}
+	surface, err := iamapi.New(iamapi.Options{
+		Directory: reader,
+		// ONE WRITER PER CALLER. The node's own writer acts as the
+		// DEPLOYMENT, which is right for a bootstrap and wrong for
+		// everything here: a directory whose author field is the node
+		// is not an audit trail.
+		Authority: func(actor string, kind iam.Kind, grants []iam.Grant) iamapi.Writer {
+			return writer.As(actor, kind, grants)
+		},
+		Opener:       e.PersonSealer(),
+		Bootstrap:    bootstrapReissue(nodeID, auth),
+		ExternalBase: boot.API.ExternalBase(),
+		// THIS NODE'S OWN CEILING, which the report compares a person's
+		// declared grants against: it is applied at decision time and
+		// never written, so a fleet mid-rollout legally disagrees and
+		// nothing else would say so.
+		Ceiling: boot.API.Auth.MaxGrants,
+		Seats:   seatExists(e),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("api: the identity directory: %w", err)
+	}
+	return surface, nil
+}
+
+// bootstrapReissue is the one-time code's re-issue, or nil where this node
+// serves no sign-in surface.
+//
+// THE SAME SERVICE THAT MINTS ONE AT BOOT, rather than a second
+// implementation: the file's path, its mode, the hash that is published and
+// the withdrawals that precede it are one sequence, and a copy of it here
+// would be a second answer to "how many codes are live".
+func bootstrapReissue(nodeID string, auth *authapi.Service) iamapi.Bootstrap {
+	if auth == nil {
+		return nil
+	}
+	return bootstrapMinter{auth: auth, node: nodeID}
+}
+
+type bootstrapMinter struct {
+	auth *authapi.Service
+	node string
+}
+
+func (b bootstrapMinter) MintCode(ctx context.Context) (string, error) {
+	return b.auth.ReissueBootstrapCode(ctx, b.node)
+}
+
+// seatExists reports whether a seat is one this node's org chart holds, or
+// nil on a node that cannot tell.
+//
+// THE MIRROR OF [seatHeld], one estate the other way round, and the nil is
+// the same third value: a node running no chart domain has an empty copy of
+// it, so asking would report EVERY bound person as dangling.
+func seatExists(e *engine.Engine) iamapi.Seats {
+	reader := e.Chart()
+	if reader == nil {
+		return nil
+	}
+	return func(handle string) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), seatProbeBudget)
+		defer cancel()
+		_, err := reader.Seat(ctx, handle,
+			statelog.Freshness{Level: statelog.ReadStale})
+		// AN UNREADABLE CHART READS AS PRESENT, which is the direction
+		// that does not raise a false alarm: reporting somebody's
+		// binding as dangling because a read failed would send an
+		// administrator to unbind a person whose seat is perfectly
+		// there.
+		return err == nil || !errors.Is(err, chart.ErrNotFound)
+	}
+}
+
+// seatProbeBudget bounds one seat lookup inside the report.
+//
+// TWO SECONDS, and it is a per-ROW budget on a walk that may cover the whole
+// directory — so the number is what one local SQL read on a busy node costs
+// at its worst rather than what a network call would. A probe that cannot
+// answer inside it reads as present, which is the arm above.
+const seatProbeBudget = 2 * time.Second
+
+// openBootstrap writes this node's one-time founder code when the company has
+// nobody in it.
+//
+// # Why it runs at boot and not on demand
+//
+// A company with no person has no way to create one: every /iam route needs a
+// credential, and the Tier A token an operator holds is the deployment's
+// rather than anybody's. The code is what closes that, and it has to exist
+// BEFORE somebody opens the dashboard — a welcome screen that told them to run
+// a command to mint a code would be a welcome screen for an operator with a
+// shell rather than for the founder.
+//
+// # And why a node that already has people mints nothing
+//
+// The file is a superuser claim sitting on a host. An established fleet of a
+// hundred nodes must not leave one on every machine, so the mint is gated on
+// the estate being genuinely empty — and on `api.auth.bootstrap` being open,
+// which is how a deployment whose first person is created by `POST /iam/people`
+// under a Tier A token says so.
+func openBootstrap(ctx context.Context, boot *config.Bootstrap,
+	e *engine.Engine, nodeID string, auth *authapi.Service) error {
+
+	if auth == nil || boot.API.Auth.Bootstrap == config.BootstrapAccessClosed {
+		return nil
+	}
+	reader := e.IAM()
+	if reader == nil {
+		return nil
+	}
+	held, err := reader.AnyPerson(ctx)
+	if err != nil {
+		// A NODE THAT CANNOT READ ITS OWN ESTATE MINTS NOTHING and does
+		// not refuse to boot. The two failure directions are not
+		// symmetric: a code nobody needed is a live superuser claim on
+		// a host, and a code that was not written is one command away.
+		logging.Get("cli").Warn("api_bootstrap_not_offered",
+			"error", err,
+			"detail", "this node could not read its identity estate, so it "+
+				"did not mint a founder code; `crewlet iam bootstrap-code` "+
+				"mints one once it can")
+		return nil
+	}
+	if held {
+		return nil
+	}
+	path, err := auth.WriteBootstrapCode(ctx, nodeID)
+	if err != nil {
+		return fmt.Errorf("api: mint this node's founder code: %w", err)
+	}
+	// THE PATH AND NEVER THE VALUE. A log is shipped, aggregated and
+	// searched, and a superuser claim in one outlives every rotation.
+	logging.Get("cli").Warn("iam_bootstrap_code_ready", "path", path,
+		"detail", "this company has nobody in it; the one-time founder code "+
+			"is in that file, mode 0600, on this host")
+	return nil
 }

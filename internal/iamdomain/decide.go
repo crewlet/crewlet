@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -63,10 +64,6 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 			"people on one address", w.missingKeys())
 	}
 
-	blind, err := w.blinder.Email(in.Email)
-	if err != nil {
-		return statelog.Position{}, err
-	}
 	if err := w.sealer.Mint(ctx, in.PersonID, w.Actor, w.Now()); err != nil {
 		return statelog.Position{}, err
 	}
@@ -74,17 +71,29 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Position, er
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	sealedEmail, err := w.sealer.Seal(ctx, in.PersonID, FieldEmail, in.Email)
-	if err != nil {
-		return statelog.Position{}, err
-	}
-
-	// THE ADDRESS FIRST. It is the claim most likely to be contested —
-	// two administrators adding one new joiner — so it is the one that
-	// should fail before anything else has happened.
-	if _, err := w.claim(ctx, KindEmail, blind, in.PersonID, sealedEmail,
-		in.OpID+":email"); err != nil {
-		return statelog.Position{}, err
+	// AN ADDRESS IS OPTIONAL AND A KEY IS NOT. A machine identity has no
+	// mailbox, so there is nothing to blind, nothing to seal and no
+	// address claim to take — but its NAME is still sealed, under a key
+	// minted for it like anybody else's, because a removal has to be able
+	// to shred `Release pipeline, raised by Dana` as surely as a person.
+	var sealedEmail string
+	if in.Email != "" {
+		blind, err := w.blinder.Email(in.Email)
+		if err != nil {
+			return statelog.Position{}, err
+		}
+		if sealedEmail, err = w.sealer.Seal(ctx, in.PersonID, FieldEmail,
+			in.Email); err != nil {
+			return statelog.Position{}, err
+		}
+		// THE ADDRESS FIRST. It is the claim most likely to be
+		// contested — two administrators adding one new joiner — so it
+		// is the one that should fail before anything else has
+		// happened.
+		if _, err := w.claim(ctx, KindEmail, blind, in.PersonID, sealedEmail,
+			in.OpID+":email"); err != nil {
+			return statelog.Position{}, err
+		}
 	}
 	if in.Login != "" {
 		if _, err := w.claim(ctx, KindLogin, in.Login, in.PersonID, "",
@@ -171,10 +180,19 @@ func (e Enrolment) validate() error {
 		return fmt.Errorf("iamdomain: %q is not a principal kind", e.Kind)
 	case !e.Stage.Valid():
 		return fmt.Errorf("iamdomain: %q is not an enrolment stage", e.Stage)
-	case e.Email == "":
-		return errors.New("iamdomain: an enrolment needs an address: it is " +
-			"what the person is found by, and a person with none can never " +
-			"sign in")
+	case e.Kind == iam.KindPerson && e.Email == "":
+		return fmt.Errorf("%w: enrolling a person needs an address — it is "+
+			"the interactive login key, and somebody with none can never "+
+			"sign in", ErrNotFindable)
+	case e.Email == "" && e.Login == "":
+		// A MACHINE NEEDS NO ADDRESS and must still be FINDABLE. It has
+		// no login page and no mailbox — `svc:ci` proves itself with a
+		// token — so requiring an address would have meant inventing
+		// one, and a row that is neither addressable nor named is a
+		// credential holder nobody can list, revoke or audit.
+		return fmt.Errorf("%w: enrolling a %s needs a login — it has no login "+
+			"page and therefore no address, so the login is the only thing "+
+			"that finds it", ErrNotFindable, e.Kind)
 	case e.Login != "" && !iam.ValidLogin(e.Login) && !iam.ValidMachineHandle(e.Login):
 		return fmt.Errorf("iamdomain: %q is neither a person's login "+
 			"(segments joined by dots) nor a machine's handle (segments "+
@@ -183,6 +201,17 @@ func (e Enrolment) validate() error {
 	}
 	return nil
 }
+
+// ErrNotFindable reports an enrolment that would create somebody nothing can
+// look up.
+//
+// ITS OWN SENTINEL because the two arms have different fixes and a caller
+// renders them differently: a person needs an address (the interactive login
+// key) and a machine needs a login (it has no login page, so there is nothing
+// else to find it by). What they share is the consequence — a credential
+// holder nobody can list, revoke or audit — which is why one sentinel covers
+// both.
+var ErrNotFindable = errors.New("iamdomain: nothing could find this identity")
 
 // Claim takes one address, login or seat binding for a person.
 //
@@ -744,17 +773,61 @@ func (w *Writer) MintBootstrap(ctx context.Context, in BootstrapMint) (
 	if err != nil {
 		return statelog.Position{}, err
 	}
+	// THE BOOTSTRAP'S OWN BUCKET, which is what the apply writes.
+	//
+	// The root scope is what this reached for first, on the reasoning that
+	// a bootstrap is about the company rather than about a person — and it
+	// is REFUSED, by name, for a reason that outranks it: a deferral at
+	// the root freezes every suspension, every revocation and every login
+	// behind one record a node could not decode. Only an eviction and a
+	// reanchor may state it. A bootstrap hashes its own id into a bucket
+	// exactly as a person does, so there is one to name.
 	rec, err := w.record(BootstrapSubject(), OpBootstrap, "",
-		RootScope(), mutation, in.Reason)
+		BucketScope(BootstrapBucket()), mutation, in.Reason)
 	if err != nil {
 		return statelog.Position{}, err
 	}
-	// THE ROOT SCOPE, because a bootstrap is about the company rather than
-	// about a person: there is no bucket to name, and the one thing every
-	// node must not do is decide it has seen the whole estate while a
-	// mint it could not decode sits below.
 	result, err := w.publish(ctx,
 		w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
+	return result.Position, err
+}
+
+// WithdrawBootstrap supersedes a code nobody redeemed.
+//
+// # Why re-issuing spends what is outstanding
+//
+// A live code is a way to become the company's first administrator with no
+// credential at all. Minting a second without ending the first leaves TWO,
+// and an operator who re-issued because they lost the file has no idea the
+// original is still in a terminal somewhere. So `crewlet iam bootstrap-code`
+// withdraws every outstanding code and then mints, and exactly one is live
+// after it runs.
+//
+// IT IS NOT A REDEMPTION WITH NO PERSON. The two leave the same row state and
+// are opposite events; see [Bootstrap.Withdrawn].
+func (w *Writer) WithdrawBootstrap(ctx context.Context, id, opID,
+	reason string) (statelog.Position, error) {
+
+	if err := w.mayAdminister(OpBootstrap); err != nil {
+		return statelog.Position{}, err
+	}
+	if id == "" || opID == "" {
+		return statelog.Position{}, errors.New("iamdomain: withdrawing a " +
+			"bootstrap code needs its id and an operation id")
+	}
+	mutation, err := EncodeBootstrapDoc(Bootstrap{
+		V: DocumentVersion, ID: id, Withdrawn: true,
+	})
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	rec, err := w.record(BootstrapSubject(), OpBootstrap, "",
+		BucketScope(BootstrapBucket()), mutation, reason)
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	result, err := w.publish(ctx,
+		w.request(&rec, opID, statelog.PatternArbitrated, nil))
 	return result.Position, err
 }
 
@@ -802,8 +875,12 @@ func (w *Writer) SpendBootstrap(ctx context.Context, in BootstrapSpend) (
 	if err != nil {
 		return statelog.Position{}, err
 	}
+	// BOTH BUCKETS: the bootstrap's own, because the row it spends lives
+	// there, and the PERSON's, because the same apply is what names them.
+	// A scope that stated one would leave the other's readers certifying a
+	// copy this record changed.
 	rec, err := w.record(BootstrapSubject(), OpBootstrap, in.Person,
-		RootScope(), mutation, in.Reason)
+		BucketScope(BootstrapBucket(), BucketOf(in.Person)), mutation, in.Reason)
 	if err != nil {
 		return statelog.Position{}, err
 	}
@@ -893,6 +970,330 @@ type CredentialSet struct {
 	// shape in which the expectation and the decision come from one
 	// snapshot.
 	Apply func([]Credential) []Credential
+
+	OpID   string
+	Reason string
+}
+
+// Invite mints an invitation to an address nobody in this company holds.
+//
+// # It arbitrates on the ADDRESS, not on the invitation's own id
+//
+// An invitation's id is a fresh uuid nobody else would name, so a subject
+// keyed on it would never contend with anything — and two administrators
+// inviting one address would both succeed, producing two links for one
+// person, either of which creates them. The address is the thing two writers
+// must not both win, so it is the subject: a create at an expectation of
+// zero, on the SAME subject an enrolment's email claim takes, so an
+// invitation and a hire for one address contend as well.
+//
+// The loser reads a newer row and answers 409 naming what is already there,
+// which is [ErrClaimed]'s whole job.
+//
+// # The link is not here
+//
+// This publishes the invitation's id and what redeeming it confers. The
+// SECRET a person follows is the caller's — minted by them, shown once, and
+// never written to this log, because a log is replicated, snapshotted, backed
+// up and donated to joining peers. What is stored is the id, which is the
+// verifier: holding the link is holding the id.
+func (w *Writer) Invite(ctx context.Context, in InviteMint) (
+	statelog.Position, error) {
+
+	if err := w.mayAdminister(OpInvite); err != nil {
+		return statelog.Position{}, err
+	}
+	switch {
+	case in.ID == "" || in.OpID == "":
+		return statelog.Position{}, errors.New("iamdomain: an invitation needs " +
+			"its own id and an operation id")
+	case in.Email == "":
+		return statelog.Position{}, errors.New("iamdomain: an invitation needs " +
+			"the address it is for — it arbitrates on that address, so one " +
+			"with none would contend with nothing and two would both win")
+	case in.ExpiresAt.IsZero():
+		return statelog.Position{}, errors.New("iamdomain: an invitation needs " +
+			"an expiry; one read as `never` is a superuser claim that stays " +
+			"live in somebody's mailbox for the life of the company")
+	}
+	if w.blinder == nil || w.sealer == nil {
+		return statelog.Position{}, fmt.Errorf("iamdomain: this node cannot "+
+			"mint an invitation: %s", w.missingKeys())
+	}
+	blind, err := w.blinder.Email(in.Email)
+	if err != nil {
+		return statelog.Position{}, fmt.Errorf("iamdomain: blind an "+
+			"invitation's address: %w", err)
+	}
+	// SEALED UNDER THE INVITATION'S OWN ID rather than a person's, because
+	// there is no person yet. The key is minted here and shredded when the
+	// invitation is collected, so an address somebody typed and never sent
+	// leaves no cleartext anywhere — which is the same promise a removal
+	// makes, one object earlier.
+	if err := w.sealer.Mint(ctx, in.ID, w.Actor, w.Now()); err != nil {
+		return statelog.Position{}, fmt.Errorf("iamdomain: mint an "+
+			"invitation's key: %w", err)
+	}
+	sealed, err := w.sealer.Seal(ctx, in.ID, FieldEmail, in.Email)
+	if err != nil {
+		return statelog.Position{}, fmt.Errorf("iamdomain: seal an "+
+			"invitation's address: %w", err)
+	}
+	mutation, err := EncodeInvitation(Invitation{
+		V: DocumentVersion, ID: in.ID, Sealed: sealed,
+		InvitedBy: w.Actor, Grants: in.Grants, Colleague: in.Colleague,
+		ExpiresAt: in.ExpiresAt,
+	})
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	subject := EmailSubject(blind)
+	// THE BUCKET IS THE ADDRESS'S OWN, matching the apply: an invitation
+	// has no person until it is redeemed, and a bucket derived from an
+	// empty id would put every outstanding invitation in one sweep.
+	rec, err := w.record(subject, OpInvite, "",
+		BucketScope(BucketOf(blind)), mutation, in.Reason)
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	// THE ROW READ IS WHAT REFUSES THE SEQUENTIAL CASE, and the broker's
+	// create-at-zero is what settles the concurrent one. Both are needed
+	// and neither substitutes for the other: two administrators inviting
+	// at the same instant contend at the broker because neither subject
+	// has an anchor yet, and the second one an hour later publishes above
+	// the anchor the first left — so without this read it would land.
+	//
+	// IT READS BOTH TABLES, because an address can be spoken for by a
+	// PERSON or by an invitation nobody has redeemed. Reading only the
+	// people, as a claim's own decide does, missed every outstanding
+	// invitation and produced a second link for the same address.
+	decide := func(tx *sql.Tx) error {
+		holder, held, err := holderOf(ctx, tx, KindEmail, blind)
+		if err != nil {
+			return err
+		}
+		if held {
+			return &ErrClaimed{Kind: KindEmail, Token: blind, Holder: holder}
+		}
+		outstanding, found, err := openInvitationFor(ctx, tx, blind, w.Now())
+		if err != nil {
+			return err
+		}
+		if found {
+			return &ErrClaimed{Kind: KindEmail, Token: blind, Holder: outstanding}
+		}
+		return nil
+	}
+	result, err := w.publish(ctx,
+		w.request(&rec, in.OpID, statelog.PatternCreate, decide))
+	return result.Position, err
+}
+
+// openInvitationFor is the invitation on an address that has not been
+// redeemed and has not aged out, read INSIDE a decide's snapshot.
+//
+// THE WRITER'S CLOCK DECIDES THE EXPIRY HERE, which is the one place in this
+// domain that is acceptable: every instant an applier stores is the BROKER's,
+// and this read is advisory — what it buys is a better refusal, never the
+// arbitration. A writer whose clock is minutes out re-issues an invitation
+// somebody could still have used, or refuses one that had just aged out, and
+// both are ordinary administrative outcomes rather than a correctness loss.
+func openInvitationFor(ctx context.Context, tx *sql.Tx, blind string,
+	now time.Time) (string, bool, error) {
+
+	var id string
+	err := tx.QueryRowContext(ctx, `
+		SELECT id FROM iam_invites
+		WHERE email_blind = ? AND redeemed_at = 0 AND expires_at > ?
+		ORDER BY created_at DESC LIMIT 1`,
+		blind, now.UnixMilli()).Scan(&id)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("iamdomain: read the invitations on an "+
+			"address: %w", err)
+	}
+	return id, true, nil
+}
+
+// InviteMint is what issuing an invitation needs.
+type InviteMint struct {
+	// ID is the invitation's own id, which is also the verifier a
+	// redemption presents. The CALLER mints it, because the caller is
+	// what shows the link once and this never sees the secret again.
+	ID string
+
+	// Email is the address it is for, in the clear. It is blinded for the
+	// subject and sealed for the row before anything is published.
+	Email string
+
+	// Grants and Colleague are what redeeming it confers, decided ONCE by
+	// whoever issued it rather than again by whoever processes the
+	// redemption — which is also what stops a redemption being a way to
+	// ask for more than was offered.
+	Grants    []iam.Grant
+	Colleague iam.Colleague
+
+	// ExpiresAt is when it stops being redeemable. REQUIRED.
+	ExpiresAt time.Time
+
+	OpID   string
+	Reason string
+}
+
+// UpdatePerson rewrites one person's own document — their grants, their reach
+// into the work, their name — forming the new whole INSIDE the snapshot.
+//
+// # The same shape as [Writer.SetCredentials], and for the same reason
+//
+// A person's document is authored whole, so a caller changing one field
+// cannot form the new value without the current one and must not read it in
+// another transaction: a set assembled from an earlier read pairs an old
+// decision with a new expectation, and the broker accepts it.
+//
+// # The two self-escalation rules are enforced HERE
+//
+// Not only at the route, because a record can be published by a CLI, a duty
+// and a test, none of which passes through one — and this is the last frame
+// that sees every path. A caller may not confer a grant they do not
+// themselves hold, on anybody, themselves included. That is one rule stated
+// once rather than the design's two, because "on my own record" and "on
+// somebody else's" have the same answer and splitting them is how one of the
+// two arms comes to be checked and the other not.
+//
+// THE BOOTSTRAP IS THE STATED EXEMPTION and it is not reached through here:
+// [Writer.Enrol] creates the first person, while nobody holds a credential at
+// all.
+func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
+	statelog.Position, error) {
+
+	if err := w.mayAdminister(OpUpdate); err != nil {
+		return statelog.Position{}, err
+	}
+	switch {
+	case in.PersonID == "" || in.OpID == "":
+		return statelog.Position{}, errors.New("iamdomain: updating a person " +
+			"needs a person and an operation id")
+	case in.Apply == nil:
+		return statelog.Position{}, errors.New("iamdomain: updating a person " +
+			"needs the function that forms the new document inside the " +
+			"snapshot — a caller holding the current one read it in another " +
+			"transaction, which is the pairing the write authority forbids")
+	}
+	// THE NAME IS SEALED BEFORE THE DECIDE, never inside it. Sealing is a
+	// fleet-secret read, and a decide that performed one would be a
+	// transaction whose commit depends on a coordination round trip — the
+	// same reason the applier never decrypts. So it happens here, once,
+	// and the decide only places the ciphertext.
+	sealedName := ""
+	if in.Name != nil {
+		if w.sealer == nil {
+			return statelog.Position{}, fmt.Errorf("iamdomain: this node "+
+				"cannot change a name: it has %s, and a name is sealed under "+
+				"the person's own key before it is published", w.missingKeys())
+		}
+		var err error
+		if sealedName, err = w.sealer.Seal(ctx, in.PersonID, FieldName,
+			*in.Name); err != nil {
+			return statelog.Position{}, err
+		}
+	}
+	var mutation []byte
+	decide := func(tx *sql.Tx) error {
+		var document []byte
+		err := tx.QueryRowContext(ctx,
+			`SELECT document FROM iam_people WHERE id = ?`, in.PersonID).
+			Scan(&document)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("iamdomain: person %q is not held on this node, "+
+				"so their row cannot be formed here", in.PersonID)
+		} else if err != nil {
+			return fmt.Errorf("iamdomain: read person %q: %w", in.PersonID, err)
+		}
+		person, err := DecodePerson(document)
+		if err != nil {
+			return fmt.Errorf("iamdomain: open person %q: %w", in.PersonID, err)
+		}
+		if in.Name != nil {
+			person.NameSealed = sealedName
+		}
+		updated, err := in.Apply(person)
+		if err != nil {
+			return err
+		}
+		if err := w.mayConfer(person.Grants, updated.Grants); err != nil {
+			return err
+		}
+		mutation, err = EncodePerson(updated)
+		return err
+	}
+	rec, err := w.record(PersonSubject(in.PersonID), OpUpdate, in.PersonID,
+		PeopleScope(in.PersonID), nil, in.Reason)
+	if err != nil {
+		return statelog.Position{}, err
+	}
+	req := w.request(&rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) error {
+		if err := decide(tx); err != nil {
+			return err
+		}
+		rec.Mutation = mutation
+		return nil
+	})
+	result, err := w.publish(ctx, req)
+	return result.Position, err
+}
+
+// mayConfer refuses a change that ADDS a grant this writer's party does not
+// hold.
+//
+// ONLY THE ADDITIONS ARE CHECKED, which is the difference between a rule and
+// an obstruction: taking a grant AWAY from somebody is always allowed —
+// nobody escalates by narrowing — and an administrator who cannot hold
+// secrets:reveal must still be able to withdraw it from a leaver.
+//
+// AN UNKNOWN GRANT IS REFUSED for [iam.Principal.Can]'s reason: a spelling a
+// newer peer wrote that this build cannot name answers false, and a denylist
+// would have admitted it.
+func (w *Writer) mayConfer(before, after []iam.Grant) error {
+	for _, g := range after {
+		if slices.Contains(before, g) || w.Can(g) {
+			continue
+		}
+		return fmt.Errorf("%w: conferring %s needs the same grant, and this "+
+			"party holds %v — a caller may not hand out what they do not "+
+			"themselves hold, on their own record or on anybody else's",
+			ErrRefused, g, w.Grants)
+	}
+	return nil
+}
+
+// PersonUpdate is what rewriting one person's document needs.
+type PersonUpdate struct {
+	PersonID string
+
+	// Name is a new name in the CLEAR, or nil to leave it alone.
+	//
+	// A POINTER AND NOT A STRING, because "" is a real setting — somebody
+	// clearing a name they would rather not have here — and a plain
+	// string could not tell it from a caller who never mentioned one.
+	//
+	// IT IS NOT [PersonUpdate.Apply]'s TO SET. A name is sealed under
+	// this person's own key, which is a fleet-secret read, and the apply
+	// runs inside the decide's transaction — so it is sealed before,
+	// placed on the document the apply is handed, and the apply may still
+	// overwrite it if that is genuinely what the caller means.
+	Name *string
+
+	// Apply forms the new document from the current one, INSIDE the
+	// snapshot. A function rather than a value for [CredentialSet.Apply]'s
+	// reason: the caller does not hold the current document and must not
+	// read it separately.
+	//
+	// IT MAY REFUSE, which a caller uses for everything this package
+	// cannot judge — an unknown colleague level, a stage the surface will
+	// not set here — and the refusal travels out of the decide unwrapped.
+	Apply func(Person) (Person, error)
 
 	OpID   string
 	Reason string

@@ -121,11 +121,12 @@ func (a *Applier) applyBootstrap(ctx context.Context, tx *sql.Tx, at applyContex
 		return 0, fmt.Errorf("iamdomain: re-encode the bootstrap at %s: %w",
 			at.position, err)
 	}
-	// A REDEMPTION AND A MINT ARE ONE STATEMENT, distinguished by what the
-	// payload carries: a mint names a verifier and no person, a redemption
-	// names a person. The whole life of the one bootstrap object sits
-	// consecutively on one subject, so an operator reads it in order
-	// whatever each record is called.
+	// A MINT, A REDEMPTION AND A WITHDRAWAL ARE ONE STATEMENT,
+	// distinguished by what the payload carries: a mint names a verifier
+	// and no person, a redemption names a person, a withdrawal says so.
+	// The whole life of the one bootstrap object sits consecutively on
+	// one subject, so an operator reads it in order whatever each record
+	// is called.
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_bootstrap_codes
 			(id, verifier, expires_at, redeemed_at, person_id, minted_by,
@@ -149,12 +150,16 @@ func (a *Applier) applyBootstrap(ctx context.Context, tx *sql.Tx, at applyContex
 
 // redeemedAt is the broker instant a bootstrap was spent, or zero.
 //
-// DERIVED FROM THE PAYLOAD NAMING A PERSON rather than carried as its own
-// field, because the two would then be able to disagree: a record naming a
-// person with no redemption instant, or an instant with nobody behind it, are
-// both states the estate has no reading for.
+// DERIVED FROM THE PAYLOAD rather than carried as its own field, because the
+// two would then be able to disagree: a record naming a person with no
+// redemption instant, or an instant with nobody behind it, are both states the
+// estate has no reading for.
+//
+// SPENT COVERS BOTH WAYS A CODE STOPS WORKING — somebody used it, or an
+// operator superseded it — and the row keeps WHICH: `person_id` is set on the
+// first and empty on the second, and the document says `withdrawn` either way.
 func redeemedAt(at applyContext, bootstrap Bootstrap) int64 {
-	if bootstrap.Person == "" {
+	if bootstrap.Person == "" && !bootstrap.Withdrawn {
 		return 0
 	}
 	return at.unix()

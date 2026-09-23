@@ -36,7 +36,7 @@ func (a Access) Valid() bool { return slices.Contains(Accesses, a) }
 
 // Grant is one capability a principal carries.
 //
-// A CLOSED SET OF TEN, drawn from the surfaces this engine actually has to
+// A CLOSED SET OF ELEVEN, drawn from the surfaces this engine actually has to
 // authorize — internal/api's route table, configapi, secretsapi, setupapi and
 // the builtin tool set — rather than from a taxonomy invented to look tidy.
 // Each constant below says which surface it covers and why it is not folded
@@ -136,6 +136,26 @@ const (
 	// splitting them would invite a gate that holds seven of eight.
 	GrantFleetOperate Grant = "fleet:operate"
 
+	// GrantPeopleManage is authority over PERSON ROWS: inviting somebody,
+	// changing what they carry, suspending them, revoking their sessions,
+	// resetting a second factor, removing them.
+	//
+	// THE GRANT THAT CAN GRANT, which is why it is not folded into
+	// [GrantConfigWrite] although both are administrative. Changing the
+	// company document rebuilds every seat's tools and providers;
+	// changing a person's row decides who may do that tomorrow. An
+	// automation that applies a configuration must not be able to enrol
+	// itself a colleague, and the person who onboards a team has no
+	// business editing `mcp_servers`.
+	//
+	// IT IS ALSO THE ONE GRANT THAT BOUNDS ITSELF. A caller may not
+	// confer a grant they do not hold — on anybody, themselves included —
+	// so holding this does not reach past whatever else the holder
+	// carries. internal/iamdomain enforces that at the RECORD, because a
+	// record can be published by a CLI, a duty and a migration, none of
+	// which passes through a route.
+	GrantPeopleManage Grant = "people:manage"
+
 	// GrantSandboxRun starts a detached coding run and holds the per-run
 	// credential the MCP bridge mints for the box. The one grant that
 	// puts generated code on a machine and hands it a seat's whole tool
@@ -144,7 +164,7 @@ const (
 	GrantSandboxRun Grant = "sandbox:run"
 )
 
-// AllGrants are the ten, in the order the constants declare them.
+// AllGrants are the eleven, in the order the constants declare them.
 //
 // Named AllGrants rather than Grants because [Principal.Grants] is the field a
 // reader meets first, and one name for the company's whole vocabulary and for
@@ -159,6 +179,7 @@ var AllGrants = []Grant{
 	GrantConfigWrite,
 	GrantSecretWrite,
 	GrantFleetOperate,
+	GrantPeopleManage,
 	GrantSandboxRun,
 }
 
@@ -176,6 +197,7 @@ var grantAccess = map[Grant]Access{
 	GrantConfigWrite:    AccessWrite,
 	GrantSecretWrite:    AccessWrite,
 	GrantFleetOperate:   AccessWrite,
+	GrantPeopleManage:   AccessWrite,
 	GrantSandboxRun:     AccessWrite,
 }
 

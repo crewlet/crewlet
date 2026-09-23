@@ -58,7 +58,7 @@ func newSecretsClient(boot *config.Bootstrap, override string) (*secretsClient, 
 	if err != nil {
 		return nil, err
 	}
-	token, err := nodeAPIToken(boot, "/secrets")
+	token, err := nodeAPIToken("/secrets")
 	if err != nil {
 		return nil, err
 	}

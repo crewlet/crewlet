@@ -276,6 +276,48 @@ func (s *Service) WriteBootstrapCode(ctx context.Context, nodeID string) (string
 	return path, nil
 }
 
+// ReissueBootstrapCode withdraws every outstanding code and mints one.
+//
+// # Exactly one is live after it runs, which the boot path deliberately is not
+//
+// [Service.WriteBootstrapCode] runs at BOOT and leaves an existing file alone,
+// because an operator may have the old code open in a terminal and replacing
+// it silently would invalidate what they are about to type. This is the
+// opposite gesture: somebody asked for a new one, so the old ones are the
+// problem rather than the thing to protect — a live code is a way to become
+// the first administrator with no credential at all, and an operator who
+// re-issued because they lost the file has no idea the original still works.
+//
+// THE WITHDRAWALS GO FIRST. A crash between them and the mint leaves a
+// company with NO way in, which an operator fixes by running this again; the
+// other order leaves two, which nothing reports and nobody notices.
+func (s *Service) ReissueBootstrapCode(ctx context.Context, nodeID string) (
+	string, error) {
+
+	outstanding, err := s.directory.OutstandingBootstrapCodes(ctx, s.now())
+	if err != nil {
+		return "", fmt.Errorf("authapi: read the outstanding bootstrap "+
+			"codes: %w", err)
+	}
+	for _, code := range outstanding {
+		if _, err := s.writer.WithdrawBootstrap(ctx, code.ID,
+			"bootstrap-withdraw:"+code.ID,
+			"superseded by a re-issued code"); err != nil {
+
+			return "", fmt.Errorf("authapi: withdraw the bootstrap code "+
+				"%s: %w", code.ID, err)
+		}
+	}
+	path := s.bootstrapCodePath()
+	// THE FILE IS REPLACED, unlike the boot path's: whoever asked for this
+	// is holding the terminal, and leaving the old value in place would
+	// answer a path whose contents no longer work.
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("authapi: replace %s: %w", path, err)
+	}
+	return s.WriteBootstrapCode(ctx, nodeID)
+}
+
 // bootstrapCodeID is the SHA-256 of a code, which is what the log carries.
 //
 // THE HASH IS BOTH THE ID AND THE VERIFIER, deliberately: the object's

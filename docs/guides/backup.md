@@ -376,6 +376,44 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   silently), sandbox-run records vanish (a billed box leaks until its own
   TTL), and the completion ledger forgets (bounded duplicate turns).
 
+### The last step is `crewlet iam invalidate-all`
+
+A restore rolls identity backwards as surely as it rolls everything else
+backwards, and one of those rollbacks hands somebody a working credential:
+
+- **A session ended after the artefact was taken comes back alive.** The row
+  that ended it is in the artefact as an open session, so a bearer that was
+  revoked — or that somebody signed out of, or that reuse detection
+  killed — validates again.
+- **A revocation performed after the artefact was taken is undone.** A
+  person's revocation epoch is a number in the restored rows, so a leaver
+  whose access was cut yesterday holds an epoch the estate now accepts.
+
+Neither is fixable by finding the affected people, because the artefact does
+not know who they are: whatever ended those sessions happened *after* it was
+written. The **fleet-wide session generation** is the one number that can be
+pushed forward without knowing:
+
+```bash
+crewlet iam invalidate-all -api http://127.0.0.1:8080
+```
+
+Every bearer minted before it — every cookie, every session — is invalid by
+construction, and everybody signs in again once. Machine tokens survive,
+because they carry their owner's revocation epoch rather than the generation;
+if the restore also rolled back a token revocation, withdraw it again with
+`crewlet iam revoke-credential`.
+
+Run it **after** the fleet is up and **before** anybody is told the restore is
+finished. It takes `fleet:operate`, which is the grant whoever ran the restore
+already holds.
+
+Then read `crewlet iam check`: a restore under a different keyring reports
+every person as *sealed under a key this deployment does not have* rather than
+as somebody with no name, and a restore of an artefact taken before a removal
+brings back the tombstone and the ciphertext while the key stays destroyed —
+so the removed person's name does not come back with the backup.
+
 ## What not to do
 
 - **Do not copy the store file while the engine runs.** A live WAL database

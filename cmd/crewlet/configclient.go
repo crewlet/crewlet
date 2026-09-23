@@ -44,7 +44,7 @@ func newConfigClient(boot *config.Bootstrap, override string) (*configClient, er
 	if err != nil {
 		return nil, err
 	}
-	token, err := nodeAPIToken(boot, "/config")
+	token, err := nodeAPIToken("/config")
 	if err != nil {
 		return nil, err
 	}

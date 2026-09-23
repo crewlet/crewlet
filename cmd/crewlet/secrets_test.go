@@ -394,7 +394,10 @@ func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 // up, so the fleet's store is reachable through its API, and that is the only
 // route that puts a value on every node.
 func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
-	t.Parallel()
+	// THE CREDENTIAL IS THE OPERATOR'S OWN, which is what routing through
+	// a node now needs: the command no longer helps itself to the first
+	// entry of the Tier A list it just parsed.
+	t.Setenv(apiTokenEnv, "ops-token")
 	boot := bootWithAPI(t, "127.0.0.1", 8080, "ops-token")
 	locked := fmt.Errorf("open store: %w: /var/lib/crewlet/index.db is held by "+
 		"pid 41 on host-a since 2026-01-01T00:00:00Z", store.ErrLocked)

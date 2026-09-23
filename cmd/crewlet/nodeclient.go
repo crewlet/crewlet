@@ -105,10 +105,16 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 			}
 		}
 		if bearer == "" {
-			// The LENIENT form: these routes are servable with
-			// `api.auth.disabled`, so an absent token is a legitimate
-			// call rather than something to refuse in advance.
-			bearer = nodeTokenOrEmpty(boot)
+			// THE LENIENT FORM, and what it is lenient about has
+			// changed: `api.auth.disabled` is gone, so an absent token
+			// is no longer a servable posture — it is a call that will
+			// be refused at the far end. It is still not refused HERE,
+			// because a development principal resolves an
+			// unauthenticated request on a loopback bind of an
+			// unreleased binary, and that is a legitimate way to reach
+			// these routes. The 401 from a node that does not is the
+			// honest answer and it names the variable.
+			bearer = nodeTokenOrEmpty()
 		}
 	}
 	return &nodeClient{

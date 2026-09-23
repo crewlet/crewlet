@@ -36,7 +36,7 @@ func bootWithAPI(t *testing.T, host string, port int, token string) *config.Boot
 // would fail on every node configured the way a container image configures
 // one — which is to say, most of them.
 func TestAWildcardBindResolvesToLoopback(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
 		client, err := newSecretsClient(bootWithAPI(t, host, 9090, "t"), "")
 		if err != nil {
@@ -52,7 +52,7 @@ func TestAWildcardBindResolvesToLoopback(t *testing.T) {
 // the address and every request goes nowhere, with a parse error that names
 // neither.
 func TestAnIPv6HostIsBracketed(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	client, err := newSecretsClient(bootWithAPI(t, "fd00::1", 9090, "t"), "")
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestAnIPv6HostIsBracketed(t *testing.T) {
 // through at all. "connection refused to :0" would send an operator looking
 // for a network fault.
 func TestANodeWithNoHTTPSurfaceIsRefusedByName(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	_, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 0, "t"), "")
 	if err == nil {
 		t.Fatal("a node with api.port 0 was accepted as a write target")
@@ -79,28 +79,12 @@ func TestANodeWithNoHTTPSurfaceIsRefusedByName(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO TOKENS IS REFUSED BEFORE THE REQUEST, not after a 401.
-//
-// The guard would answer 401 either way; saying it here names the two ways
-// out — add a token to Tier A, or export one — which a bare 401 cannot.
-func TestANodeWithNoTokensSaysHowToAuthenticate(t *testing.T) {
-	t.Parallel()
-	_, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 8080, ""), "")
-	if err == nil {
-		t.Fatal("a node with no api.auth.tokens was accepted")
-	}
-	for _, want := range []string{"api.auth.tokens", apiTokenEnv} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal omits %q: %v", want, err)
-		}
-	}
-}
-
 // THE ENVIRONMENT WINS OVER TIER A, because the token decides ATTRIBUTION.
 // Every entry in the list authenticates, but the id is stamped as the author
 // of the write, so an operator who wants their own name on a rotation has to
 // be able to supply their own credential.
 func TestTheEnvironmentTokenWinsOverTierA(t *testing.T) {
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	t.Setenv(apiTokenEnv, "mine")
 	client, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 8080, "shared"), "")
 	if err != nil {
@@ -108,29 +92,6 @@ func TestTheEnvironmentTokenWinsOverTierA(t *testing.T) {
 	}
 	if client.token != "mine" {
 		t.Errorf("token = %q, want the one from the environment", client.token)
-	}
-}
-
-// A NODE THAT LISTS NO CREDENTIAL IS REFUSED HERE, naming the fix.
-//
-// This used to be the opposite assertion: `api.auth.disabled` made an empty
-// token legitimate, so refusing would have made the local-development escape
-// hatch the one posture this command could not talk to. That field is gone —
-// every guarded route needs a credential on every posture — so an empty token
-// is now always the 401 the operator would otherwise have to diagnose from the
-// far end.
-func TestANodeWithNoTokenIsRefusedNamingTheFix(t *testing.T) {
-	t.Parallel()
-	boot := bootWithAPI(t, "127.0.0.1", 8080, "")
-	_, err := newSecretsClient(boot, "")
-	if err == nil {
-		t.Fatal("a node listing no api.auth.tokens was accepted, so the " +
-			"command will send no credential and read a 401 from the far end")
-	}
-	for _, want := range []string{"api.auth.tokens", apiTokenEnv} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name %s: %v", want, err)
-		}
 	}
 }
 
@@ -192,7 +153,7 @@ func (n *fakeSecretsNode) client(t *testing.T) *secretsClient {
 // operator and the byte sequence the vendor will compare. A value that came
 // back re-encoded would fail at the vendor with a 401 that names neither.
 func TestSettingASecretSendsTheRawValue(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, "ops-token")
 	node := newFakeSecretsNode(t)
 	value := "-----BEGIN KEY-----\nline two\n\ttabbed \n"
 
@@ -213,13 +174,48 @@ func TestSettingASecretSendsTheRawValue(t *testing.T) {
 	}
 }
 
+// AUTHENTICATION IS THE ENVIRONMENT'S, AND A MISSING ONE IS REFUSED HERE.
+//
+// The guard would answer 401 either way; saying it before the request names
+// the way out, which a bare 401 from the far end cannot.
+//
+// THE CONFIG'S OWN TOKENS ARE NOT A FALLBACK, which this asserts in both
+// directions. `api.auth.tokens` is what a node ACCEPTS, and a command that
+// helped itself to the first entry authored an operator's write under a name
+// they had not chosen — and read a resolved ${VAR} out of a file in the clear
+// to do it.
+func TestTheCredentialIsTheEnvironmentsAndNotTheConfigs(t *testing.T) {
+	t.Setenv(apiTokenEnv, "")
+	// A node listing a perfectly good token is STILL refused, because the
+	// command has none of its own.
+	if _, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 8080, "ops-token"),
+		""); err == nil {
+
+		t.Fatal("a command with no credential was accepted, so it will send " +
+			"nothing and read a 401 from the far end")
+	} else if !strings.Contains(err.Error(), apiTokenEnv) {
+		t.Errorf("the refusal does not name %s: %v", apiTokenEnv, err)
+	}
+	// AND THE ENVIRONMENT IS ENOUGH ON ITS OWN, which is the control: a
+	// node whose Tier A lists nothing is still reachable by somebody
+	// holding a machine token.
+	t.Setenv(apiTokenEnv, "a-minted-token")
+	client, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 8080, ""), "")
+	if err != nil {
+		t.Fatalf("an exported credential was refused: %v", err)
+	}
+	if client.token != "a-minted-token" {
+		t.Errorf("the client carries %q", client.token)
+	}
+}
+
 // A NAME WITH A SLASH IN IT STILL ADDRESSES ONE ROW.
 //
 // ${VAR} names are conventionally uppercase words, but nothing refuses an odd
 // one, and an unescaped slash would silently address a different path — which
 // on this surface is a write that goes somewhere else entirely.
 func TestAnAwkwardNameIsEscapedIntoThePath(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
 	if err := node.client(t).Set(t.Context(), "a/b c", "v", "", "", time.Now()); err != nil {
 		t.Fatalf("set: %v", err)
@@ -235,7 +231,7 @@ func TestAnAwkwardNameIsEscapedIntoThePath(t *testing.T) {
 // "stop"; collapsing the two would have a node it cannot reach look exactly
 // like a credential nobody set, and the run would rotate the lot.
 func TestAMissingSecretIsTheNotFoundSentinel(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
 	node.status, node.body = http.StatusNotFound, `{"error":"not_found"}`
 
@@ -251,7 +247,7 @@ func TestAMissingSecretIsTheNotFoundSentinel(t *testing.T) {
 // all, and reporting that as "no such secret" would have an operator set a
 // value over and over against a node that will never hold it.
 func TestA404WithoutTheBodyIsReportedAsAMissingSurface(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
 	node.status, node.body = http.StatusNotFound, `{}`
 
@@ -267,7 +263,7 @@ func TestA404WithoutTheBodyIsReportedAsAMissingSurface(t *testing.T) {
 
 // A REJECTED TOKEN NAMES THE VARIABLE THAT FIXES IT.
 func TestARejectedTokenSaysWhatToSet(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
 	node.status = http.StatusUnauthorized
 
@@ -280,7 +276,7 @@ func TestARejectedTokenSaysWhatToSet(t *testing.T) {
 // THE NODE'S HINT REACHES THE OPERATOR. A refusal this client swallowed would
 // leave a 503 with no reason anywhere the person running the command can see.
 func TestTheNodesHintIsCarriedIntoTheError(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
 	node.status = http.StatusServiceUnavailable
 	node.body = `{"error":"no_keyring","hint":"run crewlet secrets keygen"}`
@@ -301,7 +297,7 @@ func TestTheNodesHintIsCarriedIntoTheError(t *testing.T) {
 // the fleet will not seal with, and silent success there reports a rotation
 // that did not happen.
 func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
 	node.body = `{"moved":["A","B"]}`
 
@@ -320,7 +316,7 @@ func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 // A LISTING KEEPS ITS TIMESTAMPS, which is half of what a listing is for:
 // "when did this last change" is the question an operator brings to it.
 func TestAListingParsesWhatTheNodeReported(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
 	node.body = `{"secrets":[{"name":"A","key_id":"k1",` +
 		`"updated_at":"2026-03-04T05:06:07Z","updated_by":"sam","source":"cli"}]}`
@@ -343,7 +339,7 @@ func TestAListingParsesWhatTheNodeReported(t *testing.T) {
 // UNSET REPORTS WHETHER A ROW WENT. "It was not set" and "it is gone now" are
 // different outcomes and an operator acts differently on each.
 func TestUnsetReportsWhetherARowWent(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
 	node.body = `{"removed":false}`
 
@@ -364,6 +360,7 @@ func TestUnsetReportsWhetherARowWent(t *testing.T) {
 // store to "check" first would create an empty database beside the Tier A
 // file that nothing ever reads, on a machine that runs no engine.
 func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
 	cfg := bootstrapWithKeyring(t, "k1")
 	t.Setenv(apiTokenEnv, "ops-token")
@@ -398,6 +395,7 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 // propagate would reasonably conclude the write failed. "This node will put
 // it on the fleet at its next start" is not guessable.
 func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	cfg := bootstrapWithKeyring(t, "k1")
 	var out, errs bytes.Buffer
 	err := run([]string{"secrets", "set", "GL_TOKEN", "-value", "v", "-config", cfg},
@@ -426,7 +424,7 @@ func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
 // Transport, which reads as a default rather than as the omission it is.
 // See internal/httpx's package doc.
 func TestCLIClientsRideTheSharedTransport(t *testing.T) {
-	t.Parallel()
+	t.Setenv(apiTokenEnv, cliFixtureToken)
 	sc, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 8080, "ops-token"), "")
 	if err != nil {
 		t.Fatalf("newSecretsClient: %v", err)

@@ -102,6 +102,11 @@ type Directory interface {
 	// node does not hold. It is what makes ending a NAMED session a check
 	// against this node's own rows rather than a claim the caller made.
 	SessionOwner(ctx context.Context, lineage string) (string, error)
+
+	// OutstandingBootstrapCodes are the codes that are neither spent nor
+	// aged out, which re-issuing one has to withdraw.
+	OutstandingBootstrapCodes(ctx context.Context, now time.Time) (
+		[]iamdomain.BootstrapCode, error)
 }
 
 // Writer is what this surface writes, defined here for Directory's reason.
@@ -131,6 +136,12 @@ type Writer interface {
 	// both succeed and a company would have two founders.
 	MintBootstrap(ctx context.Context, in iamdomain.BootstrapMint) (statelog.Position, error)
 	SpendBootstrap(ctx context.Context, in iamdomain.BootstrapSpend) (statelog.Position, error)
+
+	// WithdrawBootstrap supersedes a code nobody redeemed, which is what
+	// re-issuing one has to do first: two live codes are two ways into an
+	// engine that has no other way in.
+	WithdrawBootstrap(ctx context.Context, id, opID, reason string) (
+		statelog.Position, error)
 
 	// SetCredentials replaces a person's credential set, forming the new
 	// whole from their own row INSIDE the snapshot — which is what keeps

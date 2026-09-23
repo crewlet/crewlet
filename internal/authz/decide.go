@@ -3,6 +3,8 @@ package authz
 import (
 	"context"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -109,13 +111,42 @@ const (
 	// these are the surfaces where the grants differ from each other by
 	// design — reading a credential and rotating one are opposite risks.
 	ClassOperator Class = "operator"
+
+	// ClassDirectoryRead — who can reach this company, and how: the
+	// directory listing, one person's row, the credentials that exist, the
+	// sessions that are open, the estate's own report.
+	//
+	// THREE WAYS IN, and each is a different party asking the same
+	// question. The person the row is ABOUT, because somebody must be able
+	// to see what they themselves carry; whoever holds
+	// [iam.GrantPeopleManage], because they are the party that writes it;
+	// and whoever holds [iam.GrantAuditRead], because "who can reach this
+	// company" is the audit question and an auditor who could not ask it
+	// could not audit anything.
+	//
+	// THE OBJECT IS A PERSON ID, never a login or a handle — this is the
+	// one place in the table where that is true, and it is forced: the
+	// identity estate keys on an id precisely because a person changes
+	// their login, and a self check against a mutable name would open
+	// somebody else's row the day they swapped.
+	ClassDirectoryRead Class = "directory_read"
+
+	// ClassDirectorySelf — a gesture on one person's own credentials or
+	// sessions: minting a token, revoking one, ending every session.
+	// The person themselves, or whoever manages people.
+	//
+	// NO AUDIT PATH, which is what makes it its own class rather than
+	// [ClassDirectoryRead]: an auditor establishes what a company's access
+	// looks like and never changes it, and a grant that could end a
+	// session is a grant that can lock a company out of its own engine.
+	ClassDirectorySelf Class = "directory_self"
 )
 
-// Classes are the eleven, in declaration order.
+// Classes are the thirteen, in declaration order.
 var Classes = []Class{
 	ClassRead, ClassSelf, ClassColleagueWrite, ClassOwnRecord, ClassOwnOrLead,
 	ClassContainer, ClassChartObject, ClassDestructive, ClassPurge,
-	ClassAuthored, ClassOperator,
+	ClassAuthored, ClassOperator, ClassDirectoryRead, ClassDirectorySelf,
 }
 
 // Decide answers whether p may do a to o.
@@ -256,6 +287,26 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 
 	case ClassOperator:
 		return granted(p, r.grant)
+
+	case ClassDirectoryRead, ClassDirectorySelf:
+		// THE PERSON THEMSELVES FIRST, compared on the ID and never on
+		// a name. An object naming nobody — a listing — cannot reach
+		// this arm, which is correct: a listing is not about anybody
+		// in particular, so it falls through to the capabilities.
+		if o.Owner != "" && p.ID != uuid.Nil && p.ID.String() == o.Owner {
+			return Decision{Allowed: true, Reason: ReasonSelf}
+		}
+		if p.Can(iam.GrantPeopleManage) {
+			return Decision{Allowed: true, Reason: ReasonGrant}
+		}
+		if r.class == ClassDirectoryRead && p.Can(iam.GrantAuditRead) {
+			return Decision{Allowed: true, Reason: ReasonGrant}
+		}
+		// NO GRANT rather than NOT SELF, because the capability is what
+		// almost every caller here is missing and the self arm is the
+		// exception — telling an administrator without people:manage
+		// that they "are not that person" sends them to the wrong fix.
+		return Decision{Reason: ReasonNoGrant}
 	}
 	// UNREACHABLE WHILE Classes AND THIS SWITCH AGREE, which a test in
 	// this package asserts in both directions. It is a refusal rather

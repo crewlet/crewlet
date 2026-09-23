@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -304,8 +305,30 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runtime := s.runtimeAllowed(r)
+	kind := chart.SeatKind(strings.TrimSpace(r.URL.Query().Get("kind")))
+	unheld := r.URL.Query().Get("unheld") == "true"
+	if unheld && s.held == nil {
+		// THE FILTER CANNOT BE ANSWERED, so it is REFUSED rather than
+		// applied to an empty directory. A node running no identity
+		// domain holds a legitimately empty copy of that estate, so
+		// filtering against it would return EVERY human seat in the
+		// company under a parameter that promised the opposite — which
+		// is the one failure a screen renders as a finished answer.
+		httpjson.FailWith(w, http.StatusServiceUnavailable,
+			httpjson.CodeUnavailable, map[string]string{
+				"detail": "this node runs no identity domain, so it cannot " +
+					"say which seats nobody holds; ask a node that does",
+			})
+		return
+	}
 	seats := make([]seatView, 0, len(got.Seats))
 	for _, seat := range got.Seats {
+		if kind != "" && seat.Kind != kind {
+			continue
+		}
+		if unheld && s.held(seat.Handle) {
+			continue
+		}
 		seats = append(seats, viewOfSeat(seat, runtime))
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{

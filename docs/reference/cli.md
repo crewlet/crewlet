@@ -478,6 +478,79 @@ silently deletes half of every seat the moment somebody uses it. `-out PATH`
 writes it at `0600`, because it carries the names of every credential the
 company holds.
 
+## `crewlet iam`
+
+```
+crewlet iam <command> [SUBJECT] [-config PATH] [-api URL] [-json] [-reason TEXT]
+```
+
+The company's [people, credentials and sessions](../concepts/identity-and-access.md),
+from the command line.
+
+**Every one of these goes through a running node**, for `crewlet chart`'s
+reason: the directory is a state-log domain, a change is a RECORD arbitrated
+at the broker, and the broker is embedded in the engine's own process with no
+listener. A second process cannot publish one.
+
+**Authentication is `CREWLET_API_TOKEN` and nothing else.** The Tier A
+`api.auth.tokens` list is what a node *accepts*; it is not a wallet this
+command helps itself from. Export one of its values, or mint yourself a
+machine token with `crewlet iam token`.
+
+| Command | What it does |
+|---|---|
+| `people` | The directory, paged. `-q` narrows on the login and the seat; `-stage` on the enrolment stage; `-limit` on the page |
+| `show ID` | One person, in full, with their name and address opened |
+| `invite EMAIL` | Issue an invitation. Prints the link **once** — nothing stores it and no route reads one back |
+| `create` | Create somebody directly, with `-login`, `-email`, `-name` and `-kind`. No password: a person arrives with one by redeeming an invitation, and a machine gets a token from `iam token` |
+| `bind ID SEAT` | Bind a person to a chart seat |
+| `unbind ID` | Take the binding back |
+| `grant ID` | Change what somebody carries: `-grants`, `-colleague` |
+| `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way |
+| `remove ID` | Tombstone them and destroy their key, which makes their name and address unrecoverable everywhere |
+| `revoke ID` | End every session and token they hold, by bumping their revocation epoch |
+| `sessions ID` | Their sessions, newest first, ended ones included |
+| `credentials` | What somebody proves themselves with. `-person` names them; without it, yourself |
+| `token` | Mint a machine token. Prints the value **once**; the estate holds a hash |
+| `revoke-credential ID` | Withdraw one credential, naming its owner with `-person` |
+| `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live |
+| `invalidate-all` | Invalidate every session in the company. The restore runbook's last step |
+| `bootstrap-code` | Re-issue the one-time founder code. Withdraws every outstanding one first, so exactly one is live |
+| `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings, grants this node's ceiling clamps |
+| `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-limit` |
+
+### Flags
+
+| Flag | Default | What it is |
+|---|---|---|
+| `-config PATH` | `crewlet.yaml` | Tier A config naming the node to reach |
+| `-api URL` | the `api.host:port` in `-config` | The running node to talk to |
+| `-json` | off | Print the raw answer rather than a table |
+| `-reason TEXT` | the surface's own | Recorded on the change, and read by whoever audits it |
+| `-grants G,...` | leave alone | A comma-separated grant list, or the word `none` for an empty one |
+| `-colleague L` | leave alone | `none`, `read` or `write` |
+| `-person ID` | yourself | Whose credentials or sessions |
+| `-label L` | — | What to call a minted token, for somebody holding four |
+| `-days N` | 90 | How long a minted token lasts, at most 365 — "forever" is deliberately unexpressible |
+| `-q TERM` | — | Narrow the directory on a login or a seat |
+| `-stage S` | every stage | `invited`, `enrolling`, `active`, `suspended` or `retired` |
+| `-since POSITION` / `-at TIME` | — | Where the trail starts. `-since` is a log position; `-at` is an RFC 3339 instant the route resolves to one |
+| `-limit N` | 50 (100 for the trail) | How many rows |
+
+**`-grants none` strips and an omitted `-grants` leaves alone.** They are
+opposite intentions and an empty flag value cannot carry both, so the word is
+explicit — and it is the one spelling that could never be a grant.
+
+**A value shown once is shown once.** `invite` and `token` print something
+nothing can read back: what the estate holds is the invitation's id (which
+*is* the verifier — holding the link is holding the id) and a SHA-256 of the
+token. Lost one is re-issued rather than recovered.
+
+**Every write prints its outcome rather than "done".** `applied` means this
+node has the change; `pending` means it is durable and this node has not
+applied it yet, and carries the position to read at; `unknown` means nothing
+can be established from here.
+
 ## `crewlet secrets`
 
 ### `crewlet secrets keygen`
@@ -492,7 +565,7 @@ The remaining subcommands operate on the [secret store](../concepts/secret-store
 
 **Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start. The engine's exclusive database lock is what tells the two apart, with a pid attached.
 
-`-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer token comes from `CREWLET_API_TOKEN` when set, and otherwise from the first `api.auth.tokens` entry in the Tier A config; the token's id is recorded as the author of the write.
+`-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer token comes from `CREWLET_API_TOKEN` and from nowhere else — `api.auth.tokens` is what a node **accepts** rather than a wallet the CLI helps itself from — and the credential's own identity is recorded as the author of the write.
 
 ### `crewlet secrets set`
 
@@ -688,7 +761,7 @@ crewlet budgets reset -scope agent:<id>    # just one seat
 | Flag | Default | What it does |
 |---|---|---|
 | `-url` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
-| `-token` | `$CREWLET_API_TOKEN`, then the config's first `api.auth.tokens` entry | The bearer token. Every guarded route needs one, reads included |
+| `-token` | `$CREWLET_API_TOKEN` | The bearer token. Every guarded route needs one, reads included. There is no fallback to the config's own `api.auth.tokens`: that list is what the node accepts, and a write authored by whichever entry came first landed under a name nobody chose |
 
 The environment wins over the config so an operator who exported a token
 deliberately gets that one. There is no token *default* on the command line:

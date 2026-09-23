@@ -252,6 +252,16 @@ type Credential struct {
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 	RevokedAt time.Time `json:"revoked_at,omitzero"`
 
+	// Label is what the mint called this credential, for somebody who
+	// holds four tokens and has to know which one to revoke.
+	//
+	// FREE TEXT AND NOT AN IDENTITY: two credentials may share a label,
+	// nothing resolves one, and the id is what every revocation names.
+	// It is in the clear like the login, for the same reason — a value
+	// the directory prints on every row is one an operator needs to be
+	// able to read back.
+	Label string `json:"label,omitempty"`
+
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
@@ -416,6 +426,18 @@ type Bootstrap struct {
 	// Person is set by the REDEMPTION, naming the administrator it
 	// created.
 	Person string `json:"person,omitempty"`
+
+	// Withdrawn is set by a MINT THAT SUPERSEDES this code, which is the
+	// third statement on this subject beside a mint and a redemption.
+	//
+	// IT IS NOT A REDEMPTION WITH NO PERSON. The two produce the same row
+	// state — spent, unusable — and they are opposite events: one is
+	// somebody becoming the founder and the other is an operator
+	// re-issuing because nobody did. An estate that could not tell them
+	// apart would answer "this code was used" about a code nobody ever
+	// typed, which is the sentence an investigation most needs to be
+	// right.
+	Withdrawn bool `json:"withdrawn,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
@@ -736,12 +758,12 @@ var (
 	statusFields     = jsoncarry.Names(StatusChange{})
 	removalFields    = jsoncarry.Names(Removal{}, "released")
 	bootstrapFields  = jsoncarry.Names(Bootstrap{}, "verifier", "minted_by",
-		"expires_at", "person")
+		"expires_at", "person", "withdrawn")
 	sweepFields        = jsoncarry.Names(Sweep{}, "changes", "sessions", "expired")
 	invalidationFields = jsoncarry.Names(Invalidation{}, "by")
 	evictionFields     = jsoncarry.Names(Eviction{}, "readmitted", "by")
 	generationFields   = jsoncarry.Names(Generation{}, "prev_last_seq_seen",
 		"new_stream_created_at", "by")
 	credentialFields = jsoncarry.Names(Credential{}, "verifier",
-		"subject_blind", "expires_at", "revoked_at")
+		"subject_blind", "expires_at", "revoked_at", "label")
 )

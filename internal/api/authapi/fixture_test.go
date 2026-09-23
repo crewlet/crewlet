@@ -125,6 +125,12 @@ func (stubDirectory) InvitationByID(context.Context, string) (iamdomain.Invitati
 
 func (stubDirectory) SessionOwner(context.Context, string) (string, error) { return "", nil }
 
+func (stubDirectory) OutstandingBootstrapCodes(context.Context, time.Time) (
+	[]iamdomain.BootstrapCode, error) {
+
+	return nil, nil
+}
+
 type stubWriter struct{}
 
 func (stubWriter) OpenSession(context.Context, iamdomain.SessionStart) (statelog.Position, error) {
@@ -140,6 +146,12 @@ func (stubWriter) Revoke(context.Context, string, string, string) (statelog.Posi
 }
 
 func (stubWriter) Enrol(context.Context, iamdomain.Enrolment) (statelog.Position, error) {
+	return statelog.Position{}, nil
+}
+
+func (stubWriter) WithdrawBootstrap(context.Context, string, string, string) (
+	statelog.Position, error) {
+
 	return statelog.Position{}, nil
 }
 

@@ -316,6 +316,17 @@ type Options struct {
 	// on the one that refusal points at, which is worse than either alone.
 	Chart chartMounter
 
+	// IAM serves /iam, normally an iamapi.Service: the company's identity
+	// directory.
+	//
+	// OPTIONAL, and nil is the same posture that leaves [Options.Auth]
+	// nil — a node running no identity domain has nothing to serve here
+	// — so the routes are ABSENT rather than refusing. A 404 says this
+	// node does not hold the directory; a 503 would say it does and is
+	// broken, and send an operator looking for an outage on the node
+	// least able to help.
+	IAM chartMounter
+
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
 	Secrets routeMounter
@@ -572,6 +583,13 @@ func New(opts Options) (*App, error) {
 	// rather than serving an ungated route for the life of the process.
 	if err := opts.Chart.Routes(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the chart surface: %w", err)
+	}
+	// AND THE IDENTITY DIRECTORY, which fails the same way for the same
+	// reason: every /iam route states its authority where it is mounted.
+	if opts.IAM != nil {
+		if err := opts.IAM.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the identity surface: %w", err)
+		}
 	}
 	// THE BROWSER POSTURE WRAPS THE CREDENTIAL ONE, because a preflight
 	// carries no credential: the browser sends it itself, before it will

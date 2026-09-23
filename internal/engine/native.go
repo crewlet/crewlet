@@ -680,7 +680,7 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// redeems into — and neither has a principal of their own yet.
 		// Without it the sign-in surface's own writer was refused by
 		// the domain, so a fresh deployment could not create anybody.
-		Grants: []iam.Grant{iam.GrantFleetOperate},
+		Grants: nodeWriterGrants,
 	})
 	if err != nil {
 		return fmt.Errorf("engine: iam writer: %w", err)
@@ -688,6 +688,15 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	n.iamReader, n.iamWriter = reader, writer
 	return nil
 }
+
+// nodeWriterGrants is what the NODE itself authors identity records as.
+//
+// A PACKAGE-LEVEL VALUE so a test can hold it against
+// [iamdomain.AdminGrant] rather than a reader having to remember the pairing:
+// the two halves live in different packages, nothing else compares them, and
+// the failure when they drift is that a fresh deployment cannot create its
+// first person.
+var nodeWriterGrants = []iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant}
 
 // holdersOrNil is the identity directory as the chart's seam, or a genuine
 // nil.

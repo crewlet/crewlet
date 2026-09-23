@@ -70,8 +70,9 @@ Flags:
 
 A running engine holds its database, so these commands go through its
 authenticated /secrets surface — which is what puts a value on every node.
-Export CREWLET_API_TOKEN to authenticate as a specific operator; without it
-the first api.auth.tokens entry in the Tier A config is used.
+Export CREWLET_API_TOKEN to authenticate. It is the only source — the Tier A
+api.auth.tokens list is what the node ACCEPTS, not a wallet this command helps
+itself from.
 `
 
 func runSecrets(args []string, stdout, stderr io.Writer) error {

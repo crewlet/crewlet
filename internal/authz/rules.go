@@ -117,6 +117,17 @@ const (
 	ActionFleetOperate Action = "fleet.operate"
 	ActionAuditRead    Action = "audit.read"
 	ActionSandboxRun   Action = "run_sandbox"
+
+	// --- the identity directory -------------------------------------- //
+	//
+	// FOUR VERBS FOR SIXTEEN ROUTES, because the routes differ in what
+	// they do and not in how they are decided. What separates them is the
+	// pair of questions this estate actually asks: is this about a person
+	// or about the directory, and does it CHANGE anything.
+	ActionDirectoryRead   Action = "iam.read"
+	ActionDirectoryWrite  Action = "iam.write"
+	ActionCredentialWrite Action = "iam.credential.write"
+	ActionSessionEnd      Action = "iam.session.end"
 )
 
 // rule is one verb's row: which class decides it, and — for [ClassOperator]
@@ -243,6 +254,24 @@ var rules = map[Action]rule{
 	ActionFleetOperate: {class: ClassOperator, grant: iam.GrantFleetOperate},
 	ActionAuditRead:    {class: ClassOperator, grant: iam.GrantAuditRead},
 	ActionSandboxRun:   {class: ClassOperator, grant: iam.GrantSandboxRun},
+
+	// A DIRECTORY READ IS THREE PARTIES' — the person it is about, the
+	// party that writes it, and the party that audits it. The class holds
+	// all three; see its own doc for why an auditor is in and why the
+	// object is an id.
+	ActionDirectoryRead: {class: ClassDirectoryRead},
+	// AND A DIRECTORY WRITE IS ONE PARTY'S, with NO self path at all.
+	// Editing your own grants is the escalation this estate exists to
+	// close, so "it is my own row" must not be a way in — the record layer
+	// refuses conferring what the caller does not hold, and this refuses
+	// the gesture before it gets there.
+	ActionDirectoryWrite: {class: ClassOperator, grant: iam.GrantPeopleManage},
+	// MINTING AND REVOKING A CREDENTIAL, and ENDING SESSIONS, are the two
+	// gestures a person legitimately makes about themselves — a personal
+	// access token, signing out everywhere — so they carry the self path
+	// the write above refuses.
+	ActionCredentialWrite: {class: ClassDirectorySelf},
+	ActionSessionEnd:      {class: ClassDirectorySelf},
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask

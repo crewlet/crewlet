@@ -203,13 +203,34 @@ var ErrRefused = errors.New("iamdomain: this party may not author that record")
 // WHAT IT GUARDS IS THE ASYMMETRY IN THIS ESTATE: changing your own password
 // and suspending somebody else are both "a record on a person's subject", and
 // only the arbitration tells them apart — which is to say, not at all.
+//
+// # The grant is people:manage, and it used to be config:write
+//
+// That was wrong in both directions and wrong loudly in one. An automation
+// holding the company's own grant could enrol itself a colleague, which is
+// the escalation this estate exists to close; and the NODE's own writer —
+// which authors the bootstrap enrolment, the invite redemption, the sweeps
+// and the deactivation probe — holds [iam.GrantFleetOperate] and never
+// config:write, so every one of those paths was refused. Nothing noticed,
+// because the surface that exercises them builds a stub writer.
 func (w *Writer) mayAdminister(op OpKind) error {
-	if w.Can(iam.GrantConfigWrite) {
+	if w.Can(AdminGrant) {
 		return nil
 	}
 	return fmt.Errorf("%w: %s requires %s, and this party holds %v", ErrRefused,
-		op, iam.GrantConfigWrite, w.Grants)
+		op, AdminGrant, w.Grants)
 }
+
+// AdminGrant is the capability every administrative record in this domain
+// requires.
+//
+// EXPORTED so the parties that must hold it can be CHECKED rather than
+// remembered. The node's own writer is one — it authors the bootstrap
+// enrolment and the invite redemption on behalf of people who have no
+// principal yet — and a grant list that drifts away from this one refuses
+// every enrolment on a fresh deployment, silently, on a path whose tests use
+// a stub writer.
+const AdminGrant = iam.GrantPeopleManage
 
 // publish runs one decide through the framework's own write authority.
 //
