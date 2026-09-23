@@ -980,7 +980,7 @@ type SeatHolder struct {
 	Stage iam.Stage
 
 	// Removed marks a seat whose holder was REMOVED while holding it, and
-	// that nobody has been bound to since.
+	// that nobody has been bound to since that removal.
 	//
 	// A removal releases every claim the person held, the seat among them,
 	// so the row that bound them is gone and the seat reads as held by
@@ -988,8 +988,15 @@ type SeatHolder struct {
 	// chart declares. Answered that way, removing somebody would route
 	// MORE than suspending them: the seat's contact map still names the
 	// leaver's own accounts. The tombstone is what still says who held it,
-	// and it outlives every horizon here, so this stays true until the
-	// seat is bound to somebody else.
+	// and it outlives every horizon here.
+	//
+	// IT SPEAKS FOR THE BINDING IT RELEASED AND NO OTHER. The first bind of
+	// the seat after the removal ends its say for good
+	// (`iam_removed.seat_rebound_by`): a successor who is bound and later
+	// unbound hands the seat back to the chart like any other unbind, rather
+	// than back to the leaver's tombstone — which, read from the seat's
+	// current rows alone, withheld it again indefinitely whatever its
+	// contact map had since been pointed at.
 	Removed bool
 }
 
@@ -1039,13 +1046,16 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 			return fmt.Errorf("iamdomain: read the seat bindings: %w", err)
 		}
 
-		// A REMOVAL'S SEAT, WHILE NOBODY HOLDS IT. The NOT EXISTS is
-		// what hands a seat on: bind somebody new and the tombstone stops
-		// being the seat's last word.
+		// A REMOVAL'S SEAT, UNTIL IT IS BOUND AGAIN. `seat_rebound_by` is
+		// what hands the seat on for good — the first bind after the
+		// removal stamps it, so a later unbind does not bring the leaver
+		// back — and the NOT EXISTS keeps the current holder's standing
+		// the seat's word over a duplicate a restore left behind.
 		removed, err := tx.QueryContext(ctx, `
 			SELECT json_extract(r.claims_json, '$.seat_id') AS seat, r.person_id
 			  FROM iam_removed r
 			 WHERE COALESCE(json_extract(r.claims_json, '$.seat_id'), '') != ''
+			   AND r.seat_rebound_by = ''
 			   AND NOT EXISTS (
 			       SELECT 1 FROM iam_people p
 			        WHERE p.seat_id = json_extract(r.claims_json, '$.seat_id'))

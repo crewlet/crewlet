@@ -189,6 +189,30 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	bound, _ := result.RowsAffected()
 	written += bound
+	if kind == KindSeat && bound > 0 {
+		// AND IT ENDS THE SAY OF EVERY REMOVAL THAT RELEASED THIS SEAT.
+		// A removal's tombstone withholds the seat it released because
+		// the contact map still names the leaver; a bind is a new binding
+		// with a standing of its own, and once one has landed the leaver
+		// is no longer what the seat's standing is about — however many
+		// holders come and go after it. See [Reader.SeatHolders].
+		//
+		// The FIRST bind's operation id, and the guard is what makes it the
+		// first: a removal is a gate no node defers, so every node has its
+		// tombstone before any later bind, and every node stamps the same
+		// id.
+		retired, err := tx.ExecContext(ctx, `
+			UPDATE iam_removed SET seat_rebound_by = ?
+			WHERE seat_rebound_by = ''
+			  AND json_extract(claims_json, '$.seat_id') = ?`,
+			at.record.OpID, at.record.Subject.ID)
+		if err != nil {
+			return int(written), fmt.Errorf("iamdomain: end the removals' say "+
+				"over seat %s: %w", at.record.Subject.ID, err)
+		}
+		n, _ := retired.RowsAffected()
+		written += n
+	}
 	if kind == KindSeat && written > 0 {
 		// A BIND puts a person — at whatever stage they are — between
 		// the seat and its contact routing.

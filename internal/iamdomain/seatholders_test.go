@@ -56,18 +56,31 @@ func TestSeatHoldersNamesWhoHoldsEachSeatAndAtWhatStage(t *testing.T) {
 		Seat: "ops-lead", Person: successor, Stage: iam.StageActive}
 	assertHolders(t, holdersBySeat(t, reader), want)
 
-	// AND UNBINDING THAT SUCCESSOR LEAVES THE REMOVAL AS THE LAST WORD
-	// AGAIN. It is the rule stated plainly rather than an accident of the
-	// query: the directory holds no record of the release beyond the row
-	// it cleared, so what it can say about the seat is that somebody was
-	// removed from it while holding it — and routing it to the chart's map
-	// on that evidence is the one direction that can reach a leaver.
+	// AND UNBINDING THAT SUCCESSOR DOES NOT BRING THE LEAVER BACK. The
+	// tombstone spoke for the binding the removal released; the successor's
+	// bind was a later binding with a standing of its own, and its unbind
+	// hands the seat to the chart like any other unbind. Read from the
+	// seat's current rows alone, the removal became the seat's last word
+	// again here and withheld it indefinitely — whatever its contact map
+	// had since been pointed at.
 	if _, err := rig.writer.Release(t.Context(), iamdomain.KindSeat, "ops-lead",
 		successor, "op-unbind", "moved teams"); err != nil {
 		t.Fatalf("unbind: %v", err)
 	}
 	rig.drain()
-	want["ops-lead"] = iamdomain.SeatHolder{Seat: "ops-lead", Person: removed, Removed: true}
+	delete(want, "ops-lead")
+	assertHolders(t, holdersBySeat(t, reader), want)
+
+	// AND A SUCCESSOR WHO IS THEMSELVES REMOVED WHILE HOLDING IT leaves a
+	// tombstone of their own, which speaks for THEIR binding: the rule is
+	// per removal, not a seat that stopped being withheld for ever.
+	second := bindNew(t, rig, "noor.aziz", "ops-lead")
+	if _, err := rig.writer.Remove(t.Context(), second, "op-remove-second",
+		"left the company"); err != nil {
+		t.Fatalf("remove the second holder: %v", err)
+	}
+	rig.drain()
+	want["ops-lead"] = iamdomain.SeatHolder{Seat: "ops-lead", Person: second, Removed: true}
 	assertHolders(t, holdersBySeat(t, reader), want)
 }
 

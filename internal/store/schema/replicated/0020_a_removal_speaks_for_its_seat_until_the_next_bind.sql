@@ -1,0 +1,39 @@
+-- A removal's tombstone speaks for the seat it released only until that seat is
+-- bound again.
+--
+-- # What the tombstone is for
+--
+-- A removal releases every claim the person held, their seat among them, so
+-- the row that bound them is gone and the seat reads as held by nobody — the
+-- same as a seat nobody ever held, which routes by the chart's contact map.
+-- That map still names the leaver's own accounts, so the tombstone is what
+-- withholds the seat: a removal must not route MORE than the suspension that
+-- usually precedes it.
+--
+-- # Why it needs a column to stop
+--
+-- It used to stop only while somebody HELD the seat, because the directory
+-- kept no trace of a later bind beyond the row the bind wrote. So a seat the
+-- leaver held, bound to a successor and then unbound again — somebody moving
+-- teams — went back to being withheld for the LEAVER, indefinitely: a later
+-- content record pointing the seat's contact map at somebody else changed
+-- nothing, and the only thing that said so was a count in a log line. The
+-- tombstone's evidence is about the binding it RELEASED, and a later bind is a
+-- later binding with a standing of its own.
+--
+-- # Why the operation id and not a position
+--
+-- For the reason `record_id` on the same table is one: the apply that writes it
+-- is one that must be able to run twice, and a position changes under a
+-- republish where an operation id does not. It is written by the FIRST bind of
+-- the released seat after the removal and by nothing after it, so every node
+-- that applied the same log holds the same id — the removal is a gate record
+-- no node ever defers, so every node has its tombstone before any later bind.
+--
+-- Empty is the ordinary state rather than a missing value — a removal whose
+-- seat nobody has taken since — so it is NOT NULL with a default.
+--
+-- No index: the directory read is one row per person the company has ever
+-- removed, read whole, and a removal is rare enough that the table is small.
+
+ALTER TABLE iam_removed ADD COLUMN seat_rebound_by TEXT NOT NULL DEFAULT '';

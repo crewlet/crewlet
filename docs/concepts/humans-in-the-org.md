@@ -579,7 +579,7 @@ holder may not be reached registers **no contact identity at all**:
 | `active`, `invited`, `enrolling`, or a binding still being enrolled | registered — each is somebody the company has put in the seat |
 | `suspended` | withheld |
 | `retired` | withheld |
-| removed while holding the seat, and nobody bound since | withheld until the next holder is bound |
+| removed while holding the seat, and the seat not bound since | withheld until the seat is next bound — and that bind ends the removal's say for good, so a later unbind hands the seat to the chart rather than back to the leaver |
 | a stage this build cannot name (a newer peer wrote it) | withheld — briefly unreachable is the safe way to be wrong during an upgrade |
 | nobody bound | registered — an unheld seat is routed by the chart, as before the directory existed |
 
