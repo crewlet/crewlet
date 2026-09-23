@@ -453,6 +453,9 @@ const iamMaxAnswer = 8 << 20
 // detail is the half that names the seat, the grant or the holder. A status
 // alone would make `409` indistinguishable from `409`.
 func iamRefusal(status int, answer map[string]any, raw []byte) error {
+	if msg, ok := credentialRefusal(status, raw, true); ok {
+		return errors.New(msg)
+	}
 	code, _ := answer["error"].(string)
 	detail, _ := answer["detail"].(string)
 	if detail == "" {

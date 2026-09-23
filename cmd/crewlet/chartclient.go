@@ -186,6 +186,9 @@ func (c *chartClient) write(ctx context.Context, method, path string, body []byt
 // does not carry — and a client that printed "400" would throw away the one
 // sentence that says what to do.
 func chartRefusal(what string, status int, raw []byte) error {
+	if msg, ok := credentialRefusal(status, raw, true); ok {
+		return fmt.Errorf("%s was refused (%d): %s", what, status, msg)
+	}
 	var body struct {
 		Error  string `json:"error"`
 		Detail string `json:"detail"`

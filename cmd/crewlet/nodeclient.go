@@ -73,7 +73,8 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 	addr := fs.String("url", "",
 		"the running node's base URL; empty takes it from the config's api block")
 	token := fs.String("token", "",
-		"bearer token; empty takes "+apiTokenEnv+", then the config's first token")
+		"bearer token; empty takes "+apiTokenEnv+" — never the config's own "+
+			"api.auth.tokens, which is what the node accepts")
 	if extra != nil {
 		extra(fs)
 	}
@@ -238,14 +239,10 @@ func nodeError(status int, body []byte, sentToken bool) error {
 			withRefusalDetail(firstNonEmpty(payload.Error, "unknown outcome"),
 				payload.Detail, payload.Hint))}
 	}
+	if msg, ok := credentialRefusal(status, body, sentToken); ok {
+		return errors.New(msg)
+	}
 	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden:
-		if !sentToken {
-			return errors.New("the node refused the request and no token was sent: " +
-				"export " + apiTokenEnv + ", or pass -token")
-		}
-		return errors.New("the node refused the token: check it against the " +
-			"api.auth.tokens entry you meant to use")
 	case http.StatusServiceUnavailable:
 		// TWO DIFFERENT FACTS on this surface, and the guess below is
 		// only one of them: a node built without the backend a route

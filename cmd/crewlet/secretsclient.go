@@ -239,9 +239,9 @@ func (c *secretsClient) refusal(status int, path string, raw []byte) error {
 		return fmt.Errorf("%s has no /secrets surface: it is running a build "+
 			"from before secrets moved onto the fleet, or it cannot reach the "+
 			"coordination store", c.base)
-	case status == http.StatusUnauthorized:
-		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
-			"api.auth.tokens", c.base, apiTokenEnv)
+	}
+	if msg, ok := credentialRefusal(status, raw, true); ok {
+		return fmt.Errorf("%s: %s", c.base, msg)
 	}
 	msg := body.Error
 	if msg == "" {

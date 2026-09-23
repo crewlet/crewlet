@@ -132,13 +132,13 @@ func (c *configClient) refusal(status int, raw []byte) error {
 		Stored  string `json:"stored_revision_id"`
 	}
 	_ = json.Unmarshal(raw, &body)
+	if msg, ok := credentialRefusal(status, raw, true); ok {
+		return fmt.Errorf("%s: %s", c.base, msg)
+	}
 	switch {
 	case status == http.StatusNotFound:
 		return fmt.Errorf("%s has no /config surface: it is running a build "+
 			"from before this route existed, or it is not an engine node", c.base)
-	case status == http.StatusUnauthorized:
-		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
-			"api.auth.tokens", c.base, apiTokenEnv)
 	case status == http.StatusConflict && body.Error == "revision_advanced":
 		return lostRace(c.base, body.Current, body.Stored)
 	}
