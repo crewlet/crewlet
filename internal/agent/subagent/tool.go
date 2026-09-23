@@ -156,6 +156,15 @@ func (t *Tool) Parameters() map[string]any {
 							"description": "A configured providers.llm key to run this task " +
 								"on. Omit to take the seat's own worker model.",
 						},
+						"output": map[string]any{
+							"type": "object",
+							"description": "The JSON Schema this worker's answer must " +
+								"fill, so it comes back as fields you can use directly " +
+								"rather than prose. Replaces the template's; omit to " +
+								"take the template's, or {result, notes}. An object " +
+								"schema with 1 to 12 named properties, at most 3 levels " +
+								"deep, whose `required` entries are properties it has.",
+						},
 					},
 					"required": []any{"id", "prompt"},
 				},
@@ -181,6 +190,10 @@ type taskArgs struct {
 	After        []string  `json:"after"`
 	MaxTurns     turnCount `json:"max_turns"`
 	Model        string    `json:"model"`
+	// Output is a JSON Schema, which is why it stays a map: the worker's
+	// provider receives it verbatim, and the engine reads only the part a
+	// template's is held to — see [config.ValidateWorkerOutput].
+	Output map[string]any `json:"output"`
 }
 
 // turnCount accepts a round cap sent as a number OR as a string.
@@ -226,7 +239,7 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, err
 		req.Tasks = append(req.Tasks, Task{
 			ID: a.ID, Worker: a.Worker, SystemPrompt: a.SystemPrompt,
 			Prompt: a.Prompt, Tools: a.Tools, After: a.After,
-			MaxTurns: int(a.MaxTurns), Model: a.Model,
+			MaxTurns: int(a.MaxTurns), Model: a.Model, Output: a.Output,
 		})
 	}
 

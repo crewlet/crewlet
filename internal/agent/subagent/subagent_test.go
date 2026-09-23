@@ -2234,6 +2234,91 @@ func TestTheToolNeverOffersTheDenylistToItsWorker(t *testing.T) {
 	}
 }
 
+// A TASK'S OWN `output` IS THE SHAPE ITS WORKER ANSWERS IN — the one way an
+// inline worker gets a declared answer at all, since it has no template.
+//
+// The tool's schema never declared it, so a delegate call carrying one had it
+// dropped: the worker answered {result, notes} and the parent, which asked
+// for fields it could act on, got prose it had to re-read.
+func TestATasksOwnOutputIsTheShapeItsWorkerAnswersIn(t *testing.T) {
+	t.Parallel()
+	var published map[string]any
+	p := &provider{name: "sub", reply: func(_ context.Context, _ int, req llm.Request) (*llm.Completion, error) {
+		for _, def := range req.Tools {
+			if def.Name == subagent.SubmitTool {
+				published = def.Parameters
+			}
+		}
+		return submit(map[string]any{"verdict": "clean"}, 1, 1), nil
+	}}
+	tool, _ := toolFixture(t, p)
+	res, err := tool.Call(context.Background(), map[string]any{"tasks": []any{
+		taskArg("audit", "check the deploy", map[string]any{"output": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"verdict": map[string]any{"type": "string"},
+			},
+			"required": []any{"verdict"},
+		}}),
+	}})
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if res.Failed {
+		t.Fatalf("a task declaring its own answer shape was refused: %s", res.Output)
+	}
+	props, _ := published["properties"].(map[string]any)
+	if _, ok := props["verdict"]; !ok {
+		t.Fatalf("submit_result published %v, not the task's own schema", published)
+	}
+	if !strings.Contains(res.Output, `"verdict":"clean"`) {
+		t.Errorf("the answer did not come back as the task's fields: %s", res.Output)
+	}
+}
+
+// A SCHEMA NO WORKER CAN ANSWER IN IS REFUSED BEFORE ANYTHING RUNS, naming
+// the task and held to the rule a template's is held to at load.
+//
+// Admitted, it reaches the worker's provider as the submission tool's schema:
+// a non-object schema is a tool call the provider refuses, and a `required`
+// naming a field that is not there is a submission nothing can satisfy — a
+// worker's whole round budget spent failing to answer.
+func TestATaskOutputNoWorkerCanAnswerInIsRefusedUpFront(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		output map[string]any
+		says   string
+	}{
+		{"not an object", map[string]any{"type": "string"}, "tasks[0].output.type"},
+		{"requiring a field it lacks", map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"verdict": map[string]any{"type": "string"}},
+			"required":   []any{"verdit"},
+		}, `"verdit"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			p := &provider{name: "sub"}
+			tool, _ := toolFixture(t, p)
+			res, err := tool.Call(context.Background(), map[string]any{"tasks": []any{
+				taskArg("audit", "check the deploy", map[string]any{"output": c.output}),
+			}})
+			if err != nil {
+				t.Fatalf("Call: %v", err)
+			}
+			if !res.Failed || !strings.Contains(res.Output, `task "audit"`) ||
+				!strings.Contains(res.Output, c.says) {
+				t.Fatalf("answered %q, want the task's schema refused naming %s",
+					res.Output, c.says)
+			}
+			if p.count() != 0 {
+				t.Error("a task with an unanswerable schema still started")
+			}
+		})
+	}
+}
+
 func TestTheToolRejectsMalformedToolNames(t *testing.T) {
 	t.Parallel()
 	p := &provider{name: "sub"}

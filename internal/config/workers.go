@@ -168,6 +168,18 @@ const (
 	maxOutputDepth = 3
 )
 
+// ValidateWorkerOutput holds an answer schema to the rule a worker template's
+// `output` is held to at load, rendering path in every fault it reports.
+//
+// Exported for the one other place such a schema arrives: a delegated task's
+// own `output`, which the executor writes in the call itself and which
+// internal/agent/subagent checks before anything runs. One rule, because a
+// schema a template may not declare is no easier for a worker to answer when
+// a model wrote it.
+func ValidateWorkerOutput(path Path, schema map[string]any) error {
+	return validateOutputSchema(path, schema)
+}
+
 // validateOutputSchema refuses a schema the submission tool could not use.
 //
 // A SUBSET, deliberately. The engine does not implement JSON Schema — it

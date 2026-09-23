@@ -248,6 +248,15 @@ func resolveTask(i int, t Task, workers map[string]config.Worker, limits Limits)
 		r.maxTurns = t.MaxTurns
 	}
 	if len(t.Output) > 0 {
+		// HELD TO A TEMPLATE'S RULE, before anything runs. A template's
+		// schema is checked at load; this one is written by the model
+		// delegating, so this is its load — and a schema no submission can
+		// satisfy spends a worker's whole round budget failing to answer.
+		if err := config.ValidateWorkerOutput(config.Path{"tasks", i, "output"}, t.Output); err != nil {
+			return r, &PlanError{Reason: fmt.Sprintf(
+				"delegate: task %q's `output` is not a schema a worker can answer "+
+					"in — fix it or leave it out to take the template's: %v", r.ID, err)}
+		}
 		r.output = t.Output
 	}
 	r.maxTurns = clampTurns(r.maxTurns, limits.MaxTurns)
