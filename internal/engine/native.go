@@ -713,6 +713,11 @@ func (n *native) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// answers 503 to every arm, and with no lag to read it
 		// answered as a caught-up node for as long as it was behind.
 		Lag: running.Lag,
+		// AND THE WAIT, which a write presenting a session this node
+		// has not applied yet takes: a sign-in answers before its
+		// session's start applies, and the request guard waits for the
+		// position the bearer states rather than refusing it.
+		Await: running.runner.WaitCommitted,
 	})
 	if err != nil {
 		return fmt.Errorf("engine: iam reader: %w", err)

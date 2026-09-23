@@ -200,6 +200,15 @@ type Request struct {
 	// deliberate skip look like a node that is behind. Nothing in this
 	// framework can enforce that pairing — this comment is where it
 	// exists.
+	//
+	// AND WHOEVER READS NEXT OWES THE WAIT THIS SKIPPED. For a sign-in
+	// that reader is the request guard: it serves a read on the bearer's
+	// own proof, and makes a WRITE wait for the position the bearer
+	// carries before deciding it on the rows (internal/api/auth's session
+	// arm). Without that half, the first write a client made straight
+	// after signing in met a 503 on every node — `crewlet iam token
+	// -login` signs in and mints in one breath, and failed on every real
+	// run.
 	NoWait bool
 }
 

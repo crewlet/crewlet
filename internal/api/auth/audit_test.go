@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -462,10 +463,11 @@ func TestTheSessionArmNeedsATrail(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
 	_, err := auth.NewSessions(auth.SessionsDeps{
-		Signer: rig.signer, Directory: rig.dir, Chart: rig.chart,
+		Signer: rig.signer, Directory: rig.dir, Applier: rig.dir, Chart: rig.chart,
 	})
-	if err == nil {
-		t.Fatal("a session arm with no audit trail was built")
+	if err == nil || !strings.Contains(err.Error(), "audit trail") {
+		t.Fatalf("a session arm with no audit trail answered %v, want a "+
+			"refusal naming the trail", err)
 	}
 }
 
@@ -496,7 +498,7 @@ func (s *signedIn) withAudit(tr *trail) *auth.Guard {
 	b.API.Auth.MaxGrants = iam.AllGrants
 	b.API.ExternalURL = "http://127.0.0.1:8080"
 	arm, err := auth.NewSessions(auth.SessionsDeps{
-		Signer: s.signer, Directory: s.dir, Chart: s.chart,
+		Signer: s.signer, Directory: s.dir, Applier: s.dir, Chart: s.chart,
 		External: b.API.ExternalBase(),
 		OnReuse:  s.ended.record,
 		Audit:    tr,

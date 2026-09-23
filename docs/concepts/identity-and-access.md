@@ -1164,7 +1164,7 @@ because each is a row in a domain that **lags independently**.
 | Row ended, the person's epoch ahead of the bearer's, the person suspended, or the generation moved | 401 `session_revoked` | 401 | 401 |
 | Rotation index ahead of the window past the overlap | 401, and the epoch bump is published | 401 | 401 |
 | Row absent, and this node's iam position covers the bearer's start position | 401 `session_revoked` | 401 | 401 |
-| Row absent, this node below the bearer's start position, applier lag under 60 s | serve: the signature and the epoch are the proof | 503 `identity_unavailable` | 503, no grace |
+| Row absent, this node below the bearer's start position, applier lag under 60 s | serve: the signature and the epoch are the proof | wait up to 5 s for this node to apply the bearer's start position, then decide on the rows; 503 `identity_unavailable` if it has not | the same wait, then the same answer |
 | The iam applier stalled past 60 s, the person's bucket deferred, or the replicated store answers `ErrNoEstate` | 503 | 503 | 503 |
 | Not a bearer of this format at all | 401 | 401 | 401 |
 
@@ -1216,6 +1216,23 @@ so a missing session row there may be exactly the session that record opened.
 It is asked of every record the node has set aside, not only the earliest, and
 only for the person's own bucket, so one record about somebody else refuses
 nobody here.
+
+**A write waits for the session it presents.** A sign-in answers *before* any
+node applies the session it opened — it is the one identity write that does
+not wait for its own record, because nothing in its answer reads the row — and
+the cookie carries the position the session's start landed at. What the
+sign-in owes in return is that whoever reads the cookie next honours that
+position. A read already does. A write used to be refused `503` outright on a
+node below it, which is every node for the few hundred milliseconds an apply
+takes — exactly when a client that signs in and then acts makes its first
+request, so `crewlet iam token -login`, which signs in and mints in one breath,
+was refused on every real run. Now a write on a node below the cookie's start
+position waits for this node's applier to reach that position — at most five
+seconds, the same budget a write gives its own record — and is then decided on
+the rows like any other request; a node that does not arrive in time is behind
+for real and answers `503` with its retry hint. The position waited for is the
+one inside the signed cookie, so no caller can name a position of their own to
+park a request on.
 
 ### The three credential shapes meet at one frame
 

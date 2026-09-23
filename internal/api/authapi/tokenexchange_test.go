@@ -89,8 +89,8 @@ func (r *exchangeRig) rebuild(b config.Bootstrap) {
 	r.boot = b
 	audit := &recordingAudit{}
 	arm, err := auth.NewSessions(auth.SessionsDeps{
-		Signer: fixtureSigner(r.t), Directory: r.estate, Chart: r.chart,
-		External: b.API.ExternalBase(), Audit: audit,
+		Signer: fixtureSigner(r.t), Directory: r.estate, Applier: r.estate,
+		Chart: r.chart, External: b.API.ExternalBase(), Audit: audit,
 		Now: func() time.Time { return clock },
 	})
 	if err != nil {
@@ -401,6 +401,17 @@ func (e *sessionEstate) setApplied(at uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.applied = at
+}
+
+// AwaitApplied answers at once: this estate's applied position moves only when
+// a case moves it, so a wait either has already arrived or never will.
+func (e *sessionEstate) AwaitApplied(_ context.Context, position uint64) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.applied >= position {
+		return nil
+	}
+	return context.DeadlineExceeded
 }
 
 func (e *sessionEstate) OpenSession(_ context.Context, in iamdomain.SessionStart) (

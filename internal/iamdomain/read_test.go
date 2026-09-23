@@ -1,6 +1,7 @@
 package iamdomain_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/google/uuid"
 )
 
@@ -490,5 +493,56 @@ func TestAReservationIsReadAsOneAndNotAsAnUndecodablePerson(t *testing.T) {
 	if !errors.Is(err, iamdomain.ErrNotFound) {
 		t.Errorf("updating a reservation answered %v, want %v", err,
 			iamdomain.ErrNotFound)
+	}
+}
+
+// A WAIT IS FOR THE PACKED POSITION A BEARER STATES, ON THIS DOMAIN'S OWN LOG,
+// AND A READER WITH NO APPLIER NEVER REPORTS ARRIVAL.
+//
+// The request guard waits here for a session's start before it decides a
+// write on the rows, so the two halves are the whole contract: the position
+// unpacks into the log this reader answers for, generation and all — a wait
+// in the wrong number space arrives early or never — and a reader built with
+// no runner behind it answers an error rather than nil, because a wait that
+// reported arrival would send the guard to decide on rows that are not there.
+//
+// THE APPLIER HERE HAS COMMITTED NOTHING, which is the state a node is in when
+// the first sign-in after a boot is answered: the stream is the domain's own,
+// and one read back off an empty cursor would be no stream at all.
+func TestAReaderWaitsForTheBearersPositionOnItsOwnLog(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	log, err := statelogtest.LocalReaderOver(
+		iamdomain.Domain{}, rig.db.Replicated(), rig.waiter)
+	if err != nil {
+		t.Fatalf("build the read authority: %v", err)
+	}
+	stream := iamdomain.Domain{}.Stream().Name
+	var asked []statelog.Position
+	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
+		DB: rig.db, Log: log,
+		Committed: func() statelog.Position { return statelog.Position{} },
+		Await: func(_ context.Context, p statelog.Position) error {
+			asked = append(asked, p)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("build the reader: %v", err)
+	}
+	want := statelog.Position{Stream: stream, Generation: 2, Seq: 41}
+	if err := reader.AwaitApplied(t.Context(), uint64(want.Packed())); err != nil {
+		t.Fatalf("a wait the applier answered came back %v", err)
+	}
+	if len(asked) != 1 || asked[0] != want {
+		t.Errorf("the applier was asked to wait for %v, want %v", asked, want)
+	}
+
+	bare, err := iamdomain.NewReader(iamdomain.ReaderOptions{DB: rig.db, Log: log})
+	if err != nil {
+		t.Fatalf("build a reader with no runner: %v", err)
+	}
+	if err := bare.AwaitApplied(t.Context(), 1); err == nil {
+		t.Error("a reader with no applier reported a position reached")
 	}
 }

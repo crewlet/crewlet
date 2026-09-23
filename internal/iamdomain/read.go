@@ -56,6 +56,7 @@ type Reader struct {
 
 	committed func() statelog.Position
 	lag       func() time.Duration
+	await     func(context.Context, statelog.Position) error
 }
 
 // ReaderOptions is what a reader is built from.
@@ -82,6 +83,14 @@ type ReaderOptions struct {
 	// the session table and a token's binding turn on was dead.
 	Committed func() statelog.Position
 	Lag       func() time.Duration
+
+	// Await blocks until this node's applier has committed through a
+	// position — the runner's own wait. NIL ANSWERS AN ERROR rather than
+	// nil, for the other two's reason read the other way round: a reader
+	// with no runner behind it will never reach a position, and a wait
+	// that reported arrival would send a caller to decide on rows that are
+	// not there.
+	Await func(context.Context, statelog.Position) error
 }
 
 // NewReader builds the identity estate's read side.
@@ -96,7 +105,7 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 			"nobody can tell from a correct refusal")
 	}
 	r := &Reader{db: opts.DB, log: opts.Log,
-		committed: opts.Committed, lag: opts.Lag}
+		committed: opts.Committed, lag: opts.Lag, await: opts.Await}
 	if r.committed == nil {
 		r.committed = func() statelog.Position { return statelog.Position{} }
 	}
@@ -108,6 +117,26 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 
 // At is the position this node's rows were derived through.
 func (r *Reader) At() statelog.Position { return r.committed() }
+
+// errNoApplier is a wait asked of a reader with no runner behind it.
+var errNoApplier = errors.New("iamdomain: this reader has no applier to wait " +
+	"on, so no position will ever be reached here")
+
+// AwaitApplied blocks until this node's applier has committed through a packed
+// position, or ctx ends.
+//
+// PACKED, because that is the form a session bearer carries its start in, and
+// the one caller is the request guard waiting for exactly that position — see
+// internal/api/auth's session arm. The stream is this DOMAIN's own, named by
+// the domain rather than read back off the applier: a packed position does not
+// carry one, a bearer is only ever about this log, and an applier that has
+// committed nothing yet has no position to read a stream name off.
+func (r *Reader) AwaitApplied(ctx context.Context, position uint64) error {
+	if r.await == nil {
+		return errNoApplier
+	}
+	return r.await(ctx, statelog.Unpack(Domain{}.Stream().Name, int64(position)))
+}
 
 // ErrNotFound is a lookup this node could answer and that names nobody.
 //

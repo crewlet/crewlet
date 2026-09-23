@@ -152,6 +152,15 @@ const (
 	// the signature and the epoch are proof the sign-in happened — and
 	// refuses writes with 503.
 	//
+	// A WRITE REACHES THAT 503 ONLY AFTER A WAIT, and the wait is the
+	// request guard's rather than this table's (internal/api/auth's
+	// session arm): a sign-in answers before any node applies the session
+	// it opened, so the first write a client makes straight after one lands
+	// here on EVERY node for the few hundred milliseconds an apply takes.
+	// The guard waits, bounded, for the start position this bearer states
+	// and asks this table again; the cell below is what a node still short
+	// of it after that answers.
+	//
 	// THIS ROW IS WHY THE START POSITION IS IN THE BEARER. Without it
 	// [RowGone] and this row are one answer, and whichever one it was
 	// would be wrong half the time: 401 signs out every person whose

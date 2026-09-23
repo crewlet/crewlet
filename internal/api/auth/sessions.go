@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // HOW A SIGNED-IN PERSON BECOMES A PRINCIPAL.
@@ -142,6 +143,32 @@ func seatRefusal(binding session.Binding) *Refusal {
 // hint come to disagree.
 const RetryIdentitySeconds = 2
 
+// SessionCatchUp is how long a write presenting a session this node has not
+// yet applied waits for it, before it is answered 503.
+//
+// THE PUBLISHER'S OWN RESOLVE BUDGET ([statelog.DefaultResolveBudget]),
+// because it is the same wait moved to the other end of one sign-in. A write
+// through the identity domain waits that long for this node's applier to reach
+// the record the broker acknowledged; the sign-in that minted this bearer
+// SKIPPED that wait ([statelog.Request.NoWait]) on the understanding that
+// whoever reads the bearer next honours the position it carries — so the
+// request that reads it next is given the budget the sign-in did not spend. A
+// node still short of the position after it is genuinely behind, which is what
+// the 503 and its [RetryIdentitySeconds] hint are for.
+const SessionCatchUp = statelog.DefaultResolveBudget
+
+// Applier is this node's identity applier, as the session arm waits on it.
+//
+// CONSUMER-DEFINED and one method wide: the arm never reads a position, it
+// only waits for the one a bearer states — see [Sessions.awaitStart].
+type Applier interface {
+	// AwaitApplied blocks until this node's identity applier has committed
+	// through the packed log position, and answers nil only once it has.
+	// Anything else — the context ending, an applier that is gone — is an
+	// error, and the caller answers as though it had not waited.
+	AwaitApplied(ctx context.Context, position uint64) error
+}
+
 // Sessions is the guard's session arm: everything needed to turn a cookie into
 // a person.
 //
@@ -154,6 +181,10 @@ type Sessions struct {
 	signer    *session.Signer
 	directory session.Directory
 	chart     session.Chart
+
+	// applier is what a write presenting a session this node has not yet
+	// applied waits on — see [Sessions.awaitStart].
+	applier Applier
 
 	// external is `api.external_url`, which decides the cookie's NAME. It
 	// must be the configured value and never the request's, for the reason
@@ -208,6 +239,13 @@ type SessionsDeps struct {
 	// same reason.
 	Directory session.Directory
 
+	// Applier is this node's identity applier, waited on by a write that
+	// presents a session the node has not applied yet. REQUIRED: a sign-in
+	// answers before this node applies the session it opened, so without
+	// it every write a client makes straight after signing in — `crewlet
+	// iam token -login`'s mint is exactly that — is a 503 on every node.
+	Applier Applier
+
 	// Chart resolves a bound person's seat. REQUIRED, and the zero value
 	// of the engine's adapter is what a node with no chart domain passes:
 	// it answers UNKNOWN to every seat question, which is 503 — never the
@@ -245,6 +283,11 @@ func NewSessions(deps SessionsDeps) (*Sessions, error) {
 		return nil, errors.New("auth: the session arm needs the identity " +
 			"directory — a bearer's signature says it was minted here and " +
 			"the rows say whether it is still live")
+	case deps.Applier == nil:
+		return nil, errors.New("auth: the session arm needs the identity " +
+			"applier to wait on — a sign-in answers before this node applies " +
+			"the session it opened, so without it every write made straight " +
+			"after signing in is refused 503")
 	case deps.Chart == nil:
 		return nil, errors.New("auth: the session arm needs a chart seam; " +
 			"a nil one would resolve every bound person as seatless, which " +
@@ -257,6 +300,7 @@ func NewSessions(deps SessionsDeps) (*Sessions, error) {
 	}
 	s := &Sessions{
 		signer: deps.Signer, directory: deps.Directory, chart: deps.Chart,
+		applier:  deps.Applier,
 		external: deps.External, onReuse: deps.OnReuse, audit: deps.Audit,
 		now: deps.Now,
 	}
@@ -350,11 +394,15 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		return sessionAnswer{how: iam.Anonymous}
 	}
 	subjects := tierASubjects{directory: s.directory, tokens: tokens}
+	need := needOf(r.Method)
 	v := s.signer.Validate(r.Context(), subjects, cookie)
+	if v.Row == session.RowBehind && v.Answer(need) == session.AnswerUnavailable {
+		v = s.awaitStart(r.Context(), subjects, cookie, v)
+	}
 	if v.Reuse {
 		s.reuse(r, v, client(r))
 	}
-	switch v.Answer(needOf(r.Method)) {
+	switch v.Answer(need) {
 	case session.AnswerUnavailable:
 		log.WarnContext(r.Context(), "api_session_unavailable",
 			"row", string(v.Row), "detail", v.Detail, "error", errText(v.Err))
@@ -427,6 +475,48 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		principal: s.principal(v, binding, ceiling, proof), how: iam.Resolved,
 		presented: true,
 	}
+}
+
+// awaitStart waits for this node to apply the start of the session a write
+// presents, and validates the bearer again once it has — or answers the row it
+// already had.
+//
+// # Why a write waits and a read does not
+//
+// A sign-in answers BEFORE any node's applier reaches the session it opened
+// ([statelog.Request.NoWait]): the broker has acknowledged the record, the
+// bearer carries the position it landed at, and what the sign-in owes in
+// return is that whoever reads the bearer next honours that position. A read
+// always has — [session.RowBehind] serves it on the signature and the epoch. A
+// write may not be served on those alone, because it acts on the rows, and it
+// used to be refused 503 outright: on EVERY node for the few hundred
+// milliseconds an apply takes, which is exactly when a client that signs in
+// and then acts makes its first request. `crewlet iam token -login` signs in
+// and mints at once, and was refused on every real run, with the node it asked
+// a fraction of a second from being able to answer.
+//
+// So the write waits for the one position its bearer states — the wait the
+// sign-in skipped — and is then decided on the rows like any other request.
+//
+// # Bounded, and a miss is the answer it already had
+//
+// [SessionCatchUp] bounds it, and a node that does not arrive inside it is
+// behind for real: the row stays [session.RowBehind] and the request is
+// answered 503 with its retry hint, as before. Nothing is waited for that the
+// bearer did not state, and the bearer is SIGNED, so a caller cannot name a
+// position of its choosing to park a request on.
+func (s *Sessions) awaitStart(ctx context.Context, directory session.Directory,
+	cookie string, behind session.Validation) session.Validation {
+
+	wait, cancel := context.WithTimeout(ctx, SessionCatchUp)
+	defer cancel()
+	if err := s.applier.AwaitApplied(wait, behind.Bearer.StartPosition); err != nil {
+		log.DebugContext(ctx, "api_session_start_not_applied",
+			"lineage", behind.Bearer.Lineage.String(),
+			"position", behind.Bearer.StartPosition, "error", err)
+		return behind
+	}
+	return s.signer.Validate(ctx, directory, cookie)
 }
 
 // reissue sets the cookie a served validation re-issued, if it re-issued one.

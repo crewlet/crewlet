@@ -348,18 +348,19 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 	b := config.DefaultBootstrap()
 	b.API.Auth.MaxGrants = iam.AllGrants
 	b.API.ExternalURL = "http://127.0.0.1:8080"
+	rows := sessionRows{session.Identity{Applied: 10,
+		Session: session.SessionRow{Found: true, Epoch: 1, ProvedAt: time.Now()},
+		Person: session.PersonRow{Found: true, Epoch: 1,
+			Stage: iam.StageActive, Login: "bob.sre",
+			Grants: []iam.Grant{iam.GrantStateRead}},
+	}}
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: signer, Chart: noSeats{}, External: b.API.ExternalBase(),
 		Audit: quietAudit{}, Now: func() time.Time { return at },
 		// PROVED A MOMENT AGO on the clock the route's step-up check
 		// reads, which is the wall clock: minting a credential is a
 		// sensitive gesture, and this case is about WHO mints, not when.
-		Directory: sessionRows{session.Identity{Applied: 10,
-			Session: session.SessionRow{Found: true, Epoch: 1, ProvedAt: time.Now()},
-			Person: session.PersonRow{Found: true, Epoch: 1,
-				Stage: iam.StageActive, Login: "bob.sre",
-				Grants: []iam.Grant{iam.GrantStateRead}},
-		}},
+		Directory: rows, Applier: rows,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -385,6 +386,15 @@ type sessionRows struct{ identity session.Identity }
 
 func (d sessionRows) Resolve(context.Context, string, string) (session.Identity, error) {
 	return d.identity, nil
+}
+
+// AwaitApplied arrives only where the rows already cover the position: these
+// rows never move, so a wait either has already arrived or never will.
+func (d sessionRows) AwaitApplied(_ context.Context, position uint64) error {
+	if d.identity.Applied >= position {
+		return nil
+	}
+	return context.DeadlineExceeded
 }
 
 // quietAudit is a guard trail that keeps nothing.

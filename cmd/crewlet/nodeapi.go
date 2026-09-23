@@ -229,6 +229,10 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 	sessions, err := auth.NewSessions(auth.SessionsDeps{
 		Signer:    signer,
 		Directory: reader,
+		// THE SAME READER'S APPLIER, which a write presenting a session
+		// this node has not applied yet waits on — the sign-in above
+		// answers before it does.
+		Applier: reader,
 		// THE CHART VIEW, and the ZERO VALUE on a node with no chart
 		// domain — never nil, which internal/iam/session reads as the
 		// seatless arm. See [engine.SeatViewOf].

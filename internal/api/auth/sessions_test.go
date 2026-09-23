@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,7 +102,7 @@ func (s *signedIn) guard(ceiling ...iam.Grant) *auth.Guard {
 	b.API.Auth.MaxGrants = ceiling
 	b.API.ExternalURL = "http://127.0.0.1:8080"
 	arm, err := auth.NewSessions(auth.SessionsDeps{
-		Signer: s.signer, Directory: s.dir, Chart: s.chart,
+		Signer: s.signer, Directory: s.dir, Applier: s.dir, Chart: s.chart,
 		External: b.API.ExternalBase(),
 		OnReuse:  s.ended.record,
 		Audit:    newAuditTrail(s.t),
@@ -170,6 +171,24 @@ func lineageAt(t *testing.T, at time.Time) uuid.UUID {
 type fakeDirectory struct {
 	identity session.Identity
 	err      error
+
+	// caughtUp is what this node's rows become once its applier reaches
+	// the position a wait asked for, and nil for a node that never gets
+	// there. waitedFor is every position a wait asked for.
+	caughtUp  *session.Identity
+	waitedFor []uint64
+}
+
+// AwaitApplied arrives when the rows a case caught this node up to cover the
+// position, and never otherwise: a node that does not catch up answers as a
+// wait that ran out.
+func (d *fakeDirectory) AwaitApplied(_ context.Context, position uint64) error {
+	d.waitedFor = append(d.waitedFor, position)
+	if d.caughtUp == nil || d.caughtUp.Applied < position {
+		return context.DeadlineExceeded
+	}
+	d.identity = *d.caughtUp
+	return nil
 }
 
 func (d *fakeDirectory) Resolve(context.Context, string, string) (
@@ -460,12 +479,13 @@ func TestANodeThatCannotReadTheEstateAnswers503AndKeepsTheCookie(t *testing.T) {
 	}
 }
 
-// A NODE THAT IS MERELY BEHIND SERVES READS AND REFUSES WRITES.
+// A NODE THAT STAYS BEHIND SERVES READS AND REFUSES WRITES.
 //
 // The `behind` row of the session table, reached through the guard rather
 // than asserted off the map: this node has not applied the record the bearer
 // names, which is a read it can honestly serve from what it has and a write
-// it must not accept.
+// it must not accept — once the wait for the bearer's start has run out. A
+// read never waits, because it is served on the signature and the epoch.
 func TestANodeBehindTheSessionServesReadsAndRefusesWrites(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
@@ -475,9 +495,63 @@ func TestANodeBehindTheSessionServesReadsAndRefusesWrites(t *testing.T) {
 	if got := rig.call(g, http.MethodGet, "/agents", rig.withCookie); got.status != http.StatusOK {
 		t.Errorf("a read answered %d, want 200", got.status)
 	}
+	if len(rig.dir.waitedFor) != 0 {
+		t.Errorf("a read waited for %v — it is served on the bearer's own "+
+			"proof, and parking it would cost every tab a node's lag", rig.dir.waitedFor)
+	}
 	write := rig.call(g, http.MethodPost, "/work/items", rig.withCookie)
 	if write.status != http.StatusServiceUnavailable {
 		t.Errorf("a write answered %d, want 503", write.status)
+	}
+}
+
+// A WRITE STRAIGHT AFTER SIGNING IN WAITS FOR THE SESSION'S OWN START.
+//
+// A sign-in answers before any node applies the session it opened — the one
+// write in the estate that does not wait — and the bearer carries the position
+// its start landed at, so whoever reads it next owes that position a wait.
+// The request guard used to answer a write on a node below it 503 at once,
+// which is every node for the few hundred milliseconds an apply takes, and
+// every `crewlet iam token -login` run: it signs in and mints in the same
+// breath. The write waits for exactly the bearer's start position and is then
+// decided on the rows. Mutation: drop the wait from the session arm and the
+// write answers 503.
+func TestAWriteStraightAfterSigningInWaitsForItsSession(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	applied := rig.dir.identity
+	rig.dir.identity.Applied = sessionStart - 1
+	rig.dir.identity.Session = session.SessionRow{}
+	rig.dir.caughtUp = &applied
+
+	write := rig.call(rig.guard(), http.MethodPost, "/work/items", rig.withCookie)
+	if write.status != http.StatusOK || write.how != iam.Resolved {
+		t.Fatalf("a write presenting a session this node was about to apply "+
+			"answered %d (%s), want it served once the node caught up",
+			write.status, write.how)
+	}
+	if !slices.Equal(rig.dir.waitedFor, []uint64{sessionStart}) {
+		t.Errorf("the guard waited for %v, want exactly the bearer's start "+
+			"position %d", rig.dir.waitedFor, sessionStart)
+	}
+	if write.principal.Login != "sarah.chen" {
+		t.Errorf("the write resolved as %q, want the person the session is "+
+			"theirs", write.principal.Login)
+	}
+}
+
+// THE ARM IS REFUSED WITHOUT AN APPLIER TO WAIT ON, because without one every
+// write made straight after signing in is a 503 on every node.
+func TestTheSessionArmNeedsAnApplier(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	_, err := auth.NewSessions(auth.SessionsDeps{
+		Signer: rig.signer, Directory: rig.dir, Chart: rig.chart,
+		Audit: newAuditTrail(t),
+	})
+	if err == nil || !strings.Contains(err.Error(), "applier") {
+		t.Fatalf("a session arm with no applier answered %v, want a refusal "+
+			"naming it", err)
 	}
 }
 
