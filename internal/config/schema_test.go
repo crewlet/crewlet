@@ -3,12 +3,15 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -550,6 +553,105 @@ units:
 		{name: "duplicate unit names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nunits:\n  - {name: Core, children: [{name: Platform}]}\n  - {name: Edge, children: [{name: Platform}]}\n"},
 		{name: "duplicate setup step names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nproviders:\n  sandbox:\n    fake: true\n    setup:\n      - {name: registry, commands: [\"true\"]}\n      - {name: registry, commands: [\"true\"]}\n"},
 		{name: "a ceiling below its base", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nturn_engine: {max_tool_rounds: 20, execute_max_tool_rounds_ceiling: 10}\n"},
+		// A TIER A TOKEN'S ID AT ITS BOUND AND ONE PAST IT. The bound is
+		// the validator's — the id composes `token:<id>`, a login held to
+		// iam.MaxLogin — and an editor has to say it too, or a config the
+		// engine refuses is one the editor called fine.
+		{name: "a token id at its bound", tier: TierBootstrap,
+			yaml: tokenDoc(strings.Repeat("a", tokenIDBound))},
+		{name: "a token id past its bound", tier: TierBootstrap, editorCatches: true,
+			yaml: tokenDoc(strings.Repeat("a", tokenIDBound+1))},
+	}
+}
+
+// tokenIDBound is how long a Tier A token's id may be: the width of a login,
+// less the class every token's login carries.
+var tokenIDBound = iam.MaxLogin - len(iam.TokenLoginPrefix)
+
+// tokenDoc is a Tier A document declaring one token under id, and otherwise
+// valid.
+func tokenDoc(id string) string {
+	return "api:\n  auth:\n    tokens:\n      - id: " + id +
+		"\n        token: a-token-value-long-enough-to-pass-the-floor" +
+		"\n        grants: [state:read]\n"
+}
+
+// A TIER A TOKEN'S ID IS BOUNDED IN THE ARTIFACT AT THE WIDTH THE VALIDATOR
+// DERIVES.
+//
+// The bound used to be prose in the field's description, which a schema does
+// not read: an editor accepted a fifty-nine-character id that `crewlet
+// validate` then refused. It is a `maxlen` directive now, and a struct tag is a
+// literal that cannot be computed — so this holds the literal to the
+// derivation, both ways: the artifact's `maxLength` is iam.MaxLogin less the
+// `token:` class, and the validator admits exactly that many and no more.
+func TestTheSchemaBoundsATokenIDWhereTheValidatorDoes(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierBootstrap)["$defs"].(map[string]any)
+	token, _ := defs["APIToken"].(map[string]any)
+	props, _ := token["properties"].(map[string]any)
+	id, _ := props["id"].(map[string]any)
+	if got, _ := id["maxLength"].(float64); int(got) != tokenIDBound {
+		t.Fatalf("the schema bounds a token id at %v, and the validator at %d "+
+			"(%d for a login, less %q)", id["maxLength"], tokenIDBound,
+			iam.MaxLogin, iam.TokenLoginPrefix)
+	}
+	if !iam.ValidTokenID(strings.Repeat("a", tokenIDBound)) {
+		t.Errorf("the validator refuses a token id of %d characters, the "+
+			"bound it derives", tokenIDBound)
+	}
+	if iam.ValidTokenID(strings.Repeat("a", tokenIDBound+1)) {
+		t.Errorf("the validator admits a token id of %d characters, past the "+
+			"bound it derives", tokenIDBound+1)
+	}
+}
+
+// EVERY DIRECTIVE A TAG CARRIES IS ONE THE GENERATOR READS, WITH A VALUE IT
+// CAN READ.
+//
+// parseDirectives keeps any key and applyNumberDirectives drops a bound that
+// does not parse, so a misspelt key or a bound written as a word would vanish
+// from the artifact without a word: a constraint the author meant that the
+// schema never states. Walked over every type the two tiers reach, because a
+// directive on a type nothing in the tiers reaches is one no schema carries
+// either.
+func TestEveryDirectiveIsOneTheGeneratorReads(t *testing.T) {
+	t.Parallel()
+	seen := map[reflect.Type]bool{}
+	var walk func(t reflect.Type, path string, fail func(string, ...any))
+	walk = func(typ reflect.Type, path string, fail func(string, ...any)) {
+		for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice ||
+			typ.Kind() == reflect.Array || typ.Kind() == reflect.Map {
+			typ = typ.Elem()
+		}
+		if typ.Kind() != reflect.Struct || seen[typ] {
+			return
+		}
+		seen[typ] = true
+		for f := range typ.Fields() {
+			field := path + "." + f.Name
+			for key, value := range parseDirectives(f.Tag.Get("js")) {
+				numeric, known := schemaDirectives[key]
+				switch {
+				case !known:
+					fail("%s carries the directive %q, which the generator "+
+						"does not read", field, key)
+				case numeric:
+					if _, err := strconv.ParseFloat(value, 64); err != nil {
+						fail("%s bounds %s at %q, which is not a number",
+							field, key, value)
+					}
+				}
+			}
+			walk(f.Type, field, fail)
+		}
+	}
+	for _, root := range []any{Bootstrap{}, Company{}} {
+		typ := reflect.TypeOf(root)
+		walk(typ, typ.Name(), t.Errorf)
+	}
+	if len(seen) < 2 {
+		t.Fatal("the walk reached no types, so it checked nothing")
 	}
 }
 

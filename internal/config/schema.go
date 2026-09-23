@@ -259,6 +259,17 @@ func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string) ma
 }
 
 func applyStringDirectives(out map[string]any, directives map[string]string) {
+	// maxlen is a BYTE bound the validator already enforces, stated where an
+	// editor can see it: a bound that lived only in a field's description
+	// was prose to a schema, so an editor accepted a value `crewlet validate`
+	// then refused. JSON Schema counts characters rather than bytes, and the
+	// two agree on every value a bounded field here admits, because each such
+	// field's own pattern admits ASCII alone.
+	if v, ok := directives["maxlen"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			out["maxLength"] = n
+		}
+	}
 	if v, ok := directives["enum"]; ok {
 		parts := strings.Split(v, "|")
 		values := make([]any, len(parts))
@@ -308,6 +319,20 @@ func yamlName(f reflect.StructField) (string, bool) {
 // a character class like {0,63} contains a comma. A directive that silently
 // truncated a pattern would put a WRONG rule in a public artifact, which is
 // worse than no rule.
+//
+// THE KEYS ARE [schemaDirectives], and nothing else is read: `required`, and
+// for a string `enum`, `pattern` and `maxlen`, and for a number `min` and
+// `max`. A key outside that set, or a bound that is not a number, would be
+// dropped here without a word — a constraint the author meant and the
+// artifact never states — so the suite walks every tag the two tiers carry
+// and refuses both (TestEveryDirectiveIsOneTheGeneratorReads).
+// schemaDirectives is every js-tag key the generator reads, each with whether
+// its value is a number.
+var schemaDirectives = map[string]bool{
+	"required": false, "enum": false, "pattern": false,
+	"maxlen": true, "min": true, "max": true,
+}
+
 func parseDirectives(tag string) map[string]string {
 	if tag == "" {
 		return nil

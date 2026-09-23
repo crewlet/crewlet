@@ -977,7 +977,7 @@ func (o *APIOIDC) validate(path Path, ceiling []iam.Grant) error {
 type APIToken struct {
 	// ID is a short label stamped into revision audit rows (created_by):
 	// "founder", "ops", "ci-pipeline".
-	ID string `yaml:"id" json:"id" js:"required;pattern=^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)*$" desc:"Short label; the token acts under the login token:<id>, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons, at most 58 characters so the login stays within 64."`
+	ID string `yaml:"id" json:"id" js:"required;pattern=^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)*$;maxlen=58" desc:"Short label; the token acts under the login token:<id>, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons, at most 58 characters so the login stays within 64."`
 
 	// Token is the value, or a ${VAR} reference to it. Resolved once at
 	// startup and never stored.
