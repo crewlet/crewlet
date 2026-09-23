@@ -92,12 +92,10 @@ func TestAnAmbiguousCatalogueNeedsADefaultOnlyWhereASeatWouldReadIt(t *testing.T
 //
 // The engine builds a backend only for a cell something reaches, so an
 // ambiguous catalogue with no default and no seat reaches nothing, builds
-// nothing, and registers run_sandbox for nobody. That would merely be inert
-// if it could be repaired later — but the sandbox runtime is built ONCE AT
-// BOOT, so the founder who then adds a sandbox-enabled seat live gets a clean
-// apply and code work that silently never happens for the life of the
-// process. Every catalogue that resolves a default reaches it precisely so a
-// seat added later has somewhere to go.
+// nothing, and registers run_sandbox for nobody: a block that reads as
+// configuration and configures nothing, which is why an empty block is refused
+// too. Every catalogue that resolves a default reaches it precisely so a seat
+// added later has somewhere to go.
 func TestACatalogueNothingReachesIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, doc := range []string{

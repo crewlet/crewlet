@@ -70,7 +70,18 @@ type DutyFunc func(ctx context.Context) (bool, error)
 type WaiterOptions struct {
 	Queue   Publisher
 	Pending PendingStore
-	Manager *Manager
+
+	// Manager is the manager CURRENT at each tick — the coordinator's own
+	// [Coordinator.Manager] in the engine.
+	//
+	// A SOURCE RATHER THAN A VALUE, because the manager is swapped on every
+	// apply that changes providers.sandbox and the poll runs for the life
+	// of the process. It was a value captured once, so after a reload the
+	// poll went on reconnecting, keeping alive and reaping through the
+	// backends of the catalogue the node booted with — a rotated
+	// credential it no longer resolved, a keepalive to the old TTL, a cell
+	// the company had reshaped — while every launch used the new ones.
+	Manager func() *Manager
 
 	// Interval is the poll cadence. Zero takes [DefaultPollInterval].
 	Interval time.Duration
@@ -109,7 +120,7 @@ type WaiterOptions struct {
 type Waiter struct {
 	queue   Publisher
 	pending PendingStore
-	manager *Manager
+	manager func() *Manager
 
 	interval  time.Duration
 	claimDuty DutyFunc
@@ -206,6 +217,13 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 	if !w.mayTick(ctx) {
 		return 0, nil
 	}
+	// ONE MANAGER FOR THE WHOLE TICK, read once: a reload landing mid-pass
+	// must not poll half the runs through one catalogue and reap the rest
+	// through another.
+	manager := w.manager()
+	if manager == nil {
+		return 0, errors.New("sandbox: the waiter's manager source answered no manager")
+	}
 	runs, err := w.pending.ListActive(ctx)
 	if err != nil {
 		return 0, err
@@ -234,7 +252,7 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 			// created. The next tick finds it attached.
 			continue
 		}
-		switch w.pollOne(ctx, run) {
+		switch w.pollOne(ctx, manager, run) {
 		case pollDone, pollGone:
 			// gone → the box vanished; fire anyway so the coordinator frees
 			// the seat and marks the run failed (collect will fail to
@@ -250,7 +268,7 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 	if fired > 0 {
 		log.InfoContext(ctx, "sandbox_waiter_fired", "completions", fired)
 	}
-	if reaped := w.reapExpiredPauses(ctx, runs); reaped > 0 {
+	if reaped := w.reapExpiredPauses(ctx, manager, runs); reaped > 0 {
 		// Said out loud: a reaped box is a checkout an operator will find
 		// gone, and the pause TTL is the knob that decides it.
 		log.InfoContext(ctx, "sandbox_paused_boxes_reaped", "count", reaped)
@@ -314,8 +332,8 @@ const (
 )
 
 // pollOne reconnects and asks the runner whether the job has finished.
-func (w *Waiter) pollOne(ctx context.Context, run PendingRun) pollState {
-	provider, err := w.manager.Provider(Placement(run.Placement))
+func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) pollState {
+	provider, err := manager.Provider(Placement(run.Placement))
 	if err != nil {
 		// A row naming a cell this build or this company does not have can
 		// never complete, and retrying it every tick would keep the seat
@@ -346,11 +364,11 @@ func (w *Waiter) pollOne(ctx context.Context, run PendingRun) pollState {
 	// as long as it needs. The box is bounded only by how long the engine can
 	// go WITHOUT this heartbeat, never by a fixed run deadline: completion is
 	// detected by tracking the job, not by a clock.
-	if err = box.SetTimeout(ctx, w.manager.BoxTimeout().Seconds()); err != nil {
+	if err = box.SetTimeout(ctx, manager.BoxTimeout().Seconds()); err != nil {
 		log.DebugContext(ctx, "sandbox_keepalive_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 
-	runner, err := w.manager.RunnerFor(run.CodingAgent)
+	runner, err := manager.RunnerFor(run.CodingAgent)
 	if err != nil {
 		// A misconfigured runner cannot be polled, and retrying forever
 		// would hold the seat busy for the life of the deployment.
@@ -409,7 +427,7 @@ func (w *Waiter) succeed(turnID string) {
 // there for why the deadline can be dated from the park itself. Skipping an
 // unstamped row instead made a run whose pause record failed — one warn-only
 // store write — a remote box billed until a person noticed.
-func (w *Waiter) reapExpiredPauses(ctx context.Context, runs []PendingRun) int {
+func (w *Waiter) reapExpiredPauses(ctx context.Context, manager *Manager, runs []PendingRun) int {
 	now := w.now()
 	reaped := 0
 	for _, run := range runs {
@@ -451,7 +469,7 @@ func (w *Waiter) reapExpiredPauses(ctx context.Context, runs []PendingRun) int {
 		sandboxID := run.SandboxID
 		// Kill by id: Connect would auto-resume the snapshot, booting the box
 		// back up purely to shut it down.
-		provider, err := w.manager.Provider(Placement(run.Placement))
+		provider, err := manager.Provider(Placement(run.Placement))
 		if err != nil {
 			log.WarnContext(ctx, "sandbox_pause_reap_no_backend",
 				"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())

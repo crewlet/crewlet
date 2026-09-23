@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -37,7 +38,9 @@ import (
 // are NOT: they hold the busy set and the poll loop, which are facts about
 // this PROCESS rather than about a config revision — rebuilding them on an
 // apply would forget which seats are mid-run and start a second poll loop
-// against the same rows.
+// against the same rows. So they are built ONCE, by the first company that
+// reaches a sandbox cell — at boot, or at whichever apply brings one — and
+// every later revision only swaps the manager under them.
 
 // buildSandbox constructs the manager for a company, or nil when no seat can
 // run code.
@@ -783,26 +786,27 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // has already said what it did and why (see [Engine.failSuspension]), and no
 // caller fails a turn over it — the run is settled either way.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) (bool, error) {
-	if e.sandboxPending == nil || e.sandboxCoordinator == nil {
+	rt := e.sandbox.Load()
+	if rt == nil {
 		// No store and no coordinator: nothing recorded the run, nothing
 		// polls it, and nothing will ever resume this turn.
 		return false, nil
 	}
 	suspension, ok := r.Suspended()
 	if !ok {
-		e.failSuspension(ctx, turnID, "sandbox_suspension_missing",
+		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_missing",
 			"the turn suspended but recorded no conversation", nil)
 		return false, nil
 	}
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
-		e.failSuspension(ctx, turnID, "sandbox_suspension_unserializable",
+		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",
 			"the suspended conversation could not be serialized", err)
 		return false, nil
 	}
-	suspended, err := e.sandboxPending.MarkSuspended(ctx, turnID, blob)
+	suspended, err := rt.pending.MarkSuspended(ctx, turnID, blob)
 	if err != nil {
-		e.failSuspension(ctx, turnID, "sandbox_suspension_unwritable",
+		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unwritable",
 			"the suspended conversation could not be written", err)
 		// UNKNOWN, not lost: the write may have landed, and the settle
 		// that follows it declines a row that is no longer launching.
@@ -813,7 +817,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		// either the launch never recorded it, or its tail has already
 		// been claimed and settled by somebody else. Overwriting either
 		// one is worse than failing.
-		e.failSuspension(ctx, turnID, "sandbox_suspension_not_launching",
+		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_not_launching",
 			"the run was no longer launching when its conversation was written", nil)
 		return false, nil
 	}
@@ -832,14 +836,15 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 // settles only a run still launching (see [sandbox.Coordinator.FailRun]): a
 // write reported as failed can have landed, and a run it moved to running is
 // one the completion poll resumes.
-func (e *Engine) failSuspension(ctx context.Context, turnID, event, detail string, cause error) {
+func (e *Engine) failSuspension(ctx context.Context, rt *sandboxRuntime, turnID, event, detail string,
+	cause error) {
 	args := []any{"turn_id", turnID,
 		"detail", detail + "; a run still launching cannot be resumed, so its box is reclaimed and the run ended"}
 	if cause != nil {
 		args = append(args, "error", cause)
 	}
 	log.ErrorContext(ctx, event, args...)
-	if err := e.sandboxCoordinator.FailRun(ctx, turnID,
+	if err := rt.coordinator.FailRun(ctx, turnID,
 		types.SandboxFailureSuspensionUnrecorded, detail); err != nil {
 		log.WarnContext(ctx, "sandbox_suspension_settle_failed", "turn_id", turnID, "error", err,
 			"detail", "the run's record could not be read, so its box was not reclaimed; the "+
@@ -858,10 +863,11 @@ var _ builtin.SandboxLauncher = (*launcher)(nil)
 
 func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (sandbox.LaunchResult, error) {
 	e := l.engine
-	manager, pending := e.sandboxManager(), e.sandboxPending
-	if manager == nil || pending == nil {
+	rt := e.sandbox.Load()
+	if rt == nil {
 		return sandbox.LaunchResult{}, fmt.Errorf("this engine has no sandbox backend configured")
 	}
+	manager, pending := rt.coordinator.Manager(), rt.pending
 	seat, err := t.RequireSeat()
 	if err != nil {
 		return sandbox.LaunchResult{}, err
@@ -1178,35 +1184,83 @@ func (e *Engine) sandboxEnv(seat *org.Role, gate *config.RoleSandbox, setup []sa
 	return resolved
 }
 
-// sandboxManager is this node's manager, or nil.
-func (e *Engine) sandboxManager() *sandbox.Manager {
-	if e.sandboxCoordinator == nil {
-		return nil
-	}
-	return e.sandboxCoordinator.Manager()
+// sandboxRuntime is this node's code-work machinery, published whole: the
+// durable row store every detached run is recorded in, and the coordinator
+// that drives those runs over it. See [Engine.sandbox].
+type sandboxRuntime struct {
+	pending     sandbox.PendingStore
+	coordinator *sandbox.Coordinator
 }
 
-// buildSandboxRuntime builds this node's code-work machinery, or leaves it off.
-//
-// Called once at boot rather than on every apply: the coordinator holds the
-// busy set and the waiter holds the poll loop, both facts about this PROCESS.
-// The manager under them IS swapped on an apply, through SetManager, so a
-// provider change reaches a running node without forgetting which seats are
-// mid-run.
-//
-// SPLIT FROM startSandboxWaiter because the two need different things to
-// exist. The coordinator must exist before equip, which registers run_sandbox
-// only on a node that has one; the waiter needs the node, whose incarnation is
-// what its fleet-singleton duty is claimed under. Doing both at once meant one
-// of the two ran against a nil.
-func (e *Engine) buildSandboxRuntime(company *Company) error {
-	manager, err := buildSandbox(company.Config, e.resolver(), e.sandboxOtel)
+// startSandboxFor is [Engine.startSandbox] for the company a node boots on:
+// its catalogue built, and the runtime brought up where it reaches a cell.
+// An apply builds the catalogue itself, earlier, so that a revision whose
+// catalogue cannot be built is refused before anything else moves.
+func (e *Engine) startSandboxFor(ctx context.Context, c *Company) error {
+	manager, err := buildSandbox(c.Config, e.resolver(), e.sandboxOtel)
 	if err != nil {
 		return err
 	}
-	if manager == nil {
-		return nil
+	_, err = e.startSandbox(ctx, manager)
+	return err
+}
+
+// startSandbox brings up this node's code-work machinery for the first company
+// whose catalogue builds a manager, and reports whether this call brought it
+// up.
+//
+// ONCE PER PROCESS, from whichever comes first: the boot of a company that
+// reaches a sandbox cell, or the apply of the first revision that does. It is
+// the second of those that had no path at all — the coordinator was built at
+// boot or never, so a node started unconfigured (the quickstart's own route)
+// or on a company with no providers.sandbox served every later revision's
+// code-enabled seats with no run_sandbox, no agent-mode executor and no way to
+// finish a run a peer had left on one of its seats, until the process
+// restarted. Once up, a revision only swaps the manager ([Engine.Apply]'s
+// `sandbox` stage), because the busy set and the poll loop are this process's.
+//
+// A NIL MANAGER IS NOT A START: the company reaches no cell, and the runtime
+// waits for one that does.
+//
+// SPLIT FROM THE POLL on the boot path, where the two need different things to
+// exist: the coordinator must exist before equip, which registers run_sandbox
+// only on a node that has one, and the poll needs the node, whose incarnation
+// its fleet-singleton duty is claimed under. On an apply the node already
+// exists, so this starts the poll too — and PREPARES THE SEATS this node
+// already holds, which took their leases before there was a control topic to
+// attach or a run to recover ([Engine.prepareHeldSeats]).
+func (e *Engine) startSandbox(ctx context.Context, manager *sandbox.Manager) (bool, error) {
+	if manager == nil || e.sandbox.Load() != nil {
+		return false, nil
 	}
+	rt, err := e.buildSandboxRuntime(manager)
+	if err != nil {
+		return false, err
+	}
+	// PUBLISHED BEFORE THE SEATS ARE PREPARED, so a seat acquired from here
+	// on prepares itself through its own hook, and the walk below finds it
+	// already attached rather than racing it.
+	if !e.sandbox.CompareAndSwap(nil, rt) {
+		return false, nil
+	}
+	log.Info("sandbox_enabled", "placements", manager.Placements(),
+		"default_run_in", string(manager.DefaultPlacement()),
+		"coding_agent", manager.DefaultCodingAgent())
+	if e.node == nil {
+		// BOOT: the node, the poll and every seat come after this.
+		return true, nil
+	}
+	if e.mode.Publishes() {
+		if err := e.startSandboxWaiter(ctx); err != nil {
+			return true, err
+		}
+	}
+	e.prepareHeldSeats(ctx, rt)
+	return true, nil
+}
+
+// buildSandboxRuntime builds the machinery [Engine.startSandbox] publishes.
+func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		// A detached run's RECORD is what survives the turn that starts
 		// it, so a node with no coordination store cannot offer code work
@@ -1217,13 +1271,13 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		// The FLEET's store, not this node's: a run is recovered by
 		// whichever node owns its seat next, and that node is not
 		// reliably the one that launched it.
-		return fmt.Errorf("providers.sandbox needs a coordination store: a detached " +
+		return nil, fmt.Errorf("providers.sandbox needs a coordination store: a detached " +
 			"run's state is a fleet record, and without one a seat handoff orphans every box")
 	}
-	e.sandboxPending = sandbox.NewCoordStore(e.backends.Fleet)
+	pending := sandbox.NewCoordStore(e.backends.Fleet)
 
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Queue: e.backends.Queue, Pending: e.sandboxPending, Manager: manager,
+		Queue: e.backends.Queue, Pending: pending, Manager: manager,
 		Resume:  &resumer{engine: e},
 		Account: e.sandboxAccountant(),
 		// The per-run tool bridge dies with the run — see
@@ -1241,27 +1295,28 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		Stopped: e.releaseWorkingStatus,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	e.sandboxCoordinator = coordinator
-	log.Info("sandbox_enabled", "placements", manager.Placements(),
-		"default_run_in", string(manager.DefaultPlacement()),
-		"coding_agent", manager.DefaultCodingAgent())
-	return nil
+	return &sandboxRuntime{pending: pending, coordinator: coordinator}, nil
 }
 
-// startSandboxWaiter starts the completion poll, once the node exists.
-func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration) error {
-	if e.sandboxCoordinator == nil {
+// startSandboxWaiter starts the completion poll, once the node exists and a
+// runtime does, and at most once.
+func (e *Engine) startSandboxWaiter(ctx context.Context) error {
+	rt := e.sandbox.Load()
+	if rt == nil || e.sandboxWaiter.Load() != nil {
 		return nil
 	}
+	interval := e.sandboxPollInterval
 	duty, err := e.waiterDuty(interval)
 	if err != nil {
 		return err
 	}
 	waiter, err := sandbox.NewWaiter(sandbox.WaiterOptions{
-		Queue: e.backends.Queue, Pending: e.sandboxPending,
-		Manager:  e.sandboxCoordinator.Manager(),
+		Queue: e.backends.Queue, Pending: rt.pending,
+		// THE COORDINATOR'S CURRENT MANAGER, asked on every tick: an
+		// apply swaps it, and the poll outlives every revision.
+		Manager:  rt.coordinator.Manager,
 		Interval: interval,
 		// The duty is claimed per tick: the waiter polls EVERY active run
 		// in the company, not just this node's seats, so N nodes running it
@@ -1272,7 +1327,9 @@ func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration)
 	if err != nil {
 		return err
 	}
-	e.sandboxWaiter = waiter
+	if !e.sandboxWaiter.CompareAndSwap(nil, waiter) {
+		return nil
+	}
 	waiter.Start(context.WithoutCancel(ctx))
 	return nil
 }
@@ -1280,9 +1337,33 @@ func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration)
 // stopSandbox halts the poll loop. The rows and the boxes are untouched: a
 // detached run belongs to its row, and the next owner of its seat recovers it.
 func (e *Engine) stopSandbox() {
-	if e.sandboxWaiter != nil {
-		e.sandboxWaiter.Stop()
+	if w := e.sandboxWaiter.Load(); w != nil {
+		w.Stop()
 	}
+}
+
+// sandboxSeatRuns is the inbox screening's two sandbox answers for a seat, read
+// off the runtime live: no to both where there is none, which is right for a
+// node that has never run code — a seat on it cannot be in either state.
+func (e *Engine) sandboxSeatRuns(handle string) (held, awaitsAnswer bool) {
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return false, false
+	}
+	return rt.coordinator.SeatRuns(handle)
+}
+
+// answerParkedRun offers a delivery to a parked coding run, through the
+// runtime current when it arrives; with none, nothing is parked here to take
+// it.
+func (e *Engine) answerParkedRun(ctx context.Context, handle string,
+	conv sandbox.ConversationRef, answer string, trigger *events.Event) (sandbox.AnswerDisposition, error) {
+
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return sandbox.AnswerNotMine, nil
+	}
+	return rt.coordinator.TryResumeFromAnswer(ctx, handle, conv, answer, trigger)
 }
 
 // sandboxAccountant charges collected runs, or nil where nothing counts them.
@@ -1320,10 +1401,11 @@ const waiterDutyName = "sandbox-waiter"
 // rather than on every tick: the waiter fails closed on a claim error, so a
 // refused TTL would leave it never ticking, every detached run hanging and
 // every box losing its keepalive, with one warning per tick as the only sign.
+// [New] asks the same question before anything is open, because the start can
+// be an apply's (see [checkSandboxPollInterval]).
 func (e *Engine) waiterDuty(interval time.Duration) (schedule.DutyFunc, error) {
-	if err := coord.CheckDutyTTL(coord.WorkerResource(waiterDutyName), waiterDutyTTL(interval)); err != nil {
-		return nil, fmt.Errorf("engine: a sandbox poll interval of %v needs a %v waiter duty; "+
-			"lower Options.SandboxPollInterval: %w", interval, waiterDutyTTL(interval), err)
+	if err := checkSandboxPollInterval(interval); err != nil {
+		return nil, err
 	}
 	if e.backends == nil || e.backends.Coord == nil {
 		return nil, nil
@@ -1331,6 +1413,23 @@ func (e *Engine) waiterDuty(interval time.Duration) (schedule.DutyFunc, error) {
 	// The TTL expression is spelled as the duty-TTL guard test expects it;
 	// see TestEveryDutyTTLFitsTheDutyCeiling.
 	return e.workerDuty(waiterDutyName, waiterDutyTTL(interval)), nil
+}
+
+// checkSandboxPollInterval refuses a poll interval whose waiter duty no backend
+// will grant.
+//
+// ASKED AT BOOT whether or not this node runs a sandbox yet, as well as where
+// the poll starts: a node that boots with none starts its poll at whichever
+// apply brings the first, and refused THERE the interval would leave a runtime
+// published with no poll — every run launched on it never collected — on a
+// revision that was itself fine. An Option is the operator's, so it is refused
+// where the operator is still looking.
+func checkSandboxPollInterval(interval time.Duration) error {
+	if err := coord.CheckDutyTTL(coord.WorkerResource(waiterDutyName), waiterDutyTTL(interval)); err != nil {
+		return fmt.Errorf("engine: a sandbox poll interval of %v needs a %v waiter duty; "+
+			"lower Options.SandboxPollInterval: %w", interval, waiterDutyTTL(interval), err)
+	}
+	return nil
 }
 
 // dutyTTLTicks is how many poll intervals the waiter duty survives without a
@@ -1398,7 +1497,35 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 		}
 	}
 
-	if e.sandboxCoordinator == nil {
+	if rt := e.sandbox.Load(); rt != nil {
+		if err := e.prepareSeatSandbox(ctx, rt, handle, epoch, owner); err != nil {
+			return err
+		}
+	}
+	// THE SEAT IS LIVE HERE, which is the fact the live projection has
+	// always had a branch for and nothing ever published: an
+	// `agent_spawned` is what clears a stale `terminated`, `offline` or
+	// `afk` from a seat that has moved to this node, so without it a seat
+	// whose last owner went away renders as broken until it happens to do
+	// some work.
+	//
+	// FOR EVERY SEAT, not only a code-enabled node's: this sat behind the
+	// sandbox step's early return, so on the ordinary node — one whose
+	// company configures no providers.sandbox — no seat was ever announced
+	// and every one of them stayed on whatever its last owner left behind.
+	e.publishSeatLifecycle(ctx, handle, types.AgentSpawned{})
+	return nil
+}
+
+// prepareSeatSandbox is the seat's half of the code-work machinery: its control
+// topic attached, then its detached runs recovered, BEFORE anything can
+// deliver to it. Exactly once per holding, whichever path reaches it first —
+// the seat's own acquisition, or the apply that brought the runtime up while
+// the seat was already held; the caller holds the seat's lock either way.
+func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime, handle string,
+	epoch int64, owner string) error {
+
+	if e.sandboxSeatAttached(handle) {
 		return nil
 	}
 	control, group := topics.AgentControl(handle), topics.AgentControlGroup(handle)
@@ -1410,7 +1537,7 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 	// A detached run outlives its node, so that window is not hypothetical.
 	if err := e.backends.Queue.Subscribe(ctx, control, group,
 		func(ctx context.Context, ev *events.Event) queue.Result {
-			if err := e.sandboxCoordinator.OnEvent(ctx, ev); err != nil {
+			if err := rt.coordinator.OnEvent(ctx, ev); err != nil {
 				// NAK, so a completion this node could not settle comes
 				// back — to this node once its store recovers, or to the
 				// seat's next owner. Acking it would lose the turn.
@@ -1420,17 +1547,62 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 		}); err != nil {
 		return fmt.Errorf("attaching the sandbox control topic: %w", err)
 	}
-	if err := e.sandboxCoordinator.RecoverSeat(ctx, handle, owner, epoch); err != nil {
-		return err
+	// ATTACHED FROM HERE, whatever recovery says: a release has to detach
+	// what this call attached, and a refused seat is released.
+	e.markSandboxSeat(handle, true)
+	return rt.coordinator.RecoverSeat(ctx, handle, owner, epoch)
+}
+
+// sandboxSeatAttached reports whether this node attached the seat's sandbox
+// control topic, and markSandboxSeat records that it did or no longer does.
+func (e *Engine) sandboxSeatAttached(handle string) bool {
+	e.sandboxSeatsMu.Lock()
+	defer e.sandboxSeatsMu.Unlock()
+	return e.sandboxSeats[handle]
+}
+
+func (e *Engine) markSandboxSeat(handle string, attached bool) {
+	e.sandboxSeatsMu.Lock()
+	defer e.sandboxSeatsMu.Unlock()
+	if attached {
+		e.sandboxSeats[handle] = true
+		return
 	}
-	// THE SEAT IS LIVE HERE, which is the fact the live projection has
-	// always had a branch for and nothing ever published: an
-	// `agent_spawned` is what clears a stale `terminated`, `offline` or
-	// `afk` from a seat that has moved to this node, so without it a seat
-	// whose last owner went away renders as broken until it happens to do
-	// some work.
-	e.publishSeatLifecycle(ctx, handle, types.AgentSpawned{})
-	return nil
+	delete(e.sandboxSeats, handle)
+}
+
+// prepareHeldSeats gives every seat this node already holds the code-work half
+// of its preparation, when the runtime comes up after they were taken.
+//
+// A SEAT TAKEN BEFORE THE RUNTIME EXISTED attached no control topic and
+// recovered no run, because its acquisition had nothing to attach them to. Left
+// so, the first run it launched under the revision that brought the runtime
+// would publish its completion to a topic nothing on this node consumes, and a
+// run a peer left on it would be polled by nobody here: the seat held the
+// coding job's turn for ever and never resumed it.
+//
+// UNDER EACH SEAT'S OWN LOCK, the one its acquisition and release run under, so
+// a seat claimed or handed on while this walks is prepared exactly once or not
+// at all ([seat.Host.WithHeldSeat]).
+//
+// A SEAT THAT CANNOT BE PREPARED IS HANDED BACK, exactly as an acquisition that
+// failed the same step is refused: its next acquisition, here or on a peer,
+// runs the whole preparation again. Voluntarily — the lease is good and the turn
+// in flight finishes — which is [seat.ReasonUnprepared].
+func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
+	host := e.node.Host()
+	for _, handle := range host.Held() {
+		_, err := host.WithHeldSeat(handle, func(lease coord.Lease) error {
+			return e.prepareSeatSandbox(ctx, rt, handle, lease.Epoch, lease.Owner)
+		})
+		if err == nil {
+			continue
+		}
+		log.ErrorContext(ctx, "sandbox_seat_unprepared", "seat", handle, "error", err,
+			"detail", "the seat is handed back so its next acquisition prepares it "+
+				"for code work whole")
+		host.Release(ctx, handle, seat.ReasonUnprepared)
+	}
 }
 
 // publishSeatLifecycle announces a seat arriving on or leaving this node.
@@ -1537,10 +1709,23 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 		e.memory.Forget(handle)
 	}
 
-	if e.sandboxCoordinator == nil {
+	rt := e.sandbox.Load()
+	if rt == nil {
 		return
 	}
-	e.sandboxCoordinator.ReleaseSeat(handle)
+	rt.coordinator.ReleaseSeat(handle)
+	// ONLY WHAT THIS NODE ATTACHED: a seat taken before the runtime came up,
+	// and handed on before its preparation reached it, has no consumer here
+	// to detach.
+	if !e.sandboxSeatAttached(handle) {
+		return
+	}
+	// FORGOTTEN WHETHER OR NOT THE DETACH LANDS. A re-acquisition that
+	// found the mark would skip its own attach, and if the detach did in
+	// fact take the consumer down the seat would collect no completion at
+	// all; attaching again beside one that survived is a second competing
+	// consumer over the same coordinator, which settles each delivery once.
+	e.markSandboxSeat(handle, false)
 	control, group := topics.AgentControl(handle), topics.AgentControlGroup(handle)
 	if control == "" {
 		return
@@ -1561,10 +1746,8 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 // It is NOT "does this seat have a run waiting for an answer" — a parked run
 // frees its seat by design. See [sandbox.Coordinator.SeatRuns].
 func (e *Engine) SeatHeldBySandbox(handle string) bool {
-	if e.sandboxCoordinator == nil {
-		return false
-	}
-	return e.sandboxCoordinator.SeatHeldBySandbox(handle)
+	held, _ := e.sandboxSeatRuns(handle)
+	return held
 }
 
 // sandboxLLM resolves the model a coding run works under, and the credential

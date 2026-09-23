@@ -225,6 +225,20 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	applied = append(applied, "company")
+	// THE REVISION'S SANDBOX MANAGER, built HERE — beside the company it is
+	// a part of, before anything below mutates this node — because a
+	// catalogue that cannot be built is a revision that cannot be served:
+	// its code-enabled seats would plan around boxes nobody can mint. It was
+	// built only where a coordinator already existed, so on every other
+	// node a broken block was published rather than refused. Nil is a
+	// company that reaches no sandbox cell, which is not a failure.
+	sandboxManager, err := buildSandbox(next.Config, e.resolver(), e.sandboxOtel)
+	if err != nil {
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the revision's providers.sandbox could not be built; "+
+				"this node still serves the previous epoch")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
 	// THE NATIVE RUNTIME, on a node whose first company on a native backend
 	// this is — before the tools, which are registered only where its
 	// halves exist, and before the inbound edge, whose parsers include its
@@ -239,6 +253,20 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	}
 	if startedNative {
 		applied = append(applied, "native")
+	}
+	// THE SANDBOX RUNTIME, on a node that has never run one and whose
+	// revision reaches a sandbox cell — before the tools for the reason the
+	// native runtime is: run_sandbox and an agent-mode executor are offered
+	// only where it exists. See [Engine.startSandbox], and the bug it fixes.
+	startedSandbox, err := e.startSandbox(ctx, sandboxManager)
+	if err != nil {
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the code sandbox could not be started for this revision; "+
+				"the previous epoch is still current")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
+	if startedSandbox {
+		applied = append(applied, "sandbox_runtime")
 	}
 	// Equipped before it is published, for the same reason as at boot: a
 	// turn can start the instant the pointer moves, and a revision that
@@ -268,21 +296,17 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// The sandbox MANAGER is swapped, and only the manager: the coordinator
 	// and the waiter hold this process's busy set and poll loop, so
 	// rebuilding them would forget which seats are mid-run and start a
-	// second loop against the same rows. A revision whose provider block is
-	// broken is refused here rather than published — the alternative serves
-	// a company whose sandbox-enabled seats plan around a box that will
-	// never be minted.
-	if e.sandboxCoordinator != nil {
-		manager, err := buildSandbox(next.Config, e.resolver(), e.sandboxOtel)
-		if err != nil {
-			log.WarnContext(ctx, "config_apply_failed", "error", err,
-				"detail", "the revision's providers.sandbox could not be built; "+
-					"the previous epoch is still current")
-			return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
-		}
-		if manager != nil {
-			e.sandboxCoordinator.SetManager(manager)
-		}
+	// second loop against the same rows. The swap carries the backends of a
+	// cell the revision dropped for the runs still on it, and a revision
+	// with no catalogue changes nothing — see [sandbox.Coordinator.SetManager].
+	//
+	// HERE rather than beside the build, and it cannot fail: every stage
+	// that can refuse a node already serving a company has run, so a
+	// manager swapped in is one whose epoch is about to be published, and a
+	// refusal never leaves a node launching through a catalogue its
+	// current epoch does not have.
+	if rt := e.sandbox.Load(); rt != nil {
+		rt.coordinator.SetManager(sandboxManager)
 		applied = append(applied, "sandbox")
 	}
 

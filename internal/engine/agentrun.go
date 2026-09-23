@@ -49,7 +49,13 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 // expires on a four-hour clock.
 func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) error {
 	e := l.engine
-	manager, pending := e.sandboxManager(), e.sandboxPending
+	var (
+		manager *sandbox.Manager
+		pending sandbox.PendingStore
+	)
+	if rt := e.sandbox.Load(); rt != nil {
+		manager, pending = rt.coordinator.Manager(), rt.pending
+	}
 	if manager == nil || pending == nil {
 		return fmt.Errorf("this seat's executor is a coding CLI in agent mode, which "+
 			"runs in a box: configure providers.sandbox, or set `mode: text` on "+

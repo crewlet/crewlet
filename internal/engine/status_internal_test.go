@@ -704,7 +704,7 @@ func equipForCode(t *testing.T, e *Engine, pending sandbox.PendingStore) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	e.sandboxPending, e.sandboxCoordinator = pending, coordinator
+	e.useSandbox(pending, coordinator)
 }
 
 // suspendingModel hands its first round to the detaching tool, which is all it
@@ -808,8 +808,8 @@ func TestAParkedRunTakesItsIndicatorDown(t *testing.T) {
 // without [sandbox.CoordinatorOptions.Stopped] the indicator heartbeat outlives
 // the process.
 //
-// Driven through [Engine.buildSandboxRuntime] rather than a coordinator this
-// case assembled, because the whole defect class on this path is a complete
+// Driven through [Engine.startSandbox] rather than a coordinator this case
+// assembled, because the whole defect class on this path is a complete
 // subsystem with no caller: an option declared and never passed is exactly what
 // a test holding its own coordinator cannot see.
 //
@@ -822,10 +822,15 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	// The double, which is the whole catalogue this case needs: the run is
 	// settled before it ever has a box.
 	company.Config.Providers.Sandbox = &config.SandboxProvider{Fake: true}
-	if err := e.buildSandboxRuntime(company); err != nil {
-		t.Fatalf("buildSandboxRuntime: %v", err)
+	manager, err := buildSandbox(company.Config, e.resolver(), e.sandboxOtel)
+	if err != nil {
+		t.Fatalf("buildSandbox: %v", err)
 	}
-	if err := e.sandboxPending.BeginLaunch(t.Context(), sandbox.PendingRun{
+	if started, err := e.startSandbox(t.Context(), manager); err != nil || !started {
+		t.Fatalf("startSandbox = (%v, %v), want a runtime brought up", started, err)
+	}
+	rt := e.sandbox.Load()
+	if err := rt.pending.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: "wk-code", AgentHandle: "swe", Role: "SWE",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
@@ -849,7 +854,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 
 	// The run is settled rather than resumed: its record is deleted, its box
 	// reclaimed, and the turn suspended into it is over.
-	if err := e.sandboxCoordinator.FailRun(t.Context(), "wk-code",
+	if err := rt.coordinator.FailRun(t.Context(), "wk-code",
 		types.SandboxFailureSuspensionUnrecorded,
 		"the suspended conversation could not be written"); err != nil {
 		t.Fatalf("FailRun: %v", err)

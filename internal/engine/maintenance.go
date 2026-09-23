@@ -266,15 +266,15 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 // retirement that holds the seat's lease under owner and epoch.
 //
 // Through the sandbox coordinator, which reclaims each run's box, announces the
-// loss and finishes its record. A node without one (its company configured no
-// sandbox when it started) cannot reach a box, so it ends nothing, and it must
+// loss and finishes its record. A node without one (no company it has served
+// reached a sandbox cell) cannot reach a box, so it ends nothing, and it must
 // not let the retirement delete the subscriptions of a seat whose runs are still
 // recorded: it reads the fleet's run records itself, and refuses while the seat
 // has any. The duty's next holder, or this node once it runs a coordinator,
 // retires the seat instead.
 func (e *Engine) retireSeatRuns(ctx context.Context, handle, owner string, epoch int64) error {
-	if c := e.sandboxCoordinator; c != nil {
-		return c.RetireSeat(ctx, handle, owner, epoch)
+	if rt := e.sandbox.Load(); rt != nil {
+		return rt.coordinator.RetireSeat(ctx, handle, owner, epoch)
 	}
 	if e.backends == nil || e.backends.Fleet == nil {
 		return fmt.Errorf("engine: this node has no fleet store, so it cannot tell whether "+
@@ -286,9 +286,9 @@ func (e *Engine) retireSeatRuns(ctx context.Context, handle, owner string, epoch
 	}
 	if len(runs) > 0 {
 		return fmt.Errorf("engine: retired seat %q still has %d coding runs and this node runs no "+
-			"sandbox coordinator to end them (providers.sandbox was not configured when it started); "+
+			"sandbox coordinator to end them (no company it has served configures providers.sandbox); "+
 			"its mailbox is kept until a node that runs one holds the maintenance duty, or this "+
-			"node is restarted on a company that configures providers.sandbox", handle, len(runs))
+			"node applies a company that configures providers.sandbox", handle, len(runs))
 	}
 	return nil
 }

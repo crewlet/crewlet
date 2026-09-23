@@ -287,6 +287,18 @@ const (
 	// already running against those rows, is better finished than
 	// abandoned, and the seat leaves the moment it goes idle.
 	ReasonUnserviceable ReleaseReason = "unserviceable"
+
+	// ReasonUnprepared is a seat this node already holds that could not be
+	// made ready for something the company brought in AFTER the seat was
+	// taken — the code sandbox's control topic and run recovery, which a
+	// seat acquired before the node ran a sandbox never had.
+	//
+	// VOLUNTARY, for the reason ReasonUnserviceable is: the lease is good
+	// and the turn in flight runs against a node that is still correct, so
+	// it finishes; the seat goes back so that its next acquisition, here or
+	// on a peer, runs the whole preparation that failed — exactly as an
+	// acquisition failing the same step is refused.
+	ReasonUnprepared ReleaseReason = "unprepared"
 )
 
 // Fenced reports whether this release has lost exclusivity — whether a peer

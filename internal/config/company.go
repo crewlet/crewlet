@@ -1378,13 +1378,11 @@ func (c *Company) validateSandboxPlacement() error {
 
 	reached := c.SandboxPlacements()
 	if catalogue.Enabled() && len(reached) == 0 {
-		// A CATALOGUE NOTHING CAN RUN, and it is not merely inert. The
-		// engine builds a backend only for a cell something reaches, so
-		// zero reached cells means no manager, no coordinator, and
-		// `run_sandbox` registered for nobody — and the sandbox runtime is
-		// built ONCE AT BOOT, so a founder who later adds a sandbox-enabled
-		// seat live gets a clean apply and code work that silently never
-		// happens, for the life of the process.
+		// A CATALOGUE NOTHING CAN RUN. The engine builds a backend only
+		// for a cell something reaches, so zero reached cells means no
+		// manager, no runtime and `run_sandbox` registered for nobody: a
+		// block that reads as configuration and configures nothing, which
+		// is the reason an empty block is refused too.
 		//
 		// It is only reachable on an AMBIGUOUS catalogue: any catalogue
 		// that resolves a default reaches that default, precisely so a seat
@@ -1392,8 +1390,8 @@ func (c *Company) validateSandboxPlacement() error {
 		// or a seat, which is the other thing that would reach a cell.
 		p.add(at(field("providers.sandbox"), "default_run_in"), ErrMissing,
 			"this catalogue configures more than one place to run code (%s) and "+
-				"nothing names one, so no backend is built and no seat can ever "+
-				"run code here. Name the default, give a seat `run_in`, or remove "+
+				"nothing names one, so no backend is built and no seat can run "+
+				"code here. Name the default, give a seat `run_in`, or remove "+
 				"the block",
 			names(catalogue.available()))
 	}

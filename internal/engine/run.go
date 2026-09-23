@@ -176,14 +176,32 @@ type Engine struct {
 	batch *queue.BatchOptions
 
 	// sandbox is this node's code-work machinery: the coordinator holding
-	// the busy set, the waiter polling detached runs, and the durable row
-	// store behind both. On the ENGINE rather than on an epoch, because
-	// they are facts about this process — rebuilding them on an apply would
-	// forget which seats are mid-run and start a second poll loop against
-	// the same rows.
-	sandboxCoordinator *sandbox.Coordinator
-	sandboxWaiter      *sandbox.Waiter
-	sandboxPending     sandbox.PendingStore
+	// the busy set and the durable row store behind it. On the ENGINE
+	// rather than on an epoch, because they are facts about this process —
+	// rebuilding them on an apply would forget which seats are mid-run.
+	//
+	// AN ATOMIC POINTER, published whole and at most once — nil until the
+	// first company that reaches a sandbox cell, at boot or at an apply,
+	// never cleared — for the reason [Engine.native] is one: a node that
+	// booted with no sandbox has a seat host, a dispatcher and a tool loop
+	// reading it before an apply brings it up. Every reader loads it once.
+	// See [Engine.startSandbox].
+	sandbox atomic.Pointer[sandboxRuntime]
+
+	// sandboxWaiter is the completion poll, started once, on a node that
+	// publishes, the first time a runtime exists and the node does.
+	sandboxWaiter atomic.Pointer[sandbox.Waiter]
+
+	// sandboxPollInterval is Options.SandboxPollInterval, kept because an
+	// apply can be what starts the poll.
+	sandboxPollInterval time.Duration
+
+	// sandboxSeats are the seats whose sandbox control topic this node has
+	// attached, so a seat is attached exactly once however it came to be
+	// prepared — by its own acquisition, or by the apply that brought the
+	// runtime up while it was already held. See [Engine.prepareHeldSeats].
+	sandboxSeatsMu sync.Mutex
+	sandboxSeats   map[string]bool
 
 	// leaseTTL is the seat lease TTL, which is also the seat lease bucket's
 	// own age, resolved once from Tier A.
@@ -516,9 +534,10 @@ type Options struct {
 	// SandboxRuns reports what a seat's detached runs mean for its inbox:
 	// whether one HOLDS the seat — a job outlasting any broker ack window,
 	// so the seat's mail is parked — and whether one is waiting for a
-	// person's answer, which any delivery might be. Nil answers no to both,
-	// which is correct for a build with no sandbox provider wired: a seat
-	// that cannot start a detached run is never in either state.
+	// person's answer, which any delivery might be. Nil reads this engine's
+	// own coordinator, live — no to both until one exists, which is correct
+	// for a node that has never run code: a seat that cannot start a
+	// detached run is never in either state.
 	//
 	// ONE SEAM FOR BOTH, because the two move together: a run that parks on
 	// a question stops holding its seat in the same moment it starts
@@ -548,6 +567,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// serve permanently rather than one that fails on the way up.
 	if err := config.CheckTiers(opts.Bootstrap, opts.Company); err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
+	}
+	// THE COMPLETION POLL'S CADENCE, whether or not this node will ever run a
+	// sandbox: an apply can bring it its first, and the poll starts there.
+	// See [checkSandboxPollInterval].
+	if err := checkSandboxPollInterval(opts.SandboxPollInterval); err != nil {
+		return nil, err
 	}
 
 	// EVERYTHING THAT CAN FAIL WITH NOTHING OPEN COMES FIRST, which is why
@@ -631,14 +656,16 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		boot:     opts.Bootstrap,
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
-		mcp:         mcp.NewBridge(nil),
-		sandboxOtel: otel,
-		bridge:      bridge,
-		metrics:     opts.Metrics,
-		mode:        mode,
-		incarnation: incarnation,
-		id:          nodeID,
-		startedAt:   time.Now().UTC(),
+		mcp:                 mcp.NewBridge(nil),
+		sandboxOtel:         otel,
+		sandboxPollInterval: opts.SandboxPollInterval,
+		sandboxSeats:        map[string]bool{},
+		bridge:              bridge,
+		metrics:             opts.Metrics,
+		mode:                mode,
+		incarnation:         incarnation,
+		id:                  nodeID,
+		startedAt:           time.Now().UTC(),
 		// Built before equip, which is what writes the company's own
 		// numbers into it, and before node.New, which hands the same
 		// value to every seat attachment.
@@ -753,11 +780,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// from a company — the sandbox backends it configures, the native
 	// runtime its backends ask for, the tools its seats are given — and an
 	// unconfigured node has none of them to build. The apply that brings it
-	// its first revision equips it and starts the native runtime then
-	// ([Engine.startNativeFor]). The sandbox coordinator is the exception:
-	// it is built here or not at all, so a first company that configures
-	// `providers.sandbox` is served without `run_sandbox` until a restart —
-	// the limitation docs/concepts/code-sandbox.md states.
+	// its first revision builds all of it then: the native runtime
+	// ([Engine.startNativeFor]) and the sandbox runtime
+	// ([Engine.startSandbox]), each before that apply equips.
 	if company != nil {
 		// BEFORE equip, because equip registers run_sandbox and only a
 		// node with a coordinator can offer it: a tool whose dependency is
@@ -765,7 +790,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// engine that equipped first would build a code-enabled company
 		// whose seats have no code tool and plan around one anyway.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := e.buildSandboxRuntime(company); err != nil {
+		if err := e.startSandboxFor(ctx, company); err != nil {
 			return nil, fmt.Errorf("engine: sandbox: %w", err)
 		}
 		// BEFORE equip too, and for exactly the same reason: the ten
@@ -943,7 +968,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
-	if err := e.startSandboxWaiter(ctx, opts.SandboxPollInterval); err != nil {
+	if err := e.startSandboxWaiter(ctx); err != nil {
 		return nil, fmt.Errorf("engine: sandbox waiter: %w", err)
 	}
 	e.startMaintenance(ctx)
@@ -1016,8 +1041,13 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.Conditions == nil {
 		runs := opts.SandboxRuns
-		if runs == nil && e.sandboxCoordinator != nil {
-			runs = e.sandboxCoordinator.SeatRuns
+		if runs == nil {
+			// READ LIVE, never bound here: this runs once, in New, and on
+			// a node whose first sandbox company arrives by apply there is
+			// no coordinator yet to bind — so every delivery after that
+			// apply was screened as though no run could exist, and a seat
+			// with a job still running took new turns beside it.
+			runs = e.sandboxSeatRuns
 		}
 		d.Conditions = e.conditionsFor(runs)
 	}
@@ -1048,13 +1078,17 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Pause == nil {
 		d.Pause = e.pause
 	}
-	if d.Answer == nil && e.sandboxCoordinator != nil {
+	if d.Answer == nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
 		// exported and tested since the clarification path was written, and
 		// nothing in the engine called it — so a coding run that asked a
 		// person a question waited out its pause TTL however promptly they
 		// replied.
-		d.Answer = e.sandboxCoordinator.TryResumeFromAnswer
+		//
+		// LIVE, for the reason the conditions above are: bound here, a
+		// node whose sandbox arrived by apply offered no reply to any
+		// parked run for the life of the process.
+		d.Answer = e.answerParkedRun
 	}
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred

@@ -446,9 +446,9 @@ dashboard prompts for the token on first load. See
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
 with the API still serving — you can then bootstrap live without restarting.
 The first revision brings up everything the company needs, the engine's own
-tracker and knowledge base included, with their projects and spaces; only a
-`providers.sandbox` block waits for the next restart
-([Code Sandbox](../concepts/code-sandbox.md)):
+tracker and knowledge base included, with their projects and spaces, and the
+[code sandbox](../concepts/code-sandbox.md) when it configures
+`providers.sandbox`:
 
 ```bash
 curl -X PUT http://localhost:8000/config \
