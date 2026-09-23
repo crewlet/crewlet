@@ -71,16 +71,12 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	// cleaned, which leaves a tree that diffs plausibly and serves a blank
 	// page.
 	//
-	// IT DOES NOT CLAIM THE NAMES ARE HASHED, which is what it used to say on
-	// both counts and could not see either way: `[^"]+` matches `index` as
-	// happily as `index-Cd0p1oTg`, so the assertion was true of every build
-	// and the comment was describing a check nobody had written. The stated
-	// consequence was wrong too — an unhashed name was said to put "a stale
-	// module in every reader's browser", which internal/api/dashboard.go
-	// forecloses: every asset answers `Cache-Control: no-cache` with an ETag
-	// derived from the bytes, so a changed file is picked up on the next
-	// request whatever it is called. What pins the caching contract is
-	// TestAnUnchangedAssetRevalidatesCheaply, where it can fail.
+	// It does not claim the names are hashed: `[^"]+` matches `index` as
+	// happily as `index-Cd0p1oTg`. That claim is
+	// TestEveryFileUnderAssetsIsContentHashed's, and it matters now — every
+	// file under assets/ is served `immutable` for a year, so a name that
+	// does not change with its bytes would pin a stale module in every
+	// reader's browser until they cleared it.
 	entry := regexp.MustCompile(`src="(/static/dashboard/assets/[^"]+\.js)"`)
 	sheet := regexp.MustCompile(`href="(/static/dashboard/assets/[^"]+\.css)"`)
 	if !entry.Match(shell) {
@@ -278,6 +274,73 @@ func TestTheShellLoadsFromTheBinary(t *testing.T) {
 	// fails silently in a browser — the text simply renders in the fallback.
 	if fonts < 4 {
 		t.Errorf("only %d font faces reached from the stylesheet, want 4", fonts)
+	}
+}
+
+// hashedName is the shape the build writes under assets/: the module's or
+// asset's own name, a dash, Rolldown's content hash — eight characters of the
+// base64url alphabet, its default — and the extension.
+//
+// EXACTLY eight, because a looser count passes ordinary words:
+// `settings-overview-panel.js` satisfies eight-or-more. A bundler bump that
+// changes the length fails here, loudly, and the fix is this pattern.
+//
+// It is a SHAPE, and a shape is all a Go test can check: the hash is the
+// bundler's, over its own chunk graph, and nothing here can recompute it. So
+// a fixed name that happens to end in a dash and eight such characters
+// (`use-keyboard.js`) would pass. Every way a hash has actually gone missing
+// from a build — `[hash]` dropped from a file-name pattern, an emitFile with
+// a fixed name, a `public/assets/` directory Vite copies verbatim — names the
+// file after its module alone (`index.js`, `react.js`,
+// `rolldown-runtime.js`), and each of those fails.
+var hashedName = regexp.MustCompile(`^.+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$`)
+
+// TestEveryFileUnderAssetsIsContentHashed holds the built tree to the promise
+// the server makes about it.
+//
+// internal/api/dashboard.go serves everything under dashboard/assets/ as
+// `public, max-age=31536000, immutable` — a browser that has the file never
+// asks for it again, reload or not. That is correct only because the build
+// names every file there `<name>-<hash>.<ext>`, so different bytes are a
+// different URL. A file under assets/ without one — a plugin's emitFile with
+// a fixed name, a `public/assets/` directory Vite copies verbatim, a
+// `chunkFileNames` that dropped `[hash]` — would be pinned in every reader's
+// browser for a year with nothing to say the page is running old code.
+//
+// It reads what the BINARY embeds, the tree the server answers from, and
+// checks the server's answer for each file as well as its name.
+func TestEveryFileUnderAssetsIsContentHashed(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+
+	names := 0
+	err := fs.WalkDir(static.FS(), "dashboard/assets", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		names++
+		if !hashedName.MatchString(path.Base(p)) {
+			t.Errorf("%s is under assets/ without a content hash in its name, and "+
+				"everything there is served immutable for a year: a changed file "+
+				"under this name would never reach a browser that has it. Emit it "+
+				"as assets/[name]-[hash][extname], or outside assets/", p)
+		}
+		res := fetch(t, a, "/static/"+p, nil)
+		if got := res.Header.Get("Cache-Control"); got != forever {
+			t.Errorf("/static/%s: cache control = %q, want %q — the name is a "+
+				"version, so there is nothing to revalidate", p, got, forever)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the embedded assets/: %v", err)
+	}
+	// A FLOOR: the entry module, the React chunk and the stylesheet. A build
+	// that moved its output elsewhere would leave this walking an empty
+	// directory — or none — and passing.
+	if names < 3 {
+		t.Errorf("the embedded assets/ holds %d files; the entry, the React chunk "+
+			"and the stylesheet are three", names)
 	}
 }
 

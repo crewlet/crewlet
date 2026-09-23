@@ -174,6 +174,14 @@ export default defineConfig({
     // asks for it and requires the path to be under fonts/ — rather than any
     // filename, which is the design system's to choose. Everything else keeps
     // the hashed default.
+    //
+    // AND EVERYTHING ROUTED TO assets/ MUST CARRY [hash]. The engine serves
+    // that directory `immutable` for a year (internal/api/dashboard.go), which
+    // is correct only because a changed file is a new name; a fixed name there
+    // would pin a stale module in every reader's browser.
+    // TestEveryFileUnderAssetsIsContentHashed reads the built tree and fails
+    // on one. The entry and the chunks take Vite's default,
+    // `assets/[name]-[hash].js`.
     rollupOptions: {
       output: {
         assetFileNames: (asset) =>

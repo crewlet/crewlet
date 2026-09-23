@@ -1813,6 +1813,35 @@ and filter in the URL, and one file per screen.  `/dashboard` serves the
 shell; `/static/{path}` serves its assets.  The build output is
 COMMITTED, so `go build ./...` needs no Node.
 
+The shell and its assets are served under two caching classes, decided by
+where the build put the file:
+
+| Files | `Cache-Control` | Why |
+|---|---|---|
+| Everything under `/static/dashboard/assets/` — the entry module, every chunk, the stylesheet | `public, max-age=31536000, immutable` | Each name carries a content hash, so different bytes are a different URL. A browser that has the file never asks again, reload included |
+| Everything else — the shell (`/dashboard`), `/favicon.ico`, `/static/crewlet-icon.svg`, the fonts, the notices and `protocol.js` | `no-cache` | The name does not change with the bytes. The browser keeps its copy and revalidates it on every load, so a redeploy is picked up on the next one; the shell is what names the new hashed files |
+
+Every file answers with a strong `ETag`, and `If-None-Match` is read as a
+list under weak comparison, so `"a", "b"`, `W/"a"` and `*` each earn a
+`304`. `HEAD` and `Range` are answered too.
+
+**Text is gzipped for a client that asks for it**: HTML, JavaScript, CSS,
+SVG, JSON, plain text and the `.ico` favicon are compressed once per file
+per process, at gzip's best level, and served with `Content-Encoding: gzip`
+when the request's `Accept-Encoding` admits `gzip` (or `x-gzip`, or `*`)
+with a weight above zero and the result is smaller than the file. A member
+that names gzip outranks the wildcard, so `*, gzip;q=0` gets the file as it
+is, and so does a request with no `Accept-Encoding` at all — the clients that
+send none are scripts and probes, which would print the compressed bytes.
+Fonts and images are never recompressed: woff2 and PNG already are. The gzip
+representation has its own `ETag` (the identity tag with `-gz` before the
+closing quote), and every response for a file that has one carries
+`Vary: Accept-Encoding`, its `304` included. Measured on the committed build,
+the four files a first load fetches go from 1.47 MB to 401 KB. A reverse
+proxy in front of the engine needs no compression or caching rule of its own
+for the dashboard; one that compresses leaves an already-encoded response as
+it is.
+
 `/static/dashboard/THIRD_PARTY_NOTICES.txt` (served as `text/plain`) is the
 license text of every npm package the bundle contains, the design system's
 three among them, written by Vite's `build.license`, followed by the SIL Open
