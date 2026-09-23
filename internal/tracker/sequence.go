@@ -376,6 +376,11 @@ func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
 		},
 	})
 	switch {
+	case err == nil && answered.Outcome == statelog.OutcomeUnknown:
+		// THE LEDGER CANNOT VOUCH FOR THE TASK STEP, so its silence is not
+		// "the task has not applied" and filing it now could file it
+		// twice: the answer is the step's own, and it is not a landing.
+		return WriteResult{Result: answered}, nil
 	case err == nil:
 		return w.landedTask(ctx, answered, task.ID)
 	case !errors.Is(err, errTaskNotApplied):

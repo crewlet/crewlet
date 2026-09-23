@@ -1,6 +1,8 @@
 package statelog_test
 
 import (
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -300,4 +302,103 @@ func (shortWindowDomain) Stream() statelog.StreamSpec {
 	spec := probeDomain{}.Stream()
 	spec.Duplicates = shortWindow
 	return spec
+}
+
+// A REFUSAL IS NOT RETURNED FOR AN OPERATION THE LEDGER CANNOT VOUCH FOR —
+// unless it is about this node rather than the operation.
+//
+// A retry's rows already hold what its first copy did, and that is exactly
+// what makes a decision refuse: a move's root is already in the target, a
+// create's guarding row is already there, a version condition finds the
+// object moved by its own first copy. A domain whose decision only PROBES the
+// ledger refuses whenever it runs at all. So on a node whose ledger may have
+// lost the operation's row, the refusal is the ledger's silence read as an
+// answer, and it was returned before the ledger was ever asked.
+func TestARefusalTheLedgerCannotVouchForIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	refused := errors.New("the rows say somebody else did it")
+	probe := func(h *harness, op string) (statelog.Result, error) {
+		return h.pub.Publish(h.t.Context(), statelog.Request{
+			Subject: probeSubject("a"),
+			Scope:   statelog.ScopeSet{Paths: []string{"object.a"}},
+			OpID:    op,
+			Pattern: statelog.PatternArbitrated,
+			Decide: func(*sql.Tx, statelog.Stamp) (statelog.Decision, error) {
+				return statelog.Decision{}, refused
+			},
+		})
+	}
+	create := func(h *harness, op string) (statelog.Result, error) {
+		return h.pub.Publish(h.t.Context(), statelog.Request{
+			Subject: probeSubject("a"),
+			Scope:   statelog.ScopeSet{Paths: []string{"object.a"}},
+			OpID:    op,
+			Pattern: statelog.PatternCreate,
+			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				return statelog.Decision{Payload: probeRecord(stamp, op, "x")}, nil
+			},
+		})
+	}
+	minted := time.Now().Add(-time.Hour)
+
+	t.Run("a decision's refusal, minted before the sweep, answers unknown", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		h.sweep(minted.Add(time.Minute))
+		op := statelog.NewOpID(minted, "probe")
+		res, err := probe(h, op)
+		if err != nil || res.Outcome != statelog.OutcomeUnknown || res.OpID != op {
+			t.Fatalf("a refusing decision on an operation the ledger cannot "+
+				"vouch for = (%+v, %v), want unknown under %s", res, err, op)
+		}
+		if got := h.appends.appends.Load(); got != 0 {
+			t.Fatalf("appended %d record(s)", got)
+		}
+	})
+
+	t.Run("a create's guarding row, minted before the sweep, answers unknown", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		h.sweep(minted.Add(time.Minute))
+		h.rows.set(func(s *statelog.Snap) { s.Guard = true })
+		res, err := create(h, statelog.NewOpID(minted, "create"))
+		if err != nil || res.Outcome != statelog.OutcomeUnknown {
+			t.Fatalf("a create over a guarding row its own first copy may have "+
+				"written = (%+v, %v), want unknown — \"it already exists\" "+
+				"is what a re-run of a create that landed always finds", res, err)
+		}
+	})
+
+	t.Run("the same refusals stand where the ledger vouches", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		h.sweep(minted.Add(time.Minute))
+		after := minted.Add(2 * time.Minute)
+		if _, err := probe(h, statelog.NewOpID(after, "probe")); !errors.Is(err, refused) {
+			t.Fatalf("a refusing decision minted after the sweep = %v, want "+
+				"its refusal — nothing that far back was lost, so the ledger's "+
+				"silence is an answer", err)
+		}
+		h.rows.set(func(s *statelog.Snap) { s.Guard = true })
+		if _, err := create(h, statelog.NewOpID(after, "create")); !errors.Is(err, statelog.ErrExists) {
+			t.Fatalf("a create minted after the sweep over a guarding row = %v, "+
+				"want ErrExists", err)
+		}
+	})
+
+	t.Run("a refusal about this node stands either way", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		h.sweep(minted.Add(time.Minute))
+		h.rows.set(func(s *statelog.Snap) { s.Deleted = true })
+		_, err := create(h, statelog.NewOpID(minted, "create"))
+		var refusal *statelog.Unavailable
+		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonDeleted {
+			t.Fatalf("a create over a deletion marker on an operation the "+
+				"ledger cannot vouch for = %v, want the deleted refusal — it "+
+				"is true whether or not the operation applied, and names the "+
+				"remedy an unknown would hide", err)
+		}
+	})
 }

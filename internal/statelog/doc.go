@@ -117,8 +117,12 @@
 // VOUCH for the operation (Publisher.vouches): it cannot for one minted before
 // the watermark whose row it does not hold, and such a write is answered
 // `unknown` instead — the one answer that is true, and the one a retry can do
-// nothing wrong with. The resolution of a lost acknowledgement asks the same
-// question.
+// nothing wrong with. A decision that REFUSES asks the same question before
+// the refusal is returned, because rows holding the first application are
+// exactly what makes a re-run refuse — its root already moved, its guarding
+// row already there — and only a refusal about this node itself (an
+// [Unavailable]) stands without it. The resolution of a lost acknowledgement
+// asks it too.
 //
 // THE LEDGER TRAVELS INSIDE A SNAPSHOT, and so does its watermark
 // ([Domain.OpsTable]). That is what keeps an adoption from costing anything:

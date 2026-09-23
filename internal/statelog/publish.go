@@ -597,7 +597,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 	for round := 1; round <= casRounds; round++ {
 		snap, err := p.snapshot(ctx, req)
 		if err != nil {
-			return Result{Rounds: round}, err
+			return p.refusedUnlessUnvouched(ctx, req, round, err)
 		}
 		if snap.HeldOK {
 			// THIS OPERATION ALREADY APPLIED HERE, so this call is its
@@ -615,7 +615,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 			}, nil
 		}
 		if refusal := p.refuseFromSnapshot(req, snap); refusal != nil {
-			return Result{Rounds: round}, refusal
+			return p.refusedUnlessUnvouched(ctx, req, round, refusal)
 		}
 		if snap.Decision.Empty() {
 			// NOTHING TO PUBLISH IS A SUCCESS, not an error: an update
@@ -708,6 +708,59 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 	}
 	return Result{Rounds: casRounds}, fmt.Errorf("%w: %s kept changing under this write",
 		ErrConflict, req.Subject)
+}
+
+// refusedUnlessUnvouched is a refusal this round settled on, or `unknown`
+// where this node's operation ledger cannot vouch for the operation.
+//
+// A REFUSAL IS A DECISION TOO, and the ledger's gate before a publish exists
+// because a decision taken on rows that may already hold this operation's own
+// first application is about the wrong world. A refusal is the sharpest case
+// of it, since the rows refuse precisely BECAUSE that application happened: a
+// cross-project move re-run finds its root already in the target and refuses
+// it as somebody else's, a create finds its guarding row and calls the object
+// taken, an update conditioned on a version finds it moved by its own first
+// copy. On a node whose ledger may have lost the operation's row — its sweep,
+// or an adoption from a donor that scrubbed its ledger — the refusal was
+// returned before the ledger was ever asked, so a retry was told "no" where
+// the only true answer is that this node cannot say. A domain whose decision
+// only PROBES the ledger (it refuses whenever it runs, because running means
+// the ledger held no row) is the whole of this case: without the question,
+// its "somebody else did it" was the ledger's silence read as an answer.
+//
+// So for an operation the ledger cannot vouch for, every conclusion a round
+// can reach is `unknown` — publishing is answered so already — EXCEPT ONE THIS
+// NODE CANNOT SERVE AT ALL. An [Unavailable] is a fact about this node rather
+// than about the operation (it holds a record it cannot decode, it is behind,
+// the object is deleted for good), true whether or not the operation applied,
+// and it names the remedy — another node, or giving up — which an `unknown`
+// would hide.
+//
+// A LEDGER THAT CANNOT BE READ, or a caller that has gone, leaves the refusal
+// standing: an error the caller can act on beats an unknown this node could
+// not establish either.
+func (p *Publisher) refusedUnlessUnvouched(ctx context.Context, req Request,
+	round int, refusal error) (Result, error) {
+
+	var unavailable *Unavailable
+	if ctx.Err() != nil || errors.As(refusal, &unavailable) {
+		return Result{Rounds: round}, refusal
+	}
+	vouched, err := p.vouches(ctx, req)
+	if err != nil || vouched {
+		return Result{Rounds: round}, refusal
+	}
+	p.logger.WarnContext(ctx, "statelog_write_unvouched",
+		"domain", p.domain.Name(), "subject", req.Subject.String(),
+		"op_id", req.OpID, "minted_at", mintedAt(req.OpID),
+		"refusal", refusal.Error(),
+		"detail", "this operation was minted before this node's operation "+
+			"ledger may have lost rows, it holds no row saying whether the "+
+			"operation already applied, and its decision refused on rows that "+
+			"may hold that very application — so it is answered unknown "+
+			"rather than refused; a node whose ledger lost nothing that far "+
+			"back can answer it")
+	return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Rounds: round}, nil
 }
 
 // snapshot takes one round's snapshot, handing the domain's decision the

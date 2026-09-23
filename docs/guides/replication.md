@@ -109,7 +109,13 @@ back it may have. Each node deletes its rows thirty days after applying them,
 and records how far back each pass deleted. An operation minted before the
 watermark whose row is gone is answered **`unknown`** — before anything is
 published — rather than decided a second time, so a retry a month on is never
-applied twice. The thirty days are sized for the slowest real retrier, a seat
+applied twice. It is answered `unknown` rather than **refused**, too: a retry's
+rows already hold what its first copy did, which is exactly what makes a
+re-run refuse (a move finds its task already in the target project, a create
+finds its object already there), so on such an operation "no" would be the
+ledger's silence read as an answer. Only a refusal about the node itself — it
+holds a record it cannot read, or the object is deleted for good — stands
+either way. The thirty days are sized for the slowest real retrier, a seat
 that only runs on a schedule carrying an operation id across a long weekend; a
 write that is retried later than that is told `unknown`, and the operation's
 own record, if it landed, is on the log. The watermark travels with the ledger,
@@ -556,7 +562,7 @@ replication:
 | `statelog_record_gated` | `WARN` | A durable record applied nowhere, naming the gate — `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), and `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)). |
 | `statelog_write_gated` | `WARN` | The same, seen by the write that published it. |
 | `statelog_publish_unknown` | `WARN` | A write could not tell whether its record landed. The operation id is in the line; retry under that id, never a fresh one. |
-| `statelog_write_unvouched` | `WARN` | A write was answered `unknown` without being published, because its operation was minted (`minted_at`) before this node's operation ledger may have lost rows — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build, which arrives without its ledger — and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |
+| `statelog_write_unvouched` | `WARN` | A write was answered `unknown` rather than published or refused (a `refusal` field says what the decision refused), because its operation was minted (`minted_at`) before this node's operation ledger may have lost rows — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build, which arrives without its ledger — and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |
 | `statelog_reanchor_started`, `statelog_reanchored` | `WARN` | A generation transition of ONE domain. Both name the domain (`domain`), the one stream it moved (`stream`), the new generation, the stream's live creation instant (`stream_created_at`), the case (`case`: `recreated`, followed from its first surviving record; `restored`, followed from its end; or `abandoned`, followed from this node's own checkpoint with the records of the generation an evicted peer held void) and the new checkpoint (`cursor`); the start also names the instant the rows were keyed to before (`keyed_to`), this node's checkpoint (`position`) and where the log ends (`last_seq`) and the generation its rows stood at (`from_generation` — every generation strictly between it and the new one is abandoned), and the completion gives the stream's high-water mark before the reanchor (`prev_last_seq_seen`). A restored reanchor the operator ran with `-discard` names, on the start as `discarding` and on the completion as `discarded`, the sequence of the newest record written after the restore that it applied on no node (0 when it discarded none). No other domain's checkpoint moves, and the domain's applier resumes without a restart. |
 
 The snapshotter, the donor and the adopter write under the same component. The
