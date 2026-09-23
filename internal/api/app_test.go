@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -834,5 +835,46 @@ func TestHealthSendsAnEmptyDomainListRatherThanNull(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("domains = %v, want an empty list", got)
+	}
+}
+
+// HEALTH NAMES THE IDENTITY DUTIES THIS NODE ARMED, and at which interval.
+//
+// A duty that was never armed — a node with no workers, no secret store, no
+// provider — looks from every other vantage point exactly like one quietly
+// finding nothing to do: no record, no log line, no deleted key. This is the
+// one place an operator can read off which of them this node will run and how
+// often, and a node that armed none says so with `{}` rather than a null a
+// client would read as "cannot say".
+func TestHealthNamesTheIdentityDutiesThisNodeArmed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		armed map[string]time.Duration
+		want  map[string]any
+	}{
+		{"a worker node", map[string]time.Duration{
+			"iam_sweep": time.Hour, "iam_key_shred": 15 * time.Minute,
+		}, map[string]any{"iam_sweep": 3600.0, "iam_key_shred": 900.0}},
+		{"a node that armed none", nil, map[string]any{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := newApp(t, api.Options{
+				Runtime: &fakeRuntime{state: api.RuntimeState{
+					Posture: "serve", IdentityDuties: tc.armed,
+				}},
+				Sources: queries.Sources{Company: active(t)},
+			})
+			_, body := get(t, a, "/health")
+			got, ok := body["identity_duty_seconds"].(map[string]any)
+			if !ok {
+				t.Fatalf("identity_duty_seconds = %#v, want an object",
+					body["identity_duty_seconds"])
+			}
+			if !maps.Equal(got, tc.want) {
+				t.Errorf("identity_duty_seconds = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

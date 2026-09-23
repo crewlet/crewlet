@@ -157,9 +157,12 @@ type identityDuties struct {
 //
 // A NODE THAT RUNS NO IDENTITY DOMAIN ARMS NONE — a seats-only satellite
 // applies no identity records, so it has no rows to report on and no estate
-// to publish into. Within that, each duty is armed only where it has what it
-// needs: the probe needs a provider and custody, the key duty the company's
-// secret store.
+// to publish into — and NOR DOES ONE THAT RUNS NO WORKERS: every duty here is a
+// worker singleton, whose claim that node's roles gate refuses on every tick
+// ([Engine.workerDuty]), so arming them there would be loops that never run,
+// reported by [Engine.IdentityDuties] as duties that do. Within that, each duty
+// is armed only where it has what it needs: the probe needs a provider and
+// custody, the key duty the company's secret store.
 func (e *Engine) startIdentityDuties(ctx context.Context, boot *config.Bootstrap) {
 	duties := e.identityDutiesFor(boot)
 	if len(duties) == 0 {
@@ -183,12 +186,13 @@ func (e *Engine) startIdentityDuties(ctx context.Context, boot *config.Bootstrap
 }
 
 // IdentityDuties names the identity duties this node armed, with the interval
-// each runs at.
+// each runs at, and nil on a node that armed none.
 //
-// Exported for [Engine.Maintenance]'s reason: "is the identity estate being
-// kept, and how often" is an operator's question, and a duty that was never
-// armed looks from every other vantage point exactly like one quietly finding
-// nothing to do.
+// SERVED ON `GET /health` as `identity_duty_seconds`, because "is the identity
+// estate being kept here, and how often" is an operator's question, and a duty
+// that was never armed looks from every other vantage point exactly like one
+// quietly finding nothing to do. It says what this node WILL run when it holds
+// the lease; which node holds each lease is the coordination store's answer.
 func (e *Engine) IdentityDuties() map[string]time.Duration {
 	if e == nil || e.identity == nil {
 		return nil
@@ -216,7 +220,7 @@ func (e *Engine) stopIdentityDuties() {
 // duties, at which interval — without running a loop.
 func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
 	if e.native == nil || e.native.iamReader == nil || e.native.iamWriter == nil ||
-		boot == nil {
+		boot == nil || !e.profile.RunsWorkers() {
 		return nil
 	}
 	reader, writer := e.native.iamReader, e.native.iamWriter
@@ -292,15 +296,28 @@ func runIdentityDuty(ctx context.Context, duty identityDuty) {
 		if ctx.Err() != nil {
 			return
 		}
-		if mine(ctx, duty) && plan.held() {
-			duty.pass(ctx)
-		}
+		tickIdentityDuty(ctx, duty, plan)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+// tickIdentityDuty is one claim of one duty, reporting whether it ran the pass.
+//
+// THE CLAIM FIRST, AND THE SCHEDULE ASKED ONLY ON A HELD ONE. [passSchedule]
+// counts the claims this node WON, so asking it on a claim a peer won would
+// count that claim here: a node that lost the lease for a while would run
+// early the moment it won it back, or spend its first held claim's run on a
+// tick it never held.
+func tickIdentityDuty(ctx context.Context, duty identityDuty, plan *passSchedule) bool {
+	if !mine(ctx, duty) || !plan.held() {
+		return false
+	}
+	duty.pass(ctx)
+	return true
 }
 
 // passSchedule decides, claim by claim, when a duty that claims more often than

@@ -74,6 +74,14 @@ type RuntimeState struct {
 	// role: the domain appears here once the node is actually applying it.
 	Domains []string
 
+	// IdentityDuties are the identity estate's fleet-singleton duties THIS
+	// NODE armed, each with the interval it runs at when it holds the
+	// lease. Nil is "armed none", which is a real answer: a node running
+	// no identity domain, or no workers, arms none — and a duty that was
+	// never armed looks from every other vantage point exactly like one
+	// quietly finding nothing to do.
+	IdentityDuties map[string]time.Duration
+
 	// Seats are the handles this node is serving. The first question about
 	// any fleet, and one previously answerable only by reading three
 	// processes' logs at debug level.

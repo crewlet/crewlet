@@ -82,6 +82,14 @@ type Health struct {
 	// operator reads off which node is applying what.
 	Domains []string `json:"domains"`
 
+	// IdentityDutySeconds maps each identity duty this node armed to the
+	// interval it runs at, in seconds — `{}` on a node that armed none.
+	// Always an object, for Domains' reason: the engine always knows what
+	// it armed, so a null would be a claim this body never has to make. It
+	// is where an operator reads that the key duty is running at all, and
+	// at which interval the deactivation probe asks the provider.
+	IdentityDutySeconds map[string]float64 `json:"identity_duty_seconds"`
+
 	// StallLagSeconds is how far behind this node's watched duty is,
 	// present only when it is behind at all. It is the number that climbs
 	// towards the seat lease TTL, at which the watchdog ends the process —
@@ -208,6 +216,10 @@ func (a *App) health(ctx context.Context) Health {
 		// The floor is the store's own, not a number this package picked:
 		// it is what every read is bounded by.
 		EventHistorySeconds: int(store.EventHistory.Seconds()),
+		IdentityDutySeconds: make(map[string]float64, len(state.IdentityDuties)),
+	}
+	for name, every := range state.IdentityDuties {
+		body.IdentityDutySeconds[name] = every.Seconds()
 	}
 	body.Consistency = consistencyOf(a.report())
 	if state.StallLag > 0 {

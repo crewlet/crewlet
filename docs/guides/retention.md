@@ -759,6 +759,13 @@ than an hour later — and then on its interval.
 The fifth is the operation ledger's sweep, which runs in the ordinary
 maintenance tick on every node.
 
+A node arms these only if it runs the identity domain **and** the `workers`
+role: an ingress-only node applies the identity log but claims no singleton, so
+it arms none rather than running loops its roles would refuse on every tick.
+`identity_duty_seconds` on [`GET /health`](../reference/api-endpoints.md#the-health-envelope)
+names the ones a node armed and each interval — the only way to tell a duty
+that is running and finding nothing from one that was never armed.
+
 **The key duty exists because a removal is a key deletion.** The removal's rows
 commit first and the person's key is destroyed after, on every node that
 applies it — so a coordination store that blinks at that instant leaves a row

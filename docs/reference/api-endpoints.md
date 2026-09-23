@@ -2065,7 +2065,8 @@ that needs the rest of the envelope asks the `stream` query for it.
   "posture": "serve",
   "applied_epoch": 41,
   "seats": ["ceo", "cto"],
-  "domains": ["tracker", "vectors", "pages"],
+  "domains": ["tracker", "vectors", "pages", "chart", "iam"],
+  "identity_duty_seconds": {"iam_sweep": 3600, "iam_claims": 3600, "iam_key_shred": 900},
   "unproven_seconds": {"eng": 312.5}
 }
 ```
@@ -2084,6 +2085,7 @@ that needs the rest of the envelope asks the `stream` query for it.
 | `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
 | `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck`. The only place an operator can see *why* a node left rotation, since `/ready` answers a bare `503` either way. |
 | `domains` | The state-log domains **this node** applies, derived from `node.roles`. A fleet's members may legitimately run different sets, so this is how you read off which node is applying what — and the only other symptom of a node that declines a domain is a peer's board answering a question this node's copy cannot. Always a list: a node that runs no domain at all refuses to start, so this is never `null`. `crewlet validate` reports the same set from a Tier A document, before the node boots. |
+| `identity_duty_seconds` | Each [identity duty](../guides/retention.md#the-identity-duties) **this node** armed, mapped to the interval it runs at, in seconds, whenever it holds that duty's lease. `{}` on a node that armed none — one running no identity domain, or no `workers` role, since every one of them is a worker singleton. A duty that was never armed looks from every other vantage point exactly like one quietly finding nothing to do, so this is where you read that the key duty is running at all (it needs the company's secret store) and at what interval the deactivation probe asks your provider (it needs an `oidc` block). Which node holds each lease right now is the coordination store's answer, not this node's. |
 | `applied_epoch` | The activation epoch this node last applied. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |

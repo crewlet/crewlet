@@ -3,11 +3,15 @@ package engine_test
 import (
 	"maps"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE IDENTITY DUTIES ARE ARMED WHERE THEIR INPUTS ARE, and nowhere else.
@@ -24,6 +28,10 @@ import (
 //     operator's `deactivation_probe` — the interval that was once dropped on
 //     the way from Tier A to the flow.
 //  3. A seats-only satellite runs no identity domain and arms nothing.
+//  4. An ingress-only node RUNS the domain and still arms nothing: every duty
+//     is a worker singleton its roles gate would refuse on every tick, and
+//     loops that never run reported as armed duties are exactly the
+//     look-alike this case exists to rule out.
 func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 	t.Parallel()
 	storeDir := func(b *config.Bootstrap) {
@@ -75,4 +83,61 @@ func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 			t.Fatalf("a node running no identity domain armed %v", got)
 		}
 	})
+
+	t.Run("an ingress-only node", func(t *testing.T) {
+		t.Parallel()
+		e := newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			storeDir(b)
+			b.Node.Roles = []string{"ingress"}
+		})})
+		if !slices.ContainsFunc(e.Domains(), func(d statelog.Domain) bool {
+			return d.Name() == iamdomain.Domain{}.Name()
+		}) {
+			t.Fatalf("precondition: an ingress node runs %v, and this case is about "+
+				"one that runs the identity domain", e.Domains())
+		}
+		if got := e.IdentityDuties(); len(got) != 0 {
+			t.Fatalf("a node that runs no workers armed %v", got)
+		}
+	})
+}
+
+// EVERY IDENTITY DUTY IS A LEASE-CLAIMED FLEET SINGLETON.
+//
+// Each duty's claim is the node's own `worker:` lease on the duty's name, so a
+// fleet runs each pass on exactly one node per tick — the sweep publisher and
+// the probe above all, which write records and ask somebody else's identity
+// provider. A duty armed with no claim runs on EVERY node, and nothing else in
+// this package would notice: the pass still runs, the records it writes are
+// still accepted. So the case reads the coordination store after the first
+// tick, which every duty takes at arming: each armed duty's lease is held, by
+// this node.
+func TestEveryIdentityDutyIsALeaseClaimedSingleton(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})})
+	armed := e.IdentityDuties()
+	if len(armed) == 0 {
+		t.Fatal("precondition: a worker node running the identity domain armed no duty")
+	}
+	owner := e.Node().Owner()
+	deadline := time.Now().Add(30 * time.Second)
+	for name := range armed {
+		for {
+			lease, err := e.Backends().Coord.Get(t.Context(), coord.WorkerResource(name))
+			if err != nil {
+				t.Fatalf("read the lease of %s: %v", name, err)
+			}
+			if lease != nil && lease.Owner == owner {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("duty %s ran its first tick with no lease held by this node "+
+					"(%+v): it is not a singleton, so every node in a fleet runs it",
+					name, lease)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 }

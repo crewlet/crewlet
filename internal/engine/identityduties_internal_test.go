@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"context"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -123,5 +126,56 @@ func TestADuplicatedAddressIsNeverLoggedByItsBlind(t *testing.T) {
 			t.Errorf("%s: the warning does not name the holders, which are "+
 				"what an operator acts on", tc.kind)
 		}
+	}
+}
+
+// A CLAIM THIS NODE DID NOT HOLD NEITHER RUNS THE PASS NOR ADVANCES THE
+// SCHEDULE.
+//
+// A duty that claims more often than it runs counts the claims it WON, so a
+// claim a peer won — or one the store could not answer — must not be counted
+// here: counted, a node that lost the lease for a while would run early the
+// moment it won it back. The sequence below is three claims per run, with a
+// lost claim and an unanswerable one before the first run is due again; held
+// claims are the only ones counted, so the second run lands on the fourth HELD
+// claim, which is the seventh tick.
+func TestALostClaimNeitherRunsNorAdvancesTheSchedule(t *testing.T) {
+	t.Parallel()
+	blip := errors.New("coordination store: no responders")
+	type answer struct {
+		held bool
+		err  error
+	}
+	claims := []answer{
+		{held: true},  // 1: the first held claim runs
+		{held: false}, // a peer won it
+		{err: blip},   // nobody could say
+		{held: true},  // held claim 2
+		{held: true},  // held claim 3
+		{held: false}, // a peer again
+		{held: true},  // held claim 4: runs
+		{held: true},  // held claim 5
+	}
+	next := 0
+	passes := 0
+	duty := identityDuty{
+		name: "iam_test",
+		claim: func(context.Context) (bool, error) {
+			a := claims[next]
+			next++
+			return a.held, a.err
+		},
+		pass: func(context.Context) { passes++ },
+	}
+	plan := newPassSchedule(3)
+	var ran []int
+	for tick := 1; tick <= len(claims); tick++ {
+		if tickIdentityDuty(t.Context(), duty, plan) {
+			ran = append(ran, tick)
+		}
+	}
+	if !slices.Equal(ran, []int{1, 7}) || passes != 2 {
+		t.Errorf("ran at ticks %v (%d passes), want [1 7] — a claim this node "+
+			"did not hold was counted towards its schedule", ran, passes)
 	}
 }

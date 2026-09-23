@@ -122,6 +122,10 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		// a second derivation on this surface is how a probe comes to
 		// name a set the appliers do not match.
 		Domains: domainNames(r.engine.Domains()),
+		// WHICH IDENTITY DUTIES THIS NODE ARMED, off the engine's own
+		// record of the loops it started — the same answer the arming
+		// decision produced, never a second derivation from the roles.
+		IdentityDuties: r.engine.IdentityDuties(),
 		// The seats this node could not prove it let go of, and for how
 		// long. The one fleet fault that is silent everywhere else: the
 		// lease is still ours, so no peer claims the seat, and the host
