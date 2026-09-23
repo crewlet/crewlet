@@ -114,15 +114,17 @@ type retention struct {
 	//
 	// TAKEN ON THE TICK AND READ BY THE REPORT, because the measurement is
 	// a scan of the whole source corpus and a report is assembled on every
-	// operator request, every dashboard poll and every alarm beat. It and
-	// each log's daily intake are the ONLY alarm inputs measured at the
-	// trim's [statelog.TrimInterval] — both are scans, and a quarter-hour is the
-	// resolution each is honest at, since neither summarises anything that
-	// moves faster than a corpus or a day. Every other input the reading
-	// carries — apply lag, the backup register, the maintenance window,
-	// free space, the windowed metrics and the bindings' observation — is
-	// re-read on every [statelog.AlarmInterval] beat. See
-	// [retention.measureCoverage] and [retention.heartbeat].
+	// operator request, every dashboard poll and every alarm beat. It, each
+	// log's daily intake and the store's connection-pool waits are the ONLY
+	// alarm inputs measured at the trim's [statelog.TrimInterval] — two
+	// scans and a delta of cumulative counters, each honest at a
+	// quarter-hour because none summarises anything that moves faster than
+	// a corpus, a day or a tick. Every other input the reading carries —
+	// apply lag, the backup register, the maintenance window, free space,
+	// the other windowed metrics, the bindings' observation, each log's
+	// held record and whether each log's floor can be read — is re-read on
+	// every [statelog.AlarmInterval] beat. See [retention.measureCoverage]
+	// and [retention.heartbeat].
 	coverFraction float64
 	coverKnown    bool
 
