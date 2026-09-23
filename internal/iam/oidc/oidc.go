@@ -53,8 +53,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // FlightTTL is how long a login may take between the two requests.
@@ -140,15 +138,11 @@ type Config struct {
 	// rejects and a config that looks right.
 	RedirectURI string
 
-	// GroupGrants maps a provider group to the capabilities it confers.
-	//
-	// THE GRANTS RIDE INTO THE SESSION rather than onto the person: two
-	// sessions from two providers would otherwise write each other's
-	// grants onto one row, and a person who has not signed in would carry
-	// grants nobody can see the source of. A person who has never signed
-	// in has no carried grants at all, which is the deprovisioning
-	// property the mapping exists for.
-	GroupGrants map[string][]iam.Grant
+	// GroupsClaim is the ID token claim that carries the person's groups,
+	// or empty for a deployment that maps none — in which case no claim is
+	// read at all. See rawClaims.groups for why it is one name and never a
+	// list of aliases.
+	GroupsClaim string
 
 	// RequireACR is the authentication context this company insists on —
 	// a provider's name for "this person used a second factor". Empty
@@ -217,20 +211,6 @@ func (c Config) Validate() error {
 				"authenticated, and a public client here would let anybody "+
 				"who intercepts a code redeem it"))
 	}
-	for group, grants := range c.GroupGrants {
-		for _, grant := range grants {
-			if !grant.Valid() {
-				// A GRANT THIS BUILD CANNOT NAME IS A REFUSAL HERE,
-				// unlike one arriving on a peer's row: this is a value
-				// an operator typed, so the honest answer is to say it
-				// is not a capability rather than to confer nothing and
-				// look configured.
-				problems = append(problems, fmt.Errorf(
-					"`oidc.group_grants[%q]` names %q, which is not a "+
-						"capability this build knows", group, grant))
-			}
-		}
-	}
 	return errors.Join(problems...)
 }
 
@@ -240,29 +220,4 @@ func (c Config) Probe() time.Duration {
 		return c.DeactivationProbe
 	}
 	return DefaultDeactivationProbe
-}
-
-// GrantsFor is the capabilities a set of provider groups confers.
-//
-// THE UNION, intersected by the caller with the node's own ceiling at DECISION
-// time rather than here — lowering a ceiling must not require a write, and a
-// set computed at sign-in and stored would be exactly that.
-//
-// A GROUP THE MAPPING DOES NOT NAME CONFERS NOTHING and is not an error: a
-// provider's group list is whatever the directory happens to hold, and
-// refusing a login because somebody is in a team this company never mapped
-// would make every new group at the provider an outage here.
-func (c Config) GrantsFor(groups []string) []iam.Grant {
-	seen := map[iam.Grant]bool{}
-	var out []iam.Grant
-	for _, group := range groups {
-		for _, grant := range c.GroupGrants[group] {
-			if !grant.Valid() || seen[grant] {
-				continue
-			}
-			seen[grant] = true
-			out = append(out, grant)
-		}
-	}
-	return out
 }

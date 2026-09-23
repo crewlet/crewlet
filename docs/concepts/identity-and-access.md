@@ -772,6 +772,33 @@ administrator, once.
 There is no `auto_provision`. It is the same decision written as a config
 field, and a field is how it ends up on by accident.
 
+### Group grants ride the session that presented them
+
+`api.auth.oidc.group_grants` maps groups onto grants, and the groups are read
+from the **one** ID-token claim `api.auth.oidc.groups_claim` names — `groups`
+at most providers, `roles` or a namespaced URL at others. One name and never a
+list of aliases, because trying several would be a guess about which claim
+carries authority; an empty name reads none, and naming none while mapping
+groups is refused by validation, since that mapping could never apply. A claim
+that is neither a list of names nor one name refuses the sign-in naming the
+claim, rather than signing somebody in with nothing their mapping promised.
+The result of that mapping is recorded **on the session the sign-in opens**, never
+on the person: a person's groups are known only at a login and are true only
+for as long as the provider's assertion is, so written to the person's row they
+would outlive the provider saying them, and two sessions from two providers
+would overwrite each other's. What a signed-in person holds is therefore
+
+> (the grants declared on their own record ∪ the grants their session carries)
+> ∩ this node's `api.auth.max_grants`
+
+taken per node, per request. A union rather than a replacement, because the
+two answer different questions — a group removal at the provider must not
+silently revoke something an administrator granted here. A person who has not
+signed in through the provider carries nothing, and group-derived authority
+lapses with the session that presented it; a node that has not yet applied a
+brand-new session's row serves its reads on the declared set alone, which only
+ever narrows. `GET /auth/session` shows the effective set.
+
 ### The deactivation probe
 
 A provider that suspends or deletes an account tells nobody. Every other

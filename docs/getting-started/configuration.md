@@ -782,7 +782,9 @@ api:
     #   scopes: [openid, email, profile, groups, offline_access]  # unset asks
     #                             #   for openid, profile, email and offline_access;
     #                             #   a list REPLACES that set, openid always added
-    #   groups_claim: groups
+    #   groups_claim: groups      # the ONE id-token claim groups are read
+    #                             #   from. Empty reads none; required once
+    #                             #   group_grants maps anything
     #   deactivation_probe: 1h    # 5m..24h — the only thing that notices a
     #                             #   person disabled at the provider
     #   group_grants:

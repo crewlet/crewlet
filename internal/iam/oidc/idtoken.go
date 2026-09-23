@@ -3,6 +3,7 @@ package oidc
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -68,8 +69,9 @@ type Claims struct {
 	// does not administer.
 	EmailVerified bool
 
-	// Groups are the provider's group names, mapped to grants that ride
-	// into the session.
+	// Groups are the provider's group names, read from the claim
+	// [Config.GroupsClaim] names and mapped to grants that ride into the
+	// session. Empty when the deployment names no claim.
 	Groups []string
 
 	// ACR is the authentication context the provider asserts, and
@@ -173,11 +175,15 @@ func (c Config) Verify(ctx context.Context, keys Keys, raw, nonce string,
 			ErrRefused, len(claims.Audience), claims.AuthorizedParty)
 	}
 
+	groups, err := claims.groups(c.GroupsClaim)
+	if err != nil {
+		return Claims{}, fmt.Errorf("%w: %w", ErrRefused, err)
+	}
 	out := Claims{
 		Subject: claims.Subject, Issuer: claims.Issuer,
 		Email: claims.Email, Name: claims.Name,
 		EmailVerified: bool(claims.EmailVerified),
-		Groups:        claims.Groups, ACR: claims.ACR,
+		Groups:        groups, ACR: claims.ACR,
 	}
 	if claims.AuthTime > 0 {
 		out.AuthTime = time.Unix(claims.AuthTime, 0).UTC()
@@ -207,12 +213,63 @@ type rawClaims struct {
 	// vocabulary of its own.
 	ACR string `json:"acr,omitempty"`
 
-	// Groups is the claim's usual name. A provider that calls it
-	// something else is mapped at the provider, not here: a list of
-	// aliases would be a guess about which claim carries authority.
-	Groups []string `json:"groups,omitempty"`
-
 	AuthTime int64 `json:"auth_time,omitempty"`
+
+	// all is every claim the token carries, kept so the ONE claim this
+	// deployment names as carrying groups can be read whatever it is
+	// called. Nothing else reads it: the struct above is still what this
+	// engine acts on, for [Claims]' reason.
+	all map[string]json.RawMessage
+}
+
+// UnmarshalJSON decodes the named claims and keeps the whole set beside them.
+func (c *rawClaims) UnmarshalJSON(data []byte) error {
+	type named rawClaims // the same fields, without this method
+	if err := json.Unmarshal(data, (*named)(c)); err != nil {
+		return err
+	}
+	return json.Unmarshal(data, &c.all)
+}
+
+// groups reads the claim this deployment names as carrying the person's
+// groups.
+//
+// # The claim is NAMED BY THE OPERATOR, and nothing is guessed
+//
+// Providers disagree about it — `groups` at most, `roles` for an application's
+// own roles, a namespaced URL at the ones that insist custom claims carry one
+// — so the name is `api.auth.oidc.group_claim`'s to state. A LIST OF ALIASES
+// tried in turn would be a guess about which claim carries authority, and the
+// first alias an attacker could get a provider to emit would win. EMPTY READS
+// NO GROUPS AT ALL: a deployment that maps none does not have its logins'
+// authority depend on a claim nobody chose to trust.
+//
+// ABSENT IS NO GROUPS and not an error, because a person in no group is a
+// person; a single string is one group, because some providers flatten a
+// one-element list. ANY OTHER SHAPE REFUSES THE SIGN-IN, naming the claim: the
+// claim was named because it carries authority, and reading an object or a
+// number as "no groups" would leave an operator's mapping silently conferring
+// nothing, with a sign-in that looks like it worked.
+func (c rawClaims) groups(claim string) ([]string, error) {
+	if claim == "" {
+		return nil, nil
+	}
+	raw, ok := c.all[claim]
+	if !ok || string(raw) == "null" {
+		return nil, nil
+	}
+	var list []string
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list, nil
+	}
+	var one string
+	if err := json.Unmarshal(raw, &one); err == nil {
+		return []string{one}, nil
+	}
+	return nil, fmt.Errorf("the id token's %q claim is neither a list of "+
+		"group names nor one name, so this sign-in cannot say which groups "+
+		"it confers; fix the claim at the provider or name another in "+
+		"api.auth.oidc.groups_claim", claim)
 }
 
 // flexibleBool decodes a JSON bool or the strings "true" and "false".

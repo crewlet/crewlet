@@ -83,6 +83,14 @@ type SessionRow struct {
 	// rather than the person's: proof on one device says nothing about
 	// another, and a step-up re-proves by opening a new session.
 	ProvedAt time.Time
+
+	// GroupGrants are what the identity provider's groups conferred at the
+	// sign-in that opened this session, and nothing on any other method.
+	// The session's and never the person's: a person's groups are known
+	// only at a login, so the grants lapse with the session that presented
+	// them. The guard unions them with the person's declared set and
+	// clamps both to its ceiling.
+	GroupGrants []iam.Grant
 }
 
 // PersonRow is the holder's row.

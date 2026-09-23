@@ -422,6 +422,7 @@ func identityProvider(boot *config.Bootstrap) *oidc.Provider {
 		ClientID:          block.ClientID,
 		ClientSecret:      block.ClientSecret,
 		RedirectURI:       boot.API.ExternalBase() + auth.PathAuthOIDCCallback,
+		GroupsClaim:       block.GroupsClaim,
 		RequireACR:        block.RequireACR,
 		Scopes:            block.RequestedScopes(),
 		DeactivationProbe: block.DeactivationProbe(),

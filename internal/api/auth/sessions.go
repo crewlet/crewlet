@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -492,10 +493,17 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		// resolves through the chart's own former-handle trail, and
 		// taking the row would write audit rows under a handle nothing
 		// answers to.
-		Seat:      binding.Handle(),
-		SeatAt:    person.SeatAt,
-		Position:  binding.Seat.Unit,
-		Grants:    intersect(person.Grants, ceiling),
+		Seat:     binding.Handle(),
+		SeatAt:   person.SeatAt,
+		Position: binding.Seat.Unit,
+		// WHAT THE PERSON WAS GIVEN HERE AND WHAT THIS SESSION CARRIES,
+		// clamped to this node's ceiling. The carried half is the
+		// identity provider's group mapping, recorded on the session
+		// that presented it: it used to be merged into the sign-in's
+		// sighting and then dropped, so no group mapping ever conferred
+		// anything. The zero session — a row this node has not applied —
+		// carries nothing, which only ever narrows.
+		Grants:    intersect(union(person.Grants, v.Session.GroupGrants), ceiling),
 		Colleague: person.Colleague,
 		Stage:     person.Stage,
 		// WHEN THIS SESSION'S PROOF STOPS COUNTING. It used to be read
@@ -504,6 +512,25 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		// step-up surface at all — enrolling a second factor included.
 		ReauthAt: reauthDeadline(v.Session.ProvedAt, stepUp),
 	}
+}
+
+// union is every grant in either set, once each, in the order they were first
+// named.
+//
+// A UNION AND NEVER A REPLACEMENT, because the two answer different
+// questions: a person's declared grants are what this company gave them, and
+// the carried ones are what their directory membership said when they signed
+// in. Replacing either with the other would make a group removal at the
+// provider silently revoke something an administrator granted here, or an
+// administrator's edit silently drop what the provider asserted.
+func union(declared, carried []iam.Grant) []iam.Grant {
+	out := slices.Clone(declared)
+	for _, g := range carried {
+		if !slices.Contains(out, g) {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // reauthDeadline is the instant a proof taken at provedAt stops authorising a

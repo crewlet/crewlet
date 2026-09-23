@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -55,6 +56,9 @@ type provider struct {
 
 	mu     sync.Mutex
 	nonces map[string]string // code -> nonce
+
+	// groups is the groups claim every ID token carries, or none.
+	groups []string
 }
 
 const idpClientID = "crewlet"
@@ -90,12 +94,16 @@ func newProvider(t *testing.T) *provider {
 		p.mu.Lock()
 		nonce := p.nonces[r.Form.Get("code")]
 		p.mu.Unlock()
-		token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		claims := jwt.MapClaims{
 			"iss": p.URL, "aud": idpClientID, "sub": "subject-42",
 			"nonce": nonce,
 			"exp":   clock.Add(time.Hour).Unix(),
 			"iat":   clock.Add(-time.Minute).Unix(),
-		})
+		}
+		if len(p.groups) > 0 {
+			claims["groups"] = p.groups
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 		token.Header["kid"] = "k1"
 		raw, err := token.SignedString(key)
 		if err != nil {
@@ -145,11 +153,111 @@ func TestAnIdentityProviderSignInRedirectsBackAndIsAnnounced(t *testing.T) {
 	b := bootstrapFor(t)
 	b.API.Auth.Backend = config.AuthBackendOIDC
 	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
-	person := iamdomain.Sighting{
-		ID: "0192f00d-0000-7000-8000-00000000004c", Kind: iam.KindPerson,
-		Stage: iam.StageActive, Login: "sam.okoro",
-	}
 	audit := &recordingAudit{}
+	finished := signInThroughProvider(t, idp, b, func(o *authapi.Options) {
+		o.Audit = audit
+	})
+
+	if finished.Code != http.StatusFound || finished.Header().Get("Location") != "/work" {
+		t.Fatalf("the callback answered %d to %q (%s), want a redirect to /work",
+			finished.Code, finished.Header().Get("Location"), finished.Body)
+	}
+	bearer := false
+	for _, c := range finished.Result().Cookies() {
+		if c.Name == session.CookieName(b.API.ExternalBase()) && c.Value != "" {
+			bearer = true
+		}
+	}
+	if !bearer {
+		t.Error("the redirect carries no session cookie, so the browser arrives signed out")
+	}
+	emitted, failures := audit.snapshot()
+	if len(failures) != 0 {
+		t.Errorf("a sign-in that succeeded was counted as failing: %+v", failures)
+	}
+	if len(emitted) != 1 {
+		t.Fatalf("announced %d events, want the one session", len(emitted))
+	}
+	started2, ok := emitted[0].(types.IAMSessionStarted)
+	if !ok || started2.Method != types.SignInOIDC || started2.Person != linkedPerson.ID ||
+		started2.Remote != "198.51.100.7" {
+		t.Errorf("announced %#v", emitted[0])
+	}
+}
+
+// A PROVIDER'S GROUPS RIDE THE SESSION THEY OPENED, AND ONLY THAT SESSION.
+//
+// The group mapping turns the ID token's groups claim into grants. The
+// callback used to merge them into the sighting it signed in and then drop
+// them — nothing downstream reads a sighting's grants — so no mapping ever
+// conferred anything. They are recorded on the session record, where the
+// guard unions them with the person's declared set at decision time, and
+// never on the person, so they lapse with the session that presented them.
+func TestAProvidersGroupsRideTheSessionTheyOpened(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	idp.groups = []string{"engineering", "oncall", "a-team-nobody-mapped"}
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{
+		Issuer: idp.URL, ClientID: idpClientID, GroupsClaim: "groups",
+		GroupGrants: map[string][]iam.Grant{
+			"engineering": {iam.GrantWorkWrite},
+			"oncall":      {iam.GrantWorkWrite, iam.GrantStateRead},
+		},
+	}
+	writer := &sessionRecorder{}
+	finished := signInThroughProvider(t, idp, b, func(o *authapi.Options) {
+		o.Writer = writer
+	})
+	if finished.Code != http.StatusFound {
+		t.Fatalf("the callback answered %d (%s)", finished.Code, finished.Body)
+	}
+	starts := writer.opened()
+	if len(starts) != 1 {
+		t.Fatalf("opened %d sessions, want one", len(starts))
+	}
+	want := []iam.Grant{iam.GrantWorkWrite, iam.GrantStateRead}
+	if got := starts[0].GroupGrants; !slices.Equal(got, want) {
+		t.Errorf("the session carries %v, want %v: the mapped union of the "+
+			"groups the provider asserted", got, want)
+	}
+}
+
+// sessionRecorder is a writer that remembers every session it opened.
+type sessionRecorder struct {
+	stubWriter
+	mu     sync.Mutex
+	starts []iamdomain.SessionStart
+}
+
+func (w *sessionRecorder) OpenSession(ctx context.Context,
+	in iamdomain.SessionStart) (iamdomain.SessionOpened, error) {
+
+	w.mu.Lock()
+	w.starts = append(w.starts, in)
+	w.mu.Unlock()
+	return w.stubWriter.OpenSession(ctx, in)
+}
+
+func (w *sessionRecorder) opened() []iamdomain.SessionStart {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.starts)
+}
+
+// linkedPerson is who the provider's subject is linked to.
+var linkedPerson = iamdomain.Sighting{
+	ID: "0192f00d-0000-7000-8000-00000000004c", Kind: iam.KindPerson,
+	Stage: iam.StageActive, Login: "sam.okoro",
+}
+
+// signInThroughProvider runs one whole round trip — the start, the provider,
+// the callback — from /work, and answers the callback's response.
+func signInThroughProvider(t *testing.T, idp *provider, b config.Bootstrap,
+	options func(*authapi.Options)) *httptest.ResponseRecorder {
+
+	t.Helper()
 	// THE LINK IS KEYED ON THE SUBJECT'S BLIND under the surface's own
 	// blinder, so the directory answers only for the subject this provider
 	// asserts.
@@ -173,9 +281,13 @@ func TestAnIdentityProviderSignInRedirectsBackAndIsAnnounced(t *testing.T) {
 	svc := buildWith(t, b, oidc.NewProvider(oidc.Config{
 		Issuer: idp.URL, ClientID: idpClientID, ClientSecret: "not-a-real-secret",
 		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
+		// THE CLAIM THE DEPLOYMENT NAMES, as the engine's own wiring
+		// hands it over.
+		GroupsClaim: b.API.Auth.OIDC.GroupsClaim,
 	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
-		o.Directory = linkedDirectory{blind: subjectBlind, person: person}
-		o.Audit, o.Cipher = audit, cipher
+		o.Directory = linkedDirectory{blind: subjectBlind, person: linkedPerson}
+		o.Cipher = cipher
+		options(o)
 	})
 	mux := http.NewServeMux()
 	svc.Routes(mux)
@@ -197,30 +309,5 @@ func TestAnIdentityProviderSignInRedirectsBackAndIsAnnounced(t *testing.T) {
 	}
 	finished := httptest.NewRecorder()
 	mux.ServeHTTP(finished, callback)
-
-	if finished.Code != http.StatusFound || finished.Header().Get("Location") != "/work" {
-		t.Fatalf("the callback answered %d to %q (%s), want a redirect to /work",
-			finished.Code, finished.Header().Get("Location"), finished.Body)
-	}
-	bearer := false
-	for _, c := range finished.Result().Cookies() {
-		if c.Name == session.CookieName(b.API.ExternalBase()) && c.Value != "" {
-			bearer = true
-		}
-	}
-	if !bearer {
-		t.Error("the redirect carries no session cookie, so the browser arrives signed out")
-	}
-	emitted, failures := audit.snapshot()
-	if len(failures) != 0 {
-		t.Errorf("a sign-in that succeeded was counted as failing: %+v", failures)
-	}
-	if len(emitted) != 1 {
-		t.Fatalf("announced %d events, want the one session", len(emitted))
-	}
-	started2, ok := emitted[0].(types.IAMSessionStarted)
-	if !ok || started2.Method != types.SignInOIDC || started2.Person != person.ID ||
-		started2.Remote != "198.51.100.7" {
-		t.Errorf("announced %#v", emitted[0])
-	}
+	return finished
 }

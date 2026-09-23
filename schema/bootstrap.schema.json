@@ -150,7 +150,7 @@
           "type": "object"
         },
         "groups_claim": {
-          "description": "The id-token claim carrying groups. Empty maps no groups.",
+          "description": "The id-token claim carrying groups. Empty maps no groups; required once group_grants maps any.",
           "type": "string"
         },
         "issuer": {

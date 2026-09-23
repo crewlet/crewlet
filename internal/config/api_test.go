@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"slices"
 	"strings"
 	"testing"
 
@@ -517,6 +518,18 @@ func TestTheOIDCBlockRefusesWhatWouldLetSomebodyElseIssueIdentities(t *testing.T
 	refuses(t, oidc(func(o *APIOIDC) {
 		o.GroupGrants = map[string][]iam.Grant{"ops": nil}
 	}), "confers nothing")
+	// A MAPPING WITH NO CLAIM TO READ never applies: the verifier reads the
+	// groups out of the claim groups_claim names and out of no other.
+	refuses(t, oidc(func(o *APIOIDC) {
+		o.GroupGrants = map[string][]iam.Grant{"ops": {iam.GrantStateRead}}
+	}), "groups_claim")
+	mapped := oidc(func(o *APIOIDC) {
+		o.GroupsClaim = "groups"
+		o.GroupGrants = map[string][]iam.Grant{"ops": {iam.GrantStateRead}}
+	})
+	if err := mapped.Validate(); err != nil {
+		t.Errorf("a mapping with its claim named was refused: %v", err)
+	}
 }
 
 // `openid` IS ADDED RATHER THAN REFUSED, because a scopes list that forgets it
@@ -758,6 +771,7 @@ func TestTheApiWarningsAreAdvisoryAndSayWhereTheConsequenceIs(t *testing.T) {
 		b.API.Auth.OIDC = &APIOIDC{
 			Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
 			Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
+			GroupsClaim: "groups",
 			GroupGrants: map[string][]iam.Grant{"ops": {iam.GrantSecretRead}},
 		}
 		named(t, b, "group_grants")
@@ -774,6 +788,7 @@ func TestASoundApiPostureWarnsAboutNothing(t *testing.T) {
 	b.API.Auth.OIDC = &APIOIDC{
 		Issuer: "https://acme.example.com", ClientID: "c", ClientSecret: "s",
 		Scopes:      []string{ScopeOpenID, ScopeOfflineAccess},
+		GroupsClaim: "groups",
 		GroupGrants: map[string][]iam.Grant{"ops": {iam.GrantStateRead}},
 	}
 	for _, w := range b.Warnings() {
@@ -795,5 +810,36 @@ func TestANodeServingNoApiWarnsAboutNoneOfIt(t *testing.T) {
 		if strings.HasPrefix(w.Path, "api.") {
 			t.Errorf("a node binding no port warned about its API: %s", w.Path)
 		}
+	}
+}
+
+// GROUP GRANTS ARE A UNION, AND AN UNMAPPED GROUP CONFERS NOTHING.
+//
+// A provider's group list is whatever the directory happens to hold, so
+// refusing a login because somebody is in a team this company never mapped
+// would make every new group at the provider an outage here; and a person is
+// in several groups, so what they carry must not depend on the order a
+// provider listed them in. This is the ONE copy of the rule — internal/iam/oidc
+// carried a second, which nothing in production called and which had already
+// drifted from this one.
+func TestGroupGrantsAreTheUnionAndAnUnmappedGroupIsNotAnError(t *testing.T) {
+	t.Parallel()
+	o := APIOIDC{GroupGrants: map[string][]iam.Grant{
+		"engineering": {iam.GrantWorkWrite},
+		"oncall":      {iam.GrantWorkWrite, iam.GrantStateRead},
+	}}
+	for _, order := range [][]string{
+		{"engineering", "oncall", "a-team-nobody-mapped"},
+		{"a-team-nobody-mapped", "oncall", "engineering"},
+	} {
+		got := o.GrantsFor(order)
+		if len(got) != 2 || !slices.Contains(got, iam.GrantWorkWrite) ||
+			!slices.Contains(got, iam.GrantStateRead) {
+			t.Errorf("groups %v confer %v, want work:write and state:read once each",
+				order, got)
+		}
+	}
+	if got := o.GrantsFor([]string{"a-team-nobody-mapped"}); len(got) != 0 {
+		t.Errorf("an unmapped group conferred %v", got)
 	}
 }

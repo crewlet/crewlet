@@ -5,11 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -69,6 +69,7 @@ func testConfig() oidc.Config {
 		Issuer: testIssuer, ClientID: testClientID,
 		ClientSecret: "not-a-real-secret",
 		RedirectURI:  "https://crewlet.example.com/auth/oidc/callback",
+		GroupsClaim:  "groups",
 	}
 }
 
@@ -130,6 +131,67 @@ func TestAValidIDTokenIsAcceptedAndRead(t *testing.T) {
 		t.Errorf("the acr reads %q", got.ACR)
 	case !got.AuthTime.Equal(at.Add(-2 * time.Minute)):
 		t.Errorf("auth_time reads %v", got.AuthTime)
+	}
+}
+
+// THE GROUPS ARE READ FROM THE CLAIM THE DEPLOYMENT NAMES, AND NO OTHER.
+//
+// Providers disagree about which claim carries groups, so the operator names
+// it in api.auth.oidc.groups_claim. The verifier used to read a fixed
+// `groups` claim whatever the setting said: a deployment that named `roles`
+// had its mapping confer nothing, and one that named no claim — "this
+// deployment maps no groups" — still had its logins' authority read out of a
+// claim nobody chose to trust.
+func TestTheGroupsAreReadFromTheClaimTheDeploymentNames(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		claim   string
+		payload map[string]any
+		want    []string
+		refused bool
+	}{
+		{name: "a renamed claim", claim: "roles",
+			payload: map[string]any{"roles": []string{"ops"}, "groups": []string{"decoy"}},
+			want:    []string{"ops"}},
+		{name: "a namespaced claim", claim: "https://example.com/groups",
+			payload: map[string]any{"https://example.com/groups": []string{"ops", "oncall"}},
+			want:    []string{"ops", "oncall"}},
+		{name: "no claim named reads nothing", claim: "",
+			payload: map[string]any{"groups": []string{"ops"}}},
+		{name: "an absent claim is no groups", claim: "groups",
+			payload: map[string]any{}},
+		{name: "a single name is one group", claim: "groups",
+			payload: map[string]any{"groups": "ops"}, want: []string{"ops"}},
+		{name: "any other shape refuses the sign-in", claim: "groups",
+			payload: map[string]any{"groups": map[string]any{"ops": true}},
+			refused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := claims()
+			for k, v := range tc.payload {
+				c[k] = v
+			}
+			config := testConfig()
+			config.GroupsClaim = tc.claim
+			got, err := config.Verify(t.Context(), publishedKeys(),
+				sign(t, c, jwt.SigningMethodRS256, testKID, signingKey), testNonce, at)
+			if tc.refused {
+				if !errors.Is(err, oidc.ErrRefused) ||
+					!strings.Contains(err.Error(), tc.claim) {
+					t.Errorf("verified with %v (groups %v), want a refusal "+
+						"naming the claim", err, got.Groups)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if !slices.Equal(got.Groups, tc.want) {
+				t.Errorf("groups read %v, want %v", got.Groups, tc.want)
+			}
+		})
 	}
 }
 
@@ -338,42 +400,6 @@ func TestEmailVerifiedDecodesFromBothShapesProvidersSend(t *testing.T) {
 			t.Errorf("email_verified as %s read %v, want %v", raw,
 				got.EmailVerified, want)
 		}
-	}
-}
-
-// GROUP GRANTS ARE A UNION, AND AN UNMAPPED GROUP CONFERS NOTHING.
-//
-// A provider's group list is whatever the directory happens to hold, so
-// refusing a login because somebody is in a team this company never mapped
-// would make every new group at the provider an outage here.
-func TestGroupGrantsAreTheUnionAndAnUnmappedGroupIsNotAnError(t *testing.T) {
-	t.Parallel()
-	c := testConfig()
-	c.GroupGrants = map[string][]iam.Grant{
-		"engineering": {iam.GrantWorkWrite},
-		"oncall":      {iam.GrantWorkWrite, iam.GrantStateRead},
-		"broken":      {iam.Grant("not-a-capability")},
-	}
-	got := c.GrantsFor([]string{"engineering", "oncall", "a-team-nobody-mapped", "broken"})
-	if len(got) != 2 {
-		t.Fatalf("the union is %v, want two distinct grants", got)
-	}
-	seen := map[iam.Grant]bool{}
-	for _, grant := range got {
-		if seen[grant] {
-			t.Errorf("%q appears twice", grant)
-		}
-		seen[grant] = true
-	}
-	if !seen[iam.GrantWorkWrite] || !seen[iam.GrantStateRead] {
-		t.Errorf("the union is %v", got)
-	}
-	// AND A MAPPING NAMING A CAPABILITY THIS BUILD DOES NOT KNOW IS A
-	// VALIDATION FAILURE, because it is a value an operator typed: the
-	// honest answer is to say it is not a capability rather than to
-	// confer nothing and look configured.
-	if err := c.Validate(); err == nil {
-		t.Error("a group mapped to a capability this build cannot name validated")
 	}
 }
 

@@ -814,8 +814,12 @@ type APIOIDC struct {
 
 	// GroupsClaim is the id-token claim carrying the caller's groups.
 	// Empty means this deployment maps no groups, which is a real posture:
-	// every person's authority is then what the directory row says.
-	GroupsClaim string `yaml:"groups_claim,omitempty" json:"groups_claim,omitempty" desc:"The id-token claim carrying groups. Empty maps no groups."`
+	// every person's authority is then what the directory row says — and
+	// no claim is read at all. ONE NAME AND NEVER A LIST OF ALIASES:
+	// providers disagree about it, and trying several would be a guess
+	// about which claim carries authority. Required once GroupGrants maps
+	// anything, since a mapping with no claim to read never applies.
+	GroupsClaim string `yaml:"groups_claim,omitempty" json:"groups_claim,omitempty" desc:"The id-token claim carrying groups. Empty maps no groups; required once group_grants maps any."`
 
 	// RequireACR is an authentication-context class the id token must
 	// carry — the way a provider is asked for a second factor it, rather
@@ -936,6 +940,16 @@ func (o *APIOIDC) validate(path Path, ceiling []iam.Grant) error {
 		"below five minutes every live session is exchanged at the provider more "+
 			"often than a person clicks, and past a day the probe is slower than "+
 			"the shortest session it is meant to end")
+	// A MAPPING WITH NO CLAIM TO READ confers nothing, ever: the groups a
+	// sign-in presents are read out of the claim `groups_claim` names and
+	// out of no other, so a deployment that maps groups and names none has
+	// an authority table that looks configured and never applies.
+	if len(o.GroupGrants) > 0 && strings.TrimSpace(o.GroupsClaim) == "" {
+		p.add(at(path, "groups_claim"), ErrMissing,
+			"required once group_grants maps anything: it is the id-token "+
+				"claim the groups are read from, and with none named no "+
+				"mapping ever confers a grant")
+	}
 	for group, grants := range o.GroupGrants {
 		gp := at(at(path, "group_grants"), group)
 		if strings.TrimSpace(group) == "" {

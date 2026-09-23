@@ -9,7 +9,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -146,12 +145,6 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	s.throttle.Flush(r.Context(), source)
 
-	// THE GROUP MAPPING RIDES INSIDE THE SESSION, never onto the person's
-	// own row: what a provider's groups confer is true for as long as that
-	// assertion is, and writing it to the estate would outlive the
-	// provider saying it.
-	held.Grants = mergeGrants(held.Grants,
-		s.boot.API.Auth.OIDC.GrantsFor(claims.Groups))
 	// BACK TO WHERE THE LOGIN BEGAN, by redirect. The callback is a
 	// browser following the provider's redirect, and it used to answer the
 	// JSON body the password route does — which a browser renders as text
@@ -162,6 +155,13 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInOIDC, acr: claims.ACR, redirect: flight.Return,
 		refresh: tokens.Refresh,
+		// THE GROUP MAPPING RIDES INSIDE THE SESSION, never onto the
+		// person's own row: what a provider's groups confer is true for
+		// as long as that assertion is, and writing it to the estate
+		// would outlive the provider saying it. It used to be merged into
+		// this sighting and then dropped, since nothing downstream reads
+		// a sighting's grants — so no mapping ever conferred anything.
+		groupGrants: s.boot.API.Auth.OIDC.GrantsFor(claims.Groups),
 	})
 }
 
@@ -203,36 +203,6 @@ func (s *Service) personForSubject(r *http.Request, claims oidc.Claims) (
 		return iamdomain.Sighting{}, err
 	}
 	return held, nil
-}
-
-// mergeGrants is the union of what a person carries and what their provider
-// groups confer.
-//
-// A UNION AND NOT A REPLACEMENT, because the two answer different questions: a
-// person's own grants are what this company gave them and the mapped ones are
-// what their directory membership says today. Replacing would make a group
-// removal silently revoke something an administrator granted here.
-//
-// The CEILING is applied downstream, per node per request, so nothing this
-// composes can exceed what the deployment allows.
-func mergeGrants(held, mapped []iam.Grant) []iam.Grant {
-	out := make([]iam.Grant, 0, len(held)+len(mapped))
-	out = append(out, held...)
-	for _, g := range mapped {
-		if !containsGrant(out, g) {
-			out = append(out, g)
-		}
-	}
-	return out
-}
-
-func containsGrant(set []iam.Grant, want iam.Grant) bool {
-	for _, g := range set {
-		if g == want {
-			return true
-		}
-	}
-	return false
 }
 
 // returnTo is where the browser goes once the login completes.

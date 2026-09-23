@@ -1103,6 +1103,7 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 			V: DocumentVersion, Person: in.Person, Epoch: epoch,
 			AbsoluteExpiresAt: in.AbsoluteExpiresAt,
 			ProvedAt:          in.ProvedAt,
+			GroupGrants:       slices.Clone(in.GroupGrants),
 		})
 		return err
 	}
@@ -1183,6 +1184,14 @@ type SessionStart struct {
 	// [Session.ProvedAt]. It is the WRITER's clock, authored at the proof,
 	// like the absolute deadline beside it.
 	ProvedAt time.Time
+
+	// GroupGrants are what the identity provider's groups conferred at
+	// this sign-in — see [Session.GroupGrants]. They are NOT checked
+	// against the writer's own grants, unlike a person's declared set:
+	// they are the operator's Tier A mapping applied to what the provider
+	// asserted, and every node clamps them to its own ceiling at decision
+	// time rather than here.
+	GroupGrants []iam.Grant
 
 	// NoWait asks for the answer the broker's acknowledgement already
 	// establishes, rather than waiting for this node's applier.

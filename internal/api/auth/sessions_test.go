@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -315,6 +316,41 @@ func TestANodesCeilingClampsASignedInPersonsGrants(t *testing.T) {
 	}
 	if !got.principal.Can(iam.GrantStateRead) {
 		t.Errorf("grants %v lost what the ceiling permits", got.principal.Grants)
+	}
+}
+
+// A PROVIDER'S GROUP GRANTS RIDE THE SESSION THAT PRESENTED THEM.
+//
+// What a person holds is (their declared grants ∪ what their session carries)
+// ∩ this node's ceiling, at decision time. The OIDC callback used to merge the
+// mapped grants into the sign-in's sighting and then drop them, so no group
+// mapping ever conferred anything. The carried half is unioned, never a
+// replacement for the declared one; it is clamped like everything else; and a
+// session that carries none — any other sign-in — confers only the declared
+// set.
+func TestAProvidersGroupGrantsRideTheSessionThatPresentedThem(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	rig.dir.identity.Session.GroupGrants = []iam.Grant{
+		iam.GrantWorkWrite, iam.GrantStateRead, iam.GrantSecretWrite,
+	}
+	got := rig.call(rig.guard(iam.GrantStateRead, iam.GrantConfigRead,
+		iam.GrantWorkWrite), http.MethodGet, "/agents", rig.withCookie)
+	if got.how != iam.Resolved {
+		t.Fatalf("resolution %v, want resolved", got.how)
+	}
+	want := []iam.Grant{iam.GrantStateRead, iam.GrantConfigRead, iam.GrantWorkWrite}
+	if !slices.Equal(got.principal.Grants, want) {
+		t.Errorf("grants %v, want %v: the declared set, then what the "+
+			"session carries, once each and clamped to the ceiling",
+			got.principal.Grants, want)
+	}
+
+	plain := newSignedIn(t)
+	got = plain.call(plain.guard(), http.MethodGet, "/agents", plain.withCookie)
+	if got.how != iam.Resolved || got.principal.Can(iam.GrantWorkWrite) {
+		t.Errorf("a session carrying nothing resolved %v with %v — want the "+
+			"declared set alone", got.how, got.principal.Grants)
 	}
 }
 

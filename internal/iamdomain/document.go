@@ -236,6 +236,23 @@ type Session struct {
 	// stale-but-set instant would one day have made it fresh.
 	ProvedAt time.Time `json:"proved_at,omitzero"`
 
+	// GroupGrants are what the identity provider's groups conferred at the
+	// sign-in that opened this session — `api.auth.oidc.group_grants`
+	// applied to the groups claim of the ID token it presented — and empty
+	// on every other method.
+	//
+	// ON THE SESSION AND NEVER ON THE PERSON, because a person's groups
+	// are known only at a login and are true only for as long as that
+	// assertion is: written to the person's row they would outlive the
+	// provider saying them, and two sessions from two providers would
+	// overwrite each other's. So what somebody holds is (their declared
+	// grants ∪ the grants their SESSION carries) ∩ the node's ceiling,
+	// taken at decision time; a person who has not signed in through the
+	// provider carries none, and group-derived authority lapses with the
+	// session that presented it — which is the deprovisioning property the
+	// mapping exists for.
+	GroupGrants []iam.Grant `json:"group_grants,omitempty"`
+
 	// EndedReason is why a session stopped, on the CLOSE record: signed
 	// out, revoked, expired, or reuse detected. "This session was ended by
 	// reuse detection" is the sentence an investigation is looking for,

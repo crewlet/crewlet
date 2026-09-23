@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -492,6 +493,11 @@ type signIn struct {
 	stepUp   bool
 	replaces string
 
+	// groupGrants are what the identity provider's groups conferred, and
+	// empty on every other method. They ride into the session record and
+	// never onto the person — see [iamdomain.Session.GroupGrants].
+	groupGrants []iam.Grant
+
 	// redirect is where a BROWSER that arrived by navigation goes next,
 	// rather than a JSON body it has no script to read. Empty answers
 	// JSON, which is what every fetch-driven route wants.
@@ -524,8 +530,9 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 		// and a step-up surface asks again once this node's window has
 		// passed. It is the one field that says so: without it every
 		// session was stale from its first request.
-		ProvedAt: s.now(),
-		OpID:     "session:" + lineage.String(),
+		ProvedAt:    s.now(),
+		GroupGrants: how.groupGrants,
+		OpID:        "session:" + lineage.String(),
 		// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT, because
 		// nothing in this answer reads the row: the bearer carries the
 		// position and every node validates against its own applier.
