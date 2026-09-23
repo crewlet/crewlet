@@ -199,6 +199,79 @@ func TestAPurgedParentIsRefusedAndAnUnknownOneIsWaitedFor(t *testing.T) {
 	}
 }
 
+// EVERY WRITE THAT NAMES A TASK TELLS A PURGED ONE FROM ONE THIS NODE HAS NOT
+// APPLIED — the parent's rule, on every other path.
+//
+// An update, a removal, a restore, a second purge and a dependency answered a
+// task with no row "not on this node", which is the retryable answer: a
+// caller, a duty or an HTTP client was told to come back to a task a purge
+// destroyed for good. And a dependency ON such a task answered the opposite
+// for the other absence — "there is no task", never to be retried — to a
+// create this node simply had not applied yet.
+func TestEveryTaskWriteTellsAPurgedTaskFromAnUnappliedOne(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "gone")
+	filedTask(t, r, "here")
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "gone", "ENG",
+		"a test"); err != nil {
+		t.Fatalf("PurgeTask: %v", err)
+	}
+	r.drain()
+
+	writes := map[string]func(id string) error{
+		"an update": func(id string) error {
+			title := "back"
+			_, err := r.writer.UpdateTask(t.Context(), "op-u-"+id, id, "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{Title: &title},
+				tracker.ChangeFields, nil)
+			return err
+		},
+		"a removal": func(id string) error {
+			_, err := r.writer.RemoveTask(t.Context(), "op-r-"+id, id, "ENG", false, nil)
+			return err
+		},
+		"a restore": func(id string) error {
+			_, err := r.writer.RestoreTask(t.Context(), "op-s-"+id, id, "ENG", nil)
+			return err
+		},
+		"a purge": func(id string) error {
+			_, err := r.writer.PurgeTask(t.Context(), "op-p-"+id, id, "ENG", "again")
+			return err
+		},
+		"a dependency of it": func(id string) error {
+			_, err := r.writer.Depend(t.Context(), "op-d-"+id, tracker.DependencyChange{
+				Task: id, Project: "ENG", WaitingOnAdd: []string{"here"},
+			}, fixedLeads{})
+			return err
+		},
+		"a dependency on it": func(id string) error {
+			_, err := r.writer.Depend(t.Context(), "op-o-"+id, tracker.DependencyChange{
+				Task: "here", Project: "ENG", WaitingOnAdd: []string{id},
+			}, fixedLeads{})
+			return err
+		},
+	}
+	for name, write := range writes {
+		t.Run(name, func(t *testing.T) {
+			switch err := write("gone"); {
+			case err == nil:
+				t.Fatal("a write naming a purged task was accepted")
+			case errors.Is(err, statelog.ErrUnavailable):
+				t.Errorf("a purged task answered %v — come back later, to a "+
+					"task a purge destroyed for good", err)
+			case !strings.Contains(err.Error(), "purged"):
+				t.Errorf("the refusal %q does not say the task was purged", err)
+			}
+			if err := write("never-applied-here"); !errors.Is(err, statelog.ErrUnavailable) {
+				t.Errorf("a task this node holds no row or marker of = %v, want "+
+					"the unavailable answer — it may be a create this node "+
+					"has not applied", err)
+			}
+		})
+	}
+}
+
 // A CHILD IN THE TRASH STAYS WHERE IT IS, AND THE MERGE STILL FINISHES.
 //
 // A tombstoned task is frozen, so a re-parent of one is refused on its own

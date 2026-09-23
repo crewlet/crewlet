@@ -365,8 +365,7 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			return err
 		}
 		if !held {
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				change.Task, statelog.ErrUnavailable)
+			return absentTask(ctx, tx, change.Task, "task")
 		}
 		out.self = self
 		for _, id := range wanted {
@@ -377,10 +376,14 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			adding := slices.Contains(required, id)
 			switch {
 			case !held && adding:
-				return fmt.Errorf("tracker: there is no task %s, so the "+
-					"dependency naming it cannot be written — an edge to a "+
-					"task that does not exist resolves to nothing on every "+
-					"node, for ever", id)
+				// NO EDGE TO A TASK THIS NODE DOES NOT HOLD, and the
+				// refusal is [absentTask]'s two answers rather than
+				// one: a purged task is gone for good, and a task with
+				// no row and no marker may be a create this node has
+				// not applied — which "there is no task" told the
+				// caller never to retry.
+				return fmt.Errorf("tracker: the dependency on task %s "+
+					"cannot be written: %w", id, absentTask(ctx, tx, id, "task"))
 			case !held:
 				// A REMOVE OF AN EDGE TO A VANISHED TASK IS THE
 				// CORRECTION SOMEBODY IS MAKING, so it is skipped

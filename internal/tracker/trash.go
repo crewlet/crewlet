@@ -179,8 +179,7 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
-					"on this node: %w", id, statelog.ErrUnavailable)
+				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
 			}
 			// THE PROJECT FIRST, before the no-op below: who may remove
 			// this task was decided on the project the caller read it
@@ -229,8 +228,7 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
-					"on this node: %w", id, statelog.ErrUnavailable)
+				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
 			}
 			if wrong := filedUnder(current, project); wrong != nil {
 				return statelog.Decision{}, wrong

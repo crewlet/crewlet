@@ -94,10 +94,10 @@ func TestAWriteOnAPurgedTaskIsRefusedAsDeleted(t *testing.T) {
 	if err == nil {
 		t.Fatal("a write on a purged task was accepted")
 	}
-	if !strings.Contains(err.Error(), "not on this node") &&
-		!errors.Is(err, statelog.ErrUnavailable) {
+	if errors.Is(err, statelog.ErrUnavailable) || !strings.Contains(err.Error(), "purged") {
 		t.Fatalf("the refusal is %v, which does not tell the caller its task "+
-			"is gone rather than contended", err)
+			"is gone rather than contended — or not yet applied here, which "+
+			"is what \"not on this node\" says and a caller retries", err)
 	}
 	if answer := r.ask(map[string]any{"container": "project:ENG"}); len(answer.Rows) != 0 {
 		t.Fatalf("a purged task came back: %+v", answer.Rows)

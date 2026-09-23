@@ -514,8 +514,9 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, err
 			}
 			if !held {
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
-					"on this node: %w", id, statelog.ErrUnavailable)
+				// TWO ABSENCES, and only one is worth coming back for —
+				// see [absentTask].
+				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
 			}
 			// THE PROJECT THE CALLER DECIDED ON IS THIS TASK'S — see
 			// [filedUnder]. A re-route is the project's own decision and

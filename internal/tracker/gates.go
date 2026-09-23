@@ -423,8 +423,9 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is "+
-					"not on this node: %w", id, statelog.ErrUnavailable)
+				// A SECOND PURGE OF ONE TASK IS TOLD IT IS GONE, rather
+				// than to come back to it — see [absentTask].
+				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
 			}
 			decision, err := w.decide(subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`

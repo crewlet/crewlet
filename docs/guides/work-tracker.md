@@ -1032,7 +1032,12 @@ Three different gestures, and the difference matters:
   ([Views](#views)), because the one thing a person needs after an assistant
   removes the wrong subtree is to see what was removed.
 - **Delete** writes a marker. Every node drops every record about that task for
-  ever, which is what stops a redelivery months later resurrecting it.
+  ever, which is what stops a redelivery months later resurrecting it — and it
+  is also how a write that names the task is told it is **gone for good**:
+  an update, a removal, a restore, a second purge, a dependency of it or on it,
+  a subtask filed under it and a merge naming it are all refused as purged,
+  never as "not on this node", which is the answer for a task this node has
+  not applied yet and the one a client is right to retry.
 - **Purge** removes the rows, and answers the same three-valued outcome every
   write here has: `applied`, `pending` (the record is durable and this node has
   not reached it yet — do not run it again) or `unknown`, the one to retry.
