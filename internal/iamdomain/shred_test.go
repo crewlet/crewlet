@@ -156,7 +156,7 @@ func TestAKeyNobodyOwnsIsDestroyedOnlyWhenItIsCertainlyNobodys(t *testing.T) {
 		return iamdomain.Enrolment{
 			PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 			Name: "Sarah Chen", Email: "sarah.chen@example.com",
-			OpID: op, Reason: "a joiner",
+			Login: "sarah.chen", OpID: op, Reason: "a joiner",
 		}
 	}
 	if err := rig.enrol(joiner(winner, "enrol-1")); err != nil {
@@ -243,7 +243,7 @@ func TestARemovalsKeyIsDestroyedOnANodeBehindTheLog(t *testing.T) {
 	if err := rig.enrol(iamdomain.Enrolment{
 		PersonID: leaver, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
-		OpID: "enrol-sarah", Reason: "a joiner",
+		Login: "sarah.chen", OpID: "enrol-sarah", Reason: "a joiner",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
