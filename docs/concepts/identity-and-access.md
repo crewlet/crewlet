@@ -845,14 +845,16 @@ worker node holds its lease, at `oidc.deactivation_probe`. See
 the estate's other duties are scheduled.
 
 A provider sign-in resolves the subject through the person's **link**, and only
-a live one: a withdrawn or expired link signs nobody in. A subject that two
-people hold live links to — which the engine never writes, and a restore can —
-signs **neither** of them in, because the subject is the whole of what a
-provider sign-in proves. The browser is answered `409 subject_conflict`: a
-definite refusal with no `Retry-After`, since waiting never clears it and only
-an administrator removing one of the links does. It names neither holder — who
-else holds the link is not the caller's to learn — and the node's log line
-`api_oidc_subject_ambiguous` names both, for the administrator who decides.
+a live one: an unlinked subject, one a person was moved off and one whose
+person was removed sign nobody in. A subject that two people hold live links
+to — which the broker never admits, and a restore can — signs **neither** of
+them in, because the subject is the whole of what a provider sign-in proves.
+The browser is answered `409 subject_conflict`: a definite refusal with no
+`Retry-After`, since waiting never clears it and only an administrator removing
+one of the links does. It names neither holder — who else holds the link is not
+the caller's to learn — while the node's log line `api_oidc_subject_ambiguous`
+and `crewlet iam check` (a duplicated `link` claim) name both, for the
+administrator who decides.
 
 Without `offline_access` there is no refresh token and therefore no probe, and
 validation says so rather than leaving you believing an off-boarding is felt
@@ -1386,6 +1388,8 @@ Identity has **two trails**, and they answer different questions.
 | `iam_recovery_code_used` | The sign-in surface | Once per code, with how many are left |
 | `iam_credential_minted`, `iam_credential_revoked` | The directory (a machine token) and the sign-in surface (an app code or a new set of recovery codes) | Once per gesture |
 | `iam_mfa_reset` | The directory, when an administrator clears somebody's second factor | Once per reset |
+| `iam_identity_linked` | The identity writer, when a provider subject is pinned to a person — `via: invite` for an invitation redeemed through the provider, `via: admin` for an administrator | Once per link, and only once the person it names exists |
+| `iam_identity_unlinked` | The identity writer, when an administrator takes a person's provider subject off them | Once per unlink |
 | `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed |
 | `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
 | `iam_token_first_use` | The request guard, for a Tier A token | Once per token per hour per node — or every request, for a token whose entry sets `audit_every_use` |
@@ -1469,10 +1473,13 @@ events filtered out of the store:
   hour of use writes nothing, and a touch event would be the one row per request
   the rest of this design exists to avoid.
 
-And there is no linking event: this build has no gesture that binds an
-identity-provider subject to a person as a step of its own (see [Linking is
-explicit](#linking-is-explicit-and-an-email-match-is-never-a-link)), so there
-is nothing for one to announce.
+**Neither link event carries the subject.** It identifies a person at a third
+party, so the estate holds it only as a keyed blind — and an event row is the
+one copy removing that person would never reach: it lands in every node's
+event store, on the activity feed and at every collector, none of which a
+removal's key deletion touches. The row names the person, the provider's
+issuer and who pinned it; which of the provider's accounts is theirs is a
+question for the provider.
 
 ---
 
@@ -1511,6 +1518,7 @@ claim arbitrates on.**
 | An email address | `crewlet.iam.log.email.<blind>` | create-only, expectation zero |
 | A login | `crewlet.iam.log.login.<login>` | create-only, expectation zero |
 | A seat binding | `crewlet.iam.log.seat.<seat handle>` | create-only, expectation zero |
+| An identity-provider subject (a **link**) | `crewlet.iam.log.link.<blind>` | create-only, expectation zero |
 | A session | `crewlet.iam.log.session.<lineage>` | create-only, expectation zero |
 | A person's own content | `crewlet.iam.log.person.<id>` | conditional on the row's version |
 | The first-person bootstrap | `crewlet.iam.log.bootstrap` | one object for the whole company |
@@ -1522,7 +1530,8 @@ person holds it. Two administrators enrolling *different* addresses never
 contend at all.
 
 Because a record has exactly one subject, **an enrolment is a sequence**: take
-the address, take the login, then write the person. A sequence that stops
+the address, take the login, take the provider subject when the enrolment came
+through an identity provider, then write the person. A sequence that stops
 halfway leaves a claimed address with no person — a *reservation*, a legal,
 named state rather than a person holding an address somebody else also holds.
 Nothing collects it on a clock, because its claims still hold their subjects on
@@ -1530,18 +1539,20 @@ the log and a deleted row would leave an address arbitrated to nobody the
 directory can name. `crewlet iam check` reports one older than an hour as
 `claim_orphaned`, and removing its id releases what it holds.
 
-That half-finished row is a **reservation**: it holds the address, login or
-seat its claims took, and it has no kind, no stage and no credential, so it
-may do nothing. Every reader reports it as one rather than as a person —
-`GET /iam/people` lists it with `"reserved": true`, a sign-in or a Tier A
-token binding through its login finds nobody who can act, a session naming it
-finds no person, and the first-person bootstrap does not count it as somebody
-enrolled. It is never a reason for a 503.
+That half-finished row is a **reservation**: it holds the address, login, seat
+or provider subject its claims took, and it has no kind, no stage and no
+credential, so it may do nothing. Every reader reports it as one rather than as
+a person — `GET /iam/people` lists it with `"reserved": true`, a sign-in, a
+provider sign-in through its subject or a Tier A token binding through its
+login finds nobody who can act, a session naming it finds no person, and the
+first-person bootstrap does not count it as somebody enrolled. It is never a
+reason for a 503.
 
 > **If you are reading the schema and reaching for a unique index as a
 > backstop: don't.** A duplicate cannot arise from ordinary traffic, and it
-> *can* arise from a restore or a reanchor. Three **non-unique, partial**
-> indexes over the address blind, the login and the seat id are what the
+> *can* arise from a restore or a reanchor. Four **non-unique, partial**
+> indexes — over the address blind, the login and the seat id on a person's
+> row, and over the subject blind on a credential — are what the
 > `iam_claims` duty reads to *report* one — a WARN line each hour it stands,
 > and a `claim_duplicated` finding in `crewlet iam check` naming everybody who
 > holds it. A unique index would convert an anomaly an operator can repair
@@ -1589,7 +1600,7 @@ Rotating it is a migration, not a setting.
 | Table | What it holds |
 |---|---|
 | `iam_people` | One person or machine, and the three claims denormalised onto their row so a duplicate can be *reported* |
-| `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, an identity-provider subject, a machine token's hash. Never a secret that could be presented to anything |
+| `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, a machine token's hash, and a **link**: an identity-provider subject's blind, which only the link's claim ever writes and which a person's own record never carries. Never a secret that could be presented to anything |
 | `iam_invites` | An address spoken for by somebody who has no person yet, and the grants redeeming it confers |
 | `iam_bootstrap_codes` | How a company with nobody in it acquires its first administrator |
 | `iam_sessions` | One row per session **lineage**. Rotations are not rows — a rotation id is derived — so this grows with sign-ins, not with requests |

@@ -103,6 +103,13 @@ func (a *Applier) writePerson(ctx context.Context, tx *sql.Tx, at applyContext,
 }
 
 // writeCredentials replaces a person's credential rows from the payload.
+//
+// EVERY ROW BUT A PROVIDER LINK. A link is its claim's row and nobody else's
+// ([KindLink]): the delete leaves it where it is, and an oidc entry a payload
+// carries is skipped rather than written. SKIPPED, NOT REFUSED — the writer
+// refuses such a document ([authoredPerson]), and a record that reached the
+// log anyway is one every node holds identically, so failing its apply would
+// stop the log everywhere over a row this apply was never going to own.
 func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 	at applyContext, id string, credentials []Credential) (int, error) {
 
@@ -126,7 +133,8 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 	}
 
 	result, err := tx.ExecContext(ctx,
-		`DELETE FROM iam_credentials WHERE person_id = ?`, id)
+		`DELETE FROM iam_credentials WHERE person_id = ? AND method <> ?`,
+		id, string(MethodOIDC))
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: clear person %s's credentials: %w", id, err)
 	}
@@ -134,6 +142,9 @@ func (a *Applier) writeCredentials(ctx context.Context, tx *sql.Tx,
 
 	written := int(removed)
 	for _, credential := range credentials {
+		if credential.Method == MethodOIDC {
+			continue
+		}
 		document, err := EncodeCredential(credential)
 		if err != nil {
 			return written, fmt.Errorf("iamdomain: encode a credential for "+

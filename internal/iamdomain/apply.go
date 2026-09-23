@@ -307,6 +307,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		rows, err = a.applyEmail(ctx, tx, at)
 	case KindLogin, KindSeat:
 		rows, err = a.applyToken(ctx, tx, at, ObjectKind(rec.Subject.Kind))
+	case KindLink:
+		rows, err = a.applyLink(ctx, tx, at)
 	case KindSession:
 		rows, err = a.applySession(ctx, tx, at)
 	case KindInvalidation:

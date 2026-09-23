@@ -1,6 +1,7 @@
 package iamdomain_test
 
 import (
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -210,9 +211,10 @@ func TestOneResolveAnswersTheSessionAndThePersonTogether(t *testing.T) {
 // are different classes inside one MAC by construction, so that matched nobody
 // and every provider sign-in was refused, while the blinder, the reader and the
 // callback each passed their own suite. And the subject is the WHOLE of what a
-// provider sign-in proves, so a withdrawn link must resolve nobody, and a
-// subject two people hold must resolve neither of them. Resolving either one
-// would sign somebody in as somebody else with nothing further checked.
+// provider sign-in proves, so a withdrawn link must resolve nobody, a subject a
+// person was moved OFF must resolve nobody, and a subject two people hold must
+// resolve neither of them. Resolving either one would sign somebody in as
+// somebody else with nothing further checked.
 func TestAProviderSubjectResolvesThroughALiveLinkOnly(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -230,30 +232,66 @@ func TestAProviderSubjectResolvesThroughALiveLinkOnly(t *testing.T) {
 		return blind
 	}
 	now := brokerAt.Add(time.Hour)
-	enrol := func(login string, link iamdomain.Credential) string {
+	enrol := func(login string) string {
 		t.Helper()
 		id := uuid.New().String()
-		link.ID = uuid.New().String()
-		link.Method = iamdomain.MethodOIDC
 		if err := rig.enrol(iamdomain.Enrolment{
 			PersonID: id, Kind: iam.KindPerson, Stage: iam.StageActive,
 			Name: login, Email: login + "@example.com", Login: login,
 			OpID: "enrol-" + login, Reason: "a provider link",
-			Credentials: []iamdomain.Credential{link},
 		}); err != nil {
 			t.Fatalf("enrol %s: %v", login, err)
 		}
 		return id
 	}
+	link := func(person, sub, replacing string) {
+		t.Helper()
+		if err := rig.during(func() error {
+			_, err := rig.writer.Link(t.Context(), iamdomain.LinkChange{
+				PersonID: person, Replacing: replacing,
+				Link: iamdomain.Link{Issuer: "https://idp.example.com",
+					Blind: subject(sub)},
+				OpID: "link-" + person + "-" + sub, Reason: "pinned",
+			})
+			return err
+		}); err != nil {
+			t.Fatalf("link %s to %s: %v", person, sub, err)
+		}
+	}
 
-	linked := enrol("ada.linked", iamdomain.Credential{SubjectBlind: subject("ada")})
-	enrol("rex.revoked", iamdomain.Credential{SubjectBlind: subject("rex"),
-		RevokedAt: brokerAt})
-	enrol("eve.expired", iamdomain.Credential{SubjectBlind: subject("eve"),
-		ExpiresAt: now.Add(-time.Minute)})
-	first := enrol("dan.first", iamdomain.Credential{SubjectBlind: subject("dan")})
-	second := enrol("dan.second", iamdomain.Credential{SubjectBlind: subject("dan")})
+	linked := enrol("ada.linked")
+	link(linked, "ada", "")
+	withdrawn := enrol("rex.withdrawn")
+	link(withdrawn, "rex", "")
+	if err := rig.during(func() error {
+		_, err := rig.writer.Unlink(t.Context(), withdrawn,
+			iamdomain.Link{Issuer: "https://idp.example.com",
+				Blind: subject("rex")}, "unlink-rex", "left")
+		return err
+	}); err != nil {
+		t.Fatalf("unlink: %v", err)
+	}
+	moved := enrol("mo.moved")
+	link(moved, "mo-old", "")
+	link(moved, "mo-new", subject("mo-old"))
+	first := enrol("dan.first")
+	link(first, "dan", "")
+	second := enrol("dan.second")
 	rig.drain()
+	// A RESTORE is the only thing that puts one subject on two people: the
+	// rows it copies back never passed through the broker, so the second
+	// holder is written straight into the estate rather than published.
+	if err := rig.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO iam_credentials
+				(id, person_id, method, verifier, subject_blind, expires_at,
+				 revoked_at, bucket, created_at, version, document)
+			VALUES (?, ?, 'oidc', x'', ?, 0, 0, 0, 0, 1, x'')`,
+			uuid.New().String(), second, subject("dan"))
+		return err
+	}); err != nil {
+		t.Fatalf("restore a duplicate link: %v", err)
+	}
 
 	// THE CONTROL: the address column never matches a subject, so the
 	// lookup that shipped refused a person this estate does link.
@@ -263,30 +301,27 @@ func TestAProviderSubjectResolvesThroughALiveLinkOnly(t *testing.T) {
 			"blinds are separate classes and must never meet", held.ID, err)
 	}
 
-	held, err := reader.PersonBySubjectBlind(t.Context(), subject("ada"), now)
-	if err != nil {
-		t.Fatalf("resolve a linked subject: %v", err)
-	}
-	if held.ID != linked || held.Login != "ada.linked" {
-		t.Errorf("a linked subject resolved to %q (%q), want %q", held.ID,
-			held.Login, linked)
-	}
-
-	for name, sub := range map[string]string{
-		"a withdrawn link": "rex", "an expired link": "eve",
-		"a subject nobody links": "nobody",
+	for name, want := range map[string]struct {
+		sub, id, login string
+	}{
+		"a linked subject":       {"ada", linked, "ada.linked"},
+		"the subject moved TO":   {"mo-new", moved, "mo.moved"},
+		"a withdrawn link":       {"rex", "", ""},
+		"the subject moved OFF":  {"mo-old", "", ""},
+		"a subject nobody links": {"nobody", "", ""},
 	} {
-		held, err := reader.PersonBySubjectBlind(t.Context(), subject(sub), now)
+		held, err := reader.PersonBySubjectBlind(t.Context(), subject(want.sub), now)
 		if err != nil {
-			t.Errorf("%s: %v, want nobody and no error", name, err)
+			t.Errorf("%s: %v, want no error", name, err)
 		}
-		if held.ID != "" {
-			t.Errorf("%s resolved to %q, so a person the company unlinked "+
-				"still signs in through the provider", name, held.ID)
+		if held.ID != want.id || held.Login != want.login {
+			t.Errorf("%s resolved to %q (%q), want %q — a subject resolving "+
+				"to anybody but its one live holder signs somebody in as "+
+				"somebody else", name, held.ID, held.Login, want.id)
 		}
 	}
 
-	held, err = reader.PersonBySubjectBlind(t.Context(), subject("dan"), now)
+	held, err := reader.PersonBySubjectBlind(t.Context(), subject("dan"), now)
 	if !errors.Is(err, iamdomain.ErrSubjectAmbiguous) {
 		t.Fatalf("a subject two people hold answered %v, want "+
 			"ErrSubjectAmbiguous", err)

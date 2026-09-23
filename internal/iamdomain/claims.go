@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -53,12 +54,14 @@ const OrphanGrace = time.Hour
 
 // DuplicateClaim is one token held by more than one person.
 type DuplicateClaim struct {
-	// Kind is which claim: [KindEmail], [KindLogin] or [KindSeat].
+	// Kind is which claim: [KindEmail], [KindLogin], [KindSeat] or
+	// [KindLink].
 	Kind ObjectKind
 
 	// Token is the claimed value: the login or the seat handle in the
-	// clear, and for an address the keyed BLIND — the address itself is
-	// sealed and this report opens nothing.
+	// clear, and for an address or a provider subject the keyed BLIND —
+	// the value itself is sealed or was never held, and this report opens
+	// nothing.
 	Token string
 
 	// People are the holders, in id order.
@@ -118,6 +121,11 @@ func (r *Reader) Claims(ctx context.Context, now time.Time) (ClaimReport, error)
 			}
 			out.Duplicates = append(out.Duplicates, dups...)
 		}
+		links, err := duplicateLinks(ctx, tx)
+		if err != nil {
+			return err
+		}
+		out.Duplicates = append(out.Duplicates, links...)
 		orphans, err := orphansBefore(ctx, tx, now.Add(-OrphanGrace))
 		if err != nil {
 			return err
@@ -189,6 +197,48 @@ func duplicatesOf(ctx context.Context, tx *sql.Tx, kind ObjectKind,
 	return out, nil
 }
 
+// duplicateLinks is every provider subject more than one person holds a LIVE
+// link to — the link's half of [duplicatesOf], over the credential rows its
+// claim writes rather than a column.
+//
+// OVER THE PARTIAL INDEX the schema ships on the subject blind, which is also
+// what a provider sign-in resolves through, so the grouping reads only rows
+// that hold a subject.
+func duplicateLinks(ctx context.Context, tx *sql.Tx) ([]DuplicateClaim, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT subject_blind, person_id FROM iam_credentials
+		WHERE subject_blind != '' AND method = ? AND revoked_at = 0
+		  AND subject_blind IN (
+			SELECT subject_blind FROM iam_credentials
+			WHERE subject_blind != '' AND method = ? AND revoked_at = 0
+			GROUP BY subject_blind HAVING COUNT(DISTINCT person_id) > 1)
+		ORDER BY subject_blind, person_id`,
+		string(MethodOIDC), string(MethodOIDC))
+	if err != nil {
+		return nil, fmt.Errorf("iamdomain: find duplicate link claims: %w", err)
+	}
+	defer rows.Close()
+	var out []DuplicateClaim
+	for rows.Next() {
+		var blind, person string
+		if err := rows.Scan(&blind, &person); err != nil {
+			return nil, fmt.Errorf("iamdomain: scan a duplicate link claim: %w", err)
+		}
+		if n := len(out); n > 0 && out[n-1].Token == blind {
+			if !slices.Contains(out[n-1].People, person) {
+				out[n-1].People = append(out[n-1].People, person)
+			}
+			continue
+		}
+		out = append(out, DuplicateClaim{Kind: KindLink, Token: blind,
+			People: []string{person}})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iamdomain: find duplicate link claims: %w", err)
+	}
+	return out, nil
+}
+
 // orphansBefore is every reservation created before cutoff.
 //
 // A RESERVATION IS A ROW NO CONTENT RECORD HAS FILLED — no kind and no stage —
@@ -198,9 +248,13 @@ func orphansBefore(ctx context.Context, tx *sql.Tx, cutoff time.Time) (
 	[]OrphanedClaim, error) {
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, login, email_blind, seat_id, created_at FROM iam_people
-		WHERE stage = '' AND kind = '' AND created_at < ?
-		ORDER BY id`, cutoff.UnixMilli())
+		SELECT p.id, p.login, p.email_blind, p.seat_id, p.created_at,
+		       EXISTS(SELECT 1 FROM iam_credentials c
+		               WHERE c.person_id = p.id AND c.method = ?
+		                 AND c.revoked_at = 0)
+		FROM iam_people p
+		WHERE p.stage = '' AND p.kind = '' AND p.created_at < ?
+		ORDER BY p.id`, string(MethodOIDC), cutoff.UnixMilli())
 	if err != nil {
 		return nil, fmt.Errorf("iamdomain: find orphaned reservations: %w", err)
 	}
@@ -211,9 +265,10 @@ func orphansBefore(ctx context.Context, tx *sql.Tx, cutoff time.Time) (
 			o       OrphanedClaim
 			blind   string
 			created int64
+			linked  bool
 		)
 		if err := rows.Scan(&o.Person, &o.Login, &blind, &o.Seat,
-			&created); err != nil {
+			&created, &linked); err != nil {
 			return nil, fmt.Errorf("iamdomain: scan a reservation: %w", err)
 		}
 		if blind != "" {
@@ -224,6 +279,12 @@ func orphansBefore(ctx context.Context, tx *sql.Tx, cutoff time.Time) (
 		}
 		if o.Seat != "" {
 			o.Holds = append(o.Holds, KindSeat)
+		}
+		// A LINK AN ENROLMENT THROUGH THE PROVIDER CLAIMED before it
+		// stopped: the subject signs in as nobody until the reservation
+		// is removed or the redemption is retried.
+		if linked {
+			o.Holds = append(o.Holds, KindLink)
 		}
 		// A RESERVATION HOLDING NOTHING is a row every claim was released
 		// from — by the removal that repaired it, or a move — and there

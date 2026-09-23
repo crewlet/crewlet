@@ -45,15 +45,11 @@ import (
 //
 // # What is deliberately NOT here
 //
-// `iam_identity_linked` is named by the design and has no type, because
-// nothing in this build links an identity-provider subject to a person: the
-// callback resolves a subject somebody ALREADY linked and refuses one nobody
-// did. A registered type with no publisher is a filter chip that can never
-// match and a docs row describing a fact that never happens, so it arrives
-// with the link flow that produces it. `iam_token_rejected` is absent for the
-// admission rule's own reason: a rejected bearer is authored by whoever holds
-// the wrong value, so it is a failed attempt of method `bearer` inside
-// [IAMLoginFailures] and never a row of its own.
+// `iam_token_rejected` is absent for the admission rule's own reason: a
+// rejected bearer is authored by whoever holds the wrong value, so it is a
+// failed attempt of method `bearer` inside [IAMLoginFailures] and never a row
+// of its own. And neither link event carries the provider's SUBJECT — see
+// [IAMIdentityLinked].
 
 func init() {
 	events.Register[IAMSessionStarted]()
@@ -68,6 +64,8 @@ func init() {
 	events.Register[IAMTokenOverreach]()
 	events.Register[IAMRecoveryCodeUsed]()
 	events.Register[IAMMFAReset]()
+	events.Register[IAMIdentityLinked]()
+	events.Register[IAMIdentityUnlinked]()
 	events.Register[IAMSessionGenerationBumped]()
 	events.Register[RecordUnverifiable]()
 	events.Register[RecordTampered]()
@@ -704,6 +702,85 @@ func (e IAMMFAReset) Actor() string { return e.By }
 // Summary names whose.
 func (e IAMMFAReset) Summary() string {
 	return "Second factor of " + orSomebody(e.Person, "") + " reset"
+}
+
+// LinkVia is how an identity provider subject came to be pinned to a person.
+//
+// THE TWO ANSWERS ARE THE WHOLE LIST, and that is the rule the link enforces
+// rather than a vocabulary that happens to be short: a subject is pinned by an
+// invitation somebody issued and the invitee redeemed through the provider, or
+// by an administrator — never by the provider asserting an address that
+// matched somebody's, because at most providers a person sets their own.
+type LinkVia string
+
+const (
+	// LinkViaInvite is an invitation redeemed through the identity
+	// provider, which pins the subject the provider came back with to the
+	// person the redemption created.
+	LinkViaInvite LinkVia = "invite"
+
+	// LinkViaAdmin is an administrator pinning a subject to somebody who
+	// already exists — `PATCH /iam/people/{id}` with `oidc_subject`, or
+	// `crewlet iam link`.
+	LinkViaAdmin LinkVia = "admin"
+)
+
+// Valid reports whether v is one of the two.
+func (v LinkVia) Valid() bool { return v == LinkViaInvite || v == LinkViaAdmin }
+
+// IAMIdentityLinked is an identity provider subject pinned to a person, which
+// is what makes their provider sign-in resolve to them from now on.
+//
+// NO SUBJECT, and the absence is the design's own rule for where a subject may
+// live: it identifies a person at a third party, so the estate holds it only
+// as a keyed blind, and an event row is the one place that copy would outlive
+// everything else — it reaches the node store, the activity feed and every
+// OTLP sink, none of which a removal's crypto-shred reaches. The issuer is
+// here because it is the company's own provider and names nobody; which of
+// its subjects is the person's own is a question for the provider.
+type IAMIdentityLinked struct {
+	Person string  `json:"person"`
+	Issuer string  `json:"issuer"`
+	Via    LinkVia `json:"via"`
+	By     string  `json:"by"`
+}
+
+// EventType is the "iam_identity_linked" wire type.
+func (IAMIdentityLinked) EventType() string { return "iam_identity_linked" }
+
+// Actor is who pinned it — the administrator, or the node's own writer for an
+// invitation redeemed through the provider.
+func (e IAMIdentityLinked) Actor() string { return e.By }
+
+// Summary names whose sign-in and how it was pinned.
+func (e IAMIdentityLinked) Summary() string {
+	how := "by an administrator"
+	if e.Via == LinkViaInvite {
+		how = "redeeming an invitation"
+	}
+	return fmt.Sprintf("Identity provider sign-in linked for %s (%s)",
+		orSomebody(e.Person, ""), how)
+}
+
+// IAMIdentityUnlinked is an identity provider subject taken off a person, after
+// which their provider sign-in resolves to nobody. The subject is absent for
+// [IAMIdentityLinked]'s reason.
+type IAMIdentityUnlinked struct {
+	Person string `json:"person"`
+	Issuer string `json:"issuer"`
+	By     string `json:"by"`
+	Reason string `json:"reason"`
+}
+
+// EventType is the "iam_identity_unlinked" wire type.
+func (IAMIdentityUnlinked) EventType() string { return "iam_identity_unlinked" }
+
+// Actor is the administrator who removed it.
+func (e IAMIdentityUnlinked) Actor() string { return e.By }
+
+// Summary names whose.
+func (e IAMIdentityUnlinked) Summary() string {
+	return "Identity provider sign-in unlinked for " + orSomebody(e.Person, "")
 }
 
 // IAMSessionGenerationBumped is the fleet-wide session generation moving, which

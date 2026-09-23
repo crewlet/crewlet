@@ -256,6 +256,8 @@ var categories = map[string]placement{
 	"iam_token_overreach":           {"auth", RateAuthenticated},
 	"iam_recovery_code_used":        {"auth", RateAuthenticated},
 	"iam_mfa_reset":                 {"auth", RateAuthenticated},
+	"iam_identity_linked":           {"auth", RateAuthenticated},
+	"iam_identity_unlinked":         {"auth", RateAuthenticated},
 	"iam_session_generation_bumped": {"auth", RateAuthenticated},
 	"statelog_record_unverifiable":  {"auth", RateEngine},
 	"statelog_record_tampered":      {"auth", RateEngine},

@@ -17,8 +17,8 @@
 // there is no uniqueness check anywhere in this estate, and there is nothing
 // to add one to.
 //
-// What makes an address, a login and a seat binding unique instead is the
-// SUBJECT GRAMMAR: each claim arbitrates on ITSELF, create-only at an
+// What makes an address, a login, a seat binding and an identity provider's
+// subject unique instead is the SUBJECT GRAMMAR: each claim arbitrates on ITSELF, create-only at an
 // expectation of zero, so two operators enrolling one address contend at the
 // broker and exactly one wins. It is the knowledge base's create rule —
 // arbitrate on the TITLE, because two writers must contend for a name and two
@@ -37,7 +37,8 @@
 //
 // A person's id is a uuid7 that nothing renames, and every claim record names
 // it. An enrolment is therefore a SEQUENCE — take the address, take the login,
-// write the person — for the reason the tracker's dependency edge is one: each
+// take the provider subject when the enrolment came through one, write the
+// person — for the reason the tracker's dependency edge is one: each
 // end arbitrates on its own subject, and a record has exactly one subject to
 // arbitrate on. A sequence that stops halfway leaves a CLAIMED ADDRESS WITH NO
 // PERSON, which is a legal named state rather than corruption: the claim report
@@ -75,7 +76,7 @@ import (
 // with that literal in it.
 type ObjectKind string
 
-// The eleven kinds.
+// The twelve kinds.
 //
 // EXPORTED AND ENUMERATED because four readers that cannot see each other all
 // compare against them: the publisher builds the subject, the wake feed's
@@ -145,6 +146,36 @@ const (
 	// state this domain can prevent, because the chart is a different log
 	// and a read of it guarantees nothing.
 	KindSeat ObjectKind = "seat"
+
+	// KindLink is a claim pinning one IDENTITY PROVIDER SUBJECT to one
+	// person, by the keyed BLIND of the issuer and the subject together.
+	//
+	// IT IS WHAT A PROVIDER SIGN-IN RESOLVES THROUGH, and the only thing:
+	// the provider asserts a subject, the subject's blind names this
+	// claim, and the claim names the person. An address the provider
+	// asserts is never a link, because at most providers a person sets
+	// their own address, and the person an address match would link them
+	// to is whoever is most worth becoming. So a link is made by exactly
+	// two gestures — redeeming an invitation THROUGH the provider, and an
+	// administrator pinning it ([Writer.Link]) — and arbitrated here like
+	// every other claim, create-only at an expectation of zero, so two
+	// administrators pinning one subject to two people contend and exactly
+	// one wins.
+	//
+	// A BLIND for [KindEmail]'s reason and the only one: the subject
+	// identifies a person at a third party, and a subject is a broker
+	// path carried in the clear in every delivery. Under its OWN class of
+	// the blind-index key, so a subject can never collide with an address.
+	//
+	// ITS HOLDER IS A CREDENTIAL ROW, not a column on the person: the link
+	// is what the person signs in WITH, and the credential table is where
+	// a provider sign-in has always resolved a subject. The claim's apply
+	// is the ONLY writer of those rows — a content record never carries
+	// one and its apply never deletes one — which is what keeps the
+	// arbitration and the row one fact rather than two. A person holds at
+	// most one: pinning a second takes the first off them, which is the
+	// column semantics every other claim has.
+	KindLink ObjectKind = "link"
 
 	// KindSession is one signed-in session's whole life, by its LINEAGE:
 	// the uuid7 the session was opened with, which its rotations are
@@ -239,7 +270,7 @@ const (
 	KindBarrier ObjectKind = "barrier"
 )
 
-// ObjectKinds are the eleven, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the twelve, and THE ORDER IS LOAD-BEARING.
 //
 // [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
 // order — so the declaration decides what the framework's own suite certifies,
@@ -252,7 +283,7 @@ const (
 // apply has nothing to attach to, so any other order would certify a failure
 // rather than a domain.
 var ObjectKinds = []ObjectKind{
-	KindPerson, KindEmail, KindLogin, KindSeat, KindSession,
+	KindPerson, KindEmail, KindLogin, KindSeat, KindLink, KindSession,
 	KindInvalidation, KindBootstrap, KindSweep, KindEviction,
 	KindGeneration, KindBarrier,
 }
@@ -263,7 +294,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// TEN OF ELEVEN DO. The barrier shares one subject across the whole domain, so
+// ELEVEN OF TWELVE DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one and write an anchor row per read into the transaction holding this
 // store's only writer.
@@ -271,7 +302,7 @@ func (k ObjectKind) Arbitrated() bool { return k != KindBarrier }
 
 // Identified reports whether this kind's subject carries an id.
 //
-// EIGHT OF ELEVEN DO. The bootstrap, the invalidation and the barrier are the
+// NINE OF TWELVE DO. The bootstrap, the invalidation and the barrier are the
 // three kinds with exactly one object in the whole domain, and each is a
 // singleton for a reason stated at its constant rather than because an id was
 // hard to choose.
@@ -286,7 +317,7 @@ func (k ObjectKind) Identified() bool {
 // RootScoped reports whether a record on this kind may state the whole estate
 // as its scope.
 //
-// FOUR OF ELEVEN MAY, and it is the tightest rule in this package because the
+// FOUR OF TWELVE MAY, and it is the tightest rule in this package because the
 // cost of the root term here is the highest in the tree: a deferred record at
 // the root blocks every read whose closure it covers, which is every read in
 // the domain — so one record a node cannot decode would freeze every
@@ -353,6 +384,13 @@ func LoginSubject(login string) Subject {
 // SeatSubject names a claim on one seat, by its derived id.
 func SeatSubject(seatID string) Subject {
 	return Subject{Kind: KindSeat, ID: seatID}
+}
+
+// LinkSubject names a claim on one identity provider subject, taking the BLIND
+// rather than the subject, for [EmailSubject]'s reason: this package never
+// sees a provider's subject in a broker path.
+func LinkSubject(blind string) Subject {
+	return Subject{Kind: KindLink, ID: blind}
 }
 
 // SessionSubject names one session's whole life by its lineage.

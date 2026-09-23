@@ -528,7 +528,8 @@ func (r *Reader) PersonByEmailBlind(ctx context.Context, blind string) (Sighting
 // has to verify THAT person's digest, while a subject resolved to the wrong
 // holder is somebody signed in as somebody else with nothing further checked.
 // Nothing the broker arbitrates produces one; a restore can, and the sign-in
-// stays refused until an operator removes one of the links.
+// stays refused until an operator unlinks one of the holders — the claim
+// report names both.
 var ErrSubjectAmbiguous = errors.New("iamdomain: more than one person holds " +
 	"a live link to this identity provider subject")
 
@@ -538,10 +539,13 @@ var ErrSubjectAmbiguous = errors.New("iamdomain: more than one person holds " +
 // THE CREDENTIAL AND NOT THE PERSON ROW, because a subject belongs to a link
 // rather than to a person: the person row's blind is their ADDRESS, and a
 // subject looked up there matches nobody — which is how every provider sign-in
-// was refused while each piece passed its own tests. A withdrawn or expired
-// link resolves nobody, for [CredentialRow.Revoked]'s rule: the callback checks
-// the person's stage and nothing about the link, so this read is the only
-// place a revoked link is refused.
+// was refused while each piece passed its own tests. A withdrawn link — an
+// unlink, a move to another subject, a removal — resolves nobody, for
+// [CredentialRow.Revoked]'s rule: the callback checks the person's stage and
+// nothing about the link, so this read is the only place a revoked link is
+// refused. A link its claim pinned to a RESERVATION answers that reservation
+// ([Sighting.Reserved]), which acts as nobody: an enrolment through the
+// provider that stopped between its claims and its person.
 func (r *Reader) PersonBySubjectBlind(ctx context.Context, blind string,
 	now time.Time) (Sighting, error) {
 

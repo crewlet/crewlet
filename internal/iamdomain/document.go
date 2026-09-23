@@ -157,6 +157,16 @@ type Claim struct {
 	// high bits.
 	ChartPosition uint64 `json:"chart_position,omitempty"`
 
+	// Issuer is the identity provider a LINK claim's subject belongs to,
+	// in the clear, set on a [KindLink] claim and on nothing else.
+	//
+	// IN THE CLEAR because it is the company's own provider's address and
+	// identifies nobody, and it has to travel because the subject's blind
+	// is one-way: without it a link row could say that somebody is linked
+	// and never to which provider — and a company that changes provider
+	// could not tell its old links from its new ones.
+	Issuer string `json:"issuer,omitempty"`
+
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
@@ -281,7 +291,15 @@ type Credential struct {
 	// SubjectBlind is the provider's own subject claim, blinded, for an
 	// oidc credential. It identifies a person at a third party, which is
 	// the same reason an address is blinded and the only one.
+	//
+	// AN OIDC CREDENTIAL IS A LINK, and a link is written by its CLAIM'S
+	// apply and by nothing else ([KindLink]): a person's document never
+	// carries one, and the writer refuses a document that does.
 	SubjectBlind string `json:"subject_blind,omitempty"`
+
+	// Issuer is the provider an oidc credential's subject belongs to, in
+	// the clear — see [Claim.Issuer]. Empty on every other method.
+	Issuer string `json:"issuer,omitempty"`
 
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 	RevokedAt time.Time `json:"revoked_at,omitzero"`
@@ -334,6 +352,11 @@ const (
 	// MethodOIDC is an identity provider's assertion. Nothing is
 	// presented to this engine, so there is no verifier at all: what is
 	// stored is which subject at which issuer this person is.
+	//
+	// IT IS A LINK, taken as a claim ([KindLink], [Writer.Link]) and never
+	// authored inside a person's document: the claim is what keeps one
+	// subject on one person, and a row the document could also write
+	// would be a second writer of the same fact.
 	MethodOIDC CredentialMethod = "oidc"
 
 	// MethodToken is a machine's bearer token, held as a hash.

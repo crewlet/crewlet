@@ -64,6 +64,7 @@ func catalogue() []events.Payload {
 		IAMLoginFailures{}, IAMStepUpCompleted{}, IAMCredentialMinted{},
 		IAMCredentialRevoked{}, IAMGrantsChanged{}, IAMTokenFirstUse{},
 		IAMTokenOverreach{}, IAMRecoveryCodeUsed{}, IAMMFAReset{},
+		IAMIdentityLinked{}, IAMIdentityUnlinked{},
 		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 	}
 }
@@ -96,6 +97,8 @@ var wireTypes = []string{
 	"iam_credential_minted",
 	"iam_credential_revoked",
 	"iam_grants_changed",
+	"iam_identity_linked",
+	"iam_identity_unlinked",
 	"iam_login_failures",
 	"iam_mfa_reset",
 	"iam_recovery_code_used",
@@ -352,6 +355,8 @@ var wireTags = map[string][]string{
 	"iam_token_overreach":             {"every_use", "remote", "route", "status", "token"},
 	"iam_recovery_code_used":          {"login", "person", "remaining", "remote"},
 	"iam_mfa_reset":                   {"by", "person", "reason"},
+	"iam_identity_linked":             {"by", "issuer", "person", "via"},
+	"iam_identity_unlinked":           {"by", "issuer", "person", "reason"},
 	"iam_session_generation_bumped":   {"by", "generation", "reason"},
 	"statelog_record_unverifiable":    {"domain", "held", "key_id", "position"},
 	"statelog_record_tampered":        {"domain", "held", "key_id", "position"},
