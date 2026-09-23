@@ -40,6 +40,12 @@
 // either direction, by construction rather than by a uniqueness check some
 // later writer has to remember to run.
 //
+// AND BOTH ARE BOUNDED AT [MaxLogin], a seat handle's own width: a login is a
+// subject token the broker indexes for the life of the deployment and the
+// name in an author column beside a seat handle. The bound is IN the grammar,
+// so every surface that enrols, renames or composes a login is held to it by
+// asking the one question it already asks.
+//
 // AND EACH GRAMMAR BELONGS TO ONE KIND — [ValidLoginFor] — because a name is
 // read back as a claim about the kind that holds it. `token:<id>` is the login
 // a Tier A token acts under, and the identity directory's row under it is what
@@ -135,11 +141,35 @@ var loginPattern = regexp.MustCompile(`^` + segment + `(?:\.` + segment + `)+$`)
 // nothing can decode, and the write lands while every listing misses it.
 var handlePattern = regexp.MustCompile(`^` + segment + `(?::` + segment + `)+$`)
 
+// MaxLogin bounds a person's login and a machine's handle, in bytes — which
+// is characters too, since both grammars admit ASCII alone.
+//
+// SIXTY-FOUR, which is the bound a seat handle already has (internal/chart's
+// MaxKey), for the reasons that bound it — restated here because this package
+// is a leaf and cannot import the chart:
+//
+//   - a login is a SUBJECT TOKEN: `iam.login.<login>` is the claim it
+//     arbitrates on, so the broker keeps it in a per-subject index for the
+//     life of the deployment, and a Tier A token's `token:<id>` is one too;
+//   - it lands in the same author column a seat handle does — the tracker's,
+//     the knowledge base's, the chart's and the identity trail's — so the
+//     three names share one width wherever a screen renders who did
+//     something;
+//   - and the directory prints it on every row.
+//
+// Nothing bounded it before, so a login was whatever length somebody typed,
+// and a proposal derived from a sixty-four-byte address local part plus a
+// domain label could run past a hundred. A Tier A token id therefore stops at
+// fifty-eight: it acts under `token:<id>`.
+const MaxLogin = 64
+
 // ValidLogin reports whether s is a well-formed person login.
-func ValidLogin(s string) bool { return loginPattern.MatchString(s) }
+func ValidLogin(s string) bool { return len(s) <= MaxLogin && loginPattern.MatchString(s) }
 
 // ValidMachineHandle reports whether s is a well-formed machine handle.
-func ValidMachineHandle(s string) bool { return handlePattern.MatchString(s) }
+func ValidMachineHandle(s string) bool {
+	return len(s) <= MaxLogin && handlePattern.MatchString(s)
+}
 
 // TokenLoginPrefix is the class segment a Tier A token's login carries.
 //
@@ -258,7 +288,10 @@ func NormalizeEmail(email string) string {
 // part that yields one segment — `jane@example.com` — borrows the domain's
 // first label as its second (`jane.example`), because the dot is what keeps a
 // login out of the seat-handle namespace and a proposal that could never be
-// accepted would be a form that refuses its own default.
+// accepted would be a form that refuses its own default. For the same reason
+// an address whose proposal would run past [MaxLogin] proposes NOTHING rather
+// than a cut name: a login shortened at an arbitrary byte is one the person
+// did not choose and would not recognise, and an empty field asks them to.
 func LoginFromAddress(address string) string {
 	local, domain, ok := strings.Cut(NormalizeEmail(address), "@")
 	if !ok {

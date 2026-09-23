@@ -2,6 +2,7 @@ package iamdomain_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -33,6 +34,10 @@ func TestAnEnrolmentHoldsALoginToItsHoldersKind(t *testing.T) {
 			"ci:release", "mallory@example.com"},
 		{"a machine taking a person's login", iam.KindMachine,
 			"dana.sre", ""},
+		// THE BOUND IS THE GRAMMAR'S, so the domain inherits it rather
+		// than restating it: sixty-five bytes of dotted login.
+		{"a person's login past the bound", iam.KindPerson,
+			strings.Repeat("d", iam.MaxLogin-3) + ".sre", "dana@example.com"},
 	} {
 		_, err := rig.writer.Enrol(rig.t.Context(), iamdomain.Enrolment{
 			PersonID: "018f3a9c-0000-7000-8000-00000000010" + string(rune('a'+i)),

@@ -217,7 +217,7 @@
           "type": "array"
         },
         "id": {
-          "description": "Short label; the token acts under the login token:\u003cid\u003e, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons.",
+          "description": "Short label; the token acts under the login token:\u003cid\u003e, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons, at most 58 characters so the login stays within 64.",
           "pattern": "^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)*$",
           "type": "string"
         },

@@ -734,7 +734,8 @@ A login that is absent or outside its holder's kind is `400` — `POST
 /iam/people` requires one for a person as for a machine, because it is the
 name their changes are recorded under while they hold no seat: a person's is dotted (`jane.doe`)
 and a machine's is coloned (`ci:release`, or `token:<id>` to bind a Tier A
-token), checked on a create and on a rename alike — and so is a `kind` other
+token), at most 64 characters either way, checked on a create and on a rename
+alike — and so is a `kind` other
 than `person` or `machine`, since a seat belongs to the chart and the engine
 is the node. A value outside a bound is `400` too: a `reason` longer than 256
 bytes (it is rendered into the authentication trail beside the op, so it

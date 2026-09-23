@@ -1,6 +1,9 @@
 package iam
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // AN ADDRESS IS MATCHED IN THE FORM A VENDOR SENDS IT.
 //
@@ -85,10 +88,16 @@ func TestAProposedLoginFitsThePersonGrammarOrIsNothing(t *testing.T) {
 		"punctuation separates once":  {"o'brien..x@example.com", "o.brien.x"},
 		"a hyphen only inside a word": {"--jane--doe-@example.com", "jane-doe.example"},
 		"hyphens survive in a word":   {"mary-jane.watson@example.com", "mary-jane.watson"},
-		"no local part":               {"@example.com", ""},
-		"no domain to borrow from":    {"jane@", ""},
-		"not an address":              {"jane.doe", ""},
-		"nothing":                     {"", ""},
+		// AT THE BOUND AND ONE PAST IT: fifty-six letters and `.example` is
+		// sixty-four bytes, and a fifty-seventh is a login no enrolment
+		// would accept — so it proposes nothing rather than a cut name.
+		"a proposal at the bound": {strings.Repeat("j", 56) + "@example.com",
+			strings.Repeat("j", 56) + ".example"},
+		"a proposal past the bound": {strings.Repeat("j", 57) + "@example.com", ""},
+		"no local part":             {"@example.com", ""},
+		"no domain to borrow from":  {"jane@", ""},
+		"not an address":            {"jane.doe", ""},
+		"nothing":                   {"", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

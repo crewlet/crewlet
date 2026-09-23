@@ -592,9 +592,11 @@ func loginFits(kind iam.Kind, login string) error {
 		shape = "a machine's login is lowercase segments joined by a COLON " +
 			"(ci:release, or token:<id> for a Tier A token)"
 	}
-	return fmt.Errorf("%w: %q is not a login a %s may hold — %s. Each kind has "+
-		"its own separator, which keeps it apart from a seat handle and from "+
-		"the other kind's names", ErrInvalidLogin, login, kind, shape)
+	return fmt.Errorf("%w: %q is not a login a %s may hold — %s, at most %d "+
+		"characters. Each kind has its own separator, which keeps it apart "+
+		"from a seat handle and from the other kind's names, and the bound is "+
+		"a seat handle's, since the two share every author column",
+		ErrInvalidLogin, login, kind, shape, iam.MaxLogin)
 }
 
 // ErrInvalidLogin reports a login outside its holder's kind's grammar.

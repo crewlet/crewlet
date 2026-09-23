@@ -798,7 +798,8 @@ api:
                         #   is required once port is set, on every backend
       - id: founder     # acts under the login token:founder — lowercase
                         #   letters, digits and hyphens, optionally joined
-                        #   by colons (ci-pipeline, ci:release)
+                        #   by colons (ci-pipeline, ci:release), at most 58
+                        #   characters so the login stays within 64
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26+ chars, on the RESOLVED value
         grants: [state:read, config:read, config:write, secrets:read,
                  secrets:write, work:write, knowledge:write, fleet:operate]

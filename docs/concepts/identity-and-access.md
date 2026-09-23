@@ -81,6 +81,14 @@ as a login, and an audit feed filtered on a name matches everything that name
 did and nothing else. A login without a dot, or a machine handle without a
 colon, is refused when it is written rather than discovered later.
 
+**All three stop at 64 characters.** A login is the subject its claim
+arbitrates on (`iam.login.<login>`), which the broker indexes for the life of
+the deployment, and it sits in the same author column a seat handle does, so it
+takes the handle's bound. A Tier A token id therefore stops at 58, since it
+acts under `token:<id>`; and an address whose proposed login would run past the
+bound proposes none, leaving the person to type one rather than handing them a
+name cut at an arbitrary letter.
+
 **Each shape belongs to its kind, and to no other.** A person's login must be
 dotted and a machine's must be coloned — at enrolment, at an invitation's
 redemption and at every rename. That matters most for one family of names:

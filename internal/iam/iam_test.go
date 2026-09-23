@@ -181,6 +181,49 @@ func TestALoginsGrammarBelongsToItsKind(t *testing.T) {
 	}
 }
 
+// A LOGIN IS BOUNDED AT [MaxLogin], in both grammars and so for every kind.
+//
+// It is a subject token the broker indexes for the life of the deployment and
+// the name in an author column beside a seat handle, so it is held to the
+// handle's width — enforced IN the grammar, which is what every surface that
+// enrols, renames or composes one asks. At the bound and one past it, for a
+// dotted login, a coloned handle and a Tier A token id, whose login carries
+// six bytes of class. Mutation: drop the length from either grammar and the
+// case past the bound is admitted.
+func TestALoginIsBoundedInItsGrammar(t *testing.T) {
+	t.Parallel()
+	// seg builds a name of exactly n bytes out of segments joined by sep.
+	seg := func(n int, sep string) string {
+		return strings.Repeat("a", n-1-len(sep)) + sep + "b"
+	}
+	for _, tc := range []struct {
+		name string
+		ok   func(string) bool
+		sep  string
+	}{
+		{"a person's login", func(s string) bool { return ValidLoginFor(KindPerson, s) }, "."},
+		{"a machine's handle", func(s string) bool { return ValidLoginFor(KindMachine, s) }, ":"},
+	} {
+		if at := seg(MaxLogin, tc.sep); !tc.ok(at) {
+			t.Errorf("%s of %d bytes, the bound, is refused: %q", tc.name,
+				len(at), at)
+		}
+		if past := seg(MaxLogin+1, tc.sep); tc.ok(past) {
+			t.Errorf("%s of %d bytes, past the bound, is admitted", tc.name,
+				len(past))
+		}
+	}
+	idAt := strings.Repeat("a", MaxLogin-len(TokenLoginPrefix))
+	if !ValidTokenID(idAt) {
+		t.Errorf("a Tier A token id whose login is %d bytes is refused",
+			len(TokenLogin(idAt)))
+	}
+	if ValidTokenID(idAt + "a") {
+		t.Errorf("a Tier A token id whose login is %d bytes is admitted",
+			len(TokenLogin(idAt+"a")))
+	}
+}
+
 // A TIER A TOKEN'S ID COMPOSES A MACHINE LOGIN, and only one that does is an
 // id — the rule internal/config refuses a token by.
 func TestATierATokenIDComposesAMachineLogin(t *testing.T) {

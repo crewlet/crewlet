@@ -104,6 +104,10 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"token id with an underscore", "api:\n  auth:\n    tokens:\n      - {id: ci_bot, token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
 		{"token id with a dot", "api:\n  auth:\n    tokens:\n      - {id: ci.bot, token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
 		{"token id with an empty segment", "api:\n  auth:\n    tokens:\n      - {id: \"ci:\", token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
+		// AND TO ITS LENGTH: fifty-nine characters is a `token:<id>` of
+		// sixty-five, one past the bound every login is held to.
+		{"token id whose login is past the bound", "api:\n  auth:\n    tokens:\n      - {id: " +
+			strings.Repeat("a", 59) + ", token: a}\n", "api.auth.tokens[0].id", ErrUnknownValue},
 
 		// A CORS ALLOW-LIST IS COMPARED AGAINST THE BROWSER'S `Origin`
 		// HEADER EXACTLY, and that header is always `scheme://host[:port]`
