@@ -951,7 +951,9 @@ The three cases are where the log is followed **from**:
   is followed from its first surviving record;
 - **restored** — it is the same stream, ending below this node's checkpoint or
   written past it since, so the rows already hold every record the copy kept
-  and it is followed from its end; none of them is applied again. If the log
+  and it is followed from its end — one below the generation record the verb
+  appends, so a record written while it ran is not applied past it either —
+  and none of them is applied again. If the log
   also holds records the rows do **not** — written after the restore, by a node
   whose rows were the copy's age — they would be applied on no node, so the
   verb names the newest of them and refuses unless you pass `-discard`. The

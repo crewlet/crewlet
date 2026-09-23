@@ -33,6 +33,10 @@ type fakeCapacityNode struct {
 	// whether the transition was asked to discard it.
 	reanchorDiscards bool
 	reanchorDiscard  bool
+
+	// reanchorTakes is how long the transition takes to answer — a node
+	// rebuilding its consumer on a slow metadata group.
+	reanchorTakes time.Duration
 }
 
 func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
@@ -88,6 +92,7 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 		reply(w, body)
 	})
 	mux.HandleFunc("POST /work/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(n.reanchorTakes)
 		n.reanchorConfirm = r.URL.Query().Get("confirm")
 		n.reanchorDiscard = r.URL.Query().Get("discard") == "true"
 		which := n.reanchorCase
@@ -475,5 +480,30 @@ func writeArtefact(t *testing.T, dir string, at time.Time) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), body, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A REANCHOR IS WAITED FOR PAST THE ORDINARY TEN SECONDS.
+//
+// Once its generation record is on the log a reanchor rebuilds the node's
+// consumer — a delete and a create of a replicated object — and on a fleet
+// whose metadata group is slow that outlasts the ten seconds every other call
+// gets. The CLI gave up there and reported a failure for a transition the node
+// went on to finish; the node had also been running it on the request's own
+// context, so the cancellation stopped it halfway.
+func TestAReanchorIsWaitedForPastTheOrdinaryTimeout(t *testing.T) {
+	node := newFakeCapacityNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	node.reanchorCase, node.reanchorCursor = "restored", 7000
+	node.reanchorTakes = nodeRequestTimeout + 500*time.Millisecond
+
+	stdout, _, err := cli(t, "retention", "reanchor", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "2031-04-02T03:00:00Z")
+	if err != nil {
+		t.Fatalf("a reanchor the node answered after %s was reported as %v — the "+
+			"CLI gave up on a transition the node finished", node.reanchorTakes, err)
+	}
+	if !strings.Contains(stdout, "is re-anchored at generation") {
+		t.Fatalf("the report does not say the log was re-anchored:\n%s", stdout)
 	}
 }

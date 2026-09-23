@@ -371,6 +371,21 @@ func maintenanceExclude(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
+// reanchorRequestTimeout is how long `crewlet retention reanchor` waits for the
+// node's answer to the transition itself.
+//
+// SIX MINUTES. Once its generation record is appended, a reanchor finishes on
+// the node's own budget — the broker's bring-up budget, five minutes on a
+// clustered one — because it rebuilds this node's consumer on the log, a delete
+// and a create of a replicated object each of which is a raft round trip there;
+// the minute on top covers what it reads before the append: the stream, the
+// positions register and the log's tail. At the ten seconds every other call
+// gets, a transition on a fleet whose metadata group was slow was reported to
+// the operator as failed while the node went on to finish it — and the node
+// ran it on the request's own context, so the cancellation stopped it halfway,
+// with its generation open on the log and nothing committed.
+const reanchorRequestTimeout = 6 * time.Minute
+
 // retentionReanchor is `crewlet retention reanchor`.
 func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 	var stream, confirm *string
@@ -465,7 +480,8 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 		Cursor     uint64                `json:"cursor"`
 		Discarded  *statelog.TailRecord  `json:"discarded"`
 	}
-	if err := client.post(context.Background(), path, &answer); err != nil {
+	if err := client.patiently(reanchorRequestTimeout).post(context.Background(),
+		path, &answer); err != nil {
 		return err
 	}
 	from := fmt.Sprintf("from its first surviving record, after sequence %d",

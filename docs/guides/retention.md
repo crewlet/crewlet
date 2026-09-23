@@ -871,6 +871,22 @@ written after the restore at all, and `-discard` then discards nothing, because
 the record it names is one the rows already hold. What it never does is follow
 the log past a record it cannot vouch for without saying so.
 
+**The checkpoint goes one below the verb's own generation record**, not at the
+end it read: the verb appends that record first, so anything written between
+its reading and its append lands below the record too. If a node whose rows
+were the copy's age writes the log in that moment, the verb walks the log again
+up to its own record, names what landed, and refuses with the generation already
+open — re-run it with `-discard` to finish, or keep the record by replacing this
+node's rows with a peer's and evicting this node, which abandons the generation
+it opened.
+
+**A reanchor that stops part-way is re-run.** Once its generation record is on
+the log, the verb rebuilds this node's consumer and commits the checkpoint on
+the node's own time rather than the caller's, and the CLI waits up to six
+minutes for it. If it stops anyway — the broker blinked, the node restarted —
+re-run the same command: it finds its own record, follows the log from one
+below it, and still names every record written after the restore beneath it.
+
 **A rebuild under a node that never restarts is caught too**, wherever the node
 reads the stream's state: the position heartbeat does every ten seconds, and a
 write that would publish at an expectation of zero does within the write. The

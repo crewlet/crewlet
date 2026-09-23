@@ -429,6 +429,9 @@ type reanchorLog struct {
 	// landed as before any expectation is checked. The solo broker — the
 	// default here — checks the expectation first and refuses instead.
 	dedupeFirst bool
+	// landed runs once after the next append that lands — a caller giving
+	// up the moment the record is on the log.
+	landed func()
 }
 
 // reanchorRecord is one record on the fake log.
@@ -472,7 +475,13 @@ func (l *reanchorLog) Append(_ context.Context, subject, msgID string, expect *u
 			Code:      400, Description: "wrong last sequence",
 		}
 	}
-	return l.landLocked(subject, msgID, body), false, nil
+	seq := l.landLocked(subject, msgID, body)
+	if l.landed != nil {
+		landed := l.landed
+		l.landed = nil
+		landed()
+	}
+	return seq, false, nil
 }
 
 // landLocked stores one record. The caller holds mu.
@@ -552,11 +561,14 @@ type reanchorConsumer struct {
 	fail   error
 	order  *[]string
 	during func()
+	// ctxErr is what the context each reset ran under said about itself.
+	ctxErr []error
 }
 
-func (c *reanchorConsumer) Reset(_ context.Context, after uint64) error {
+func (c *reanchorConsumer) Reset(ctx context.Context, after uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.ctxErr = append(c.ctxErr, ctx.Err())
 	if c.order != nil {
 		*c.order = append(*c.order, "consumer")
 	}
@@ -807,9 +819,11 @@ func TestARestoredLogIsReanchoredAtItsEnd(t *testing.T) {
 	in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
 	in.FirstSeq, in.LastSeq = 1, 7_000
 	// THE RESTORED COPY'S LAST RECORD, at the sequence the new checkpoint
-	// goes to.
+	// goes to — one below the generation record the append puts after it —
+	// and one these rows applied, as they did every record the copy kept.
 	f.log.seq = 6_999
-	f.log.put("probe.object.last", "op-last", []byte(`{}`))
+	f.log.put("probe.object.last", "op-last", probeBody(t, 7_000, "op-last"))
+	holdRecord(t, f.db, 7_000, "op-last")
 
 	plan, err := statelog.Reanchor(t.Context(), deps, in, confirmed())
 	if err != nil {
@@ -2104,5 +2118,191 @@ func TestWhoOpenedEachGenerationIsReadOffTheLog(t *testing.T) {
 	if got, err := statelog.GenerationOpeners(t.Context(), probeDomain{},
 		probeGeneration{keeps: false}, log, 1, 5); err != nil || len(got) != 0 {
 		t.Fatalf("a domain keeping no generation record = %v, %v, want nothing", got, err)
+	}
+}
+
+// probeBody is the probe domain's record at seq, as the fake log holds it.
+func probeBody(t *testing.T, seq uint64, opID string) []byte {
+	t.Helper()
+	body, err := json.Marshal(env(seq, "edit", fmt.Sprint(seq), opID, 1))
+	if err != nil {
+		t.Fatalf("encode the record at %d: %v", seq, err)
+	}
+	return body
+}
+
+// holdRecord seeds the fixture's rows with the record the fake log holds at
+// seq, applied under opID at generation 1 — what a node that applied it holds
+// in its operation ledger.
+func holdRecord(t *testing.T, db *store.DB, seq uint64, opID string) {
+	t.Helper()
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `SELECT 1 FROM probe_ops LIMIT 1`); err != nil {
+			if _, err := tx.ExecContext(t.Context(), probeDDL); err != nil {
+				return err
+			}
+		}
+		at := statelog.Position{Stream: probeStream, Generation: 1, Seq: seq}
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO probe_ops (op_id, subject, position, applied_at, stored_at)
+			VALUES (?, 'object.x', ?, 0, ?)`, opID, at.Packed(),
+			store.EncodeTime(reanchorCreated.Add(time.Duration(seq)*time.Second)))
+		return err
+	}); err != nil {
+		t.Fatalf("hold the record at %d: %v", seq, err)
+	}
+}
+
+// A RESTORED REANCHOR FOLLOWS THE LOG FROM ONE BELOW ITS OWN RECORD, AND
+// WALKS WHAT LANDED BEFORE IT.
+//
+// The end it read is not where it follows from: a node whose rows were the
+// copy's age, whose fence was not yet established, wrote a record between the
+// reading and the append. Placed at the end as read, the checkpoint put that
+// record at the new generation on top of these rows. One below the generation
+// record, it is below the checkpoint instead — and the walk for what the
+// transition discards is taken again up to there, so the record is named: the
+// transition refuses without the operator's word, having opened the
+// generation and committed nothing else, and with it finishes naming what it
+// discarded.
+func TestARestoredReanchorFollowsFromOneBelowItsOwnRecord(t *testing.T) {
+	t.Parallel()
+	stage := func(t *testing.T) (*reanchorFixture, statelog.ReanchorInputs) {
+		t.Helper()
+		f := newReanchorFixture(t)
+		seedCursor(t, f.db, probeStream,
+			statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, reanchorCreated)
+		in := reanchorInputs()
+		in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
+		in.FirstSeq, in.LastSeq = 1, 7_000
+		f.log.seq = 6_999
+		f.log.put("probe.object.last", "op-last", probeBody(t, 7_000, "op-last"))
+		holdRecord(t, f.db, 7_000, "op-last")
+		// THE WRITE BETWEEN THE READING AND THE APPEND, by a copy-age node.
+		f.log.put("probe.object.late", "op-late", probeBody(t, 7_001, "op-late"))
+		return f, in
+	}
+
+	t.Run("without the operator's word", func(t *testing.T) {
+		t.Parallel()
+		f, in := stage(t)
+		_, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), in, confirmed())
+		if !errors.Is(err, statelog.ErrReanchorRefused) ||
+			!strings.Contains(err.Error(), "op-late") || !strings.Contains(err.Error(), "discard") {
+			t.Fatalf("Reanchor over a record landed before its own = %v, want a "+
+				"refusal naming it", err)
+		}
+		if at, _ := cursorOf(t, f.db, probeStream); at.Generation != 1 {
+			t.Fatalf("a refused reanchor moved the checkpoint to %s", at)
+		}
+		if len(f.consumer.after) != 0 {
+			t.Fatalf("a refused reanchor moved the consumer to %v", f.consumer.after)
+		}
+	})
+
+	t.Run("with it", func(t *testing.T) {
+		t.Parallel()
+		f, in := stage(t)
+		guard := confirmed()
+		guard.Discard = true
+		plan, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), in, guard)
+		if err != nil {
+			t.Fatalf("Reanchor with the discard flag: %v", err)
+		}
+		// The generation record landed at 7002, above the late write.
+		if plan.Cursor != 7_001 || plan.Discarded == nil || plan.Discarded.Seq != 7_001 {
+			t.Fatalf("the plan is %+v, want the checkpoint at 7001, one below the "+
+				"generation record, discarding the record there", plan)
+		}
+		if at, _ := cursorOf(t, f.db, probeStream); at.Seq != 7_001 || at.Generation != 2 {
+			t.Fatalf("the checkpoint is at %s, want generation 2 at 7001", at)
+		}
+		if len(f.consumer.after) != 1 || f.consumer.after[0] != 7_001 {
+			t.Fatalf("the consumer resumes after %v, want 7001 — the late write "+
+				"would be applied at the new generation", f.consumer.after)
+		}
+	})
+}
+
+// A RE-RUN OF AN INTERRUPTED RESTORED REANCHOR FINISHES BELOW ITS OWN RECORD.
+//
+// The first attempt appended its generation record and failed before its
+// checkpoint committed. The re-run reads the log's end after that record, and
+// its inputs name the record as its own (ReanchorInputs.Opened): the
+// transition races its own record, finds it, and puts the checkpoint one below
+// it — where the resumed applier applies it first. At the end as read, the
+// record sat below the checkpoint and was applied nowhere.
+func TestARerunOfAnInterruptedRestoredReanchorFinishesBelowItsOwnRecord(t *testing.T) {
+	t.Parallel()
+	f := newReanchorFixture(t)
+	seedCursor(t, f.db, probeStream,
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, reanchorCreated)
+	f.log.seq = 6_999
+	f.log.put("probe.object.last", "op-last", probeBody(t, 7_000, "op-last"))
+	holdRecord(t, f.db, 7_000, "op-last")
+	// THE FIRST ATTEMPT: its record at 7001, and its consumer reset failed.
+	deps := f.deps(probeDomain{})
+	in := reanchorInputs()
+	in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
+	in.FirstSeq, in.LastSeq = 1, 7_000
+	f.consumer.fail = errors.New("the caller gave up")
+	if _, err := statelog.Reanchor(t.Context(), deps, in, confirmed()); err == nil {
+		t.Fatal("the first attempt succeeded, so nothing here is a re-run")
+	}
+	f.consumer.fail = nil
+	// AND A RECORD AFTER IT — the log moved on before the re-run read it.
+	f.log.put("probe.barrier.b", "op-barrier", []byte(`{"kind":"barrier"}`))
+
+	in.LastSeq, in.Opened = 7_002, 7_001
+	if which, cursor, err := in.Case(); err != nil || which != statelog.ReanchorRestored ||
+		cursor != 7_000 {
+		t.Fatalf("the re-run's case is (%q, %d, %v), want restored at 7000, one "+
+			"below its own record", which, cursor, err)
+	}
+	plan, err := statelog.Reanchor(t.Context(), deps, in, confirmed())
+	if err != nil {
+		t.Fatalf("the re-run: %v", err)
+	}
+	if plan.Cursor != 7_000 || plan.Discarded != nil {
+		t.Fatalf("the re-run's plan is %+v, want the checkpoint at 7000 discarding "+
+			"nothing — its own record is not a record written after the restore", plan)
+	}
+	if at, _ := cursorOf(t, f.db, probeStream); at.Seq != 7_000 || at.Generation != 2 {
+		t.Fatalf("the checkpoint is at %s, want generation 2 at 7000", at)
+	}
+}
+
+// A REANCHOR FINISHES AFTER ITS CALLER HAS GONE.
+//
+// Once the generation record is on the log the generation is open, and every
+// later step is what makes this node the one the fleet continues from. On the
+// caller's context, a client that gave up — the operator's CLI waits a bounded
+// time, and the API runs this on the request's own context — cancelled the
+// consumer's rebuild halfway and left the generation open with nothing
+// committed. The steps after the append run on a context of their own.
+func TestAReanchorFinishesAfterItsCallerHasGone(t *testing.T) {
+	t.Parallel()
+	f := newReanchorFixture(t)
+	seedCursor(t, f.db, probeStream,
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, keyedCreated)
+	in := reanchorInputs()
+	in.FirstSeq = 42
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	f.log.landed = cancel
+	plan, err := statelog.Reanchor(ctx, f.deps(probeDomain{}), in, confirmed())
+	if err != nil {
+		t.Fatalf("a reanchor whose caller gave up after the append = %v, want it "+
+			"finished", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("the caller's context was never cancelled, so nothing here was checked")
+	}
+	if len(f.consumer.ctxErr) != 1 || f.consumer.ctxErr[0] != nil {
+		t.Fatalf("the consumer was rebuilt under a context reporting %v, want a "+
+			"live one", f.consumer.ctxErr)
+	}
+	if at, _ := cursorOf(t, f.db, probeStream); at.Generation != plan.Generation {
+		t.Fatalf("the checkpoint is at %s, want generation %d committed", at, plan.Generation)
 	}
 }

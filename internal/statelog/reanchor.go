@@ -153,6 +153,15 @@ type ReanchorInputs struct {
 	// describe the sources these rows' own domains keep.
 	Unheld *TailRecord
 
+	// Opened is the sequence of THIS node's own record opening the
+	// generation this reanchor would open, when an earlier attempt appended
+	// it and failed before its checkpoint committed ([OwnGeneration]) — and
+	// zero when there is none. The restored case's checkpoint goes one below
+	// it, and the walk for Unheld stops there: the record is this node's own
+	// transition rather than one written after the restore, and everything
+	// beneath it is what the walk exists to find.
+	Opened uint64
+
 	// PeersReanchored is how many peers have already re-anchored THIS
 	// stream: they stand at a later generation of this domain than this
 	// node's checkpoint, and a generation moves only by a reanchor or by
@@ -368,7 +377,14 @@ func (in ReanchorInputs) Case() (ReanchorCase, uint64, error) {
 	if pastEnd(in.Position, in.LastSeq) || in.Diverged {
 		// AT THE LOG'S END, because the rows already hold every record the
 		// restored copy kept — see [ReanchorRestored] for what replaying
-		// them into a new generation does.
+		// them into a new generation does. One below this node's own
+		// generation record where an earlier attempt already appended it
+		// ([ReanchorInputs.Opened]): that record opens the generation, and
+		// the resumed applier applies it first. The transition places it
+		// below the record it appends in the same way ([Reanchor]).
+		if in.Opened > 0 {
+			return ReanchorRestored, in.Opened - 1, nil
+		}
 		return ReanchorRestored, in.LastSeq, nil
 	}
 	if in.Abandoned > in.Generation {
@@ -656,11 +672,28 @@ type ReanchorDeps struct {
 	By     string
 	NodeID string
 
+	// CompletionBudget bounds the steps after the generation record is
+	// appended, which run on a context DETACHED from the caller's — see
+	// [Reanchor] — and zero is [ReanchorCompletionBudget].
+	CompletionBudget time.Duration
+
 	// Logger is where this writes. Nil is the package's own component
 	// logger, never silence: see loggerOr for what silence cost.
 	Logger *slog.Logger
 	Now    func() time.Time
 }
+
+// ReanchorCompletionBudget is how long a reanchor's steps after its append get
+// when the caller names no budget of its own.
+//
+// TWO MINUTES: the steps are a stream read, the walk of the log's tail, one
+// record read, a local transaction — and the rebuild of this node's consumer,
+// which is a delete and a create of a replicated object and dominates the rest.
+// That is a bring-up of two creates, and two minutes is the ceiling a whole
+// bring-up gets on a broker with no peers; a caller on a clustered broker
+// passes the clustered bring-up's own, which is longer because each create is a
+// raft round trip against peers ([ReanchorDeps.CompletionBudget]).
+const ReanchorCompletionBudget = 2 * time.Minute
 
 // resolved is these deps with every optional one defaulted, and the only
 // value [Reanchor] reads them from.
@@ -673,6 +706,9 @@ func (d ReanchorDeps) resolved() ReanchorDeps {
 	d.Logger = loggerOr(d.Logger)
 	if d.Now == nil {
 		d.Now = time.Now
+	}
+	if d.CompletionBudget <= 0 {
+		d.CompletionBudget = ReanchorCompletionBudget
 	}
 	return d
 }
@@ -697,12 +733,19 @@ func (d ReanchorDeps) resolved() ReanchorDeps {
 //     its OWN record there and carries on, first-writer-wins used for the one
 //     thing it is perfectly suited to. A record another node wrote there is a
 //     refusal, force or no force: that node opened the generation from its own
-//     rows ([appendGeneration]). Then read the stream's instant AGAIN:
-//     the same instant before and after the append is the same stream
-//     throughout, because an instant never comes back.
+//     rows ([appendGeneration]). Everything after the append runs on a
+//     context detached from the caller's, under its own budget: the
+//     generation is open once the record is on the log, and a caller giving
+//     up must not leave it open with nothing committed. Then read the
+//     stream's instant AGAIN: the same instant before and after the append is
+//     the same stream throughout, because an instant never comes back. For a
+//     restored log, walk its tail again up to one below the record — what
+//     landed between the reading and the append is below it too — and refuse,
+//     unless the operator accepted discarding, over a record these rows do not
+//     hold ([ReanchorInputs.Unheld]).
 //  5. Move this node's consumer to the case's checkpoint: one below the
-//     stream's first surviving sequence for a recreated one, the log's end as
-//     it was read for a restored one. BEFORE the checkpoint, so a consumer
+//     stream's first surviving sequence for a recreated one, one below the
+//     generation record for a restored one. BEFORE the checkpoint, so a consumer
 //     that cannot be moved leaves nothing committed: the broker will not move
 //     a consumer's start on its own, and one left at the old checkpoint on a
 //     rebuilt stream starts past every record the applier then waits for.
@@ -714,9 +757,10 @@ func (d ReanchorDeps) resolved() ReanchorDeps {
 //     was past its end — so the engine starts the loop again and the domain
 //     resumes without a restart.
 //
-// Both checkpoints sit below the generation record the transition appended —
-// the first sequence and the end were both read before the append — so the
-// resumed applier applies that record first, whichever case it was.
+// Every checkpoint sits below the generation record the transition appended —
+// the first sequence was read before the append, and the restored case's is
+// placed one below the record itself — so the resumed applier applies that
+// record first, whichever case it was.
 //
 // # What it no longer does, and why
 //
@@ -807,18 +851,69 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 		return ReanchorPlan{}, fmt.Errorf("statelog: encode %s's generation %d "+
 			"record: %w", d.Domain.Name(), gen, err)
 	}
+	var opened uint64
 	if keeps {
-		if err := appendGeneration(ctx, d, spec, gen, record); err != nil {
+		if opened, err = appendGeneration(ctx, d, spec, gen, record); err != nil {
 			return ReanchorPlan{}, fmt.Errorf("statelog: publish %s's generation "+
 				"%d: %w", d.Domain.Name(), gen, err)
 		}
 	}
-	if err := stillConfirmed(ctx, d.Stream, in); err != nil {
+
+	// FROM HERE ON, NOT THE CALLER'S CONTEXT. The record is on the log, so
+	// the generation is open whatever happens next, and every step after it
+	// exists to make this node the one the fleet continues from. On the
+	// caller's context a client that gave up — the operator's CLI waits a
+	// bounded time, and the API runs this on the request's own context —
+	// cancelled the consumer's rebuild halfway, leaving the generation open
+	// on the log with nothing committed; and a re-run then met its own
+	// record. Detached, bounded by its own budget
+	// ([ReanchorDeps.CompletionBudget]), the transition finishes or fails on
+	// its own account.
+	post, cancelPost := context.WithTimeout(context.WithoutCancel(ctx), d.CompletionBudget)
+	defer cancelPost()
+	if err := stillConfirmed(post, d.Stream, in); err != nil {
 		return ReanchorPlan{}, err
 	}
 
+	// THE RESTORED CASE FOLLOWS THE LOG FROM ONE BELOW ITS OWN RECORD, not
+	// from the end it read: whatever landed between that reading and the
+	// append sits below the record, and one earlier attempt's record may be
+	// above that reading's end or below it. Placed at the end as read, a
+	// record a copy-age node wrote in between was applied at the new
+	// generation on top of these rows, and a re-run's checkpoint went above
+	// its own record, which was then applied nowhere. And the walk for what
+	// that discards is taken again up to there, because the records that
+	// landed in between are ones the first walk never saw
+	// ([ReanchorInputs.Unheld]).
+	if keeps && plan.Case == ReanchorRestored {
+		plan.Cursor = opened - 1
+		at.Seq = plan.Cursor
+		if in.ClaimsIdentity {
+			unheld, walkErr := UnheldTail(post, d.Domain, d.DB, d.Stream, in.Generation,
+				in.FirstSeq, plan.Cursor)
+			if walkErr != nil {
+				return ReanchorPlan{}, fmt.Errorf("statelog: %s's generation %d is "+
+					"open at sequence %d, and whether the records below it hold "+
+					"writes this node's rows do not could not be read — nothing "+
+					"else is committed; re-run the reanchor: %w", d.Domain.Name(),
+					gen, opened, walkErr)
+			}
+			if unheld != nil && !guard.Discard {
+				return ReanchorPlan{}, fmt.Errorf("%w: %s's generation %d is open at "+
+					"sequence %d, and records this node's rows do not hold landed "+
+					"below it after the log was read — the newest is %s. Nothing "+
+					"else is committed. Re-run with the discard flag to finish "+
+					"re-anchoring and apply them on no node; or keep them by "+
+					"replacing this node's rows with a peer's, and evict this node "+
+					"(crewlet retention evict), which abandons the generation it "+
+					"opened", ErrReanchorRefused, d.Domain.Name(), gen, opened, *unheld)
+			}
+			plan.Discarded = unheld
+		}
+	}
+
 	// 5. THIS NODE'S CONSUMER, before the checkpoint it resumes from.
-	if err := d.Consumer.Reset(ctx, plan.Cursor); err != nil {
+	if err := d.Consumer.Reset(post, plan.Cursor); err != nil {
 		return ReanchorPlan{}, fmt.Errorf("statelog: move this node's %s consumer "+
 			"to sequence %d of the adopted stream — nothing is committed, so "+
 			"re-running the reanchor repeats it: %w", d.Domain.Name(),
@@ -834,7 +929,7 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 	// the log does meanwhile moves it.
 	var names time.Time
 	if plan.Cursor > 0 {
-		_, _, storedAt, ok, readErr := d.Stream.At(ctx, plan.Cursor)
+		_, _, storedAt, ok, readErr := d.Stream.At(post, plan.Cursor)
 		if readErr != nil {
 			return ReanchorPlan{}, fmt.Errorf("statelog: read %s's record at sequence "+
 				"%d, which the new checkpoint names — nothing is committed, so "+
@@ -847,8 +942,8 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 	}
 
 	// 6. THE ONE CHECKPOINT, alone in its transaction.
-	if err := d.DB.Tx(ctx, func(tx *sql.Tx) error {
-		return t.reanchorCursor(ctx, tx, at, in.StreamCreatedAt, names, plan.From, d.Now())
+	if err := d.DB.Tx(post, func(tx *sql.Tx) error {
+		return t.reanchorCursor(post, tx, at, in.StreamCreatedAt, names, plan.From, d.Now())
 	}); err != nil {
 		return ReanchorPlan{}, fmt.Errorf("statelog: move %s's checkpoint into "+
 			"generation %d: %w", d.Domain.Name(), gen, err)
@@ -968,8 +1063,14 @@ func reanchoredDetail(c ReanchorCase) string {
 // clustered stream, so a message id that collided with a peer's would be
 // acknowledged as though it had landed; the domains' message ids name their
 // writer, and this does not rely on it.
+//
+// # It answers where the record is
+//
+// The sequence the record stands at — the one it landed at, or the one the
+// subject held it at when this was a re-run finding its own — because that is
+// where the restored case's checkpoint goes: one below it.
 func appendGeneration(ctx context.Context, d ReanchorDeps, spec StreamSpec, gen uint32,
-	record GenerationRecord) error {
+	record GenerationRecord) (uint64, error) {
 
 	subject := spec.SubjectPrefix + "." + record.Subject.String()
 	zero := uint64(0)
@@ -979,24 +1080,24 @@ func appendGeneration(ctx context.Context, d ReanchorDeps, spec StreamSpec, gen 
 		if !duplicate {
 			// LANDED AT ZERO: the subject held nothing, so nobody's
 			// record is there but this one.
-			return nil
+			return seq, nil
 		}
-		return generationIsOurs(ctx, d, subject, seq, gen)
+		return seq, generationIsOurs(ctx, d, subject, seq, gen)
 	case faultFull, faultTooLarge, faultRefused:
-		return fmt.Errorf("the broker refused to store the record: %s", detail)
+		return 0, fmt.Errorf("the broker refused to store the record: %s", detail)
 	case faultRejected, faultUnknown:
 		held, found, probe := d.Stream.LastSeq(ctx, subject)
 		switch {
 		case probe != nil:
-			return fmt.Errorf("the append was not acknowledged (%v) and whether "+
+			return 0, fmt.Errorf("the append was not acknowledged (%v) and whether "+
 				"%s holds a record could not be read: %w", err, subject, probe)
 		case !found:
-			return fmt.Errorf("the append was not acknowledged and %s holds "+
+			return 0, fmt.Errorf("the append was not acknowledged and %s holds "+
 				"nothing, so nothing landed — re-run the reanchor: %w", subject, err)
 		}
-		return generationIsOurs(ctx, d, subject, held, gen)
+		return held, generationIsOurs(ctx, d, subject, held, gen)
 	}
-	return err
+	return 0, err
 }
 
 // generationIsOurs reads the record a generation subject holds at seq and

@@ -151,7 +151,12 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		DB:       replicatedEstate{node: s.db},
 		By:       req.By,
 		NodeID:   e.native.Load().nodeID,
-		Now:      time.Now,
+		// THE BRING-UP BUDGET OF THIS BROKER, for the steps after the
+		// append: the consumer's rebuild is a delete and a create of a
+		// replicated object, which a clustered broker gives a raft round
+		// trip each ([statelog.ReanchorCompletionBudget]).
+		CompletionBudget: s.clustered.SequenceBudget(),
+		Now:              time.Now,
 	}, in, statelog.ReanchorGuard{Confirm: req.Confirm, Force: req.Force, Discard: req.Discard})
 	if err != nil {
 		if len(peers) > 0 {
@@ -304,27 +309,6 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	in.Diverged = in.Diverged || running.runner.Diverged()
 	in.ClaimsIdentity = running.domain.ClaimsIdentity()
 	n := e.native.Load()
-	// AND WHAT FOLLOWING A RESTORED LOG FROM ITS END WOULD DISCARD: the
-	// newest record on it that writes rows these do not hold, which on a
-	// restored log was written after the restore
-	// ([statelog.ReanchorInputs.Unheld]). Asked only in the restored case of a
-	// domain that claims identity — the one case that skips records — and an
-	// unreadable log refuses, because whether the reanchor loses writes is
-	// the question.
-	if in.ClaimsIdentity {
-		if which, _, caseErr := in.Case(); caseErr == nil && which == statelog.ReanchorRestored {
-			in.Unheld, err = statelog.UnheldTail(ctx, running.domain,
-				replicatedEstate{node: n.log.db}, running.log, in.Generation,
-				in.FirstSeq, in.LastSeq)
-			if err != nil {
-				return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether %s holds "+
-					"records written after the restore that this node's rows do not "+
-					"could not be read, and a restored reanchor would apply them on no "+
-					"node — check the broker and re-run: %w",
-					statelog.ErrReanchorRefused, stream, err)
-			}
-		}
-	}
 	if !in.ClaimsIdentity {
 		// NO FLEET GUARD APPLIES, and no generation is anybody's but this
 		// node's own: every node re-anchors its own copy of such a log.
@@ -447,7 +431,53 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			in.Abandoned = max(in.Abandoned, gen)
 		}
 	}
+	if err := e.restoredTail(ctx, running, n, enc, &in); err != nil {
+		return statelog.ReanchorInputs{}, nil, err
+	}
 	return in, peers, nil
+}
+
+// restoredTail fills in what a RESTORED reanchor of an identity-claiming domain
+// would discard: this node's own record opening the next generation, when an
+// earlier attempt already appended it ([statelog.ReanchorInputs.Opened]), and
+// the newest record below that — or below the log's end — that writes rows
+// these do not hold ([statelog.ReanchorInputs.Unheld]).
+//
+// LAST, after the fleet: the generation a reanchor opens is the one after every
+// generation this domain has used, an evicted node's included, and only then is
+// it known which subject an earlier attempt of this node's would have written.
+// An unreadable log refuses, because whether the reanchor loses writes is the
+// question.
+func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, n *native,
+	enc statelog.GenerationEncoder, in *statelog.ReanchorInputs) error {
+
+	// ONLY THE RESTORED CASE has a tail to fill — and a case that cannot be
+	// decided names none, since the transition refuses it in its own words.
+	if which, _, _ := in.Case(); which != statelog.ReanchorRestored {
+		return nil
+	}
+	stream := running.domain.Stream().Name
+	next := max(in.Generation, in.Abandoned) + 1
+	opened, own, err := statelog.OwnGeneration(ctx, running.domain, enc, running.log,
+		next, n.nodeID)
+	if err != nil {
+		return fmt.Errorf("%w: whether an earlier reanchor of %s on this node already "+
+			"opened generation %d could not be read off the log — check the broker "+
+			"and re-run: %w", statelog.ErrReanchorRefused, stream, next, err)
+	}
+	bound := in.LastSeq
+	if own {
+		in.Opened, bound = opened, opened-1
+	}
+	in.Unheld, err = statelog.UnheldTail(ctx, running.domain,
+		replicatedEstate{node: n.log.db}, running.log, in.Generation, in.FirstSeq, bound)
+	if err != nil {
+		return fmt.Errorf("%w: whether %s holds records written after the restore "+
+			"that this node's rows do not could not be read, and a restored reanchor "+
+			"would apply them on no node — check the broker and re-run: %w",
+			statelog.ErrReanchorRefused, stream, err)
+	}
+	return nil
 }
 
 // sameStream reports whether a peer's position can be on the stream this node's

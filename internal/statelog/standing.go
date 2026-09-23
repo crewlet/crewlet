@@ -153,3 +153,52 @@ func GenerationOpeners(ctx context.Context, d Domain, enc GenerationEncoder,
 	}
 	return out, nil
 }
+
+// OwnGeneration is the sequence of THIS node's own record opening generation
+// gen of domain d, and false when the subject holds no record, another node's,
+// or d keeps none — what a re-run of an interrupted reanchor finds its own
+// earlier append by.
+//
+// # Why a re-run needs it before it appends anything
+//
+// A reanchor appends its generation record before anything else moves, so one
+// that failed after the append — a caller that gave up while the consumer was
+// being rebuilt is enough — leaves that record on the log and nothing
+// committed. The re-run reads the log's end AFTER it: a restored reanchor that
+// walked back from that end for records these rows do not hold met its own
+// record first and refused naming it, hiding every record written after the
+// restore beneath it; and forced past, it put the checkpoint at the end, above
+// the record, which was then applied nowhere. So the walk and the checkpoint
+// are both bounded one below this node's own record ([ReanchorInputs.Opened]).
+// Another node's record there is not this node's to bound anything by: the
+// transition reads it back and refuses ([Reanchor]).
+func OwnGeneration(ctx context.Context, d Domain, enc GenerationEncoder,
+	log StandingLog, gen uint32, nodeID string) (uint64, bool, error) {
+
+	subject, keeps := enc.GenerationSubject(gen)
+	if !keeps {
+		return 0, false, nil
+	}
+	seq, held, err := log.LastSeq(ctx, d.Stream().SubjectPrefix+"."+subject.String())
+	if err != nil {
+		return 0, false, fmt.Errorf("statelog: read %s's generation %d subject: %w",
+			d.Stream().Name, gen, err)
+	}
+	if !held {
+		return 0, false, nil
+	}
+	_, payload, _, ok, err := log.At(ctx, seq)
+	switch {
+	case err != nil:
+		return 0, false, fmt.Errorf("statelog: read %s's generation %d record at "+
+			"sequence %d: %w", d.Stream().Name, gen, seq, err)
+	case !ok:
+		return 0, false, nil
+	}
+	env, err := d.Envelope(payload)
+	if err != nil {
+		return 0, false, fmt.Errorf("statelog: decode %s's generation %d record at "+
+			"sequence %d: %w", d.Stream().Name, gen, seq, err)
+	}
+	return seq, env.Writer == nodeID, nil
+}

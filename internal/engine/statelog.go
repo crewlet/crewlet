@@ -163,6 +163,11 @@ type stateLog struct {
 	db     *store.DB
 	fleet  coord.Fleet
 
+	// clustered is whether the broker has peers, which is what a replicated
+	// create's budget branches on — and so how long a reanchor's steps after
+	// its append may take ([statelog.ReanchorDeps.CompletionBudget]).
+	clustered jsprovision.Clustered
+
 	// metrics is the process's one recorder, threaded down so the apply
 	// loop's instruments are observed rather than merely declared.
 	metrics *metrics.Recorder
@@ -382,7 +387,8 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		metrics: e.metrics,
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
 		ceilings: ceilings, volume: streamVolume(boot),
-		run: runCtx, stop: cancel,
+		clustered: host.Clustered(),
+		run:       runCtx, stop: cancel,
 		snapshotNudge: make(chan struct{}, 1),
 	}
 	// PROVISION EVERY LOG FIRST, and only then decide whether this node
