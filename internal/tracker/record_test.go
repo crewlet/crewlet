@@ -365,14 +365,15 @@ func TestEncodeRefusesARecordThatCannotBeApplied(t *testing.T) {
 // cadence and the whole capacity model are derived from it. A struct tag that
 // quietly renamed a field or omitted the empty id would move that number with
 // nothing to notice.
+//
+// THE ENCODER THE READ INDEX CALLS, not a struct this case builds: the version
+// is the one field the encoder chooses, and a barrier written at the domain's
+// newest version is one every node on the build before retains — a deferral
+// row per linearizable read for the length of a rolling upgrade.
 func TestTheBarrierRecordIsItsMeasuredLiteral(t *testing.T) {
 	t.Parallel()
-	body, err := json.Marshal(tracker.RecordEnvelope{
-		V:       tracker.RecordVersion,
-		Subject: tracker.BarrierSubject(),
-		Op:      tracker.OpBarrier,
-		Gen:     3,
-		Scope:   tracker.ScopeSet{Subject: true},
+	body, err := tracker.EncodeBarrier(statelog.Envelope{
+		Kind: statelog.BarrierKind, Gen: 3,
 	})
 	if err != nil {
 		t.Fatalf("encode: %v", err)

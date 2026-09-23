@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the record shape this build writes.
+// RecordVersion is the record shape THIS BUILD can decode.
 //
 // A record at a HIGHER version leaves the envelope decoded and everything else
 // opaque, and is RETAINED at its position rather than skipped — which is the
@@ -18,7 +18,58 @@ import (
 // installs a gate: there an unknown version stops the applier, because a
 // deferred gate licenses every later record on this node and the eviction gate
 // has no inverse that repairs it.
-const RecordVersion = 1
+//
+// # What each version added
+//
+//   - 1: every shape this domain has.
+//   - 2: a task patch may carry the cross-project move's marker
+//     ([TaskPatch.Moving]).
+//
+// A record is WRITTEN at the lowest version a reader can apply without
+// losing anything it says, never simply at this constant — see
+// [recordVersionOf] for why that matters to a node still on the older build.
+const RecordVersion = 2
+
+// baseRecordVersion is the version a record whose shape no later version
+// changed is written at: 1, which every build there has ever been reads.
+//
+// THE BARRIER AND A REANCHOR'S GENERATION ARE WRITTEN AT IT FOR EVER, never at
+// [RecordVersion], because of what an older node does with a record it cannot
+// read: it retains it. A retained barrier is one more deferral row on that
+// node for every linearizable read anybody makes, and a node holding a
+// deferral declines to snapshot until it upgrades; a retained generation is a
+// transition that node never makes. Neither has anything a later version
+// could add to it.
+const baseRecordVersion = 1
+
+// moveMarkVersion is the version a task patch carrying [TaskPatch.Moving] is
+// written at. See [recordVersionOf].
+const moveMarkVersion = 2
+
+// recordVersionOf is the version a record carrying payload is written at: the
+// lowest whose reader applies it without losing anything.
+//
+// A PATCH CARRYING THE MOVE MARKER IS WRITTEN AT 2, because version 2 is when
+// the field began. A build reading only 1 decodes the patch by ignoring the
+// one field it does not know and applies the rest — a root re-homed with no
+// marker on that node's row, where every newer node holds one: rows the
+// identity claim says are identical, and are not ([Domain.ClaimsIdentity]).
+// Written at 2, that build RETAINS the record instead, and applies it once it
+// is upgraded (see the deferral contract in [statelog]).
+//
+// EVERYTHING ELSE STAYS AT 1, and not for tidiness. A retained record holds
+// back every later record whose scope nests under its own on that node, so a
+// rolling upgrade loses coverage exactly where a shape changed — here, the
+// root of a subtree somebody moved, until its walk is done — and nowhere else.
+// A domain that raised every record to its newest version would stall an
+// older node's whole tracker for the length of the upgrade. And a gate is
+// pinned at [GateRecordVersion] for ever, which this function never raises.
+func recordVersionOf(payload any) int {
+	if patch, ok := payload.(TaskPatch); ok && patch.Moving != nil {
+		return moveMarkVersion
+	}
+	return baseRecordVersion
+}
 
 // DocumentVersion is the object shape this build writes.
 //
@@ -773,7 +824,11 @@ func (e *ErrFutureVersion) Error() string {
 // applier has nothing to compare it against.
 func (r MutationRecord) Encode() ([]byte, error) {
 	if r.V == 0 {
-		r.V = RecordVersion
+		// THE LOWEST, never [RecordVersion]: a record nobody stated a
+		// version for is one nobody decided needs a newer reader, and
+		// defaulting it to the newest would have every older node
+		// retain it.
+		r.V = baseRecordVersion
 	}
 	if err := r.Subject.Validate(); err != nil {
 		return nil, err
@@ -1263,7 +1318,8 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	}
 	return MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V:       RecordVersion,
+			// NEVER [RecordVersion]: see [baseRecordVersion].
+			V:       baseRecordVersion,
 			Subject: BarrierSubject(),
 			Op:      OpBarrier,
 			Scope:   ScopeSet{Subject: true},

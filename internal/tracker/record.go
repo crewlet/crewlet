@@ -414,10 +414,16 @@ type Task struct {
 	// It rides the DOCUMENT rather than a column of its own: nothing
 	// selects on it, and what the duty selects on is `merging`, which
 	// already has its partial index.
-	Merging       bool       `json:"merging,omitempty"`
-	MergeReparent bool       `json:"merge_reparent,omitempty"`
-	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
-	ArchivedBy    string     `json:"archived_by,omitempty"`
+	Merging       bool `json:"merging,omitempty"`
+	MergeReparent bool `json:"merge_reparent,omitempty"`
+
+	// Moving is true on a ROOT whose cross-project move has carried it
+	// and has not yet carried every task beneath it. See
+	// [TaskPatch.Moving].
+	Moving bool `json:"moving,omitempty"`
+
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	ArchivedBy string     `json:"archived_by,omitempty"`
 
 	Removed *Tombstone `json:"removed,omitempty"`
 
@@ -660,6 +666,23 @@ type TaskPatch struct {
 	// down, so the pair cannot drift into "not merging, but re-parenting".
 	Merging       *bool `json:"merging,omitempty"`
 	MergeReparent *bool `json:"merge_reparent,omitempty"`
+
+	// Moving is the cross-project move's own marker, and it does for that
+	// walk what Merging does for a merge's: it is set by the SAME append
+	// that moves the root, cleared by the move's last one, and it is what
+	// the duty selects on to finish a walk whose holder died.
+	//
+	// ON THE ROOT'S OWN MOVE rather than an append of its own before it,
+	// because the root landing in the target is the moment the subtree is
+	// split: a separate mark could land without the move behind it, or the
+	// move without the mark, and either is a state no reader can tell
+	// from the other.
+	//
+	// A NEW FIELD ON A SHARED RECORD, so a record carrying it is written at
+	// [moveMarkVersion] — see [recordVersionOf]. Merging is a version-1
+	// field every build reads; this one the build before it would drop,
+	// and that node would then hold a row the rest of the fleet does not.
+	Moving *bool `json:"moving,omitempty"`
 
 	// Reassignments is the hand-off counter this write leaves behind,
 	// decided by the WRITER inside its own snapshot — see

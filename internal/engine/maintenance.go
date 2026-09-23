@@ -99,7 +99,8 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 				// kind of thing from a sweep: its records are a log
 				// and nothing deletes them here. They finish work a
 				// crash left half-done — a re-spread walk, an
-				// abandoned merge, a one-sided dependency — and tell
+				// abandoned merge or cross-project move, a one-sided
+				// dependency — and tell
 				// the tasks a close unblocked. Every one is GATED,
 				// so a tick with nothing to do costs one indexed
 				// read.

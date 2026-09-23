@@ -451,6 +451,9 @@ func applyPatch(task Task, patch TaskPatch) Task {
 			task.MergeReparent = false
 		}
 	}
+	if patch.Moving != nil {
+		task.Moving = *patch.Moving
+	}
 	if patch.Reassignments != nil {
 		task.Reassignments = *patch.Reassignments
 	}
@@ -515,12 +518,12 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			 points, spend_turns, spend_rounds, spend_input, spend_output,
 			 spend_cache_read, spend_cache_write, spend_wall_ms, spend_tokens,
 			 done_at, closed_at, finished_at, archived, archived_at, removed_at,
-			 removed_with, batch_id, merging, reassignments, policy_stamp,
+			 removed_with, batch_id, merging, moving, reassignments, policy_stamp,
 			 unblocked_told_at, search_rev, embed_rev, inconsistent_project,
 			 cycle, too_deep, key_collision, created_at, updated_at, version,
 			 scoped_through, document)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,
-		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,0,0,?,?,?,0,?)
+		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,0,0,?,?,?,0,?)
 		ON CONFLICT (id) DO UPDATE SET
 			key = excluded.key, project_key = excluded.project_key,
 			routing_unit = excluded.routing_unit,
@@ -536,7 +539,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			finished_at = excluded.finished_at, archived = excluded.archived,
 			archived_at = excluded.archived_at, removed_at = excluded.removed_at,
 			removed_with = excluded.removed_with, batch_id = excluded.batch_id,
-			merging = excluded.merging,
+			merging = excluded.merging, moving = excluded.moving,
 			reassignments = excluded.reassignments,
 			policy_stamp = excluded.policy_stamp,
 			updated_at = excluded.updated_at, version = excluded.version,
@@ -555,7 +558,8 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 		nullableTime(task.ClosedAt), nullableTime(task.FinishedAt()),
 		boolInt(task.Archived), nullableTime(task.ArchivedAt),
 		removedAt(task), removedWith(task), batchOf(c.record),
-		boolInt(task.Merging), task.Reassignments, task.PolicyStamp,
+		boolInt(task.Merging), boolInt(task.Moving), task.Reassignments,
+		task.PolicyStamp,
 		store.EncodeTime(task.CreatedAt), store.EncodeTime(task.UpdatedAt),
 		c.packed, document)
 	if err != nil {

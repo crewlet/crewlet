@@ -195,6 +195,10 @@ func TestACrossProjectMoveCarriesTheSubtree(t *testing.T) {
 	}
 	r.drain()
 
+	// THE APPLIER RUNS, because a move with a subtree writes the root's
+	// own subject twice — its move, and the mark coming down after the
+	// walk — and the second waits for the first. See applyWhileWriting.
+	r.applyWhileWriting()
 	if _, err := r.writer.CreateTask(t.Context(), "op-root",
 		newTask("m-root"), nil); err != nil {
 		t.Fatalf("CreateTask root: %v", err)

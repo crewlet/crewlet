@@ -5,4 +5,5 @@ package tracker
 // thing the one function per claim exists to prevent.
 var (
 	MergeClaim = mergeClaim
+	MoveClaim  = moveClaim
 )

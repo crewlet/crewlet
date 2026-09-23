@@ -867,7 +867,7 @@ func appendEviction(t *testing.T, running *runningDomain, opID, node string) uin
 	}
 	record, err := tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.RecordVersion, OpID: opID, Subject: subject,
+			V: tracker.GateRecordVersion, OpID: opID, Subject: subject,
 			Op: tracker.OpEviction, CreatedAt: time.Now().UTC(),
 			Scope: tracker.ScopeSet{Subject: true},
 		},

@@ -110,11 +110,16 @@ func TestARetryOfAStoppedMoveMovesWhatIsLeftOnce(t *testing.T) {
 	if again := oneTask(t, r, "m-kid-a"); again.Key != moved.Key {
 		t.Errorf("m-kid-a was re-keyed from %s to %s by the retry", moved.Key, again.Key)
 	}
-	// ONE RANGE FOR WHAT WAS LEFT AND ONE MOVE: no second root record and
-	// no second move of the child that had already gone.
-	if got := r.logEnd(t); got != end+2 {
-		t.Errorf("the retry put %d record(s) on the log, want 2 — a counter "+
-			"for what was left and m-kid-b's move", got-end)
+	// ONE RANGE FOR WHAT WAS LEFT, ONE MOVE AND THE MARK COMING DOWN: no
+	// second root record and no second move of the child that had already
+	// gone.
+	if got := r.logEnd(t); got != end+3 {
+		t.Errorf("the retry put %d record(s) on the log, want 3 — a counter "+
+			"for what was left, m-kid-b's move and the root's mark coming "+
+			"down", got-end)
+	}
+	if oneTask(t, r, "m-root").Moving {
+		t.Error("the root is still marked mid-move after the retry finished its walk")
 	}
 }
 

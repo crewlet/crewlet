@@ -357,6 +357,18 @@ half-done leaves the old nodes holding records they cannot apply and refusing
 reads about the objects those records touched — with `deferred` naming exactly
 what to do, which is finish the upgrade.
 
+**A record is written at the lowest version that can apply it whole**, never at
+the newest the build knows, so what an older node holds back is exactly the
+objects whose shape changed. Two records are written above version 1 today: a
+knowledge container's settings, which carry the activation that wrote them, and
+a task write carrying a cross-project move's mid-move mark (both at version 2).
+So during an upgrade from a build before them, an older node holds back a
+container a newer node rewrote, with the page writes in it, and the root of a
+subtree being moved, until it is upgraded — and nothing else. Every barrier and
+every generation record stays at version 1 for good: an older node retaining
+those would hold a deferral for every linearizable read, or never make the
+transition a reanchor announced.
+
 **The upgraded node applies what it retained at its next boot**, before its
 applier consumes anything new: every retained record it can now read, in log
 order, each released in the transaction that applied it. A record whose scope

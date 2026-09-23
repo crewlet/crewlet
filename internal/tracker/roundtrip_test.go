@@ -230,6 +230,29 @@ func (r *roundTrip) applyWhileWriting() {
 	r.waiter.advance = r.drain
 }
 
+// lagBehindOwnWrites is a node whose applier is behind its own appends: the
+// applier runs when a write waits for its own earlier append — the session
+// wait [tracker.Writer.After] asks for — and never to resolve an outcome, so
+// every append reports `pending`. It is the one state in which a gesture's
+// later append can only see an earlier one by waiting for it, because nothing
+// in between has.
+func (r *roundTrip) lagBehindOwnWrites() {
+	r.waiter.mu.Lock()
+	defer r.waiter.mu.Unlock()
+	r.waiter.advance = r.drain
+	r.waiter.lagOutcomes = true
+}
+
+// applyOnlyOnDrain undoes [roundTrip.applyWhileWriting]: from here on nothing
+// applies but an explicit drain, so a case can put a whole sequence on the log
+// and have this node read it before any of it arrives.
+func (r *roundTrip) applyOnlyOnDrain() {
+	r.waiter.mu.Lock()
+	defer r.waiter.mu.Unlock()
+	r.waiter.advance = nil
+	r.waiter.lagOutcomes = false
+}
+
 // drain consumes every record the broker holds beyond what this node has
 // applied, exactly as the framework's own loop does — one transaction per
 // record, carrying the rows and the checkpoint together.
@@ -407,6 +430,12 @@ type testWaiter struct {
 	// [roundTrip.applyWhileWriting] for why a harness that drives the
 	// applier by hand needs one.
 	advance func()
+
+	// lagOutcomes keeps the applier out of the wait that RESOLVES an
+	// outcome, so every write reports `pending` while a write that waits
+	// for its own earlier append still gets it. See
+	// [roundTrip.lagBehindOwnWrites].
+	lagOutcomes bool
 }
 
 func (w *testWaiter) reach(p statelog.Position) {
@@ -476,6 +505,15 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 
 func (w *testWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
 	p statelog.Position) error {
+	w.mu.Lock()
+	lag := w.lagOutcomes
+	w.mu.Unlock()
+	if lag && w.Committed().Packed() < p.Packed() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return context.DeadlineExceeded
+	}
 	return w.WaitCommitted(ctx, p)
 }
 

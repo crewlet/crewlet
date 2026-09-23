@@ -1028,12 +1028,13 @@ func (h *held) release(ctx context.Context) {
 // MoveTaskToProject re-homes a task and everything beneath it. SEQUENCE 7.
 //
 //	Rk, then take move/<task> → Rs the target project and its tag set;
-//	refuse archived, refuse a required field the task lacks → A the tags
-//	the subtree carries that the target lacks → A the alias on the former
-//	key at expectation 0 → A the counter, a RANGE mint for the whole
-//	subtree → A the root task on the range's first number → per
+//	refuse archived, refuse a required field the task lacks, refuse a
+//	subtree with a task in the trash → A the tags the subtree carries that
+//	the target lacks → A the alias on the former key at expectation 0 → A
+//	the counter, a RANGE mint for the whole subtree → A the root task on
+//	the range's first number, MARKED mid-move when it has a subtree → per
 //	descendant, in (depth, id) order, A on its own subject on the next →
-//	release.
+//	A taking the root's mark down → release.
 //
 // THE SOURCE PROJECT'S ORDER IS NOT REWRITTEN. The rows leave it entirely, so
 // there is nothing to place; what covers a reader whose closure names the
@@ -1062,11 +1063,32 @@ func (h *held) release(ctx context.Context) {
 // id with whatever it recorded under it, and a re-run's walk is shorter than
 // the first run's.
 //
+// # When nobody re-runs it
+//
+// The root's own append carries the MARK ([TaskPatch.Moving]) whenever there is
+// a subtree behind it, and the walk's last append takes it down. A walk that
+// stopped between the two — its process died, a descendant's append was
+// refused, its caller never retried — leaves a root that says so, and the
+// tracker duty finishes it once this sequence's claim has lapsed: every
+// descendant still outside the root's project follows it on a fresh range, and
+// the mark comes down ([duty.finishMoves]). Before the mark, nothing did: the
+// subtree stayed split across two projects until somebody re-ran the gesture
+// under an operation id nobody had kept.
+//
+// # What it refuses before the first append
+//
+// A task in the TRASH anywhere in the subtree, the root included. A tombstoned
+// task refuses every write, so its step would stop the walk — and the re-run,
+// and the duty behind both — on the same task for good, with the subtree split
+// around it. So the move refuses whole and names it: restore it or purge it,
+// then move again. A task removed while the walk runs cannot be refused this
+// way, and the walk waits for it instead ([Writer.followRoot]).
+//
 // CRASH RESIDUE: a tag declared with no task yet (harmless); an alias for a key
 // still held (harmless — the apply never lowers `current`); a numbering gap;
-// descendants still keyed in the old project. REPAIRER: the re-run above, and
-// nothing else — no duty completes an abandoned walk, which is why a walk that
-// stops says to re-run it.
+// descendants still keyed in the old project, under a root marked mid-move.
+// REPAIRER: the re-run above or the tracker duty, whichever comes first — the
+// other then finds nothing left to move.
 func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target string,
 	newTags []Tag) (WriteResult, error) {
 
@@ -1105,6 +1127,10 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			return fmt.Errorf("tracker: task %s has a parent, and only a ROOT "+
 				"task moves between projects — moving a subtask alone would "+
 				"leave it in a project its parent is not in", taskID)
+		case current.Removed != nil:
+			return fmt.Errorf("tracker: task %s was removed by %s at %s; "+
+				"restore it before moving it", taskID, current.Removed.By,
+				current.Removed.At.Format(time.RFC3339))
 		}
 		root = current
 		if current.Project == target {
@@ -1129,8 +1155,19 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		if err := requiredFields(ctx, tx, project, current); err != nil {
 			return err
 		}
-		subtree, err = readSubtree(ctx, tx, taskID)
-		return err
+		if subtree, err = readSubtree(ctx, tx, taskID); err != nil {
+			return err
+		}
+		for _, descendant := range subtree {
+			if descendant.Removed != nil {
+				return fmt.Errorf("tracker: task %s under %s is in the trash, "+
+					"and a removed task is frozen, so the move could not carry "+
+					"it and would leave it in %s under a root in %s — restore "+
+					"it or purge it, then move again", descendant.ID, taskID,
+					current.Project, target)
+			}
+		}
+		return nil
 	}); err != nil {
 		return WriteResult{}, err
 	}
@@ -1179,14 +1216,27 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return WriteResult{}, err
 	}
 
+	// THE MARK RIDES THE ROOT'S OWN MOVE, and only when a subtree is
+	// behind it: a leaf's move is one append, finished the moment it lands,
+	// and a mark on it would be one more append to take it down.
 	former := append(append([]string{}, root.FormerKeys...), root.Key)
 	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target, former,
-		&KeyMint{N: base})
+		&KeyMint{N: base}, len(subtree) > 0)
 	if err != nil {
 		return result, err
 	}
-	if err = w.moveDescendants(ctx, opID, target, subtree, base+1); err != nil {
-		return result, err
+	if len(subtree) > 0 {
+		if err = w.moveDescendants(ctx, opID, target, subtree, base+1); err != nil {
+			return result, err
+		}
+		// THE MARK COMES DOWN ON THE SUBJECT THE ROOT'S MOVE ALREADY
+		// MOVED, and the descendants in between are on subjects of their
+		// own — so the root's position is what this last append has to
+		// see, exactly as a merge's close waits for its mark. See
+		// [Writer.After].
+		if err = w.After(result.Position).endMove(ctx, opID, taskID, target); err != nil {
+			return result, err
+		}
 	}
 	if result.Collapsed {
 		// THE ROOT MOVED UNDER AN EARLIER COPY that this node had not
@@ -1208,9 +1258,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 // THE ROOT'S STEP IS ASKED FOR, AND ONLY ANSWERED, the way [Writer.resumeCreate]
 // asks for a create's task: the ledger answers it before the Decide runs if
 // THIS operation moved the root, and a Decide that does run means somebody
-// else did, which is a refusal. Then every descendant still outside the target
-// follows it, on a fresh range — see [Writer.MoveTaskToProject] for why never
-// the first run's.
+// else did, which is a refusal. Then the rest follows it ([Writer.followRoot]).
 func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 	target string, subtree []Task) (WriteResult, error) {
 
@@ -1236,31 +1284,129 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 		// finish somebody else's walk under this one's name.
 		return WriteResult{Result: answered}, nil
 	}
-	var left []Task
-	for _, descendant := range subtree {
-		if descendant.Project != target {
-			left = append(left, descendant)
-		}
-	}
-	if len(left) > MaxDescendants {
-		return WriteResult{Result: answered}, fmt.Errorf("tracker: task %s has "+
-			"%d descendants still to move and a move carries at most %d",
-			root.ID, len(left), MaxDescendants)
-	}
-	if len(left) > 0 {
-		base, _, err := w.mintKey(ctx,
-			stepID(statelog.NewOpID(time.Now(), "remint"), "counter"),
-			target, len(left), nil)
-		if err != nil {
-			return WriteResult{Result: answered}, err
-		}
-		if err := w.moveDescendants(ctx, opID, target, left, base); err != nil {
-			return WriteResult{Result: answered}, err
-		}
+	if err := w.followRoot(ctx, opID, root, subtree); err != nil {
+		return WriteResult{Result: answered}, err
 	}
 	out := WriteResult{Result: answered}
 	out.Key, out.Rank = root.Key, root.Rank
 	return out, nil
+}
+
+// finishAbandonedMove completes a move whose walk stopped with its root marked
+// mid-move: the tracker duty's half of [Writer.MoveTaskToProject], run under
+// the move's own claim, which the caller holds. It reports whether there was a
+// walk to finish.
+//
+// THE ROOT IS READ AGAIN HERE, under the claim, because the holder may have
+// finished between the duty's selection and its claim: a root whose mark is
+// down is a move that is done, and one in the trash is frozen until somebody
+// restores it.
+func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool, error) {
+	if w.db == nil {
+		return false, fmt.Errorf("tracker: this writer has no store, so it " +
+			"cannot read the subtree an abandoned move left behind")
+	}
+	var (
+		root    Task
+		subtree []Task
+		marked  bool
+	)
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		current, held, err := readTask(ctx, tx, id)
+		switch {
+		case err != nil:
+			return err
+		case !held:
+			return fmt.Errorf("tracker: task %s is marked mid-move and not on "+
+				"this node: %w", id, statelog.ErrUnavailable)
+		case !current.Moving || current.Removed != nil:
+			return nil
+		}
+		root, marked = current, true
+		subtree, err = readSubtree(ctx, tx, id)
+		return err
+	})
+	if err != nil || !marked {
+		return false, err
+	}
+	return true, w.followRoot(ctx, opID, root, subtree)
+}
+
+// followRoot moves every descendant a root's move has not carried yet, and
+// then takes the root's mark down. SHARED BY THE RE-RUN AND THE DUTY, so a walk
+// finished either way is finished by one algorithm rather than by two that
+// have to keep agreeing.
+//
+// ON A FRESH RANGE, never the first run's — see [Writer.MoveTaskToProject] —
+// and a descendant is LEFT when it is outside the ROOT'S project, whichever
+// project that is: a subtree can hold a child a merge re-parented in from
+// another project, and the move carries the whole subtree.
+//
+// A DESCENDANT IN THE TRASH IS WAITED FOR, never skipped. The move refuses a
+// subtree holding one before its first append, so this is a task removed
+// while the walk ran; it is frozen, so nothing can carry it until somebody
+// restores it, and taking the mark down around it would leave it in the old
+// project for good, under a root in the new one. So everything else moves, the
+// mark stays up, and the refusal names the task: the restore is what lets the
+// next pass — the duty's or a re-run — finish the walk, and a purge takes it
+// out of the subtree altogether.
+//
+// ON A NODE BEHIND THE LOG the subtree it reads may still show descendants the
+// walk already carried. Their steps are refused inside their own snapshots —
+// each is conditioned on the project it was read in, and the task is no longer
+// there — so nothing is moved twice; the range minted for them is a gap, which
+// is what every other crash residue here costs.
+func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
+	subtree []Task) error {
+
+	var left, frozen []Task
+	for _, descendant := range subtree {
+		switch {
+		case descendant.Project == root.Project:
+		case descendant.Removed != nil:
+			frozen = append(frozen, descendant)
+		default:
+			left = append(left, descendant)
+		}
+	}
+	if len(left) > MaxDescendants {
+		return fmt.Errorf("tracker: task %s has %d descendants still to move "+
+			"and a move carries at most %d", root.ID, len(left), MaxDescendants)
+	}
+	if len(left) > 0 {
+		base, _, err := w.mintKey(ctx,
+			stepID(statelog.NewOpID(time.Now(), "remint"), "counter"),
+			root.Project, len(left), nil)
+		if err != nil {
+			return err
+		}
+		if err := w.moveDescendants(ctx, opID, root.Project, left, base); err != nil {
+			return err
+		}
+	}
+	if len(frozen) > 0 {
+		return fmt.Errorf("tracker: task %s under %s is in the trash and still "+
+			"in project %s, and a removed task is frozen — the move waits for "+
+			"it: restore it and the next pass carries it into %s, or purge it",
+			frozen[0].ID, root.ID, frozen[0].Project, root.Project)
+	}
+	return w.endMove(ctx, opID, root.ID, root.Project)
+}
+
+// endMove takes a root's mid-move mark down: the walk's last append.
+//
+// A MARK ALREADY DOWN IS NOTHING TO WRITE, decided inside the append's own
+// snapshot ([Writer.UpdateTask]) — so a re-run of a walk whose last append
+// landed, and a duty that raced the holder's own, each publish nothing rather
+// than a history row saying nothing.
+//
+// A QUIET COMMIT UNDER [ChangeMoved]: it is the move finishing, and the people
+// watching the root heard about the move from its first append.
+func (w *Writer) endMove(ctx context.Context, opID, rootID, project string) error {
+	down := false
+	_, err := w.UpdateTask(ctx, stepID(opID, "moved"), rootID, project,
+		NoIfMatch, TaskPatch{Moving: &down}, ChangeMoved, nil)
+	return err
 }
 
 // moveDescendants moves each of a subtree's descendants, in order, on the
@@ -1272,7 +1418,7 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 		if _, err := w.moveOne(ctx, stepID(opID, "task-"+descendant.ID),
 			descendant, target,
 			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
-			&KeyMint{N: base + uint64(i)}); err != nil {
+			&KeyMint{N: base + uint64(i)}, false); err != nil {
 			return fmt.Errorf("tracker: %d of %d descendants moved; re-run the "+
 				"move under the same operation id, which moves the rest: %w",
 				i, len(descendants), err)
@@ -1281,11 +1427,20 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 	return nil
 }
 
-// moveOne re-homes one task of a moving subtree.
+// moveOne re-homes one task of a moving subtree, and marks it mid-move when it
+// is the root of one that has a walk still to come.
+//
+// CONDITIONED ON THE PROJECT THE TASK WAS READ IN, which is what makes a
+// second walk over the same subtree harmless: a task somebody already carried
+// is in another project by the time its step decides, and [Writer.UpdateTask]
+// refuses a write naming the wrong one rather than re-keying it again.
 func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
-	target string, former []string, mint *KeyMint) (WriteResult, error) {
+	target string, former []string, mint *KeyMint, mark bool) (WriteResult, error) {
 
 	patch := TaskPatch{Project: &target, FormerKeys: &former, Mint: mint}
+	if mark {
+		patch.Moving = &mark
+	}
 	// NO NOTIFICATION AND NO HISTORY BUMP on a descendant: a subtree that
 	// moved wakes the people watching the root, not everybody watching
 	// every task beneath it.

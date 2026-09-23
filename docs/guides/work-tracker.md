@@ -68,6 +68,19 @@ two can never disagree. That decides what counts:
 - A task **moved between projects** counts against the project it moved *to*,
   which is where a reader following it up will look. Both projects' counts move.
 
+A move between projects carries the task's **whole subtree**: only a root task
+moves, and every task beneath it follows, re-keyed in the new project with its
+old key still resolving. A task in the trash anywhere in that subtree refuses
+the move until it is restored or purged, because a removed task is frozen and
+the move could not carry it. A move that stops part-way — its node died, or the
+stream refused an append — leaves its root **marked mid-move**, and the
+`tracker` duty finishes it on its first pass (every 15 minutes) after the
+move's claim has lapsed, which is a minute after its last heartbeat and never
+while it is still running: the tasks still in the old project follow on fresh
+keys, which leaves a gap in the numbering like any other interrupted write. A
+task removed while the move was running is waited for — the root stays marked
+until it is restored, and the next pass carries it.
+
 A project nobody has filed work into reports **no last change at all**, rather
 than an instant borrowed from its own creation: "nothing has ever been filed
 here" is the answer, and a made-up date would make an untouched project look

@@ -19,8 +19,8 @@ import (
 // # What is here and what deliberately is not
 //
 // Every job below completes something a WRITER started and could not end — a
-// re-spread whose inline window was too small, a merge whose holder died
-// mid-walk, a dependent nobody told. None of them is a scan looking for
+// re-spread whose inline window was too small, a merge or a cross-project move
+// whose holder died mid-walk, a dependent nobody told. None of them is a scan looking for
 // trouble, and that is the shape rather than an accident: a duty that goes
 // looking is a duty that costs the same whether or not anything is wrong, on
 // every node, for ever.
@@ -61,7 +61,7 @@ type DutyDeps struct {
 
 // Jobs is the tracker's housekeeping, as the maintenance worker's own shape.
 //
-// FIVE JOBS, every one [maintenance.Fleet] and all but one gated. The names
+// SIX JOBS, every one [maintenance.Fleet] and all but one gated. The names
 // are the log's, and each is the table or the walk it is about rather than the
 // code that runs it.
 func Jobs(d DutyDeps) []maintenance.Job {
@@ -84,6 +84,12 @@ func Jobs(d DutyDeps) []maintenance.Job {
 			Scope: maintenance.Fleet,
 			Gate:  duty.pendingMerges,
 			Run:   duty.finishMerges,
+		},
+		{
+			Name:  "tracker_abandoned_moves",
+			Scope: maintenance.Fleet,
+			Gate:  duty.pendingMoves,
+			Run:   duty.finishMoves,
 		},
 		{
 			Name:  "tracker_unblocked",
@@ -436,6 +442,86 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 	d.deps.Logger.InfoContext(ctx, "tracker_merge_completed",
 		"task", id, "into", walk.into, "subtasks_moved", moved)
 	return true, nil
+}
+
+// pendingMoves reads whether any root is marked mid-move. ONE PROBE on the
+// partial index the schema ships for exactly this predicate, so a company
+// where nothing is mid-move pays it and nothing else.
+//
+// A REMOVED ROOT IS NOT PENDING, for the reason [duty.pendingMerges] gives: it
+// is frozen, and its restore is what brings it back.
+func (d *duty) pendingMoves(ctx context.Context) (bool, error) {
+	var found int
+	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
+			SELECT EXISTS (SELECT 1 FROM tracker_tasks
+			               WHERE moving = 1 AND removed_at IS NULL)`).
+			Scan(&found)
+	})
+	if err != nil {
+		return false, fmt.Errorf("tracker: read whether a move is mid-walk: %w", err)
+	}
+	return found == 1, nil
+}
+
+// finishMoves completes every cross-project move whose walk stopped with its
+// root marked mid-move.
+//
+// THE SAME SHAPE AS [duty.finishMerges], and for the same reasons: a root is
+// marked for the whole of a LIVE move too, so the move's own claim is what
+// says it was abandoned and a move is finished only under it; the root is read
+// again once the claim is held; and one move's failure is not the tick's.
+//
+// WHAT FINISHING IS lives on the writer ([Writer.followRoot]), shared with a
+// re-run of the move itself: every descendant still outside the root's
+// project follows it on a fresh range, and the mark comes down. A descendant
+// in the trash is waited for — the mark stays up and the failure names it —
+// because carrying the rest around it and taking the mark down would leave it
+// in the old project for good.
+func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error) {
+	var marked []string
+	if err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id FROM tracker_tasks
+			WHERE moving = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
+			WalkBatch)
+		if err != nil {
+			return fmt.Errorf("tracker: read the abandoned moves: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			marked = append(marked, id)
+		}
+		return rows.Err()
+	}); err != nil {
+		return 0, err
+	}
+
+	var finished int64
+	for _, id := range marked {
+		claim, err := d.deps.Writer.hold(ctx, moveClaim(id))
+		if err != nil {
+			d.walkHeld(ctx, "tracker_move_walk_held", id, err)
+			continue
+		}
+		completed, err := d.deps.Writer.finishAbandonedMove(ctx,
+			d.opID("move", id, now), id)
+		claim.release(ctx)
+		if err != nil {
+			d.deps.Logger.WarnContext(ctx, "tracker_move_completion_failed",
+				"task", id, "error", err)
+			continue
+		}
+		if completed {
+			finished++
+			d.deps.Logger.InfoContext(ctx, "tracker_move_completed", "task", id)
+		}
+	}
+	return finished, nil
 }
 
 // abandonedMerge is a mid-merge task's own account of the walk that stopped:

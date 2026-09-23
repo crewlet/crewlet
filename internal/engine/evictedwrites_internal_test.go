@@ -140,7 +140,7 @@ func trackerEviction(t *testing.T, node string) []byte {
 	}
 	payload, err := tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.RecordVersion, OpID: "op-evict-" + node,
+			V: tracker.GateRecordVersion, OpID: "op-evict-" + node,
 			Subject: tracker.EvictionSubject(node), Op: tracker.OpEviction,
 			Writer: "node-peer", Scope: tracker.ScopeSet{Subject: true},
 		},
@@ -164,7 +164,7 @@ func pagesEviction(t *testing.T, node string) []byte {
 	}
 	payload, err := pages.Encode(pages.MutationRecord{
 		RecordEnvelope: pages.RecordEnvelope{
-			V: pages.RecordVersion, OpID: "op-evict-" + node,
+			V: pages.GateRecordVersion, OpID: "op-evict-" + node,
 			Subject: pages.EvictionSubject(node), Op: pages.OpEviction,
 			Writer: "node-peer", Scope: pages.ScopeSet{Subject: true},
 		},

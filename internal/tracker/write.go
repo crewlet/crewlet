@@ -534,6 +534,15 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					"it and decide again rather than re-sending this patch",
 					ErrStaleVersion, id, current.Version, ifMatch)
 			}
+			if markOnly(patch) && *patch.Moving == current.Moving {
+				// THE MARK ALREADY SAYS IT: a walk's last append whose
+				// mark somebody else took down — the holder, racing the
+				// duty that finished its walk — or a re-run of one that
+				// landed. An empty decision is a success, as it is for
+				// a promotion with nothing left to mark, rather than a
+				// history row recording that nothing moved.
+				return statelog.Decision{Version: int64(current.Version)}, nil
+			}
 			if patch.Tags != nil {
 				// AGAINST THE TASK'S OWN PROJECT rather than the
 				// argument's, because a move carries the tags into
@@ -636,6 +645,15 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	result.Warnings = append(result.Warnings, fieldWarnings...)
 	result.Warnings = append(result.Warnings, promoteWarnings...)
 	return result, err
+}
+
+// markOnly reports a patch whose one change is the cross-project move's mark.
+func markOnly(patch TaskPatch) bool {
+	if patch.Moving == nil {
+		return false
+	}
+	patch.Moving = nil
+	return patch.Empty()
 }
 
 // settlePromote resolves a promotion's mark into the parent's whole checklist
@@ -1026,7 +1044,7 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
+			V: recordVersionOf(payload), OpID: opID, Subject: subject, Op: op,
 			CreatedAt: at, Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Kind:       kind,
