@@ -298,3 +298,57 @@ func TestTheCheckNamesEveryHolderOfADuplicatedClaim(t *testing.T) {
 		}
 	}
 }
+
+// `iam link` PINS THE SUBJECT THE OPERATOR TYPED, AND `iam unlink` TAKES IT OFF.
+//
+// Both are the one edit the directory has for it — `oidc_subject` on the
+// person — and the empty string is the unlink, so a command that sent nothing
+// for `unlink` would be an edit that changes nothing and reports success. And
+// a link with no subject is refused before the config is read, naming what is
+// missing.
+func TestIamLinkPinsTheSubjectTheOperatorTyped(t *testing.T) {
+	type seen struct {
+		method, path string
+		body         map[string]any
+	}
+	var got []seen
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		one := seen{method: r.Method, path: r.URL.Path}
+		_ = json.NewDecoder(r.Body).Decode(&one.body)
+		got = append(got, one)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"p-1","position":"iam@9"}`))
+	}))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	var out, errs bytes.Buffer
+	if err := run([]string{"iam", "link", "p-1", "00u1abcd", "-reason", "okta",
+		"-config", cfg, "-api", node.URL}, &out, &errs); err != nil {
+		t.Fatalf("iam link: %v\n%s", err, errs.String())
+	}
+	if err := run([]string{"iam", "unlink", "p-1", "-config", cfg, "-api",
+		node.URL}, &out, &errs); err != nil {
+		t.Fatalf("iam unlink: %v\n%s", err, errs.String())
+	}
+	if len(got) != 2 {
+		t.Fatalf("the node saw %d requests, want 2", len(got))
+	}
+	for i, want := range []string{"00u1abcd", ""} {
+		call := got[i]
+		if call.method != http.MethodPatch || call.path != "/iam/people/p-1" {
+			t.Errorf("request %d was %s %s", i, call.method, call.path)
+		}
+		subject, present := call.body["oidc_subject"]
+		if !present || subject != want {
+			t.Errorf("request %d carried oidc_subject %v (present %v), want %q",
+				i, subject, present, want)
+		}
+	}
+
+	err := run([]string{"iam", "link", "p-1"}, &out, &errs)
+	if err == nil || !strings.Contains(err.Error(), "sub claim") {
+		t.Errorf("a link with no subject answered %v, want the subject named", err)
+	}
+}

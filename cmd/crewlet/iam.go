@@ -48,6 +48,9 @@ Usage:
   crewlet iam create -login L [-email E] [-kind K]     Create somebody directly
   crewlet iam bind ID SEAT                             Bind a person to a chart seat
   crewlet iam unbind ID                                Take the binding back
+  crewlet iam link ID SUBJECT                          Pin their identity provider account
+                                                       (its sub claim) to them
+  crewlet iam unlink ID                                Take the provider link back
   crewlet iam grant ID [-grants G,...] [-colleague L]  Change what somebody carries
   crewlet iam suspend ID                               Stop them acting, keep the row
   crewlet iam activate ID                              Let them act again
@@ -74,6 +77,12 @@ Flags:
 
 Export CREWLET_API_TOKEN to authenticate. Every /iam route is guarded, reads
 included: a map of who can reach a company is worth as much as the grants.
+
+"iam link" is one of the only two ways an identity provider account is ever
+tied to somebody — the other is an invitation redeemed through the provider.
+SUBJECT is the account's own "sub" claim, which the provider's console shows;
+an address is never a link. Linking somebody already linked MOVES them, and a
+subject somebody else holds is refused naming them.
 
 A token minted by "iam token" acts as the person or service account it names,
 carrying at most what they hold now, for at most a year (90 days unless -days
@@ -190,6 +199,12 @@ func runIAM(args []string, stdout, stderr io.Writer) error {
 	case "unbind":
 		return out.written(client.patch(ctx, "/iam/people/"+subject,
 			map[string]any{"seat": "", "reason": *reason}))
+	case "link":
+		return out.written(client.patch(ctx, "/iam/people/"+subject,
+			map[string]any{"oidc_subject": second, "reason": *reason}))
+	case "unlink":
+		return out.written(client.patch(ctx, "/iam/people/"+subject,
+			map[string]any{"oidc_subject": "", "reason": *reason}))
 	case "grant":
 		body, err := iamGrantsBody(*grants, *colleague)
 		if err != nil {
@@ -280,6 +295,8 @@ var iamSubjects = subjectTable{
 	"invite":            {"an address"},
 	"bind":              {"a person id", "a seat handle"},
 	"unbind":            {"a person id"},
+	"link":              {"a person id", "the provider account's subject (its sub claim)"},
+	"unlink":            {"a person id"},
 	"grant":             {"a person id"},
 	"suspend":           {"a person id"},
 	"activate":          {"a person id"},
@@ -531,6 +548,13 @@ func (p *iamPrinter) people(answer map[string]any, err error) error {
 	return nil
 }
 
+// linkedIssuer is the identity provider somebody is linked to, or empty. The
+// subject is never shown: the estate holds it only as a keyed blind.
+func linkedIssuer(answer map[string]any) string {
+	link, _ := answer["oidc"].(map[string]any)
+	return str(link["issuer"])
+}
+
 // personName is what to show where a name would go.
 //
 // THE THREE STATES ARE THREE SENTENCES. A removed person's key is destroyed
@@ -565,6 +589,7 @@ func (p *iamPrinter) one(answer map[string]any, err error) error {
 		{"name", dash(personName(answer))},
 		{"email", dash(str(answer["email"]))},
 		{"seat", dash(str(answer["seat"]))},
+		{"identity provider", dash(linkedIssuer(answer))},
 		{"colleague", str(answer["colleague"])},
 		{"grants", dash(joinAny(answer["grants"]))},
 		{"revocation epoch", str(answer["revocation_epoch"])},

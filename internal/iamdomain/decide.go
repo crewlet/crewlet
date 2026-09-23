@@ -162,7 +162,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		// is the one that should fail before anything else has
 		// happened.
 		address, claimErr := w.claim(ctx, at, KindEmail, blind, in.PersonID,
-			Claim{Sealed: sealedEmail}, in.OpID+":email", in.Kind)
+			Claim{Sealed: sealedEmail}, "", in.OpID+":email", in.Kind)
 		if claimErr != nil {
 			return statelog.Result{}, claimErr
 		}
@@ -177,7 +177,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// would acknowledge the second claim as the first inside its duplicate
 	// window, and the person would be written holding the login they gave
 	// up rather than the one they chose.
-	claimed, err := w.claim(ctx, at, KindLogin, in.Login, in.PersonID, Claim{},
+	claimed, err := w.claim(ctx, at, KindLogin, in.Login, in.PersonID, Claim{}, "",
 		in.OpID+":login:"+in.Login, in.Kind)
 	if err != nil {
 		return statelog.Result{}, err
@@ -193,7 +193,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// only the reservation this same redemption finishes on its retry.
 	if in.Link != nil {
 		linked, err := w.claim(ctx, at, KindLink, in.Link.Blind, in.PersonID,
-			Claim{Issuer: in.Link.Issuer}, in.OpID+":link", in.Kind)
+			Claim{Issuer: in.Link.Issuer}, "", in.OpID+":link", in.Kind)
 		if err != nil {
 			return statelog.Result{}, err
 		}
@@ -221,16 +221,34 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// grants actually land from — a check against an earlier read would
 	// pair an invitation somebody spent a moment ago with a person it then
 	// creates. Nil for the writer's own authority, which was checked above.
-	var decide func(*sql.Tx) error
+	var basis func(*sql.Tx) error
 	switch {
 	case in.Invitation != "":
-		decide = func(tx *sql.Tx) error {
+		basis = func(tx *sql.Tx) error {
 			return w.redeemable(ctx, tx, in, blind)
 		}
 	case in.BootstrapCode != "":
-		decide = func(tx *sql.Tx) error {
+		basis = func(tx *sql.Tx) error {
 			return w.bootstrappable(ctx, tx, in)
 		}
+	}
+	// AND THE LINK THE PERSON WILL HOLD, read in the same snapshot, because
+	// it is not only this enrolment's: a redemption that stopped after an
+	// attempt through the identity provider pinned a subject to this
+	// person's reservation, and a retry by password finishes the same
+	// person holding it. Announcing what THIS call asked for would say
+	// nothing about that link — a person able to sign in through a
+	// provider account with no row on the trail saying so.
+	var pinned Link
+	decide := func(tx *sql.Tx) error {
+		if basis != nil {
+			if err := basis(tx); err != nil {
+				return err
+			}
+		}
+		var err error
+		pinned, err = liveLinkOf(ctx, tx, in.PersonID)
+		return err
 	}
 	// ARBITRATED, NOT A CREATE, and the claims are why: they run first and
 	// their apply leaves a RESERVATION row for this person, so a create
@@ -254,13 +272,13 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// its claim landed: until the content record lands, the claim is held
 	// by a reservation nobody can sign in as, and an announcement then
 	// would describe a sign-in that may never be possible.
-	if in.Link != nil {
+	if pinned.Blind != "" {
 		via := types.LinkViaAdmin
 		if in.Invitation != "" {
 			via = types.LinkViaInvite
 		}
 		w.announce(ctx, result, err, types.IAMIdentityLinked{
-			Person: in.PersonID, Issuer: in.Link.Issuer, Via: via, By: w.Actor,
+			Person: in.PersonID, Issuer: pinned.Issuer, Via: via, By: w.Actor,
 		})
 	}
 	return result, err
@@ -630,7 +648,7 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 	// caller: a login's grammar is the kind of whoever holds it, and a
 	// caller stating that kind would be stating what it read in another
 	// transaction — which is the one input this check cannot trust.
-	return w.claim(ctx, w.gesture(), kind, token, personID, Claim{}, opID, "")
+	return w.claim(ctx, w.gesture(), kind, token, personID, Claim{}, "", opID, "")
 }
 
 // claim is the shared body, so an enrolment's own claims and an operator's
@@ -646,9 +664,10 @@ func (w *Writer) Claim(ctx context.Context, kind ObjectKind, token, personID,
 //
 // payload carries what a claim states beside its token — an address's sealed
 // form, a link's issuer — and nothing else: the person and the chart position
-// are the decide's.
+// are the decide's. replacing is the token a MOVE takes the person off, and it
+// is read only for a link: see [ErrLinked].
 func (w *Writer) claim(ctx context.Context, at *statelog.Position,
-	kind ObjectKind, token, personID string, payload Claim, opID string,
+	kind ObjectKind, token, personID string, payload Claim, replacing, opID string,
 	enrolling iam.Kind) (statelog.Result, error) {
 
 	if token == "" || personID == "" || opID == "" {
@@ -704,6 +723,10 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 			// a subject pinned to one would be a way to act as a
 			// service account from a browser.
 			if err := linkable(ctx, tx, personID, enrolling); err != nil {
+				return err
+			}
+			if err := unlinkedElsewhere(ctx, tx, personID, token,
+				replacing); err != nil {
 				return err
 			}
 		}
@@ -980,7 +1003,8 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 	// ONE MARK FOR THE MOVE, so the release decides from a state holding
 	// the claim that freed its token.
 	mark := w.gesture()
-	claimed, err := w.claim(ctx, mark, kind, to, personID, payload, opID+":"+string(kind), "")
+	claimed, err := w.claim(ctx, mark, kind, to, personID, payload, from,
+		opID+":"+string(kind), "")
 	switch {
 	case err != nil:
 		return statelog.Result{}, err

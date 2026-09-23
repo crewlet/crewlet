@@ -44,6 +44,22 @@ type Flight struct {
 	// the ordinary way a sign-in flow leaks a token.
 	Return string `json:"return,omitempty"`
 
+	// Invite is the invitation this round trip REDEEMS, when it began on
+	// an invitation's page rather than at the sign-in page: the callback
+	// enrols the person it was issued for and pins the subject the
+	// provider comes back with to them. Empty for an ordinary sign-in.
+	//
+	// SEALED HERE for Return's reason: an invitation id is the credential
+	// its link carries, and one a caller could swap on the way back from
+	// the provider would let any provider account finish somebody else's
+	// invitation that the caller merely started.
+	Invite string `json:"invite,omitempty"`
+
+	// Login is the login the redeemer chose on the invitation's page, in
+	// the person grammar — or the one that page proposed from the
+	// address. Empty for an ordinary sign-in.
+	Login string `json:"login,omitempty"`
+
 	// ExpiresAt is when the flight stops being redeemable, stamped by the
 	// node that minted it and enforced by whichever node finishes.
 	ExpiresAt time.Time `json:"expires_at"`
@@ -64,11 +80,16 @@ const entropyBytes = 32
 // Start mints a flight and returns the provider URL to send the browser to,
 // with the sealed cookie value to set beside it.
 //
+// want is what the CALLER needs remembered across the round trip — where to
+// return, and the redemption it is finishing — and the three values the round
+// trip itself carries are minted here over whatever it holds, so a caller can
+// never supply a state, a nonce or a verifier of its own choosing.
+//
 // THE SEALED VALUE IS RETURNED RATHER THAN A COOKIE, because how a cookie is
 // named and attributed is one decision this engine makes in one place, and it
 // is not this package's: see internal/iam/session.
-func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint, returnTo string,
-	now time.Time) (redirect, sealed string, err error) {
+func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint string,
+	want Flight, now time.Time) (redirect, sealed string, err error) {
 
 	if cipher == nil {
 		return "", "", fmt.Errorf("%w: this node has no keyring, so a login "+
@@ -78,7 +99,8 @@ func (c Config) Start(cipher secrets.Cipher, authorizationEndpoint, returnTo str
 	if err := c.Validate(); err != nil {
 		return "", "", fmt.Errorf("%w: %w", ErrNotConfigured, err)
 	}
-	flight := Flight{Return: returnTo, ExpiresAt: now.Add(FlightTTL)}
+	flight := Flight{Return: want.Return, Invite: want.Invite, Login: want.Login,
+		ExpiresAt: now.Add(FlightTTL)}
 	for _, into := range []*string{&flight.State, &flight.Nonce, &flight.Verifier} {
 		value, err := randomValue()
 		if err != nil {

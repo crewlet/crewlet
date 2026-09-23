@@ -77,9 +77,11 @@ type LinkChange struct {
 // [KindLink]) — never relinked: taking a subject off one person and giving it
 // to another is two gestures somebody makes on purpose, an unlink and a link,
 // and a link that did both would be the one way to take over an account that
-// looks like maintenance. A MOVE (Replacing set) claims the new subject first
-// and releases the old one after, for [Writer.Rename]'s reason: a new subject
-// refused leaves the person linked where they were.
+// looks like maintenance. The same holds from the other side: a person already
+// linked to a DIFFERENT subject is refused ([ErrLinked]) unless the change
+// names that subject as the one it replaces. A MOVE (Replacing set) claims the
+// new subject first and releases the old one after, for [Writer.Rename]'s
+// reason: a new subject refused leaves the person linked where they were.
 func (w *Writer) Link(ctx context.Context, in LinkChange) (statelog.Result, error) {
 	if err := w.mayAdminister(OpClaim); err != nil {
 		return statelog.Result{}, err
@@ -110,7 +112,7 @@ func (w *Writer) Link(ctx context.Context, in LinkChange) (statelog.Result, erro
 			in.Link.Blind, payload, in.OpID, in.Reason)
 	} else {
 		result, err = w.claim(ctx, w.gesture(), KindLink, in.Link.Blind,
-			in.PersonID, payload, in.OpID+":"+string(KindLink), "")
+			in.PersonID, payload, "", in.OpID+":"+string(KindLink), "")
 	}
 	w.announce(ctx, result, err, types.IAMIdentityLinked{
 		Person: in.PersonID, Issuer: in.Link.Issuer, Via: types.LinkViaAdmin,
@@ -140,6 +142,75 @@ func (w *Writer) Unlink(ctx context.Context, personID string, link Link,
 		Person: personID, Issuer: link.Issuer, By: w.Actor, Reason: reason,
 	})
 	return result, err
+}
+
+// ErrLinked is a person who already holds a live link to a DIFFERENT provider
+// subject than the one being pinned, from a change that did not name it as the
+// one it replaces.
+//
+// NEVER RELINKED IN PASSING. A person signs in through exactly one subject,
+// and a second pin that quietly superseded the first would be a way to take
+// over somebody's provider sign-in that reads as a routine link: the account
+// they have used for a year stops working and a different one starts. So a
+// change that moves them says which link it moves them OFF — an
+// administrator's move names it, having just read the person — and an
+// invitation redeemed a second time through a different provider account than
+// its first attempt pinned is refused rather than switched.
+var ErrLinked = errors.New("iamdomain: this person is already linked to a " +
+	"different identity provider subject")
+
+// unlinkedElsewhere refuses a link for somebody who holds a live link to a
+// different subject than both the one being pinned and the one this change
+// replaces, read inside the claim's own snapshot — see [ErrLinked].
+//
+// THE SAME SUBJECT PASSES, because that is a retry: an enrolment through the
+// provider re-driven after its link claim landed re-runs this decide, and
+// refusing it there would strand the redemption it is finishing.
+func unlinkedElsewhere(ctx context.Context, tx *sql.Tx, personID, blind,
+	replacing string) error {
+
+	held, err := liveLinkOf(ctx, tx, personID)
+	switch {
+	case err != nil:
+		return err
+	case held.Blind == "", held.Blind == blind, held.Blind == replacing:
+		return nil
+	case replacing != "":
+		return fmt.Errorf("%w: the link this move replaces is not the one "+
+			"person %s holds now — read them again", ErrLinked, personID)
+	}
+	return fmt.Errorf("%w: person %s — move them (naming the link it "+
+		"replaces) or unlink them first", ErrLinked, personID)
+}
+
+// liveLinkOf is the live link one person holds, read INSIDE a decide's
+// snapshot, or the zero Link for somebody linked to nothing.
+//
+// THE LOWEST ID when a restore has left them two, which is the row the
+// directory reports too ([PersonRow.Link]); the claim report names the
+// duplicate. A credential document this build cannot open still yields the
+// blind — the person IS linked — with the issuer unknown.
+func liveLinkOf(ctx context.Context, tx *sql.Tx, personID string) (Link, error) {
+	var (
+		out      Link
+		document []byte
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT subject_blind, document FROM iam_credentials
+		 WHERE person_id = ? AND method = ? AND revoked_at = 0
+		 ORDER BY id LIMIT 1`, personID, string(MethodOIDC)).
+		Scan(&out.Blind, &document)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return Link{}, nil
+	case err != nil:
+		return Link{}, fmt.Errorf("iamdomain: read person %s's provider "+
+			"link: %w", personID, err)
+	}
+	if held, err := DecodeCredential(document); err == nil {
+		out.Issuer = held.Issuer
+	}
+	return out, nil
 }
 
 // linkHolderOf is who holds a LIVE link to one provider subject, read INSIDE a

@@ -349,8 +349,11 @@ type CredentialRow struct {
 	Label string
 
 	// Issuer is the identity provider an oidc credential — a provider
-	// link — belongs to. Empty on every other method.
-	Issuer string
+	// link — belongs to, and SubjectBlind the keyed blind of the subject it
+	// pins. Empty on every other method. The blind is what unlinking names
+	// ([Writer.Unlink]); it is never a subject a screen can print.
+	Issuer       string
+	SubjectBlind string
 
 	// Grants and Colleague are what a machine token was minted carrying —
 	// the ceiling on what it can do, re-cut to its owner's own grants on
@@ -373,7 +376,7 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, person_id, method, created_at, expires_at, revoked_at,
-			       document
+			       subject_blind, document
 			FROM iam_credentials WHERE person_id = ? ORDER BY created_at DESC`,
 			personID)
 		if err != nil {
@@ -391,7 +394,7 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 				document []byte
 			)
 			if err := rows.Scan(&row.ID, &row.PersonID, &method, &created,
-				&expires, &revoked, &document); err != nil {
+				&expires, &revoked, &row.SubjectBlind, &document); err != nil {
 				return fmt.Errorf("iamdomain: scan a credential: %w", err)
 			}
 			row.Method = CredentialMethod(method)

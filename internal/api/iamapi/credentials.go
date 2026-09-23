@@ -38,6 +38,10 @@ type credentialView struct {
 	// every request. Absent on every other method.
 	Grants    []iam.Grant   `json:"grants,omitempty"`
 	Colleague iam.Colleague `json:"colleague,omitempty"`
+
+	// Issuer is the identity provider an `oidc` credential — a provider
+	// link — belongs to. Absent on every other method.
+	Issuer string `json:"issuer,omitempty"`
 }
 
 // GetCredentials is `GET /iam/credentials?person=`.
@@ -62,7 +66,7 @@ func (s *Service) GetCredentials(w http.ResponseWriter, r *http.Request) {
 			Label: row.Label, CreatedAt: row.CreatedAt,
 			ExpiresAt: row.ExpiresAt, RevokedAt: row.RevokedAt,
 			Revoked: row.Revoked(now), Grants: row.Grants,
-			Colleague: row.Colleague,
+			Colleague: row.Colleague, Issuer: row.Issuer,
 		})
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{"credentials": out})
@@ -262,6 +266,25 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		})
 }
 
+// linkCredential reports whether a credential id names one person's LIVE
+// provider link, and the link it names.
+func (s *Service) linkCredential(r *http.Request, person, id string) (
+	iamdomain.Link, bool, error) {
+
+	held, err := s.directory.Credentials(r.Context(), person)
+	if err != nil {
+		return iamdomain.Link{}, false, err
+	}
+	for _, row := range held {
+		if row.ID == id && row.Method == iamdomain.MethodOIDC &&
+			row.RevokedAt.IsZero() {
+			return iamdomain.Link{Issuer: row.Issuer, Blind: row.SubjectBlind},
+				true, nil
+		}
+	}
+	return iamdomain.Link{}, false, nil
+}
+
 // DeleteCredential is `DELETE /iam/credentials/{id}`.
 //
 // IT REVOKES RATHER THAN DELETES, which is the same choice the session rows
@@ -294,6 +317,28 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	now := s.now()
 	_, fromToken := auth.PresentedToken(r.Context())
+	// A PROVIDER LINK IS NOT IN THE PERSON'S CREDENTIAL SET: it is its
+	// claim's row, and a set rewritten without it would leave it exactly
+	// where it was while answering "nothing changed". So an id naming one
+	// is an UNLINK — which a token may not make, for the same reason it may
+	// not withdraw a password: it is how the owner signs in.
+	if held, ok, err := s.linkCredential(r, person, id); err != nil {
+		s.unavailable(w, r, "read a person's credentials", err)
+		return
+	} else if ok {
+		if fromToken {
+			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+				map[string]string{"detail": "a machine token revokes machine " +
+					"tokens and nothing else: an identity provider link is how " +
+					"its owner signs in"})
+			return
+		}
+		unlinkOp := s.opIDFor(r, "credentials:unlink:"+id)
+		unlinked, err := writer.Unlink(r.Context(), person, held, unlinkOp,
+			"a provider link was revoked")
+		s.answerWrite(w, r, unlinkOp, unlinked, err, map[string]any{"id": id})
+		return
+	}
 	found, withheld := false, false
 	var method iamdomain.CredentialMethod
 	const reason = "a credential was revoked"

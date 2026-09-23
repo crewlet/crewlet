@@ -195,9 +195,8 @@ func TestALinkAndAnUnlinkAreAnnounced(t *testing.T) {
 //
 // The directory row reports the link the person holds now (what an
 // administrator names as the one they are replacing); the subject moved off
-// resolves nobody and can be pinned to somebody else; and a pin that forgot to
-// name the link it replaces still ends with the person holding ONE — the
-// apply supersedes the other rather than leaving two ways to become them.
+// resolves nobody and can be pinned to somebody else; and a pin that does not
+// name the link it replaces is refused rather than switching them.
 func TestAPersonHoldsOneLinkAndAMoveFreesTheOld(t *testing.T) {
 	t.Parallel()
 	rig := newLinkRig(t)
@@ -228,20 +227,65 @@ func TestAPersonHoldsOneLinkAndAMoveFreesTheOld(t *testing.T) {
 		t.Errorf("the subject a move released could not be pinned again: %v", err)
 	}
 
-	// A PIN THAT DID NOT NAME WHAT IT REPLACES: the claim is on a fresh
-	// subject so the broker admits it, and the apply is what keeps the
-	// person at one link.
-	if err := rig.link(ada, third, "", "link-third"); err != nil {
-		t.Fatalf("a second pin: %v", err)
+	// A PIN THAT DID NOT NAME WHAT IT REPLACES is refused, and so is a
+	// move naming a link the person no longer holds: a person already
+	// linked is never relinked in passing, because the account they have
+	// signed in with would stop working and a different one start.
+	for name, replacing := range map[string]string{
+		"a pin naming nothing": "", "a move naming a stale link": old.Blind,
+	} {
+		if err := rig.link(ada, third, replacing, "link-third-"+name); !errors.Is(err,
+			iamdomain.ErrLinked) {
+			t.Errorf("%s answered %v, want ErrLinked", name, err)
+		}
 	}
-	if got := rig.resolves(next); got != "" {
-		t.Errorf("a person pinned to a second subject still signs in "+
-			"through the first (%q): one person, two ways to become them", got)
+	if got := rig.resolves(next); got != ada {
+		t.Errorf("a refused relink moved the person off their subject: it "+
+			"resolves to %q", got)
+	}
+	if got := rig.resolves(third); got != "" {
+		t.Errorf("a refused relink pinned the new subject to %q", got)
+	}
+}
+
+// TWO PINS RACING ON ONE PERSON LEAVE THEM WITH ONE LINK.
+//
+// Each pin arbitrates on its own SUBJECT, so two administrators pinning two
+// different subjects to one person never contend at the broker — and each
+// decide reads a snapshot the other's record is not in yet, so [ErrLinked]
+// passes both. What keeps the person at one link is the APPLY: the later
+// record takes the earlier one off them, on every node, in log order. The
+// race is made deterministic by publishing both before this node applies
+// either.
+func TestTwoPinsRacingOnOnePersonLeaveOneLink(t *testing.T) {
+	t.Parallel()
+	rig := newLinkRig(t)
+	ada := rig.person("ada.raced")
+	first, second := rig.subject("first"), rig.subject("second")
+	for i, pin := range []struct {
+		by   string
+		link iamdomain.Link
+	}{{"ana.admin", first}, {"bo.admin", second}} {
+		writer := rig.writer.As(pin.by, iam.KindPerson, iam.AllGrants)
+		if _, err := writer.Link(t.Context(), iamdomain.LinkChange{
+			PersonID: ada, Link: pin.link, OpID: "race-" + pin.by,
+			Reason: "raced",
+		}); err != nil {
+			t.Fatalf("pin %d: %v — neither decide can see the other's record", i, err)
+		}
+	}
+	rig.drain()
+	if got := rig.resolves(second); got != ada {
+		t.Errorf("the later pin resolves to %q, want %q", got, ada)
+	}
+	if got := rig.resolves(first); got != "" {
+		t.Errorf("the earlier pin still resolves to %q: one person, two ways "+
+			"to become them", got)
 	}
 	live := rig.column(`SELECT subject_blind FROM iam_credentials
 		WHERE person_id = ? AND method = 'oidc' AND revoked_at = 0`, ada)
-	if !slices.Equal(live, []string{third.Blind}) {
-		t.Errorf("live links = %v, want only the third", live)
+	if !slices.Equal(live, []string{second.Blind}) {
+		t.Errorf("live links = %v, want only the later pin", live)
 	}
 }
 
@@ -382,21 +426,22 @@ func TestAnEnrolmentThroughTheProviderPinsItsSubject(t *testing.T) {
 		t.Fatalf("derive the invited person: %v", err)
 	}
 	link := rig.subject("joiner")
-	redeem := func(grants []iam.Grant) error {
+	redeem := func(grants []iam.Grant, through iamdomain.Link) error {
 		return rig.draining(func() error {
 			_, err := nodeWriter(rig.writeRig).Enrol(t.Context(), iamdomain.Enrolment{
 				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 				Name: "A joiner", Email: "joiner@example.com",
 				Login: "joiner.one", Grants: grants,
 				Colleague: iam.ColleagueRead, Invitation: invitation,
-				Link: &link, OpID: "redeem-" + person,
+				Link: &through, OpID: "redeem-" + person,
 				Reason: "redeemed through the identity provider",
 			})
 			return err
 		})
 	}
 
-	if err := redeem([]iam.Grant{iam.GrantStateRead, iam.GrantSecretRead}); err == nil {
+	if err := redeem([]iam.Grant{iam.GrantStateRead, iam.GrantSecretRead},
+		link); err == nil {
 		t.Fatal("a redemption asking for more than the invitation offered " +
 			"was admitted")
 	}
@@ -424,7 +469,16 @@ func TestAnEnrolmentThroughTheProviderPinsItsSubject(t *testing.T) {
 			"holds", stopped.Orphans)
 	}
 
-	if err := redeem(offered); err != nil {
+	// A RETRY THROUGH A DIFFERENT PROVIDER ACCOUNT is refused rather than
+	// switched: the stopped attempt pinned its subject to this person,
+	// and a second account arriving for them is the relink ErrLinked
+	// exists to refuse.
+	other := rig.subject("somebody-else")
+	if err := redeem(offered, other); !errors.Is(err, iamdomain.ErrLinked) {
+		t.Fatalf("a retry through another provider account answered %v, "+
+			"want ErrLinked", err)
+	}
+	if err := redeem(offered, link); err != nil {
 		t.Fatalf("the retried redemption: %v", err)
 	}
 	if got := rig.resolves(link); got != person {
@@ -507,5 +561,70 @@ func TestADuplicateLinkIsReported(t *testing.T) {
 		!slices.Equal(report.Duplicates[0].People, holders) {
 		t.Fatalf("duplicates = %+v, want the link held by %v", report.Duplicates,
 			holders)
+	}
+}
+
+// A REDEMPTION FINISHED BY PASSWORD ANNOUNCES THE LINK ITS FIRST ATTEMPT
+// PINNED.
+//
+// An attempt through the provider that stopped after its link claim left the
+// subject pinned to the reservation, and the same redemption finished with a
+// password creates the same person — holding that link. What is announced is
+// read from the snapshot the person lands in rather than from the call that
+// finished it, or the person could sign in through a provider account with no
+// row on the trail saying they were linked to it.
+func TestARedemptionFinishedByPasswordAnnouncesTheLinkItHolds(t *testing.T) {
+	t.Parallel()
+	rig := newLinkRig(t)
+	invitation := uuid.Must(uuid.NewV7()).String()
+	offered := []iam.Grant{iam.GrantStateRead}
+	if err := rig.draining(func() error {
+		_, err := rig.writer.Invite(t.Context(), iamdomain.InviteMint{
+			ID: invitation, Email: "later@example.com", Grants: offered,
+			Colleague: iam.ColleagueRead,
+			ExpiresAt: brokerAt.Add(168 * time.Hour),
+			OpID:      "invite-later", Reason: "onboarding",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+	rig.drain()
+	person, err := iamdomain.InvitedPersonID(invitation)
+	if err != nil {
+		t.Fatalf("derive the invited person: %v", err)
+	}
+	link := rig.subject("later")
+	redeem := func(grants []iam.Grant, through *iamdomain.Link) error {
+		return rig.draining(func() error {
+			_, err := nodeWriter(rig.writeRig).Enrol(t.Context(), iamdomain.Enrolment{
+				PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+				Name: "Later", Email: "later@example.com", Login: "later.one",
+				Grants: grants, Colleague: iam.ColleagueRead,
+				Invitation: invitation, Link: through, OpID: "redeem-" + person,
+				Reason: "redeemed",
+			})
+			return err
+		})
+	}
+	if err := redeem([]iam.Grant{iam.GrantStateRead, iam.GrantSecretRead},
+		&link); err == nil {
+		t.Fatal("a redemption asking for more than was offered was admitted")
+	}
+	rig.events.take()
+
+	if err := redeem(offered, nil); err != nil {
+		t.Fatalf("the redemption finished by password: %v", err)
+	}
+	if got := rig.resolves(link); got != person {
+		t.Fatalf("the subject resolves to %q, want the person the "+
+			"redemption created", got)
+	}
+	linked, _ := linkEvents(rig.events.take())
+	want := types.IAMIdentityLinked{Person: person, Issuer: linkIssuer,
+		Via: types.LinkViaInvite, By: "node-a"}
+	if len(linked) != 1 || linked[0] != want {
+		t.Errorf("linked = %+v, want exactly %+v — the person holds a link "+
+			"nothing announced", linked, want)
 	}
 }

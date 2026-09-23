@@ -780,8 +780,37 @@ it does not attach a provider subject to an existing person because the
 addresses agree. Both are the same hazard: at most providers a user can set
 their own address, so "the addresses match" is a claim the attacker controls —
 and the person it would link them to is whoever is most worth becoming. A
-subject is bound to a person by an invitation somebody issued, or by an
-administrator, once.
+subject is **linked** to a person in exactly two ways:
+
+- **An invitation redeemed through the provider.** The invitation's page
+  offers the provider (`provider_start`), and the round trip carries the
+  invitation sealed beside the PKCE verifier. When the person comes back, the
+  callback enrols the person the invitation creates — its grants, its reach,
+  its address, the login they chose, no password — and links the account the
+  provider came back with to them, then signs them in. The invitation is the
+  authority; the provider says only who arrived.
+- **An administrator.** `PATCH /iam/people/{id}` with `oidc_subject` (or
+  `crewlet iam link ID SUBJECT`) pins the account whose `sub` claim that is,
+  at the deployment's own provider.
+
+A link is a **claim** on the subject, arbitrated like an address or a login:
+two administrators pinning one account to two people contend and exactly one
+wins, and the other is told who holds it — `409 subject_conflict`. It is
+**never relinked in passing**, from either side. An account somebody holds is
+taken off them only by unlinking them first; and a person already linked to one
+account is moved to another only by a change that names the account it
+replaces, so an invitation re-redeemed through a *different* account than its
+first attempt pinned is refused rather than switched. A person holds one link.
+
+Unlinking — `"oidc_subject": ""`, `crewlet iam unlink`, or revoking the link's
+credential id — ends their provider sign-in from the next request on every node
+that has applied it, and a removal ends it with everything else. Each link and
+unlink is announced as `iam_identity_linked` (with `via: invite` or `via:
+admin`) and `iam_identity_unlinked`.
+
+The directory never shows a subject back. The estate holds it only as a keyed
+blind, under a class of its own so it can never collide with an address, and
+the directory says a person is linked and to which provider.
 
 There is no `auto_provision`. It is the same decision written as a config
 field, and a field is how it ends up on by accident.
@@ -852,7 +881,7 @@ them in, because the subject is the whole of what a provider sign-in proves.
 The browser is answered `409 subject_conflict`: a definite refusal with no
 `Retry-After`, since waiting never clears it and only an administrator removing
 one of the links does. It names neither holder — who else holds the link is not
-the caller's to learn — while the node's log line `api_oidc_subject_ambiguous`
+the caller's to learn — while the node's log line `api_oidc_subject_conflict`
 and `crewlet iam check` (a duplicated `link` claim) name both, for the
 administrator who decides.
 

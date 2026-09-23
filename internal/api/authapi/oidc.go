@@ -25,6 +25,12 @@ const flightCookieName = "crewlet_oidc_flight"
 
 // OIDCStart sends the browser to the provider.
 //
+// `?invite=<id>` starts a REDEMPTION rather than a sign-in: the invitation and
+// the login the person chose (`?login=`, or the one the invitation's page
+// proposed) are checked here and sealed into the flight, and the callback
+// enrols the person the invitation creates and links the subject the provider
+// comes back with to them — see invite_oidc.go.
+//
 // # It keeps its state in the BROWSER, sealed, and on no node
 //
 // A fleet serves logins from whichever ingress node a request lands on, so a
@@ -40,8 +46,15 @@ func (s *Service) OIDCStart(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
+	want := oidc.Flight{Return: s.returnTo(r)}
+	if invite := r.URL.Query().Get("invite"); invite != "" {
+		var ok bool
+		if want, ok = s.redemptionFlight(w, r, want, invite); !ok {
+			return
+		}
+	}
 	redirect, sealed, err := s.provider.Config().Start(
-		s.cipher, metadata.AuthorizationEndpoint, s.returnTo(r), s.now())
+		s.cipher, metadata.AuthorizationEndpoint, want, s.now())
 	if err != nil {
 		// A FAULT AND NOT AN OUTAGE, so a 500 rather than a 503 asking to
 		// be retried: what fails here is this node's own configuration
@@ -69,10 +82,13 @@ func (s *Service) OIDCStart(w http.ResponseWriter, r *http.Request) {
 // At most providers a person can set their own address, so an address the
 // provider asserts is a claim the attacker controls — and the person it would
 // link them to is whoever is most worth becoming. So a subject this estate
-// does not already hold a credential for is REFUSED rather than provisioned or
-// matched: somebody with an account links it deliberately, and there is no
-// `auto_provision` setting because that is the same decision written as a
-// field, and a field is how it ends up on by accident.
+// does not already hold a LINK for is REFUSED rather than provisioned or
+// matched, and a link is made in exactly two ways: an invitation redeemed
+// through this same round trip (the flight carries it, and the callback
+// enrols and links in one sequence — [Service.redeemThroughProvider]), or an
+// administrator pinning it. There is no `auto_provision` setting, because
+// that is the same decision written as a field, and a field is how it ends up
+// on by accident.
 func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	arrived := s.now()
 	source := s.sourceOf(r)
@@ -138,24 +154,32 @@ func (s *Service) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	held, err := s.personForSubject(r, claims)
-	switch {
-	case errors.Is(err, iamdomain.ErrSubjectAmbiguous):
-		// A DEFINITE REFUSAL, NOT AN OUTAGE. Answered as the 503 below it
-		// told the browser to retry against a state no amount of waiting
-		// changes — only an administrator removing one of the links does.
-		// A FAILED ATTEMPT on the trail, and NOT a throttle failure: the
-		// caller proved the subject to the provider, so this is nobody
-		// guessing.
-		attempt.Subject = claims.Issuer + "|" + claims.Subject
-		s.audit.Failed(r.Context(), attempt)
-		httpjson.Fail(w, http.StatusConflict, httpjson.CodeSubjectConflict)
+	attempt.Subject = claims.Issuer + "|" + claims.Subject
+	if flight.Invite != "" {
+		s.redeemThroughProvider(w, r, arrived, attempt, flight, claims,
+			tokens.Refresh)
 		return
-	case err != nil:
+	}
+	held, err := s.personForSubject(r, claims)
+	if errors.Is(err, iamdomain.ErrSubjectAmbiguous) {
+		// A CONFLICT AND NOT AN OUTAGE: a restore left this subject
+		// linked to two people, and no retry clears it — an operator
+		// unlinking one of them does. It used to answer 503, which a
+		// browser retries at the provider for ever.
+		// A FAILED ATTEMPT on the trail naming the subject, and NOT a
+		// throttle failure: the caller proved the subject to the provider,
+		// so this is nobody guessing.
+		attempt.Subject = claims.Issuer + "|" + claims.Subject
+		s.refuseSubjectConflict(w, r, attempt, "this identity provider "+
+			"account is linked to more than one person in this company; an "+
+			"administrator has to remove one of the links", err)
+		return
+	}
+	if err != nil {
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
-	attempt.Subject, attempt.Person = claims.Issuer+"|"+claims.Subject, held.ID
+	attempt.Person = held.ID
 	if held.ID == "" || !stageAdmits(held.Stage) {
 		// NO LINK, NO SIGN-IN. See this function's doc: an address the
 		// provider asserts is not a link, and this is where that rule
@@ -211,13 +235,7 @@ func (s *Service) personForSubject(r *http.Request, claims oidc.Claims) (
 	// address matches nobody and every provider sign-in is refused.
 	held, err := s.directory.PersonBySubjectBlind(r.Context(), blind, s.now())
 	if errors.Is(err, iamdomain.ErrSubjectAmbiguous) {
-		// LOUDER than an outage, because waiting does not clear it: a
-		// restore left one subject linked to two people, and the
-		// sign-in stays refused until an operator removes a link. The
-		// error names both holders, and this line is the only place
-		// they are named — the caller is told neither.
-		log.ErrorContext(r.Context(), "api_oidc_subject_ambiguous",
-			"issuer", claims.Issuer, "error", err)
+		// THE CALLER ANSWERS IT, as a conflict: see OIDCCallback.
 		return iamdomain.Sighting{}, err
 	}
 	if err != nil {

@@ -260,8 +260,10 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 // different thing to do next. What is particular here is [iamdomain.ErrRefused]
 // and [iamdomain.ErrClaimed]: the first is authority (403, and it will never
 // land however often it is retried) and the second is a lost race on an
-// address, a login or a seat (409, naming who holds it). An estate that could
-// not decide is 503 WITH the Retry-After every identity 503 carries and the
+// address, a login or a seat (409, naming who holds it). A provider subject
+// somebody else holds, and a person already linked to a different one
+// ([iamdomain.ErrLinked]), are 409 `subject_conflict` — the code the sign-in
+// surface answers the same fact with. An estate that could not decide is 503 WITH the Retry-After every identity 503 carries and the
 // operation id: it used to be a bare 503, which a client cannot tell from a
 // node that is gone for good.
 //
@@ -290,6 +292,19 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	switch {
 	case errors.Is(err, iamdomain.ErrRefused):
 		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+			map[string]string{"detail": err.Error()})
+		return
+	case errors.As(err, &claimed) && claimed.Kind == iamdomain.KindLink:
+		// THE HOLDER AND NEVER THE BLIND: the administrator reading this
+		// may manage people and needs to know whose link it is; the
+		// blind is a keyed hash nobody can act on.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeSubjectConflict,
+			map[string]string{"detail": "that identity provider account is " +
+				"already linked to person " + claimed.Holder + "; unlink them " +
+				"first if it is theirs no longer", "holder": claimed.Holder})
+		return
+	case errors.Is(err, iamdomain.ErrLinked):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeSubjectConflict,
 			map[string]string{"detail": err.Error()})
 		return
 	case errors.As(err, &claimed):

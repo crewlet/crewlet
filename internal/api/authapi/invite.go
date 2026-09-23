@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -53,6 +54,16 @@ type inviteView struct {
 
 	// MinPasswordLength is the floor, so a form refuses before it posts.
 	MinPasswordLength int `json:"min_password_length"`
+
+	// ProviderStart is where the form sends a person who would rather
+	// redeem this invitation through the company's identity provider than
+	// set a password here: the provider's sign-in, carrying this
+	// invitation, and a `login` query parameter the form appends with the
+	// login the person chose (the proposal above when it appends none).
+	// The provider account they come back with is LINKED to the person the
+	// invitation creates — the one way a subject is pinned without an
+	// administrator. Absent on a deployment with no provider.
+	ProviderStart string `json:"provider_start,omitempty"`
 }
 
 // inviteRedeem is what redeeming presents.
@@ -84,11 +95,17 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
-	httpjson.Write(w, http.StatusOK, inviteView{
+	view := inviteView{
 		Email: email, InvitedBy: held.InvitedBy,
 		Login:             iam.LoginFromAddress(email),
 		MinPasswordLength: iam.MinPasswordChars,
-	})
+	}
+	if s.provider != nil {
+		view.ProviderStart = auth.PathAuthOIDCStart + "?" + url.Values{
+			"invite": {held.ID},
+		}.Encode()
+	}
+	httpjson.Write(w, http.StatusOK, view)
 }
 
 // RedeemInvite creates the person an invitation was issued for.
@@ -155,7 +172,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			// as the first attempt's, so the ledger collapses the two.
 			s.spendInvitation(r, held, person, opID)
 		}
-		s.refuseSpentInvitation(w, r, arrived, source)
+		s.refuseSpentInvitationID(w, r, arrived, source, held.ID)
 		return
 	}
 	email, err := s.openSealed(r, held)
@@ -269,33 +286,41 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err e
 	}
 }
 
-// invitation resolves the link, answering false once it has written the
-// refusal.
+// invitation resolves the link the route's path names, answering false once it
+// has written the refusal.
+func (s *Service) invitation(w http.ResponseWriter, r *http.Request,
+	arrived time.Time, source string) (iamdomain.InvitationRow, bool) {
+
+	return s.invitationByID(w, r, arrived, source, r.PathValue("id"))
+}
+
+// invitationByID resolves one invitation — the one a route's path names, or
+// the one a redemption through the identity provider sealed into its flight.
 //
 // ONE REFUSAL FOR ABSENT, REDEEMED AND EXPIRED, because the three have one
 // remedy — ask for a new one — and telling them apart would say "this was
 // already used" to somebody whose link merely aged out, sending them to find
-// out who used it — and a counted one: see [Service.refuseSpentInvitation].
-func (s *Service) invitation(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, source string) (iamdomain.InvitationRow, bool) {
+// out who used it — and a counted one: see [Service.refuseSpentInvitationID].
+func (s *Service) invitationByID(w http.ResponseWriter, r *http.Request,
+	arrived time.Time, source, id string) (iamdomain.InvitationRow, bool) {
 
-	held, err := s.directory.InvitationByID(r.Context(), r.PathValue("id"))
+	held, err := s.directory.InvitationByID(r.Context(), id)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_invite_lookup_failed", "error", err)
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return iamdomain.InvitationRow{}, false
 	}
 	if held.ID == "" || held.Spent(s.now()) {
-		s.refuseSpentInvitation(w, r, arrived, source)
+		s.refuseSpentInvitationID(w, r, arrived, source, id)
 		return iamdomain.InvitationRow{}, false
 	}
 	return held, true
 }
 
-// refuseSpentInvitation is every 410 this surface answers: an invitation
+// refuseSpentInvitationID is every 410 this surface answers: an invitation
 // nobody issued, one redeemed, one aged out, and one whose address somebody is
-// already enrolled under. ONE ANSWER for all of them, for [Service.invitation]'s
-// reason.
+// already enrolled under. ONE ANSWER for all of them, for
+// [Service.invitationByID]'s reason.
 //
 // # It is a FAILED ATTEMPT, counted like every other
 //
@@ -307,8 +332,8 @@ func (s *Service) invitation(w http.ResponseWriter, r *http.Request,
 // SOURCE — which is what fills the ceiling — reaches the audit trail's
 // failure tally, and is padded to the deadline measured from arrival, because
 // an absent id and a spent one are one refusal and must not be two timings.
-func (s *Service) refuseSpentInvitation(w http.ResponseWriter, r *http.Request,
-	arrived time.Time, source string) {
+func (s *Service) refuseSpentInvitationID(w http.ResponseWriter, r *http.Request,
+	arrived time.Time, source, id string) {
 
 	s.throttle.Fail(r.Context(), source)
 	s.audit.Failed(r.Context(), authevents.Failure{
@@ -316,7 +341,7 @@ func (s *Service) refuseSpentInvitation(w http.ResponseWriter, r *http.Request,
 		// THE ID PRESENTED, keyed in memory and never kept: how many
 		// DIFFERENT links one client tried in a minute is the difference
 		// between a stale bookmark and a walk.
-		Subject: r.PathValue("id"),
+		Subject: id,
 	})
 	s.throttle.Pad(r.Context(), arrived)
 	httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)

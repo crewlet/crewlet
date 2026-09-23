@@ -192,7 +192,8 @@ func TestALoginBegunOnOneNodeFinishesOnAnother(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discovery: %v", err)
 	}
-	redirect, sealed, err := config.Start(cipher, metadata.AuthorizationEndpoint, "/work", at)
+	redirect, sealed, err := config.Start(cipher, metadata.AuthorizationEndpoint,
+		oidc.Flight{Return: "/work"}, at)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -237,7 +238,8 @@ func TestTheAuthorizationRequestUsesS256AndNeverPlain(t *testing.T) {
 	t.Parallel()
 	idp := newIssuer(t)
 	config := idp.config()
-	redirect, sealed, err := config.Start(testCipher(t), idp.Server.URL+"/authorize", "", at)
+	redirect, sealed, err := config.Start(testCipher(t), idp.Server.URL+"/authorize",
+		oidc.Flight{}, at)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -299,7 +301,7 @@ func TestTheAuthorizationRequestAsksForTheConfiguredScopes(t *testing.T) {
 			config := idp.config()
 			config.Scopes = tc.configured
 			redirect, _, err := config.Start(testCipher(t),
-				idp.Server.URL+"/authorize", "", at)
+				idp.Server.URL+"/authorize", oidc.Flight{}, at)
 			if err != nil {
 				t.Fatalf("start: %v", err)
 			}
@@ -323,7 +325,8 @@ func TestACodeCannotBeRedeemedWithoutTheVerifier(t *testing.T) {
 	t.Parallel()
 	idp := newIssuer(t)
 	config := idp.config()
-	redirect, sealed, err := config.Start(testCipher(t), idp.Server.URL+"/authorize", "", at)
+	redirect, sealed, err := config.Start(testCipher(t), idp.Server.URL+"/authorize",
+		oidc.Flight{}, at)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -350,7 +353,8 @@ func TestAFlightIsNotRedeemableAfterItsWindow(t *testing.T) {
 	t.Parallel()
 	idp := newIssuer(t)
 	cipher := testCipher(t)
-	_, sealed, err := idp.config().Start(cipher, idp.Server.URL+"/authorize", "", at)
+	_, sealed, err := idp.config().Start(cipher, idp.Server.URL+"/authorize",
+		oidc.Flight{}, at)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -360,6 +364,43 @@ func TestAFlightIsNotRedeemableAfterItsWindow(t *testing.T) {
 	if _, err := oidc.Open(cipher, sealed, at.Add(oidc.FlightTTL)); err == nil {
 		t.Error("a flight opened at exactly its deadline — the cookie carries " +
 			"the PKCE verifier, so its window is how long that sits in a browser")
+	}
+}
+
+// A FLIGHT CARRIES THE REDEMPTION IT IS FINISHING, AND MINTS ITS OWN SECRETS.
+//
+// An invitation redeemed through the provider is decided at the CALLBACK, so
+// the invitation and the login the redeemer chose must survive the round trip
+// sealed — a query parameter on the way back could be swapped for somebody
+// else's invitation. And whatever the caller hands in, the state, the nonce
+// and the verifier are this package's own: a caller able to choose them would
+// be able to predict them.
+func TestAFlightCarriesTheRedemptionAndMintsItsOwnSecrets(t *testing.T) {
+	t.Parallel()
+	idp := newIssuer(t)
+	cipher := testCipher(t)
+	_, sealed, err := idp.config().Start(cipher, idp.Server.URL+"/authorize",
+		oidc.Flight{Return: "/welcome", Invite: "inv-1", Login: "jane.doe",
+			State: "chosen", Nonce: "chosen", Verifier: "chosen"}, at)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	flight, err := oidc.Open(cipher, sealed, at)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if flight.Invite != "inv-1" || flight.Login != "jane.doe" ||
+		flight.Return != "/welcome" {
+		t.Errorf("the flight carries (%q, %q, %q), want the redemption it "+
+			"was started for", flight.Invite, flight.Login, flight.Return)
+	}
+	for name, value := range map[string]string{
+		"state": flight.State, "nonce": flight.Nonce, "verifier": flight.Verifier,
+	} {
+		if value == "chosen" || value == "" {
+			t.Errorf("the %s is %q — a caller-supplied value, not one this "+
+				"package minted", name, value)
+		}
 	}
 }
 

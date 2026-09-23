@@ -107,6 +107,14 @@ type Writer interface {
 	Rebind(ctx context.Context, personID, from, to, opID, reason string) (
 		statelog.Result, error)
 	Invite(ctx context.Context, in iamdomain.InviteMint) (statelog.Result, error)
+
+	// Link pins an identity provider subject to somebody who already
+	// exists, or moves them from one to another; Unlink takes it off
+	// them. Two gestures rather than a Claim and a Release, because each
+	// states the issuer and announces itself.
+	Link(ctx context.Context, in iamdomain.LinkChange) (statelog.Result, error)
+	Unlink(ctx context.Context, personID string, link iamdomain.Link,
+		opID, reason string) (statelog.Result, error)
 	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Result, error)
 	InvalidateAll(ctx context.Context, opID, reason string) (statelog.Result, error)
 	Remove(ctx context.Context, personID, opID, reason string) (statelog.Result, error)
@@ -134,6 +142,16 @@ type Authority func(actor string, kind iam.Kind, grants []iam.Grant) Writer
 type Opener interface {
 	Open(ctx context.Context, personID string, field iamdomain.Field,
 		sealed string) (string, error)
+}
+
+// Blinds resolves the keyed blind a provider subject is held under.
+//
+// CONSUMER-DEFINED AND ONE METHOD, like [Opener]: this surface blinds the
+// subject an administrator pins and nothing else. Resolved per write rather
+// than held, for [iamdomain.Blinds]' reason — the key is minted by whichever
+// node first needs it.
+type Blinds interface {
+	Blinder(ctx context.Context) (*iamdomain.Blinder, error)
 }
 
 // Bootstrap is how a company with nobody in it acquires its first
@@ -177,6 +195,15 @@ type Options struct {
 	// which is the honest shape for a deployment whose `api.auth.bootstrap`
 	// is closed.
 	Bootstrap Bootstrap
+
+	// Issuer is the identity provider this deployment signs people in
+	// through (`api.auth.oidc.issuer`), and Blinds what a subject pinned to
+	// somebody is blinded with. Both are needed for `oidc_subject` and
+	// nothing else, so their ABSENCE REFUSES THAT FIELD rather than the
+	// surface: a deployment with no provider has no subject to pin, and it
+	// says so naming the setting.
+	Issuer string
+	Blinds Blinds
 
 	// ExternalBase is `api.external_url`, which is what an invitation's
 	// link is built from.
@@ -235,6 +262,8 @@ type Service struct {
 	opener    Opener
 	bootstrap Bootstrap
 	external  string
+	issuer    string
+	blinds    Blinds
 	bindings  Bindings
 	ceiling   []iam.Grant
 	audit     Audit
@@ -263,6 +292,7 @@ func New(opts Options) (*Service, error) {
 		directory: opts.Directory, authority: opts.Authority,
 		opener: opts.Opener, bootstrap: opts.Bootstrap,
 		external: opts.ExternalBase, bindings: opts.Bindings,
+		issuer: opts.Issuer, blinds: opts.Blinds,
 		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit, keys: opts.Keys,
 		current: opts.Current,
 		now:     opts.Now,

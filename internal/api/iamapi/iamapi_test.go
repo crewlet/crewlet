@@ -278,6 +278,11 @@ type fakeWriter struct {
 	// moved is every login and seat MOVE the surface asked for.
 	moved []move
 
+	// links are the provider pins asked for, and unlinked the links taken
+	// off somebody (the blind as `from`).
+	links    []iamdomain.LinkChange
+	unlinked []move
+
 	// held is the credential set a SetCredentials call's Apply is run
 	// against, the way the real decide runs it against the snapshot.
 	held []iamdomain.Credential
@@ -386,6 +391,20 @@ func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 
 	w.invited = in
 	return w.did("invite")
+}
+
+func (w *fakeWriter) Link(_ context.Context, in iamdomain.LinkChange) (
+	statelog.Result, error) {
+
+	w.links = append(w.links, in)
+	return w.did("link")
+}
+
+func (w *fakeWriter) Unlink(_ context.Context, person string,
+	link iamdomain.Link, _, _ string) (statelog.Result, error) {
+
+	w.unlinked = append(w.unlinked, move{"link", person, link.Blind, ""})
+	return w.did("unlink")
 }
 
 func (w *fakeWriter) Revoke(_ context.Context, _, _, _ string) (

@@ -39,7 +39,8 @@
 // addresses agree. Both are the same hazard: at most providers a user can set
 // their own address, so "the addresses match" is a claim the attacker controls
 // — and the person it would link them to is whoever is most worth becoming.
-// A subject is bound to a person by an invitation somebody issued or by an
+// A subject is bound to a person by an invitation somebody issued — the flight
+// carries the invitation across the round trip ([Flight.Invite]) — or by an
 // administrator, once, and the binding is what authenticates afterwards.
 //
 // There is no `auto_provision`. It is the same decision written as a config
@@ -94,22 +95,15 @@ var Scopes = []string{"openid", "profile", "email", "offline_access"}
 //
 // ONE SENTINEL FOR EVERY ARM, for the reason internal/iam/credential gives
 // about a sign-in: the detail is logged and the caller is told a login failed.
-// The exception is the two states an operator has to be able to act on — an
-// unconfigured provider and a subject already bound to somebody else — which
-// have sentinels of their own below.
+// The exception is the state an operator has to be able to act on — an
+// unconfigured provider — which has a sentinel of its own below. A subject
+// already linked to somebody else is not this package's to decide: which
+// person a subject is pinned to is the identity estate's claim, and its
+// refusal is internal/iamdomain's (an ErrClaimed of kind link, or ErrLinked).
 var ErrRefused = errors.New("oidc: this sign-in could not be completed")
 
 // ErrNotConfigured reports a deployment with no identity provider.
 var ErrNotConfigured = errors.New("oidc: no identity provider is configured")
-
-// ErrSubjectClaimed reports a provider subject already bound to a DIFFERENT
-// person.
-//
-// ITS OWN SENTINEL and audited, because it is the one refusal here that is
-// evidence rather than noise: somebody's provider account is being offered as
-// proof of an identity it is not bound to, and the caller answers 409 and
-// leaves whatever invitation was in play unspent.
-var ErrSubjectClaimed = errors.New("oidc: that provider account is already bound to somebody else")
 
 // Config is the identity provider a company signs in through.
 //

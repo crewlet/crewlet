@@ -28,8 +28,11 @@ func (a *Applier) applyLink(ctx context.Context, tx *sql.Tx, at applyContext) (i
 // the subject goes on ONE person and comes off every other, and the person
 // holds ONE subject — pinning a second revokes the first. Both are the apply's
 // to make deterministic, because neither is a state the broker can refuse: the
-// subject arbitrates the SUBJECT, and a stale row carrying it is this node's
-// own residue.
+// subject arbitrates the SUBJECT, not the person, so two administrators
+// pinning two different subjects to one person at once each pass their
+// decide ([ErrLinked] reads a snapshot neither record is in yet), and a stale
+// row carrying the subject is this node's own residue. The later record wins,
+// on every node, because the log orders them.
 //
 // REVOKED RATHER THAN DELETED, and a version guard on every statement, because
 // a record deferred on one person's bucket can be reprocessed after a later one

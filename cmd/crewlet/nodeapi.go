@@ -367,6 +367,12 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 		Opener:       e.PersonSealer(),
 		Bootstrap:    bootstrapReissue(nodeID, auth),
 		ExternalBase: boot.API.ExternalBase(),
+		// THE PROVIDER THE SIGN-IN SURFACE USES, read off the one the
+		// engine built rather than the config block again, so a subject
+		// an administrator pins is blinded under the issuer every
+		// provider sign-in resolves under.
+		Issuer: providerIssuer(e),
+		Blinds: e.PersonBlinder(),
 		// THIS NODE'S OWN CEILING, which the report compares a person's
 		// declared grants against: it is applied at decision time and
 		// never written, so a fleet mid-rollout legally disagrees and
@@ -388,6 +394,15 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 		return nil, fmt.Errorf("api: the identity directory: %w", err)
 	}
 	return surface, nil
+}
+
+// providerIssuer is the identity provider this node signs people in through,
+// or empty where it signs nobody in that way.
+func providerIssuer(e *engine.Engine) string {
+	if p := e.IdentityProvider(); p != nil {
+		return p.Config().Issuer
+	}
+	return ""
 }
 
 // bootstrapReissue is the one-time code's re-issue, or nil where this node

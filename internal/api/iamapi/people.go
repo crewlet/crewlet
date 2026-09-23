@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -64,6 +65,12 @@ type personView struct {
 	Seat   string `json:"seat,omitempty"`
 	SeatAt uint64 `json:"seat_at,omitempty"`
 
+	// OIDC is the identity provider this person is linked to, present
+	// only when they are. The ISSUER and never the subject: the estate
+	// holds a subject only as a keyed blind, which is not a value anybody
+	// can read back — the provider is where to look up which account.
+	OIDC *oidcView `json:"oidc,omitempty"`
+
 	Grants    []iam.Grant   `json:"grants,omitempty"`
 	Colleague iam.Colleague `json:"colleague"`
 
@@ -74,6 +81,11 @@ type personView struct {
 	Version   uint64    `json:"version"`
 }
 
+// oidcView is a person's provider link as the directory renders it.
+type oidcView struct {
+	Issuer string `json:"issuer"`
+}
+
 // viewOf renders one row, opening what it is entitled to open.
 func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personView {
 	out := personView{
@@ -82,6 +94,9 @@ func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personVie
 		Colleague: row.Colleague, Epoch: row.Epoch,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		Version: row.Version, Reserved: row.Reserved,
+	}
+	if row.Link.Blind != "" {
+		out.OIDC = &oidcView{Issuer: row.Link.Issuer}
 	}
 	name, removedName := s.open(ctx, row.ID, iamdomain.FieldName, row.NameSealed)
 	email, removedEmail := s.open(ctx, row.ID, iamdomain.FieldEmail, row.EmailSealed)
@@ -258,7 +273,15 @@ type patchBody struct {
 	Grants    *[]iam.Grant   `json:"grants"`
 	Colleague *iam.Colleague `json:"colleague"`
 	Stage     *iam.Stage     `json:"stage"`
-	Reason    string         `json:"reason"`
+
+	// OIDCSubject pins the person to the subject — the `sub` claim — of
+	// an account at this deployment's identity provider, moving them from
+	// whatever account they are linked to now; the empty string unlinks
+	// them. One of the only two ways a subject is ever pinned, the other
+	// being an invitation redeemed through the provider.
+	OIDCSubject *string `json:"oidc_subject"`
+
+	Reason string `json:"reason"`
 }
 
 // refusal is what is wrong with an edit that this surface can judge before
@@ -285,8 +308,53 @@ func (b patchBody) refusal() string {
 	case len(b.Reason) > iamdomain.MaxReason:
 		return "the reason is " + strconv.Itoa(len(b.Reason)) + " bytes and " +
 			"the cap is " + strconv.Itoa(iamdomain.MaxReason)
+	case b.OIDCSubject != nil && strings.TrimSpace(*b.OIDCSubject) != *b.OIDCSubject:
+		// A SUBJECT IS COMPARED BYTE FOR BYTE, so a pasted value with a
+		// stray space would pin an account the provider never asserts —
+		// a link that looks made and signs nobody in.
+		return "oidc_subject carries leading or trailing whitespace; a " +
+			"provider's subject is matched exactly"
+	case b.OIDCSubject != nil && len(*b.OIDCSubject) > maxSubjectBytes:
+		return "oidc_subject is " + strconv.Itoa(len(*b.OIDCSubject)) +
+			" bytes; OpenID Connect bounds a subject at " +
+			strconv.Itoa(maxSubjectBytes)
 	}
 	return ""
+}
+
+// maxSubjectBytes is the longest provider subject an administrator may pin.
+//
+// 255, OpenID Connect Core's own bound on the `sub` claim ("MUST NOT exceed
+// 255 ASCII characters"), so anything longer is not a subject any compliant
+// provider can assert.
+const maxSubjectBytes = 255
+
+// linkTarget is what an `oidc_subject` edit asks for, decided BEFORE the first
+// record: the link to pin (zero to unlink), and whether anything changes.
+func (s *Service) linkTarget(r *http.Request, in patchBody,
+	held iamdomain.PersonRow) (iamdomain.Link, bool, string, error) {
+
+	if in.OIDCSubject == nil {
+		return iamdomain.Link{}, false, "", nil
+	}
+	if *in.OIDCSubject == "" {
+		return iamdomain.Link{}, held.Link.Blind != "", "", nil
+	}
+	if s.issuer == "" || s.blinds == nil {
+		return iamdomain.Link{}, false, "this deployment signs nobody in " +
+			"through an identity provider, so there is no subject to pin — " +
+			"set api.auth.oidc in the node's configuration first", nil
+	}
+	blinder, err := s.blinds.Blinder(r.Context())
+	if err != nil {
+		return iamdomain.Link{}, false, "", err
+	}
+	blind, err := blinder.Subject(s.issuer, *in.OIDCSubject)
+	if err != nil {
+		return iamdomain.Link{}, false, "", err
+	}
+	link := iamdomain.Link{Issuer: s.issuer, Blind: blind}
+	return link, blind != held.Link.Blind, "", nil
 }
 
 // PatchPerson is `PATCH /iam/people/{id}`.
@@ -338,6 +406,19 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	}
 	opID := s.opIDFor(r, "people:update:"+id)
 	reason := reasonOr(in.Reason, "changed through /iam/people")
+	link, relink, refusal, err := s.linkTarget(r, in, held)
+	switch {
+	case refusal != "":
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": refusal})
+		return
+	case err != nil:
+		// THE BLIND KEY, unreadable or not yet minted: nothing has been
+		// published, and the same edit lands once the key is readable.
+		log.WarnContext(r.Context(), "api_iam_subject_unblinded", "error", err)
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
+		return
+	}
 
 	// EVERY STEP'S ANSWER IS KEPT, and a step that did not land ends the
 	// sequence there: an unknown claim, stage or move is one the next
@@ -377,6 +458,29 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	if in.Login != nil && *in.Login != held.Login {
 		if !step(writer.Rename(r.Context(), id, held.Login, *in.Login,
 			opID, reason)) {
+			return
+		}
+	}
+	if relink {
+		// A CLAIM LIKE THE TWO ABOVE, and after them for the same order
+		// they keep: the claims first, because they are what can be
+		// refused. A move names the link the person holds NOW — read a
+		// moment ago — so a relink never happens in passing; the domain
+		// refuses it if that link moved underneath this edit.
+		var (
+			linked statelog.Result
+			err    error
+		)
+		if link.Blind == "" {
+			linked, err = writer.Unlink(r.Context(), id, held.Link,
+				opID+":unlink", reason)
+		} else {
+			linked, err = writer.Link(r.Context(), iamdomain.LinkChange{
+				PersonID: id, Link: link, Replacing: held.Link.Blind,
+				OpID: opID + ":link", Reason: reason,
+			})
+		}
+		if !step(linked, err) {
 			return
 		}
 	}
