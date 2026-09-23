@@ -367,11 +367,20 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if err != nil {
 		return failed(pageWriteFailure(WritePageTool, err)), nil
 	}
+	if got.Outcome.Outcome == statelog.OutcomeUnknown {
+		// A PAGE NOBODY CAN SAY WAS WRITTEN IS NOT ONE TO REPORT: the id and
+		// revision below would be a create's that may never have landed.
+		return failed(pageUnknown(WritePageTool, got.Outcome, fmt.Sprintf(
+			"Read %s/%s with get_page before writing it again: if the first "+
+				"write landed, a second one is refused because the title is taken.",
+			in.Container, in.Title))), nil
+	}
 	t.deps.settle(ctx, got.Outcome.Position)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "container": got.Page.Container,
 		"title": got.Page.Title, "version": got.Page.Version,
 		"revision": got.Revision,
+		"outcome":  string(got.Outcome.Outcome), "position": positionOf(got.Outcome.Position),
 	})
 }
 
@@ -477,7 +486,13 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	if err != nil {
 		return failed(pageWriteFailure(SavePageTool, err)), nil
 	}
+	if got.Outcome.Outcome == statelog.OutcomeUnknown {
+		return failed(pageUnknown(SavePageTool, got.Outcome, "Read the page with "+
+			"get_page: if its version moved past the one you edited, the save "+
+			"landed; if it did not, save again with the version you just read.")), nil
+	}
 	at := got.Outcome.Position
+	outcome := got.Outcome.Outcome
 	revision := got.Revision
 	// A RENAME IS ITS OWN WRITE, and it goes SECOND. An address change
 	// contends for the address and a content change contends for the page,
@@ -499,6 +514,13 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 				"was not: %s", clip(want),
 				pageWriteFailure(SavePageTool, err))), nil
 		}
+		if renamed.Outcome.Outcome == statelog.OutcomeUnknown {
+			return failed(fmt.Sprintf("The edit was saved; whether the rename to "+
+				"%q landed is not known. %s", clip(want),
+				pageUnknown(SavePageTool, renamed.Outcome, "Read the page with "+
+					"get_page: its title says whether the rename landed, and "+
+					"renaming again to the same title is harmless."))), nil
+		}
 		got.Page = renamed.Page
 		// THE LATER OF THE TWO, never the rename's outright. A rename to
 		// the title a page already displays appends no record at all, so
@@ -513,12 +535,14 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		}
 		if renamed.Outcome.Position.Packed() > at.Packed() {
 			at = renamed.Outcome.Position
+			outcome = renamed.Outcome.Outcome
 		}
 	}
 	t.deps.settle(ctx, at)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "title": got.Page.Title,
 		"version": got.Page.Version, "revision": revision,
+		"outcome": string(outcome), "position": positionOf(at),
 	})
 }
 
@@ -606,10 +630,18 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		if err != nil {
 			return failed(pageWriteFailure(CommentOnPageTool, err)), nil
 		}
+		if written.Outcome.Outcome == statelog.OutcomeUnknown {
+			return failed(pageUnknown(CommentOnPageTool, written.Outcome,
+				"Editing the comment again with the same body is harmless: it "+
+					"replaces the text with what it already says if the first "+
+					"edit landed.")), nil
+		}
 		t.deps.settle(ctx, written.Outcome.Position)
 		return jsonResult(map[string]any{
 			"comment_id": comment.ID, "page": detail.Page.Title,
 			"edited": true, "revision": written.Revision,
+			"outcome":  string(written.Outcome.Outcome),
+			"position": positionOf(written.Outcome.Position),
 		})
 	}
 
@@ -630,11 +662,47 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if err != nil {
 		return failed(pageWriteFailure(CommentOnPageTool, err)), nil
 	}
+	if written.Outcome.Outcome == statelog.OutcomeUnknown {
+		// THE ONE UNKNOWN A REPEAT MAY OR MAY NOT COLLAPSE. A seat's
+		// comment is derived from its turn, so the same call again is the
+		// same comment and posts once — wherever this node's ledger can
+		// vouch for it. An operator's has no turn to derive from, so a
+		// repeat is a second comment if the first landed.
+		next := "Do not post it again without checking the page: a repeat " +
+			"is a second comment if the first one landed."
+		if in.TurnKey != "" && !written.Outcome.Unvouched {
+			next = "Call comment_on_page again with exactly the same arguments, " +
+				"before calling it with any other: the retry is the same comment " +
+				"and posts once."
+		}
+		return failed(pageUnknown(CommentOnPageTool, written.Outcome, next)), nil
+	}
 	t.deps.settle(ctx, written.Outcome.Position)
 	return jsonResult(map[string]any{
 		"comment_id": comment.ID, "page": detail.Page.Title,
 		"mentioned": comment.Mentions, "revision": written.Revision,
+		"outcome":  string(written.Outcome.Outcome),
+		"position": positionOf(written.Outcome.Position),
 	})
+}
+
+// pageUnknown explains a page write whose outcome is unknown: it may have
+// landed and it may not, so it is reported as neither — and never as done,
+// which is what answering with an id and a revision did.
+//
+// AN UNVOUCHED ONE SAYS SO, because it sends the caller somewhere else: this
+// node's operation ledger may have lost the record of the operation, so the
+// same call here answers the same way every time, and another node — or a
+// person looking at the page — is what can tell.
+func pageUnknown(name string, result statelog.Result, next string) string {
+	why := "the write's acknowledgement was lost"
+	if result.Unvouched {
+		why = "this node's operation ledger may have lost the record of it, so " +
+			"this node cannot tell and asking it again answers the same way"
+	}
+	return fmt.Sprintf("%s: whether this landed is unknown (%s; operation %s). "+
+		"It may be on the page and it may not — do not report it as done, and "+
+		"do not report it as failed. %s", name, why, result.OpID, next)
 }
 
 // pageWriteFailure explains a write that did not land, in terms the model can

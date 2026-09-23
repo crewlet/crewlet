@@ -56,6 +56,18 @@ did-this-reach-anybody gate, and each waits for its own write to reach this
 node's projection before answering — so a turn that files an item and then
 lists the project sees what it just filed.
 
+Every write answers with its `outcome` — `applied`, `pending` or `unknown`, the
+[three values every write has](replication.md#a-write-has-three-outcomes) — and
+the `position` it is durable at. A write whose outcome is **unknown** is never
+answered with the id and revision of something that may not exist: the tool
+answers that it may have landed and may not, and what to do. Where this node's
+operation ledger cannot vouch for the operation — it was minted before the
+ledger may have lost rows, a seat woken by a backlog trigger just after its
+node adopted a snapshot — the answer says this node cannot tell, because the
+same call here answers the same way every time; a seat's own comment under a
+plain lost acknowledgement is told to repeat the call, which is the same
+comment and posts once.
+
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
 with the writes attributed to your token rather than to a seat, and ten more
