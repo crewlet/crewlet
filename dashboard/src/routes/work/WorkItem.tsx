@@ -669,11 +669,6 @@ export function ItemBody({
             <div key={entry.id} className={`work-check${entry.done ? " done" : ""}`}>
               {entry.done ? <CheckGlyph size="sm" /> : <RemoveGlyph size="sm" />}
               <span className="work-check-name">{entry.name}</span>
-              {entry.promoted_to && (
-                <a className="t-link" href={href(["work", entry.promoted_to])}>
-                  became a subtask →
-                </a>
-              )}
               <span className="spacer" />
               {entry.assignee && <Assignee handle={entry.assignee} seatName={chrome.seatName} />}
             </div>

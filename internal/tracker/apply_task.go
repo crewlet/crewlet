@@ -1667,17 +1667,16 @@ func writeChecklistItems(ctx context.Context, tx *sql.Tx, task Task,
 	written, err := insertMany(ctx, tx, maxVariables, `
 		INSERT INTO tracker_checklist_items
 			(task_id, checklist_id, item_id, name, done, assignee,
-			 parent_id, ord, promoted_to)
+			 parent_id, ord)
 		VALUES`,
-		`(?,?,?,?,?,?,?,?,?)`,
+		`(?,?,?,?,?,?,?,?)`,
 		`ON CONFLICT (task_id, checklist_id, item_id) DO UPDATE SET
 			name = excluded.name, done = excluded.done,
 			assignee = excluded.assignee, parent_id = excluded.parent_id,
-			ord = excluded.ord, promoted_to = excluded.promoted_to`,
+			ord = excluded.ord`,
 		rows, func(r row) []any {
 			return []any{task.ID, r.list, r.item.ID, r.item.Name,
-				boolInt(r.item.Done), r.item.Assignee, r.item.Parent, r.ord,
-				r.item.PromotedTo}
+				boolInt(r.item.Done), r.item.Assignee, r.item.Parent, r.ord}
 		})
 	if err != nil {
 		return 0, fmt.Errorf("tracker: write the checklists of %s: %w", task.ID, err)

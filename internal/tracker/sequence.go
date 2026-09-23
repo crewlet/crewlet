@@ -15,9 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// The FIVE sequences that stay genuinely cross-object — a create (1), an item
-// promotion (1a), a merge (13) and a bulk edit (26) here, and a dependency in
-// depend.go — and the one property that makes them tolerable.
+// The FOUR sequences that stay genuinely cross-object — a create (1), a merge
+// (13) and a bulk edit (26) here, and a dependency in depend.go — and the one
+// property that makes them tolerable.
 //
 // # Why a multi-append sequence is not a transaction, and must not pretend
 //
@@ -35,9 +35,7 @@ import (
 //
 // The order is never arbitrary. A create mints its number first and its task
 // second, so a crash leaves a numbering GAP rather than two tasks sharing a
-// key, because a key is what people paste into chat. An item promotion marks
-// its parent LAST, because the other order leaves an item marked promoted with
-// no subtask behind it.
+// key, because a key is what people paste into chat.
 //
 // # Every step is a step ON THE LOG
 //
@@ -253,9 +251,8 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	return result, err
 }
 
-// writeTask is sequence 1's second append and 1a's second, shared because they
-// are the same append: a whole task at expectation zero, guarded by its own
-// row.
+// writeTask is sequence 1's second append: a whole task at expectation zero,
+// guarded by its own row.
 func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 	notify *Notify, at time.Time) (WriteResult, error) {
 
@@ -290,8 +287,7 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 	}, err
 }
 
-// mintKey takes the next key number in a project. SEQUENCE 1's first append,
-// and 1a's.
+// mintKey takes the next key number in a project. SEQUENCE 1's first append.
 //
 // # Why the number is a record and not a row read
 //
@@ -585,7 +581,8 @@ func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 // A SUBTASK IS JUDGED BY A DIFFERENT FLAG. ClickUp ships two toggles and so
 // does this, and the default that matters is the second: a field required on a
 // task is NOT required on a subtask unless the definition says so — otherwise
-// one required field blocks every checklist item anybody promotes.
+// one required field is a form to fill for every step somebody breaks a task
+// into.
 func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task) error {
 	declared, err := declaredFields(ctx, tx, project.Key)
 	if err != nil {
@@ -629,155 +626,6 @@ func bodyWarnings(body string) []string {
 			len(found), MaxReferencesPerBody)}
 	}
 	return nil
-}
-
-// PromoteItem turns a checklist item into a subtask. SEQUENCE 1a.
-//
-//	Rs the parent and its project → A on the counter → A on the subtask at
-//	expectation 0, carrying rank = intPart(n) → A on the PARENT, marking
-//	the item promoted.
-//
-// # Why this is a sequence at all, and why the parent commit is LAST
-//
-// A promoted item is a subtask, and a subtask has a KEY — so the promotion
-// mints a counter value and carries the identical counter-then-task window a
-// create does, including the numbering gap. It was listed among the one-append
-// gestures for as long as nobody asked what its key came from.
-//
-// The parent is marked last because the other order leaves an item marked
-// promoted with no subtask behind it — a struck-through line pointing at
-// nothing, which no reader can tell from a subtask somebody purged.
-//
-// CRASH RESIDUE: a numbering gap, exactly as row 1; or a landed subtask whose
-// parent item is still un-marked. REPAIRER: nobody for the gap. The un-marked
-// parent needs none either, because the subtask's id is a uuid5 over the item:
-// a retry re-derives the same id, the create is refused as already existing on
-// its guarding row, and the retry proceeds to the parent commit. A subtask that
-// was PURGED is refused as deleted rather than resurrected.
-func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
-	subtask Task, notify *Notify) (WriteResult, error) {
-
-	switch {
-	case parentID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a promotion names no parent")
-	case itemID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a promotion names no item")
-	case subtask.ID == "":
-		return WriteResult{}, fmt.Errorf("tracker: a promotion mints no subtask "+
-			"id — it is a uuid5 over item %s, which is what makes a retry "+
-			"re-derive the same subtask rather than a second one", itemID)
-	}
-	// THE SAME DEFAULT AS A PLAIN CREATE, and for the same reason: a
-	// checklist item carries no type, so a promotion that named none would
-	// be refused by the catalogue check inside the mint.
-	if subtask.Type == "" {
-		subtask.Type = DefaultTaskType
-	}
-	// STATED BEFORE THE MINT, so the create's own parent check reads the
-	// parent in the mint's snapshot like every other subtask's.
-	subtask.Parent = &parentID
-
-	var parent Task
-	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), subtask.Project,
-		func(tx *sql.Tx) error {
-			current, held, err := readTask(ctx, tx, parentID)
-			switch {
-			case err != nil:
-				return err
-			case !held:
-				return fmt.Errorf("tracker: parent task %s is not on this "+
-					"node: %w", parentID, statelog.ErrUnavailable)
-			case current.Removed != nil:
-				return fmt.Errorf("tracker: task %s was removed by %s at %s; "+
-					"restore it before promoting anything out of it",
-					parentID, current.Removed.By,
-					current.Removed.At.Format(time.RFC3339))
-			}
-			if _, _, found := findItem(current, itemID); !found {
-				return fmt.Errorf("tracker: task %s has no checklist item %s",
-					parentID, itemID)
-			}
-			parent = current
-			// A PROMOTION'S SUBTASK CARRIES NO CUSTOM FIELDS — it is
-			// built from a checklist item, which has none — so the
-			// coerced map it answers with is empty and is dropped
-			// deliberately rather than threaded through.
-			_, _, err = w.refuseCreate(ctx, tx, subtask)
-			return err
-		})
-	if err != nil {
-		return WriteResult{Result: minted}, err
-	}
-	rank, err := IntegerAt(n)
-	if err != nil {
-		return WriteResult{}, fmt.Errorf("tracker: derive %s-%d's rank: %w",
-			subtask.Project, n, err)
-	}
-	at := w.Now()
-	subtask.Key = fmt.Sprintf("%s-%d", subtask.Project, n)
-	subtask.Rank = rank
-	subtask.CreatedAt, subtask.UpdatedAt = at, at
-	if subtask.Status == "" {
-		subtask.Status = StatusTodo
-	}
-	subtask.StatusGroup = subtask.Status.Group()
-	if subtask.Priority == "" {
-		subtask.Priority = PriorityNone
-	}
-
-	created, err := w.writeTask(ctx, stepID(opID, "subtask"), subtask, notify, at)
-	created.Key, created.Rank = subtask.Key, subtask.Rank
-	if err != nil && !errors.Is(err, statelog.ErrExists) {
-		// ALREADY EXISTING IS THE RETRY'S OWN PATH, not a failure: the
-		// id is derived from the item, so a re-run finds its own subtask
-		// and carries on to the parent commit the first attempt did not
-		// reach.
-		return created, err
-	}
-
-	lists := markPromoted(parent, itemID, subtask.ID)
-	marked, err := w.UpdateTask(ctx, stepID(opID, "parent"), parentID,
-		parent.Project, NoIfMatch, TaskPatch{Checklists: &lists},
-		ChangeChecklist, nil)
-	if err != nil {
-		return created, fmt.Errorf("tracker: subtask %s was created and its "+
-			"item in %s is still un-marked; re-run the promotion, which "+
-			"re-derives the same subtask and completes: %w",
-			subtask.Key, parentID, err)
-	}
-	created.Result = marked.Result
-	return created, nil
-}
-
-// findItem locates a checklist item on a task.
-func findItem(task Task, itemID string) (list, item int, found bool) {
-	for l := range task.Checklists {
-		for i := range task.Checklists[l].Items {
-			if task.Checklists[l].Items[i].ID == itemID {
-				return l, i, true
-			}
-		}
-	}
-	return 0, 0, false
-}
-
-// markPromoted is the parent's own new checklist state.
-//
-// THE ITEM IS NOT DELETED. It stays, pointing at the subtask, which is what
-// renders it struck through with the new key — a deletion would lose the fact
-// that this line became that task.
-func markPromoted(parent Task, itemID, subtaskID string) []Checklist {
-	lists := make([]Checklist, len(parent.Checklists))
-	copy(lists, parent.Checklists)
-	l, i, found := findItem(parent, itemID)
-	if !found {
-		return lists
-	}
-	items := make([]ChecklistItem, len(lists[l].Items))
-	copy(items, lists[l].Items)
-	items[i].PromotedTo = &subtaskID
-	lists[l].Items = items
-	return lists
 }
 
 // errWalkRunning is a walk somebody is already running: another node's lease,

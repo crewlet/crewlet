@@ -2357,9 +2357,6 @@ export interface WorkChecklistItem {
   assignee?: string;
   parent?: string;
   order?: number;
-  /** The subtask this item BECAME, which renders it struck through with the
-   *  new key rather than deleted. */
-  promoted_to?: string;
 }
 
 export interface WorkChecklist {

@@ -97,8 +97,8 @@ names the types that carry a field, and a field that does not apply to a task
 cannot be missing from it — its value would be hidden the moment it was set. A
 field required at the **workspace** is required in every project, and one
 required on a project only there; a subtask is judged by the second toggle
-(`required_in_subtasks`, off by default) so one required field does not block
-every checklist item anybody promotes.
+(`required_in_subtasks`, off by default) so one required field is not a form
+to fill for every step somebody breaks a task into.
 
 **A name is a resolution key, not a label.** A type, a field and an option are
 each resolvable three ways — by id, by slug, and by **name** — which is what

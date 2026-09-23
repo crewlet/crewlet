@@ -89,7 +89,7 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"original_max_bytes is what the pending classification compares",
 		"the replacement record carries no bot user id",
 		"a node's boot reconcile is O(keys)",
-		"An item promotion marks its parent LAST",
+		"so a crash leaves a numbering GAP rather than two tasks sharing a",
 		"LimitMarkerTTL: time.Minute",
 		"tracker_rank_duplicates_cleared",
 	} {

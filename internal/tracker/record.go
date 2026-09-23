@@ -276,10 +276,6 @@ type ChecklistItem struct {
 	Assignee string  `json:"assignee,omitempty"`
 	Parent   *string `json:"parent,omitempty"`
 	Order    int     `json:"order,omitempty"`
-
-	// PromotedTo names the subtask this item became, which is what renders
-	// it struck through with the new key rather than deleting it.
-	PromotedTo *string `json:"promoted_to,omitempty"`
 }
 
 // Checklist is a group of items. It mints no object and appears on no board.
@@ -921,8 +917,8 @@ type FieldDef struct {
 
 	// RequiredInSubtasks decides INSTEAD of Required for a task with a
 	// parent, defaulting to false — ClickUp's two separate toggles, and
-	// the default that keeps a required field from blocking every
-	// checklist item promoted into a subtask.
+	// the default that keeps a required field from being a form to fill
+	// for every step somebody breaks a task into.
 	RequiredInSubtasks bool `json:"required_in_subtasks,omitempty"`
 
 	Default json.RawMessage `json:"default,omitempty"`

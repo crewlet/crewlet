@@ -1,0 +1,22 @@
+-- `tracker_checklist_items.promoted_to` goes, with the promotion it recorded.
+--
+-- 0002 kept a checklist item that had been turned into a subtask, struck
+-- through and pointing at the subtask it became. The only writer was the
+-- tracker's item promotion, and the promotion never had a caller — no tool, no
+-- route, no duty, no CLI — so every row anybody could write held NULL here.
+-- It went in the same commit as this file, and not only for want of a caller:
+-- nothing in this build writes a checklist at all, so there was never an item
+-- to promote, and its last step rewrote the parent's whole checklist from a
+-- read taken in another transaction, which loses whatever landed in between.
+-- A promotion a surface can reach starts from checklist writes that are
+-- gestures resolved inside the decide, and it would be designed with them.
+--
+-- THE TABLE STAYS, and so do its two indexes: they are what the checklist's
+-- own readers — the assignee filter, the checklist wake, the progress count —
+-- read, and none of them ever named this column.
+--
+-- IT IS DROPPED IN THE COMMIT THAT STOPS WRITING IT and not before, for 0018's
+-- reason: a column removed while its writer still fills it is an apply that
+-- fails on every node at once. There is no data to migrate — the column held
+-- NULL on every row of every node.
+ALTER TABLE tracker_checklist_items DROP COLUMN promoted_to;
