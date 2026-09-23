@@ -14,6 +14,13 @@ import (
 func AlarmReference() string {
 	var b strings.Builder
 	b.WriteString(alarmHeader)
+	if perLog := PerLogKinds(); len(perLog) > 0 {
+		named := make([]string, len(perLog))
+		for i, kind := range perLog {
+			named[i] = "`" + string(kind) + "`"
+		}
+		fmt.Fprintf(&b, perLogNote, sentenceList(named))
+	}
 	b.WriteString("\n| Alarm | What it means | What to do |\n")
 	b.WriteString("|---|---|---|\n")
 	for _, rule := range table {
@@ -111,6 +118,16 @@ the alarm, in the units of the thing measured, and the remedy from the table
 below.
 `
 
+// perLogNote says which alarms are raised once per log, rendered from the
+// table's own flag so the sentence cannot name a different set from the one
+// the report raises.
+const perLogNote = `
+Some are about one log rather than the node, and are raised once for each log
+they hold on: the detail leads with the log's name, each has its own pair of
+lines carrying it as ` + "`domain`" + `, and the gauge stays one series per kind that
+reads 1 while any log's stands. They are %s.
+`
+
 const alarmFooter = `
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
@@ -118,3 +135,12 @@ decides something — the grace that sheds a node, the grace that moves its
 seats, the budget a caller was promised, the replay window a log's ceiling was
 sized to hold.
 `
+
+// sentenceList joins names the way a sentence does: "a", "a and b", "a, b
+// and c".
+func sentenceList(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}

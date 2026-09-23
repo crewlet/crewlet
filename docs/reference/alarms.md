@@ -16,6 +16,11 @@ The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
 below.
 
+Some are about one log rather than the node, and are raised once for each log
+they hold on: the detail leads with the log's name, each has its own pair of
+lines carrying it as `domain`, and the gauge stays one series per kind that
+reads 1 while any log's stands. They are `log_headroom`, `log_ceiling_short`, `trim_blocked`, `deferred_old` and `floor_unknown`.
+
 | Alarm | What it means | What to do |
 |---|---|---|
 | `apply_lag` | This node is more than a minute behind the log. Its seats move if it stays behind for thirty. | Check this node's applier: `crewlet retention status` names the domain and its position. A node that stays behind past the deferral grace loses its seats to a peer. |

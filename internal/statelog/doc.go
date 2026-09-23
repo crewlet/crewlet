@@ -205,5 +205,7 @@
 // the deferral grace, a floor this node cannot read — is evaluated once per
 // log ([Report]), because its consequence and its remedy are that log's: the
 // grace moves a node's seats for one log and nothing for another, and a node
-// behind two re-anchors needs two.
+// behind two re-anchors needs two. Each log's is then ITS OWN ALARM, raised and
+// cleared on its own ([Alarm.Domain], [Tracker]), since a kind that stands for
+// two logs is two things an operator has to be told started and ended.
 package statelog

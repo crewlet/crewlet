@@ -365,6 +365,14 @@ type Alarm struct {
 	// Kind is which alarm.
 	Kind Kind `json:"kind"`
 
+	// Domain is the log a per-log condition is about, and empty for one
+	// about the node. It is the other half of the alarm's IDENTITY: one
+	// evaluation can carry a kind once per log ([Report]), and the kind
+	// alone folded those into one — see the tracker's [instance]. The
+	// detail still leads with the same name, for a reader who has only the
+	// line.
+	Domain string `json:"domain,omitempty"`
+
 	// Detail says what was measured, in the operator's units. It is the
 	// half of an alarm that makes it actionable: "apply_lag" is a name,
 	// and "this node is 4m12s behind" is a fact.
@@ -386,6 +394,14 @@ type rule struct {
 	fires func(Reading) (string, bool)
 	// remedy is what an operator does about it.
 	remedy string
+	// perLog marks a condition that is a property of ONE LOG rather than
+	// of the node, which the report evaluates once per log from that log's
+	// own inputs and stamps with its name ([Alarm.Domain]). DECLARED on the
+	// row so the published reference can say which they are, and held
+	// against what the report actually raises per log by a test in both
+	// directions — a flag nothing checked would be the second opinion the
+	// table exists to prevent.
+	perLog bool
 }
 
 // table is every alarm this engine can raise, in the order they are reported.
@@ -429,7 +445,8 @@ var table = []rule{
 			"latency and this node's apply drain before looking anywhere else.",
 	},
 	{
-		kind: KindLogHeadroom,
+		kind:   KindLogHeadroom,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			if r.HeadroomFraction == nil {
 				return "", false
@@ -456,7 +473,8 @@ var table = []rule{
 		// are the ceiling the operator set and the window they set, and
 		// the alarm fires at the point where the second no longer fits
 		// in the first.
-		kind: KindLogCeilingShort,
+		kind:   KindLogCeilingShort,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			if r.LogBytesPerDay == nil || r.LogMaxBytes == 0 || r.ReplayWindow <= 0 {
 				return "", false
@@ -519,7 +537,8 @@ var table = []rule{
 		// nothing the age term would release has cost nothing, however long
 		// it has lasted — a knowledge base nobody writes to is blocked for
 		// the life of the deployment.
-		kind: KindTrimBlocked,
+		kind:   KindTrimBlocked,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			if r.TrimBlockedBy == "" || r.ReplayWindow <= 0 || r.TrimPastWindow == 0 {
 				return "", false
@@ -539,7 +558,8 @@ var table = []rule{
 		// report evaluates it once for each log this node holds a record on,
 		// because what the grace does is the log's — see
 		// [Reading.DeferredSheds].
-		kind: KindDeferredOld,
+		kind:   KindDeferredOld,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			what := "the oldest record on this log that this node cannot apply"
 			if r.DeferredRecord != "" {
@@ -564,7 +584,8 @@ var table = []rule{
 		// PER LOG, for the same reason: a read of one log refuses on that
 		// log's floor, and a floor published ahead of this node is one
 		// log's re-anchor.
-		kind: KindFloorUnknown,
+		kind:   KindFloorUnknown,
+		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			detail := fmt.Sprintf("this log's trim floor has been unreadable here "+
 				"for %s", round(r.FloorUnknownFor))
@@ -774,6 +795,19 @@ func Frac(v float64) *float64 { return &v }
 // is a real and BENIGN measurement rather than an absent one — see
 // [Reading.LogBytesPerDay].
 func PerDay(v uint64) *uint64 { return &v }
+
+// PerLogKinds is every alarm raised once per log rather than once per node, in
+// the table's own order — the five a reader of the reference has to know carry
+// a log's name ([Alarm.Domain]) and stand once for each log they hold on.
+func PerLogKinds() []Kind {
+	var out []Kind
+	for _, rule := range table {
+		if rule.perLog {
+			out = append(out, rule.kind)
+		}
+	}
+	return out
+}
 
 // Kinds is every alarm this engine can raise, sorted. For the reference doc
 // and for a surface that renders a row per kind.

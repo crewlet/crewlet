@@ -1,6 +1,9 @@
 package statelog_test
 
 import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -480,6 +483,99 @@ func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
 	}
 	if got := gauge(t, rec, statelog.KindApplyLag); got != 0 {
 		t.Errorf("the gauge reads %v after the alarm cleared, want 0", got)
+	}
+}
+
+// ONE KIND ON TWO LOGS IS TWO ALARMS, each logged when it starts and when it
+// ends.
+//
+// Five conditions are evaluated once per log, so one evaluation can carry
+// `trim_blocked` for the tracker's log and again for the knowledge base's.
+// Keyed on the kind alone, the tracker folded the second into the first: it
+// raised no line of its own, the tracker's clearing while the knowledge base's
+// stood said nothing, and the one `alarm_cleared` that finally came carried the
+// knowledge base's detail against the tracker's start. The gauge stays one
+// series per kind, up while either is.
+func TestOneKindOnTwoLogsIsTwoAlarms(t *testing.T) {
+	t.Parallel()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	tracker := statelog.NewTracker(rec, func() time.Time { return clock })
+	var logs bytes.Buffer
+	statelog.LogTrackerTo(tracker, slog.New(slog.NewJSONHandler(&logs, nil)))
+	lines := func(event string) []map[string]any {
+		var out []map[string]any
+		for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var line map[string]any
+			if json.Unmarshal([]byte(raw), &line) == nil && line["msg"] == event {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+	blocked := func(domain string) statelog.Alarm {
+		return statelog.Alarm{Kind: statelog.KindTrimBlocked, Domain: domain,
+			Detail: domain + ": the trim has not advanced"}
+	}
+	lagging := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 2m0s behind"}
+
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, blocked("tracker"), blocked("pages")})
+	raised := lines("alarm_raised")
+	if len(raised) != 3 {
+		t.Fatalf("raising one node alarm and one kind on two logs wrote %d line(s), "+
+			"want three: %v", len(raised), raised)
+	}
+	domains := map[string]bool{}
+	for _, line := range raised {
+		if line["alarm"] != string(statelog.KindTrimBlocked) {
+			// A NODE'S ALARM NAMES NO LOG.
+			if _, named := line["domain"]; named {
+				t.Errorf("the node's own alarm names a log: %v", line)
+			}
+			continue
+		}
+		domain, _ := line["domain"].(string)
+		domains[domain] = true
+		if !strings.HasPrefix(line["detail"].(string), domain+": ") {
+			t.Errorf("the %s log's line carries another's detail: %v", domain, line)
+		}
+	}
+	if !domains["tracker"] || !domains["pages"] {
+		t.Errorf("trim_blocked was raised for %v, want each log once", domains)
+	}
+
+	// THE TRACKER'S LOG CLEARS WHILE THE KNOWLEDGE BASE'S STANDS: its own line,
+	// its own age, its own detail — and the kind is still up.
+	clock = clock.Add(20 * time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, blocked("pages")})
+	cleared := lines("alarm_cleared")
+	if len(cleared) != 1 || cleared[0]["domain"] != "tracker" ||
+		cleared[0]["for"] != "20m0s" || cleared[0]["detail"] != "tracker: the trim has not advanced" {
+		t.Fatalf("one log's alarm clearing wrote %v; want one line naming the "+
+			"tracker's log, its twenty minutes and its detail", cleared)
+	}
+	if got := gauge(t, rec, statelog.KindTrimBlocked); got != 1 {
+		t.Errorf("the gauge reads %v while the knowledge base's alarm stands, want 1", got)
+	}
+
+	clock = clock.Add(10 * time.Minute)
+	tracker.Observe(t.Context(), nil)
+	cleared = lines("alarm_cleared")
+	if len(cleared) != 3 {
+		t.Fatalf("clearing everything wrote %d clear line(s) in all, want three: %v",
+			len(cleared), cleared)
+	}
+	for _, line := range cleared[1:] {
+		if line["alarm"] == string(statelog.KindTrimBlocked) &&
+			(line["domain"] != "pages" || line["for"] != "30m0s") {
+			t.Errorf("the knowledge base's clear reads %v; want its own thirty minutes", line)
+		}
+	}
+	if got := gauge(t, rec, statelog.KindTrimBlocked); got != 0 {
+		t.Errorf("the gauge reads %v once every log's alarm cleared, want 0", got)
 	}
 }
 

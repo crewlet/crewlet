@@ -841,6 +841,10 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			perDomain.TrimBlockedFor = in.At.Sub(d.BlockedSince)
 		}
 		for _, a := range Evaluate(perDomain) {
+			// THE LOG IS THE ALARM'S IDENTITY as well as its first
+			// word: a kind raised for two logs is two alarms, each
+			// raised and cleared on its own (see [Tracker.Observe]).
+			a.Domain = d.Domain
 			a.Detail = d.Domain + ": " + a.Detail
 			out = append(out, a)
 		}

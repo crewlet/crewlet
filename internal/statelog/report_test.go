@@ -563,6 +563,11 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 				continue
 			}
 			log, detail, _ := strings.Cut(a.Detail, ": ")
+			// THE LOG IS THE ALARM'S IDENTITY, not only its first
+			// word: the tracker raises and clears each on it.
+			if a.Domain != log {
+				t.Errorf("a %s alarm about the %s log carries domain %q", kind, log, a.Domain)
+			}
 			out[log] = detail
 		}
 		return out
@@ -592,6 +597,78 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 		t.Errorf("floor_unknown was raised for %v; want the tracker's log alone, "+
 			"naming its floor", floors)
 	}
+}
+
+// THE ALARMS THE REPORT RAISES PER LOG ARE EXACTLY THE ONES THE TABLE FLAGS,
+// in both directions.
+//
+// The flag is what the published reference names them from and what a reader
+// relies on to know an alarm's detail leads with a log and stands once per log.
+// So one log is put at the firing value of every per-log condition beside a
+// node reading that fires one of its own: every alarm the report stamps with a
+// log must be a flagged kind, every flagged kind must be stamped, and nothing
+// the node raises may carry a log.
+func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
+	t.Parallel()
+	d := healthyDomain("tracker", true)
+	// NEARLY FULL, and taking in a gibibyte a day against a gibibyte ceiling.
+	d.MaxBytes, d.Bytes = 1<<30, 1<<30-1
+	d.BytesPerDay = statelog.PerDay(1 << 30)
+	// BLOCKED ON A BACKUP NOBODY TOOK, for longer than the window, with a
+	// hundred records past it.
+	in := statelog.TrimInputs{
+		Now: reportAt, HoldsReadable: true, CountedReadable: true,
+		Counted:      []statelog.NodePosition{{NodeID: "node-1", Seq: 900, At: reportAt}},
+		BackupMaxAge: 24 * time.Hour, HasFeed: true, FeedReadable: true,
+		FeedAckFloor: 890, AgeFloor: 800, HoldStale: statelog.TrimHoldStale,
+	}
+	d.Decision = statelog.Trim(in.Terms())
+	d.BlockedSince = reportAt.Add(-(replayWindow + statelog.TrimInterval + time.Hour))
+	// HOLDING A RECORD PAST THE GRACE, and unable to read its floor.
+	d.DeferredAge, d.DeferredSheds = statelog.DeferralGrace+time.Minute, true
+	d.FloorUnknownFor = statelog.FloorCacheStale + time.Second
+
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, RegisterReadable: true,
+		ReplayWindow: replayWindow,
+		Reading:      statelog.Reading{ApplyLag: 2 * time.Minute},
+		Domains:      []statelog.DomainInputs{d},
+	})
+	flagged := map[statelog.Kind]bool{}
+	for _, kind := range statelog.PerLogKinds() {
+		flagged[kind] = true
+	}
+	stamped := map[statelog.Kind]bool{}
+	for _, a := range rep.Alarms {
+		switch {
+		case a.Domain == "" && flagged[a.Kind]:
+			t.Errorf("%s is flagged per log and was raised with no log: %q", a.Kind, a.Detail)
+		case a.Domain != "" && !flagged[a.Kind]:
+			t.Errorf("%s was raised for the %s log and is not flagged per log, so the "+
+				"reference says nothing of it", a.Kind, a.Domain)
+		case a.Domain != "":
+			stamped[a.Kind] = true
+		}
+	}
+	for kind := range flagged {
+		if !stamped[kind] {
+			t.Errorf("%s is flagged per log and the report never raised it for a log "+
+				"whose inputs are all at the firing value", kind)
+		}
+	}
+	if !alarmedKind(rep.Alarms, statelog.KindApplyLag) {
+		t.Error("the node's own alarm was not raised, so this case proves nothing " +
+			"about what a node-wide alarm carries")
+	}
+}
+
+func alarmedKind(alarms []statelog.Alarm, kind statelog.Kind) bool {
+	for _, a := range alarms {
+		if a.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // A BLOCKED DOMAIN WITH NO KNOWN INSTANT STILL CARRIES ONE.
