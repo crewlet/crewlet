@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Who a personal question is about.
+// Party is who a personal question is about.
 //
 // # A PERSON IS ONE PARTY WITH TWO IDENTITIES
 //

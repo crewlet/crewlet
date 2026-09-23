@@ -461,13 +461,13 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return settledCreate{}, fmt.Errorf("tracker: project %s is archived, so "+
 			"it takes no new work; unarchive it first", task.Project)
 	}
-	if err := declaredType(ctx, tx, task); err != nil {
+	if err = declaredType(ctx, tx, task); err != nil {
 		return settledCreate{}, err
 	}
-	if err := declaredTags(ctx, tx, task.Project, task.Tags); err != nil {
+	if err = declaredTags(ctx, tx, task.Project, task.Tags); err != nil {
 		return settledCreate{}, err
 	}
-	if err := requiredFields(ctx, tx, project, task); err != nil {
+	if err = requiredFields(ctx, tx, project, task); err != nil {
 		return settledCreate{}, err
 	}
 	fields, warnings, err := settleFields(ctx, tx, task.Project, task.Type,
