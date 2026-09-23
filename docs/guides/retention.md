@@ -129,8 +129,12 @@ Every fresh deployment's trim is blocked — on its first backup, on its first
 snapshot donors, and for as long as a log nobody writes to stays empty, since
 every node sits at position zero on it. `crewlet retention status` shows the
 block and the term holding it from the first tick, because that is what the
-screen is for. The **`trim_blocked` alarm** is quieter, and fires only when both
-of these hold:
+screen is for. The node holding the trim says it in its log once rather than
+every tick, both at `WARN` so a filter that shows one shows the other:
+`retention_trim_blocked` when a block starts or the term holding it changes,
+and `retention_trim_unblocked` when the trim advances again, carrying how long
+it was blocked. The **`trim_blocked` alarm** is quieter still, and fires only
+when both of these hold:
 
 - the trim has been blocked for longer than `min_age` **plus one trim tick**
   (fifteen minutes). `min_age` is the number the configuration already holds

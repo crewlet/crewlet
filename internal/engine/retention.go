@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -153,6 +154,10 @@ type retention struct {
 	// the bindings interleaved would each fold the other's half-read state
 	// into the clocks.
 	beating sync.Mutex
+
+	// logger is where a block's transitions are said; nil is the package's
+	// own logger. See [retention.sayBlock].
+	logger *slog.Logger
 
 	stop context.CancelFunc
 	done sync.WaitGroup
@@ -558,16 +563,72 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 	if err := r.fleet.PutFloor(ctx, row); err != nil {
 		return fmt.Errorf("publish the trim floor: %w", err)
 	}
-	if decision.Blocked() {
-		// ONE LINE PER TICK PER DOMAIN, at WARN, naming the term, what
-		// it has and what it wants — because the published field is
-		// invisible to anyone watching logs and the log line is
-		// invisible to anyone watching a dashboard.
-		log.WarnContext(ctx, "retention_trim_blocked", "domain", name,
-			"term", decision.BlockedBy, "detail", decision.Detail,
-			"blocked_since", row.BlockedSince, "trim_to", decision.To)
-	}
+	r.sayBlock(ctx, name, previous, had, decision, row)
 	return nil
+}
+
+// sayBlock logs a domain's block when it starts, when the term holding it
+// changes, and when it ends — and never on a tick that changed none of those.
+//
+// # Why transitions and not a line per tick
+//
+// It was a WARN on every tick of every blocked domain, and a blocked trim is a
+// state a healthy fleet lives in for weeks: every fresh deployment waits on its
+// first backup and its first donors, and a log nobody writes to is blocked for
+// the life of the deployment, since every node sits at position zero on it.
+// That was four WARN lines an hour for each such log, for ever, on a fleet with
+// nothing wrong — the log-line half of the `trim_blocked` alarm that fired on
+// every young fleet. Whether a block has come to COST something is the alarm's
+// question, at a threshold the configuration already made; a line's job is to
+// say, for whoever reads logs rather than screens, when a block began, what
+// holds it, and how long it lasted — which is the alarm tracker's own rate, for
+// the tracker's reason: a level repeated every tick buries when it started.
+//
+// FROM THE PUBLISHED ROW rather than from memory, because the duty moves on a
+// lease: a holder that took over mid-block reads the block its predecessor
+// published, and says nothing about a block that did not start on its watch —
+// which is the reason `blocked_since` is published at all.
+//
+// BOTH AT WARN, the tracker's pair's level, so a filter that shows a block's
+// start shows its end. Splitting them by the term — a term nobody could read at
+// WARN, one that permits nothing yet at INFO — reads well until a block changes
+// term: one that started on a missing backup and ended on a joining node was a
+// WARN start with an INFO end, and a reader filtering on WARN saw a block that
+// never ended. What it costs is one WARN, once, for each ordinary block a fresh
+// deployment starts with.
+func (r *retention) sayBlock(ctx context.Context, name string,
+	previous coord.TrimFloor, had bool, decision statelog.TrimDecision,
+	row coord.TrimFloor) {
+
+	wasBlocked := had && previous.Blocked()
+	switch {
+	case decision.Blocked() &&
+		(!wasBlocked || previous.BlockedBy != string(decision.BlockedBy)):
+		attrs := []any{"domain", name, "term", decision.BlockedBy,
+			"detail", decision.Detail, "blocked_since", row.BlockedSince}
+		if wasBlocked {
+			// THE CLOCK DID NOT RESTART — see [retention.publish] —
+			// so the line says which term held the block before.
+			attrs = append(attrs, "was", previous.BlockedBy)
+		}
+		r.logs().WarnContext(ctx, "retention_trim_blocked", attrs...)
+	case !decision.Blocked() && wasBlocked:
+		attrs := []any{"domain", name, "was", previous.BlockedBy,
+			"trim_to", decision.To}
+		if !previous.BlockedSince.IsZero() {
+			attrs = append(attrs, "for",
+				row.At.Sub(previous.BlockedSince).Round(time.Second).String())
+		}
+		r.logs().WarnContext(ctx, "retention_trim_unblocked", attrs...)
+	}
+}
+
+// logs is where the trim speaks: the package's own logger, or a case's.
+func (r *retention) logs() *slog.Logger {
+	if r.logger != nil {
+		return r.logger
+	}
+	return log
 }
 
 // reportedPositions is every node's committed position in one domain.

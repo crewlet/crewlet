@@ -1,9 +1,13 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,6 +200,111 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	}
 	if published[0].By != "node-b" {
 		t.Fatalf("the floor names %q as its writer, want node-b", published[0].By)
+	}
+}
+
+// A BLOCKED TRIM IS SAID WHEN IT STARTS, WHEN ITS TERM CHANGES AND WHEN IT
+// ENDS — and not on the ticks between, nor again by a holder that took the duty
+// over mid-block.
+//
+// It was a WARN on every tick of every blocked domain, and a block is a state a
+// healthy fleet lives in for weeks: a fresh deployment waiting on its first
+// backup, and a log nobody writes to for the life of the deployment. That was
+// four lines an hour per such log, for ever. Every line is a WARN, so a filter
+// that shows a block's start shows its end — including a block that started on
+// a term nobody could read and ended on one that permitted nothing yet.
+func TestABlockedTrimIsSaidWhenItStartsChangesAndEnds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	r := floorFleet(t)
+	r.logger = logger
+	lines := func() []map[string]any {
+		var out []map[string]any
+		for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var line map[string]any
+			if json.Unmarshal([]byte(raw), &line) == nil &&
+				strings.HasPrefix(line["msg"].(string), "retention_trim_") {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+	tick := func(r *retention, at time.Time, decision statelog.TrimDecision) {
+		t.Helper()
+		published, err := r.fleet.Floors(ctx)
+		if err != nil {
+			t.Fatalf("floors: %v", err)
+		}
+		previous := map[string]coord.TrimFloor{}
+		for _, f := range published {
+			previous[f.Domain] = f
+		}
+		if err := r.publish(ctx, "tracker", 1, decision, fleetInputs{
+			at: at, previous: previous}); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+	}
+	noBackup := statelog.TrimDecision{BlockedBy: statelog.TermBackupFloor,
+		Detail: "no backup has been recorded",
+		Terms:  []statelog.Term{{Name: statelog.TermBackupFloor}}}
+	joining := statelog.TrimDecision{BlockedBy: statelog.TermApplied,
+		Detail: "this term permits removing nothing yet",
+		Terms: []statelog.Term{{Name: statelog.TermBackupFloor, Seq: 900, Known: true},
+			{Name: statelog.TermApplied, Known: true}}}
+	advancing := statelog.TrimDecision{To: 900,
+		Terms: []statelog.Term{{Name: statelog.TermApplied, Seq: 900, Known: true}}}
+	t0 := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
+
+	// THE BLOCK STARTS, on a term nobody could read: one WARN.
+	tick(r, t0, noBackup)
+	// FOUR MORE TICKS OF IT say nothing.
+	for i := 1; i <= 4; i++ {
+		tick(r, t0.Add(time.Duration(i)*statelog.TrimInterval), noBackup)
+	}
+	// AND NEITHER DOES A HOLDER THAT TOOK THE DUTY OVER MID-BLOCK.
+	peer := &retention{fleet: r.fleet, nodeID: "node-b", logger: logger}
+	tick(peer, t0.Add(5*statelog.TrimInterval), noBackup)
+	got := lines()
+	if len(got) != 1 || got[0]["msg"] != "retention_trim_blocked" ||
+		got[0]["level"] != "WARN" || got[0]["term"] != string(statelog.TermBackupFloor) {
+		t.Fatalf("six ticks of one block, across a handover, wrote %v; want the "+
+			"one WARN that started it", got)
+	}
+
+	// THE TERM CHANGES — a backup landed, and a node joining at position zero
+	// holds it now: said once, naming the term before, with the clock that
+	// never restarted.
+	tick(peer, t0.Add(6*statelog.TrimInterval), joining)
+	tick(peer, t0.Add(7*statelog.TrimInterval), joining)
+	got = lines()
+	if len(got) != 2 {
+		t.Fatalf("a change of term wrote %d line(s) in all, want two: %v", len(got), got)
+	}
+	changed := got[1]
+	if changed["msg"] != "retention_trim_blocked" || changed["level"] != "WARN" ||
+		changed["term"] != string(statelog.TermApplied) ||
+		changed["was"] != string(statelog.TermBackupFloor) ||
+		changed["blocked_since"] != t0.Format(time.RFC3339) {
+		t.Errorf("the change of term reads %v; want a WARN naming both terms and "+
+			"the block's first instant", changed)
+	}
+
+	// IT ENDS: once, at the level it started at although the term that
+	// ended it was one that permitted nothing yet, with how long it lasted.
+	tick(peer, t0.Add(8*statelog.TrimInterval), advancing)
+	tick(peer, t0.Add(9*statelog.TrimInterval), advancing)
+	got = lines()
+	if len(got) != 3 {
+		t.Fatalf("the end of the block wrote %d line(s) in all, want three: %v", len(got), got)
+	}
+	ended := got[2]
+	if ended["msg"] != "retention_trim_unblocked" || ended["level"] != "WARN" ||
+		ended["was"] != string(statelog.TermApplied) ||
+		ended["for"] != (8*statelog.TrimInterval).String() {
+		t.Errorf("the end of the block reads %v; want a WARN naming the last term "+
+			"and its two hours", ended)
 	}
 }
 
