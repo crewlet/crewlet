@@ -587,8 +587,10 @@ roles:
       gitlab_username: jane-founder
       # WHO SHE IS ON THE DASHBOARD is not written here.  She signs in as
       # a person in the identity directory (`crewlet iam invite`, then
-      # `crewlet iam bind <id> founder`), and the directory binds her to
-      # this seat — so what she files there is filed by her.  A contact
+      # `crewlet iam bind <id> jane-founder` — the SEAT's handle, which
+      # the name derives; `founder` above is her Mattermost username), and
+      # the directory binds her to this seat — so what she files there is
+      # filed by her.  A contact
       # block is how to REACH a person; a credential is something they
       # hold, and the company document names none of them.
 
