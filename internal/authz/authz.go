@@ -250,6 +250,14 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 // [iam.GrantFleetOperate] rather than a grant of its own, because that is what
 // the closed eleven has for "whoever runs this deployment" and a second admin
 // grant beside it would be a second answer to one question. Its own name here
-// so the eleven rules below say ADMIN where they mean it, and one edit moves
-// every one of them the day the vocabulary grows a people-management grant.
+// so the rules that use it say ADMIN where they mean it.
+//
+// AND NOT [iam.GrantPeopleManage], although that grant exists and its name
+// reads like the right one for a person's queue. It is authority over PERSON
+// ROWS in the identity estate — who is enrolled and what they carry — and the
+// directory classes are where it is asked. A person's work record, their inbox
+// and their day are the TRACKER's, and the admin path over those is whoever
+// runs the deployment: an administrator who onboards a team has no business
+// reading everybody's inbox by virtue of it, and folding the two would make
+// the grant that can grant also the grant that reads.
 const adminGrant = iam.GrantFleetOperate

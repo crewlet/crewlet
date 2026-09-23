@@ -346,8 +346,13 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
         </Button>
       }
     >
-      This answer is auth-gated. It needs an API token matching one of your{" "}
-      <InlineCode tone="inherit">api.auth.tokens</InlineCode> entries.
+      {/* ABOUT THE GRANT, NOT A TOKEN. It said this needed "an API token
+          matching one of your api.auth.tokens entries", which was the whole
+          of authority while a Tier A token was the only credential; a person
+          signed in with a session and refused one grant was sent to find a
+          token they have no use for. */}
+      The credential you presented does not carry the grant this answer needs, or none was
+      presented. Sign in as somebody who holds it, or set a token that carries it.
     </Callout>
   ),
   // NO `icon` ON THIS ONE, OR ON THE THREE BELOW IT. A Callout draws its

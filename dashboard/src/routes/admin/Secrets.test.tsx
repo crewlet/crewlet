@@ -150,11 +150,11 @@ test("the screen never asks for a value", async () => {
 // rendered the "code this build does not know" banner — with no way to set
 // the token the same banner exists to offer. This screen is guarded reads
 // included, so a 401 is the refusal an operator actually arrives at.
-test("a 401 renders the auth-gated banner, with the button that fixes it", async () => {
+test("a 401 renders the refusal banner, with the button that fixes it", async () => {
   stubFetch(() => new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 }));
   render(<Secrets />);
 
-  expect(await screen.findByText(/auth-gated/)).toBeDefined();
+  expect(await screen.findByText(/does not carry the grant/)).toBeDefined();
   expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
@@ -293,6 +293,28 @@ test("a reference check that failed is never shown as nothing pointing at it", a
   // And it is gated exactly as a referenced row is: an unknown answer is not
   // a safe one.
   expect((screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+// A REFUSED CHECK NAMES THE GRANT THE ENGINE NAMED. The reference index is
+// `config:read`, and a reader who may list credentials without it is refused
+// with the grant in the answer — which is the remedy, where "this surface needs
+// an operator token" sent a signed-in person to find a token.
+test("a reference check refused on authority names the grant it needs", async () => {
+  stubFetch((path) => {
+    if (path === "/secrets") return ok(body);
+    if (path === "/config/references") {
+      return new Response(
+        JSON.stringify({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }),
+        { status: 403 },
+      );
+    }
+    return ok({});
+  });
+  render(<Secrets />);
+  await openRemove("GITHUB_TOKEN");
+
+  expect(screen.getByText(/This needs config:read/)).toBeDefined();
+  expect(screen.queryByText(/operator token/)).toBeNull();
 });
 
 // A DEPLOYMENT BEFORE ITS FIRST IMPORT has no active document, so nothing can

@@ -101,7 +101,16 @@ function refusalCode(err: unknown): QueryErrorCode {
 function refusal(err: unknown): string {
   if (!(err instanceof RestError)) return String(err);
   if (err.unauthorized) {
-    return "This surface needs an operator token. Set one from the command palette.";
+    // THE GRANT THE ENGINE NAMED, where it named one: a refusal on
+    // authority carries the grants that would have admitted the caller, and
+    // "needs an operator token" sent a signed-in person to find a token when
+    // what they lacked was `config:read`.
+    const grants = Array.isArray(err.body.grants)
+      ? err.body.grants.filter((g): g is string => typeof g === "string")
+      : [];
+    return grants.length > 0
+      ? `This needs ${grants.join(" or ")}, which the credential you presented does not carry.`
+      : "This needs a credential that carries the grant to read it. Sign in, or set one from the command palette.";
   }
   return err.detail || err.code || "the engine refused the read";
 }

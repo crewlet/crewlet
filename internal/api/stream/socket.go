@@ -615,8 +615,9 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		client.Reply(queryError(req, CodeUnavailable))
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
-		// carry a database path or a driver's own message, and the socket
-		// is the one surface an unauthenticated reader may be holding.
+		// carry a database path or a driver's own message, and holding the
+		// grant a question needs does not make a reader somebody that path
+		// is meant for.
 		log.WarnContext(ctx, "stream_query_failed", "what", req.What, "error", err)
 		client.Reply(queryError(req, CodeQueryFailed))
 	}

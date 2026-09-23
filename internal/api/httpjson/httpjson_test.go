@@ -3,8 +3,13 @@ package httpjson_test
 import (
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -250,32 +255,73 @@ func TestStructuredFieldsKeepTheirShapeAndNeverDisplaceTheErrorCode(t *testing.T
 	}
 }
 
-// declared is every code this package names, the three groups together: the
-// writer's own, the query-answer set the socket shares, and the setup pass's.
+// declared is every `Code` constant this package's source declares, read off
+// the source itself.
 //
-// Hand-listed so that adding a constant without adding it here is caught by
-// the count below rather than passing as "nothing to check".
-var declared = []httpjson.Code{
-	httpjson.CodeEncodeFailed, httpjson.CodeBodyTooLarge,
-	httpjson.CodeUnreadableBody, httpjson.CodeInvalidBody,
-	httpjson.CodeInvalidQuery, httpjson.CodeNonCanonicalPath,
-	httpjson.CodeInternalError,
-	httpjson.CodeDraining, httpjson.CodeInvalidToken,
+// IT WAS A HAND-KEPT LIST, which said a count below would catch a constant
+// missing from it. There was no count, and the list held twenty of the
+// thirty-four codes: every identity code, the CSRF refusal, `forbidden`,
+// `stale` and `refused` were declared, rendered verbatim by the dashboard, and
+// read by no copy review at all. Walking the declarations is what makes "every
+// code" mean every code.
+func declared(t *testing.T) []httpjson.Code {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "httpjson.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse httpjson.go: %v", err)
+	}
+	var out []httpjson.Code
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok || value.Type == nil {
+				continue
+			}
+			if ident, ok := value.Type.(*ast.Ident); !ok || ident.Name != "Code" {
+				continue
+			}
+			for _, v := range value.Values {
+				lit, ok := v.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Fatalf("a Code constant is not a string literal: %#v", v)
+				}
+				raw, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("unquote %s: %v", lit.Value, err)
+				}
+				out = append(out, httpjson.Code(raw))
+			}
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("the walk found no Code constants, so every case over it certifies nothing")
+	}
+	return out
+}
 
-	httpjson.CodeUnknownQuery, httpjson.CodeUnauthorized,
-	httpjson.CodeQueryFailed, httpjson.CodeNotFound,
-	httpjson.CodeBadParams, httpjson.CodeUnavailable,
-
-	httpjson.CodePassInFlight, httpjson.CodeNotProvisionable,
-	httpjson.CodeNoExternalURL, httpjson.CodeRequirementsOutstanding,
-	httpjson.CodeRunNotFound, httpjson.CodeVendorRefused,
+// EVERY DECLARED CODE IS ON THE TABLE, AND EVERY CODE ON THE TABLE IS DECLARED.
+//
+// Both directions, because each fails silently: a constant missing from the
+// table answers with no sentence, and a table entry no constant names is a
+// code no route can spell except by writing the string out.
+func TestTheDeclarationsAndTheTableAgree(t *testing.T) {
+	t.Parallel()
+	names := declared(t)
+	slices.Sort(names)
+	if table := httpjson.Codes(); !slices.Equal(names, table) {
+		t.Errorf("declared %v\ntable    %v", names, table)
+	}
 }
 
 // Every declared code is Valid, and an invented one is not — the guard that
 // keeps a fifth spelling of "too large" from appearing.
 func TestOnlyTheDeclaredCodesAreValid(t *testing.T) {
 	t.Parallel()
-	for _, code := range declared {
+	for _, code := range declared(t) {
 		if !code.Valid() {
 			t.Errorf("%q is declared but not Valid", code)
 		}
@@ -299,7 +345,7 @@ func TestOnlyTheDeclaredCodesAreValid(t *testing.T) {
 // screen and nobody notices until a person is confused by it.
 func TestEveryCodeCarriesASentenceAPersonReads(t *testing.T) {
 	t.Parallel()
-	for _, code := range declared {
+	for _, code := range declared(t) {
 		message := code.Message()
 		switch {
 		case message == "":
@@ -408,5 +454,22 @@ func TestAWriterWithNoDeadlineStillReads(t *testing.T) {
 	}
 	if string(got) != `{"a":1}` {
 		t.Errorf("read %q, want the whole body", got)
+	}
+}
+
+// A KNOWN CALLER REFUSED IS TOLD ABOUT A GRANT, NOT A TOKEN.
+//
+// `unauthorized` said "that query needs an operator token", which was true
+// while an operator token was the only credential and authority one yes-or-no.
+// It is the sentence the dashboard renders verbatim to a person signed in with
+// a session and refused one grant — who has no token to find, and whose
+// credential is fine. The remedy the sentence names is the one the code means.
+func TestAKnownCallerIsToldAboutTheGrantNotAToken(t *testing.T) {
+	t.Parallel()
+	message := httpjson.CodeUnauthorized.Message()
+	if !strings.Contains(message, "grant") || strings.Contains(message, "token") {
+		t.Errorf("unauthorized says %q: a caller this node knows is refused "+
+			"for a grant, and a sentence about a token sends them to replace "+
+			"a credential that works", message)
 	}
 }

@@ -438,8 +438,8 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 			t.Errorf("%v: answer = %v, want %q", tc.err, got, tc.want)
 		}
 		// The reason reaches the log, not the client: a failure can
-		// carry a database path, and the socket is the one surface an
-		// unauthenticated reader may be holding.
+		// carry a database path, and holding the grant a question needs
+		// does not make a reader somebody that path is meant for.
 		if raw, _ := json.Marshal(got); strings.Contains(string(raw), "/var/lib") {
 			t.Errorf("the failure leaked its detail to the client: %s", raw)
 		}

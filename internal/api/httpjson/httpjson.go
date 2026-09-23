@@ -42,6 +42,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -103,9 +104,9 @@ const (
 	CodeDraining Code = "draining"
 
 	// CodeInvalidToken is a credential that is missing, or present and not
-	// one this engine accepts. ONE code for both, because telling them
-	// apart in the answer tells an unauthenticated caller which half of the
-	// guess was right.
+	// one this engine accepts — a Tier A token, a session, a machine token.
+	// ONE code for both, because telling them apart in the answer tells an
+	// unauthenticated caller which half of the guess was right.
 	CodeInvalidToken Code = "invalid_token"
 )
 
@@ -123,10 +124,15 @@ const (
 	// CodeUnavailable.
 	CodeUnknownQuery Code = "unknown_query"
 
-	// CodeUnauthorized is a question that needs an operator credential the
-	// caller did not present. DISTINCT from CodeInvalidToken, which refuses
-	// the connection itself: this one is a socket that is legitimately open
-	// for anonymous reads being asked an operator's question.
+	// CodeUnauthorized is a request from a caller this node KNOWS, refused
+	// because their credential does not carry the grant it needs — or, for
+	// a personal record, the relation. DISTINCT from CodeInvalidToken, which
+	// refuses a caller nobody could identify: the remedy there is a
+	// credential and here it is authority, and a reader told the first
+	// when they meant the second goes and replaces a credential that
+	// works. It is a 403 over HTTP, and wherever the authority table made
+	// the refusal the detail names the rule's `reason` and the `grants`
+	// that would have admitted the caller.
 	CodeUnauthorized Code = "unauthorized"
 
 	// CodeQueryFailed is a question this node understood and could not
@@ -300,14 +306,14 @@ const (
 	// is a leaf and cannot import that one to share the constant.
 	CodeSeatUnavailable Code = "seat_unavailable"
 
-	// CodeForbidden is a WRITE the authority table refused: a caller this
-	// node knows, whose grants or relations do not reach the verb.
+	// CodeForbidden is a WRITE the human write surface refused: a caller
+	// this node knows, whose grants or relations do not reach the verb.
 	//
-	// ITS OWN CODE rather than [CodeUnauthorized], whose sentence is about a
-	// query needing an operator token — which is the wrong thing to tell a
-	// signed-in person refused a write, and a sentence a dashboard renders
-	// verbatim. The detail carries the verb's own refusal, worded once for
-	// every surface that serves it.
+	// ITS OWN CODE rather than [CodeUnauthorized] because the detail is a
+	// different shape: it carries the verb's own refusal SENTENCE, worded
+	// once in the tools and read identically in a turn, in the operator's
+	// assistant and here, where [CodeUnauthorized]'s detail is the table's
+	// `reason` and `grants` as values.
 	CodeForbidden Code = "forbidden"
 
 	// CodeStale is a write that lost to somebody else's: a version that
@@ -348,11 +354,18 @@ var codes = map[Code]string{
 		"in this node's log.",
 	CodeDraining: "This node is shutting down and is not taking new work. " +
 		"Try another node, or this one once it has restarted.",
-	CodeInvalidToken: "This request needs an operator token, and none this " +
-		"engine accepts was presented.",
+	CodeInvalidToken: "This request needs a credential, and none this engine " +
+		"accepts was presented. Sign in, or send an API token this deployment " +
+		"issued.",
 
 	CodeUnknownQuery: "This node does not serve that query.",
-	CodeUnauthorized: "That query needs an operator token.",
+	// ABOUT THE GRANT, NOT A TOKEN. It said "that query needs an operator
+	// token", which was true while an operator token was the only credential
+	// and authority a single yes-or-no; a person signed in with a session
+	// and refused one grant was told to go and find a token.
+	CodeUnauthorized: "The credential you presented does not carry the grant " +
+		"this request needs. Ask whoever runs this deployment for it, or use " +
+		"a credential that carries it.",
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",
@@ -407,6 +420,14 @@ var codes = map[Code]string{
 	CodeRefused: "That change was refused and nothing was written. The detail " +
 		"says why.",
 }
+
+// Codes is every code in the vocabulary, sorted.
+//
+// FOR THE WALKS that hold the table against what reads it: this package's own
+// copy review, which must see every code rather than a list somebody kept by
+// hand, and the gates elsewhere that hold a client's copy of the vocabulary
+// against the engine's.
+func Codes() []Code { return slices.Sorted(maps.Keys(codes)) }
 
 // Valid reports whether c is in the vocabulary — which is to say, whether the
 // table carries a sentence for it.

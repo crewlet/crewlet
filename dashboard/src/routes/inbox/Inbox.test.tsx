@@ -382,7 +382,7 @@ test("a refused inbox read is not a caught-up inbox", async () => {
   await settle();
 
   const notices = screen.getByText("Notices").closest("section");
-  expect(notices?.textContent).toContain("auth-gated");
+  expect(notices?.textContent).toContain("does not carry the grant");
   expect(notices?.textContent).not.toContain("marked read");
   expect(notices?.textContent).not.toContain("Nothing has reached you");
 });
