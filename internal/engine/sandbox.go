@@ -327,25 +327,31 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			sandbox.ErrResumeUnavailable, req.Run.AgentHandle)
 	}
 	return r.engine.resumeTurn(ctx, resumeInput{
-		Company: company,
-		Run:     req.Run,
-		State:   state,
-		Turn: &turnctx.Turn{
-			// THE SAME RUN AND THE SAME UNIT OF WORK the suspended
-			// turn had, both read off the row: the resume re-enters
-			// that run, and its writes stay idempotent against the
-			// trigger the run was dispatched for.
-			RunID: req.Run.TurnID, WorkKey: req.Run.UnitOfWork(),
-			WorkSince: req.Run.WorkSince,
-			Seat:      seat, Org: company.Org,
-			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
-		},
+		Company:       company,
+		Run:           req.Run,
+		State:         state,
+		Turn:          resumedTurn(req.Run, seat, company.Org),
 		Answer:        req.Answer,
 		Success:       req.Success,
 		Trigger:       req.Trigger,
 		CostUSD:       req.CostUSD,
 		DeliveredRefs: req.DeliveredRefs,
 	})
+}
+
+// resumedTurn is the turn a parked run is re-entered as.
+//
+// THE SAME RUN AND THE SAME UNIT OF WORK the suspended turn had, both read off
+// the row: the resume re-enters that run, and its writes stay idempotent
+// against the trigger the run was dispatched for. The instant is
+// [sandbox.PendingRun.WorkBegan], never the raw field, because a row an older
+// build parked has a key and no instant.
+func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organization) *turnctx.Turn {
+	return &turnctx.Turn{
+		RunID: run.TurnID, WorkKey: run.UnitOfWork(), WorkSince: run.WorkBegan(),
+		Seat: seat, Org: organization,
+		Depth: run.DelegationDepth, Chain: run.DelegationChain,
+	}
 }
 
 // guardResume runs one resume, abandoning it if it panics.

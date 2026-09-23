@@ -61,3 +61,34 @@ func TestWhenTheWorkBeganTravelsWithTheWorkKey(t *testing.T) {
 			"from the first", resumedTurn.Context, began)
 	}
 }
+
+// A RUN AN OLDER BUILD PARKED RESUMES WITH A REAL INSTANT, on both the turn its
+// tools run under and the telemetry that describes it.
+//
+// Its row has a unit of work and no `work_since`, and a zero instant reads as
+// older than every loss the operation ledger has recorded: on any node whose
+// ledger had swept once, every write the resumed turn made answered `unknown`.
+// The row's own CreatedAt is the fixed instant it answers instead.
+func TestARunAnOlderBuildParkedResumesWithAnInstant(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}
+	company := &Company{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}}
+	launched := time.Date(2026, 9, 1, 8, 10, 0, 0, time.UTC)
+	run := sandbox.PendingRun{
+		TurnID: "run-1", WorkKey: "wk-1", AgentHandle: "swe", CreatedAt: launched,
+	}
+
+	resumed := resumedTurn(run, seat, company.Org)
+	if !resumed.WorkSince.Equal(launched) || resumed.WorkKey != "wk-1" {
+		t.Fatalf("the resumed turn's tools see work %q begin at %s, want wk-1 at "+
+			"%s — a zero instant answers every write unknown", resumed.WorkKey,
+			resumed.WorkSince, launched)
+	}
+	described := (&Engine{}).describeResume(context.Background(), company, resumeInput{
+		Run: run, Turn: resumed,
+	}).runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
+	if described.Context == nil || !described.Context.WorkSince.Equal(launched) {
+		t.Fatalf("the resumed turn's runner sees the work begin at %+v, want %s",
+			described.Context, launched)
+	}
+}

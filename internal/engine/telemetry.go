@@ -461,7 +461,7 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// turn would derive different operation ids from the first half.
 		runID:     in.Run.TurnID,
 		workKey:   in.Run.UnitOfWork(),
-		workSince: in.Run.WorkSince,
+		workSince: in.Run.WorkBegan(),
 		// AND EACH CONVERSATION VALUE FROM ITS OWN FIELD: the resumed
 		// turn's events are tagged with the conversation it reports back
 		// to and is answered on, while the partition it was launched from

@@ -695,13 +695,17 @@ changes nothing either way.
 
 A **resumed** turn is not a re-run. A detached coding job re-enters the run
 that parked it, carrying that run's id, its work key and when that work began
-on its own row, so a suspend/resume pair is one turn on every screen and
-writes under the same ids in both halves. The resume also starts from what the
-run already called — the rounds before the suspension, the parked round's own
-calls and whatever an agent-mode run called over the bridge — so the counts in
-its ids continue rather than start again. A delegated worker counts from the
-run's calls and its own, never a sibling's, and the run counts every worker's
-calls once their wave is done.
+on its own row, so a suspend/resume pair is one turn on every screen and writes
+under the same ids in both halves. A run parked by a build from before the row
+carried that instant resumes with the row's own creation instant instead —
+fixed, so every resume of it derives the same ids — rather than with no instant
+at all, which would answer every write the resumed half made `unknown` on any
+node whose operation ledger has swept. The resume also starts from what the run
+already called — the rounds before the suspension, the parked round's own calls
+and whatever an agent-mode run called over the bridge — so the counts in its
+ids continue rather than start again. A delegated worker counts from the run's
+calls and its own, never a sibling's, and the run counts every worker's calls
+once their wave is done.
 
 Where that shows on the screens:
 

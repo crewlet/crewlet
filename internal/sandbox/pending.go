@@ -216,6 +216,42 @@ func (r PendingRun) UnitOfWork() string {
 	return ""
 }
 
+// WorkBegan is the instant every operation id this run derives from its unit
+// of work ([PendingRun.UnitOfWork]) carries, or the zero instant when the run
+// has no unit of work.
+//
+// THE ROW'S OWN work_since WHERE IT HAS ONE, which is the instant the first
+// half of the turn derived its ids with, so the resumed half derives the same.
+//
+// A FIXED INSTANT OFF THE ROW WHERE IT HAS NOT. Nothing rewrites a parked row,
+// so a run parked by a build from before that field carries a unit of work and
+// no instant, and the zero instant reads as older than every loss the
+// operation ledger has recorded: on any node whose ledger had swept once, every
+// write the resumed turn made answered `unknown`, and the run's whole second
+// half was lost. Such a row answers its own CreatedAt — when the launch wrote
+// it — which is safe on every count the instant has to meet:
+//
+//   - it is FIXED, so every resume of the row derives the same ids, and a
+//     resume that is itself retried is idempotent against the first;
+//   - it cannot collide with the first half, whose ids the older build derived
+//     another way, so a write repeated across the upgrade is a second write
+//     rather than a lost one — the same cost as a crash re-run with no ledger;
+//   - it is no LATER than any write made under it, since every such write is
+//     the resume's, after the launch — which is all the ledger's vouching needs
+//     of an operation's instant (see statelog's Publisher.vouches).
+//
+// Zero where the row has no unit of work either, which is the documented
+// "nothing to collapse" case: those ids are fresh anyway.
+func (r PendingRun) WorkBegan() time.Time {
+	switch {
+	case !r.WorkSince.IsZero():
+		return r.WorkSince.UTC()
+	case r.UnitOfWork() == "":
+		return time.Time{}
+	}
+	return r.CreatedAt.UTC()
+}
+
 // MaxBridgeCalls bounds the durable log of a bridged run.
 //
 // The row is ONE VALUE in the coordination store, read and written whole on
@@ -255,8 +291,8 @@ type PendingRun struct {
 	// could not reproduce it would derive DIFFERENT ids for the same
 	// writes, and the state log reads it to refuse deciding again an
 	// operation minted before its node adopted a donated snapshot.
-	// Zero on a row written before this field existed, which reads as
-	// older than every adoption — the conservative end.
+	// Zero on a row written before this field existed — read it through
+	// [PendingRun.WorkBegan], never raw.
 	WorkSince time.Time `json:"work_since,omitzero"`
 
 	AgentHandle string `json:"agent_handle"`
