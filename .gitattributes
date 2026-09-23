@@ -18,8 +18,9 @@
 #
 # NOT `binary` and NOT `-diff`, which would also be tempting: `make
 # dashboard-check` is `npm run build` followed by `git diff --exit-code --
-# static/dashboard`, and ci.yml prints that patch under "The diff above is what
-# a rebuild produced". Under `binary` it becomes "Binary files … differ", and
+# static/dashboard` (and a check for files the index does not carry at all),
+# and that diff is the patch both it and ci.yml print when the committed tree
+# drifted. Under `binary` it becomes "Binary files … differ", and
 # `git log -G` over the tree drops from 66 matching commits to none. `-merge`
 # costs neither: the diff is byte-identical to having no attribute at all.
 #

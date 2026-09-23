@@ -3127,12 +3127,15 @@ static/dashboard/           THE BUILD OUTPUT — committed, and what the binary 
 `go install …@latest` must work on a clean checkout with no Node on the machine,
 and an embed directive cannot run a bundler. A stale bundle would compile,
 embed, serve and pass every Go test while running code nobody wrote — so CI
-rebuilds it and diffs the tree (`make dashboard-check`), the same idiom as
-`go mod tidy -diff` and the generated `schema/`.
+rebuilds it and fails on any difference from the commit (`make dashboard-check`),
+the same idiom as `go mod tidy -diff` and the generated `schema/`. A difference
+includes a file the rebuild wrote that the commit does not carry at all: every
+emitted name is content-hashed, so a changed chunk is a new path, which
+`git diff` cannot see and `git commit -a` never stages.
 
 | To | Run |
 |---|---|
-| change the dashboard | `make dashboard` — then commit `static/dashboard` with your source change |
+| change the dashboard | `make dashboard && git add -A -- static/dashboard` — then commit it with your source change |
 | develop against a running engine | `make dashboard-dev` (proxies to `localhost:8000`) |
 | run its suites | `make dashboard-test` |
 | check the committed bundle is current | `make dashboard-check` |
