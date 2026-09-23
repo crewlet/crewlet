@@ -22,14 +22,15 @@
 //
 // A FEW ROUTES HAVE NO TOOL, and are the ones a seat is never given: placing a
 // card between two neighbours on a board, rewriting one's own remark on a work
-// item, and the knowledge base's four destructive verbs and its rename. Those
-// call the domain's writer themselves, and decide first through the SAME table
-// — [authz.ActionWorkRank], [authz.ActionWorkCommentEdit],
+// item, purging a work item, and the knowledge base's four destructive verbs
+// and its rename. Those call the domain's writer themselves, and decide first
+// through the SAME table — [authz.ActionWorkRank],
+// [authz.ActionWorkCommentEdit], [authz.ActionWorkPurge],
 // [authz.ActionPageRename], [authz.ActionPageTrash], [authz.ActionPageRestore],
-// [authz.ActionPagePurge] and [authz.ActionPageCommentRemove]. The four page
-// verbs had rules and no caller at all until this surface; the work purge had
-// a route of its own under /work/{id}/purge with an operator check written
-// beside it, which this replaces.
+// [authz.ActionPagePurge] and [authz.ActionPageCommentRemove]. The four page verbs had rules and no caller
+// at all until this surface; the work purge had a route of its own under
+// /work/{id}/purge with an operator check written beside it, which this
+// replaces.
 //
 // # Authority is decided ONCE, and read identically everywhere
 //
