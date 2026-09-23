@@ -62,10 +62,14 @@ func mounted(t *testing.T, opts secretsapi.Options, grants ...iam.Grant) http.Ha
 		t.Fatalf("Routes: %v", err)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// FRESH IN BOTH STEP-UP WINDOWS, as the guard stamps every Tier A
+		// token, so a case here is decided on its grants alone.
 		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), iam.Principal{
 			ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
 			Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
 			Stage: iam.StageActive, Grants: grants,
+			ReauthAt:          time.Now().Add(time.Hour),
+			SensitiveReauthAt: time.Now().Add(time.Hour),
 		})))
 	})
 }

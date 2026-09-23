@@ -158,5 +158,12 @@ func (g *Guard) devResolution(r *http.Request) *iam.Principal {
 		return nil
 	}
 	p := g.dev.principal()
+	// FRESH BY CONSTRUCTION, as every credential with nobody at a keyboard
+	// is: a laptop run with no credential at all has nothing it could
+	// present to confirm who is there, and a development principal that
+	// could never reach a step-up surface could not edit the very company
+	// it was started to develop against. The bypass is already gated on an
+	// unversioned build and a loopback host; this adds no reach it lacks.
+	g.proof.stamp(&p, g.now())
 	return &p
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -66,10 +67,28 @@ func nimbus() chart {
 	}
 }
 
-// person is a human principal with these grants.
+// decidedAt is the instant every case here is decided at.
+//
+// THE WALL CLOCK AT START-UP rather than a fixed date, because the cases that
+// go through [authz.ContextGuard] are decided at the request's own instant and
+// a proof fixed in 2026 would be stale against it.
+var decidedAt = time.Now()
+
+// proved gives a principal a proof of identity a minute old: inside both
+// windows, so every case that is not about the step-up decides on its rule
+// alone — the step-up has cases of its own below.
+func proved(p iam.Principal) iam.Principal {
+	at := decidedAt.Add(-time.Minute)
+	p.ReauthAt = at.Add(time.Hour)
+	p.SensitiveReauthAt = at.Add(15 * time.Minute)
+	return p
+}
+
+// person is a human principal with these grants, who proved who they are a
+// minute ago.
 func person(login string, grants ...iam.Grant) iam.Principal {
-	return iam.Principal{ID: uuid.New(), Login: login, Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: grants}
+	return proved(iam.Principal{ID: uuid.New(), Login: login, Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: grants})
 }
 
 // seat is an agent principal acting as a seat.
@@ -79,7 +98,7 @@ func person(login string, grants ...iam.Grant) iam.Principal {
 func personLeading(handle string, grants ...iam.Grant) iam.Principal {
 	p := seat(handle, grants...)
 	p.Kind = iam.KindPerson
-	return p
+	return proved(p)
 }
 
 func seat(handle string, grants ...iam.Grant) iam.Principal {
@@ -285,29 +304,33 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		// asked the project relation with a unit key would refuse the
 		// lead of that very unit on every company whose unit does not
 		// file under a project of the same name.
-		{"a unit's lead edits its content", seat("cto"),
+		//
+		// A PERSON BOUND TO THE SEAT, because that is who writes the chart:
+		// it is an HTTP surface a seat's tools never reach, and every write
+		// on it asks for a recent proof of identity no seat can give.
+		{"a unit's lead edits its content", personLeading("cto"),
 			authz.ActionChartContent,
 			authz.Object{Kind: authz.KindUnit, Container: "sre"},
 			true, authz.ReasonLead},
-		{"a colleague in it does not", seat("sre"),
+		{"a colleague in it does not", personLeading("sre"),
 			authz.ActionChartContent,
 			authz.Object{Kind: authz.KindUnit, Container: "sre"},
 			false, authz.ReasonNotLead},
-		{"a unit key is not a project key", seat("cto"),
+		{"a unit key is not a project key", personLeading("cto"),
 			authz.ActionChartContent,
 			authz.Object{Kind: authz.KindUnit, Container: "PLATFORM"},
 			false, authz.ReasonNotLead},
 		// THE RUNTIME HALF IS THE COMPANY'S, whoever leads the team: a
 		// seat's model chain, its credentials and its mcp_env are
 		// exec.Command on every engine host.
-		{"a unit's lead does not write the runtime half", seat("cto"),
+		{"a unit's lead does not write the runtime half", personLeading("cto"),
 			authz.ActionChartRuntime, authz.Object{Kind: authz.KindCompany},
 			false, authz.ReasonNoGrant},
 		{"the company's own grant does",
 			person("jane.doe", iam.GrantConfigWrite),
 			authz.ActionChartRuntime, authz.Object{Kind: authz.KindCompany},
 			true, authz.ReasonGrant},
-		{"structure is the company's too", seat("cto"),
+		{"structure is the company's too", personLeading("cto"),
 			authz.ActionChartStructure, authz.Object{Kind: authz.KindCompany},
 			false, authz.ReasonNoGrant},
 
@@ -397,7 +420,7 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			d := authz.Decide(t.Context(), c.p, c.action, c.object, nimbus())
+			d := authz.Decide(t.Context(), c.p, c.action, c.object, nimbus(), decidedAt)
 			if d.Unknown() {
 				t.Fatalf("decided UNKNOWN: %v", d.Err)
 			}
@@ -439,8 +462,8 @@ func TestFlippingTheChartInvertsEveryLeadAnswer(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			was := authz.Decide(t.Context(), seat(c.actor), c.action, c.object, nimbus())
-			is := authz.Decide(t.Context(), seat(c.actor), c.action, c.object, inverted)
+			was := authz.Decide(t.Context(), seat(c.actor), c.action, c.object, nimbus(), decidedAt)
+			is := authz.Decide(t.Context(), seat(c.actor), c.action, c.object, inverted, decidedAt)
 			if !was.Allowed {
 				t.Fatalf("the fixture does not allow this to begin with: %q", was.Reason)
 			}
@@ -476,7 +499,7 @@ func TestAChartReadErrorIsUnknownNotARefusal(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			d := authz.Decide(t.Context(), seat("cto"), c.action, c.object,
-				chart{err: behind})
+				chart{err: behind}, decidedAt)
 			if !d.Unknown() {
 				t.Fatalf("a chart that could not answer decided %v (%q), which "+
 					"a surface renders as a refusal", d.Allowed, d.Reason)
@@ -516,7 +539,7 @@ func TestTheAdminPathDecidesWithNoChartAtAll(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			d := authz.Decide(t.Context(), admin, c.action, c.object, authz.NoChart{})
+			d := authz.Decide(t.Context(), admin, c.action, c.object, authz.NoChart{}, decidedAt)
 			if d.Unknown() {
 				t.Fatalf("the admin path asked a chart it does not need: %v", d.Err)
 			}
@@ -537,7 +560,7 @@ func TestAVerbWithNoRuleIsRefused(t *testing.T) {
 	t.Parallel()
 	d := authz.Decide(t.Context(), person("jane.doe", iam.GrantFleetOperate),
 		authz.Action("delete_the_company"), authz.Object{Kind: authz.KindCompany},
-		nimbus())
+		nimbus(), decidedAt)
 	if d.Allowed {
 		t.Fatal("a verb this build has no rule for was allowed")
 	}
@@ -582,7 +605,7 @@ func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 				{Kind: kind, ID: "x", Owner: "somebody.else", Author: "somebody.else",
 					Container: "ELSEWHERE", ContainerKind: authz.KindProject},
 			} {
-				d := authz.Decide(t.Context(), nobody(), a, object, chart{})
+				d := authz.Decide(t.Context(), nobody(), a, object, chart{}, decidedAt)
 				if d.Unknown() {
 					t.Fatalf("%s on %+v was undecidable against a chart that "+
 						"answers: %v", a, object, d.Err)
@@ -593,7 +616,7 @@ func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 				var admits []iam.Grant
 				for _, g := range iam.AllGrants {
 					alone := person("jane.doe", g)
-					got := authz.Decide(t.Context(), alone, a, object, chart{})
+					got := authz.Decide(t.Context(), alone, a, object, chart{}, decidedAt)
 					if got.Allowed && got.Reason == authz.ReasonGrant {
 						admits = append(admits, g)
 					}

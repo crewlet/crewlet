@@ -39,6 +39,41 @@
 // opinion about the hierarchy. So the chart is a four-method seam the consumer
 // implements, and every other input is a value a test can write down. A rule
 // exercised only through a running engine is a rule nobody re-reads.
+//
+// THE INSTANT IS AN ARGUMENT TOO, for the same reason. Some verbs ask how
+// RECENTLY the principal proved who they are — see below — and a Decide that
+// read the clock itself could not be asked about a proof forty minutes old
+// without waiting forty minutes. The caller passes when it is deciding; an
+// HTTP guard passes the request's own instant.
+//
+// # How recently somebody proved who they are
+//
+// A session lives for days and a laptop is left unlocked, so the gestures that
+// change what a company IS ask for a proof taken minutes ago rather than on
+// Monday: that is the STEP-UP, and every row states how recent a proof it asks
+// for ([iam.Recency]) — none, `step_up` (an hour by default: the company's
+// configuration, chart, integrations and credential writes, the identity
+// directory's writes and the deployment's own controls) or `step_up_sensitive`
+// (fifteen minutes: revealing a secret, changing anybody's authority or how
+// they prove it, ending every session in the company).
+//
+// IT IS DECIDED HERE, ON THE ROW, and nowhere else. It was a setting nothing
+// read: the sign-in surface could record a proof and no surface outside it ever
+// asked for one, so a cookie from last week reached every one of those
+// gestures. On the row, a REST route and a tool asking about one verb get one
+// answer, and a walk holds every row to having decided — a zero recency is
+// refused, because read as "none" it is a sensitive verb that shipped open.
+//
+// THE PROOF IS ASKED AFTER THE RULE ADMITS, so a caller who could never take
+// the verb is told what they lack rather than sent to confirm their identity
+// first, and the refusal ([ReasonStepUp]) names the window it needs so a
+// client can ask the person and replay the request. Who counts as having
+// proved is the principal's business ([iam.Principal.Proved]): a session
+// proved when it signed in or stepped up, while a credential with nobody at a
+// keyboard — a Tier A token, a machine token, the development principal — is
+// fresh by construction, because there is nothing else it could ever present.
+// No TOOL asks for a proof (a walk holds that too): a seat has no keyboard, and
+// the operator's MCP surface is not a step-up surface.
 package authz
 
 import (
@@ -182,6 +217,15 @@ type Decision struct {
 	// and it is the copy that drifts. A walk in this package's tests holds
 	// the two together over every verb, kind and grant.
 	Grants []iam.Grant
+
+	// Recency is the proof the deciding rule asked for, set on a
+	// [ReasonStepUp] refusal and on nothing else: the rule would have
+	// admitted this principal, and their proof of who they are is older
+	// than the window this names. It is what a client needs in order to
+	// ask the person to confirm who they are and replay the request, which
+	// is why it rides on the decision rather than being looked up beside
+	// it.
+	Recency iam.Recency
 }
 
 // Unknown reports a decision this node could not reach.
@@ -233,6 +277,11 @@ const (
 	// verb. It is the one refusal that is a BUILD mistake rather than an
 	// authority fact — see [Decide].
 	ReasonUnknownAction Reason = "unknown_action"
+	// ReasonStepUp is the one refusal the principal clears themselves: the
+	// rule ADMITS them, and their proof of who they are is older than the
+	// window the verb asks for ([Decision.Recency]). Confirming who they
+	// are and asking again is the whole remedy — no grant would change it.
+	ReasonStepUp Reason = "step_up"
 )
 
 // Reasons are every one, in declaration order.
@@ -240,6 +289,7 @@ var Reasons = []Reason{
 	ReasonGrant, ReasonSelf, ReasonAuthor, ReasonLead,
 	ReasonNoGrant, ReasonNotSelf, ReasonNotLead, ReasonNotAuthor,
 	ReasonSeatRefused, ReasonStage, ReasonUnnamed, ReasonUnknownAction,
+	ReasonStepUp,
 }
 
 // Valid reports whether a reason is one this build knows.

@@ -282,6 +282,31 @@ func TestASessionsProofCountsForTheStepUpWindow(t *testing.T) {
 	if !got.principal.Fresh(rig.at) {
 		t.Error("a session proved ten minutes ago is stale inside an hour's window")
 	}
+	// AND THE SENSITIVE WINDOW IS ITS OWN, composed from the same proof and
+	// this node's `step_up_sensitive`: two deadlines, because a gesture asks
+	// for one window or the other and one instant cannot answer both.
+	sensitive := proved.Add(config.DefaultSessionStepUpSensitive)
+	if !got.principal.SensitiveReauthAt.Equal(sensitive) {
+		t.Errorf("sensitive deadline %s, want the proof at %s plus the %s window",
+			got.principal.SensitiveReauthAt, proved,
+			config.DefaultSessionStepUpSensitive)
+	}
+	if !got.principal.Proved(iam.RecencySensitive, rig.at) {
+		t.Error("a session proved ten minutes ago is stale inside fifteen")
+	}
+
+	// A PROOF FORTY MINUTES OLD is inside the hour and outside the quarter:
+	// the ordinary gestures go on and revealing a secret asks again.
+	older := newSignedIn(t)
+	older.dir.identity.Session.ProvedAt = older.at.Add(-40 * time.Minute)
+	got = older.call(older.guard(), http.MethodGet, "/agents", older.withCookie)
+	if !got.principal.Proved(iam.RecencyStepUp, older.at) ||
+		got.principal.Proved(iam.RecencySensitive, older.at) {
+		t.Errorf("a proof forty minutes old reads step_up=%v sensitive=%v, "+
+			"want fresh and stale",
+			got.principal.Proved(iam.RecencyStepUp, older.at),
+			got.principal.Proved(iam.RecencySensitive, older.at))
+	}
 
 	unproved := newSignedIn(t)
 	unproved.dir.identity.Session.ProvedAt = time.Time{}
@@ -290,10 +315,35 @@ func TestASessionsProofCountsForTheStepUpWindow(t *testing.T) {
 	// THE ZERO DEADLINE, and not a window added to nothing: the two are
 	// both stale, and only the first says "never proved" to a reader of
 	// `reauth_at` rather than naming the year one.
-	if got.how != iam.Resolved || !got.principal.ReauthAt.IsZero() {
+	if got.how != iam.Resolved || !got.principal.ReauthAt.IsZero() ||
+		!got.principal.SensitiveReauthAt.IsZero() {
 		t.Errorf("a session that proved nothing resolved %v with reauth "+
-			"deadline %s — want resolved with none", got.how,
-			got.principal.ReauthAt)
+			"deadlines %s and %s — want resolved with none", got.how,
+			got.principal.ReauthAt, got.principal.SensitiveReauthAt)
+	}
+}
+
+// A CREDENTIAL WITH NOBODY AT A KEYBOARD IS FRESH BY CONSTRUCTION, in BOTH
+// windows.
+//
+// A Tier A token has no second factor, no session and no person behind it:
+// there is nothing else it could ever present, so presenting it is the proof.
+// Fresh only for the ordinary window, the break-glass credential could not
+// reveal a secret or change who holds authority on the one day it exists for —
+// the day the identity provider is down.
+func TestATierATokenIsFreshInBothWindows(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer a-tier-a-token")
+	})
+	if got.how != iam.Resolved {
+		t.Fatalf("a presented Tier A token resolved %v", got.how)
+	}
+	for _, r := range []iam.Recency{iam.RecencyStepUp, iam.RecencySensitive} {
+		if !got.principal.Proved(r, time.Now()) {
+			t.Errorf("a Tier A token is stale for %s", r)
+		}
 	}
 }
 

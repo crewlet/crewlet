@@ -142,12 +142,29 @@ type Principal struct {
 	Position string
 
 	// ReauthAt is the instant after which this principal's proof of
-	// identity is stale, in UTC.
+	// identity is too old for an ordinary step-up gesture
+	// ([RecencyStepUp]), in UTC.
 	//
 	// ZERO IS NOT "NEVER" — see [Principal.Fresh]. A zero deadline read
 	// as "never expires" is a session somebody forgot to bound, which is
 	// the same failure the zero [Grant] would be.
 	ReauthAt time.Time
+
+	// SensitiveReauthAt is the same instant for a SENSITIVE gesture
+	// ([RecencySensitive]): the proof plus `step_up_sensitive` rather than
+	// plus `step_up`, and so never later than ReauthAt on a principal the
+	// guard composed.
+	//
+	// TWO DEADLINES AND NOT ONE, because the two windows are two settings
+	// and a gesture asks for one of them: a single deadline could say
+	// whether a proof is inside the hour and could not say whether it is
+	// inside the quarter-hour. Carried as instants rather than as the proof
+	// and the two windows, because the windows are THIS NODE's settings and
+	// the node that composed the principal is the one whose windows apply
+	// — exactly as its ceiling is the one cut into the grants.
+	//
+	// ZERO IS STALE here too, for ReauthAt's reason.
+	SensitiveReauthAt time.Time
 
 	// Stage is how far through enrolment this principal is.
 	Stage Stage
@@ -206,6 +223,25 @@ func (p Principal) UnknownGrants() []Grant {
 // forgot to fill in into a session that outlives the company.
 func (p Principal) Fresh(now time.Time) bool {
 	return !p.ReauthAt.IsZero() && now.Before(p.ReauthAt)
+}
+
+// Proved reports whether this principal's proof of identity is recent enough
+// for a gesture that asks for r, at now.
+//
+// A RECENCY THIS BUILD CANNOT NAME IS NOT PROVED, which is the direction that
+// fails safe: a rule written by a newer peer and read here must not open a
+// door because this build did not know how recent the proof had to be. And
+// [RecencyAny] is proved by anybody, which is what signing in was for.
+func (p Principal) Proved(r Recency, now time.Time) bool {
+	switch r {
+	case RecencyAny:
+		return true
+	case RecencyStepUp:
+		return p.Fresh(now)
+	case RecencySensitive:
+		return !p.SensitiveReauthAt.IsZero() && now.Before(p.SensitiveReauthAt)
+	}
+	return false
 }
 
 // Validate reports what is wrong with this principal, naming the field.

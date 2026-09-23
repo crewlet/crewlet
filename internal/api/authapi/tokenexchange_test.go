@@ -292,9 +292,10 @@ func TestTheSessionRouteReadsAnExchangedSession(t *testing.T) {
 			rec.Body.String())
 	}
 	var got struct {
-		Login     string    `json:"login"`
-		ExpiresAt time.Time `json:"expires_at"`
-		StepUpDue bool      `json:"step_up_due"`
+		Login              string    `json:"login"`
+		ExpiresAt          time.Time `json:"expires_at"`
+		StepUpDue          bool      `json:"step_up_due"`
+		SensitiveStepUpDue bool      `json:"sensitive_step_up_due"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -306,8 +307,11 @@ func TestTheSessionRouteReadsAnExchangedSession(t *testing.T) {
 		t.Errorf("expires_at %s, want the exchange's one-hour deadline %s",
 			got.ExpiresAt, want)
 	}
-	if got.StepUpDue {
-		t.Error("a session stepped up by construction reports a step-up due")
+	if got.StepUpDue || got.SensitiveStepUpDue {
+		t.Errorf("a session stepped up by construction reports a step-up due "+
+			"(ordinary %v, sensitive %v) — the break-glass credential must "+
+			"reach the sensitive gestures too", got.StepUpDue,
+			got.SensitiveStepUpDue)
 	}
 }
 
@@ -323,28 +327,42 @@ func TestAStepUpIsDueOnceTheProofIsStale(t *testing.T) {
 	mux := http.NewServeMux()
 	surface(t).Routes(mux)
 	for _, tc := range []struct {
-		name  string
-		stale time.Time
-		due   bool
+		name         string
+		stale        time.Time
+		sensitive    time.Time
+		due, sensDue bool
 	}{
-		{"half a window past stale", clock.Add(-window / 2), true},
-		{"half a window before stale", clock.Add(window / 2), false},
+		{"half a window past stale", clock.Add(-window / 2),
+			clock.Add(-window / 2), true, true},
+		{"half a window before stale", clock.Add(window / 2),
+			clock.Add(window / 2), false, false},
+		// THE TWO WINDOWS ARE TWO ANSWERS: a proof inside the hour and
+		// outside the quarter is fresh for one and due for the other.
+		{"inside step_up, outside step_up_sensitive", clock.Add(window / 2),
+			clock.Add(-time.Minute), false, true},
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
 		req = req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
 			ID: uuid.Must(uuid.NewV7()), Login: "jane.doe", Kind: iam.KindPerson,
 			Stage: iam.StageActive, ReauthAt: tc.stale,
+			SensitiveReauthAt: tc.sensitive,
 		}))
 		req.Header.Set("Authorization", "Bearer whatever-the-guard-resolved")
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		var got struct {
-			StepUpDue bool `json:"step_up_due"`
+			StepUpDue          bool      `json:"step_up_due"`
+			SensitiveStepUpDue bool      `json:"sensitive_step_up_due"`
+			SensitiveReauthAt  time.Time `json:"sensitive_reauth_at"`
 		}
 		_ = json.Unmarshal(rec.Body.Bytes(), &got)
-		if got.StepUpDue != tc.due {
-			t.Errorf("%s: step_up_due %v, want %v", tc.name, got.StepUpDue,
-				tc.due)
+		if got.StepUpDue != tc.due || got.SensitiveStepUpDue != tc.sensDue {
+			t.Errorf("%s: step_up_due %v sensitive %v, want %v and %v", tc.name,
+				got.StepUpDue, got.SensitiveStepUpDue, tc.due, tc.sensDue)
+		}
+		if !got.SensitiveReauthAt.Equal(tc.sensitive) {
+			t.Errorf("%s: sensitive_reauth_at %s, want the principal's %s",
+				tc.name, got.SensitiveReauthAt, tc.sensitive)
 		}
 	}
 }

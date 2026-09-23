@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -66,7 +67,10 @@ func ContextGuard(chart Chart) Guard {
 		if p.Object != nil {
 			object = p.Object(r)
 		}
-		return Decide(r.Context(), principal, p.Action, object, chart)
+		// NOW, at the request: how recently the caller proved who they
+		// are is judged at the instant they ask, against the deadlines
+		// the guard composed for this very request.
+		return Decide(r.Context(), principal, p.Action, object, chart, time.Now())
 	}
 }
 
@@ -168,13 +172,22 @@ const RetryUndecidedSeconds = 2
 //     they already hold. See the package doc.
 //   - A REFUSAL is `403 unauthorized`, carrying the rule's reason and the
 //     grants that would have admitted the caller ([RefusalDetail]).
+//   - A STALE PROOF is `403 step_up_required` — the code the sign-in surface
+//     already answers for the same fact, so a client learns ONE spelling —
+//     carrying the window it needs ([StepUpDetail]): the rule admitted the
+//     caller, and confirming who they are and replaying the request is the
+//     whole remedy, which a client can do without asking anybody.
 func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decision) {
-	if d.Unknown() {
+	switch {
+	case d.Unknown():
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, RetryUndecidedSeconds)
-		return
+	case d.Reason == ReasonStepUp:
+		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
+			StepUpDetail(d))
+	default:
+		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+			RefusalDetail(d.Reason, d.Grants))
 	}
-	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-		RefusalDetail(d.Reason, d.Grants))
 }
 
 // Handle mounts one guarded route.

@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -102,7 +103,8 @@ func TestAMachineActorCannotSatisfyAnOwnRecordCheck(t *testing.T) {
 			authz.ActionInboxMark, authz.ActionPinsSet,
 		} {
 			d := authz.Decide(t.Context(), token, action,
-				authz.Object{Kind: authz.KindPerson, Owner: id}, chartLeads)
+				authz.Object{Kind: authz.KindPerson, Owner: id}, chartLeads,
+				time.Now())
 			if d.Allowed {
 				t.Errorf("the token %q passed %s on the seat %q's record (%s)",
 					id, action, id, d.Reason)
@@ -115,7 +117,8 @@ func TestAMachineActorCannotSatisfyAnOwnRecordCheck(t *testing.T) {
 			t.Fatalf("the control %q is not a seat handle", id)
 		}
 		if d := authz.Decide(t.Context(), bare, authz.ActionInboxMark,
-			authz.Object{Kind: authz.KindPerson, Owner: id}, chartLeads); !d.Allowed {
+			authz.Object{Kind: authz.KindPerson, Owner: id}, chartLeads,
+			time.Now()); !d.Allowed {
 			t.Fatalf("the control was refused (%s), so this test cannot see "+
 				"the collision it guards against", d.Reason)
 		}

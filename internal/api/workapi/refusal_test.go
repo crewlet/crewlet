@@ -120,7 +120,7 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	plain := http.NewServeMux()
 	if err := authz.NewRouter(plain, func(req *http.Request, p authz.Policy) authz.Decision {
 		return authz.Decide(req.Context(), caller, p.Action,
-			authz.Object{Kind: authz.KindTask}, chart{})
+			authz.Object{Kind: authz.KindTask}, chart{}, time.Now())
 	}).Handle("POST /work/items", authz.Policy{Action: authz.ActionWorkCreate},
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})); err != nil {
 		t.Fatalf("mount the control: %v", err)

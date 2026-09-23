@@ -764,8 +764,13 @@ api:
     session:
       absolute: 168h          # 1h..720h (default 168h)
       rotate_after: 1h        # 5m..24h  (default 1h)
-      step_up: 1h             # 5m..24h  (default 1h)
-      step_up_sensitive: 15m  # 1m..step_up (default 15m)
+      step_up: 1h             # 5m..24h  (default 1h): how recent a proof of
+                              #   identity a config, chart, setup, credential
+                              #   or deployment write asks for
+      step_up_sensitive: 15m  # 1m..step_up (default 15m): the same for
+                              #   revealing a secret, an /iam write and
+                              #   ending every session. A token is fresh
+                              #   by construction in both
     audit:
       changes: 9600h    # 2160h..24000h (default 9600h = 400 days)
       sessions: 2160h   # 168h..9600h   (default 2160h = 90 days), and never

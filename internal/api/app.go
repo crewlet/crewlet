@@ -723,7 +723,8 @@ func (o Options) missing() error {
 // mountDeployment registers the routes that operate the DEPLOYMENT rather
 // than the company: the budget reset, the backup, the retention gestures and
 // the capacity window. Every one takes [iam.GrantFleetOperate], through the
-// authority table's [authz.ActionFleetOperate], stated where it is mounted.
+// authority table's [authz.ActionFleetOperate] for a write and
+// [authz.ActionFleetRead] for a read, stated where it is mounted.
 //
 // # They decided nothing, and the guard in front of them decides nothing either
 //
@@ -744,15 +745,33 @@ func (o Options) missing() error {
 // what the `retention` question already declares: a map of which machine
 // holds what, and the value a reanchor must echo, are not the company's
 // working state.
+//
+// # A write asks for a recent proof of identity, and a read does not
+//
+// The two verbs carry the same grant and differ in the step-up alone: every
+// write here changes what the deployment does for everybody on it, so it asks
+// for a proof inside `api.auth.session.step_up`, while the two reads — the
+// maintenance window's status and the value a reanchor must echo — change
+// nothing, and a status an operator cannot see without re-proving who they
+// are is one they stop checking. The METHOD picks the verb, because that is
+// the one fact about a route this surface already treats as its read/write
+// line (the session table's columns are keyed on it too), and a second list
+// of which patterns read would be the thing that drifts.
 func (a *App) mountDeployment(mux *http.ServeMux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(authz.NoChart{}))
-	operate := authz.Policy{Action: authz.ActionFleetOperate}
 	var failures []error
-	mount := func(pattern string, h http.HandlerFunc) {
-		if err := router.Handle(pattern, operate, h); err != nil {
+	a.deploymentRoutes(func(pattern string, h http.HandlerFunc) {
+		if err := router.Handle(pattern, deploymentPolicy(pattern), h); err != nil {
 			failures = append(failures, err)
 		}
-	}
+	})
+	return errors.Join(failures...)
+}
+
+// deploymentRoutes names every route [App.mountDeployment] mounts, through the
+// mount it is handed: separate from the router, so a walk can read the whole
+// list without standing the deployment up.
+func (a *App) deploymentRoutes(mount func(string, http.HandlerFunc)) {
 	// POSTs, and a read posture of any kind never opens them: clearing a
 	// company's spend ceiling, and copying every credential and every
 	// seat's memory to a path the caller names, are not reads.
@@ -765,7 +784,16 @@ func (a *App) mountDeployment(mux *http.ServeMux) error {
 	// and it is why the verb can run at all on a topology whose broker
 	// binds no socket. See retention.go.
 	a.mountCapacity(mount)
-	return errors.Join(failures...)
+}
+
+// deploymentPolicy is the verb one deployment route is decided under: a read
+// is [authz.ActionFleetRead] and everything else [authz.ActionFleetOperate].
+// See [App.mountDeployment] for why the method is what picks it.
+func deploymentPolicy(pattern string) authz.Policy {
+	if strings.HasPrefix(pattern, http.MethodGet+" ") {
+		return authz.Policy{Action: authz.ActionFleetRead}
+	}
+	return authz.Policy{Action: authz.ActionFleetOperate}
 }
 
 // Inbound is what the webhook edge needs that only the surrounding process

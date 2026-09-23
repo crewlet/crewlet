@@ -160,9 +160,14 @@ func (s *surface) do(t *testing.T, method, path, body string, headers map[string
 	// THE CALLER THE GUARD WOULD HAVE RESOLVED, attached the way it
 	// attaches one: every route here is decided on a grant, so a request
 	// carrying no principal is refused before it reaches the surface.
+	//
+	// FRESH IN BOTH STEP-UP WINDOWS, as the guard stamps every Tier A
+	// token: presenting it is the proof, so a write here is decided on its
+	// grant alone.
 	req = req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
 		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: iam.TokenLogin("ops"),
 		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: s.grants,
+		ReauthAt: time.Now().Add(time.Hour), SensitiveReauthAt: time.Now().Add(time.Hour),
 	}))
 	res := httptest.NewRecorder()
 	s.mux.ServeHTTP(res, req)

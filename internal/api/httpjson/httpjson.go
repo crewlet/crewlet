@@ -613,8 +613,8 @@ var codes = map[Code]string{
 		"here. Wait a little and try again.",
 	CodeSecondFactorRequired: "Enter the code from your authenticator app, or " +
 		"one of your recovery codes.",
-	CodeStepUpRequired: "This action needs you to confirm who you are. Sign " +
-		"in again to continue.",
+	CodeStepUpRequired: "This action needs you to have confirmed who you are " +
+		"recently. Confirm it, then try again.",
 	CodeSessionRevoked: "This session has ended. Sign in again.",
 	CodeBootstrapClosed: "The first-operator setup is not available on this " +
 		"deployment. Ask somebody who already has an account to invite you.",

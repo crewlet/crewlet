@@ -18,6 +18,12 @@ const (
 	// an answer — no capability would, and what is missing is a relation
 	// the chart does not hold — rather than an omission.
 	DetailGrants = "grants"
+	// DetailWindow is [Decision.Recency] on a step-up refusal: which of
+	// the two windows the verb asks a proof inside, spelled as the
+	// `api.auth.session` key that sets it (`step_up` or
+	// `step_up_sensitive`), so the word a client reads and the setting an
+	// operator tunes are one string.
+	DetailWindow = "window"
 )
 
 // RefusalDetail is the machine-readable half of a refusal the authority table
@@ -39,4 +45,22 @@ func RefusalDetail(reason Reason, grants []iam.Grant) httpjson.Detail {
 		names = append(names, string(g))
 	}
 	return httpjson.Detail{DetailReason: string(reason), DetailGrants: names}
+}
+
+// StepUpDetail is the machine-readable half of a [ReasonStepUp] refusal: the
+// reason, the window the verb asks a proof inside, and the grants the rule
+// admitted the caller on — under the same keys every refusal uses, plus the
+// one that names the window.
+//
+// WHAT A CLIENT NEEDS TO REPLAY THE REQUEST AND NOTHING ELSE. The remedy is
+// the caller's own — confirm who they are (`POST /auth/step-up`, or the
+// identity provider's re-authentication) and send the same request again — so
+// the answer names which proof is missing rather than a grant nobody is
+// missing. It deliberately does not carry the deadline the proof passed: that
+// is the session's own `reauth_at`, which `GET /auth/session` already serves,
+// and a second copy here is a second clock a screen could disagree with.
+func StepUpDetail(d Decision) httpjson.Detail {
+	detail := RefusalDetail(ReasonStepUp, d.Grants)
+	detail[DetailWindow] = string(d.Recency)
+	return detail
 }

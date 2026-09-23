@@ -14,6 +14,11 @@ import "slices"
 // premise is that naming an identity concept must not pull in a password
 // hasher — so the two numbers config reads live in the leaf, and credential
 // imports them rather than declaring a second copy nothing compares.
+//
+// [Recency] is here for the same premise one layer over: internal/authz states
+// on every rule how recently a principal must have proved who they are, and a
+// rule table naming a step-up window must not pull in the sessions that
+// measure one.
 
 // SecondFactor is whether a company REQUIRES a second factor or merely offers
 // one.
@@ -70,3 +75,51 @@ func (s SecondFactor) Requires() bool { return s != SecondFactorOptional }
 // [secrets.MinSharedTokenChars] gives: a byte count quietly passes a 12-byte
 // value that is four characters of UTF-8.
 const MinPasswordChars = 12
+
+// Recency is how recently a gesture needs whoever makes it to have PROVED who
+// they are — the step-up requirement, as a value a rule states.
+//
+// THE TWO WINDOWS ARE THE CONFIGURATION'S, and the values are spelled as its
+// keys: `step_up` is `api.auth.session.step_up` (an hour by default — the
+// ordinary administrative gestures), and `step_up_sensitive` is
+// `api.auth.session.step_up_sensitive` (fifteen minutes — the gestures that
+// hand over something that cannot be taken back: a secret's value, somebody's
+// authority, every session in the company). A refusal names the window it
+// needs by this value, so the setting an operator would tune and the word a
+// client reads are one string.
+//
+// A NAMED STRING WHOSE ZERO VALUE IS INVALID, and the zero is the one that
+// would be dangerous: read as "no proof needed", a rule somebody wrote without
+// deciding would ship a sensitive gesture open to a session proved last week.
+// So every rule in internal/authz states one of the three, and a walk there
+// refuses the zero.
+type Recency string
+
+const (
+	// RecencyAny asks for no recent proof: signing in was enough. Every
+	// read, and every gesture a seat's own tools make, is this — a seat has
+	// no keyboard to prove anything at, and the operator's MCP surface is
+	// not a step-up surface.
+	RecencyAny Recency = "any"
+
+	// RecencyStepUp asks for a proof inside `api.auth.session.step_up`: the
+	// company's configuration, its chart, its integrations, its credential
+	// store's writes, the identity directory's writes and the deployment's
+	// own controls.
+	RecencyStepUp Recency = "step_up"
+
+	// RecencySensitive asks for a proof inside
+	// `api.auth.session.step_up_sensitive`: revealing a secret's value,
+	// changing what anybody may do or how they prove it, and ending every
+	// session in the company.
+	RecencySensitive Recency = "step_up_sensitive"
+)
+
+// Recencies are the three, weakest first.
+var Recencies = []Recency{RecencyAny, RecencyStepUp, RecencySensitive}
+
+// Valid reports whether a value is one this build knows.
+func (r Recency) Valid() bool { return slices.Contains(Recencies, r) }
+
+// Demands reports whether r asks for any recent proof at all.
+func (r Recency) Demands() bool { return r.Valid() && r != RecencyAny }

@@ -125,12 +125,21 @@ type sessionResponse struct {
 	// bearer rather than a cookie — a Tier A token or a personal access
 	// token has its own lifetime and no session to end.
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
-	ReauthAt  time.Time `json:"reauth_at,omitzero"`
 
-	// StepUpDue reports whether the next sensitive action will ask this
-	// caller to confirm who they are, so a client can say so before they
-	// start rather than after.
-	StepUpDue bool `json:"step_up_due"`
+	// ReauthAt and SensitiveReauthAt are when this caller's proof of who
+	// they are stops counting for an ordinary step-up gesture
+	// (`api.auth.session.step_up`) and for a sensitive one
+	// (`step_up_sensitive`) — the two instants the authority table judges
+	// against, so a screen counting down to either counts to the refusal
+	// itself. Absent when nothing was proved.
+	ReauthAt          time.Time `json:"reauth_at,omitzero"`
+	SensitiveReauthAt time.Time `json:"sensitive_reauth_at,omitzero"`
+
+	// StepUpDue and SensitiveStepUpDue report whether the next gesture of
+	// each kind will ask this caller to confirm who they are, so a client
+	// can say so before they start rather than after.
+	StepUpDue          bool `json:"step_up_due"`
+	SensitiveStepUpDue bool `json:"sensitive_step_up_due"`
 }
 
 // Session answers who the caller is.
@@ -165,14 +174,16 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 	}
 	httpjson.Write(w, http.StatusOK, sessionResponse{
 		Person: principal.ID.String(), Login: principal.Login,
-		Seat:      principal.Seat,
-		Kind:      principal.Kind,
-		Stage:     principal.Stage,
-		Grants:    principal.Grants,
-		Colleague: principal.Colleague,
-		ExpiresAt: expires,
-		ReauthAt:  principal.ReauthAt,
-		StepUpDue: s.stepUpDue(principal),
+		Seat:               principal.Seat,
+		Kind:               principal.Kind,
+		Stage:              principal.Stage,
+		Grants:             principal.Grants,
+		Colleague:          principal.Colleague,
+		ExpiresAt:          expires,
+		ReauthAt:           principal.ReauthAt,
+		SensitiveReauthAt:  principal.SensitiveReauthAt,
+		StepUpDue:          s.stepUpDue(principal),
+		SensitiveStepUpDue: !principal.Proved(iam.RecencySensitive, s.now()),
 	})
 }
 

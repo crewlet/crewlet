@@ -336,13 +336,13 @@ type sessionAnswer struct {
 // and a second reading of it here would be a second answer to "is this peer
 // the proxy". It is called only on the paths that record something.
 //
-// ceiling and stepUp are the guard's own `api.auth.max_grants` and step-up
+// ceiling and proof are the guard's own `api.auth.max_grants` and step-up
 // window, applied to a person as they are to a token.
 //
 // tokens is the guard's Tier A entries by login, for a session exchanged from
 // one: see [tierASubjects].
 func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
-	ceiling []iam.Grant, stepUp time.Duration, client func(*http.Request) string,
+	ceiling []iam.Grant, proof proofWindows, client func(*http.Request) string,
 	tokens func(login string) (config.APIToken, bool)) sessionAnswer {
 
 	cookie := cookieOf(r)
@@ -417,14 +417,14 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// and discarding it would sign out a person whose only problem
 		// is a chart edit.
 		return sessionAnswer{
-			principal: s.principal(v, binding, ceiling, stepUp), how: iam.Resolved,
+			principal: s.principal(v, binding, ceiling, proof), how: iam.Resolved,
 			refusal: seatRefusal(binding), presented: true,
 		}
 	}
 
 	s.reissue(w, v)
 	return sessionAnswer{
-		principal: s.principal(v, binding, ceiling, stepUp), how: iam.Resolved,
+		principal: s.principal(v, binding, ceiling, proof), how: iam.Resolved,
 		presented: true,
 	}
 }
@@ -508,10 +508,10 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 // token's exchanged cookie never reaches here: the guard composes it from the
 // entry, exactly as it composes the token's bearer.
 func (s *Sessions) principal(v session.Validation, binding session.Binding,
-	ceiling []iam.Grant, stepUp time.Duration) iam.Principal {
+	ceiling []iam.Grant, proof proofWindows) iam.Principal {
 
 	person := v.Person
-	return iam.Principal{
+	p := iam.Principal{
 		// THE PERSON'S OWN ID, parsed from the bearer. A bearer that
 		// reached here verified, so the value is one this engine wrote.
 		ID:    personID(v.Bearer.Person),
@@ -536,12 +536,13 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		Grants:    intersect(union(person.Grants, v.Session.GroupGrants), ceiling),
 		Colleague: person.Colleague,
 		Stage:     person.Stage,
-		// WHEN THIS SESSION'S PROOF STOPS COUNTING. It used to be read
-		// off a person field nothing ever set, so every session was
-		// stale from its first request and no person could reach a
-		// step-up surface at all — enrolling a second factor included.
-		ReauthAt: reauthDeadline(v.Session.ProvedAt, stepUp),
 	}
+	// WHEN THIS SESSION'S PROOF STOPS COUNTING, for each window. It used
+	// to be read off a person field nothing ever set, so every session
+	// was stale from its first request and no person could reach a
+	// step-up surface at all — enrolling a second factor included.
+	proof.stamp(&p, v.Session.ProvedAt)
+	return p
 }
 
 // union is every grant in either set, once each, in the order they were first
@@ -563,14 +564,37 @@ func union(declared, carried []iam.Grant) []iam.Grant {
 	return out
 }
 
-// reauthDeadline is the instant a proof taken at provedAt stops authorising a
-// step-up surface, or the zero time — which [iam.Principal.Fresh] reads as
-// stale — for a session that proved nothing.
-func reauthDeadline(provedAt time.Time, stepUp time.Duration) time.Time {
+// proofWindows is this node's two step-up windows: `api.auth.session.step_up`
+// and `step_up_sensitive`.
+//
+// THE NODE'S OWN, applied when a principal is composed, for the ceiling's
+// reason: a session row states only WHEN its holder proved who they are, so a
+// shortened window takes effect on this node's next request with nothing
+// rewritten, and a fleet mid-rollout legally disagrees about it.
+type proofWindows struct {
+	stepUp, sensitive time.Duration
+}
+
+// windowsOf reads the two windows off the session settings, defaults applied.
+func windowsOf(s config.APISession) proofWindows {
+	return proofWindows{stepUp: s.StepUp(), sensitive: s.StepUpSensitive()}
+}
+
+// stamp gives p the two deadlines a proof taken at provedAt earns: the proof
+// plus each window.
+//
+// A ZERO provedAt STAMPS NOTHING, which [iam.Principal.Proved] reads as stale
+// in both windows: a session that proved nothing — one exchanged from no
+// person, or a row this node has not applied yet — must never read as fresh,
+// and a proof of the zero instant plus an hour would read as long stale only
+// by luck.
+func (w proofWindows) stamp(p *iam.Principal, provedAt time.Time) {
 	if provedAt.IsZero() {
-		return time.Time{}
+		p.ReauthAt, p.SensitiveReauthAt = time.Time{}, time.Time{}
+		return
 	}
-	return provedAt.Add(stepUp)
+	p.ReauthAt = provedAt.Add(w.stepUp)
+	p.SensitiveReauthAt = provedAt.Add(w.sensitive)
 }
 
 // personID parses the id a bearer carries.

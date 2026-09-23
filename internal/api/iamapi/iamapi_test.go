@@ -127,27 +127,41 @@ func (r *rig) as(p iam.Principal, method, target string, body any) answered {
 }
 
 // principals the cases act as.
+//
+// EVERY ONE PROVED WHO THEY ARE A MINUTE AGO, inside both step-up windows:
+// the directory's writes ask for a recent proof, and a case about a grant or
+// the self path must not be refused on the age of one; the step-up has cases
+// of its own.
 func administrator() iam.Principal {
-	return iam.Principal{
+	return proved(iam.Principal{
 		ID: alice, Login: "alice.admin", Kind: iam.KindPerson,
 		Stage: iam.StageActive, Seat: "founder",
 		Grants: []iam.Grant{iam.GrantPeopleManage, iam.GrantStateRead},
-	}
+	})
+}
+
+// proved gives p a proof of identity a minute old, the way the guard composes
+// a signed-in person's deadlines from their session.
+func proved(p iam.Principal) iam.Principal {
+	at := time.Now().Add(-time.Minute)
+	p.ReauthAt = at.Add(time.Hour)
+	p.SensitiveReauthAt = at.Add(15 * time.Minute)
+	return p
 }
 
 func auditor() iam.Principal {
-	return iam.Principal{
+	return proved(iam.Principal{
 		ID:    uuid.MustParse("018f3a9c-0000-7000-8000-0000000000c3"),
 		Login: "carol.audit", Kind: iam.KindPerson, Stage: iam.StageActive,
 		Grants: []iam.Grant{iam.GrantAuditRead},
-	}
+	})
 }
 
 func ordinary() iam.Principal {
-	return iam.Principal{
+	return proved(iam.Principal{
 		ID: bob, Login: "bob.sre", Kind: iam.KindPerson,
 		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead},
-	}
+	})
 }
 
 type fakeDirectory struct {

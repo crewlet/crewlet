@@ -183,6 +183,21 @@ var AllGrants = []Grant{
 	GrantSandboxRun,
 }
 
+// PersonPresentGrants are the grants whose gestures need a PERSON present, and
+// which a machine token therefore never carries, whatever its owner holds:
+// revealing a credential's value, and deciding who may do anything at all.
+//
+// HERE, IN THE LEAF, because two packages that cannot see each other both have
+// to enforce it: internal/iamdomain refuses them at a token's mint, and
+// internal/iam/credential drops them from what a token carries on every
+// request. The second is not redundant — a machine token is fresh by
+// construction in both step-up windows ([Recency]), which is safe only while
+// the gestures behind the sensitive window are ones no token can reach, and a
+// rule that held only at the mint would be a rule a row from anywhere else
+// could step round. A token is what an attacker holding a pipeline's
+// environment already has.
+var PersonPresentGrants = []Grant{GrantSecretRead, GrantPeopleManage}
+
 // grantAccess classifies every grant. A map rather than a string split, for
 // the reason [Grant] gives; and every member of [AllGrants] appears, which
 // grant_test.go asserts in both directions so a new grant cannot be added

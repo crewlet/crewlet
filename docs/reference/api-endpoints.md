@@ -171,7 +171,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential. Answers the address it is for, who sent it, the password floor, and a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill. Absent, redeemed and expired are one `410`, and every `410` on either invitation route is a **failed attempt counted against the caller's source** — the id in the link is the credential, so walking ids is guessing at one, and it is turned away at the same ceiling as a guessed password |
 | `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and reach whoever issued it decided — the enrolment names the invitation as its authority and the record refuses anything it does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{login, name, password}`, and the login is **required** — every person enrols with one, the name their changes are recorded under while they hold no seat. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login or address somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. Only a record that could not land is `503`. **Retry until it lands**: the person a redemption creates is derived from the invitation, so every attempt names one person and a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. `POST /auth/bootstrap` takes `{code, login, email, name, password}`, accepts the code only while the log holds it outstanding (not withdrawn, spent or past its 24 hours), derives the founder from the code the same way, and answers its enrolment the same way |
 | `GET` | `/auth/oidc/start` `/auth/oidc/callback` | The identity-provider round trip, with PKCE and a sealed 10-minute flight cookie so a login begun on one node finishes on another. **Unguarded** — a browser following a redirect carries nothing this engine issued. **Absent** where no provider is configured. Linking is explicit: a subject this estate holds no credential for is refused, never provisioned. A provider whose discovery cannot be reached is `503` with a `Retry-After`; a start this node's own configuration cannot make — a provider block that does not validate, no keyring — is `500`, because waiting does not fix it |
-| `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage, grants, colleague level and whether the next sensitive action will ask you to confirm your identity |
+| `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage, grants and colleague level, and the two instants your proof of identity stops counting — `reauth_at` for an ordinary [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture and `sensitive_reauth_at` for a sensitive one — with `step_up_due` and `sensitive_step_up_due` saying whether the next one of each will ask you to confirm it |
 | `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's grants cut to the ceiling, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request, and so do `POST /auth/logout/all` from it and `crewlet iam invalidate-all` |
 | `POST` | `/auth/step-up` | Confirm who you are on a session that is already valid. The only route here that is **both guarded and throttled**: the caller is known, and unbounded retries against a known person is a password oracle with the enumeration already done. It answers a **fresh session cookie** and **ends the session it replaces** first — a close that does not land is `503` with a `Retry-After` and opens nothing, and a presented session that is no longer live is `401`. The replacement confirms the sign-in rather than repeating it, so it keeps the replaced session's absolute deadline and the grants its identity provider's groups conferred |
 | `POST` | `/auth/totp` | Enrol a second factor. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a step-up. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled" |
@@ -340,7 +340,8 @@ table made the refusal — every question, the policy every `/chart/*` and
 
 `reason` is the authority table's own word for the rule that decided —
 `no_grant`, `not_self`, `not_lead`, `not_author`, `stage`, `seat_refused`,
-`unnamed` — and `grants` are the capabilities any **one** of which would have
+`unnamed`, and `step_up` on the one refusal the caller clears themselves
+([below](#some-gestures-ask-how-recently-you-proved-who-you-are)) — and `grants` are the capabilities any **one** of which would have
 admitted this caller for this object. An empty `grants` is an answer rather
 than an omission: no capability would, and what is missing is a relation the
 chart does not hold. The [human write surface](#the-human-write-surface)
@@ -367,6 +368,51 @@ told they lead nobody goes looking for an authority they already hold.
 A question asked on the socket is decided by the same declaration the REST
 route is — one registry, both transports — so there is no way round a grant by
 choosing a channel.
+
+### Some gestures ask how recently you proved who you are
+
+A session lives for days, so the gestures that change what a company *is* ask
+for a proof of identity taken recently — the **step-up**. It is decided by the
+same authority table as the grant, on the same row, so a REST route and a
+socket question about one verb cannot disagree, and it is asked only **after**
+the grant or relation admitted you: a caller who could never make the gesture
+is told what they lack, not sent to confirm who they are first.
+
+| Window | Setting (default) | What asks for it |
+|---|---|---|
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` and `/chart*` (a lead editing their own unit included), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, and the deployment's own controls: `POST /budgets/reset`, `POST /backup` and every `POST /work/retention*` |
+| `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a value (`GET /secrets/{name}?reveal=true`), every `/iam` write that changes who holds authority or how they prove it — creating, editing or removing a person, an invitation, a second-factor reset, the bootstrap code, minting or revoking a credential — and `POST /iam/invalidate-all` |
+| none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) and the import ledger a client polls (`GET /chart/imports*`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions`), which is the first thing to do on finding somebody else in your account; and every work and knowledge verb — the tools, `/operator/mcp` and the human write surface |
+
+A proof that is too old is **`403 step_up_required`**, the code the sign-in
+surface answers for the same fact, carrying the window it needs so a client can
+ask the person to confirm who they are (`POST /auth/step-up`, or signing in
+again through the identity provider) and send the same request again:
+
+```json
+{
+  "error": "step_up_required",
+  "message": "…",
+  "reason": "step_up",
+  "window": "step_up_sensitive",
+  "grants": ["secrets:read"]
+}
+```
+
+`window` is spelled as the setting that sizes it. `GET /auth/session` answers
+the two deadlines the table judges against (`reauth_at`,
+`sensitive_reauth_at`) and whether each is already due, so a screen can say so
+before somebody starts rather than after they submit.
+
+**A credential with nobody at a keyboard is fresh by construction**, in both
+windows: a Tier A token (and a session exchanged from one), a personal access
+token or service token, and the development principal. There is nothing else
+any of them could present, and the break-glass credential has to reach a
+sensitive gesture on the day the identity provider is down. What bounds a
+machine token instead is its grants: `secrets:read` and `people:manage` — the
+two grants behind the sensitive gestures that need a person present — can never
+be minted onto one. No tool asks for a proof: a seat has no keyboard, and
+`/operator/mcp` is not a step-up surface.
 
 **And a node that cannot read identity answers `503`, never `403`.** The
 principal a node could not check and the principal that carries nothing are
@@ -461,6 +507,11 @@ A body refused on the second question answers exactly as a route refused at its
 pattern does: `403 unauthorized` with `reason` and the `grants` that would have
 admitted it — here `["config:write"]` — and a `503 unavailable` with a
 `Retry-After` when this node cannot decide.
+
+**Every chart write asks for a proof inside `step_up`**, a lead's edit of their
+own team included: it changes what the company executes. The reads — the import
+ledger a client polls among them — ask for none. See
+[Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are).
 
 Reads split the same way and **default to stripped**. A caller asks for the
 runtime half with `?runtime=true` and gets it only if they also hold
@@ -595,6 +646,14 @@ list and nothing ever will be.
 | `GET /iam/check` | `people:manage` or `audit:read` |
 | `POST /iam/bootstrap-code` | `people:manage`; refused once anybody can administer this company |
 | `GET /iam/audit` | `audit:read` |
+
+**Every write here but one asks for a proof inside `step_up_sensitive`** —
+fifteen minutes by default; see
+[Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are).
+Each one changes who holds authority or how they prove it, hands over a bearer
+value, or cannot be taken back. The one that asks for none is ending your own
+sessions, which is the first thing somebody does on finding an intruder in
+their account — and which ends every machine token they hold too.
 
 **The object a route names is a person ID, never a login.** The identity
 estate keys on an id precisely because a person changes their login, so a self
@@ -805,7 +864,7 @@ quiet directory from a lagging node.
 
 ### `/config/*` — live config management (auth-gated)
 
-Every `/config/*` route takes a grant: `config:read` for the reads below and `config:write` for the writes, whatever the credential — a Tier A token, a session, or the development principal. A caller without it is refused `403 unauthorized` naming the grant (see [Which grant a route needs](#which-grant-a-route-needs)). See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
+Every `/config/*` route takes a grant: `config:read` for the reads below and `config:write` for the writes, whatever the credential — a Tier A token, a session, or the development principal. A caller without it is refused `403 unauthorized` naming the grant (see [Which grant a route needs](#which-grant-a-route-needs)). A write also asks for a proof of identity inside `step_up`, and a session whose proof is older is refused `403 step_up_required` (see [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)). See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
 
 **Read-only:**
 
@@ -1055,8 +1114,8 @@ changed. Every node serves them, because every node opens the fleet's
 | Route | Grant |
 |---|---|
 | `GET /secrets`, `GET /secrets/{name}` | `config:read` |
-| `GET /secrets/{name}?reveal=true` | `config:read` **and** `secrets:read` — decided before the store is read, so a caller without the second is refused alike for a name that exists and one that does not |
-| `PUT /secrets/{name}`, `DELETE /secrets/{name}`, `POST /secrets/rekey` | `secrets:write` |
+| `GET /secrets/{name}?reveal=true` | `config:read` **and** `secrets:read`, and a proof of identity inside `step_up_sensitive` — decided before the store is read, so a caller without the second is refused alike for a name that exists and one that does not |
+| `PUT /secrets/{name}`, `DELETE /secrets/{name}`, `POST /secrets/rekey` | `secrets:write`, and a proof inside `step_up` |
 | `GET /setup/integrations`, `GET /setup/integrations/{kind}`, the two `runs` reads | `config:read` |
 | `POST /setup/integrations/{kind}/inputs` | `config:write` — and `secrets:write` as well when the submission carries a credential, supplied or to be minted |
 | `DELETE /setup/integrations/{kind}`, `POST /setup/integrations/{kind}/check` | `config:write` |
@@ -1065,6 +1124,10 @@ changed. Every node serves them, because every node opens the fleet's
 **Connecting is `config:write` and `secrets:write`.** `/setup` performs no
 write of its own — a credential goes through the store `/secrets` serves — so
 a caller who could not write a credential there cannot write one here either.
+Every `/setup` and `/secrets` write asks for a proof of identity inside
+`step_up` as well, and a reveal one inside `step_up_sensitive`; the reads ask
+for none (see
+[Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)).
 
 | Method | Path | Description |
 |--------|------|-------------|

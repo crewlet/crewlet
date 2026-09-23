@@ -167,12 +167,15 @@ func (g *Guard) token(r *http.Request, presented credential.Token,
 		// ceiling on this request.
 		Grants:    intersect(row.EffectiveGrants(), g.ceiling),
 		Colleague: row.EffectiveColleague(),
-		// STEPPED UP BY CONSTRUCTION for the grants it carries, as every
-		// non-interactive credential is: there is nothing else it could
-		// present, and the two grants that need a person present can
-		// never be minted onto one.
-		ReauthAt: now.Add(g.stepUp),
 	}
+	// STEPPED UP BY CONSTRUCTION for the grants it carries, in both windows,
+	// as every non-interactive credential is: there is nothing else it could
+	// present. The sensitive window is reachable only through what the token
+	// carries, and the two grants that need a person present — revealing a
+	// secret's value and changing who holds authority — can never be minted
+	// onto one (internal/iamdomain refuses them at the mint, and it is
+	// asserted there).
+	g.proof.stamp(&p, now)
 	ctx = context.WithValue(ctx, tokenKey{}, presented.ID)
 	if owner.Seat == "" {
 		return r.WithContext(iam.WithPrincipal(ctx, p)), nil

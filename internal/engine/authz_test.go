@@ -3,6 +3,7 @@ package engine_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -44,7 +45,8 @@ func TestAChartAuthorityWithNoCompanyIsUnknownRatherThanFalse(t *testing.T) {
 	// colleague write now and reads no chart at all: adding a label is
 	// open to every seat, and only the lead-only facets ask a relation.
 	d := authz.Decide(t.Context(), leadPrincipal("cto"), authz.ActionProjectPolicy,
-		authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}, chart)
+		authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}, chart,
+		time.Now())
 	if !d.Unknown() {
 		t.Errorf("a node with no company decided %v (%q) rather than "+
 			"reporting that it cannot tell", d.Allowed, d.Reason)

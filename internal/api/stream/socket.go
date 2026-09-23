@@ -571,7 +571,7 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 	seat string) (httpjson.Code, *Refused, bool) {
 
 	d := authz.Decide(ctx, principal, authz.ActionPersonRead,
-		authz.Object{Kind: authz.KindPerson, Owner: seat}, w.chart)
+		authz.Object{Kind: authz.KindPerson, Owner: seat}, w.chart, time.Now())
 	switch {
 	case d.Unknown():
 		log.InfoContext(ctx, "stream_watch_undecidable", "login", principal.Login,

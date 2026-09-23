@@ -202,7 +202,8 @@ func (s Sources) mayRead(ctx context.Context, principal iam.Principal,
 	action authz.Action, handle string) error {
 
 	d := authz.Decide(ctx, principal, action,
-		authz.Object{Kind: authz.KindPerson, ID: handle, Owner: handle}, s.Chart)
+		authz.Object{Kind: authz.KindPerson, ID: handle, Owner: handle}, s.Chart,
+		s.clock())
 	switch {
 	case d.Unknown():
 		// THIS NODE COULD NOT TELL, which a surface renders as 503 and

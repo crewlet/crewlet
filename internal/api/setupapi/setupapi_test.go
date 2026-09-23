@@ -312,9 +312,12 @@ func (s *surface) as(req *http.Request) *http.Request {
 	if grants == nil {
 		grants = iam.AllGrants
 	}
+	// FRESH IN BOTH STEP-UP WINDOWS, as the guard stamps every Tier A
+	// token, so a case here is decided on its grants alone.
 	return req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
 		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: iam.TokenLogin("ops"),
 		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: grants,
+		ReauthAt: time.Now().Add(time.Hour), SensitiveReauthAt: time.Now().Add(time.Hour),
 	}))
 }
 

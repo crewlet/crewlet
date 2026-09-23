@@ -108,8 +108,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// THE FLEET'S OWN GRANT, not the directory's. sessions.go argues it:
 	// a restore is run by whoever runs the deployment, and requiring
 	// people:manage as well would hand every SRE the grant that can grant.
+	// ITS OWN VERB beside the deployment's other controls, because it asks
+	// for the SENSITIVE window: it signs out everybody, irreversibly.
 	mount("POST /iam/invalidate-all",
-		at(authz.ActionFleetOperate), s.PostInvalidateAll)
+		at(authz.ActionSessionInvalidate), s.PostInvalidateAll)
 	mount("GET /iam/check", at(authz.ActionDirectoryRead), s.GetCheck)
 	mount("POST /iam/bootstrap-code",
 		at(authz.ActionDirectoryWrite), s.PostBootstrapCode)

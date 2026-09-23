@@ -121,18 +121,17 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 		Kind:      iam.KindMachine,
 		Grants:    intersect(entry.Grants, g.ceiling),
 		Colleague: entry.Level(),
-		// PRESENTING THE TOKEN IS THE PROOF, so it is fresh for the
-		// ordinary step-up window.
-		//
-		// There is nothing else it could present: a Tier A token has no
-		// second factor, no session and no person behind it. A
-		// credential that could never be fresh would be one that could
-		// never reach a sensitive gesture — which is precisely the job
-		// break-glass exists for, on the day the identity provider is
-		// down and an administrator is locked out.
-		ReauthAt: now.Add(g.stepUp),
-		Stage:    iam.StageActive,
+		Stage:     iam.StageActive,
 	}
+	// PRESENTING THE TOKEN IS THE PROOF, so it is fresh for BOTH windows:
+	// the sensitive one included.
+	//
+	// There is nothing else it could present: a Tier A token has no second
+	// factor, no session and no person behind it. A credential that could
+	// never be fresh would be one that could never reach a sensitive gesture
+	// — which is precisely the job break-glass exists for, on the day the
+	// identity provider is down and an administrator is locked out.
+	g.proof.stamp(&p, now)
 	// A BOUND CREDENTIAL ACTS AS ITS SEAT, which is the one thing this
 	// translation is not blunt about. The binding is the IDENTITY
 	// DIRECTORY's: a token enrolled there as a machine under its own
@@ -282,7 +281,7 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 		return r.WithContext(withTierA(ctx, entry, true)), refusal
 	}
 	if g.sessions != nil {
-		answer := g.sessions.resolve(w, r, g.ceiling, g.stepUp, g.Client,
+		answer := g.sessions.resolve(w, r, g.ceiling, g.proof, g.Client,
 			g.tokenByLogin)
 		if answer.presented {
 			if answer.tierA != nil && answer.how == iam.Resolved {

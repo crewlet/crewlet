@@ -116,6 +116,61 @@ func TestAZeroReauthDeadlineIsStaleNotEternal(t *testing.T) {
 	}
 }
 
+// EACH RECENCY READS ITS OWN WINDOW, and the sensitive one is not the ordinary
+// one relabelled.
+//
+// The case that matters is the middle row: a proof forty minutes old is inside
+// `step_up` and outside `step_up_sensitive`, so an ordinary gesture proceeds
+// and revealing a secret asks again. A method that read ReauthAt for both would
+// pass every other row here and reveal secrets on an hour-old proof.
+func TestEachRecencyReadsItsOwnWindow(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	proved := func(age time.Duration) Principal {
+		at := now.Add(-age)
+		return Principal{ReauthAt: at.Add(time.Hour),
+			SensitiveReauthAt: at.Add(15 * time.Minute)}
+	}
+	for _, tc := range []struct {
+		name      string
+		p         Principal
+		any, step bool
+		sensitive bool
+	}{
+		{"a proof a minute old", proved(time.Minute), true, true, true},
+		{"a proof forty minutes old", proved(40 * time.Minute), true, true, false},
+		{"a proof two hours old", proved(2 * time.Hour), true, false, false},
+		{"nothing ever proved", Principal{}, true, false, false},
+	} {
+		if got := tc.p.Proved(RecencyAny, now); got != tc.any {
+			t.Errorf("%s: any = %v, want %v", tc.name, got, tc.any)
+		}
+		if got := tc.p.Proved(RecencyStepUp, now); got != tc.step {
+			t.Errorf("%s: step_up = %v, want %v", tc.name, got, tc.step)
+		}
+		if got := tc.p.Proved(RecencySensitive, now); got != tc.sensitive {
+			t.Errorf("%s: step_up_sensitive = %v, want %v", tc.name, got, tc.sensitive)
+		}
+	}
+	// A RECENCY THIS BUILD CANNOT NAME IS NOT PROVED, however fresh the
+	// proof — a newer peer's rule must not open a door here.
+	for _, r := range []Recency{"", "step_up_paranoid"} {
+		if proved(0).Proved(r, now) {
+			t.Errorf("%q reads as proved on a proof taken this instant", r)
+		}
+		if r.Valid() || r.Demands() {
+			t.Errorf("%q reports itself a recency this build knows", r)
+		}
+	}
+	for _, r := range Recencies {
+		if !r.Valid() {
+			t.Errorf("%q is declared and reports itself invalid", r)
+		}
+		if got, want := r.Demands(), r != RecencyAny; got != want {
+			t.Errorf("%q.Demands() = %v, want %v", r, got, want)
+		}
+	}
+}
+
 // TestOnlyAnActiveStageMayAct pins the allowlist. A denylist would have
 // admitted a stage a newer peer invented, which is the direction that cannot
 // be walked back.

@@ -89,6 +89,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -288,7 +289,7 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 	if how == iam.Unknown {
 		d = authz.Decision{Err: iam.Reason(r.Context())}
 	} else {
-		d = authz.Decide(r.Context(), principal, action, object, s.chart)
+		d = authz.Decide(r.Context(), principal, action, object, s.chart, time.Now())
 	}
 	if d.Unknown() || !d.Allowed {
 		s.refuseDecision(w, r, action, d)

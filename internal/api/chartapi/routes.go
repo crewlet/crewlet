@@ -68,8 +68,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("POST /chart/units/{key}/rename", at(authz.ActionChartRename), s.renameUnit)
 	mount("POST /chart/seats/{handle}/rename", at(authz.ActionChartRename), s.renameSeat)
 	mount("POST /chart/import", at(authz.ActionChartImport), s.postImport)
-	mount("GET /chart/imports", at(authz.ActionChartImport), s.getImports)
-	mount("GET /chart/imports/{revision}", at(authz.ActionChartImport), s.getImport)
+	// THE IMPORT LEDGER IS READ UNDER ITS OWN VERB: the importer's grant,
+	// and no step-up — a client polling whether its import landed is
+	// reading, and a poll that began inside the hour must not start
+	// failing when the hour ends.
+	mount("GET /chart/imports", at(authz.ActionChartImportRead), s.getImports)
+	mount("GET /chart/imports/{revision}", at(authz.ActionChartImportRead), s.getImport)
 	mount("GET /chart/check", at(authz.ActionChartRead), s.getCheck)
 	// THE WHOLE AUTHORED DOCUMENT, at the grant that reads the company's
 	// configuration rather than the one that reads its chart. It is a

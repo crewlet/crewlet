@@ -155,7 +155,7 @@ func TestEveryGrantIsAskedForBySomeVerb(t *testing.T) {
 	for _, a := range authz.Actions() {
 		for _, g := range iam.AllGrants {
 			d := authz.Decide(t.Context(), grantedOnly(g), a,
-				authz.Object{Kind: authz.KindCompany}, authz.NoChart{})
+				authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
 			if d.Allowed && d.Reason == authz.ReasonGrant {
 				asked[g] = true
 			}
@@ -168,7 +168,7 @@ func TestEveryGrantIsAskedForBySomeVerb(t *testing.T) {
 		for _, a := range authz.Actions() {
 			for _, g := range iam.AllGrants {
 				d := authz.Decide(t.Context(), grantedOnly(g), a,
-					authz.Object{Kind: kind}, authz.NoChart{})
+					authz.Object{Kind: kind}, authz.NoChart{}, decidedAt)
 				if d.Allowed && d.Reason == authz.ReasonGrant {
 					asked[g] = true
 				}
@@ -295,7 +295,7 @@ func TestAnUndecidableRequestIsNotAForbiddenOne(t *testing.T) {
 func TestTheRoutersOwnRefusalIsTheEnvelope(t *testing.T) {
 	t.Parallel()
 	refused := authz.Decide(t.Context(), grantedOnly(iam.GrantStateRead),
-		authz.ActionConfigWrite, authz.Object{Kind: authz.KindCompany}, authz.NoChart{})
+		authz.ActionConfigWrite, authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
 	if refused.Allowed || refused.Unknown() {
 		t.Fatalf("the fixture decision was %+v, want a plain refusal", refused)
 	}

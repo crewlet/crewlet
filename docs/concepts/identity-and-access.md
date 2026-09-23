@@ -527,8 +527,9 @@ else.
 
 ## Sessions go stale, and an unset deadline is stale
 
-Every principal carries the instant after which its proof of identity no longer
-holds, and **an unset deadline is treated as already stale, not as eternal**.
+Every principal carries the two instants after which its proof of identity no
+longer holds — one for each [step-up window](#some-gestures-ask-how-recently-you-proved-who-you-are)
+— and **an unset deadline is treated as already stale, not as eternal**.
 The two readings are one keystroke apart and only one of them fails safe: a
 deadline nobody set is a session nobody bounded, and reading it as "never
 expires" turns a field somebody forgot to fill in into a credential that
@@ -956,7 +957,7 @@ because each is a row in a domain that **lags independently**.
 
 | What this node's rows say about the session | Reads | Writes | Step-up surfaces |
 |---|---|---|---|
-| Signature valid, rotation index current or in overlap, row present, the row's epoch equals the bearer's and the person's, generation current, both deadlines unexpired | serve | serve | serve if `reauth_at` is current |
+| Signature valid, rotation index current or in overlap, row present, the row's epoch equals the bearer's and the person's, generation current, both deadlines unexpired | serve | serve | serve if the proof is inside the window the gesture asks for; otherwise `403 step_up_required` |
 | Row ended, the person's epoch ahead of the bearer's, the person suspended, or the generation moved | 401 `session_revoked` | 401 | 401 |
 | Rotation index ahead of the window past the overlap | 401, and the epoch bump is published | 401 | 401 |
 | Row absent, and this node's iam position covers the bearer's start position | 401 `session_revoked` | 401 | 401 |
@@ -973,11 +974,13 @@ because each is a row in a domain that **lags independently**.
 | Seat absent, and this node's chart position is below the binding's, chart applier lag under 60 s | 503 `identity_unavailable` naming the chart |
 | The chart applier stalled past 60 s, or the view is not built | 503 |
 
-**`reauth_at` is the session's own proof plus `step_up`.** Every session a
+**`reauth_at` is the session's own proof plus `step_up`**, and
+`sensitive_reauth_at` the same proof plus `step_up_sensitive`. Every session a
 sign-in opens — a password and its second factor, an identity provider's
 token, a redeemed invitation, the bootstrap code, a step-up — records the
-instant it was proved on its row, and the guard composes the deadline from
-that and this node's `api.auth.session.step_up` at decision time. Proof is a
+instant it was proved on its row, and the guard composes both deadlines from
+that and this node's two windows at decision time — which of them a gesture
+asks for is [the authority table's](#some-gestures-ask-how-recently-you-proved-who-you-are). Proof is a
 fact about one sign-in rather than about the person, so a proof on a laptop
 says nothing about a phone signed in last week, and a step-up re-proves by
 opening a new session rather than by moving a field. That new session **ends
@@ -1298,6 +1301,49 @@ something sends them to go and ask for an authority they already hold.
 
 The admin grant is checked *before* the chart on every rule that has one, so an
 operator is never told "I cannot tell" by a node that is merely lagging.
+
+### Some gestures ask how recently you proved who you are
+
+A session lives for days and a laptop is left unlocked, so the gestures that
+change what a company *is* ask for a proof of identity taken recently rather
+than on Monday — the **step-up**. Every row of the table states how recent a
+proof its verb asks for, and there are three answers:
+
+| Window | Sized by | Asked by |
+|---|---|---|
+| none | — | Every read; every work and knowledge verb; ending your own sessions |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration and chart writes (a lead editing their own team included), connecting an integration, writing a credential, and the deployment's own controls — a budget reset, a backup, the retention and capacity gestures |
+| `step_up_sensitive` | `api.auth.session.step_up_sensitive` (15 minutes) | Revealing a secret's value; every identity-directory write that changes who holds authority or how they prove it, hands over a bearer value or cannot be taken back — enrolling, editing or removing somebody, an invitation, a second-factor reset, the bootstrap code, minting or revoking a credential; and ending every session in the company |
+
+It is decided **on the row**, beside the grant, for the same reason the grant
+is: a REST route and a tool asking about one verb get one answer. It used to be
+a setting nothing read — the sign-in surface recorded when a session proved
+who its holder was, and no surface outside it ever asked — so a cookie from last
+week reached every one of these. Every row states its window, and a row that
+states none is refused by a check in the engine's own build: read as "no proof
+needed", it would be a sensitive verb shipped open to anybody's week-old session.
+
+The proof is asked **after** the rule admits you. Somebody who could never make
+the gesture is told what they lack, rather than sent to confirm who they are
+only to be refused by a rule the confirmation never changes. A proof that is too
+old is `403 step_up_required` naming the window it needs, and the remedy is the
+caller's own: confirm who you are (`POST /auth/step-up` with your password and
+second factor, or signing in again through the identity provider) and send the
+same request again.
+
+What counts as having proved is a fact about the **credential**. A session
+proved when it signed in or stepped up, and each node composes the two
+deadlines from that instant and its own two windows on every request, so a
+shortened window takes effect at once. A credential with nobody at a keyboard —
+a Tier A token and the session exchanged from one, a personal access or
+service token, the development principal — is **fresh by construction** in both
+windows, because there is nothing else it could ever present, and the
+break-glass credential has to reach a sensitive gesture on the day the identity
+provider is down. What bounds a machine token instead is what it carries:
+`secrets:read` and `people:manage`, the two grants behind the gestures that need
+a person present, can never be minted onto one. And **no tool** asks for a
+proof — a seat has no keyboard, and the operator's assistant's surface is not a
+step-up surface — which the build checks too.
 
 ### Route policy travels with the route
 

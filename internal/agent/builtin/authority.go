@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -107,7 +108,7 @@ func Decide(chart authz.Chart) Authorizer {
 				ErrUnauthenticated, action)
 		}
 		return DecisionError(action,
-			authz.Decide(ctx, principal, action, object, chart))
+			authz.Decide(ctx, principal, action, object, chart, time.Now()))
 	}
 }
 

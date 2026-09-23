@@ -115,6 +115,30 @@ func TestAPresentedTokenIsDecidedByTheTable(t *testing.T) {
 	}
 }
 
+// A TOKEN NEVER CARRIES A GRANT THAT NEEDS A PERSON PRESENT, WHATEVER ITS ROW
+// SAYS.
+//
+// The mint refuses `secrets:read` and `people:manage`, and this is the half the
+// request path relies on: a token is fresh by construction in both step-up
+// windows, which is safe only while no token reaches the gestures behind the
+// sensitive one. A row carrying one — from a peer whose decide did not refuse
+// it — whose owner holds it too is the case that matters, because the owner
+// check alone would let it through. Mutation: drop the filter and the reveal
+// grant is carried.
+func TestATokenNeverCarriesAGrantThatNeedsAPersonPresent(t *testing.T) {
+	t.Parallel()
+	token, verifier := mintToken(t, 5)
+	row := liveRow(token, verifier)
+	row.Grants = append([]iam.Grant{iam.GrantStateRead},
+		iam.PersonPresentGrants...)
+	row.Owner.Grants = iam.AllGrants
+	if got := row.EffectiveGrants(); !slices.Equal(got,
+		[]iam.Grant{iam.GrantStateRead}) {
+		t.Errorf("a token carries %v, and %v need a person present",
+			got, iam.PersonPresentGrants)
+	}
+}
+
 // A TOKEN CARRIES WHAT ITS OWNER STILL HOLDS, AND REACHES NO FURTHER THAN
 // THEY DO.
 //

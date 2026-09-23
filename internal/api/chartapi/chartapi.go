@@ -177,7 +177,7 @@ func (s *Service) guard(r *http.Request, p authz.Policy) authz.Decision {
 	if p.Object != nil {
 		object = p.Object(r)
 	}
-	return authz.Decide(r.Context(), principal, p.Action, object, s.chart)
+	return authz.Decide(r.Context(), principal, p.Action, object, s.chart, s.now())
 }
 
 // report is one evaluation over what this node is running.
@@ -241,7 +241,9 @@ type Options struct {
 	// and is why the engine always supplies one.
 	Fleet Fleet
 
-	// Now is injectable so a test can pin an operation id's timestamp.
+	// Now is injectable so a test can pin an operation id's timestamp —
+	// and it is the instant a write's step-up is judged at, since how
+	// recently the caller proved who they are is decided when they ask.
 	Now func() time.Time
 }
 

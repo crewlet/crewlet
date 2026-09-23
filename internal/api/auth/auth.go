@@ -258,9 +258,10 @@ type Guard struct {
 	// [Guard.principalFor].
 	ceiling []iam.Grant
 
-	// stepUp is `api.auth.session.step_up`, which is how long presenting
-	// a credential authorises an administrative gesture.
-	stepUp time.Duration
+	// proof is `api.auth.session.step_up` and `step_up_sensitive`: how long
+	// a proof of identity authorises an administrative gesture and a
+	// sensitive one. See [proofWindows].
+	proof proofWindows
 
 	// now is the clock, injectable so a case can pin what a principal's
 	// freshness is measured against.
@@ -343,7 +344,7 @@ func New(b *config.Bootstrap) *Guard {
 	}
 	return &Guard{
 		tokens: tokens, ceiling: auth.MaxGrants,
-		stepUp: auth.Session.StepUp(), now: time.Now,
+		proof: windowsOf(auth.Session), now: time.Now,
 		clients: NewClients(b),
 	}
 }

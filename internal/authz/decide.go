@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -189,7 +190,14 @@ var Classes = []Class{
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the grant cannot: an operator holding
 // fleet:operate must not be told "I cannot tell" by a node that is behind.
-func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Chart) Decision {
+//
+// AND THE PROOF LAST, at now: a verb whose row asks for a recent proof of
+// identity refuses an ADMITTED principal whose proof is older than that
+// window ([ReasonStepUp], naming the window in [Decision.Recency]). Last,
+// because every earlier answer is one a fresher proof would not change.
+func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Chart,
+	now time.Time) Decision {
+
 	if !p.Stage.MayAct() {
 		return Decision{Reason: ReasonStage}
 	}
@@ -204,6 +212,22 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	if r.humanOnly && p.Kind == iam.KindSeat {
 		return Decision{Reason: ReasonSeatRefused}
 	}
+	d := decideClass(ctx, p, r, o, chart)
+	// THE PROOF LAST, and only over an ADMISSION: a refusal is already
+	// the answer, and an unknown is already "ask me again". See the
+	// package doc and [rule.recency].
+	if d.Unknown() || !d.Allowed || p.Proved(r.recency, now) {
+		return d
+	}
+	return Decision{Reason: ReasonStepUp, Recency: r.recency, Grants: d.Grants}
+}
+
+// decideClass is the class half of [Decide]: the one rule a row names, asked
+// of this principal and this object, with every precondition [Decide] owns
+// already settled.
+func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
+	chart Chart) Decision {
+
 	switch r.class {
 	case ClassRead:
 		return granted(p, iam.GrantStateRead)

@@ -192,9 +192,22 @@ func nimbus() chart.Chart {
 // leadOf is a person acting as the seat that leads `engineering`, holding NO
 // capability at all — which is the ordinary state of somebody who runs a team
 // and does not hold the deployment.
+//
+// PROVED A MINUTE AGO, inside both step-up windows: every write here asks for
+// a recent proof, and a case that is about the lead relation or a grant must
+// not be refused on the age of one; the step-up has its own case.
 func leadOf(grants ...iam.Grant) iam.Principal {
-	return iam.Principal{ID: uuid.New(), Login: "jane.doe", Seat: "cto",
-		Kind: iam.KindPerson, Stage: iam.StageActive, Grants: grants}
+	return proved(iam.Principal{ID: uuid.New(), Login: "jane.doe", Seat: "cto",
+		Kind: iam.KindPerson, Stage: iam.StageActive, Grants: grants})
+}
+
+// proved gives p a proof of identity a minute old, the way the guard composes
+// a signed-in person's deadlines from their session.
+func proved(p iam.Principal) iam.Principal {
+	at := time.Now().Add(-time.Minute)
+	p.ReauthAt = at.Add(time.Hour)
+	p.SensitiveReauthAt = at.Add(15 * time.Minute)
+	return p
 }
 
 // nobody is what an unauthenticated request resolves to.
@@ -369,8 +382,8 @@ func TestAWriteCarryingTheRuntimeHalfIsDecidedAsAnOperatorWrite(t *testing.T) {
 			`{"name":"Engineering","runtime":{"mcp_env":{"gitlab":{"T":"${X}"}}}}`,
 			http.StatusOK, true},
 		{"somebody who leads nothing may not edit even the public half",
-			iam.Principal{ID: uuid.New(), Login: "sre", Seat: "sre",
-				Kind: iam.KindPerson, Stage: iam.StageActive},
+			proved(iam.Principal{ID: uuid.New(), Login: "sre", Seat: "sre",
+				Kind: iam.KindPerson, Stage: iam.StageActive}),
 			`{"name":"Engineering"}`, http.StatusForbidden, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -1935,28 +1935,22 @@ const MaxTokenLabel = 128
 // caller typed, answered 400 rather than as an authority refusal.
 var ErrInvalidToken = errors.New("iamdomain: that token cannot be minted as asked")
 
-// TokenRefusedGrants are the grants a machine token may never carry, whatever
-// its owner holds.
-//
-// BOTH NEED A PERSON PRESENT: revealing a credential, and deciding who may do
-// anything at all. A token is what an attacker holding a pipeline's
-// environment already has.
-var TokenRefusedGrants = []iam.Grant{iam.GrantSecretRead, iam.GrantPeopleManage}
-
 // tokenGrants resolves what a token carries and refuses what it may not.
 func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 	grants := asked
 	if grants == nil {
 		grants = make([]iam.Grant, 0, len(owner))
 		for _, g := range owner {
-			if g.Valid() && !slices.Contains(TokenRefusedGrants, g) {
+			// NEVER THE TWO THAT NEED A PERSON PRESENT: see
+			// [iam.PersonPresentGrants].
+			if g.Valid() && !slices.Contains(iam.PersonPresentGrants, g) {
 				grants = append(grants, g)
 			}
 		}
 	}
 	for _, g := range grants {
 		switch {
-		case slices.Contains(TokenRefusedGrants, g):
+		case slices.Contains(iam.PersonPresentGrants, g):
 			return nil, fmt.Errorf("%w: %s cannot be minted onto a token — it "+
 				"is a gesture that needs a person present, and a token is what "+
 				"an attacker holding a pipeline's environment already has",
