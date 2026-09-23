@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -370,7 +371,7 @@ const (
 // buckets as dropped tables.
 func estatePage(t *testing.T) string {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join(moduleRoot(t), filepath.FromSlash(estateDoc)))
+	body, err := os.ReadFile(filepath.Join(sourcetree.Root(t), filepath.FromSlash(estateDoc)))
 	if err != nil {
 		t.Fatalf("read %s: %v", estateDoc, err)
 	}

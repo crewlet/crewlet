@@ -157,6 +157,15 @@ SOLO_PKGS      = $(eval SOLO_PKGS := $(shell $(PARTITION) solo))$(SOLO_PKGS)
 # added or dropped here belongs in the other two in the same commit.
 CROSS_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
+# The Go files gofmt is handed: this tree's, by internal/sourcetree's rule,
+# and never `.` — gofmt enters every directory under the one it is given, so
+# with an agent's worktree under .claude/worktrees/ `fmt-check` reported that
+# checkout's half-edited files as this tree's and `fmt` REWROTE them. Each
+# recipe captures the list before using it and stops if listing failed,
+# because gofmt handed no paths formats its standard input and passes. See
+# `go doc ./internal/sourcetree/gofiles`; ci.yml's gofmt step is the same.
+GOFILES = $(GO) run ./internal/sourcetree/gofiles
+
 COMPOSE ?= docker compose
 
 # Passed through to the vendor bootstrap scripts, which provision the seats of
@@ -193,7 +202,8 @@ install: ## go install the engine onto your PATH
 	$(GO) install ./cmd/crewlet
 
 fmt: ## rewrite everything gofmt would change
-	gofmt -w .
+	@files="$$($(GOFILES))" || exit 1; \
+	gofmt -w $$files
 
 tidy: ## tidy go.mod / go.sum
 	$(GO) mod tidy
@@ -294,7 +304,8 @@ check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross
 	@echo "  - the release pipeline  ->  make snapshot"
 
 fmt-check: ## fail if anything needs gofmt (ci: build + vet)
-	@unformatted="$$(gofmt -l .)"; \
+	@files="$$($(GOFILES))" || exit 1; \
+	unformatted="$$(gofmt -l $$files)" || exit 1; \
 	if [ -n "$$unformatted" ]; then \
 	  { echo "gofmt needed:"; \
 	    echo "$$unformatted"; \

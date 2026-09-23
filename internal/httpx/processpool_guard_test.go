@@ -5,11 +5,11 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // TestNoClientSitsOnTheProcessGlobalPool fails the build when any package in
@@ -68,7 +68,7 @@ import (
 func TestNoClientSitsOnTheProcessGlobalPool(t *testing.T) {
 	t.Parallel()
 
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 	found := walkForGlobalPool(t, root)
 
 	if found.files == 0 {
@@ -166,7 +166,7 @@ func walkForGlobalPool(t *testing.T, root string) poolWalk {
 	var out poolWalk
 
 	for _, tree := range []string{"internal", "cmd"} {
-		err := filepath.WalkDir(filepath.Join(root, tree), func(path string, d fs.DirEntry, err error) error {
+		err := sourcetree.Walk(filepath.Join(root, tree), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -286,19 +286,6 @@ func matchesInSource(t *testing.T, src string) bool {
 		return false
 	}
 	return len(globalPoolUses(file, name)) > 0
-}
-
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }
 
 func shortPos(root, pos string) string {

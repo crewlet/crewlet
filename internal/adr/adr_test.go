@@ -4,12 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/adr"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // EVERY RECORD IS WELL FORMED AND CARRIES THE FIELDS THAT MAKE IT USABLE.
@@ -97,7 +97,7 @@ var whyRequired = map[string]string{
 // reads exactly like a live one.
 func TestEveryRecordIsAnchoredAtItsAuthority(t *testing.T) {
 	t.Parallel()
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 	records := load(t)
 
 	declared := map[string]adr.Record{}
@@ -153,7 +153,7 @@ func TestEveryRecordIsAnchoredAtItsAuthority(t *testing.T) {
 // direction that matters least to the person who added it.
 func TestTheIndexNamesEveryRecord(t *testing.T) {
 	t.Parallel()
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 	index := read(t, filepath.Join(root, adr.Dir, "README.md"))
 
 	for _, r := range load(t) {
@@ -235,7 +235,7 @@ func TestAnUnenforcedDecisionSaysWhyAndStaysTrue(t *testing.T) {
 // because it reads as covered.
 func TestEveryNamedGateExists(t *testing.T) {
 	t.Parallel()
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 	tests := testFunctions(t, root)
 	if len(tests) == 0 {
 		t.Fatal("found no test functions in the tree, so this guard is " +
@@ -277,13 +277,13 @@ var testNameRE = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 func testFunctions(t *testing.T, root string) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "dist", "static":
+			case "dist", "static":
 				return filepath.SkipDir
 			}
 			return nil
@@ -331,13 +331,14 @@ type citation struct {
 func citations(t *testing.T, root string) []citation {
 	t.Helper()
 	var out []citation
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	files := 0
+	err := sourcetree.Walk(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "dist", "static":
+			case "dist", "static":
 				return filepath.SkipDir
 			}
 			return nil
@@ -349,6 +350,7 @@ func citations(t *testing.T, root string) []citation {
 		if rel == filepath.Join(adr.Dir, "0000-template.md") {
 			return nil
 		}
+		files++
 		for i, line := range strings.Split(read(t, path), "\n") {
 			for _, m := range adr.Reference.FindAllString(line, -1) {
 				out = append(out, citation{ID: m, File: rel, Line: i + 1})
@@ -358,6 +360,12 @@ func citations(t *testing.T, root string) []citation {
 	})
 	if err != nil {
 		t.Fatalf("walk %s: %v", root, err)
+	}
+	// The backward check is an absence — no citation of a record nobody
+	// declared — and a walk that read nothing finds none.
+	if files == 0 {
+		t.Fatalf("read no Go or markdown files under %s — the citation check "+
+			"was certifying nothing", root)
 	}
 	return out
 }
@@ -436,7 +444,7 @@ func packageDoc(src string) string {
 // see them.
 func TestEveryDocLinkNamesAPackageThatExists(t *testing.T) {
 	t.Parallel()
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 
 	// The matcher, on input whose verdict is known.
 	for _, positive := range []string{"[internal/coord]", "see [cmd/crewlet] for"} {
@@ -451,13 +459,13 @@ func TestEveryDocLinkNamesAPackageThatExists(t *testing.T) {
 	}
 
 	files := 0
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "dist", "static":
+			case "dist", "static":
 				return filepath.SkipDir
 			}
 			return nil
@@ -518,7 +526,7 @@ func markdownLinks(page string) []string {
 
 func load(t *testing.T) []adr.Record {
 	t.Helper()
-	records, err := adr.Load(moduleRoot(t))
+	records, err := adr.Load(sourcetree.Root(t))
 	if err != nil {
 		t.Fatalf("load the records: %v", err)
 	}
@@ -532,17 +540,4 @@ func read(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(body)
-}
-
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }

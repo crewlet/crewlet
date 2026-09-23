@@ -5,11 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // TestNoWithdrawnIdentifierSurvives fails the build when a name or a sentence
@@ -52,7 +53,7 @@ import (
 // every prose copy of a dead one. The list is a floor.
 func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 	t.Parallel()
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 
 	// The matcher is exercised on strings whose verdict is known BEFORE it
 	// is run over the tree. A guard asserting an absence passes identically
@@ -128,7 +129,7 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 	files, scanned := 0, 0
 	var offences []string
 	seen := map[withdrawalKey]bool{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -422,10 +423,11 @@ func itoa(n int) string {
 	return string(digits)
 }
 
-// skipDir names the trees this scan does not read.
+// skipDir names the trees this scan does not read, beyond what
+// [sourcetree.Walk] never enters in any scan.
 func skipDir(name string) bool {
 	switch name {
-	case ".git", "node_modules", "dist", "static":
+	case "dist", "static":
 		// static/ is a committed BUILD OUTPUT — never hand-edited, and
 		// a minified bundle is not prose anybody reads.
 		return true
@@ -440,17 +442,4 @@ func scannedFile(path string) bool {
 		return true
 	}
 	return false
-}
-
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }

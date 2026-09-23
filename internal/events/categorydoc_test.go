@@ -2,17 +2,20 @@ package events_test
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
 	_ "github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // categoryDoc is the operator-facing vocabulary for the `category` column —
-// the values `GET /events?category=` and the dashboard's filter accept.
-const categoryDoc = "../../docs/guides/deployment.md"
+// the values `GET /events?category=` and the dashboard's filter accept. It is
+// named from the module root, which is how a failure should read.
+const categoryDoc = "docs/guides/deployment.md"
 
 // An operator scripting against the filter needs to know what to put in it,
 // and the value set is a Go map they cannot read. So the docs carry a table —
@@ -90,7 +93,7 @@ func TestTheDocumentedTableNamesNoVanishedType(t *testing.T) {
 
 func readDoc(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile(categoryDoc)
+	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), filepath.FromSlash(categoryDoc)))
 	if err != nil {
 		t.Fatalf("read %s: %v", categoryDoc, err)
 	}

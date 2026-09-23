@@ -34,7 +34,7 @@ func TestEveryViewShapeTheEngineMintsHasARenderer(t *testing.T) {
 	t.Parallel()
 	engine := tracker.ViewTypeNames()
 
-	body, err := clientsource.Declaration(clientsource.Tree,
+	body, err := clientsource.Declaration(clientsource.Tree(t),
 		`export type WorkViewShape = ([^;]*);`)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestEveryViewShapeTheEngineMintsHasARenderer(t *testing.T) {
 func TestEveryGridSortKeyIsOneTheGrammarTakes(t *testing.T) {
 	t.Parallel()
 
-	body, err := clientsource.Declaration(clientsource.Tree,
+	body, err := clientsource.Declaration(clientsource.Tree(t),
 		`(?s)const COLUMN_SORT_KEYS = \[(.*?)\] as const`)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestEveryGridSortKeyIsOneTheGrammarTakes(t *testing.T) {
 func TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes(t *testing.T) {
 	t.Parallel()
 
-	body, err := clientsource.Declaration(clientsource.Tree,
+	body, err := clientsource.Declaration(clientsource.Tree(t),
 		`(?s)const PROJECT_SORT_KEYS = \[(.*?)\] as const`)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes(t *testing
 // reach. Both are silent, which is why this is a test.
 func TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Declaration(clientsource.Tree,
+	body, err := clientsource.Declaration(clientsource.Tree(t),
 		`(?s)export const CHANGES: \{[^}]*\}\[\] = \[(.*?)\n\];`)
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +223,7 @@ func TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase(t *testing.T) {
 func TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes(t *testing.T) {
 	t.Parallel()
 
-	body, err := clientsource.Declaration(clientsource.Tree,
+	body, err := clientsource.Declaration(clientsource.Tree(t),
 		`(?s)export const GROUP_AXES[^=]*= \[(.*?)\];`)
 	if err != nil {
 		t.Fatal(err)

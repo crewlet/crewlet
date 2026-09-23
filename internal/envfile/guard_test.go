@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // THE GUARD: nobody builds an assignment line by hand.
@@ -41,10 +43,11 @@ var touchesEnvFile = regexp.MustCompile(`\.env\b|envFile|EnvFile|envfile\.`)
 
 func TestNobodyBuildsAnAssignmentByHand(t *testing.T) {
 	t.Parallel()
-	root := repoRoot(t)
+	root := sourcetree.Root(t)
 	var offenders []string
+	files := 0
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -52,7 +55,7 @@ func TestNobodyBuildsAnAssignmentByHand(t *testing.T) {
 			// The grammar's own package is where the one implementation
 			// lives, and vendored trees are not ours to police.
 			switch d.Name() {
-			case "envfile", ".git", "node_modules", "vendor", "schema":
+			case "envfile", "vendor", "schema":
 				return fs.SkipDir
 			}
 			return nil
@@ -60,6 +63,7 @@ func TestNobodyBuildsAnAssignmentByHand(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
+		files++
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -78,6 +82,11 @@ func TestNobodyBuildsAnAssignmentByHand(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk: %v", err)
+	}
+	// An absence is asserted by reading everything, and a walk that read
+	// nothing asserts it just as confidently.
+	if files == 0 {
+		t.Fatal("read no Go files — this guard was certifying nothing")
 	}
 	if len(offenders) > 0 {
 		t.Fatalf("these build an env assignment by hand in a file that writes "+
@@ -123,23 +132,4 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(digits)
-}
-
-// repoRoot walks up to the directory holding go.mod.
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("no go.mod above the working directory")
-		}
-		dir = parent
-	}
 }

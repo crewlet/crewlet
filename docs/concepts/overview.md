@@ -269,6 +269,8 @@ internal/
 │                         #   which packages need the runner to themselves
 ├── clientsource/         # Holds a constant the dashboard declares against the
 │                         #   engine's own
+├── sourcetree/           # What is this repository's tree: the module root,
+│                         #   and a walk that never reads a nested checkout
 ├── e2e/                  # The end-to-end company, and the dashboard replay
 └── version/ logging/ redact/ envref/ envfile/ workkey/ backoff/  # small shared
                           #   grammars

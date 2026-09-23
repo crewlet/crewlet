@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -167,7 +168,7 @@ func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 		t.Errorf("control: a constant did not fold: got %q, %v", got, ok)
 	}
 
-	root := moduleRoot(t)
+	root := sourcetree.Root(t)
 	var found []site
 	files := 0
 	for _, dir := range []string{"internal", "cmd"} {

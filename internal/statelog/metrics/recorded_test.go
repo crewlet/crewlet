@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -123,16 +124,17 @@ var selector = regexp.MustCompile(`\bmetrics\.([A-Z]\w*)\b`)
 // non-test code outside this package.
 func identifiersReferencedInTheTree(t *testing.T) map[string]bool {
 	t.Helper()
-	root, err := filepath.Abs("../../..")
-	if err != nil {
-		t.Fatalf("resolve the module root: %v", err)
-	}
-	self, err := filepath.Abs(".")
-	if err != nil {
-		t.Fatalf("resolve this package: %v", err)
+	root := sourcetree.Root(t)
+	// Named from the root the walk starts at rather than from the working
+	// directory, so the two cannot disagree about which tree this is. A
+	// package that moved would make the exclusion below match nothing and
+	// the test unable to fail, so its absence is fatal.
+	self := filepath.Join(root, "internal", "statelog", "metrics")
+	if _, err := os.Stat(filepath.Join(self, "catalogue.go")); err != nil {
+		t.Fatalf("this package is not at %s, so the walk cannot exclude it: %v", self, err)
 	}
 	out := map[string]bool{}
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -144,8 +146,7 @@ func identifiersReferencedInTheTree(t *testing.T) map[string]bool {
 				// included it would report all of them as used and
 				// this test would be unable to fail.
 				return fs.SkipDir
-			case d.Name() == ".git" || d.Name() == "node_modules" ||
-				d.Name() == "dist" || d.Name() == "static":
+			case d.Name() == "dist" || d.Name() == "static":
 				return fs.SkipDir
 			}
 			return nil

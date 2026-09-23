@@ -63,7 +63,7 @@ else would notice. Change a target and its `ci.yml` step together, and read
 both. `make check` is:
 
 ```bash
-gofmt -l .               # formatting — prints the files that need it
+files="$(go run ./internal/sourcetree/gofiles)" && gofmt -l $files  # formatting — prints the files that need it
 go mod tidy -diff        # go.mod / go.sum are already what tidy would write
 scripts/check-signoff.sh # every commit the branch adds is signed off
 scripts/check-signoff_test.sh  # ... and that gate's own suite
@@ -79,6 +79,13 @@ cd dashboard && npm run format:check                          # dashboard-lint
 cd dashboard && npm run build && git diff --exit-code -- ../static/dashboard
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
 ```
+
+The formatting line captures the list BEFORE handing it to gofmt, and that
+is the form to copy into a hook or a script. The inline
+`gofmt -l $(go run ./internal/sourcetree/gofiles)` passes when the listing
+fails: the shell discards a command substitution's exit status, and gofmt
+handed no paths formats its standard input, finds nothing wrong and exits 0.
+Run from anywhere but the module root, the listing fails every time.
 
 The race detector is not optional here: the engine's concurrency model is
 real parallelism, and every "atomic because it is single-threaded" assumption

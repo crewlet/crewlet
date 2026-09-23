@@ -11,12 +11,17 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
 // dashboardProtocol is the dashboard's own declaration of the wire, as SOURCE:
 // the dashboard's source is committed, so it is in every checkout, and the
 // built bundle would be a step behind any change a branch makes to it.
-const dashboardProtocol = "../../../dashboard/src/protocol/types.ts"
+func dashboardProtocol(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(clientsource.Tree(t), "protocol", "types.ts")
+}
 
 // clientOnlyCodes are the query error codes the dashboard's socket produces
 // itself, which no engine frame carries: a sent query that went unanswered,
@@ -102,7 +107,8 @@ func engineCodes(t *testing.T) []string {
 // dashboardCodes is the members of the dashboard's QueryErrorCode union.
 func dashboardCodes(t *testing.T) []string {
 	t.Helper()
-	source, err := os.ReadFile(filepath.FromSlash(dashboardProtocol))
+	protocol := dashboardProtocol(t)
+	source, err := os.ReadFile(protocol)
 	if err != nil {
 		// FAILS rather than skips: the dashboard source is committed, so a
 		// missing file is a moved file, and a skip would certify nothing.
@@ -112,7 +118,7 @@ func dashboardCodes(t *testing.T) []string {
 	const head = "export type QueryErrorCode ="
 	start := strings.Index(text, head)
 	if start < 0 {
-		t.Fatalf("%s declares no QueryErrorCode union", dashboardProtocol)
+		t.Fatalf("%s declares no QueryErrorCode union", protocol)
 	}
 	// The members' doc comments are prose: they quote words ("there is
 	// nothing") and may carry a semicolon of their own. They go BEFORE the
@@ -121,7 +127,7 @@ func dashboardCodes(t *testing.T) []string {
 	body := regexp.MustCompile(`(?s)/\*.*?\*/|//[^\n]*`).ReplaceAllString(text[start+len(head):], "")
 	end := strings.Index(body, ";")
 	if end < 0 {
-		t.Fatalf("the QueryErrorCode union in %s never ends", dashboardProtocol)
+		t.Fatalf("the QueryErrorCode union in %s never ends", protocol)
 	}
 	body = body[:end]
 	var codes []string

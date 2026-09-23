@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // The stored form is the one an engine actually boots from: `crewlet config
@@ -275,7 +276,7 @@ roles:
 // config` and this suite is `package config_test`.
 func exampleCompany(t *testing.T) []byte {
 	t.Helper()
-	path := filepath.Join("..", "..", "examples", "nimbus.company.yaml")
+	path := filepath.Join(sourcetree.Root(t), "examples", "nimbus.company.yaml")
 	data, err := os.ReadFile(path) //nolint:gosec // a path this repository ships
 	if err != nil {
 		t.Fatalf("read %s: %v — this suite certifies a file this repository "+

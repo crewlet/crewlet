@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // NOTHING REACHES THE REPLICATED ESTATE'S POOL DIRECTLY.
@@ -56,18 +58,16 @@ func TestNothingIssuesAStatementOnTheReplicatedPool(t *testing.T) {
 		}
 	}
 
-	root, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatalf("resolve the module root: %v", err)
-	}
+	root := sourcetree.Root(t)
 	var found []string
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	files := 0
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "dist", "static":
+			case "dist", "static":
 				return fs.SkipDir
 			}
 			return nil
@@ -75,6 +75,7 @@ func TestNothingIssuesAStatementOnTheReplicatedPool(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
+		files++
 		body, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			return err
@@ -89,6 +90,10 @@ func TestNothingIssuesAStatementOnTheReplicatedPool(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk the tree: %v", err)
+	}
+	// The controls prove the matcher; this proves it was handed the tree.
+	if files == 0 {
+		t.Fatal("read no Go files — this guard was certifying nothing")
 	}
 	for _, site := range found {
 		t.Errorf("%s issues a statement on the replicated estate's pool, which "+

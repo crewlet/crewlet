@@ -102,9 +102,14 @@ checksummed.
 3. **Run the checks CI runs:**
 
    ```bash
-   go test ./... -race
-   gofmt -l . && go mod tidy -diff && go vet ./... && golangci-lint run
+   make check
    ```
+
+   That one target and not a list of its commands: a bare `go test ./...`
+   runs the cluster-forming packages beside everything else and bypasses
+   `internal/skipgate`, and `gofmt -l .` reads every nested checkout under
+   `.claude/worktrees/` as this tree — [CONTRIBUTING.md](CONTRIBUTING.md)
+   spells out what `make check` runs and why.
 
 4. **Rehearse the release itself** if anything about the release surface
    changed (see below). This is cheap and offline — do it whenever you are

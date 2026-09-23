@@ -35,7 +35,10 @@
 // what made the case: three implementations of "find the one file that matches
 // this pattern" is three chances for one to start skipping a directory the
 // others read, and a gate that reads less than it thinks reports a pass it did
-// not earn.
+// not earn. The last copy outside it — api/queries' own — was still matching
+// once per FILE long after this one learned to count declarations, which is
+// that drift in miniature. Which directories count as the tree at all is
+// [internal/sourcetree]'s rule, for the same reason one level down.
 package clientsource
 
 import (
@@ -44,15 +47,24 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// Tree is the dashboard's SOURCE, relative to a package directory under
-// `internal/`. Not the built bundle: that is minified and carries no
-// declaration to find, and a gate pointed at it silently matched nothing for
-// the whole of the React rewrite while reporting a pass.
+// Tree is the dashboard's SOURCE directory. Not the built bundle: that is
+// minified and carries no declaration to find, and a gate pointed at it
+// silently matched nothing for the whole of the React rewrite while reporting
+// a pass.
 //
-// Callers one level deeper (`internal/api/...`) join another `..` themselves.
-const Tree = "../../dashboard/src"
+// Anchored at the module root rather than written as a path relative to the
+// caller's package: a relative `../../dashboard/src` is right from exactly
+// one depth, so every gate one level deeper had to prepend another `..`
+// itself, and three packages kept a copy of the path to avoid it.
+func Tree(t testing.TB) string {
+	t.Helper()
+	return filepath.Join(sourcetree.Root(t), "dashboard", "src")
+}
 
 // Declaration returns the single capture of the one declaration under `tree`
 // matching `pattern`.
@@ -74,7 +86,7 @@ func Declaration(tree, pattern string) (string, error) {
 		return "", fmt.Errorf("clientsource: %q is not a pattern: %w", pattern, err)
 	}
 	var found []string
-	err = filepath.WalkDir(tree, func(path string, entry os.DirEntry, err error) error {
+	err = sourcetree.Walk(tree, func(path string, entry os.DirEntry, err error) error {
 		switch {
 		case err != nil:
 			return err
