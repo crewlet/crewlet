@@ -139,10 +139,14 @@ type Directory interface {
 	// somebody has been invited.
 	InvitationByID(ctx context.Context, id string) (iamdomain.InvitationRow, error)
 
-	// SessionOwner is who holds one session, or empty for a lineage this
-	// node does not hold. It is what makes ending a NAMED session a check
-	// against this node's own rows rather than a claim the caller made.
-	SessionOwner(ctx context.Context, lineage string) (string, error)
+	// SessionStanding is who holds one session, or empty for a lineage this
+	// node does not hold, and whether this node's rows still hold it LIVE.
+	// It is what makes ending a NAMED session a check against this node's
+	// own rows rather than a claim the caller made — and what keeps a
+	// session a record already ended from being ended, and announced,
+	// again.
+	SessionStanding(ctx context.Context, lineage string, now time.Time) (
+		owner string, live bool, err error)
 
 	// OutstandingBootstrapCodes are the codes that are neither spent nor
 	// aged out, which re-issuing one has to withdraw.

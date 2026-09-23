@@ -98,8 +98,10 @@ type estate struct {
 	// revokes records every revocation asked for.
 	revokes []string
 
-	// owner is who this estate says holds any lineage it is asked about.
+	// owner is who this estate says holds any lineage it is asked about,
+	// and over whether its rows say that session is already over.
 	owner string
+	over  bool
 
 	// unresolved names the writes whose outcome nothing can establish:
 	// each answers `unknown` under its own op id instead of landing.
@@ -124,10 +126,10 @@ func (e *estate) Revoke(_ context.Context, person, opID, _ string) (statelog.Res
 	return e.outcome("Revoke", opID, 11), nil
 }
 
-func (e *estate) SessionOwner(context.Context, string) (string, error) {
+func (e *estate) SessionStanding(context.Context, string, time.Time) (string, bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.owner, nil
+	return e.owner, e.owner != "" && !e.over, nil
 }
 
 // closedSession is one CloseSession call.

@@ -152,7 +152,9 @@ func (stubDirectory) InvitationByID(context.Context, string) (iamdomain.Invitati
 	return iamdomain.InvitationRow{}, nil
 }
 
-func (stubDirectory) SessionOwner(context.Context, string) (string, error) { return "", nil }
+func (stubDirectory) SessionStanding(context.Context, string, time.Time) (string, bool, error) {
+	return "", false, nil
+}
 
 func (stubDirectory) OutstandingBootstrapCodes(context.Context, time.Time) (
 	[]iamdomain.BootstrapCode, error) {

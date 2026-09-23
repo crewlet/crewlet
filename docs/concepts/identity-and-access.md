@@ -887,6 +887,15 @@ rule — it ends the session behind whichever name the browser presented and
 clears **both** — so a browser can never be accepted under a name the sign-out
 does not reach.
 
+A sign-out closes and announces only a session this node's rows still hold. A
+cookie past its deadline, a revoked person's cookie and one naming a session a
+record already ended are cleared and nothing else: each of them was already
+over, whatever ended it already said so, and writing a close per post would let
+anybody holding such a cookie author an `iam_session_ended` row per request.
+Ending one **named** session reads the same way — its owner and whether it is
+still live, in one snapshot — and a node that cannot read its rows records the
+close a person asked for without announcing it.
+
 Every field is there because a node has to answer with it and has no other way
 to know it:
 

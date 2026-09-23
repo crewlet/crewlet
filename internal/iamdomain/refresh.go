@@ -277,16 +277,13 @@ func (r *Reader) SessionStates(ctx context.Context, grants []RefreshGrant,
 	out := make(map[string]SessionState, len(grants))
 	applied := uint64(r.committed().Packed())
 	err := r.scan(ctx, func(tx *sql.Tx) error {
-		var invalidated int64
-		err := tx.QueryRowContext(ctx,
-			`SELECT version FROM iam_session_generation WHERE singleton = 0`).
-			Scan(&invalidated)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("iamdomain: read the session generation: %w", err)
+		invalidated, err := readInvalidated(ctx, tx)
+		if err != nil {
+			return err
 		}
 		for _, grant := range grants {
 			state, err := sessionState(ctx, tx, grant, applied,
-				uint64(invalidated), now)
+				invalidated, now)
 			if err != nil {
 				return err
 			}
@@ -298,6 +295,20 @@ func (r *Reader) SessionStates(ctx context.Context, grants []RefreshGrant,
 		return nil, err
 	}
 	return out, nil
+}
+
+// readInvalidated is the company's session generation — the position of its
+// last invalidation, zero for a company that never had one — read inside the
+// caller's snapshot.
+func readInvalidated(ctx context.Context, tx *sql.Tx) (uint64, error) {
+	var invalidated int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT version FROM iam_session_generation WHERE singleton = 0`).
+		Scan(&invalidated)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("iamdomain: read the session generation: %w", err)
+	}
+	return uint64(invalidated), nil
 }
 
 // sessionState is one grant's session, read inside the caller's snapshot.

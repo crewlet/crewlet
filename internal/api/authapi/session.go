@@ -161,7 +161,7 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 	// session, and the zero bearer omits it.
 	var expires time.Time
 	if r.Header.Get("Authorization") == "" {
-		expires = s.bearerOf(r).AbsoluteExpiresAt
+		expires = s.presentedSession(r).Bearer.AbsoluteExpiresAt
 	}
 	httpjson.Write(w, http.StatusOK, sessionResponse{
 		Person: principal.ID.String(), Login: principal.Login,
@@ -205,10 +205,24 @@ func (s *Service) stepUpDue(p iam.Principal) bool {
 // That is safe because the cookie is the only thing the browser holds: without
 // it nothing is presented, and the record catching up later merely makes the
 // row agree with what already happened.
+//
+// # A session already over is cleared, and nothing else
+//
+// The cookie is read under its signature AND this node's rows, and only a
+// session they still hold — live, or opened on a node ahead of this one —
+// is closed and announced. It used to be read under the signature alone, so
+// any cookie ever signed under a live key — expired, revoked, a removed
+// person's leftover — published a close and announced another
+// `iam_session_ended` on every post: a row per request authored by whoever
+// held a cookie the engine no longer accepts, and a second ending named for a
+// session a record had already ended. A node that cannot read its rows still
+// records the close the person asked for, and announces nothing it cannot say
+// was live.
 func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 	s.clearSession(w)
 
-	bearer := s.bearerOf(r)
+	presented := s.presentedSession(r)
+	bearer := presented.Bearer
 	if bearer.Lineage == uuid.Nil {
 		// NOTHING TO END, and it is not an error: a client that clears
 		// its own cookie and posts here is asking for exactly what
@@ -217,6 +231,20 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lineage := bearer.Lineage.String()
+	announce := false
+	switch presented.Row {
+	case session.RowValid, session.RowBehind:
+		announce = true
+	case session.RowStalled:
+		// THE ROWS CANNOT SAY, so the close the person asked for is
+		// recorded and nothing is announced: a row saying this session
+		// ended here would be false if a record had already ended it.
+	default:
+		log.DebugContext(r.Context(), "api_sign_out_already_over",
+			"lineage", lineage, "row", string(presented.Row))
+		httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
+		return
+	}
 	// THE PERSON COMES OFF THE SAME VERIFIED BEARER as the lineage, and
 	// the record is filed under their bucket — where a node that cannot
 	// decode it has to say it is behind about them.
@@ -233,7 +261,7 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 		// operation.
 		log.WarnContext(r.Context(), "api_sign_out_record_unresolved",
 			"lineage", lineage, "op_id", closed.OpID)
-	default:
+	case announce:
 		// ONLY ONCE THE RECORD LANDED — applied here, or durable and
 		// pending here. A cleared cookie is this browser forgetting; the
 		// session ending is the record every node reads, and a row saying
@@ -306,34 +334,41 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out everywhere"})
 }
 
-// bearerOf is the session this request is carrying, or the zero bearer.
+// presentedSession is the session this request's cookie names, judged by its
+// signature and this node's rows — the zero validation for a request carrying
+// none.
 //
-// # It is the SIGNATURE that decides, never the field
+// # It is the SIGNATURE that decides the lineage, never the field
 //
 // A lineage read straight out of a cookie without checking the mac is a
 // lineage the CALLER CHOSE, and closing a session on one is a denial of
 // service against anybody whose session id leaks: a proxy log, a referrer, a
 // screenshot. So this goes through [session.Signer.Validate], which parses
-// under the keyring and yields a bearer only when the signature verifies.
+// under the keyring and yields a bearer only when the signature verifies — a
+// malformed cookie's bearer is the zero value, and its lineage the nil uuid.
 //
-// WHAT IT DELIBERATELY IGNORES is the verdict. A logout has to work for a
-// cookie that is expired, revoked, or from a session this node has never
-// applied — which is precisely when somebody most wants to sign out — and
-// every one of those rows carries a bearer whose signature checked out. The
-// only row that does not is the malformed one, whose bearer is the zero value
-// and whose lineage is therefore the nil uuid.
+// # And the ROWS decide whether there is anything left to end
+//
+// The verdict comes back beside the bearer, because a sign-out is a CLAIM
+// that the session was live until now: a cookie that is expired, revoked, or
+// names a session a record already ended still carries a verified bearer, and
+// a caller that read only the bearer closed and announced every one of those
+// again. [Service.Logout] reads the row; the step-up answer and a named
+// sign-out read only the bearer, because what they need from it — the
+// absolute deadline, whether the named lineage is this cookie's — is the
+// bearer's own.
 //
 // EITHER NAME, by [session.Presented]'s rule — the guard's own. Reading only
 // the name this deployment issues left a browser that still held the other
 // (every one signed in before `api.external_url` moved from http to https)
 // signed in after it signed out: the guard went on accepting the cookie, and
 // the sign-out neither closed its session nor cleared it.
-func (s *Service) bearerOf(r *http.Request) session.Bearer {
+func (s *Service) presentedSession(r *http.Request) session.Validation {
 	cookie := session.Presented(r)
 	if cookie == "" {
-		return session.Bearer{}
+		return session.Validation{}
 	}
-	return s.signer.Validate(r.Context(), s.directoryFor(), cookie).Bearer
+	return s.signer.Validate(r.Context(), s.directoryFor(), cookie)
 }
 
 // clearSession ends the session in the browser under every name a bearer can
@@ -376,7 +411,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	owner, err := s.directory.SessionOwner(r.Context(), lineage)
+	owner, live, err := s.directory.SessionStanding(r.Context(), lineage, s.now())
 	if err != nil {
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
@@ -394,6 +429,16 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	}
 	if !mayEnd(r, principal, owner) {
 		httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
+		return
+	}
+	if !live {
+		// ALREADY OVER — its row ended, its deadline passed, its person
+		// revoked everywhere or the company invalidated — so there is
+		// nothing to close and no ending to announce: whatever ended it
+		// already said so. The answer is the same `ended`, and the cookie
+		// still goes if it was this one.
+		s.clearIfPresented(w, r, lineage)
+		httpjson.Write(w, http.StatusOK, map[string]string{"status": "ended"})
 		return
 	}
 	closed, err := s.writer.CloseSession(r.Context(), lineage, owner,
@@ -419,14 +464,19 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		Person: owner, Lineage: lineage, Reason: reason,
 		By: iam.ActorFor(principal).Name,
 	})
-	// AND THE COOKIE GOES IF IT WAS THIS ONE, so a person who ends the
-	// session they are using is not left looking at a signed-in page.
-	if lineage == s.bearerOf(r).Lineage.String() {
-		s.clearSession(w)
-	}
+	s.clearIfPresented(w, r, lineage)
 	log.InfoContext(r.Context(), "api_sign_out_one",
 		"lineage", lineage, "by", principal.Login)
 	httpjson.Write(w, http.StatusOK, map[string]string{"status": "ended"})
+}
+
+// clearIfPresented clears this request's cookie when it names the lineage a
+// named sign-out ended, so a person who ends the session they are using is not
+// left looking at a signed-in page.
+func (s *Service) clearIfPresented(w http.ResponseWriter, r *http.Request, lineage string) {
+	if lineage == s.presentedSession(r).Bearer.Lineage.String() {
+		s.clearSession(w)
+	}
 }
 
 // mayEnd reports whether this caller may end a session that person holds.

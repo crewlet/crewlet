@@ -483,3 +483,69 @@ func (r *writeRig) openSessionAt(person string, expires time.Time) (string,
 	}
 	return lineage, at
 }
+
+// A NAMED SESSION'S STANDING IS ITS OWNER AND WHETHER IT IS STILL LIVE, and
+// the second half reads every lever the probe reads.
+//
+// Ending a named session asked only whose it was, so a session a record had
+// already ended was closed and announced again. Its owner stays readable after
+// it is over — the owner check is what refuses somebody else's lineage, and it
+// must answer the same for a session that ended — and only an absent row names
+// nobody.
+func TestASessionsStandingIsItsOwnerAndWhetherItIsLive(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	person := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Enrolment{
+		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "kim.kept", Email: "kim.kept@example.com", Login: "kim.kept",
+		OpID: "enrol-kim", Reason: "a joiner",
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	later := time.Now().Add(24 * time.Hour)
+	open, _ := rig.openSessionAt(person, later)
+	closed, _ := rig.openSessionAt(person, later)
+	lapsed, _ := rig.openSessionAt(person, time.Now().Add(time.Minute))
+	if err := rig.during(func() error {
+		_, err := rig.writer.CloseSession(t.Context(), closed, person,
+			"signed out", "close-"+closed)
+		return err
+	}); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name, lineage, owner string
+		live                 bool
+	}{
+		{"an open session", open, person, true},
+		{"a session a record ended", closed, person, false},
+		{"a session past its absolute deadline", lapsed, person, false},
+		{"a lineage nobody holds", uuid.Must(uuid.NewV7()).String(), "", false},
+	} {
+		owner, live, err := reader.SessionStanding(t.Context(), tc.lineage,
+			time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("%s: SessionStanding: %v", tc.name, err)
+		}
+		if owner != tc.owner || live != tc.live {
+			t.Errorf("%s stands as (%q, live %v), want (%q, live %v)",
+				tc.name, owner, live, tc.owner, tc.live)
+		}
+	}
+
+	// AND THE PERSON'S OWN LEVER, which touches no session row.
+	if err := rig.during(func() error {
+		_, err := rig.writer.Revoke(t.Context(), person, "revoke-kim", "left")
+		return err
+	}); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if owner, live, err := reader.SessionStanding(t.Context(), open,
+		time.Now()); err != nil || owner != person || live {
+		t.Errorf("a revoked person's session stands as (%q, live %v, %v), "+
+			"want its owner and over", owner, live, err)
+	}
+}

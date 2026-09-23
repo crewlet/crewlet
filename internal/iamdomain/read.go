@@ -832,8 +832,9 @@ func fromMillis(ms int64) time.Time {
 	return time.UnixMilli(ms).UTC()
 }
 
-// SessionOwner is who holds one session, or empty for a lineage this node does
-// not hold.
+// SessionStanding is who holds one session — empty for a lineage this node
+// does not hold — and whether this node's rows still hold it LIVE, both read
+// in ONE snapshot.
 //
 // # Why it is separate from [Reader.Resolve]
 //
@@ -848,11 +849,28 @@ func fromMillis(ms int64) time.Time {
 // lineage it was handed would let anybody end anybody's session, and the only
 // thing that stops it is comparing the owner this node holds against the
 // caller this node resolved — neither of which the caller supplies.
-func (r *Reader) SessionOwner(ctx context.Context, lineage string) (string, error) {
+//
+// # And why it says whether the session is still live
+//
+// Because ending a session is a claim that it was live until now. Asked only
+// for the owner, a named sign-out closed and announced a session a record had
+// already ended — revoked, invalidated, past its absolute deadline — naming
+// the caller as the one who ended it. Live is [Reader.SessionStates]' own
+// reading of one row (not ended, not past its absolute deadline, not opened
+// before the company's last invalidation, at its person's current revocation
+// epoch), so a named sign-out and the deactivation probe agree about which
+// sessions are over. An absent row is never live.
+func (r *Reader) SessionStanding(ctx context.Context, lineage string,
+	now time.Time) (string, bool, error) {
+
 	if lineage == "" {
-		return "", nil
+		return "", false, nil
 	}
-	var owner string
+	var (
+		owner string
+		state SessionState
+	)
+	applied := uint64(r.committed().Packed())
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx,
 			`SELECT person_id FROM iam_sessions WHERE lineage = ?`, lineage).
@@ -864,12 +882,18 @@ func (r *Reader) SessionOwner(ctx context.Context, lineage string) (string, erro
 		if err != nil {
 			return fmt.Errorf("iamdomain: read a session's owner: %w", err)
 		}
-		return nil
+		invalidated, err := readInvalidated(ctx, tx)
+		if err != nil {
+			return err
+		}
+		state, err = sessionState(ctx, tx, RefreshGrant{Lineage: lineage},
+			applied, invalidated, now)
+		return err
 	})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	return owner, nil
+	return owner, owner != "" && state == SessionLive, nil
 }
 
 // SeatHeld reports whether a seat handle is one somebody in this estate is
