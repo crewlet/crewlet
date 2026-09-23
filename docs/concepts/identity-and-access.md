@@ -647,6 +647,27 @@ token the login obtained. A provider whose account is gone answers
 deactivation would sign the whole company out the first time somebody else's
 service had an outage.
 
+The token is **kept when the person signs in**, sealed into the company's secret
+store beside the session it belongs to, and nothing on the request path ever
+reads it back. A sign-in whose token cannot be kept there is **refused with a
+503** and the session it opened is closed: admitted, it would be the one
+session the probe exists to reach and never could. A provider that rotates
+refresh tokens hands back a new one on each exchange, and the probe records it —
+otherwise the next pass would present a token the provider had retired and read
+the refusal as an off-boarding. Once a session has ended, by any lever, its
+token is dropped on the next pass.
+
+The probe is a fleet singleton, `iam_deactivation_probe`, run by whichever
+worker node holds its lease, at `oidc.deactivation_probe`. See
+[the identity duties](../guides/retention.md#the-identity-duties) for how it and
+the estate's other duties are scheduled.
+
+A provider sign-in resolves the subject through the person's **link**, and only
+a live one: a withdrawn or expired link signs nobody in. A subject that two
+people hold live links to — which the engine never writes, and a restore can —
+signs **neither** of them in, and the refusal names both, because the subject
+is the whole of what a provider sign-in proves.
+
 Without `offline_access` there is no refresh token and therefore no probe, and
 validation says so rather than leaving you believing an off-boarding is felt
 sooner than it is. An unset `api.auth.oidc.scopes` asks for `openid`,
@@ -1203,16 +1224,23 @@ contend at all.
 
 Because a record has exactly one subject, **an enrolment is a sequence**: take
 the address, take the login, then write the person. A sequence that stops
-halfway leaves a claimed address with no person — a legal, named state that a
-duty reports and a sweep collects, rather than a person holding an address
-somebody else also holds.
+halfway leaves a claimed address with no person — a *reservation*, a legal,
+named state rather than a person holding an address somebody else also holds.
+Nothing collects it on a clock, because its claims still hold their subjects on
+the log and a deleted row would leave an address arbitrated to nobody the
+directory can name. `crewlet iam check` reports one older than an hour as
+`claim_orphaned`, and removing its id releases what it holds.
 
 > **If you are reading the schema and reaching for a unique index as a
 > backstop: don't.** A duplicate cannot arise from ordinary traffic, and it
 > *can* arise from a restore or a reanchor. Three **non-unique, partial**
-> indexes over the address blind, the login and the seat id are what a duty
-> reads to *report* one. A unique index would convert an anomaly an operator
-> can repair into an outage nobody can.
+> indexes over the address blind, the login and the seat id are what the
+> `iam_claims` duty reads to *report* one — a WARN line each hour it stands,
+> and a `claim_duplicated` finding in `crewlet iam check` naming everybody who
+> holds it. A unique index would convert an anomaly an operator can repair
+> into an outage nobody can: a violation inside an apply would stop that
+> node's log for good. The engine never picks who keeps a duplicated claim;
+> you do, and you release it from the others.
 
 ### What is in the clear, and what is not
 
@@ -1235,6 +1263,16 @@ your own audit trail for nothing.
 An address is looked up by its **blind**: a keyed hash, so a node holding the
 key can compute it from an address and nobody else can go the other way.
 Signing in opens nothing.
+
+The key is `CREWLET_IAM_BLIND_INDEX_KEY` in the company's secret store, and
+**the first node that needs one mints it** — under a fleet-wide hold, so two
+nodes booting together cannot each mint their own and go on deriving blinds
+the other cannot match. It is never minted over a key that was deleted: every
+blind in the estate was derived under the old one, so a new key would orphan
+every address in the directory and let each be claimed a second time. A node
+that finds the key missing while the estate holds any blinded value refuses
+every address write by name instead, until the key is restored from the backup
+that holds it. Rotating it is a migration, not a setting.
 
 ### The eight tables
 
@@ -1309,7 +1347,12 @@ The sweep that enforces them is a **record on the log**, not a local delete,
 and it names a *position range* the publisher resolves once — so two nodes with
 skewed clocks delete identical rows. It runs per **bucket**: the estate is
 divided into 64 partitions by a hash of the person's id, so one horizon's worth
-of deletions is 64 bounded transactions rather than one unbounded one.
+of deletions is 64 bounded transactions rather than one unbounded one. The
+publisher is the `iam_sweep` duty, hourly, and it publishes only for a bucket
+holding something at least a day past its horizon, which bounds it at 64
+records a day. The same record collects sessions, invitations and bootstrap
+codes a week after they stopped being presentable. See
+[Retention](../guides/retention.md#the-identity-duties).
 
 ### Removing somebody destroys a key, not a row
 
@@ -1335,7 +1378,11 @@ Two consequences worth knowing before you see them:
   the key goes afterwards. The other order would destroy a key for a removal
   that then rolled back, and nothing could put it back. If the key deletion
   fails — a coordination outage — the person is removed everywhere and their
-  key lives on, which is a state a duty finds and retries.
+  key lives on, which is a state a duty finds and retries: `iam_key_shred`
+  looks every fifteen minutes and destroys each key a removal left behind,
+  and `crewlet iam check` names every one still waiting as
+  `removal_key_live`. The duty needs no keyring — finding a key and deleting
+  it both work on a node that can decrypt nothing.
 - **A value that will not decrypt is not the same as an outage.** A removed
   person's row reports itself as *shredded*; a decryption failure on somebody
   who has not been removed is a key-store problem. Rendering the second as the

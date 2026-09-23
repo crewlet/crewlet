@@ -702,18 +702,87 @@ that is days old, and is a record of a person's working hours for as long as it
 is kept. Keeping the second as long as the first would be storing more about
 people than there is a reason to.
 
+The trail's sweep is the one sweep in the engine that is **a record on the
+log** rather than a local delete. The rows are identity-claimed, so a node
+sweeping on its own clock would hold different bytes from its peers, and "N
+byte-identical copies" would quietly become a claim about how synchronised
+their clocks were. The record names *positions* the publisher resolved once —
+"every change below this one, every session record below that one" — and one
+instant, also read once, against which the same record collects the rows that
+are **over** rather than old: sessions that ended or passed their absolute
+deadline, and invitations and bootstrap codes that expired unredeemed, each
+kept for a week afterwards so the sessions screen can still say what ended and
+why (the trail row is the durable account after that). It runs
+**per bucket**: the estate is divided into 64 partitions by a hash of the
+person's id, so one horizon's worth of deletions is 64 bounded transactions of
+at most 4 000 rows each rather than one unbounded one. Two nodes whose clocks
+disagree delete exactly the same rows, because neither reads its own clock.
+
+A redeemed invitation and a revoked credential are **not** collected: the first
+is part of the record of how somebody joined, and the second lives inside the
+person's own row, which is rewritten whole on every change to it.
+
 The identity domain's **operation ledger** keeps the single 30-day horizon
 every other domain's does, which is not a contradiction with the two above: a
 ledger answers "did my write land" and is measured against the longest a client
 will retry, where a trail answers "what happened" and is measured against an
-audit obligation. Its sweep is also the one that is **a record on the log**
-rather than a local delete — the rows are identity-claimed, so a node sweeping
-on its own clock would hold different bytes from its peers, and "N
-byte-identical copies" would quietly become a claim about how synchronised
-their clocks were. The record names a *position range* the publisher resolved
-once, and it runs **per bucket**: the estate is divided into 64 partitions by a
-hash of the person's id, so one horizon's worth of deletions is 64 bounded
-transactions rather than one unbounded one.
+audit obligation. It is swept like every other domain's — per node, by the
+maintenance sweep — because each node owns its own copy of it.
+
+### The identity duties
+
+Five things keep the identity estate honest, and four of them are fleet
+singletons, each on its own lease so that a flap on one costs that one an
+interval rather than all of them. Each of the four runs once as soon as a node
+claims it — so a restored node names a duplicate the moment it is back rather
+than an hour later — and then on its interval.
+
+| Duty | Interval | What it does |
+|---|---|---|
+| `iam_sweep` | 1 hour | Resolves `api.auth.audit.changes` (400 days) and `api.auth.audit.sessions` (90 days) to positions and publishes one sweep record for each bucket that is **due** — one holding something at least a day past its horizon. The day of slack is what bounds the log: a bucket is swept at most about once a day, so the sweep adds at most 64 records a day however often it runs. |
+| `iam_deactivation_probe` | `oidc.deactivation_probe` (1 hour) | Asks the identity provider about every live provider session, with the refresh token kept when the person signed in. Only on a deployment with an `oidc` block. |
+| `iam_key_shred` | 15 minutes | Destroys the key of anybody removed whose key outlived the removal. |
+| `iam_claims` | 1 hour | Logs every duplicated claim and every orphaned reservation at WARN, every tick it stands. |
+
+The fifth is the operation ledger's sweep, which runs in the ordinary
+maintenance tick on every node.
+
+**The key duty exists because a removal is a key deletion.** The removal's rows
+commit first and the person's key is destroyed after, on every node that
+applies it — so a coordination store that blinks at that instant leaves a row
+that says *removed* and a key that still exists. Until the key goes, the
+person's name and address are readable from every backup taken before the
+removal. Fifteen minutes is the maintenance sweep's own interval: a pending key
+exists only because a write failed, so the useful retry is "soon after the store
+is back", and every minute is a minute somebody off-boarded is still readable.
+`crewlet iam check` names each one as `removal_key_live` while it waits.
+
+**The probe needs the refresh token, so a provider sign-in keeps it.** It is
+sealed into the company's secret store beside the session it belongs to, and a
+sign-in whose token cannot be kept there is refused with a 503 rather than
+admitted: a session the probe cannot ask about is one nobody can end from the
+provider before its absolute deadline. `invalid_grant` ends the session as
+`idp_revoked`; every other failure — an unreachable provider, a 5xx, a timeout
+— is *unknown* and ends nothing, because reading an outage as a deactivation
+would sign the whole company out during somebody else's incident. A rotated
+refresh token is recorded, or the next pass would present one the provider had
+retired and read the refusal as an off-boarding. A token whose session has
+ended — by logout, expiry, a revocation or a session invalidation — is dropped
+on the next pass.
+
+**The probe's interval can exceed what a lease may live.** A lease is capped at
+three hours and every singleton keeps three claims to a lease, so a duty whose
+interval is longer than an hour claims hourly and runs every so many claims —
+a `deactivation_probe` of `90m` is two claims of 45 minutes, and the interval
+the operator set is the interval kept.
+
+**The claim report never repairs.** The broker cannot put two people on one
+address, one login or one seat, but a restore or a reanchor can, and the
+estate has no unique index to refuse it with — a violation inside an apply
+would stop that node's log for good. So a duplicate is *reported*, with every
+person holding it, and an operator decides who keeps it. An orphaned
+reservation — claims an enrolment took before it stopped, older than an hour —
+is released by removing its id.
 
 A person's **inbox** — one row per routed change per recipient — is swept at
 `tracker.native.inbox_retention_days`, **365 days** by default and settable

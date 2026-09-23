@@ -516,7 +516,7 @@ machine token with `crewlet iam token`.
 | `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live |
 | `invalidate-all` | Invalidate every session in the company. The restore runbook's last step |
 | `bootstrap-code` | Re-issue the one-time founder code. Withdraws every outstanding one first, so exactly one is live |
-| `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat removed, tombstoned, turned into an agent seat, or not yet applied on this node), grants this node's ceiling clamps. A binding this node's chart cannot judge — its applier past the 60-second stall grace — is counted and said first rather than reported either way |
+| `check` | What is wrong with this company's access: no administrator, people with no credential, dangling bindings (a seat removed, tombstoned, turned into an agent seat, or not yet applied on this node), grants this node's ceiling clamps, duplicated and orphaned claims, removed people whose key still lives. A binding this node's chart cannot judge — its applier past the 60-second stall grace — is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
 | `audit` | The identity estate's own trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-limit` |
 
 ### Flags
@@ -550,6 +550,29 @@ token. Lost one is re-issued rather than recovered.
 node has the change; `pending` means it is durable and this node has not
 applied it yet, and carries the position to read at; `unknown` means nothing
 can be established from here.
+
+### `crewlet iam check`
+
+One walk of the directory as the node you reach holds it, printed as a
+`FINDING`, a `WHO` and a sentence saying what to do. It reports and never
+repairs: each finding is somebody's decision.
+
+| Finding | What it means | What to do |
+|---|---|---|
+| `no_people_manage_holder` | No active person holding a credential carries `people:manage`, so nobody can invite, grant or revoke except through a Tier A token | Grant it to somebody, with a token |
+| `person_without_credential` | Somebody active who cannot sign in: an invitation never redeemed, an enrolment nobody finished | Re-invite them, or remove them |
+| `binding_dangling` | Somebody bound to a seat the org chart no longer holds | `unbind`, or `bind` them elsewhere |
+| `identity_shredded` | Somebody removed, whose name and address are gone everywhere | Nothing; it is what a removal is |
+| `grant_clamped_by_ceiling` | A grant somebody's row declares and this node's `api.auth.max_grants` withholds | Legal while a fleet rolls out a ceiling change; otherwise align the row and the ceiling |
+| `claim_duplicated` | An address, a login or a seat more than one person holds. `WHO` is the claim and every holder; an address is named by its kind alone, because the report carries no form of it | Decide who keeps it, and release it from the others |
+| `claim_orphaned` | Claims an enrolment took before it stopped, held for over an hour by nobody who can use them | `remove` the id, which releases them |
+| `removal_key_live` | Somebody removed whose key still exists, so their name and address are readable from every backup taken before the removal | Nothing — the key duty retries every fifteen minutes; a finding that stands says the company's secret store is refusing the delete |
+
+A duplicate cannot come from ordinary traffic — the broker arbitrates every
+claim — and **can** come from a restore or a reanchor. A report that could not
+read the claims answers 503 rather than a clean bill, because it is the only
+place a duplicate is ever named. `removal_key_live` is left out on a node with
+no company secret store, which cannot tell a surviving key from no key.
 
 ## `crewlet secrets`
 
