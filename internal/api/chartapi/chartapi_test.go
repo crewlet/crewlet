@@ -784,3 +784,17 @@ func resolved(of func() iam.Principal) chartapi.Principal {
 		return of(), iam.Resolved
 	}
 }
+
+// A BODY OVER THE CAP IS ANSWERED 413, not abandoned.
+//
+// The body reader refused it and the handler returned without writing a
+// status, so the caller was answered an empty 200 — which reads, to every
+// client, as the write having landed.
+func TestAnOversizedWriteIsAnsweredRatherThanDropped(t *testing.T) {
+	t.Parallel()
+	r := serve(t, &reader{chart: nimbus()}, leadOf(), leads())
+	body := `{"name":"` + strings.Repeat("x", chartapi.MaxBodyBytes) + `"}`
+	if rec := patch(r.mux, "/chart/units/engineering", body); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("an oversized write answered %d, want 413", rec.Code)
+	}
+}

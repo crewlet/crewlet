@@ -111,6 +111,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 
 	body, err := httpjson.ReadBody(w, r, maxLoginBody)
 	if err != nil {
+		httpjson.Refuse(w, err)
 		return
 	}
 	var in loginRequest

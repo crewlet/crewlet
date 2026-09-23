@@ -756,3 +756,16 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 		t.Error("a verb with no rule mounted, so a route can ship ungated")
 	}
 }
+
+// A BODY OVER THE CAP IS ANSWERED 413, not abandoned — for chartapi's reason:
+// the handler returned without writing a status, and an empty 200 reads as a
+// person created.
+func TestAnOversizedWriteIsAnsweredRatherThanDropped(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	got := r.as(administrator(), http.MethodPost, "/iam/people",
+		strings.Repeat("x", iamapi.MaxBodyBytes))
+	if got.status != http.StatusRequestEntityTooLarge {
+		t.Errorf("an oversized write answered %d, want 413", got.status)
+	}
+}

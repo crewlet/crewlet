@@ -228,6 +228,10 @@ func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var out T
 	raw, err := httpjson.ReadBody(w, r, MaxBodyBytes)
 	if err != nil {
+		// ANSWERED, not merely abandoned: a handler that returned here
+		// wrote no status, so a body over the cap came back as an empty
+		// 200 — which a client reads as the write having landed.
+		httpjson.Refuse(w, err)
 		return out, false
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {

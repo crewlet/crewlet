@@ -2,11 +2,13 @@ package authapi_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // EVERY ROUTE THIS SURFACE REGISTERS IS DELIBERATELY GUARDED OR DELIBERATELY
@@ -141,6 +143,31 @@ func TestTheProviderRoutesAreMountedAndExemptWhereThereIsOne(t *testing.T) {
 			t.Errorf("%s is guarded: a provider round trip is a BROWSER "+
 				"following a redirect, which carries nothing this engine "+
 				"issued — so requiring a credential makes it unreachable", want)
+		}
+	}
+}
+
+// A BODY OVER THE CAP IS ANSWERED 413, not abandoned.
+//
+// The sign-in and bootstrap handlers returned without writing a status when
+// the body reader refused a body, so the caller was answered an empty 200 —
+// which a client reads as signed in with no cookie. A 413 discloses nothing a
+// roster could be built from: it is about the size of the request, answered
+// the same whoever is named in it.
+func TestAnOversizedSignInIsAnsweredRatherThanDropped(t *testing.T) {
+	t.Parallel()
+	// A PASSWORD DEPLOYMENT, or the sign-in route answers that it serves
+	// none before it reads a byte.
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendLocal
+	mux := http.NewServeMux()
+	build(t, b, nil).Routes(mux)
+	for _, path := range []string{auth.PathAuthLogin, auth.PathAuthBootstrap} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path,
+			strings.NewReader(`{"login":"`+strings.Repeat("x", 8<<10)+`"}`)))
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("%s: an oversized body answered %d, want 413", path, rec.Code)
 		}
 	}
 }
