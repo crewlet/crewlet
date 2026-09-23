@@ -176,6 +176,21 @@ type WriteResult struct {
 // the alternative: minting the item first and the number after would let two
 // items share a key, and a key is what people paste into chat.
 //
+// # A retry under the same operation id
+//
+// THE TASK'S ID MUST BE A FUNCTION OF THE OPERATION — the builtin derives it
+// from the operation id — because the id is the subject the second append
+// arbitrates on: a retry that named a different task under the same
+// operation would be a second task the broker has no reason to refuse.
+//
+// A retry whose counter step already landed cannot use the number: that step
+// is answered from the ledger rather than decided ([statelog.Result.Collapsed]),
+// so the number it would have taken is one the counter never recorded. So the
+// retry asks for the task step the same way ([Writer.resumeCreate]): a task
+// that landed is answered with its own key, and only a task that never did
+// is filed on a FRESH mint — leaving the gap the crash residue already
+// describes, and never a second task or a shared key.
+//
 // THE RANK COMES FROM THE COUNTER VALUE and nothing arbitrates it a second
 // time. n is unique and increasing under the counter row's own arbitration, so
 // no two creates collide and every create's key is strictly the new maximum —
@@ -224,15 +239,33 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	// does with its own warnings.
 	var settled settledCreate
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), task.Project, 1,
-		func(tx *sql.Tx) error {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			var err error
-			settled, err = w.refuseCreate(ctx, tx, task)
-			return err
-		})
-	if err != nil {
+		w.settleCreate(ctx, task, &settled))
+	switch {
+	case errors.Is(err, errMintLanded):
+		return w.resumeCreate(ctx, opID, task, notify)
+	case err != nil:
 		return WriteResult{Result: minted}, err
 	}
+	return w.fileTask(ctx, opID, task, n, settled, notify)
+}
+
+// settleCreate is the read a create's mint runs inside its own snapshot: the
+// refusals that need rows, and the values only rows can settle, assigned to
+// settled on every run of the closure.
+func (w *Writer) settleCreate(ctx context.Context, task Task,
+	settled *settledCreate) func(*sql.Tx) error {
+
+	return func(tx *sql.Tx) error {
+		got, err := w.refuseCreate(ctx, tx, task)
+		*settled = got
+		return err
+	}
+}
+
+// fileTask is a create's second append, on the key number n its mint took.
+func (w *Writer) fileTask(ctx context.Context, opID string, task Task, n uint64,
+	settled settledCreate, notify *Notify) (WriteResult, error) {
+
 	if settled.fields != nil {
 		task.Fields = settled.fields
 	}
@@ -256,9 +289,105 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	}
 
 	result, err := w.writeTask(ctx, stepID(opID, "task"), task, notify, at)
+	if err == nil && result.Collapsed {
+		// THE TASK STEP LANDED UNDER AN EARLIER COPY of this operation —
+		// found once a fresh mint's append met it on the task's subject
+		// — so the task is that copy's, under the number it took, and n
+		// is the gap this retry left.
+		return w.landedTask(ctx, result.Result, task.ID)
+	}
 	result.Key, result.Rank = task.Key, task.Rank
 	result.Warnings = append(result.Warnings, settled.warnings...)
 	return result, err
+}
+
+// resumeCreate finishes a create whose counter step already landed under its
+// operation id — a retry of a create the first attempt got at least halfway
+// through.
+//
+// THE TASK STEP IS ASKED FOR FIRST, AND ONLY ANSWERED. Its decision cannot be
+// taken here — it needs the number the earlier copy's counter step took,
+// which is on the log and not in this call — so its Decide refuses; the
+// ledger answers it before the Decide runs if the task landed, and then the
+// retry is the task the first attempt filed, under its own key, with no
+// second counter record. Minting first would spend a number on every retry
+// of a create that had already finished.
+//
+// ONLY A TASK THAT HAS NOT APPLIED HERE IS FILED ON A FRESH MINT, under an
+// operation of its own: the earlier number is the documented gap, and the
+// fresh one is unique under the counter's arbitration like any other. If the
+// task did land and this node simply has not applied it yet, the fresh mint
+// still costs only a number: the task step then meets the earlier copy on the
+// task's own subject, is refused its expectation of zero, and is answered
+// from the ledger once this node catches up ([Writer.fileTask]).
+func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
+	notify *Notify) (WriteResult, error) {
+
+	subject := TaskSubject(task.ID)
+	scope := ScopeSet{Subject: true, Container: task.Project}
+	answered, err := w.publish(ctx, statelog.Request{
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    stepID(opID, "task"),
+		Pattern: statelog.PatternCreate,
+		Decide: func(*sql.Tx, statelog.Stamp) (statelog.Decision, error) {
+			return statelog.Decision{}, errTaskNotApplied
+		},
+	})
+	switch {
+	case err == nil:
+		return w.landedTask(ctx, answered, task.ID)
+	case !errors.Is(err, errTaskNotApplied):
+		return WriteResult{Result: answered}, err
+	}
+
+	var settled settledCreate
+	n, minted, err := w.mintKey(ctx,
+		stepID(statelog.NewOpID(time.Now(), "remint"), "counter"), task.Project, 1,
+		w.settleCreate(ctx, task, &settled))
+	if err != nil {
+		return WriteResult{Result: minted}, err
+	}
+	return w.fileTask(ctx, opID, task, n, settled, notify)
+}
+
+// errTaskNotApplied is a resumed create's task step finding no ledger row to
+// answer it: the task has not applied on this node.
+var errTaskNotApplied = errors.New("tracker: the create's task has not applied here")
+
+// landedTask is the answer to a create whose task step already landed: the
+// ledger's position, and the key and rank the task was filed under, read off
+// its row.
+//
+// A TASK THAT IS NO LONGER HERE — purged since — still landed, so the
+// outcome stands and the missing key is a warning rather than a refusal.
+func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
+	id string) (WriteResult, error) {
+
+	out := WriteResult{Result: result}
+	if w.db == nil {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("task %s was filed by an "+
+			"earlier copy of this operation, and this writer has no store to "+
+			"read its key from", id))
+		return out, nil
+	}
+	var task Task
+	var held bool
+	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		task, held, err = readTask(ctx, tx, id)
+		return err
+	}); err != nil {
+		return out, fmt.Errorf("tracker: task %s was filed by an earlier copy of "+
+			"this operation; read its key: %w", id, err)
+	}
+	if !held {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("task %s was filed by an "+
+			"earlier copy of this operation and is no longer on this node", id))
+		return out, nil
+	}
+	out.Key, out.Rank = task.Key, task.Rank
+	return out, nil
 }
 
 // filedUnit is which team a new task belongs to, and which team's lead hears
@@ -420,16 +549,21 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 		// and `base` is what THIS call would have taken — a number the
 		// counter never recorded and the next create is free to take too,
 		// which is two tasks with one key. The number the earlier copy
-		// took is on the log, not here; a caller that gets this retries
-		// the create as a new operation, which leaves the documented
-		// numbering gap rather than a duplicate key.
+		// took is on the log, not here: a create resumes from its task
+		// step instead ([Writer.resumeCreate]), and every other caller
+		// refuses.
 		return 0, result, fmt.Errorf("tracker: the key mint for %s already "+
 			"landed under operation %s, and the number it took is the earlier "+
-			"copy's, so it cannot be built on: %w", project, opID,
-			statelog.ErrUnavailable)
+			"copy's, so it cannot be built on: %w", project, opID, errMintLanded)
 	}
 	return base, result, nil
 }
+
+// errMintLanded is a key mint answered from an earlier copy of its operation.
+// Unavailable, because to a caller that cannot resume it is exactly that: the
+// number is on the log and not in this call.
+var errMintLanded = fmt.Errorf("the mint's number is an earlier copy's: %w",
+	statelog.ErrUnavailable)
 
 // settledCreate is what a create's own snapshot decided: the values that could
 // only be settled against rows, carried back out to the record the sequence's

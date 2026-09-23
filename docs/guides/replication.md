@@ -62,10 +62,12 @@ it comes back `applied`, at the position the first copy landed, however long
 afterwards it arrives. Deciding it again would mean deciding against rows that
 already hold it — a retried purge would find its task gone and refuse, an
 update conditioned on a version would find that version moved by its own first
-copy and refuse as stale. A retried create is the one exception to reporting
-the first copy's answer: its key number was minted by the first copy and is not
-recomputed, so the retry is refused as unavailable naming the operation, and
-the task the first copy created is where it landed.
+copy and refuse as stale. A retried create comes back as the task the first
+copy filed, under the key it took — a turn re-run after a crash files one work
+item, not two, because the new item's id is derived from the operation. Only a
+create that took its key number and never filed its task is finished on a
+fresh number, which leaves a gap in the project's numbering (ENG-8 is skipped)
+rather than two items sharing a key.
 
 The ledger is the node's own, so a donated snapshot arrives **without** one: a
 node that [adopted a snapshot](retention.md) holds no row for any operation the

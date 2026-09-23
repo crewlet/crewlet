@@ -3,6 +3,8 @@ package builtin_test
 import (
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -97,4 +99,44 @@ func commentOf(t *testing.T, patch tracker.TaskPatch) *tracker.Comment {
 		t.Fatal("the patch carries no comment")
 	}
 	return patch.Comment
+}
+
+// A RE-RUN OF ONE CREATE ADDRESSES THE TASK THE FIRST RUN FILED, and two
+// different creates file two.
+//
+// The new task's id is the subject its create arbitrates on, and it was a
+// fresh uuid per call — which was also part of the operation's name — so a
+// turn redelivered after it had filed its item filed a second one under a
+// second key, and no retry of a create could ever reach the first copy.
+func TestARerunCreateAddressesTheTaskItFiled(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	for _, args := range []map[string]any{
+		{"title": "wire the applier", "project": "ENG"},
+		// THE SAME CALL AGAIN, as the re-run makes it: the arguments a
+		// model wrote in whatever order it wrote them.
+		{"project": "ENG", "title": "wire the applier"},
+		{"title": "write the docs", "project": "ENG"},
+	} {
+		if got := callWork(t, reg, builtin.CreateWorkItemTool, args); got.Failed {
+			t.Fatalf("create %v failed: %s", args, got.Output)
+		}
+	}
+	if len(trk.created) != 3 || len(trk.opIDs) != 3 {
+		t.Fatalf("three creates reached the tracker as %d under %v",
+			len(trk.created), trk.opIDs)
+	}
+	first, rerun, other := trk.created[0], trk.created[1], trk.created[2]
+	if first.ID != rerun.ID || trk.opIDs[0] != trk.opIDs[1] {
+		t.Errorf("a re-run filed task %q under %q after %q under %q — one "+
+			"request, two items", rerun.ID, trk.opIDs[1], first.ID, trk.opIDs[0])
+	}
+	if first.ID == other.ID || trk.opIDs[0] == trk.opIDs[2] {
+		t.Errorf("two different creates share task %q / operation %q", first.ID,
+			trk.opIDs[0])
+	}
+	if _, err := uuid.Parse(first.ID); err != nil {
+		t.Errorf("the derived task id %q is not a uuid: %v", first.ID, err)
+	}
 }

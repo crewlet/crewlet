@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -88,30 +90,109 @@ func TestARetryOfAWriteThatLandedIsAnsweredWithIt(t *testing.T) {
 		}
 	})
 
-	// A CREATE WHOSE KEY WAS ALREADY MINTED UNDER THIS OPERATION does not
-	// build a task on a number the counter never recorded: that number is
-	// the next create's too, and two tasks with one key is the one thing
-	// the create sequence exists to prevent.
-	t.Run("a create whose key was minted under this operation", func(t *testing.T) {
+	// A CREATE THAT FINISHED is answered with the task it filed, under the
+	// key it took — and with no second counter record, which is a number
+	// spent on every retry of work that was already done.
+	t.Run("a create that finished", func(t *testing.T) {
 		t.Parallel()
 		r := newRoundTrip(t)
 		r.applyWhileWriting()
 		op := statelog.NewOpID(time.Now(), "create")
-		if _, err := r.writer.CreateTask(t.Context(), op, newTask("t-1"), nil); err != nil {
+		first, err := r.writer.CreateTask(t.Context(), op, newTask("t-1"), nil)
+		if err != nil {
 			t.Fatalf("the first create: %v", err)
 		}
 		r.drain()
 		end := r.logEnd(t)
 
-		_, err := r.writer.CreateTask(t.Context(), op, newTask("t-2"), nil)
-		if !errors.Is(err, statelog.ErrUnavailable) || !strings.Contains(err.Error(), "already landed") {
-			t.Fatalf("the create = %v, want the key mint's own refusal — a create "+
-				"that builds a task on the counter step an earlier copy of its "+
-				"operation took files it under a number the counter never "+
-				"recorded, which the next create takes as well", err)
+		retry, err := r.writer.CreateTask(t.Context(), op, newTask("t-1"), nil)
+		if err != nil {
+			t.Fatalf("the retry of a create that landed: %v — the task exists, "+
+				"and its filer is told it could not be filed", err)
+		}
+		if retry.Outcome != statelog.OutcomeApplied || retry.Key != first.Key ||
+			retry.Position != first.Position {
+			t.Fatalf("the retry = %+v key %q, want applied as %s at %s", retry.Result,
+				retry.Key, first.Key, first.Position)
 		}
 		if got := r.logEnd(t); got != end {
-			t.Fatalf("the refused create put %d record(s) on the log", got-end)
+			t.Fatalf("the retry put %d record(s) on the log — a create already "+
+				"filed spends no second number", got-end)
+		}
+	})
+
+	// A CREATE WHOSE TASK LANDED BUT HAS NOT APPLIED HERE looks, to the
+	// retry, exactly like one whose task never landed — the ledger holds
+	// the counter step and not the task step — so it is resumed on a fresh
+	// number. What it must not do is report that number: the task step
+	// then finds the earlier copy, and the task is that copy's.
+	t.Run("a create whose task landed and has not applied here", func(t *testing.T) {
+		t.Parallel()
+		r := newRoundTrip(t)
+		op := statelog.NewOpID(time.Now(), "create")
+		first, err := r.writer.CreateTask(t.Context(), op, newTask("t-1"), nil)
+		if err != nil || first.Outcome != statelog.OutcomePending {
+			t.Fatalf("the first create = (%+v, %v), want pending", first.Result, err)
+		}
+		// THE COUNTER STEP APPLIED, THE TASK STEP NOT: its record is the
+		// one after the counter's.
+		r.apply(r.consumed+1, first.Position.Seq-1)
+		r.applyWhileWriting()
+
+		retry, err := r.writer.CreateTask(t.Context(), op, newTask("t-1"), nil)
+		if err != nil {
+			t.Fatalf("the retry: %v", err)
+		}
+		if retry.Key != first.Key || retry.Position != first.Position ||
+			!retry.Collapsed {
+			t.Fatalf("the retry = %+v key %q, want the first copy's %s at %s — "+
+				"the fresh number it minted is the gap, not the task's key",
+				retry.Result, retry.Key, first.Key, first.Position)
+		}
+		r.drain()
+		if rows := r.ask(map[string]any{"container": "project:ENG"}).Rows; len(rows) != 1 {
+			t.Fatalf("the project holds %d tasks after one create retried once", len(rows))
+		}
+	})
+
+	// A CREATE WHOSE COUNTER LANDED AND WHOSE TASK DID NOT — the crash
+	// residue — is finished on a FRESH number. The one its counter step
+	// took is the earlier copy's and is not in this call: built on the
+	// number this call would have taken instead, the task shares its key
+	// with the next create, because the counter never recorded it.
+	t.Run("a create whose counter landed and whose task did not", func(t *testing.T) {
+		t.Parallel()
+		r := newRoundTrip(t)
+		r.applyWhileWriting()
+		lossy, lost := r.lossyWriter(t)
+		op := statelog.NewOpID(time.Now(), "create")
+		lost.refuse(".task.t-1")
+		if _, err := lossy.CreateTask(t.Context(), op, newTask("t-1"), nil); err == nil {
+			t.Fatal("the create whose task step the broker refused reported success")
+		}
+		lost.refuse("")
+		r.drain()
+
+		retry, err := r.writer.CreateTask(t.Context(), op, newTask("t-1"), nil)
+		if err != nil {
+			t.Fatalf("the retry of a create whose task never landed: %v", err)
+		}
+		r.drain()
+		if retry.Outcome != statelog.OutcomeApplied || retry.Collapsed {
+			t.Fatalf("the retry = %+v, want its own task applied", retry.Result)
+		}
+		if retry.Key != "ENG-2" {
+			t.Fatalf("the retry filed its task as %q, want ENG-2 — ENG-1 is the "+
+				"earlier copy's number, the gap a crash between the two appends "+
+				"leaves", retry.Key)
+		}
+		next, err := r.writer.CreateTask(t.Context(),
+			statelog.NewOpID(time.Now(), "create"), newTask("t-2"), nil)
+		if err != nil {
+			t.Fatalf("the next create: %v", err)
+		}
+		if next.Key == retry.Key {
+			t.Fatalf("two tasks share key %s", next.Key)
 		}
 	})
 }
@@ -163,11 +244,27 @@ func (r *roundTrip) logEnd(t *testing.T) uint64 {
 	return end
 }
 
-// lossyLog is the broker with its next few ANSWERS lost: an append still lands.
+// lossyLog is the broker with its next few ANSWERS lost — an append still
+// lands — or with the appends to one subject REFUSED outright.
 type lossyLog struct {
 	statelog.Appender
 	mu      sync.Mutex
 	pending int
+	refused string
+}
+
+// refuse makes the broker refuse to store every append to a subject ending in
+// suffix, as a full stream does; the empty suffix refuses nothing.
+func (l *lossyLog) refuse(suffix string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.refused = suffix
+}
+
+func (l *lossyLog) refuses(subject string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.refused != "" && strings.HasSuffix(subject, l.refused)
 }
 
 // drop loses the next n answers.
@@ -192,6 +289,11 @@ var errAnswerLost = errors.New("nats: timeout")
 func (l *lossyLog) Append(ctx context.Context, subject, msgID string, expect *uint64,
 	body []byte) (uint64, bool, error) {
 
+	if l.refuses(subject) {
+		return 0, false, &jetstream.APIError{
+			Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded",
+		}
+	}
 	seq, dup, err := l.Appender.Append(ctx, subject, msgID, expect, body)
 	if err == nil && l.lose() {
 		return 0, false, errAnswerLost

@@ -1319,7 +1319,6 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	now := t.deps.now()
 	task := tracker.Task{
 		V:           tracker.DocumentVersion,
-		ID:          uuid.NewString(),
 		Title:       strings.TrimSpace(argString(args, "title")),
 		Body:        argString(args, "body"),
 		Type:        strings.TrimSpace(argString(args, "type")),
@@ -1380,6 +1379,11 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				"in rather than guessing."), nil
 		}
 	}
+	// THE OPERATION, AND THE TASK'S ID FROM IT — see [createdTaskID]. The
+	// project is the operation's object rather than the id, because the id
+	// is what is being derived; by here it is settled, default included.
+	opID := opIDFor(actor, "create", task.Project, args)
+	task.ID = createdTaskID(opID)
 	// A UNIT THE CALLER NAMED, checked against the chart and open to every
 	// seat — deliberately unlike the re-route above. `FiledUnit` is the
 	// immutable record of which team the work belongs to; `RoutingUnit`
@@ -1459,7 +1463,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if len(blockers) > 0 && t.deps.Dependencies == nil {
 		return failed(unconfiguredText(CreateWorkItemTool)), nil
 	}
-	got, err := writer.CreateTask(ctx, opIDFor(actor, "create", task.ID, args), task, notify)
+	got, err := writer.CreateTask(ctx, opID, task, notify)
 	if err != nil {
 		return failed(writeFailure(CreateWorkItemTool, err)), nil
 	}
@@ -1680,6 +1684,28 @@ func callDigest(args map[string]any) string {
 // work key. FIXED for the life of the format: changing it makes every re-run
 // straddling the change write twice.
 const opIDNamespace = "crewlet.builtin.work"
+
+// createdTaskID is the id of the task a create operation files: a UUIDv5 over
+// the operation id.
+//
+// A FUNCTION OF THE OPERATION, because a task's id is the subject its create
+// arbitrates on and the row it is guarded by. A fresh id per call made every
+// re-run of one `create_work_item` — a turn redelivered after a crash, the
+// same call repeated after an `unknown` — a different operation filing a
+// different task, so one request left two items with two keys, and the retry
+// identity [opIDFor] derives was never reached: the id was part of the
+// operation's name. Derived from the operation, a re-run addresses the task
+// the first run filed, and the tracker answers it with that task.
+//
+// Where the operation is fresh — a call with no turn identity to re-derive —
+// so is the id, which is the same promise: one operation, one task.
+func createdTaskID(opID string) string {
+	return uuid.NewSHA1(createdTaskNamespace, []byte(opID)).String()
+}
+
+// createdTaskNamespace is the uuid namespace a created task's id is derived
+// under. Fixed for the life of the format: it is durable in every task row.
+var createdTaskNamespace = uuid.MustParse("8677bb1c-20e0-4fbe-ab44-846868b79b37")
 
 // ---- update_work_item -------------------------------------------------- //
 
