@@ -113,7 +113,8 @@ CREATE TABLE control_ops (
     op_id      TEXT    NOT NULL PRIMARY KEY,
     subject    TEXT    NOT NULL,
     position   INTEGER NOT NULL,
-    applied_at INTEGER NOT NULL
+    applied_at INTEGER NOT NULL,
+    stored_at  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX control_ops_swept_idx ON control_ops (applied_at);
 CREATE TABLE control_log_deferred (

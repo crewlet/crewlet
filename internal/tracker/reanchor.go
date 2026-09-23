@@ -55,11 +55,23 @@ type GenerationRecord struct{}
 // rows already held it, and an abandoned one skipped a generation whose history
 // only an evicted node held. Every reanchor used to record the first, restored
 // brokers included.
-func generationReason(c statelog.ReanchorCase) string {
-	switch c {
+//
+// AND WHAT A RESTORED ONE DISCARDED, when the operator accepted discarding
+// records written after the restore: they are on the log below this record,
+// applied on no node, and this row is the one place a later reader can learn
+// that it was decided rather than lost.
+func generationReason(f statelog.GenerationFacts) string {
+	switch f.Case {
 	case statelog.ReanchorRestored:
-		return "the broker was restored from an older copy, so the log ended " +
-			"below the checkpoint; it is followed from its end"
+		reason := "the broker was restored from an older copy — the log ended " +
+			"below the checkpoint or had been written past it — and it is " +
+			"followed from its end"
+		if f.Discarded != nil {
+			reason += fmt.Sprintf("; the records written to it after the restore "+
+				"that these rows did not hold were discarded on the operator's "+
+				"word, the newest being %s", *f.Discarded)
+		}
+		return reason
 	case statelog.ReanchorAbandoned:
 		return "the log continued in a generation only an evicted node held; it " +
 			"is followed from these rows' checkpoint and that generation's " +
@@ -111,7 +123,7 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 		NewStreamCreatedAt:  f.Inputs.StreamCreatedAt.UTC(),
 		PrevLastSeqSeen:     f.Inputs.Highest,
 		ReanchoredBy:        author,
-		Reason:              generationReason(f.Case),
+		Reason:              generationReason(f),
 	})
 	if err != nil {
 		return statelog.GenerationRecord{}, false, fmt.Errorf("tracker: encode "+

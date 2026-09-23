@@ -27,6 +27,12 @@ type fakeCapacityNode struct {
 	// sequence it would put the checkpoint at.
 	reanchorCase   string
 	reanchorCursor uint64
+
+	// reanchorDiscards makes the status name a record written after a
+	// restore that the node's rows do not hold, and reanchorDiscard is
+	// whether the transition was asked to discard it.
+	reanchorDiscards bool
+	reanchorDiscard  bool
 }
 
 func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
@@ -74,18 +80,28 @@ func newFakeCapacityNode(t *testing.T) *fakeCapacityNode {
 		default:
 			body["case"], body["cursor"] = n.reanchorCase, n.reanchorCursor
 		}
+		if n.reanchorDiscards {
+			body["discards"] = discardedRecord()
+			body["discarding"] = "statelog: reanchor refused: it holds records this " +
+				"node's rows do not; re-run with the discard flag"
+		}
 		reply(w, body)
 	})
 	mux.HandleFunc("POST /work/retention/reanchor", func(w http.ResponseWriter, r *http.Request) {
 		n.reanchorConfirm = r.URL.Query().Get("confirm")
+		n.reanchorDiscard = r.URL.Query().Get("discard") == "true"
 		which := n.reanchorCase
 		if which == "" {
 			which = "recreated"
 		}
-		reply(w, map[string]any{
+		answer := map[string]any{
 			"stream": r.URL.Query().Get("stream"), "generation": 1,
 			"case": which, "cursor": n.reanchorCursor,
-		})
+		}
+		if n.reanchorDiscard {
+			answer["discarded"] = discardedRecord()
+		}
+		reply(w, answer)
 	})
 	n.server = httptest.NewServer(mux)
 	t.Cleanup(n.server.Close)
@@ -310,6 +326,58 @@ func TestAReanchorNamesTheCaseTheOperatorConfirms(t *testing.T) {
 	}
 	if strings.Contains(stdout, "-confirm") {
 		t.Errorf("a log with nothing to re-anchor was offered a command to run:\n%s", stdout)
+	}
+}
+
+// discardedRecord is the record the fake node names as written after a restore.
+func discardedRecord() map[string]any {
+	return map[string]any{
+		"seq": 7100, "kind": "task", "subject": "task.t-1",
+		"writer": "node-b", "op_id": "op-b-1", "stored_at": "2031-04-02T04:00:00Z",
+	}
+}
+
+// TestAReanchorThatWouldDiscardSaysSoAndOffersTheFlag: a restored log holding
+// records written after the restore that this node's rows do not hold is one a
+// reanchor would apply nowhere, so the prompt says so — naming the node's own
+// refusal — and the command it offers carries -discard, which the transition
+// then passes on and whose answer names what it discarded.
+func TestAReanchorThatWouldDiscardSaysSoAndOffersTheFlag(t *testing.T) {
+	node := newFakeCapacityNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	node.reanchorCase, node.reanchorCursor, node.reanchorDiscards = "restored", 7100, true
+
+	stdout, _, err := cli(t, "retention", "reanchor", base, "-stream", "CREWLET_TRACKER_LOG")
+	if err == nil {
+		t.Fatal("a reanchor with no confirmation was accepted")
+	}
+	for _, want := range []string{"discard flag", "-confirm 2031-04-02T03:00:00Z -discard"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the prompt never says %q:\n%s", want, stdout)
+		}
+	}
+
+	_, _, err = cli(t, "retention", "reanchor", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "2031-04-02T03:00:00Z")
+	if err != nil {
+		t.Fatalf("reanchor: %v", err)
+	}
+	if node.reanchorDiscard {
+		t.Fatal("the node was asked to discard although the flag was not given")
+	}
+
+	stdout, _, err = cli(t, "retention", "reanchor", base,
+		"-stream", "CREWLET_TRACKER_LOG", "-confirm", "2031-04-02T03:00:00Z", "-discard")
+	if err != nil {
+		t.Fatalf("reanchor -discard: %v", err)
+	}
+	if !node.reanchorDiscard {
+		t.Fatal("-discard never reached the node")
+	}
+	for _, want := range []string{"applied on no node", "sequence 7100", "node-b", "op-b-1"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the report never says %q:\n%s", want, stdout)
+		}
 	}
 }
 

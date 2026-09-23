@@ -73,6 +73,11 @@ type ReanchorRequest struct {
 	// [statelog.PermitReanchor].
 	Force bool
 
+	// Discard accepts that a restored log's records this node's rows do not
+	// hold — written after the restore — are applied on no node
+	// ([statelog.ReanchorGuard.Discard]).
+	Discard bool
+
 	// By names the operator, for the generation record.
 	By string
 }
@@ -147,7 +152,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		By:       req.By,
 		NodeID:   e.native.Load().nodeID,
 		Now:      time.Now,
-	}, in, statelog.ReanchorGuard{Confirm: req.Confirm, Force: req.Force})
+	}, in, statelog.ReanchorGuard{Confirm: req.Confirm, Force: req.Force, Discard: req.Discard})
 	if err != nil {
 		if len(peers) > 0 {
 			return statelog.ReanchorPlan{}, fmt.Errorf("%w (re-anchored peers: %v)", err, peers)
@@ -292,13 +297,34 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			"re-run: %w", statelog.ErrReanchorRefused, stream, err)
 	}
 	in.ClaimsIdentity = running.domain.ClaimsIdentity()
+	n := e.native.Load()
+	// AND WHAT FOLLOWING A RESTORED LOG FROM ITS END WOULD DISCARD: the
+	// newest record on it that writes rows these do not hold, which on a
+	// restored log was written after the restore
+	// ([statelog.ReanchorInputs.Unheld]). Asked only in the restored case of a
+	// domain that claims identity — the one case that skips records — and an
+	// unreadable log refuses, because whether the reanchor loses writes is
+	// the question.
+	if in.ClaimsIdentity {
+		if which, _, caseErr := in.Case(); caseErr == nil && which == statelog.ReanchorRestored {
+			in.Unheld, err = statelog.UnheldTail(ctx, running.domain,
+				replicatedEstate{node: n.log.db}, running.log, in.Generation,
+				in.FirstSeq, in.LastSeq)
+			if err != nil {
+				return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether %s holds "+
+					"records written after the restore that this node's rows do not "+
+					"could not be read, and a restored reanchor would apply them on no "+
+					"node — check the broker and re-run: %w",
+					statelog.ErrReanchorRefused, stream, err)
+			}
+		}
+	}
 	if !in.ClaimsIdentity {
 		// NO FLEET GUARD APPLIES, and no generation is anybody's but this
 		// node's own: every node re-anchors its own copy of such a log.
 		return in, nil, nil
 	}
 	domain := running.domain.Name()
-	n := e.native.Load()
 	self := n.nodeID
 
 	// UNREADABLE IS NOT "no peers". A register nobody could list is exactly
@@ -482,6 +508,15 @@ type ReanchorView struct {
 	Case    statelog.ReanchorCase
 	Cursor  uint64
 	Refusal string
+
+	// Discards is, for the restored case, the newest record on the log that
+	// writes rows this node's do not hold — written after the restore, and
+	// applied on no node if the log is followed from its end — and nil when
+	// there is none. A reanchor that would discard it runs only with the
+	// operator's word ([ReanchorRequest.Discard]), and Discarding says why in
+	// the transition's own words.
+	Discards   *statelog.TailRecord
+	Discarding string
 }
 
 // ReanchorStatus is what an operator reads before running it: the LIVE
@@ -517,6 +552,9 @@ func (e *Engine) ReanchorStatus(ctx context.Context, stream string) (ReanchorVie
 	view := ReanchorView{CreatedAt: in.StreamCreatedAt, Generation: in.Generation}
 	if view.Case, view.Cursor, err = in.Case(); err != nil {
 		view.Refusal = err.Error()
+	}
+	if discarding := in.Discarding(); discarding != nil {
+		view.Discards, view.Discarding = in.Unheld, discarding.Error()
 	}
 	return view, nil
 }

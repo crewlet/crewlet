@@ -35,7 +35,9 @@ import (
 // A peer whose row does not yet say so: after a whole broker restore the
 // register is the copy's too, so a newer node that has not booted since — or
 // has not yet published — is at the copy's position in it, and writes made
-// before it does land. What this fence bounds is how many there are.
+// before it does land. What this fence bounds is how many there are; that there
+// are any is what the newer node's restored reanchor finds and names, refusing
+// to discard them without the operator's word ([statelog.ReanchorInputs.Unheld]).
 
 // truncation is the peer whose rows hold records one domain's log lost, as the
 // register rows and one reading of the log's end (last) show it — nil when no

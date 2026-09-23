@@ -374,7 +374,7 @@ func maintenanceExclude(args []string, stdout, stderr io.Writer) error {
 // retentionReanchor is `crewlet retention reanchor`.
 func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 	var stream, confirm *string
-	var force *bool
+	var force, discard *bool
 	client, err := nodeClientFor(args, "retention reanchor", stderr,
 		func(fs *flag.FlagSet) {
 			stream = fs.String("stream", "", "which log was recreated; required")
@@ -388,6 +388,12 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 					"has already re-anchored the stream: that peer's rows are "+
 					"the fleet's history in the new generation, and this node "+
 					"adopts its snapshot instead")
+			discard = fs.Bool("discard", false,
+				"re-anchor a RESTORED log although it holds records this "+
+					"node's rows do not — written after the restore, by a node "+
+					"whose rows were the copy's age — accepting that they are "+
+					"applied on no node. Without it the verb refuses and names "+
+					"the newest of them")
 		})
 	if err != nil {
 		return err
@@ -405,6 +411,8 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 		Case       statelog.ReanchorCase `json:"case"`
 		Cursor     uint64                `json:"cursor"`
 		Nothing    string                `json:"nothing_to_reanchor"`
+		Discards   *statelog.TailRecord  `json:"discards"`
+		Discarding string                `json:"discarding"`
 	}
 	if err := client.get(context.Background(),
 		"/work/retention/reanchor?stream="+url.QueryEscape(*stream), &status); err != nil {
@@ -428,9 +436,17 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintf(stdout, "There is nothing to re-anchor: %s\n", status.Nothing)
 			return errors.New("nothing to re-anchor")
 		}
+		flags := ""
+		if status.Discards != nil {
+			// WHAT IT WOULD DISCARD, before the command that would: the
+			// operator's word is the only thing that lets it, and a command
+			// printed without it would be refused.
+			fmt.Fprintf(stdout, "%s\n\n", status.Discarding)
+			flags = " -discard"
+		}
 		fmt.Fprintf(stdout, "%s\n\nRe-run with:\n  crewlet retention reanchor "+
-			"-stream %s -confirm %s\n", reanchorCaseText(status.Case, status.Cursor),
-			status.Stream, instant)
+			"-stream %s -confirm %s%s\n", reanchorCaseText(status.Case, status.Cursor),
+			status.Stream, instant, flags)
 		return errors.New("confirm the stream's own created_at")
 	}
 
@@ -439,11 +455,15 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 	if *force {
 		path += "&force=true"
 	}
+	if *discard {
+		path += "&discard=true"
+	}
 	var answer struct {
 		Stream     string                `json:"stream"`
 		Generation uint32                `json:"generation"`
 		Case       statelog.ReanchorCase `json:"case"`
 		Cursor     uint64                `json:"cursor"`
+		Discarded  *statelog.TailRecord  `json:"discarded"`
 	}
 	if err := client.post(context.Background(), path, &answer); err != nil {
 		return err
@@ -463,6 +483,11 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 		"%s. Every position below the generation is now comparable and safely "+
 		"stale, and its applier has resumed on this node; no other log moved.\n",
 		answer.Stream, answer.Generation, answer.Case, from)
+	if answer.Discarded != nil {
+		fmt.Fprintf(stdout, "The records written to it after the restore that this "+
+			"node's rows did not hold are applied on no node, as you accepted; the "+
+			"newest was %s.\n", *answer.Discarded)
+	}
 	return nil
 }
 

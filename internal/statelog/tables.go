@@ -268,15 +268,19 @@ func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint
 	}, nil
 }
 
-// writeOp records that this node applied an operation at a position.
-func (t tables) writeOp(ctx context.Context, tx *sql.Tx, opID, subject string, p Position, now time.Time) error {
+// writeOp records that this node applied an operation at a position, by the
+// record whose broker instant is storedAt.
+func (t tables) writeOp(ctx context.Context, tx *sql.Tx, opID, subject string, p Position,
+	storedAt, now time.Time) error {
+
 	if t.ops == "" || opID == "" {
 		return nil
 	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO `+t.ops+` (op_id, subject, position, applied_at) VALUES (?, ?, ?, ?)
+		INSERT INTO `+t.ops+` (op_id, subject, position, applied_at, stored_at)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (op_id) DO NOTHING`,
-		opID, subject, p.Packed(), store.EncodeTime(now))
+		opID, subject, p.Packed(), store.EncodeTime(now), encodeInstant(storedAt))
 	if err != nil {
 		return fmt.Errorf("statelog: record operation %q at %s: %w", opID, p, err)
 	}
@@ -412,6 +416,58 @@ func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (Position, bool
 		Generation: uint32(packed / GenerationStride),
 		Seq:        uint64(packed % GenerationStride),
 	}, true, nil
+}
+
+// appliedRecord answers whether this node applied the record with operation
+// opID, stored by the broker at storedAt, at position p — the one question a
+// restored reanchor asks of the ledger ([UnheldTail]).
+//
+// ALL THREE MUST AGREE. The operation alone is a caller's intent, which a
+// retry after the restore carries into a second record; the position alone is
+// a sequence, which the restored log reissues to whatever was written there
+// next; the instant is the record's own, and a row that names none (written
+// before the ledger kept it) vouches for nothing.
+func (t tables) appliedRecord(ctx context.Context, tx *sql.Tx, opID string, p Position,
+	storedAt time.Time) (bool, error) {
+
+	if t.ops == "" || opID == "" {
+		return false, nil
+	}
+	var packed, recorded int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT position, stored_at FROM `+t.ops+` WHERE op_id = ?`, opID).
+		Scan(&packed, &recorded)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("statelog: read operation %q: %w", opID, err)
+	}
+	named := decodeInstant(recorded)
+	return packed == p.Packed() && !named.IsZero() && sameRecord(named, storedAt), nil
+}
+
+// retainedRecord answers whether this node consumed and RETAINED the record at
+// position p stored by the broker at storedAt: a record this build could not
+// read is held here byte for byte, and is these rows' history as much as one
+// they applied.
+func (t tables) retainedRecord(ctx context.Context, tx *sql.Tx, p Position,
+	storedAt time.Time) (bool, error) {
+
+	if t.deferred == "" {
+		return false, nil
+	}
+	var recorded int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT stored_at FROM `+t.deferred+` WHERE position = ?`, p.Packed()).
+		Scan(&recorded)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("statelog: read the retained record at %s: %w", p, err)
+	}
+	return sameRecord(store.DecodeTime(recorded), storedAt), nil
 }
 
 // retain stores a record this build cannot decode, byte for byte, with every

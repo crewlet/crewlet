@@ -553,7 +553,10 @@ func (a *App) mountCapacity(mux *http.ServeMux) {
 // surviving record), `restored` (followed from its end) or `abandoned`
 // (followed from this node's own checkpoint, a generation only an evicted peer
 // held made void), with the sequence the checkpoint would go to — or, with no
-// case, why there is nothing to re-anchor.
+// case, why there is nothing to re-anchor. A restored log holding records this
+// node's rows do not — written after the restore — also answers `discards`,
+// the newest of them, and `discarding`, why a reanchor refuses them without
+// `discard=true`.
 //
 // A SEPARATE READ, because the confirmation is meant to say "I looked at the
 // thing I am re-anchoring": a verb that printed the value and accepted it back
@@ -588,6 +591,9 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 	} else {
 		answer["nothing_to_reanchor"] = view.Refusal
 	}
+	if view.Discards != nil {
+		answer["discards"], answer["discarding"] = view.Discards, view.Discarding
+	}
 	writeJSON(w, http.StatusOK, answer)
 }
 
@@ -607,7 +613,8 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 	operator, _ := auth.OperatorFrom(r.Context())
 	plan, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
 		Stream: stream, Confirm: confirm, By: operator,
-		Force: r.URL.Query().Get("force") == "true",
+		Force:   r.URL.Query().Get("force") == "true",
+		Discard: r.URL.Query().Get("discard") == "true",
 	})
 	if err != nil {
 		log.Warn("api_reanchor_refused", "stream", stream, "error", err)
@@ -616,11 +623,19 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Warn("reanchored", "operator", operator, "stream", stream,
-		"generation", plan.Generation, "case", string(plan.Case), "cursor", plan.Cursor)
-	writeJSON(w, http.StatusOK, map[string]any{
+		"generation", plan.Generation, "case", string(plan.Case), "cursor", plan.Cursor,
+		"discarded", plan.Discarded != nil)
+	answer := map[string]any{
 		"stream": stream, "generation": plan.Generation, "case": plan.Case,
 		"cursor": plan.Cursor,
-	})
+	}
+	if plan.Discarded != nil {
+		// WHAT THE OPERATOR'S WORD DISCARDED, in the answer as well as the
+		// audit row: the newest record written after the restore that is
+		// now applied on no node.
+		answer["discarded"] = plan.Discarded
+	}
+	writeJSON(w, http.StatusOK, answer)
 }
 
 // serveSetCapacity answers POST /work/retention/capacity.

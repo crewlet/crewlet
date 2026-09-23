@@ -328,7 +328,10 @@
 // ([ReanchorRestored]): up to the copy the log is a prefix of the history the rows came from,
 // so the new generation's checkpoint goes at the log's END rather than one
 // below its first record, and replaying none of it is what keeps every object
-// from rolling back to the copy.
+// from rolling back to the copy. Following it from there applies nothing below
+// the end, so a restored log holding a record that writes rows these do not —
+// written after the restore — is re-anchored only on the operator's word, the
+// newest such record named ([UnheldTail], [ReanchorGuard.Discard]).
 //
 // And a reanchor breaks the premise for every OTHER node of a domain that claims
 // identity: it opens its generation from one node's rows, so the rest hold a

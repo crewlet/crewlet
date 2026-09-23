@@ -742,6 +742,43 @@ treats a node the log has diverged from the same way — and every other node,
 ahead of the restored end or not, then adopts from it on its own: see
 [a node a peer re-anchored past](#a-node-a-peer-re-anchored-past).
 
+**If something wrote the restored log first, the reanchor asks you what to
+keep.** A restored reanchor follows the log from its end, so any record a node
+whose rows were the copy's age wrote after the restore sits below that end and
+would be applied on no node — lost to whoever it was acknowledged to. Before it
+runs, the verb walks the log back from its end to the newest record that writes
+rows (a linearizable read's barrier writes none and is stepped over) and asks
+whether this node applied that very record: the same operation, at the same
+position, stored by the broker at the same instant. If it did, nothing written
+after the restore wrote rows, and the reanchor runs. If it did not, the verb
+names that record — its kind, subject, writer, operation and sequence — prints
+it before the command it would run, and **refuses unless you pass `-discard`**.
+There are two ways out, and only you can choose between them:
+
+- **Keep this node's rows** — what they hold past the copy — by re-running with
+  `-discard`. The records written after the restore are applied on no node;
+  the generation record says so, naming the newest, and every other node adopts
+  this node's snapshot.
+- **Keep what was written after the restore** by not re-anchoring this node:
+  stop it, move its replicated database aside and start it again. It replays
+  the log from the broker, or adopts a peer's snapshot where the log has been
+  trimmed, and what only its old rows held is given up. Its old position row is
+  replaced by its new one on its first heartbeat, which also lifts every other
+  node's `log_truncated`.
+
+The walk vouches for a record through the operation ledger, which travels
+inside every snapshot — so a record this node holds because the peer it adopted
+from applied it counts as held, exactly as one it applied itself. It cannot
+vouch where the ledger has lost the record's row: to the ledger's thirty-day
+sweep, or with a snapshot from a peer on an older build, which arrived without
+its ledger. The ledger records how far back it may have lost rows, and when the
+named record's operation is older than that the refusal says so — the rows may
+hold the record after all. A record a gate dropped writes no row and reads as
+not held too. In each of those cases the verb can refuse when nothing was
+written after the restore at all, and `-discard` then discards nothing, because
+the record it names is one the rows already hold. What it never does is follow
+the log past a record it cannot vouch for without saying so.
+
 **A rebuild under a node that never restarts is caught too**, wherever the node
 reads the stream's state: the position heartbeat does every ten seconds, and a
 write that would publish at an expectation of zero does within the write. The

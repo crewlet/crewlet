@@ -22,7 +22,7 @@ subcommand below is served by it.
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of the tracker's or the pages log, and the refusal prints the numbers. Nothing is written to either log on a refusal; a partial readmission is finished with `-op-id` like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
-| `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void |
+| `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
@@ -908,19 +908,30 @@ The three cases are where the log is followed **from**:
 
 - **recreated** — the stream is not the one this node's rows are keyed to, so it
   is followed from its first surviving record;
-- **restored** — it is the same stream, ending below this node's checkpoint, so
-  the rows already hold every record it kept and it is followed from its end;
-  none of them is applied again;
+- **restored** — it is the same stream, ending below this node's checkpoint or
+  written past it since, so the rows already hold every record the copy kept
+  and it is followed from its end; none of them is applied again. If the log
+  also holds records the rows do **not** — written after the restore, by a node
+  whose rows were the copy's age — they would be applied on no node, so the
+  verb names the newest of them and refuses unless you pass `-discard`. The
+  alternative to discarding them is to keep them: do not re-anchor this node,
+  replace its rows with a peer's instead;
 - **abandoned** — it is the same stream and holds every record the rows are
   missing, but it continues in a generation only a peer the fleet has since
   **evicted** held; it is followed from this node's own checkpoint, in the
   generation after the evicted peer's, and every record of the generation it
   skips is void.
 
-A same-stream log that reaches the checkpoint and continues in no abandoned
-generation is none of these, and the verb prints that there is nothing to
-re-anchor rather than a command to run. The answer names the case and the
-sequence the checkpoint went to.
+A same-stream log that reaches the checkpoint, holding there the record the
+checkpoint names, and continues in no abandoned generation is none of these,
+and the verb prints that there is nothing to re-anchor rather than a command to
+run. The answer names the case and the sequence the checkpoint went to — and,
+with `-discard`, the newest record it discarded.
+
+`-discard` is its own flag rather than part of `-force`: `-force` says the
+fleet cannot be asked who is most caught up, which says nothing about what a
+log holds, and forcing past an unreadable register must not discard writes on
+the same keystroke.
 
 It moves **only the log you name**: that domain's checkpoint goes to the next
 generation on the live stream — the one after every generation the domain has

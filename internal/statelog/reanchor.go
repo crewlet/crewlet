@@ -47,6 +47,19 @@ type ReanchorGuard struct {
 	// Force overrides the "only the most caught-up node may reanchor"
 	// rule, and its message must name exactly what may be lost.
 	Force bool
+
+	// Discard accepts that a RESTORED log's records these rows do not hold —
+	// written after the restore, by a node whose rows were the copy's age —
+	// are applied nowhere ([ReanchorInputs.Unheld]). Without it such a
+	// reanchor refuses, naming the newest of them, because following the log
+	// from its end would lose writes somebody was told had landed, with
+	// nothing anywhere saying so.
+	//
+	// ITS OWN FLAG rather than Force: Force answers "I cannot ask the fleet
+	// who is most caught up", which says nothing about a log's tail, and an
+	// operator forcing past an unreadable register must not discard writes
+	// on the same keystroke.
+	Discard bool
 }
 
 // ConfirmationOf renders a stream's creation instant the way an operator is
@@ -123,6 +136,22 @@ type ReanchorInputs struct {
 	// broker came back from an older copy and was written past these rows
 	// before this node looked, so the log no longer ENDS below them.
 	Diverged bool
+
+	// Unheld is, for the RESTORED case of a domain that claims identity,
+	// the newest record on the log that writes rows and that this node's
+	// rows do not hold ([UnheldTail]) — nil when there is none. On a
+	// restored log such a record was written after the restore, and so was
+	// every record above it; following the log from its end applies none of
+	// them anywhere, so the transition refuses unless the operator accepts
+	// that ([ReanchorGuard.Discard]).
+	//
+	// NIL FOR EVERY OTHER CASE: a recreated log is followed from its first
+	// record and an abandoned one from these rows' own checkpoint, so each
+	// applies everything past where it starts. And nil for a domain that
+	// claims no identity — the vectors — whose post-restore records are
+	// re-embeddings of sources: skipping them keeps these rows' vectors, which
+	// describe the sources these rows' own domains keep.
+	Unheld *TailRecord
 
 	// PeersReanchored is how many peers have already re-anchored THIS
 	// stream: they stand at a later generation of this domain than this
@@ -233,7 +262,11 @@ type ReanchorInputs struct {
 // written past it before this node looked and holds another record at the
 // checkpoint's sequence ([ReanchorInputs.Diverged]). The checkpoint goes at
 // the end either way, because either way the rows are the history the fleet
-// keeps and the log is followed from where it now stands.
+// keeps and the log is followed from where it now stands. What that cannot do
+// is apply what a node whose rows were the copy's age wrote to the restored log
+// before anybody re-anchored it: those records sit below the end, so a
+// reanchor over any that write rows these do not hold runs only on the
+// operator's word ([ReanchorInputs.Unheld], [ReanchorGuard.Discard]).
 //
 // # Abandoned: the live stream is the rows' own, and it continues in a generation only an evicted node held
 //
@@ -296,6 +329,12 @@ type ReanchorPlan struct {
 	// unless the evicted node's generation made the transition skip one
 	// ([ReanchorInputs.Abandoned]).
 	From uint32
+
+	// Discarded is the newest record the operator accepted discarding — a
+	// restored log's record these rows did not hold ([ReanchorGuard.Discard]),
+	// applied on no node from here — and nil when the transition discards
+	// nothing.
+	Discarded *TailRecord
 }
 
 // Case is which case these facts describe and where the new checkpoint goes,
@@ -342,6 +381,52 @@ func (in ReanchorInputs) Case() (ReanchorCase, uint64, error) {
 		in.LastSeq, in.Position)
 }
 
+// Discarding is the refusal a reanchor of these facts makes unless the operator
+// accepts discarding what it names ([ReanchorGuard.Discard]), and nil when it
+// discards nothing: the restored case over a log holding records these rows do
+// not ([ReanchorInputs.Unheld]).
+//
+// A METHOD OF THE FACTS, beside [ReanchorInputs.Case], so the status an
+// operator reads before confirming and the transition that runs after say the
+// same thing from the same reading.
+func (in ReanchorInputs) Discarding() error {
+	// NOTHING TO RE-ANCHOR, OR ANOTHER CASE, DISCARDS NOTHING: Case's own
+	// refusal is that reading's answer, and only the restored case skips.
+	if which, _, caseErr := in.Case(); caseErr != nil || which != ReanchorRestored ||
+		in.Unheld == nil {
+		return nil //nolint:nilerr // see above: Case's refusal is reported by Case
+	}
+	return fmt.Errorf("%w: %s was restored from an older copy and holds records "+
+		"this node's rows do not — the newest that writes rows is %s, stored at "+
+		"%s. A restored reanchor follows the log from its end, %d, so they would "+
+		"be applied on no node: every other node adopts this node's snapshot, and "+
+		"what they wrote is lost to whoever it was acknowledged to. Keep them "+
+		"instead by not re-anchoring this node: replace its rows with a peer's "+
+		"that followed the log (stop it, move its replicated database aside and "+
+		"start it again — it replays the log or adopts a snapshot), which gives "+
+		"up what only this node's rows hold. Or discard them: re-run with the "+
+		"discard flag. %s", ErrReanchorRefused, in.Stream, *in.Unheld,
+		in.Unheld.StoredAt.UTC().Format(time.RFC3339Nano), in.LastSeq,
+		unheldCaveat(*in.Unheld))
+}
+
+// unheldCaveat is what a restored reanchor's refusal says about how sure its
+// "not held" is — see tail.go.
+func unheldCaveat(r TailRecord) string {
+	if !r.LedgerLostBefore.IsZero() {
+		return fmt.Sprintf("(This node's operation ledger may have lost rows from "+
+			"before %s — to its %s sweep, or with a snapshot from a peer on an "+
+			"older build — and this record's operation was minted before that, so "+
+			"its rows may hold the record after all: if they do, the discard flag "+
+			"discards nothing.)", r.LedgerLostBefore.UTC().Format(time.RFC3339Nano),
+			OpsRetention)
+	}
+	return "(The ledger names every record these rows applied since it last lost " +
+		"any, those held from a peer's snapshot included, so this one is not " +
+		"among them — unless a gate dropped it, which writes no row; then the " +
+		"discard flag discards nothing.)"
+}
+
 // PermitReanchor decides whether the transition may run, to which generation,
 // and where it puts the checkpoint.
 //
@@ -384,6 +469,12 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error
 	if err != nil {
 		return ReanchorPlan{}, err
 	}
+	// AND WHAT FOLLOWING IT FROM THERE WOULD DISCARD, which only the operator
+	// may accept — before the fleet guards, because it is a fact about the
+	// log whichever node runs the verb.
+	if refusal := in.Discarding(); refusal != nil && !guard.Discard {
+		return ReanchorPlan{}, refusal
+	}
 	if in.ClaimsIdentity && in.PeersReanchored > 0 {
 		return ReanchorPlan{}, fmt.Errorf("%w: %d peer(s) have already re-anchored "+
 			"%s — they stand at a later generation of it than this node's %d. A "+
@@ -423,8 +514,11 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error
 	// broker estate has been lost, so a generation that needed a further
 	// coordination read could not be computed at the one moment it is
 	// needed. An abandoned generation only ever raises it.
-	return ReanchorPlan{Generation: base + 1, Case: which, Cursor: cursor,
-		From: in.Generation}, nil
+	plan := ReanchorPlan{Generation: base + 1, Case: which, Cursor: cursor, From: in.Generation}
+	if in.Discarding() != nil {
+		plan.Discarded = in.Unheld
+	}
+	return plan, nil
 }
 
 // GenerationRecord is the one record a reanchor appends: the domain's own
@@ -448,6 +542,10 @@ type GenerationFacts struct {
 	// answering — which is what the record's own account of why has to say.
 	Generation uint32
 	Case       ReanchorCase
+
+	// Discarded is the newest record the operator accepted discarding
+	// ([ReanchorPlan.Discarded]), nil when the transition discards none.
+	Discarded *TailRecord
 
 	// Inputs are the facts the transition was decided from.
 	Inputs ReanchorInputs
@@ -684,11 +782,13 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 		"domain", d.Domain.Name(), "generation", gen, "case", string(plan.Case),
 		"stream", in.Stream, "stream_created_at", in.StreamCreatedAt,
 		"keyed_to", in.KeyedTo, "position", in.Position, "last_seq", in.LastSeq,
-		"cursor", plan.Cursor, "from_generation", plan.From, "forced", guard.Force)
+		"cursor", plan.Cursor, "from_generation", plan.From, "forced", guard.Force,
+		"discarding", discardedSeq(plan))
 
 	// 4. THE RECORD, first-writer-wins, and the instant read again.
 	record, keeps, err := d.Record.GenerationRecord(GenerationFacts{
-		Generation: gen, Case: plan.Case, Inputs: in, By: d.By, Writer: d.NodeID,
+		Generation: gen, Case: plan.Case, Discarded: plan.Discarded, Inputs: in,
+		By: d.By, Writer: d.NodeID,
 		At: d.Now().UTC(),
 	})
 	if err != nil {
@@ -755,8 +855,19 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 		"domain", d.Domain.Name(), "generation", gen, "case", string(plan.Case),
 		"stream", in.Stream, "stream_created_at", in.StreamCreatedAt,
 		"cursor", plan.Cursor, "prev_last_seq_seen", in.Highest,
+		"discarded", discardedSeq(plan),
 		"detail", reanchoredDetail(plan.Case))
 	return plan, nil
+}
+
+// discardedSeq is the sequence of the newest record a plan discards, and 0 when
+// it discards none — what the two log lines carry, since a line cannot hold the
+// record whole.
+func discardedSeq(plan ReanchorPlan) uint64 {
+	if plan.Discarded == nil {
+		return 0
+	}
+	return plan.Discarded.Seq
 }
 
 // reanchoredDetail is the completion line's account of what the transition

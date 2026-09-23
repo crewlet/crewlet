@@ -2348,8 +2348,8 @@ would drift.
 
 | Route | What it does |
 |---|---|
-| `GET /work/retention/reanchor?stream=NAME` | The LIVE stream's own `created_at`, read from the broker on the call — the instant a `wrong_stream` refusal names — the generation that stream's domain stands at, and what a reanchor run now would do: `case` — `recreated` (another stream than the rows are keyed to, followed from its first surviving record), `restored` (the same stream brought back from an older copy, ending below the checkpoint, followed from its end) or `abandoned` (the same stream, continuing in a generation only an evicted peer held, followed from this node's own checkpoint with that generation's records void) — with `cursor`, the sequence the new checkpoint would sit at. With nothing to re-anchor there is no `case`, and `nothing_to_reanchor` says why. `404 unknown_stream` for a stream this node does not run; `503 stream_unreadable` when the broker did not answer the read, which is worth retrying. |
-| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true]` | Runs that ONE domain's generation transition, answering with the new `generation`, the `case` it answered and the `cursor` its checkpoint went to. No other domain's checkpoint moves, and the domain's applier resumes with no restart. |
+| `GET /work/retention/reanchor?stream=NAME` | The LIVE stream's own `created_at`, read from the broker on the call — the instant a `wrong_stream` refusal names — the generation that stream's domain stands at, and what a reanchor run now would do: `case` — `recreated` (another stream than the rows are keyed to, followed from its first surviving record), `restored` (the same stream brought back from an older copy, ending below the checkpoint or written past it since, followed from its end) or `abandoned` (the same stream, continuing in a generation only an evicted peer held, followed from this node's own checkpoint with that generation's records void) — with `cursor`, the sequence the new checkpoint would sit at. With nothing to re-anchor there is no `case`, and `nothing_to_reanchor` says why. A restored log holding records this node's rows do not hold, written after the restore, also answers `discards` (the newest of them: `seq`, `kind`, `subject`, `writer`, `op_id`, `stored_at`, and `ledger_lost_before` when its operation is older than the instant this node's operation ledger may have lost rows from — the rows may hold it after all) and `discarding` (why a reanchor refuses without `discard=true`). `404 unknown_stream` for a stream this node does not run; `503 stream_unreadable` when the broker did not answer the read, which is worth retrying. |
+| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true][&discard=true]` | Runs that ONE domain's generation transition, answering with the new `generation`, the `case` it answered, the `cursor` its checkpoint went to and, when it discarded records written after a restore, the newest as `discarded`. No other domain's checkpoint moves, and the domain's applier resumes with no restart. |
 
 `confirm` is the value the `GET` returns, supplied by the caller: the
 confirmation means *I looked at the thing I am re-anchoring*, so the two are
@@ -2359,6 +2359,12 @@ It is compared as an instant at microsecond precision, so the RFC 3339 value the
 the most caught-up node may re-anchor, for a fleet whose register cannot say;
 it never overrides a peer that has already re-anchored the stream, whose rows
 are the fleet's history in the new generation and which the refusal names.
+`discard=true` accepts that a restored log's records this node's rows do not
+hold — written after the restore, and named by the `GET` as `discards` — are
+applied on no node; without it that reanchor is refused `409
+reanchor_refused`, and with it the answer carries the newest one as
+`discarded`. The two flags are separate because neither answers the other's
+question.
 
 ## Agent Memory
 

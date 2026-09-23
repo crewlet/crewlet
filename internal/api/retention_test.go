@@ -46,6 +46,10 @@ type fakeStateLog struct {
 
 	// view is the case the status reports, beside the generation above.
 	view engine.ReanchorView
+
+	// reanchored is the last reanchor asked for, and plan what it answers.
+	reanchored engine.ReanchorRequest
+	plan       statelog.ReanchorPlan
 }
 
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
@@ -73,10 +77,14 @@ func (f *fakeStateLog) StreamGeneration(stream string) (uint32, error) {
 	return generation, nil
 }
 
-func (f *fakeStateLog) Reanchor(context.Context, engine.ReanchorRequest) (
+func (f *fakeStateLog) Reanchor(_ context.Context, req engine.ReanchorRequest) (
 	statelog.ReanchorPlan, error) {
 
-	return statelog.ReanchorPlan{}, errors.New("not exercised here")
+	f.reanchored = req
+	if f.plan.Generation == 0 {
+		return statelog.ReanchorPlan{}, errors.New("not exercised here")
+	}
+	return f.plan, nil
 }
 
 func (f *fakeStateLog) SetCapacity(context.Context, engine.CapacityRequest) (
@@ -493,5 +501,62 @@ func TestTheReanchorStatusTellsAnUnknownStreamFromAnUnreadableOne(t *testing.T) 
 	}
 	if register.calls != 1 {
 		t.Fatalf("%d point(s) written, want one", register.calls)
+	}
+}
+
+// A RESTORED REANCHOR THAT WOULD DISCARD SAYS SO, AND DISCARDS ONLY ON THE WORD.
+//
+// The status names the newest record written after the restore that this
+// node's rows do not hold, beside the node's own refusal; the transition
+// passes `discard=true` on as the operator's word and nothing else does — not
+// `force=true`, which answers another question — and its answer names what it
+// discarded.
+func TestARestoredReanchorThatWouldDiscardSaysSoAndDiscardsOnlyOnTheWord(t *testing.T) {
+	t.Parallel()
+	written := &statelog.TailRecord{Seq: 7_100, Kind: "task", Subject: "task.t-1",
+		Writer: "node-b", OpID: "op-b-1", StoredAt: time.Unix(1700000100, 0).UTC()}
+	node := &fakeStateLog{
+		generations: map[string]uint32{"CREWLET_TRACKER_LOG": 1},
+		view: engine.ReanchorView{Case: statelog.ReanchorRestored, Cursor: 7_100,
+			Discards: written, Discarding: "statelog: reanchor refused: re-run with the discard flag"},
+	}
+	a := ackApp(t, &fakeBackupRegister{}, node)
+	call := func(method, path string) (int, map[string]any) {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, req)
+		var body map[string]any
+		_ = json.NewDecoder(rec.Result().Body).Decode(&body)
+		return rec.Code, body
+	}
+
+	code, body := call(http.MethodGet, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG")
+	discards, _ := body["discards"].(map[string]any)
+	if code != http.StatusOK || discards["seq"] != float64(7_100) ||
+		discards["writer"] != "node-b" || discards["subject"] != "task.t-1" ||
+		body["discarding"] != node.view.Discarding {
+		t.Fatalf("the status answered %d: %v, want the record it would discard", code, body)
+	}
+
+	node.plan = statelog.ReanchorPlan{Generation: 2, Case: statelog.ReanchorRestored,
+		Cursor: 7_100}
+	if code, body := call(http.MethodPost, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG"+
+		"&confirm=2023-11-14T22:13:20Z&force=true"); code != http.StatusOK || body["discarded"] != nil {
+		t.Fatalf("a forced reanchor answered %d: %v", code, body)
+	}
+	if node.reanchored.Discard {
+		t.Fatal("force=true reached the node as the word to discard")
+	}
+
+	node.plan.Discarded = written
+	code, body = call(http.MethodPost, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG"+
+		"&confirm=2023-11-14T22:13:20Z&discard=true")
+	if code != http.StatusOK || !node.reanchored.Discard {
+		t.Fatalf("discard=true answered %d and reached the node as %+v", code, node.reanchored)
+	}
+	if discarded, _ := body["discarded"].(map[string]any); discarded["op_id"] != "op-b-1" {
+		t.Fatalf("the answer %v does not name what it discarded", body)
 	}
 }
