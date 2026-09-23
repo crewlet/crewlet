@@ -273,6 +273,9 @@ internal/
 ├── sourcetree/           # What is this repository's tree: the module root,
 │                         #   and a walk that never reads a nested checkout
 ├── e2e/                  # The end-to-end company, and the dashboard replay
+├── period/               # The company calendar: the day, ISO week and month a
+│                         #   moment falls in, named by a label every node
+│                         #   computes alike
 └── version/ logging/ redact/ envref/ envfile/ workkey/ backoff/  # small shared
                           #   grammars
 

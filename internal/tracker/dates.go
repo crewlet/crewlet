@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // Relative dates, and why they are resolved HERE rather than in SQL.
@@ -36,15 +38,6 @@ type DateAnchor struct {
 	AllDay bool
 }
 
-// weekStart is the day a week begins for the relative tokens.
-//
-// MONDAY, and it is a constant rather than a setting: the tokens exist so that
-// "this week" means the same thing in a saved view, in a seat's tool call and
-// on the dashboard, and a per-person or per-project week start would make one
-// saved view answer two different questions depending on who opened it. A
-// company whose week genuinely starts on Sunday writes the two dates.
-const weekStart = time.Monday
-
 // ResolveDate turns one relative token into an instant.
 //
 // The tokens are the ones a person types, and they come in three shapes: three
@@ -52,15 +45,43 @@ const weekStart = time.Monday
 // an RFC3339 timestamp, which is the caller's job rather than this function's —
 // so an unknown token is an ERROR here rather than a silent zero, because a
 // zero instant is 1 January year one and would match every task ever written.
+//
+// # The calendar is [period]'s
+//
+// Every day, week and month below is a window [period.At] cut on the
+// company's clock, so a `due=` filter and a due band agree with everything
+// else the engine cuts on that calendar about where a day or a week begins —
+// Monday, the ISO week, for all of them, and a company whose week genuinely
+// starts on Sunday writes the two dates — because there is one calendar
+// rather than a copy of it here. The copy this
+// replaced cut each boundary with time.Date and then stepped from it with
+// AddDate, and in the zones that move their clocks at midnight both steps
+// were wrong: in Santiago on 8 September 2024, "today" resolved to 23:00 on
+// the 7th, so a task due that last hour of the 7th read as due today; in
+// Amman on 29 October 2021 it resolved to the second of two midnights, an
+// hour late; and every offset or boundary stepped from either carried the
+// error with it.
 func ResolveDate(token string, now time.Time, loc *time.Location) (DateAnchor, error) {
 	if loc == nil {
 		loc = time.UTC
 	}
 	token = strings.ToLower(strings.TrimSpace(token))
-	local := now.In(loc)
-	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	today := period.At(period.Day, now, loc)
+	week := period.At(period.Week, now, loc)
+	month := period.At(period.Month, now, loc)
 
-	day := func(t time.Time) DateAnchor { return DateAnchor{At: t.UTC(), AllDay: true} }
+	// begins anchors on the first instant of a window the calendar cut. A
+	// window the calendar could not cut — an offset that lands outside the
+	// years a date can be written in — is refused rather than resolved to
+	// the zero instant, which would match every task ever written; and a
+	// date past year 9999 could not be written into a task record at all.
+	begins := func(w period.Window) (DateAnchor, error) {
+		if !w.Period.Valid() {
+			return DateAnchor{}, fmt.Errorf("tracker: %q lands outside the "+
+				"years 0000 to 9999 a date can be written in", token)
+		}
+		return DateAnchor{At: w.Start.UTC(), AllDay: true}, nil
+	}
 
 	switch token {
 	case "":
@@ -69,49 +90,42 @@ func ResolveDate(token string, now time.Time, loc *time.Location) (DateAnchor, e
 	case "now":
 		return DateAnchor{At: now.UTC()}, nil
 	case "today":
-		return day(midnight), nil
+		return begins(today)
 	case "yesterday":
-		return day(midnight.AddDate(0, 0, -1)), nil
+		return begins(today.Shift(-1))
 	case "tomorrow":
-		return day(midnight.AddDate(0, 0, 1)), nil
-	case "sow":
-		return day(startOfWeek(midnight)), nil
-	case "eow":
-		return day(startOfWeek(midnight).AddDate(0, 0, 7)), nil
+		return begins(today.Next())
+	case "sow", "eopw":
+		return begins(week)
+	case "eow", "sonw":
+		return begins(week.Next())
 	case "sopw":
-		return day(startOfWeek(midnight).AddDate(0, 0, -7)), nil
-	case "eopw":
-		return day(startOfWeek(midnight)), nil
-	case "sonw":
-		return day(startOfWeek(midnight).AddDate(0, 0, 7)), nil
+		return begins(week.Shift(-1))
 	case "eonw":
-		return day(startOfWeek(midnight).AddDate(0, 0, 14)), nil
-	case "som":
-		return day(startOfMonth(midnight, loc)), nil
-	case "eom":
-		return day(startOfMonth(midnight, loc).AddDate(0, 1, 0)), nil
+		return begins(week.Shift(2))
+	case "som", "eopm":
+		return begins(month)
+	case "eom", "sonm":
+		return begins(month.Next())
 	case "sopm":
-		return day(startOfMonth(midnight, loc).AddDate(0, -1, 0)), nil
-	case "eopm":
-		return day(startOfMonth(midnight, loc)), nil
-	case "sonm":
-		return day(startOfMonth(midnight, loc).AddDate(0, 1, 0)), nil
+		return begins(month.Shift(-1))
 	case "eonm":
-		return day(startOfMonth(midnight, loc).AddDate(0, 2, 0)), nil
+		return begins(month.Shift(2))
 	}
 
 	// ±<n>d, the one token with an argument.
 	if days, ok := offsetDays(token); ok {
-		return day(midnight.AddDate(0, 0, days)), nil
+		return begins(today.Shift(days))
 	}
 
 	// An absolute instant. Both spellings, because a person types a date
-	// and a machine sends a timestamp.
+	// and a machine sends a timestamp — and a date is a DAY LABEL, so it is
+	// read by the calendar that writes them.
 	if at, err := time.Parse(time.RFC3339, token); err == nil {
 		return DateAnchor{At: at.UTC()}, nil
 	}
-	if at, err := time.ParseInLocation("2006-01-02", token, loc); err == nil {
-		return day(at), nil
+	if day, err := period.Parse(period.Day, token, loc); err == nil {
+		return begins(day)
 	}
 	return DateAnchor{}, fmt.Errorf("tracker: %q is not a date: name an instant, "+
 		"a calendar date, an offset like +7d, or one of the relative tokens", token)
@@ -123,18 +137,8 @@ func ResolveDate(token string, now time.Time, loc *time.Location) (DateAnchor, e
 // midnight to next Monday midnight and contains every instant of Sunday. The
 // alternative, an end at 23:59:59, silently drops the last second of the last
 // day and drops it differently depending on whether the column stores seconds
-// or milliseconds.
-
-// startOfWeek is midnight on the week's first day, in the given local time.
-func startOfWeek(midnight time.Time) time.Time {
-	back := (int(midnight.Weekday()) - int(weekStart) + 7) % 7
-	return midnight.AddDate(0, 0, -back)
-}
-
-// startOfMonth is midnight on the first of the month.
-func startOfMonth(midnight time.Time, loc *time.Location) time.Time {
-	return time.Date(midnight.Year(), midnight.Month(), 1, 0, 0, 0, 0, loc)
-}
+// or milliseconds. It is also exactly the shape of a [period.Window], whose
+// End is the next window's Start.
 
 // offsetDays reads a ±<n>d token.
 func offsetDays(token string) (int, bool) {
