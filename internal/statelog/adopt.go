@@ -74,8 +74,16 @@ type AdoptDeps struct {
 	// Record writes this node's own adoption row at each phase, and the
 	// join fails if it cannot: the row is what bounds which operations
 	// this node's ledger can answer for — see [AdoptedAt].
-	Record func(ctx context.Context, donor string, m Manifest, phase AdoptionPhase) error
+	//
+	// began is the adoption's start, the same at every phase of one join,
+	// and the ADOPTER stamps it rather than the caller: what makes it a
+	// bound is that it follows every offer the join collected, and only
+	// [Adopter.Join] knows when the last one was in.
+	Record func(ctx context.Context, began time.Time, donor string, m Manifest,
+		phase AdoptionPhase) error
 
+	// Logger is where this writes. Nil is the package's own component
+	// logger, never silence: see loggerOr for what silence cost.
 	Logger *slog.Logger
 	Now    func() time.Time
 }
@@ -84,13 +92,13 @@ type AdoptDeps struct {
 //
 // THE ROW DOES NOT KEEP IT. [RecordAdoption] writes the same columns at every
 // phase and stamps completed_at only at [AdoptionComplete], so what survives a
-// crash is when the join began and whether it finished — not which side of
-// the install it stopped on. That is why [AdoptedAt] reads an incomplete row
-// at its start: a node that crashed between the rename and the complete looks,
-// from its checkpoint alone, exactly like a node that is caught up, and the
-// ledger it holds may be the donor's scrubbed one. Nothing refuses to serve on
-// an incomplete row; the phase names the step in the error a failed Record
-// returns.
+// crash is when the adoption began and whether it finished — not which side
+// of the install it stopped on. That is why [AdoptedAt] reads an incomplete
+// row at its start, which is a bound on either side: a node that crashed
+// between the rename and the complete looks, from its checkpoint alone,
+// exactly like a node that is caught up, and the ledger it holds may be the
+// donor's scrubbed one. Nothing refuses to serve on an incomplete row; the
+// phase names the step in the error a failed Record returns.
 type AdoptionPhase string
 
 const (
@@ -136,10 +144,7 @@ func NewAdopter(d AdoptDeps) (*Adopter, error) {
 		return nil, fmt.Errorf("statelog: a join cannot record itself, so a crash " +
 			"mid-adoption would be indistinguishable from a node that is caught up")
 	}
-	logger := d.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	logger := loggerOr(d.Logger)
 	now := d.Now
 	if now == nil {
 		now = time.Now
@@ -213,6 +218,20 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	// THE ADOPTION BEGINS HERE, once every offer is in, and this is the
+	// instant its row keeps — the bound [AdoptedAt] reads for a join that
+	// stops before it completes. It is one instant for every offer this
+	// join tries, so one join writes one row.
+	//
+	// IT FOLLOWS EVERY DONOR'S ANSWER, and that is the whole of why it is a
+	// bound. A donor offers the artefact it holds WHEN IT ANSWERS, so every
+	// artefact this join can install was finished before its donor
+	// answered, and so before now. Stamped when the join began, it would
+	// precede the ask itself: a donor's snapshotter can finish an artefact
+	// between the ask and its answer, and an operation this node published
+	// in between would then sit inside that artefact with its ledger row
+	// scrubbed, minted after the bound.
+	began := a.now().UTC()
 
 	var refusals []error
 	for _, offer := range offers {
@@ -220,7 +239,7 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 			refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
 			continue
 		}
-		m, err := a.adopt(ctx, offer)
+		m, err := a.adopt(ctx, offer, began)
 		if err == nil {
 			return m, nil
 		}
@@ -255,8 +274,9 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	return Manifest{}, fmt.Errorf("%w: %w", ErrNoOffer, errors.Join(refusals...))
 }
 
-// adopt runs steps 1 and 3 through 9 for one chosen offer.
-func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
+// adopt runs steps 1 and 3 through 9 for one chosen offer, recording each
+// phase under the adoption's start, began.
+func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Manifest, error) {
 	at := make(map[string]uint64, len(offer.Manifest.Domains))
 	for name, pos := range offer.Manifest.Domains {
 		at[name] = pos.Seq
@@ -348,7 +368,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 			"is that everything still in it is fleet-visible",
 			offer.Manifest.Scrubbed, empty)
 	}
-	if err := a.deps.Record(ctx, offer.Manifest.NodeID, offer.Manifest, AdoptionScrubbed); err != nil {
+	if err := a.deps.Record(ctx, began, offer.Manifest.NodeID, offer.Manifest, AdoptionScrubbed); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: record the adoption: %w", err)
 	}
 
@@ -380,22 +400,32 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 	}
 	if err := a.deps.Reopen(ctx); err != nil {
 		// FORWARD PROGRESS, NOT A ROLLBACK, so it keeps the caller's
-		// context: the artefact is the live file now, and a node being
-		// stopped opens it at its next start. But the estate is not
-		// open, and that is what the caller has to be told.
+		// context: the artefact is the live file now, and whatever opens
+		// the estate next — a running node's restore, or the next start
+		// of one being stopped — opens the artefact. The row stays as
+		// [AdoptionScrubbed] left it, incomplete, which is what happened,
+		// and its start is as much a bound on this side of the install as
+		// on the other — see [AdoptedAt]. But the estate is not open, and
+		// that is what the caller has to be told.
 		return Manifest{}, fmt.Errorf("%w: the artefact is installed and "+
 			"opening it failed: %w", ErrEstateNotRestored, err)
 	}
-	if err := a.deps.Record(ctx, offer.Manifest.NodeID, offer.Manifest, AdoptionInstalled); err != nil {
+	if err := a.deps.Record(ctx, began, offer.Manifest.NodeID, offer.Manifest, AdoptionInstalled); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: record the install: %w", err)
 	}
 
 	// 9. COMPLETE.
-	if err := a.deps.Record(ctx, offer.Manifest.NodeID, offer.Manifest, AdoptionComplete); err != nil {
+	if err := a.deps.Record(ctx, began, offer.Manifest.NodeID, offer.Manifest, AdoptionComplete); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: complete the adoption: %w", err)
 	}
+	// THE ONE LINE AN ADOPTION WRITES, carrying which artefact it was: the
+	// checksum is what matches it to the donor's `statelog_snapshot_sent`,
+	// and the instant it was taken is how old the history it installed is.
+	// The engine wrote a second `statelog_adopted` holding those two, and
+	// one adoption read as two.
 	a.log.InfoContext(ctx, "statelog_adopted",
 		"node", a.deps.NodeID, "donor", offer.Manifest.NodeID,
+		"sha256", offer.Manifest.SHA256, "taken_at", offer.Manifest.TakenAt,
 		"bytes", offer.Manifest.Bytes, "domains", len(offer.Manifest.Domains))
 	return offer.Manifest, nil
 }

@@ -79,10 +79,17 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
+	// answered is when the donor first answered with its artefact: the
+	// latest instant a donor's snapshotter could have finished the file it
+	// offers, so the latest one the adoption's bound may precede.
+	var answered atomic.Int64
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: "donor",
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
-		Newest: func() (statelog.Manifest, bool) { return manifest, true },
+		Newest: func() (statelog.Manifest, bool) {
+			answered.CompareAndSwap(0, time.Now().UnixNano())
+			return manifest, true
+		},
 		Path: func(m statelog.Manifest) string {
 			// THE NAME THE MANIFEST CARRIES, which is what the engine's
 			// own donor does: a name derived here would be a fourth
@@ -107,11 +114,12 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	// answers a bound for an incomplete row too, so "an adoption is on record"
 	// cannot tell a join that finished from one that stopped partway.
 	var recorded string
+	var startedAt int64
 	var completedAt sql.NullInt64
 	if err := back.Store.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `
-			SELECT manifest, completed_at FROM statelog_adoption
-			ORDER BY started_at DESC LIMIT 1`).Scan(&recorded, &completedAt)
+			SELECT manifest, started_at, completed_at FROM statelog_adoption
+			ORDER BY started_at DESC LIMIT 1`).Scan(&recorded, &startedAt, &completedAt)
 	}); err != nil {
 		t.Fatalf("read the newest adoption row: %v", err)
 	}
@@ -123,6 +131,19 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	if recorded != manifest.SHA256 {
 		t.Fatalf("the newest adoption row names artefact %s, want the donor's %s",
 			recorded, manifest.SHA256)
+	}
+	// AND ITS START FOLLOWS THE DONOR'S ANSWER, which is what makes it the
+	// bound a join that stops before completing is read at: the artefact
+	// may have been finished an instant before the donor answered, and an
+	// operation this node published before THAT can sit inside it with its
+	// ledger row scrubbed. A start stamped when the join began precedes the
+	// ask itself.
+	if began, asked := store.DecodeTime(startedAt),
+		time.Unix(0, answered.Load()).UTC().Truncate(time.Microsecond); began.Before(asked) {
+		t.Fatalf("the adoption row starts at %s, before the donor answered at %s — "+
+			"an operation minted between the two can be inside the artefact with "+
+			"its ledger row scrubbed, and an adoption that stopped before "+
+			"completing would let it be re-decided", began, asked)
 	}
 	if _, bounded, err := statelog.AdoptedAt(t.Context(), back.Store); err != nil || !bounded {
 		t.Fatalf("the ledger reads no adoption bound (%v, %v) — every operation "+

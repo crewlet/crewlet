@@ -74,6 +74,8 @@ type Parser struct {
 
 // ParserOptions configure a parser.
 type ParserOptions struct {
+	// Logger is where the parser reports. Nil is the package's own
+	// component logger, never silence.
 	Logger *slog.Logger
 }
 
@@ -81,7 +83,7 @@ type ParserOptions struct {
 func NewParser(opts ParserOptions) *Parser {
 	logger := opts.Logger
 	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
+		logger = log
 	}
 	return &Parser{logger: logger}
 }

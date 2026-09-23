@@ -199,8 +199,10 @@ type Gates interface {
 
 	// AdoptedAt is the instant before which this node's ops table cannot
 	// vouch for an operation — when its latest adoption of a donated
-	// snapshot completed, or began where one did not complete — reporting
-	// false when it never began one. See [AdoptedAt] for the rule.
+	// snapshot completed, or began, once the fleet's offers were in, where
+	// one did not complete — reporting false when it never recorded one: a
+	// join that fails before its first record installed nothing. See
+	// [AdoptedAt] for the rule.
 	//
 	// The ops table is this node's own and is scrubbed from every
 	// donated snapshot, so an op id minted before this instant cannot be
@@ -338,8 +340,12 @@ type Deps struct {
 	// boot's comparison and every live reading land.
 	Identity Identity
 
-	Metrics    *metrics.Recorder
-	Logger     *slog.Logger
+	Metrics *metrics.Recorder
+
+	// Logger is where this writes. Nil is the package's own component
+	// logger, never silence: see loggerOr for what silence cost.
+	Logger *slog.Logger
+
 	NodeID     string
 	Generation func() uint32
 
@@ -382,10 +388,7 @@ func NewPublisher(d Deps) (*Publisher, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
-	logger := d.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	logger := loggerOr(d.Logger)
 	budget := d.ResolveBudget
 	if budget <= 0 {
 		budget = DefaultResolveBudget
@@ -828,7 +831,7 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 		// value. The op id travels with it because retrying under the
 		// SAME id is the only safe retry: a fresh one would defeat the
 		// ledger that exists for exactly this case.
-		p.logger.Warn("statelog_publish_unknown",
+		p.logger.WarnContext(ctx, "statelog_publish_unknown",
 			"domain", p.domain.Name(), "subject", subject,
 			"op_id", req.OpID, "publish_error", detail, "probe_error", err.Error())
 		return Result{Outcome: OutcomeUnknown, OpID: req.OpID}, nil
@@ -844,7 +847,7 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 		// record is what the resolution answers, from this node's own
 		// applied rows rather than from a guess — and its gated arm is
 		// why "landed" is not the same as "applied".
-		p.logger.Debug("statelog_publish_ambiguous",
+		p.logger.DebugContext(ctx, "statelog_publish_ambiguous",
 			"domain", p.domain.Name(), "subject", subject,
 			"op_id", req.OpID, "at", seq, "publish_error", detail)
 		at := Position{Stream: p.stream, Generation: p.generation(), Seq: seq}
@@ -925,7 +928,7 @@ func (p *Publisher) Resolve(ctx context.Context, req Request, at Position, mine 
 		// THE RECORD APPLIED NOWHERE AND NEVER WILL. A refusal rather
 		// than an outcome, and never a re-decide: republishing produces
 		// another durable record nothing applies.
-		p.logger.Warn("statelog_write_gated",
+		p.logger.WarnContext(ctx, "statelog_write_gated",
 			"domain", p.domain.Name(), "subject", req.Subject.String(),
 			"gate", string(reason), "position", at.String(), "op_id", req.OpID)
 		p.count(metrics.StatelogRecordsGated, metrics.Attrs{

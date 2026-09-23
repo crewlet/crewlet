@@ -254,6 +254,10 @@ type EmbedDeps struct {
 	// the tick after it are the retry, and a duty that failed the whole
 	// tick on one bad batch would stop embedding the corpus because of
 	// one document in it.
+	//
+	// Nil is this package's own `component=search` logger, NEVER a
+	// discarding one: since a failure is only ever logged, a duty whose
+	// logger went nowhere would fail every batch with no trace at all.
 	Logger *slog.Logger
 
 	// Now is the clock, injected so a test can hold it.
@@ -306,7 +310,7 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 			len(d.Corpora), EmbedBatchesPerTick)
 	}
 	if d.Logger == nil {
-		d.Logger = slog.New(slog.DiscardHandler)
+		d.Logger = log
 	}
 	if d.Now == nil {
 		d.Now = time.Now

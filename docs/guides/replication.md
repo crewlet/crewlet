@@ -408,6 +408,29 @@ changes only through `crewlet retention set-capacity`, which runs on a node
 whose state logs are up, and every mode starts them, `maintenance` and `seal`
 included: a node refused here cannot run it.
 
+## Reading a node's state-log lines
+
+Every line the state log writes about its own work carries
+`component=statelog`, so filtering on it narrows a node's log to its
+replication:
+
+| Line | Level | What it says |
+|---|---|---|
+| `statelog_apply_retrying` | `WARN` | The applier hit a failure it retries in place. Written once, when the run of failures starts. |
+| `statelog_apply_faulted` | `ERROR` | The same failure has outlived the retry budget (30 seconds): this node's rows have stopped moving, its reads refuse and its seats move until a retry succeeds. Written once per run of failures, when it crosses the budget — not on every retry. While it lasts, the node's status and every refused read name the current error, and `crewlet.statelog.apply.retries` counts the attempts. |
+| `statelog_apply_recovered` | `INFO` | A retry succeeded and the run of failures is over, with how long it lasted (`after`) and the last error it saw. A failure after it starts a new run, written again from `statelog_apply_retrying`. |
+| `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker or the knowledge base the node also stops claiming seats and the ones it holds move to a peer. What resumes it is a build that can read what this one could not, or — for a recreated stream — [`crewlet retention reanchor`](retention.md) followed by a restart. Written once per stop. |
+| `statelog_adopted` | `INFO` | The node replaced its replicated database with a peer's snapshot, naming the donor, the artefact's `sha256` (the donor's `statelog_snapshot_sent` carries the same one) and when it was taken (`taken_at`), which is how old the history it installed is. |
+| `statelog_record_gated` | `WARN` | A durable record applied nowhere, naming the gate. |
+| `statelog_write_gated` | `WARN` | The same, seen by the write that published it. |
+| `statelog_publish_unknown` | `WARN` | A write could not tell whether its record landed. The operation id is in the line; retry under that id, never a fresh one. |
+| `statelog_reanchor_started`, `statelog_reanchored` | `WARN` | A generation transition. Both name the stream the operator re-anchored (`stream`) and every stream whose cursor moved (`streams`); the completion line also gives the re-anchored stream's high-water mark before the reanchor (`prev_last_seq_seen`). |
+
+The snapshotter, the donor and the adopter write under the same component. The
+lines the engine writes *around* those loops — `statelog_stream_recreated` and
+`statelog_below_the_floor` among them — carry `component=engine`, because the
+component names the code that wrote a line rather than what it is about.
+
 ## Three things CI cannot prove
 
 Stated here because the alternative is implying a guarantee nobody measured:

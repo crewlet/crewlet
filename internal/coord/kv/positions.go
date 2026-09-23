@@ -495,7 +495,8 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	// segment escapes to itself, so `<class>.>` is a filter the broker can
 	// match. SEVEN classes share this register; reading all of them and
 	// discarding six was the shape this replaced, and the state-log write
-	// fence takes this read on every first write to a subject.
+	// fence takes this read, for the floors, on every write at an
+	// expectation of zero.
 	//
 	// `what` reaches the walk now rather than going nowhere: a store failure
 	// here used to say "read crewlet_positions" for all seven listings, which

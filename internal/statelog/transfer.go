@@ -184,6 +184,8 @@ type DonorDeps struct {
 	// Path answers where an artefact's bytes are, given its manifest.
 	Path func(Manifest) string
 
+	// Logger is where this writes. Nil is the package's own component
+	// logger, never silence: see loggerOr for what silence cost.
 	Logger *slog.Logger
 }
 
@@ -203,10 +205,7 @@ func NewDonor(d DonorDeps) (*Donor, error) {
 	case d.Newest == nil || d.Path == nil:
 		return nil, fmt.Errorf("statelog: a donor has nothing to offer")
 	}
-	logger := d.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	logger := loggerOr(d.Logger)
 	return &Donor{deps: d, log: logger}, nil
 }
 

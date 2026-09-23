@@ -90,11 +90,10 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (uint32, err
 		}
 		return 0, err
 	}
-	log.WarnContext(ctx, "statelog_reanchored", "stream", req.Stream,
-		"generation", gen, "by", req.By, "prev_last_seq_seen", in.Highest,
-		"detail", "every position below this generation is now comparable and "+
-			"safely stale; records that were on the old stream and were never "+
-			"applied here are not recovered")
+	// NO LINE OF ITS OWN: [statelog.Reanchor] writes `statelog_reanchored`
+	// with the generation, the stream named, the streams whose cursors moved
+	// and that stream's prior high-water mark, and a second line under that
+	// name here made one transition read as two.
 	return gen, nil
 }
 
@@ -114,6 +113,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	running *runningDomain) statelog.ReanchorInputs {
 
 	in := statelog.ReanchorInputs{
+		Stream:          running.domain.Stream().Name,
 		StreamCreatedAt: running.createdAt,
 		Generation:      running.runner.Committed().Generation,
 		Position:        running.runner.Committed().Seq,

@@ -40,6 +40,9 @@ import (
 type DutyDeps struct {
 	DB     *store.DB
 	Writer *Writer
+
+	// Logger is where the duty reports. Nil is the package's own
+	// component logger, never silence.
 	Logger *slog.Logger
 
 	// Leads is the company's lead map, for the one repair whose commit
@@ -60,10 +63,7 @@ type DutyDeps struct {
 // are the log's, and each is the table or the walk it is about rather than the
 // code that runs it.
 func Jobs(d DutyDeps) []maintenance.Job {
-	duty := &duty{deps: d}
-	if duty.deps.Logger == nil {
-		duty.deps.Logger = slog.New(slog.DiscardHandler)
-	}
+	duty := newDuty(d)
 	return []maintenance.Job{
 		{
 			Name:  "tracker_respread",
@@ -95,6 +95,18 @@ func Jobs(d DutyDeps) []maintenance.Job {
 			Run:   duty.repairOneSided,
 		},
 	}
+}
+
+// newDuty is the duty over its deps with every optional one defaulted.
+//
+// Its own function rather than two lines in [Jobs], because Jobs hands back
+// method values and nothing a test can read the duty's logger off: the
+// default is asserted through this.
+func newDuty(d DutyDeps) *duty {
+	if d.Logger == nil {
+		d.Logger = log
+	}
+	return &duty{deps: d}
 }
 
 type duty struct {
@@ -521,17 +533,24 @@ func (d *duty) pendingOneSided(ctx context.Context) (bool, error) {
 	return any == 1, nil
 }
 
-// repairOneSided writes the mirror commit a dependency gesture never reached.
+// repairOneSided settles every one-sided edge old enough to be abandoned:
+// it writes the mirror commit a dependency gesture never reached, or — where
+// the blocker can never take it — stamps the edge permanently one-sided.
 //
 // AGED, by [OneSidedRepairAge], so the duty never races a gesture that is
 // still running: a mirror published a second before the writer's own would be
 // two records on one subject and two wakes for one blocker's assignee.
+//
+// THE PASS'S LINE COUNTS THE TWO OUTCOMES APART. Both settle an edge and both
+// are the job's count, but a mirror written is the repair working and a stamp
+// is a dependency somebody has to resolve by hand; one number was read as the
+// first when it could be entirely the second.
 func (d *duty) repairOneSided(ctx context.Context, now, _ time.Time) (int64, error) {
 	edges, err := ScanOneSided(ctx, d.deps.DB, now.Add(-OneSidedRepairAge), WalkBatch)
 	if err != nil {
 		return 0, err
 	}
-	var repaired int64
+	var mirrored, stamped int64
 	for _, edge := range edges {
 		reason, final := edge.Final()
 		if _, err := d.deps.Writer.RepairOneSided(ctx,
@@ -546,18 +565,21 @@ func (d *duty) repairOneSided(ctx context.Context, now, _ time.Time) (int64, err
 				"error", err)
 			continue
 		}
-		repaired++
-		if final {
-			d.deps.Logger.InfoContext(ctx, "tracker_one_sided_final",
-				"dependent", edge.Dependent, "blocker", edge.Blocker,
-				"reason", reason)
+		if !final {
+			mirrored++
+			continue
 		}
+		stamped++
+		d.deps.Logger.InfoContext(ctx, "tracker_one_sided_final",
+			"dependent", edge.Dependent, "blocker", edge.Blocker,
+			"reason", reason)
 	}
-	if repaired > 0 {
+	settled := mirrored + stamped
+	if settled > 0 {
 		d.deps.Logger.InfoContext(ctx, "tracker_one_sided_repaired",
-			"edges", repaired)
+			"edges", settled, "mirrored", mirrored, "final", stamped)
 	}
-	return repaired, nil
+	return settled, nil
 }
 
 // leads is the duty's own lead map, which is nil unless one was supplied.

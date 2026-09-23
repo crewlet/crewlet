@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,19 @@ type joinHarness struct {
 	closes   atomic.Int64
 	reopens  atomic.Int64
 
+	// began is every start Record was handed, one per call.
+	began []time.Time
+	// record, nil by default, is what Record also does: a case that needs
+	// the row really written sets it to [statelog.RecordAdoption].
+	record func(ctx context.Context, began time.Time, donor string,
+		m statelog.Manifest, phase statelog.AdoptionPhase) error
+	// answered is when the harness's donor first answered an ask since the
+	// adopter was built, in Unix nanoseconds: the latest instant it can
+	// have finished the artefact it offered the join. Cleared when the
+	// adopter is built, because the harness's own readiness probes are asks
+	// too; a later call is the transfer's, which re-reads what to send.
+	answered atomic.Int64
+
 	// stillUsable is step 7's re-check, nil by default. A case sets it to
 	// stage the one thing the hold is a belt against: a fleet that
 	// trimmed past the artefact while it was in flight.
@@ -63,6 +77,10 @@ type joinHarness struct {
 	// broker is the one the donor serves on, for a case that stands up
 	// another.
 	broker *js.Queue
+
+	// logger is what the adopter writes through, nil by default — the
+	// package's own. A case that reads the lines sets it.
+	logger *slog.Logger
 }
 
 func newJoinHarness(t *testing.T) *joinHarness {
@@ -145,8 +163,11 @@ func newJoinHarness(t *testing.T) *joinHarness {
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: "donor",
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
-		Newest: func() (statelog.Manifest, bool) { return h.manifest, true },
-		Path:   func(statelog.Manifest) string { return h.snapPath },
+		Newest: func() (statelog.Manifest, bool) {
+			h.answered.CompareAndSwap(0, time.Now().UnixNano())
+			return h.manifest, true
+		},
+		Path: func(statelog.Manifest) string { return h.snapPath },
 	})
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
@@ -171,6 +192,7 @@ func newJoinHarness(t *testing.T) *joinHarness {
 
 func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 	t.Helper()
+	h.answered.Store(0)
 	a, err := statelog.NewAdopter(statelog.AdoptDeps{
 		Domains:  map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
 		LivePath: h.joinPath,
@@ -211,16 +233,35 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 			h.joiner = db
 			return nil
 		},
-		Record: func(_ context.Context, _ string, _ statelog.Manifest, phase statelog.AdoptionPhase) error {
+		Record: func(ctx context.Context, began time.Time, donor string,
+			m statelog.Manifest, phase statelog.AdoptionPhase) error {
+
 			h.phases = append(h.phases, phase)
+			h.began = append(h.began, began)
+			if h.record != nil {
+				return h.record(ctx, began, donor, m, phase)
+			}
 			return nil
 		},
 		StillUsable: h.stillUsable,
+		Logger:      h.logger,
 	})
 	if err != nil {
 		t.Fatalf("NewAdopter: %v", err)
 	}
 	return a
+}
+
+// answeredAt is when the harness's donor answered the join's ask, at the
+// precision the store keeps an instant.
+func (h *joinHarness) answeredAt(t *testing.T) time.Time {
+	t.Helper()
+	n := h.answered.Load()
+	if n == 0 {
+		t.Fatal("the donor never answered an ask, so this case has no answer " +
+			"to hold the adoption's start against")
+	}
+	return time.Unix(0, n).UTC().Truncate(time.Microsecond)
 }
 
 // debris is every file of the fetched artefact's set beside the live file: the
@@ -244,6 +285,8 @@ func (h *joinHarness) debris(t *testing.T) []string {
 func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 	t.Parallel()
 	h := newJoinHarness(t)
+	logs := &lockedBuffer{}
+	h.logger = slog.New(slog.NewJSONHandler(logs, nil))
 
 	m, err := h.adopter(t).Join(t.Context())
 	if err != nil {
@@ -251,6 +294,24 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 	}
 	if m.NodeID != "donor" {
 		t.Fatalf("adopted an artefact from %q, want the donor's", m.NodeID)
+	}
+
+	// ONE LINE SAYS SO, naming which artefact: the engine wrote a second
+	// `statelog_adopted` carrying the checksum and the instant, and one
+	// adoption read as two. The adopter's line carries both now.
+	adopted := logRecords(t, logs.Bytes(), "statelog_adopted")
+	if len(adopted) != 1 {
+		t.Fatalf("%d statelog_adopted lines for one adoption, want one", len(adopted))
+	}
+	for key, want := range map[string]any{
+		"donor":    "donor",
+		"sha256":   m.SHA256,
+		"taken_at": m.TakenAt.Format(time.RFC3339Nano),
+	} {
+		if adopted[0][key] != want {
+			t.Errorf("statelog_adopted %s = %v, want %v — it is the one line "+
+				"that says which artefact this node installed", key, adopted[0][key], want)
+		}
 	}
 
 	// THE ROWS ARRIVED and the checkpoint with them, which is the whole
@@ -305,6 +366,20 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 		if h.phases[i] != want[i] {
 			t.Fatalf("the adoption recorded %v, want %v", h.phases, want)
 		}
+	}
+	// ALL UNDER ONE START, so one join is one row — and a start that
+	// follows the donor's answer, which is what makes it the bound for a
+	// join that stops partway: see
+	// TestAJoinThatStoppedAfterItsInstallStillBoundsTheLedger.
+	for _, began := range h.began {
+		if !began.Equal(h.began[0]) {
+			t.Fatalf("one join recorded its phases under the starts %v — each "+
+				"is a row of its own", h.began)
+		}
+	}
+	if asked := h.answeredAt(t); h.began[0].Before(asked) {
+		t.Fatalf("the adoption starts at %s, before its donor answered at %s",
+			h.began[0], asked)
 	}
 	// AND NOTHING OF THE PART FILE SURVIVES, the lock its inspection took
 	// included.
@@ -559,6 +634,66 @@ func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
 					h.held.Load(), h.released.Load())
 			}
 		})
+	}
+}
+
+// A JOIN THAT STOPPED AFTER ITS INSTALL STILL BOUNDS THE LEDGER, FROM A START
+// THAT FOLLOWS ITS DONOR'S ANSWER.
+//
+// An artefact installed and then not opened leaves its adoption row
+// incomplete, and whatever opens the estate next — a running node's restore,
+// or the next start — finds the donor's file current and carries on over it.
+// Nothing completes the row, because the adoption did not complete; its START
+// is what [statelog.AdoptedAt] then answers, and that start is a bound only if
+// it follows the moment the donor answered. The donor offers what it holds
+// when it answers, so it may have finished that artefact an instant before —
+// and an operation this node published earlier than THAT can be inside the
+// file it now runs on, with its ledger row scrubbed. A start stamped when the
+// join began precedes the ask, and leaves exactly those operations to be
+// re-decided.
+//
+// The case runs the real record and the real reader over the node's own
+// store, and opens that store again after the join as the next start would.
+func TestAJoinThatStoppedAfterItsInstallStillBoundsTheLedger(t *testing.T) {
+	t.Parallel()
+	h := newJoinHarness(t)
+	h.reopenErr = errors.New("the artefact did not open")
+	h.record = func(ctx context.Context, began time.Time, donor string,
+		m statelog.Manifest, phase statelog.AdoptionPhase) error {
+
+		return statelog.RecordAdoption(ctx, h.joiner, began, donor, m, phase)
+	}
+
+	if _, err := h.adopter(t).Join(t.Context()); !errors.Is(err, statelog.ErrEstateNotRestored) {
+		t.Fatalf("Join = %v, want the installed artefact not opening", err)
+	}
+
+	// WHAT THE NEXT OPEN FINDS: the donor's file, at the position its
+	// manifest names.
+	later, err := store.Open(t.Context(), filepath.Join(filepath.Dir(h.joinPath), "node.db"),
+		store.Options{})
+	if err != nil {
+		t.Fatalf("open the node's store again: %v", err)
+	}
+	t.Cleanup(func() { _ = later.Close() })
+	at, _, _, err := statelog.CursorFor(t.Context(), later.Replicated(), probeStream)
+	if err != nil {
+		t.Fatalf("read the reopened estate's checkpoint: %v", err)
+	}
+	if at.Seq != 4_200 {
+		t.Fatalf("the reopened estate is at %d, want the artefact's 4200 — the "+
+			"case did not reach an installed artefact", at.Seq)
+	}
+
+	bound, ever, err := statelog.AdoptedAt(t.Context(), later)
+	if err != nil || !ever {
+		t.Fatalf("AdoptedAt = (%s, %v, %v), want the incomplete join's bound — "+
+			"the ledger this node now runs on is the donor's scrubbed one", bound, ever, err)
+	}
+	if asked := h.answeredAt(t); bound.Before(asked) {
+		t.Fatalf("the ledger is bounded at %s, before the donor answered at %s — "+
+			"an operation minted between the two can be inside the installed "+
+			"artefact with its ledger row scrubbed, and is re-decided", bound, asked)
 	}
 }
 

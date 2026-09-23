@@ -37,6 +37,10 @@ import (
 // visible as an interrupted adoption rather than as a node that has always
 // been here.
 //
+// startedAt is the instant [Adopter.Join] stamps once the fleet's offers are
+// in, and never one the caller reads off its own clock: it is a bound only
+// because it follows every offer — see [AdoptedAt].
+//
 // IN THE NODE ESTATE. The replicated estate is the thing being replaced, so a
 // row written there would be renamed away between the second phase and the
 // third — and the phase that matters most is the one that would vanish.
@@ -79,22 +83,48 @@ func RecordAdoption(ctx context.Context, db *store.DB, startedAt time.Time,
 // # What each row says
 //
 // A COMPLETED adoption installed a donated file whose ledger was SCRUBBED, so
-// an operation minted before it completed is one this node cannot answer for.
+// an operation minted before it began may be one this node cannot answer for.
 // An INCOMPLETE row is a join that is running or stopped partway, and the row
 // cannot say which side of the install it stopped on: the table has no phase
 // column — [RecordAdoption] writes the same columns at every phase and stamps
 // only completed_at — so a join that failed after its rename and before it
-// completed looks exactly like one that failed before it closed anything. Its
-// START is the honest bound. An operation minted after the join began is
-// published after it too — above any artefact the join could install, which
-// was taken before it asked — so this node's own applier writes its ledger row
-// into whichever file is live. One minted before it resolves `unknown` rather
-// than being re-decided, which a caller retries under the same operation id,
-// and which is safe whichever side of the install the join stopped on.
+// completed looks exactly like one that failed before it closed anything. A
+// running node that reopens such an estate finds the artefact current and
+// carries on over it, and so does a node restarted after a crash in that
+// window: the row stays incomplete, because that is what happened.
+//
+// # Why the START bounds an incomplete row, on either side of the install
+//
+// Because of WHEN it is stamped: [Adopter.Join] stamps it after the fleet's
+// offers are in and before it fetches anything, and every artefact the join
+// can install is one of those offers — the checksum it verifies is the
+// offer's. A donor offers the artefact it holds when it ANSWERS, so each was
+// finished before its donor answered, which was before the collection ended,
+// which was before the stamp. So an operation minted after the stamp was
+// published after every such artefact was taken, at the log's next sequence,
+// and that is above every position the artefact holds: this node's own
+// applier writes its ledger row into whichever file is live, the artefact or
+// the file it never replaced. An operation minted before the stamp resolves
+// `unknown` rather than being re-decided, which a caller retries under the
+// same operation id, and which is safe whichever side of the install the join
+// stopped on. Both instants are read off this node's own wall clock, so no
+// skew between nodes enters the comparison — what it does assume, as the row
+// has since it was keyed on a wall-clock instant, is a clock not stepped
+// backwards between a mint and the stamp.
+//
+// No EARLIER instant is a bound, which is why the start is not stamped when
+// the join begins. A donor's snapshotter runs on its own schedule and can
+// finish an artefact between the moment a join asks and the moment the donor
+// answers, and an operation this node published in between is then inside
+// that artefact with its ledger row scrubbed — minted after a start stamped
+// before the ask, and re-decided.
 //
 // So the answer is the LATEST such instant over every row: completed_at where
-// the adoption finished, started_at where it did not. (zero, false) only when
-// this node has never begun an adoption, and its ledger covers its whole life.
+// the adoption finished — later than its start, so never less safe —
+// started_at where it did not. (zero, false) only when this node has never
+// recorded an adoption, and its ledger covers its whole life: a join records
+// its row before it closes anything, and one that fails before then — no
+// offer, a failed fetch, a refused artefact — installed nothing.
 //
 // # Why not the newest completed row, or the newest row
 //
@@ -113,7 +143,7 @@ func AdoptedAt(ctx context.Context, db *store.DB) (time.Time, bool, error) {
 			"adoption record from")
 	}
 	// ONE AGGREGATE, which answers NULL over an empty table rather than no
-	// row: "never began an adoption" is the NULL, and there is no second
+	// row: "never recorded an adoption" is the NULL, and there is no second
 	// shape of it to handle.
 	var bound sql.NullInt64
 	err := db.Read(ctx, func(tx *sql.Tx) error {

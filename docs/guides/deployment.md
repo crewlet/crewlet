@@ -395,9 +395,10 @@ scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
 **A coordination read costs one ordered pass, and an account needs the
-consumer API.** A node reads a whole coordination bucket constantly — several
-fifteen-second duty loops on every tick, and the state-log write fence on every
-first write to a subject — and each of those is one pass over a temporary
+consumer API.** A node lists coordination records constantly — several
+fifteen-second duty loops on every tick, and the state-log write fence, which
+lists the published trim floors on every write at an expectation of zero, a
+subject's first write among them — and each of those is one pass over a temporary
 consumer, which on a replicated bucket is two metadata-raft proposals. The
 engine deliberately does **not** use the batched direct get that would avoid
 the consumer: it is served by any replica, and this estate has reads whose

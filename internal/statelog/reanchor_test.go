@@ -1,10 +1,13 @@
 package statelog_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +21,7 @@ var reanchorCreated = time.Unix(1_700_000_000, 0).UTC()
 
 func reanchorInputs() statelog.ReanchorInputs {
 	return statelog.ReanchorInputs{
+		Stream:           probeStream,
 		StreamCreatedAt:  reanchorCreated,
 		FirstSeq:         0,
 		PeersHydrated:    0,
@@ -172,6 +176,119 @@ func TestAReanchorMovesEveryCursorAndItsAuditRowTogether(t *testing.T) {
 			"fresh stream the new cursor is one below its first surviving "+
 			"sequence, which is zero", g, seq)
 	}
+}
+
+// A REANCHOR IS REPORTED ONCE, AND THE COMPLETION NAMES WHAT IT DISCARDED.
+//
+// Its lines went nowhere — the engine handed it no logger and an absent one
+// was a discarding one — so the engine wrote its own `statelog_reanchored`
+// beside the call. With both reaching the log one transition read as two, and
+// the engine's copy is gone: this one is the record, so it carries what that
+// one did. `prev_last_seq_seen` is the high-water mark of the history the
+// reanchor walked away from, which is the one fact nothing after it can
+// reconstruct.
+//
+// AND IT NAMES THE STREAM THAT NUMBER BELONGS TO. The engine's line carried
+// the stream the operator named; this one carried only `streams`, every cursor
+// the call moved — so with more than one domain registered, which is every
+// production node, it paired one domain's high-water mark with a list of logs
+// and nothing to say which. Two domains here, because one hides exactly that.
+func TestAReanchorIsReportedOnceNamingWhatItDiscarded(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	db := reanchorStore(t)
+	in := reanchorInputs()
+	in.Highest = 9_000
+
+	gen, err := statelog.Reanchor(t.Context(), statelog.ReanchorDeps{
+		// KEYED BY DOMAIN NAME, as the engine keys it. The line names
+		// streams from each domain's spec, and keyed by the stream this
+		// fixture made the key and the spec the same string — so a
+		// regression reading the keys instead passed.
+		Domains: map[string]statelog.Registered{
+			probeDomain{}.Name():       {Domain: probeDomain{}},
+			secondProbeDomain{}.Name(): {Domain: secondProbeDomain{}},
+		},
+		DB:                db,
+		ResetVersions:     func(context.Context, uint32) error { return nil },
+		PublishGeneration: func(context.Context, uint32, statelog.ReanchorInputs) error { return nil },
+		RecordGeneration: func(context.Context, *sql.Tx, uint32, statelog.ReanchorInputs) error {
+			return nil
+		},
+		Logger: slog.New(slog.NewJSONHandler(&buf, nil)),
+	}, in, confirmed())
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+
+	started := logRecords(t, buf.Bytes(), "statelog_reanchor_started")
+	if len(started) != 1 {
+		t.Fatalf("%d statelog_reanchor_started lines, want one", len(started))
+	}
+	done := logRecords(t, buf.Bytes(), "statelog_reanchored")
+	if len(done) != 1 {
+		t.Fatalf("%d statelog_reanchored lines, want one: %s", len(done), buf.String())
+	}
+	for key, want := range map[string]any{
+		"generation":         float64(2),
+		"cursor":             float64(0),
+		"prev_last_seq_seen": float64(9_000),
+		"stream":             probeStream,
+	} {
+		if done[0][key] != want {
+			t.Errorf("statelog_reanchored %s = %v, want %v", key, done[0][key], want)
+		}
+	}
+	if started[0]["stream"] != probeStream {
+		t.Errorf("statelog_reanchor_started names stream %v, want %s — its creation "+
+			"instant and position are that stream's", started[0]["stream"], probeStream)
+	}
+
+	// `streams` IS WHAT MOVED, read back from the cursors themselves rather
+	// than restated: the line's promise is the logs whose positions this
+	// call rewrote, and an operator reading it after the fact is asking
+	// exactly that.
+	var moved []any
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(),
+			`SELECT stream FROM statelog_cursor WHERE generation = ? ORDER BY stream`, gen)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var stream string
+			if err := rows.Scan(&stream); err != nil {
+				return err
+			}
+			moved = append(moved, stream)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("read the cursors back: %v", err)
+	}
+	if got, _ := done[0]["streams"].([]any); len(moved) == 0 || !slices.Equal(got, moved) {
+		t.Errorf("statelog_reanchored names streams %v, and the cursors that moved "+
+			"are on %v", done[0]["streams"], moved)
+	}
+	if detail, _ := done[0]["detail"].(string); !strings.Contains(detail, "not recovered") {
+		t.Errorf("statelog_reanchored does not say what is lost: %q", detail)
+	}
+}
+
+// secondProbeDomain is a second domain on its own log, for the one case a
+// single registered domain cannot show: which of several streams a line's
+// numbers belong to.
+type secondProbeDomain struct{ probeDomain }
+
+func (secondProbeDomain) Name() string { return "second_probe" }
+
+func (secondProbeDomain) Stream() statelog.StreamSpec {
+	spec := probeDomain{}.Stream()
+	spec.Name = "CREWLET_SECOND_PROBE_LOG"
+	spec.Subjects = []string{"crewlet.secondprobe.log.>"}
+	spec.SubjectPrefix = "crewlet.secondprobe.log"
+	return spec
 }
 
 // A FAILED AUDIT ROW ROLLS THE CURSORS BACK WITH IT.

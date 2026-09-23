@@ -278,6 +278,8 @@ type SnapshotDeps struct {
 	// Interval is how stale the newest local snapshot may be.
 	Interval time.Duration
 
+	// Logger is where this writes. Nil is the package's own component
+	// logger, never silence: see loggerOr for what silence cost.
 	Logger *slog.Logger
 	Now    func() time.Time
 }
@@ -308,10 +310,7 @@ func NewSnapshotter(d SnapshotDeps) (*Snapshotter, error) {
 	case d.Interval <= 0:
 		return nil, fmt.Errorf("statelog: the snapshot loop has no interval")
 	}
-	logger := d.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	logger := loggerOr(d.Logger)
 	now := d.Now
 	if now == nil {
 		now = time.Now

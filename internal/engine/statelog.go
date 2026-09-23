@@ -478,18 +478,20 @@ func (s *stateLog) launchAppliers(base context.Context) {
 		s.applyDone.Add(1)
 		go func() {
 			defer s.applyDone.Done()
-			if err := running.runner.Run(ctx); err != nil && ctx.Err() == nil {
-				// A STOPPED APPLIER IS NOT A CRASHED NODE. Its rows
-				// are frozen and every read of them says so through
-				// the coverage it reports, so what this costs is that
-				// the node stops taking seats — which is what the
-				// readiness gate below already does with it.
-				log.ErrorContext(ctx, "statelog_applier_stopped",
-					"domain", running.domain.Name(), "error", err.Error(),
-					"detail", "this node stops claiming seats for that domain and "+
-						"its rows are going stale; a build that can read what it "+
-						"could not, or an operator's reanchor, is what resumes it")
-			}
+			// A STOPPED APPLIER IS NOT A CRASHED NODE. Its rows are
+			// frozen and every read of them says so through the
+			// coverage it reports, so what this costs is that the
+			// node stops taking seats — which is what the readiness
+			// gate below already does with it, reading the stop off
+			// [statelog.Runner.Stopped] rather than this error.
+			//
+			// NO LINE OF ITS OWN: the runner writes
+			// `statelog_applier_stopped` as it stops, naming the
+			// stream, the position it froze at and what resumes it. A
+			// second line here made one stop read as two, and its
+			// `component=engine` is not the component the replication
+			// guide sends an operator to.
+			_ = running.runner.Run(ctx)
 		}()
 	}
 }
@@ -636,6 +638,12 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		// asymmetry here is real rather than an oversight.
 		DB: replicatedEstate{node: s.db}, Generation: at.Generation,
 		StreamCreatedAt: created, Epoch: epoch, Metrics: s.metrics,
+		// NO LOGGER, here or at any other statelog constructor: an absent
+		// one is the framework's own `component=statelog` logger. The
+		// engine's own labelled those lines `component=engine`, and the
+		// constructors used to read an absent one as silence — which is
+		// what dropped every warning this applier and the write authority
+		// beside it wrote.
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: build %s's applier: %w", domain.Name(), err)
@@ -1417,7 +1425,6 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 			"it cannot replay the records it is missing; it will ask the fleet "+
 			"for a snapshot")
 
-	startedAt := time.Now().UTC()
 	adopter, err := statelog.NewAdopter(statelog.AdoptDeps{
 		Domains:  s.registered(),
 		LivePath: e.backends.Store.ReplicatedPath(),
@@ -1432,18 +1439,17 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		Hold:   s.holdTail,
 		Close:  func(context.Context) error { return e.backends.Store.CloseReplicated() },
 		Reopen: e.backends.Store.ReopenReplicated,
-		Record: func(ctx context.Context, donor string, m statelog.Manifest,
-			phase statelog.AdoptionPhase) error {
+		Record: func(ctx context.Context, began time.Time, donor string,
+			m statelog.Manifest, phase statelog.AdoptionPhase) error {
 
-			return statelog.RecordAdoption(ctx, e.backends.Store, startedAt,
+			return statelog.RecordAdoption(ctx, e.backends.Store, began,
 				donor, m, phase)
 		},
-		Logger: log,
 	})
 	if err != nil {
 		return "", err
 	}
-	manifest, err := adopter.Join(ctx)
+	_, err = adopter.Join(ctx)
 	switch {
 	case errors.Is(err, statelog.ErrNoOffer):
 		// NOT A FAILURE — see the doc comment. The node comes up on what
@@ -1462,9 +1468,9 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		return "", fmt.Errorf("engine: this node is below the log's floor on %v "+
 			"and the join failed: %w", behind, err)
 	}
-	log.InfoContext(ctx, "statelog_adopted",
-		"node", s.nodeID, "donor", manifest.NodeID, "sha256", manifest.SHA256,
-		"taken_at", manifest.TakenAt, "bytes", manifest.Bytes)
+	// NO LINE OF ITS OWN: the adopter writes `statelog_adopted` with the
+	// donor, the artefact's checksum and when it was taken, and a second
+	// line here made one adoption read as two.
 	return joinAdopted, nil
 }
 
@@ -1564,6 +1570,12 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 // not open leaves the DONOR'S file, whose checkpoint no consumer was ever
 // moved to — and when that file is current, no rejoin follows to move them,
 // because the heartbeat that finds the node caught up requests none.
+//
+// THE ADOPTION ROW IS LEFT AS THE FAILED JOIN LEFT IT: incomplete, because the
+// adoption did not complete, and that row's start bounds this node's ledger
+// correctly whichever file the reopen finds — see [statelog.AdoptedAt]. So a
+// restore that finds the donor's file current is a recovery, not an adoption
+// to finish.
 //
 // A failed reopen is [statelog.ErrEstateNotRestored], so every outcome that
 // leaves this node with no replicated database reads the same.
@@ -2129,7 +2141,6 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 		EngineVersion: version.String(),
 		Counted:       e.countedNodes,
 		Interval:      boot.Stream.TrackerRetention.SnapshotInterval(),
-		Logger:        log,
 	})
 	if err != nil {
 		log.ErrorContext(ctx, "statelog_snapshots_unavailable", "error", err.Error(),
@@ -2149,7 +2160,6 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 			// previous pair's name — see [statelog.Manifest.Artifact].
 			return filepath.Join(dir, m.Artifact)
 		},
-		Logger: log,
 	})
 	if err != nil {
 		log.ErrorContext(ctx, "statelog_donor_unavailable", "error", err.Error(),

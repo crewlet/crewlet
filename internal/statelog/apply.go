@@ -142,7 +142,10 @@ type RunnerDeps struct {
 	Epoch map[string]any
 
 	Metrics *metrics.Recorder
-	Logger  *slog.Logger
+
+	// Logger is where this writes. Nil is the package's own component
+	// logger, never silence: see loggerOr for what silence cost.
+	Logger *slog.Logger
 
 	// Now is the clock, injectable so a test can drive the time budget.
 	Now func() time.Time
@@ -191,6 +194,10 @@ type Runner struct {
 	// between faults. See [Runner.Fault] for what a reader does with it.
 	fault      error
 	faultSince time.Time
+	// faultReported is whether the current run of failures has been
+	// written as `statelog_apply_faulted`, which happens once per run —
+	// see [Runner.faulted] for why. Cleared with fault.
+	faultReported bool
 
 	// drained records that this loop has reached the end of its log at
 	// least once since it started, which is what [Health.Drained] carries.
@@ -282,10 +289,7 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	logger := d.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	logger := loggerOr(d.Logger)
 	now := d.Now
 	if now == nil {
 		now = time.Now
@@ -556,7 +560,7 @@ func (r *Runner) Op(ctx context.Context, opID string) (Position, bool, error) {
 // has.
 func (r *Runner) Run(ctx context.Context) error {
 	r.mu.Lock()
-	r.stopped, r.fault, r.faultSince = nil, nil, time.Time{}
+	r.stopped, r.fault, r.faultSince, r.faultReported = nil, nil, time.Time{}, false
 	// AND THE DRAIN LATCH, for the reason its own field states: a restart
 	// here is an adoption or a re-anchor, and a drain of the history this
 	// loop used to apply is not a claim about the one it is about to.
@@ -701,24 +705,57 @@ func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 
 // faulted classifies a failure: a STOP is returned to end the loop, anything
 // else is recorded as the fault being retried and swallowed.
+//
+// # Why a run of failures is written as three lines and never as a level
+//
+// `statelog_apply_retrying` when the run starts, `statelog_apply_faulted`
+// ONCE, on the first retry past [ApplyRetryBudget], and
+// `statelog_apply_recovered` — carrying how long the run lasted — when a retry
+// succeeds.
+//
+// The ERROR used to be written on every retry past the budget. The loop
+// retries at least once every [ApplyRetryCeiling], and a fault outliving the
+// budget is precisely the kind that lasts — a full disk, a store refusing every
+// transaction — so that was twelve ERROR lines a minute per domain for as long
+// as it lasted: anything counting the event read one incident as hundreds, a
+// count that measured how long a fault ran rather than how many there were,
+// and the line marking the moment it crossed the budget was one of hundreds
+// identical to it. That is why [Tracker] logs an alarm's transitions rather
+// than its level, and this is the same decision for the same reason. Once per
+// RUN rather than once per process, because the run is the incident:
+// recovering and failing again is a second one, and it is written again.
+//
+// Nothing is hidden by it, because the LEVEL is carried elsewhere, by
+// surfaces that are levels by construction: [Runner.Fault] names the CURRENT
+// error on every read that refuses and in the node's status for as long as the
+// run lasts, and `crewlet.statelog.apply.retries` counts every attempt. And
+// the ERROR lands on the same retry that makes [Runner.Fault] start
+// answering, so the line and the refusals and seat moves it describes begin
+// together.
 func (r *Runner) faulted(ctx context.Context, err error) error {
 	if errors.Is(err, ErrStopped) || ctx.Err() != nil {
 		return err
 	}
+	now := r.now()
 	r.mu.Lock()
 	first := r.fault == nil
 	if first {
-		r.faultSince = r.now()
+		r.faultSince = now
 	}
 	r.fault = err
 	since := r.faultSince
+	report := !r.faultReported && now.Sub(since) >= ApplyRetryBudget
+	if report {
+		r.faultReported = true
+	}
 	r.mu.Unlock()
 	if first {
 		r.logger.WarnContext(ctx, "statelog_apply_retrying",
 			"domain", r.domain.Name(), "stream", r.spec.Name,
 			"position", r.Committed().String(), "error", err.Error(),
 			"reported_after", ApplyRetryBudget)
-	} else if r.now().Sub(since) >= ApplyRetryBudget {
+	}
+	if report {
 		r.logger.ErrorContext(ctx, "statelog_apply_faulted",
 			"domain", r.domain.Name(), "stream", r.spec.Name,
 			"position", r.Committed().String(), "error", err.Error(),
@@ -729,11 +766,12 @@ func (r *Runner) faulted(ctx context.Context, err error) error {
 	return nil
 }
 
-// recovered clears the fault a retry just outlived.
+// recovered clears the fault a retry just outlived, and closes its run: the
+// next failure starts a new one, written again from `statelog_apply_retrying`.
 func (r *Runner) recovered(ctx context.Context) {
 	r.mu.Lock()
 	had, since := r.fault, r.faultSince
-	r.fault, r.faultSince = nil, time.Time{}
+	r.fault, r.faultSince, r.faultReported = nil, time.Time{}, false
 	r.mu.Unlock()
 	if had != nil {
 		r.logger.InfoContext(ctx, "statelog_apply_recovered",
@@ -1451,6 +1489,15 @@ func (r *Runner) advance(at Position) {
 // HEALTH GOES FALSE IMMEDIATELY rather than after a grace: "this node cannot
 // run this company's records" is a different answer from "this node is briefly
 // behind", and only the first is worth moving a company's work for.
+//
+// # The one line a stop writes
+//
+// Every stop the loop makes comes through here, so this is the line, and it
+// says what an operator needs to act on it: which log, where it froze, why,
+// and what resumes it. The engine used to write a second line under the same
+// name when [Runner.Run] returned, carrying only that last sentence, and one
+// stop read as two — under `component=engine`, which is not where the
+// replication guide sends an operator looking for it.
 func (r *Runner) stop(ctx context.Context, err error) error {
 	r.mu.Lock()
 	if r.stopped == nil {
@@ -1459,7 +1506,12 @@ func (r *Runner) stop(ctx context.Context, err error) error {
 	r.mu.Unlock()
 	r.logger.ErrorContext(ctx, "statelog_applier_stopped",
 		"domain", r.domain.Name(), "stream", r.spec.Name,
-		"position", r.Committed().String(), "error", err.Error())
+		"position", r.Committed().String(), "error", err.Error(),
+		"detail", "this node's rows for this domain are frozen here and every "+
+			"read of them refuses; for a domain that gates seat admission this "+
+			"node also stops claiming seats, and the ones it holds move; a build "+
+			"that can read what this one could not, or an operator's reanchor "+
+			"and a restart, is what resumes it")
 	return err
 }
 

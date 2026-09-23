@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
@@ -27,8 +28,16 @@ type ReanchorGuard struct {
 	Force bool
 }
 
-// ReanchorInputs is everything the guards read.
+// ReanchorInputs is everything the guards read, and the one stream they were
+// read from.
 type ReanchorInputs struct {
+	// Stream is the log the operator named — the one these facts were
+	// read from. No guard reads it; the lines do, because every other
+	// field here is a fact about ONE stream, and a line carrying the
+	// high-water mark without the stream it belongs to leaves the number
+	// with nothing to be read against.
+	Stream string
+
 	// StreamCreatedAt is the LIVE stream's creation instant, which is what
 	// the operator's confirmation is checked against.
 	StreamCreatedAt time.Time
@@ -111,7 +120,8 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (uint32, error) {
 
 // ReanchorDeps is everything the transition needs that it does not own.
 type ReanchorDeps struct {
-	// Domains are every domain whose cursor moves, by stream name.
+	// Domains are every domain whose cursor moves, by domain name — the
+	// map the engine registers, keyed as the manifest and the register are.
 	Domains map[string]Registered
 
 	// DB is the replicated estate, which holds every cursor.
@@ -138,8 +148,25 @@ type ReanchorDeps struct {
 	// the cursors.
 	RecordGeneration func(ctx context.Context, tx *sql.Tx, gen uint32, in ReanchorInputs) error
 
+	// Logger is where this writes. Nil is the package's own component
+	// logger, never silence: see loggerOr for what silence cost.
 	Logger *slog.Logger
 	Now    func() time.Time
+}
+
+// resolved is these deps with every optional one defaulted, and the only
+// value [Reanchor] reads them from.
+//
+// A METHOD rather than two lines at the top of Reanchor, because Reanchor is
+// a function and keeps nothing a test could inspect afterwards: the default
+// logger is asserted through this, the way every constructor's is asserted
+// through the field it stores.
+func (d ReanchorDeps) resolved() ReanchorDeps {
+	d.Logger = loggerOr(d.Logger)
+	if d.Now == nil {
+		d.Now = time.Now
+	}
+	return d
 }
 
 // Reanchor runs the generation transition.
@@ -176,21 +203,27 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 		return 0, fmt.Errorf("statelog: a reanchor is missing one of its three " +
 			"steps, and a partial one leaves the fleet unable to write")
 	}
-	logger := d.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	now := d.Now
-	if now == nil {
-		now = time.Now
-	}
+	d = d.resolved()
 
 	gen, err := PermitReanchor(in, guard)
 	if err != nil {
 		return 0, err
 	}
-	logger.WarnContext(ctx, "statelog_reanchor_started",
-		"generation", gen, "stream_created_at", in.StreamCreatedAt,
+	// THE STREAMS BY NAME rather than a count: every domain's cursor moves,
+	// and an operator reading this line after the fact is asking which logs
+	// it was, not how many. From each domain's own spec rather than the
+	// map's keys, which are domain names.
+	streams := make([]string, 0, len(d.Domains))
+	for _, reg := range d.Domains {
+		streams = append(streams, reg.Domain.Stream().Name)
+	}
+	slices.Sort(streams)
+	// THE STREAM THE OPERATOR NAMED beside the streams that move: the
+	// creation instant, the position and the high-water mark are all read
+	// from that one, and without it the line pairs them with no stream.
+	d.Logger.WarnContext(ctx, "statelog_reanchor_started",
+		"generation", gen, "stream", in.Stream, "streams", streams,
+		"stream_created_at", in.StreamCreatedAt,
 		"position", in.Position, "forced", guard.Force)
 
 	// 4. THE RESET, bounded and resumable.
@@ -225,7 +258,7 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 				return err
 			}
 			at := Position{Stream: t.stream, Generation: gen, Seq: cursor}
-			if err := t.setCursor(ctx, tx, at, in.StreamCreatedAt, now()); err != nil {
+			if err := t.setCursor(ctx, tx, at, in.StreamCreatedAt, d.Now()); err != nil {
 				return err
 			}
 		}
@@ -235,7 +268,16 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs, guard Rean
 			gen, err)
 	}
 
-	logger.WarnContext(ctx, "statelog_reanchored",
-		"generation", gen, "cursor", cursor, "domains", len(d.Domains))
+	// THE ONE COMPLETION LINE. The engine wrote a second line under this
+	// same name while this one was going nowhere; with both reaching the
+	// log a single reanchor would read as two. Who asked is the API's line
+	// (`reanchored`, carrying the operator) and the audit row's, and
+	// neither is a fact this function has.
+	d.Logger.WarnContext(ctx, "statelog_reanchored",
+		"generation", gen, "stream", in.Stream, "streams", streams,
+		"cursor", cursor, "prev_last_seq_seen", in.Highest,
+		"detail", "every position below this generation is now comparable "+
+			"and safely stale; records that were on the old stream and were "+
+			"never applied here are not recovered")
 	return gen, nil
 }
