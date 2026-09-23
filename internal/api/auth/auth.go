@@ -609,7 +609,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		log.Debug("api_auth_ok", "operator_id", OperatorID(principal), "route", path)
-		entry, tierA := tierAOf(r.Context())
+		entry, tierA := TierA(r.Context())
 		if !tierA {
 			next.ServeHTTP(w, r)
 			return

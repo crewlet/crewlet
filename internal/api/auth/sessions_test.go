@@ -253,6 +253,34 @@ func TestASignedInPersonIsResolvedFromTheirCookie(t *testing.T) {
 	}
 }
 
+// A SESSION'S PROOF IS FRESH FOR ONE STEP-UP WINDOW AFTER IT WAS GIVEN.
+//
+// The row records WHEN a session last proved identity, and a principal
+// carries the instant that proof goes STALE — which every reader of a
+// principal compares against. The session arm used to copy the first into the
+// second, so a person who had just proved themselves read as stale on the very
+// request that followed. Mutation: copy the row's instant straight across and
+// the principal is stale ten minutes into a fifteen-minute window.
+func TestASessionsProofIsFreshForOneStepUpWindow(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
+	if got.how != iam.Resolved {
+		t.Fatalf("resolution %v, want resolved", got.how)
+	}
+	proved := rig.dir.identity.Person.ReauthAt
+	window := config.DefaultBootstrap().API.Auth.Session.StepUp()
+	if want := proved.Add(window); !got.principal.ReauthAt.Equal(want) {
+		t.Errorf("the principal's proof goes stale at %s, want %s — the "+
+			"instant it was given plus one step-up window",
+			got.principal.ReauthAt, want)
+	}
+	if !got.principal.Fresh(proved.Add(window / 2)) {
+		t.Error("halfway through the window after proving themselves, the " +
+			"person reads as stale")
+	}
+}
+
 // THE CEILING APPLIES TO A PERSON EXACTLY AS IT DOES TO A TOKEN.
 //
 // `api.auth.max_grants` is a decision-time bound, so lowering it on one node

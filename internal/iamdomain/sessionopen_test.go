@@ -96,6 +96,38 @@ func TestASessionOpenedBeforeARevocationIsEnded(t *testing.T) {
 	}
 }
 
+// A SUBJECT WITH NO PERSON ROW STILL HAS AN EPOCH.
+//
+// A session exchanged from a Tier A token names the token's login, which
+// nothing enrols, and signing out everywhere from it bumps the epoch under that
+// login. The epoch used to be read only beside a person row, so that
+// revocation was written and ended nothing: every session the token had opened
+// went on validating.
+func TestTheEpochIsReadForASubjectNobodyEnrolled(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	const subject = "token:ops"
+	if err := rig.draining(func() error {
+		_, err := rig.writer.Revoke(t.Context(), subject, "op-revoke",
+			"signed out everywhere")
+		return err
+	}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	rig.drain()
+	seen, err := rig.reader(t).Resolve(t.Context(), "", subject)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if seen.Person.Found {
+		t.Error("a subject nobody enrolled was found")
+	}
+	if seen.Person.Epoch != 1 {
+		t.Errorf("the epoch under %s reads %d, want the 1 the revocation "+
+			"moved it to", subject, seen.Person.Epoch)
+	}
+}
+
 // enrolForSessions enrols one active person and applies it.
 func enrolForSessions(t *testing.T, rig *writeRig) string {
 	t.Helper()

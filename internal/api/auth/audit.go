@@ -70,19 +70,47 @@ func (g *Guard) WithAudit(a Audit) *Guard {
 	return g
 }
 
-// tierAKey carries the Tier A entry a request's bearer matched, from the
-// resolution to the middleware that records its use.
+// tierAKey carries the Tier A entry a request's authority rests on, from the
+// resolution to the middleware that records its use and to the one route that
+// has to know which credential SHAPE arrived.
 type tierAKey struct{}
 
-// withTierA marks a request as authenticated by a Tier A token.
-func withTierA(ctx context.Context, entry config.APIToken) context.Context {
-	return context.WithValue(ctx, tierAKey{}, entry)
+// tierAUse is what a request's Tier A authority is, and how it arrived.
+type tierAUse struct {
+	entry config.APIToken
+
+	// presented is true when the request carried the token's own VALUE as
+	// its bearer, and false when it carried a session exchanged from it.
+	presented bool
 }
 
-// tierAOf is the Tier A entry a request authenticated with, if it did.
-func tierAOf(ctx context.Context) (config.APIToken, bool) {
-	entry, ok := ctx.Value(tierAKey{}).(config.APIToken)
-	return entry, ok && entry.ID != ""
+// withTierA marks a request as acting on a Tier A token's authority.
+func withTierA(ctx context.Context, entry config.APIToken, presented bool) context.Context {
+	return context.WithValue(ctx, tierAKey{}, tierAUse{entry: entry, presented: presented})
+}
+
+// TierA is the Tier A entry a request's authority rests on, if it rests on
+// one — whether the request presented the token itself or a session the token
+// was exchanged for.
+//
+// ONE ANSWER FOR BOTH SHAPES, because the entry is the authority either way:
+// the session carries nothing of its own and is re-composed from the entry on
+// every request, so a use of it is a use of the token and an overreach through
+// it is the token's overreach.
+func TierA(ctx context.Context) (config.APIToken, bool) {
+	use, ok := ctx.Value(tierAKey{}).(tierAUse)
+	return use.entry, ok && use.entry.ID != ""
+}
+
+// PresentedTierA is the Tier A entry whose VALUE this request carried as its
+// bearer, if it carried one — and never the entry behind an exchanged
+// session.
+//
+// THE ONE ROUTE THAT ASKS is the exchange itself: it turns a token's value into
+// a session, and a session presented to it has no value to exchange.
+func PresentedTierA(ctx context.Context) (config.APIToken, bool) {
+	use, ok := ctx.Value(tierAKey{}).(tierAUse)
+	return use.entry, ok && use.presented && use.entry.ID != ""
 }
 
 // refused records a presented credential this node checked and turned away.

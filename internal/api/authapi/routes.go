@@ -81,9 +81,10 @@ func (s *Service) Routes(mux auth.Mux) {
 // ONE HOUR, and shorter than a person's session on purpose. What this
 // exchanges is a credential in a config file for one in a cookie, so the
 // window is sized to the gesture it exists for — a script or an operator CLI
-// doing a burst of work — rather than to a working day. A long one would make
-// a stolen cookie as good as the token it came from, without the token's own
-// revocation path.
+// doing a burst of work, or an operator using the dashboard on the day the
+// identity provider is down — rather than to a working day. A stolen cookie
+// is as good as the token for this long and no longer: the entry leaving the
+// configuration ends it at once, and so does `crewlet iam invalidate-all`.
 const tokenLifetime = time.Hour
 
 // Token exchanges a Tier A bearer for a session cookie.
@@ -92,41 +93,59 @@ const tokenLifetime = time.Hour
 //
 // A browser cannot present a Tier A token on a WebSocket, and a script that
 // holds one should not have to re-send it on every request once it has been
-// accepted once. This turns the deployment's own machine credential into an
-// ordinary session, which every surface then treats identically.
+// accepted once. This turns the deployment's own machine credential into a
+// session, which every surface then treats identically.
 //
-// # Keyed on the SOURCE alone
+// # The session IS the token, re-read from the configuration on every request
 //
-// The session it opens is not a person — it is the token, acting as itself —
-// so nothing here reads the identity estate and nothing is enrolled. The
-// principal the guard already resolved is what it copies, which is also what
-// keeps the exchange from being a way to acquire authority: a token that
-// carries two grants gets a session carrying the same two, intersected with
-// this node's ceiling exactly as the token itself was.
+// Nothing about the token is enrolled and nothing is copied into the session:
+// its subject is the token's LOGIN (`token:<id>`), and the guard answers that
+// subject from the entry this node holds for it NOW — the same composition the
+// bearer gets, so the grants are the entry's cut to this node's ceiling on
+// each request, a token the identity directory binds to a seat acts as that
+// seat, and removing the entry from the configuration ends the session on the
+// next request. It used to be minted for the token's derived principal id,
+// which no directory row holds: once the start record applied every request
+// answered 401 and cleared the cookie, and before that it served a grantless
+// nobody — and a bound token was refused the exchange outright.
 //
-// ITS REAUTH CLOCK IS ZERO, so every step-up surface asks it to confirm who it
-// is — and it cannot, because there is nothing for a machine to confirm with.
-// That is the correct answer rather than an oversight: a config-file
-// credential must not be able to reach a surface that exists to require a
-// person.
+// IT IS STEPPED UP BY CONSTRUCTION, as the bearer is: presenting the token was
+// the proof, and there is nothing else a config-file credential could present.
+// A break-glass session that could reach no sensitive surface would be no use
+// on the day it exists for — the day the identity provider is down.
+//
+// # Only a presented token is exchanged
+//
+// A session — a person's, or one this route already minted — has no value to
+// exchange, and exchanging one for another would reset nothing anybody needs
+// reset. A personal access token is presented on every request by design.
 func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	principal, resolution := iam.From(r.Context())
-	if resolution != iam.Resolved {
+	switch resolution {
+	case iam.Resolved:
+	case iam.Unknown:
+		// THE TOKEN MATCHED AND ITS SEAT COULD NOT BE SAID, which is 503
+		// here for the reason it is everywhere: a session minted now
+		// would act as the bare credential on this node and as its seat
+		// on the next.
+		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, retryIdentity)
+		return
+	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return
 	}
-	if principal.Kind != iam.KindMachine {
-		// A PERSON ALREADY HOLDS A SESSION. Exchanging one for another
-		// would reset nothing they need reset and would cost them their
-		// step-up clock, which is the one thing this route cannot
-		// carry over.
+	entry, presented := auth.PresentedTierA(r.Context())
+	if !presented {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			map[string]string{
-				"detail": "this route exchanges a machine credential for a session",
-				"hint":   "you already hold one; see GET /auth/session",
+				"detail": "this route exchanges a Tier A token, presented as " +
+					"the bearer, for a session",
+				"hint": "a session already in hand is used as it is; see " +
+					"GET /auth/session",
 			})
 		return
 	}
+	subject := iam.TokenLogin(entry.ID)
 
 	lineage, err := uuid.NewV7()
 	if err != nil {
@@ -136,7 +155,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	}
 	expires := s.now().Add(tokenLifetime)
 	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
-		Lineage: lineage.String(), Person: principal.ID.String(),
+		Lineage: lineage.String(), Person: subject,
 		AbsoluteExpiresAt: expires,
 		OpID:              "session:" + lineage.String(),
 		NoWait:            true,
@@ -148,7 +167,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	}
 	at := opened.Position
 	bearer, err := s.signer.Mint(session.Mint{
-		Lineage: lineage, Person: principal.ID.String(),
+		Lineage: lineage, Person: subject,
 		Epoch: opened.Epoch, Generation: opened.Generation,
 		StartPosition:     uint64(at.Packed()),
 		AbsoluteExpiresAt: expires,
@@ -160,7 +179,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, session.Cookie(s.boot.API.ExternalBase(), bearer, expires))
 	log.InfoContext(r.Context(), "api_token_exchanged",
-		"login", principal.Login, "expires_at", expires)
+		"token", entry.ID, "seat", principal.Seat, "expires_at", expires)
 	s.audit.Emit(r.Context(), types.IAMSessionStarted{
 		Person: principal.ID.String(), Login: principal.Login,
 		Method: types.SignInToken, Lineage: lineage.String(),
@@ -168,7 +187,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	})
 	httpjson.Write(w, http.StatusOK, loginResponse{
 		Person: principal.ID.String(), Login: principal.Login,
-		ExpiresAt: expires, Position: at.String(),
+		Seat: principal.Seat, ExpiresAt: expires, Position: at.String(),
 	})
 }
 

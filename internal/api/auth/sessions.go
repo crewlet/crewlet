@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
@@ -283,26 +284,47 @@ func needOf(method string) session.Need {
 	return session.NeedWrite
 }
 
+// sessionAnswer is what the session arm made of one request.
+type sessionAnswer struct {
+	principal iam.Principal
+	how       iam.Resolution
+	refusal   *Refusal
+
+	// presented is "this arm applies" rather than "it succeeded": a request
+	// with no cookie falls through to the Tier A arm, and one with a cookie
+	// gets this arm's answer whatever it is.
+	presented bool
+
+	// tierA is the entry a session exchanged from a Tier A token stands
+	// for, set on a served session whose subject is a token rather than a
+	// person. The GUARD composes that principal, through the one function
+	// the token's own bearer is composed through — see [Guard.exchanged].
+	tierA *config.APIToken
+}
+
 // resolve turns a cookie into an answer, or reports that this request carries
 // none.
-//
-// The bool is "this arm applies" rather than "it succeeded": a request with no
-// cookie falls through to the Tier A arm, and one with a cookie gets this
-// arm's answer whatever it is.
 //
 // client is the GUARD's resolver of the caller's own address, handed in
 // rather than held, because the guard is what reads `api.trusted_proxies`
 // and a second reading of it here would be a second answer to "is this peer
 // the proxy". It is called only on the paths that record something.
+//
+// ceiling and stepUp are the guard's own `api.auth.max_grants` and step-up
+// window, applied to a person as they are to a token.
+//
+// tokens is the guard's Tier A entries by login, for a session exchanged from
+// one: see [tierASubjects].
 func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
-	ceiling []iam.Grant, client func(*http.Request) string) (
-	iam.Principal, iam.Resolution, *Refusal, bool) {
+	ceiling []iam.Grant, stepUp time.Duration, client func(*http.Request) string,
+	tokens func(login string) (config.APIToken, bool)) sessionAnswer {
 
 	cookie := cookieOf(r)
 	if cookie == "" {
-		return iam.Principal{}, iam.Anonymous, nil, false
+		return sessionAnswer{how: iam.Anonymous}
 	}
-	v := s.signer.Validate(r.Context(), s.directory, cookie)
+	v := s.signer.Validate(r.Context(),
+		tierASubjects{directory: s.directory, tokens: tokens}, cookie)
 	if v.Reuse {
 		s.reuse(r, v, client(r))
 	}
@@ -310,7 +332,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 	case session.AnswerUnavailable:
 		log.WarnContext(r.Context(), "api_session_unavailable",
 			"row", string(v.Row), "detail", v.Detail, "error", errText(v.Err))
-		return iam.Principal{}, iam.Unknown, nil, true
+		return sessionAnswer{how: iam.Unknown, presented: true}
 	case session.AnswerServe:
 	default:
 		// EVERY REFUSING ROW IS ANONYMOUS, and the cookie is CLEARED so
@@ -325,7 +347,18 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		for _, clear := range session.Clears(s.external) {
 			http.SetCookie(w, clear)
 		}
-		return iam.Principal{}, iam.Anonymous, nil, true
+		return sessionAnswer{how: iam.Anonymous, presented: true}
+	}
+
+	if tokens != nil {
+		if entry, isToken := tokens(v.Bearer.Person); isToken {
+			// A TOKEN'S SESSION, served: the row, the deadlines and the
+			// generation all checked out, and the entry is still held.
+			// Who it is belongs to the guard, which composes it from
+			// the entry exactly as it composes the token's bearer.
+			s.reissue(w, v)
+			return sessionAnswer{how: iam.Resolved, presented: true, tierA: &entry}
+		}
 	}
 
 	binding := session.ResolveSeat(r.Context(), s.chart, v.Person)
@@ -334,7 +367,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		log.WarnContext(r.Context(), "api_session_seat_unavailable",
 			"person", v.Bearer.Person, "seat", v.Person.Seat,
 			"detail", binding.Detail, "error", errText(binding.Err))
-		return iam.Principal{}, iam.Unknown, nil, true
+		return sessionAnswer{how: iam.Unknown, presented: true}
 	case session.AnswerServe:
 	default:
 		// THEY ARE STILL RESOLVED, and that is the whole difference
@@ -353,15 +386,79 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// bearer is live and works the moment somebody rebinds them,
 		// and discarding it would sign out a person whose only problem
 		// is a chart edit.
-		return s.principal(v, binding, ceiling), iam.Resolved,
-			seatRefusal(binding), true
+		return sessionAnswer{
+			principal: s.principal(v, binding, ceiling, stepUp), how: iam.Resolved,
+			refusal: seatRefusal(binding), presented: true,
+		}
 	}
 
+	s.reissue(w, v)
+	return sessionAnswer{
+		principal: s.principal(v, binding, ceiling, stepUp), how: iam.Resolved,
+		presented: true,
+	}
+}
+
+// reissue sets the cookie a served validation re-issued, if it re-issued one.
+func (s *Sessions) reissue(w http.ResponseWriter, v session.Validation) {
 	if v.Reissue != "" {
 		http.SetCookie(w, session.Cookie(s.external, v.Reissue,
 			v.Bearer.AbsoluteExpiresAt))
 	}
-	return s.principal(v, binding, ceiling), iam.Resolved, nil, true
+}
+
+// tierASubjects is the directory a bearer is validated against, answering a
+// Tier A token's own subject from the CONFIGURATION rather than from a row.
+//
+// # Why a session can stand for a token at all
+//
+// `POST /auth/token` exchanges a Tier A bearer for a session, so a browser can
+// present the deployment's break-glass credential without holding its value.
+// Such a session names the token's LOGIN (`token:<id>`) as its subject, and a
+// token has no directory row: its authority is a line in a config file. So
+// every fact validation reads about the SESSION — its row, whether it ended,
+// the fleet's generation, this node's lag and deferrals — is the directory's,
+// read as for anybody, and the one fact about its SUBJECT is whether this node
+// still holds the entry.
+//
+// A GONE ENTRY IS A SUBJECT THAT MAY NOT ACT, answered as a retired principal:
+// validation then ends the session wherever this node stands against its start
+// record, and the cookie is cleared. Answered as ABSENT instead, a node below
+// the start position would serve reads on a credential the operator withdrew
+// — the absent-row grace exists for a record not yet applied, and a
+// configuration entry is never late.
+//
+// A person's subject is a uuid and a token's carries the `token:` class, which
+// no uuid can, so the two never share a subject; nil tokens answers everything
+// from the directory.
+type tierASubjects struct {
+	directory session.Directory
+	tokens    func(login string) (config.APIToken, bool)
+}
+
+// Resolve answers one bearer's facts.
+func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
+	session.Identity, error) {
+
+	identity, err := d.directory.Resolve(ctx, lineage, person)
+	if err != nil || d.tokens == nil ||
+		!strings.HasPrefix(person, iam.TokenLoginPrefix) {
+		return identity, err
+	}
+	// THE EPOCH IS THE DIRECTORY'S, kept: "sign out everywhere" from a
+	// token's session bumps it under the token's login, which is what ends
+	// every session exchanged from that token.
+	epoch := identity.Person.Epoch
+	if _, held := d.tokens(person); !held {
+		identity.Person = session.PersonRow{Found: true, Stage: iam.StageRetired,
+			Login: person, Epoch: epoch}
+		return identity, nil
+	}
+	// NO GRANTS AND NO SEAT on the row: who a token's session acts as is
+	// composed from the entry by the guard, on every request.
+	identity.Person = session.PersonRow{Found: true, Stage: iam.StageActive,
+		Login: person, Epoch: epoch}
+	return identity, nil
 }
 
 // principal composes who the holder of a validated bearer is.
@@ -372,9 +469,18 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 // somebody has to rewrite. A mixed fleet mid-rollout is a LEGAL state, which
 // is why each node publishes a hash of its own ceiling.
 func (s *Sessions) principal(v session.Validation, binding session.Binding,
-	ceiling []iam.Grant) iam.Principal {
+	ceiling []iam.Grant, stepUp time.Duration) iam.Principal {
 
 	person := v.Person
+	// THE PROOF INSTANT BECOMES A DEADLINE HERE, once. The row says WHEN
+	// this session last proved identity; [iam.Principal.ReauthAt] is the
+	// instant after which that proof is stale, which is what every reader
+	// of a principal compares against — and a principal carrying the proof
+	// instant itself would read as stale the moment it was proved.
+	var reauth time.Time
+	if !person.ReauthAt.IsZero() {
+		reauth = person.ReauthAt.Add(stepUp)
+	}
 	return iam.Principal{
 		// THE PERSON'S OWN ID, parsed from the bearer. A bearer that
 		// reached here verified, so the value is one this engine wrote.
@@ -393,11 +499,11 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		Grants:    intersect(person.Grants, ceiling),
 		Colleague: person.Colleague,
 		Stage:     person.Stage,
-		// WHEN THIS SESSION LAST PROVED IDENTITY, which is what the
-		// step-up column compares against. It is the session's own
-		// fact rather than a window this package opens, so a sensitive
-		// gesture an hour into a session asks for a password again.
-		ReauthAt: person.ReauthAt,
+		// WHEN THIS SESSION'S PROOF GOES STALE, from when it was last
+		// given. It is the session's own fact plus the one step-up
+		// window, so a sensitive gesture an hour into a session asks
+		// for a password again.
+		ReauthAt: reauth,
 	}
 }
 

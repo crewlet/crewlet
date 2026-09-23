@@ -145,6 +145,9 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 		if err := readPersonRow(ctx, tx, person, &out.Person); err != nil {
 			return err
 		}
+		if err := readEpoch(ctx, tx, person, &out.Person.Epoch); err != nil {
+			return err
+		}
 		return readGeneration(ctx, tx, &out.Generation)
 	})
 	if err != nil {
@@ -265,25 +268,38 @@ func readPersonRow(ctx context.Context, tx *sql.Tx, person string,
 	out.Grants = doc.Grants
 	out.Seat = seat
 	out.SeatAt = uint64(chartPosition)
+	return nil
+}
 
-	// THE REVOCATION EPOCH IS ITS OWN ROW, and it is read in this same
-	// transaction for the reason the whole method exists: a revocation
-	// landing between the person read and the epoch read produces a
-	// verdict that never existed.
+// readEpoch fills a session subject's revocation epoch.
+//
+// THE REVOCATION EPOCH IS ITS OWN ROW, and it is read in the same transaction
+// as the person for the reason [Reader.Resolve] exists: a revocation landing
+// between the person read and the epoch read produces a verdict that never
+// existed.
+//
+// READ WHETHER OR NOT A PERSON ROW EXISTS, because not every session's subject
+// has one: a session exchanged from a Tier A token names the token's login,
+// which nothing enrols, and "sign out everywhere" from it bumps the epoch under
+// that login. Read only beside a person row, that revocation ended nothing.
+func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) error {
+	if subject == "" {
+		return nil
+	}
 	var epoch int64
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT epoch FROM iam_revocation_epochs WHERE person_id = ?`,
-		person).Scan(&epoch)
+		subject).Scan(&epoch)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// NO ROW IS EPOCH ZERO, which is a real value rather than a
-		// missing one: nobody has revoked anything for this person, and
-		// every bearer they hold carries zero too.
+		// missing one: nobody has revoked anything for this subject, and
+		// every bearer it holds carries zero too.
+		return nil
 	case err != nil:
 		return fmt.Errorf("iamdomain: read the revocation epoch: %w", err)
-	default:
-		out.Epoch = uint64(epoch)
 	}
+	*out = uint64(epoch)
 	return nil
 }
 

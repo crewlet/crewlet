@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -118,8 +119,13 @@ type sessionResponse struct {
 	Stage     iam.Stage     `json:"stage"`
 	Grants    []iam.Grant   `json:"grants"`
 	Colleague iam.Colleague `json:"colleague"`
-	ExpiresAt time.Time     `json:"expires_at"`
-	ReauthAt  time.Time     `json:"reauth_at,omitzero"`
+
+	// ExpiresAt is the absolute deadline of the session this request
+	// carried, which no re-issue moves. ABSENT for a caller presenting a
+	// bearer rather than a cookie — a Tier A token or a personal access
+	// token has its own lifetime and no session to end.
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
+	ReauthAt  time.Time `json:"reauth_at,omitzero"`
 
 	// StepUpDue reports whether the next sensitive action will ask this
 	// caller to confirm who they are, so a client can say so before they
@@ -149,6 +155,14 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return
 	}
+	// THE DEADLINE IS THE BEARER'S OWN, read off its signature: it was
+	// declared and never filled, so every answer said the session ended in
+	// the year 1. A request whose credential was a header carries no
+	// session, and the zero bearer omits it.
+	var expires time.Time
+	if r.Header.Get("Authorization") == "" {
+		expires = s.bearerOf(r).AbsoluteExpiresAt
+	}
 	httpjson.Write(w, http.StatusOK, sessionResponse{
 		Person: principal.ID.String(), Login: principal.Login,
 		Seat:      principal.Seat,
@@ -156,6 +170,7 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		Stage:     principal.Stage,
 		Grants:    principal.Grants,
 		Colleague: principal.Colleague,
+		ExpiresAt: expires,
 		ReauthAt:  principal.ReauthAt,
 		StepUpDue: s.stepUpDue(principal),
 	})
@@ -167,14 +182,16 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 // DERIVED FROM THE SAME SETTING THE GATE USES, never a second number: a client
 // that warned at a different threshold from the one that refuses would either
 // nag early or surprise late, and both read as a bug in the engine.
+//
+// [iam.Principal.Fresh] AND NOTHING ELSE, because ReauthAt is the instant a
+// proof goes STALE, which the guard derives once from the configured window.
+// This used to read it as the instant the proof was GIVEN and add the window
+// itself — which matched a session arm that stored the proof instant in the
+// field, and matched nothing else: [iam.Principal.Fresh] read every signed-in
+// person as stale the moment they proved themselves, and a Tier A token as
+// fresh for twice the window. A zero ReauthAt is nothing proved yet, and due.
 func (s *Service) stepUpDue(p iam.Principal) bool {
-	if p.ReauthAt.IsZero() {
-		// NOTHING PROVED YET is due by definition, which is the honest
-		// reading of a session opened by a route that does not prove
-		// identity at all — see the Tier A token exchange.
-		return true
-	}
-	return s.now().Sub(p.ReauthAt) >= s.boot.API.Auth.Session.StepUp()
+	return !p.Fresh(s.now())
 }
 
 // retryIdentity is the Retry-After an identity answer this node could not give
@@ -256,7 +273,10 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearSession(w)
 
-	person := principal.ID.String()
+	// THE CALLER'S OWN SUBJECT, which for a Tier A token is its login: the
+	// epoch under it is what every session exchanged from that token is
+	// checked against.
+	person := subjectOf(r, principal)
 	if _, err := s.writer.Revoke(r.Context(), person,
 		"logout-all:"+person+":"+s.now().UTC().Format(time.RFC3339Nano),
 		"signed out everywhere"); err != nil {
@@ -374,7 +394,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusOK, map[string]string{"status": "ended"})
 		return
 	}
-	if !mayEnd(principal, owner) {
+	if !mayEnd(r, principal, owner) {
 		httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
 		return
 	}
@@ -389,7 +409,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	// else's is a revocation, and the trail has to say which, because the
 	// second is the row an investigation of a stolen laptop is looking for.
 	reason := types.EndLogout
-	if owner != principal.ID.String() {
+	if owner != subjectOf(r, principal) {
 		reason = types.EndRevoked
 	}
 	s.audit.Emit(r.Context(), types.IAMSessionEnded{
@@ -419,9 +439,25 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 // a laptop is stolen and its holder cannot be reached. It is the deployment's
 // grant rather than a colleague level, because ending a person's sessions is
 // an act on the DEPLOYMENT's security rather than on the company's work.
-func mayEnd(p iam.Principal, owner string) bool {
-	if owner != "" && owner == p.ID.String() {
+func mayEnd(r *http.Request, p iam.Principal, owner string) bool {
+	if owner != "" && owner == subjectOf(r, p) {
 		return true
 	}
 	return p.Can(iam.GrantFleetOperate)
+}
+
+// subjectOf is the subject the caller's OWN sessions are opened under: a
+// person's id, or — for a caller acting on a Tier A token, by its bearer or by
+// a session exchanged from it — the token's login, which is what the exchange
+// opens its sessions under because a token has no directory row.
+//
+// ONE ANSWER FOR THE THREE GESTURES THAT ASK, so "end my session", "end my
+// other sessions" and "sign me out everywhere" agree about who "me" is: a
+// token's caller compared against its derived id owned none of the sessions
+// it had opened, and signing out everywhere bumped an epoch nothing read.
+func subjectOf(r *http.Request, p iam.Principal) string {
+	if entry, tierA := auth.TierA(r.Context()); tierA {
+		return iam.TokenLogin(entry.ID)
+	}
+	return p.ID.String()
 }

@@ -822,6 +822,21 @@ header is only ever there because somebody put it there. So `curl -H
 and, if the token is wrong, as *nobody*, rather than being quietly upgraded to
 the person whose cookie happened to be in the jar.
 
+**A Tier A token can be exchanged for a session** (`POST /auth/token`), so a
+browser can use break-glass without holding the token's value — which matters
+on the one day it exists for, when the identity provider is down. The session
+is the token and nothing else: it names the token's login (`token:<id>`) rather
+than a person, and every request re-composes it from the entry this node holds
+*now*, through the same function the bearer goes through — the entry's grants
+cut to the ceiling, the seat the directory binds the token to, and stepped up
+by construction. Its lifetime is one hour. Removing or renaming the entry ends
+it on the next request (and clears the cookie) wherever the node stands on the
+log, because a configuration entry is never late; `POST /auth/logout/all` from
+it ends every session that token opened; and `crewlet iam invalidate-all` ends
+it with everybody else's. Rotating the token's *value* under the same id keeps
+its exchanged sessions to their hour, so a rotation that answers a leak
+renames the entry or invalidates.
+
 **The ceiling applies to a person too.** `api.auth.max_grants` is intersected
 into every principal at the moment the request is resolved, so a node whose
 ceiling was lowered enforces it on its next request rather than on a row

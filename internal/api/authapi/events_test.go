@@ -35,6 +35,15 @@ func (a *recordingAudit) Emit(_ context.Context, payload events.Payload) {
 	a.emitted = append(a.emitted, payload)
 }
 
+// EmitOnce publishes every time: nothing here is about the coalescing, which
+// internal/iam/authevents certifies.
+func (a *recordingAudit) EmitOnce(ctx context.Context, _ string, _ time.Duration,
+	payload events.Payload) bool {
+
+	a.Emit(ctx, payload)
+	return true
+}
+
 func (a *recordingAudit) Failed(_ context.Context, f authevents.Failure) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

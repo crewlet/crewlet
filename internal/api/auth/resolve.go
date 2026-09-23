@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -263,21 +264,70 @@ func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 				iam.WithUnresolved(r.Context(), errBindingUnavailable)), nil
 		}
 		ctx := iam.WithPrincipal(r.Context(), principal)
-		return r.WithContext(withTierA(ctx, entry)), refusal
+		return r.WithContext(withTierA(ctx, entry, true)), refusal
 	}
 	if g.sessions != nil {
-		principal, how, refusal, presented := g.sessions.resolve(w, r,
-			g.ceiling, g.Client)
-		if presented {
-			if how == iam.Resolved {
+		answer := g.sessions.resolve(w, r, g.ceiling, g.stepUp, g.Client,
+			g.tokenByLogin)
+		if answer.presented {
+			if answer.tierA != nil && answer.how == iam.Resolved {
+				return g.exchanged(r, *answer.tierA)
+			}
+			if answer.how == iam.Resolved {
 				return r.WithContext(
-					iam.WithPrincipal(r.Context(), principal)), refusal
+					iam.WithPrincipal(r.Context(), answer.principal)), answer.refusal
 			}
-			if how == iam.Unknown {
-				return r.WithContext(iam.WithUnresolved(r.Context(), errIdentityUnavailable)), refusal
+			if answer.how == iam.Unknown {
+				return r.WithContext(iam.WithUnresolved(r.Context(), errIdentityUnavailable)), answer.refusal
 			}
-			return r.WithContext(iam.WithAnonymous(r.Context())), refusal
+			return r.WithContext(iam.WithAnonymous(r.Context())), answer.refusal
 		}
 	}
 	return r.WithContext(iam.WithAnonymous(r.Context())), nil
+}
+
+// exchanged is who a session exchanged from a Tier A token is: THE TOKEN, as
+// the entry this node holds for it says now.
+//
+// # Composed from the configuration, never from a directory row
+//
+// The token has no row — it is a line in a config file — so the session it
+// was exchanged for is validated against the ENTRY: [Sessions] has already
+// refused one whose entry this node no longer holds, and this composes the
+// principal through [Guard.principalFor], the one function the bearer itself
+// is composed through. So the grants are the entry's cut to this node's
+// ceiling on THIS request, a bound token acts as its seat exactly as the bearer
+// would (and is refused it exactly as the bearer would), and the session is
+// stepped up by construction for the reason the bearer is: presenting the
+// token was the proof, and a break-glass session that could reach no
+// sensitive surface would be no use on the day it exists for.
+//
+// The session was once composed from the directory's row for the token's
+// DERIVED id, which no directory holds: once applied every request answered
+// 401 and cleared the cookie, and before that it served a grantless nobody.
+func (g *Guard) exchanged(r *http.Request, entry config.APIToken) (
+	*http.Request, *Refusal) {
+
+	principal, how, refusal := g.principalFor(r.Context(), entry, g.now())
+	if how == iam.Unknown {
+		return r.WithContext(
+			iam.WithUnresolved(r.Context(), errBindingUnavailable)), nil
+	}
+	ctx := iam.WithPrincipal(r.Context(), principal)
+	return r.WithContext(withTierA(ctx, entry, false)), refusal
+}
+
+// tokenByLogin is the Tier A entry a token's login names, or false.
+//
+// BY THE ID IN THE LOGIN and never by value: what an exchanged session carries
+// is the token's NAME, and the entry this node holds under that name now is
+// what it answers to — so removing the entry, or renaming it, ends every
+// session exchanged from it on this node's next request.
+func (g *Guard) tokenByLogin(login string) (config.APIToken, bool) {
+	id, isToken := strings.CutPrefix(login, iam.TokenLoginPrefix)
+	if !isToken || id == "" {
+		return config.APIToken{}, false
+	}
+	entry, held := g.tokens[id]
+	return entry, held
 }
