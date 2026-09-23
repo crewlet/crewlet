@@ -135,6 +135,12 @@ const (
 	// notifications, and somebody who is messaged constantly and cannot
 	// open the dashboard as themselves. Folded together, whichever remedy
 	// a person tried first would appear not to work.
+	//
+	// THIS IS THE ONLY PLACE IT IS SAID. Validation admits the seat — a
+	// person who works only through the dashboard has no chat account to
+	// declare, and refusing the seat refused them — so a warning here is
+	// the one signal an operator gets that nobody can be @-mentioned there,
+	// and a warning rather than an error because the state is legitimate.
 	KindSeatUnreachable FindingKind = "seat_unreachable"
 )
 
@@ -292,7 +298,9 @@ func seatFindings(role *org.Role, settings *config.Company, held Held) []Finding
 			Detail: fmt.Sprintf("%s is a human seat with no contact identity, "+
 				"so nothing addressed to it reaches anybody", handle),
 			Remedy: "give the seat a contact identity on the chat surface " +
-				"this company runs",
+				"this company runs — or leave it, for a person who works " +
+				"only through the dashboard: agents then hand them work by " +
+				"assigning it in the tracker rather than mentioning them",
 		})
 	}
 	if role.IsHuman() && held != nil && !held(handle) {

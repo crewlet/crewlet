@@ -156,7 +156,15 @@ func TestHumanSeatKeepsItsDescriptiveFields(t *testing.T) {
 	}
 }
 
-func TestHumanSeatNeedsAContactIdentity(t *testing.T) {
+// A HUMAN SEAT WITH NO CONTACT IDENTITY IS A LEGITIMATE SEAT.
+//
+// A person who works through the dashboard — bound to the seat in the identity
+// directory, and never on the company's chat — has no account to write into a
+// contact block, so a rule refusing the seat refused the person. Whether
+// anybody can be MESSAGED there is a different question, and it is the chart
+// check's (`seat_unreachable`), which names the seat without refusing the
+// company that holds it.
+func TestAHumanSeatNeedsNoContactIdentity(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
@@ -170,16 +178,28 @@ func TestHumanSeatNeedsAContactIdentity(t *testing.T) {
 			t.Parallel()
 			r := human(func(r *Role) { r.Contact = tc.contact })
 			r.Contact.Normalize()
-			if err := r.Validate(); !errors.Is(err, ErrNoContact) {
-				t.Errorf("Validate() = %v, want ErrNoContact", err)
+			if err := r.Validate(); err != nil {
+				t.Errorf("Validate() = %v, want nil — a person reached only "+
+					"through the dashboard holds a legitimate seat", err)
 			}
 		})
 	}
-	// A ${VAR} reference IS a declared identity — the id is instance
-	// specific and lives in the environment, not in a committed file.
-	r := human(func(r *Role) { r.Contact = &HumanContact{GitLabUsername: "${GL_FOUNDER_USERNAME}"} })
-	if err := r.Validate(); err != nil {
-		t.Errorf("Validate() = %v, want nil", err)
+}
+
+// A ${VAR} REFERENCE IS A DECLARED IDENTITY. The id is instance specific and
+// lives in the environment rather than in a committed file, so a seat whose
+// ids are all references is reachable — which is what keeps the chart check
+// from reporting it unreachable before the variable is even read.
+func TestAReferenceIsADeclaredContactIdentity(t *testing.T) {
+	t.Parallel()
+	c := &HumanContact{GitLabUsername: "${GL_FOUNDER_USERNAME}"}
+	if c.IsEmpty() {
+		t.Error("IsEmpty() = true for a contact holding a reference, want false")
+	}
+	for _, empty := range []*HumanContact{nil, {}} {
+		if !empty.IsEmpty() {
+			t.Errorf("IsEmpty() = false for %+v, want true", empty)
+		}
 	}
 }
 
@@ -214,10 +234,10 @@ func TestRoleValidateReportsEveryProblemAtOnce(t *testing.T) {
 	r := human(func(r *Role) {
 		r.DeclaredHandle = "Sarah_Chen"
 		r.TokenBudget = 10
-		r.Contact = &HumanContact{}
+		r.Contact = &HumanContact{SlackUserID: "U${SUFFIX}"}
 	})
 	err := r.Validate()
-	for _, want := range []error{ErrInvalidHandle, ErrHumanSeatField, ErrNoContact} {
+	for _, want := range []error{ErrInvalidHandle, ErrHumanSeatField, ErrEmbeddedEnvRef} {
 		if !errors.Is(err, want) {
 			t.Errorf("Validate() = %v, missing %v", err, want)
 		}

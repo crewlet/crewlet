@@ -147,7 +147,7 @@ Role (a SEAT: can live at root level OR inside a unit)
 ├── Name string                        (DISPLAY, plus the source of the derived
 │                                       handle: nothing references a seat by it)
 ├── Responsibilities, BehavioralGuidelines []string
-├── Contact *HumanContact              (human seats: slack_user_id,
+├── Contact *HumanContact              (human seats, optional: slack_user_id,
 │                                       mattermost_user_id, atlassian_account_id,
 │                                       github_login, gitlab_username — where a
 │                                       message can be sent. Who holds the seat

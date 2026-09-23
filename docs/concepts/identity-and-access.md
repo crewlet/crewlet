@@ -345,8 +345,10 @@ address somebody typed and never sent leaves no cleartext anywhere.
 
 **The engine never sends mail.** `crewlet iam invite` and `POST
 /iam/invitations` hand the inviter the URL; getting it to the person is
-theirs. A seat holder already has contact identities, so it can also be sent
-over the notification spine the company already runs.
+theirs. A person whose seat carries a contact identity can also be sent it
+over the chat surface the company already runs; somebody who will work only
+through the dashboard has none, and the link reaches them however the inviter
+chooses.
 
 **It stays redeemable for one week.** That is the security horizon rather than
 a convenience: the link is a bearer credential sitting in somebody's mailbox,

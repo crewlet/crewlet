@@ -85,7 +85,6 @@ func TestASeatErrorCarriesItsSeatAndField(t *testing.T) {
 			r.TokenBudget = 10
 			r.Workers = []string{"researcher"}
 		}), ErrHumanSeatField, nil},
-		{"no contact", human(func(r *Role) { r.Contact = nil }), ErrNoContact, []any{"contact"}},
 		{"a human-only field on an agent", &Role{Name: "Dev", Availability: "mornings"},
 			ErrAgentSeatField, []any{"availability"}},
 		{"an embedded reference", human(func(r *Role) {

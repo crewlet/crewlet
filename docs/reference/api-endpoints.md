@@ -501,7 +501,7 @@ they were made:
 | `worker_unknown` | warning | A seat's `workers:` narrowing names a template that is gone, so it narrows to fewer workers than the list suggests |
 | `reference_dangling` | warning | A `manages:` entry, a unit's lead or a seat's unit resolves to nothing |
 | `seat_unheld` | warning | A human seat **nobody in the identity directory is bound to**, so no person can sign in and act as it — work routed there waits for somebody who cannot arrive. **Skipped, not answered,** on a node that runs no identity domain: its copy of that estate is legitimately empty, so reading it would report every human seat in the company |
-| `seat_unreachable` | warning | A human seat with no contact identity, so nothing addressed to it reaches anybody on the chat surface this company runs. Independent of the above and with a different remedy — a seat can have either without the other |
+| `seat_unreachable` | warning | A human seat with no contact identity, so nothing addressed to it reaches anybody on the chat surface this company runs. Validation **admits** such a seat — a person who works only through the dashboard has no chat account to declare — so this report is the only place it is named, and a warning rather than an error because the state is legitimate. Independent of the above and with a different remedy — a seat can have either without the other |
 
 The **same** evaluation is summarised on `/health` under `consistency`, so a
 gauge, a probe and this screen can never disagree about whether something is

@@ -276,10 +276,9 @@ so a complete config validates *before any secret exists*. You can draft
 and check an entire company offline.
 
 Validation is deep: it builds the `Organization`, so duplicate seat names,
-duplicate unit keys, bad cron expressions, invalid timezones, human seats
-with no contact identity, and a knowledge scope with no backend behind it all
-fail here rather than at run time, and a unit lead that is no seat's handle
-is reported as a warning.
+duplicate unit keys, bad cron expressions, invalid timezones and a
+knowledge scope with no backend behind it all fail here rather than at run
+time, and a unit lead that is no seat's handle is reported as a warning.
 
 `-tier auto` (the default) picks the tier from the document's **keys**, not
 its filename: the one thing this has to get right is the case where the file

@@ -551,7 +551,11 @@ type Role struct {
 	Kind RoleKind `yaml:"kind,omitempty" json:"kind,omitempty"`
 
 	// Contact is the external identities of a HUMAN seat. Nil on an agent
-	// seat; a human seat needs at least one identity in it.
+	// seat, and OPTIONAL on a human one: a person reached only through the
+	// dashboard is bound to the seat in the identity directory and has no
+	// chat account to name here. A human seat with none is a legitimate
+	// seat nobody can @-mention, which the chart check reports
+	// (`seat_unreachable`) rather than validation refusing it.
 	Contact *HumanContact `yaml:"contact,omitempty" json:"contact,omitempty"`
 
 	// Availability is a free-text note for a human seat, rendered into
@@ -860,9 +864,6 @@ func (r *Role) Validate() error {
 			add(fieldOf(offending), fmt.Errorf(
 				"role %q: %w: %s",
 				name, ErrHumanSeatField, strings.Join(offending, ", ")))
-		}
-		if r.Contact.IsEmpty() {
-			add([]any{"contact"}, fmt.Errorf("role %q: %w", name, ErrNoContact))
 		}
 	} else {
 		var humanOnly []string

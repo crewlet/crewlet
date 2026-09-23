@@ -137,7 +137,8 @@ func TestCapitalizeMatchesPythonSemantics(t *testing.T) {
 // who signs in to the dashboard and never joined the company's chat — and a
 // roster that told an agent to mention them would produce a message addressed
 // to a handle resolving to nobody, which reads to everyone else as work handed
-// over.
+// over. The company below is VALIDATED first, because a roster case over a
+// chart validation refuses would be certifying a state no company can be in.
 func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
@@ -157,6 +158,9 @@ func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 		}},
 	}
 	o.Normalize()
+	if err := o.Validate(); err != nil {
+		t.Fatalf("a chart holding a person with no chat account is refused: %v", err)
+	}
 	p := BuildExecutor(seatIn(o, "lead"), ExecutorInput{})
 
 	contains(t, p, "**Jane Founder** (jane-founder) — **human teammate**")

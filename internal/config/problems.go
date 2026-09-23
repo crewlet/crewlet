@@ -148,10 +148,8 @@ var problemKinds = []struct {
 	{"unknown_field", ErrUnknownField},
 	{"unknown_value", ErrUnknownValue},
 
-	// A seat or unit with no name, and a person nobody can reach, are
-	// required values that are absent.
+	// A seat or unit with no name is a required value that is absent.
 	{"missing", org.ErrMissingName},
-	{"missing", org.ErrNoContact},
 	// A kind outside agent and human, a handle outside its grammar, and a
 	// contact value that is neither a literal id nor one whole reference are
 	// values outside the set a field accepts.

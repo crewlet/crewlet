@@ -278,8 +278,10 @@ roles:
 ```
 
 `kind: human` seats are addressable but never spawned: no runtime, no
-inbox, no LLM. They require at least one `contact` identity and reject
-the runtime-only fields. Scope their `manages` to the top roles — a
+inbox, no LLM. They reject the runtime-only fields, and `contact` is
+optional: a person with none works through the dashboard only, agents
+cannot @-mention them, and `crewlet chart check` reports the seat as
+`seat_unreachable`. Scope their `manages` to the top roles — a
 founder managing every seat floods them. See
 [Humans in the org chart](https://docs.crewlet.ai/concepts/humans-in-the-org/).
 

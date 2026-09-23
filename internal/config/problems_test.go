@@ -231,8 +231,6 @@ func TestEveryOrgRuleHasTheKindTheContractNames(t *testing.T) {
 		rule, doc, kind string
 	}{
 		{"name must not be empty", "name: Acme\nroles:\n  - goal: ship\n", "missing"},
-		{"human seat needs at least one contact identity",
-			"name: Acme\nroles:\n  - name: Sarah\n    kind: human\n", "missing"},
 		{"unknown seat kind", "name: Acme\nroles:\n  - name: Dev\n    kind: robot\n", "unknown_value"},
 		{"handle must match", "name: Acme\nroles:\n  - name: Dev\n    handle: Dev!\n", "unknown_value"},
 		{"value embeds a ${VAR} reference",

@@ -31,8 +31,8 @@ type Role struct {
 	Name string `yaml:"name" json:"name" js:"required" desc:"Seat name, shown to people; also the source of the auto-derived handle. Nothing references a seat by it."`
 
 	// Kind is agent (the default, a spawned runtime seat) or human (an
-	// addressable-only seat that is never spawned and needs at least one
-	// contact identity).
+	// addressable-only seat that is never spawned; its contact identities
+	// are optional, and the chart check reports one that has none).
 	Kind org.RoleKind `yaml:"kind,omitempty" json:"kind,omitempty" js:"enum=agent|human" desc:"agent (default) or human."`
 
 	// Contact is a HUMAN seat's external identities — how agents mention

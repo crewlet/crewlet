@@ -340,7 +340,7 @@ reachable through two writes that were each correct when they were made:
 | a seat's `workers:` narrowing names a template that is gone | the grant is a filter rather than a definition, so it narrows the seat to fewer workers than the list suggests |
 | a seat's code gate is open on a company with no sandbox backend | a coding run cannot start, and the seat learns it as a tool error inside a turn |
 | a `manages:` entry, a unit's lead or a seat's unit resolves to nothing | the edge manages nobody, or the seat sits at the org root above every team |
-| a human seat carries no contact identity | nothing addressed to it reaches anybody |
+| a human seat carries no contact identity | no agent can @-mention the person — legitimate for somebody who works only through the dashboard, which is why it is reported and never refused |
 
 Refusing the second write is not an option: a revision that removes a provider
 is a perfectly valid revision, and refusing it would refuse an operator's edit

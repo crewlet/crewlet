@@ -151,6 +151,59 @@ func TestTheReportNamesEveryWayTheTwoHalvesDisagree(t *testing.T) {
 	}
 }
 
+// A HUMAN SEAT WITH NO CONTACT IDENTITY IS ADMITTED, AND THIS REPORT IS WHERE
+// IT IS SAID.
+//
+// The two halves are one decision. A person who works only through the
+// dashboard is bound to the seat in the identity directory and has no chat
+// account to write down, so validation accepts the seat — and because nothing
+// refuses it any more, the report is the only place left that tells an
+// operator nobody can be @-mentioned there. A report that went quiet on it, or
+// a validator that refused it again, would each leave the other half
+// describing a company that cannot exist.
+func TestAHumanSeatWithNoContactIsAdmittedAndReportedUnreachable(t *testing.T) {
+	t.Parallel()
+	view := &org.Organization{
+		Name: "Nimbus",
+		Units: []*org.Unit{{
+			Name: "Engineering", ID: "engineering", Lead: "cto",
+			Roles: []*org.Role{
+				{Name: "CTO", DeclaredHandle: "cto", Kind: org.KindHuman},
+				{Name: "SRE", DeclaredHandle: "sre", LLM: org.ProviderKeys{"anthropic"}},
+			},
+		}},
+	}
+	view.Normalize()
+	if err := view.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want the chart admitted — a person reached "+
+			"only through the dashboard holds a legitimate seat", err)
+	}
+	if err := view.ValidateAdmission(); err != nil {
+		t.Fatalf("ValidateAdmission() = %v, want nil", err)
+	}
+
+	_, settings := running()
+	// HELD, so the only finding left is the one about the contact block.
+	got := chartapi.Evaluate(view, settings, func(string) bool { return true })
+	want := []chartapi.Finding{{
+		Kind: chartapi.KindSeatUnreachable, Severity: chartapi.SeverityWarning,
+		Object: "cto",
+	}}
+	if len(got.Findings) != len(want) {
+		t.Fatalf("findings = %+v, want exactly one seat_unreachable for cto",
+			got.Findings)
+	}
+	f := got.Findings[0]
+	if f.Kind != want[0].Kind || f.Severity != want[0].Severity ||
+		f.Object != want[0].Object {
+		t.Errorf("finding = %s %s on %q, want %s %s on %q", f.Kind, f.Severity,
+			f.Object, want[0].Kind, want[0].Severity, want[0].Object)
+	}
+	if f.Remedy == "" || f.Detail == "" {
+		t.Errorf("finding %+v says what is wrong or what to do with nothing", f)
+	}
+}
+
 // A SANDBOX CELL WITH NO BACKEND BEHIND IT IS THE ONE EXEMPTION, and it is
 // the control for the rule above: `self` is the executor's own agent-mode
 // run, which happens in the engine's process rather than in a box somebody

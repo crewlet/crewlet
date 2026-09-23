@@ -161,8 +161,13 @@ func TestQuickstartCompanyLoads(t *testing.T) {
 	if len(humans) != 1 {
 		t.Fatalf("the quickstart should model exactly one human seat, found %d", len(humans))
 	}
+	// VALIDATION NO LONGER ASKS FOR A CONTACT, so this is what keeps the page
+	// teaching a founder the company's agents can actually @-mention: the
+	// quickstart wires Mattermost further down, and a founder seat with no
+	// identity there is one every escalation reaches and nobody reads.
 	if humans[0].Contact.IsEmpty() {
-		t.Fatal("a human seat with no contact identity is unreachable")
+		t.Fatal("the quickstart's founder seat carries no contact identity, " +
+			"so no agent can @-mention them on the chat the page connects")
 	}
 	if len(humans[0].Manages) == 0 {
 		t.Fatal("the founder seat should manage the top agent")

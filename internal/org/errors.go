@@ -143,11 +143,6 @@ var (
 	// almost always a missing `kind: human`.
 	ErrAgentSeatField = errors.New("human-only field set on an agent seat")
 
-	// ErrNoContact reports a human seat with no external identity. Such a
-	// seat is inert: visible in the chart and impossible for any agent to
-	// mention or reach.
-	ErrNoContact = errors.New("human seat needs at least one contact identity")
-
 	// ErrEmbeddedEnvRef reports a contact value that embeds a ${VAR}
 	// reference inside a longer string. Resolution would substitute it and
 	// register a truncated identity that no webhook payload can ever match,

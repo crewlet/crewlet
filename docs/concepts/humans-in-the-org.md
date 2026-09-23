@@ -33,7 +33,7 @@ units:
         backstory: "20 years in infrastructure"
         responsibilities:
           - "Approvals and vendor decisions"
-        contact:                  # how agents mention & reach her
+        contact:                  # how agents mention & reach her — optional
           slack_user_id: U0123456789
           mattermost_user_id: sarah.chen       # Mattermost username, not an ID
           atlassian_account_id: 5b10ac8d-...   # one ID covers Jira + Confluence
@@ -49,18 +49,27 @@ units:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `kind: human` | yes | Marks the seat as human |
-| `contact.slack_user_id` | one identity | Slack member ID (`U…`) — `<@…>` mentions and the channel an agent DMs on escalation |
-| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Stored as written, so write it in the case Mattermost shows |
-| `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
-| `contact.github_login` | one identity | GitHub username: review requests, sender attribution. Lowercased |
-| `contact.gitlab_username` | one identity | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
+| `contact.slack_user_id` | no | Slack member ID (`U…`) — `<@…>` mentions and the channel an agent DMs on escalation |
+| `contact.mattermost_user_id` | no | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Stored as written, so write it in the case Mattermost shows |
+| `contact.atlassian_account_id` | no | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
+| `contact.github_login` | no | GitHub username: review requests, sender attribution. Lowercased |
+| `contact.gitlab_username` | no | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
 | `email` | no | Indexed so a notification addressed to the address resolves to the seat. **Not** a delivery channel: no agent has an email tool by default |
 | `availability` | no | Free text rendered into a lead's roster (timezone, hours, response expectations) |
 
-A human seat needs **at least one `contact` identity** — that is how
-agents mention and reach them, and how inbound webhooks attribute their
-activity by name. A seat with no contact would be inert (visible in the
-chart but unreachable), so it's rejected at validation.
+**Every `contact` identity is optional.** They are how agents mention and
+reach a person, and how inbound webhooks attribute their activity by name — so
+give a person one for each surface they are on. A person who works only
+through the dashboard is on none of them: they act as their seat through the
+[identity directory](#acting-as-your-seat-on-the-dashboard-and-the-api), and a
+seat with no `contact` block is a legitimate seat rather than a mistake. It is
+not refused. What changes is that no agent can @-mention them: a lead's roster
+tells its agents to hand that person work by assigning it in the tracker, and
+the [continuous report](../reference/api-endpoints.md#the-continuous-report)
+(`GET /chart/check`, `crewlet chart check`) names the seat as a
+`seat_unreachable` **warning** — the one place the engine says so, and a
+warning because the state is legitimate. Add a contact identity when the
+person joins a surface the company runs, and the finding clears.
 
 **And no two seats may claim one identity.** Each of these fields is an
 external account, and an account belongs to one person. A duplicate is
@@ -84,10 +93,10 @@ example config, where the real ID is instance-specific. Values are
 whitespace-stripped when the organization is normalized. A literal
 `github_login` or `gitlab_username` is lowercased there; a reference is
 stored verbatim (never case-mangled) and its *resolved* value is
-lowercased instead. A reference whose variable is unset counts as a
-declared identity for validation, but the identity is omitted wherever it
-is consumed until the variable resolves, so the raw `${VAR}` text is never
-emitted. The count of unresolved identities is logged on every published company
+lowercased instead. A reference whose variable is unset still counts as a
+declared identity — the chart check does not report its seat unreachable —
+but the identity is omitted wherever it is consumed until the variable
+resolves, so the raw `${VAR}` text is never emitted. The count of unresolved identities is logged on every published company
 (`parties_indexed`, field `unresolved`). A value that merely *embeds* a
 `${VAR}` inside a longer string (`"acme-${SUFFIX}"`) is rejected at
 validation, because substituting part of it would register a wrong
@@ -340,10 +349,14 @@ returns `self_iterate` with a note, and the executor's next round makes
 the mention. Once the mention has gone out the reviewer ends the turn
 `done` instead — the human's reply is what re-triggers the agent, so no
 further round of that turn can produce it. If the agent genuinely **can't reach the human** (it has no
-chat tool, or the human has no contact ID), that surfaces as a config gap
-to fix: give the agent the tool, or route the work through a colleague who
-has it. The engine never manufactures a sender to bridge the gap: there is
-no "Crewlet" DM and no engine-side fallback. Escalation is ordinary
+chat tool, or the human has no contact ID), that surfaces as a gap to
+close: give the agent the tool, or route the work through a colleague who
+has it. A human with no contact ID at all is the legitimate case of a
+person who works only through the dashboard, which the chart check names
+(`seat_unreachable`): the roster tells a lead to hand them work by assigning
+it in the tracker, and a contact identity is what to add the day they join a
+surface the company runs. The engine never manufactures a sender to bridge
+the gap: there is no "Crewlet" DM and no engine-side fallback. Escalation is ordinary
 colleague-tool use, so a report reaches a human exactly the way it reaches
 an agent.
 

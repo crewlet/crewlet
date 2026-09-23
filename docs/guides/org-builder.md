@@ -311,7 +311,7 @@ as `${NAME}` first; a reference is a name, so it survives the rename.
 | Email, goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
 | Manages | Seats and units. Seats this seat manages automatically as a unit's lead are listed apart, because the engine adds them whatever the list says. |
-| Contact identities, availability | Human seats. A human seat needs at least one contact identity. |
+| Contact identities, availability | Human seats. Contact identities are optional: a seat with none is reached through the dashboard only, and the chart check reports it as `seat_unreachable`. |
 | Model | Agent seats. An ordered chain of the company's `providers.llm` keys, tried in the order chosen; to change the order, remove a provider and choose it again. A seat with no model runs on the provider keyed `default`, else the first provider in the company's order. A per-phase mapping is shown and edited in the configuration document. |
 | Token budget | Agent seats. Empty or 0 is unlimited. |
 | Schedules: enabled | Agent seats. |

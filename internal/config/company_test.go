@@ -496,11 +496,6 @@ integrations:
 func TestOrgRulesAreEnforcedThroughTheConfig(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a human seat needs a contact", func(t *testing.T) {
-		t.Parallel()
-		rejects(t, "name: Acme\nroles:\n  - name: Founder\n    kind: human\n", "Founder")
-	})
-
 	t.Run("a human seat rejects runtime fields", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, `
@@ -548,6 +543,29 @@ roles:
       - {name: standup, cron: "9 * *", task: post}
 `, "cron")
 	})
+}
+
+// A HUMAN SEAT WITH NO CONTACT IDENTITY IS A COMPANY THE CONFIG ACCEPTS, on
+// both classes of rule. A person who works through the dashboard is bound to
+// the seat in the identity directory and has no chat account to write down.
+// Refusing the document refused them — and the chart's own writes never asked
+// for a contact, so a company holding such a seat ran, and was refused the
+// moment it went back through a document (`crewlet config import` of its own
+// export). That nobody can be MESSAGED at the seat is the chart check's to
+// say (`seat_unreachable`).
+func TestAHumanSeatWithNoContactIsAValidCompany(t *testing.T) {
+	t.Parallel()
+	cfg := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n    kind: human\n")
+	if err := cfg.ValidateAdmission(); err != nil {
+		t.Fatalf("ValidateAdmission() = %v, want nil", err)
+	}
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("Organization() = %v, want the company to build", err)
+	}
+	if founder := o.Role("founder"); founder == nil || !founder.IsHuman() {
+		t.Fatalf("the founder seat is missing or not human: %+v", founder)
+	}
 }
 
 // A minimal company loads: an org chart can be authored before any

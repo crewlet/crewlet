@@ -150,8 +150,9 @@ roles:
   # You, in the chart. A `kind: human` seat is addressable but never
   # spawned (no runtime, no inbox, no LLM) — it gives escalation a person
   # to stop at, and lets agents recognise your activity on the surfaces
-  # you connect later. Needs at least one `contact` identity; scope
-  # `manages` to the top seat so you aren't copied on everything.
+  # you connect later. `contact` is optional — without one you are
+  # reached through the dashboard only, and agents cannot @-mention you on
+  # chat; scope `manages` to the top seat so you aren't copied on everything.
   - name: Your Name
     kind: human
     manages: [ceo]              # BY HANDLE. A `manages:` entry names a seat by
