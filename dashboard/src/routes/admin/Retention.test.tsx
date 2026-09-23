@@ -15,8 +15,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import { GateDialog, GateOutcome } from "./GateDialog.tsx";
-import { MaintenanceBanner, NodePositions, ServedLevelBanner, Terms } from "./Retention.tsx";
-import type { RetentionNode, RetentionTerm } from "~/protocol/index.ts";
+import {
+  DomainBlock,
+  MaintenanceBanner,
+  NodePositions,
+  ServedLevelBanner,
+  Terms,
+} from "./Retention.tsx";
+import type { RetentionDomain, RetentionNode, RetentionTerm } from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
@@ -266,4 +272,40 @@ test("an answer served at stale renders no banner at all", () => {
   // field must not paint this screen red.
   const missing = render(<ServedLevelBanner />);
   expect(missing.container.textContent).toBe("");
+});
+
+const domain = (over: Partial<RetentionDomain> = {}): RetentionDomain => ({
+  domain: "iam",
+  stream: "CREWLET_IAM_LOG",
+  generation: 0,
+  replay: "strict",
+  first_seq: 1,
+  last_seq: 900,
+  bytes: 64 << 20,
+  max_bytes: 512 << 20,
+  headroom_fraction: 0.875,
+  trim_floor: 1,
+  trim_to: 1,
+  terms: [],
+  ...over,
+});
+
+// A LOG'S DAILY INTAKE RENDERS ONLY WHERE IT WAS MEASURED. It is the rate
+// `log_ceiling_short` holds the ceiling against, and the server sends it absent
+// for a log nobody could measure — compacted, younger than a day, a node that
+// has not ticked. "0 B a day" is the claim that a log took in nothing, which is
+// the opposite fact, so the absent field must draw nothing rather than a zero.
+test("a log's daily intake renders as measured, and an unmeasured one draws nothing", () => {
+  render(<DomainBlock domain={domain({ bytes_per_day: 3 << 20 })} />);
+  expect(screen.getByText(/3\.0 MB a day/)).toBeTruthy();
+
+  // A MEASURED ZERO IS A VALUE, and it renders as one.
+  cleanup();
+  render(<DomainBlock domain={domain({ bytes_per_day: 0 })} />);
+  expect(screen.getByText(/0 B a day/)).toBeTruthy();
+
+  // THE CONTROL: absent draws no rate at all.
+  cleanup();
+  render(<DomainBlock domain={domain()} />);
+  expect(screen.queryByText(/a day/)).toBeNull();
 });

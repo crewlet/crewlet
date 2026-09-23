@@ -139,6 +139,10 @@ export function DomainScreen({ name }: { name: string }) {
               {domain.headroom_fraction != null && (
                 <span className="muted"> · {Math.round(domain.headroom_fraction * 100)}% free</span>
               )}
+              {/* Absent is unmeasured, never an idle log — see RetentionDomain. */}
+              {domain.bytes_per_day != null && (
+                <span className="muted"> · {fmtBytes(domain.bytes_per_day)} a day</span>
+              )}
             </span>
           ),
         },

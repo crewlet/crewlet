@@ -556,6 +556,12 @@ export function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
           {d.headroom_fraction != null && (
             <span className="muted"> · {Math.round(d.headroom_fraction * 100)}% free</span>
           )}
+          {/* THE DAY'S INTAKE ONLY WHERE IT WAS MEASURED. Absent is a log
+              nobody could measure, and "0 B a day" is the claim that it
+              took in nothing. */}
+          {d.bytes_per_day != null && (
+            <span className="muted"> · {fmtBytes(d.bytes_per_day)} a day</span>
+          )}
         </span>
         {d.blocked_by ? (
           <Tag variant="warning">{d.blocked_by}</Tag>

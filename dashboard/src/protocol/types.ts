@@ -1248,6 +1248,12 @@ export interface RetentionDomain {
   max_bytes?: number;
   /** ABSENT when the broker could not be asked — which is not zero headroom. */
   headroom_fraction?: number;
+  /** What the log took in over the trailing day — the rate `log_ceiling_short`
+   *  holds the ceiling against `min_age` of. ABSENT where nothing was measured
+   *  (a compacted log, one younger than a day, a node whose trim has not
+   *  ticked), and `0` only for a log that took in nothing: the two are
+   *  opposite facts and must never share a rendering. */
+  bytes_per_day?: number;
   /** What has actually been removed, and what THIS tick concluded may be. */
   trim_floor: number;
   trim_to: number;
