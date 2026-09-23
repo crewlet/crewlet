@@ -150,10 +150,15 @@ operator is never told "nothing to move" while every person's key is still
 sealed under the key they are about to retire.
 
 To act on one, use the gesture it belongs to: `crewlet iam remove` destroys a
-person's key, `crewlet iam revoke` ends their sessions and the probe drops each
-refresh token once its session is over. The blind-index key is never minted
-over one that was deleted — it comes back with the coordination store it lived
-in, from the backup that holds it ([Backups § Restoring](../guides/backup.md#restoring)).
+person's key, and `crewlet iam revoke` ends their sessions. A refresh token
+needs no gesture of its own: the key duty collects each one once its session
+is over — by sign-out, expiry, a revocation or an invalidation — whether or not
+a provider is still configured, and the deactivation probe drops only the
+tokens of sessions it ended itself
+([Retention § The identity duties](../guides/retention.md#the-identity-duties)).
+The blind-index key is never minted over one that was deleted — it comes back
+with the coordination store it lived in, from the backup that holds it
+([Backups § Restoring](../guides/backup.md#restoring)).
 
 ---
 
