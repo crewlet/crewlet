@@ -62,10 +62,12 @@ var errNoChartDomain = errors.New("engine: this node runs no org chart, so it " 
 
 // Seat resolves a reference to the seat it names now.
 //
-// A REFERENCE RATHER THAN A HANDLE LOOKUP, which [chart.Reader.Seat] already
-// is: it resolves a former handle through the chart's own rename trail, so a
-// person bound to a seat that was renamed keeps resolving rather than being
-// told their seat is gone.
+// A REFERENCE RATHER THAN A HANDLE LOOKUP, which [chart.Reader.SeatRow]
+// already is: it resolves a former handle through the chart's own rename
+// trail, so a person bound to a seat that was renamed keeps resolving rather
+// than being told their seat is gone. The ROW and nothing else: this runs on
+// every signed-in request and on every binding the dangling-binding alarm
+// classifies, and neither reads the seats it manages or its history.
 //
 // AN ABSENT SEAT IS PROBED FOR A TOMBSTONE, because a tombstone is CONCLUSIVE
 // where an absence is not. [session.ResolveSeat] can answer 403 from one
@@ -77,13 +79,13 @@ func (v SeatView) Seat(ctx context.Context, ref string) (session.Seat, bool, err
 		return session.Seat{}, false, errNoChartDomain
 	}
 	fresh := statelog.Freshness{Level: statelog.ReadStale}
-	detail, err := v.reader.Seat(ctx, ref, fresh)
+	seat, err := v.reader.SeatRow(ctx, ref, fresh)
 	switch {
 	case err == nil:
 		return session.Seat{
-			Handle: detail.Seat.Handle,
-			Kind:   string(detail.Seat.Kind),
-			Unit:   detail.Seat.UnitKey,
+			Handle: seat.Handle,
+			Kind:   string(seat.Kind),
+			Unit:   seat.UnitKey,
 		}, true, nil
 	case !errors.Is(err, chart.ErrNotFound):
 		// THE UNKNOWN ARM, never "no such seat": an unreadable estate

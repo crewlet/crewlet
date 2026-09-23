@@ -290,6 +290,43 @@ func (r *Reader) Seat(ctx context.Context, handle string, fresh statelog.Freshne
 	return out, nil
 }
 
+// SeatRow answers one seat by its handle, or by a handle it used to answer to —
+// the row alone, without the seats it manages and the history [Reader.Seat]
+// reads beside it.
+//
+// THE READ THAT RUNS PER REQUEST. Every signed-in request resolves the seat
+// its person is bound to, and the dangling-binding alarm classifies every
+// binding in the company the same way; neither renders a `manages:` list or up
+// to [HistoryLimit] history rows, and [Reader.Seat] read both on every call. It
+// resolves the address exactly as [Reader.Seat] does — the current handle
+// first, a retired one after — so the two can never name different seats.
+func (r *Reader) SeatRow(ctx context.Context, handle string, fresh statelog.Freshness) (
+	Seat, error) {
+
+	if fresh.Level == "" {
+		return Seat{}, errors.New("chart: this read names no level")
+	}
+	handle = NormalizeKey(handle)
+	var out Seat
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope("", handle), false),
+		func(tx *sql.Tx) error {
+			seat, found, err := resolveSeat(ctx, tx, handle)
+			if err != nil {
+				return err
+			}
+			if !found {
+				return fmt.Errorf("chart: no seat answers to %q: %w",
+					handle, ErrNotFound)
+			}
+			out = seat
+			return nil
+		})
+	if err != nil {
+		return Seat{}, err
+	}
+	return out, nil
+}
+
 // ErrNotFound reports an address nothing in the chart answers to.
 //
 // A SENTINEL because a surface has to tell it from a read that could not be

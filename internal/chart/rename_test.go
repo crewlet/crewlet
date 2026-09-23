@@ -268,3 +268,37 @@ func TestAClaimThatLostTheRaceIsDroppedRatherThanStallingTheDomain(t *testing.T)
 			got.Key)
 	}
 }
+
+// THE ROW READ AND THE DETAIL READ NAME ONE SEAT, through a rename.
+//
+// [chart.Reader.SeatRow] is the per-request read — the seat a signed-in person
+// is bound to, and every binding the dangling-binding alarm classifies — and it
+// exists only so those paths stop reading a manages list and a history nobody
+// renders. It must resolve an address exactly as [chart.Reader.Seat] does, or a
+// person's sign-in and the page describing their seat would disagree about which
+// seat a retired handle names.
+func TestTheSeatRowResolvesAnAddressAsTheSeatReadDoes(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-hire", op(chart.OpCreateSeat, chart.KindSeat, "sarah-chen", ""))
+	r.applySeatRekey("op-rename", "sarah-okonkwo", "sarah-chen")
+	reader := r.reader()
+
+	for _, address := range []string{"sarah-okonkwo", "sarah-chen"} {
+		row, err := reader.SeatRow(t.Context(), address, session())
+		if err != nil {
+			t.Fatalf("SeatRow(%q): %v", address, err)
+		}
+		detail, err := reader.Seat(t.Context(), address, session())
+		if err != nil {
+			t.Fatalf("Seat(%q): %v", address, err)
+		}
+		if row.Handle != "sarah-okonkwo" || row.Handle != detail.Seat.Handle {
+			t.Errorf("%q names %q by its row and %q by its detail, want the "+
+				"renamed seat both ways", address, row.Handle, detail.Seat.Handle)
+		}
+	}
+	if _, err := reader.SeatRow(t.Context(), "nobody", session()); !errors.Is(err, chart.ErrNotFound) {
+		t.Errorf("an address nothing answers to read as %v, want ErrNotFound", err)
+	}
+}
