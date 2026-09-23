@@ -62,7 +62,7 @@ func TestTheProbeEndsRevokesRotatesAndCollectsThroughTheEstate(t *testing.T) {
 	flaky := hold("flaky", idp.URL)
 	elsewhere := hold("previous-provider-token", "https://previous-provider.example.com")
 	signedOut := hold("gone", idp.URL)
-	rig.closeSession(signedOut, "logout")
+	rig.closeSession(person, signedOut, "logout")
 
 	// A GRANT WHOSE SESSION THIS NODE HAS NOT APPLIED: its start is past
 	// everything applied, which is what a login landing on a peer an

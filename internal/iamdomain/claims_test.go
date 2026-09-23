@@ -143,7 +143,7 @@ func TestAnOrphanedReservationIsReportedAndARemovalRepairsIt(t *testing.T) {
 			return err
 		}
 		_, err := rig.writer.Release(t.Context(), iamdomain.KindLogin,
-			"ghost.released", "release-released", "given back")
+			"ghost.released", released, "release-released", "given back")
 		return err
 	}); err != nil {
 		t.Fatalf("Claim and Release: %v", err)

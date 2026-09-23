@@ -90,8 +90,9 @@ type Sessions interface {
 	// opened through this provider, and holding a refresh token.
 	LiveOIDC(ctx context.Context) ([]LiveSession, error)
 
-	// End closes one session as `idp_revoked`.
-	End(ctx context.Context, lineage, reason string) error
+	// End closes one session as `idp_revoked`. It takes the SESSION rather
+	// than its lineage because a close is filed under its person's bucket.
+	End(ctx context.Context, session LiveSession, reason string) error
 
 	// Rotated records a refresh token the provider replaced. A provider
 	// that rotates has INVALIDATED the old one, so failing to record the
@@ -178,7 +179,7 @@ func (p *Prober) Run(ctx context.Context) (checked, ended int, err error) {
 		verdict, rotated := p.check(ctx, metadata.TokenEndpoint, session)
 		switch verdict {
 		case VerdictDeactivated:
-			if err := p.sessions.End(ctx, session.Lineage, ReasonIdPRevoked); err != nil {
+			if err := p.sessions.End(ctx, session, ReasonIdPRevoked); err != nil {
 				p.logger.WarnContext(ctx, "oidc_probe_end_failed",
 					"lineage", session.Lineage, "error", err.Error())
 				continue

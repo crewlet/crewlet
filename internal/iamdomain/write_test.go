@@ -297,10 +297,7 @@ func (r *writeRig) draining(gesture func() error) error {
 	// each step waits for this node's applier to reach the step before it,
 	// so a rig that drained only afterwards would deadlock on the second
 	// claim.
-	return r.during(func() error {
-		_, err := r.writer.Enrol(r.t.Context(), in)
-		return err
-	})
+	return r.during(gesture)
 }
 
 // during runs one gesture with this node's applier consuming alongside it,

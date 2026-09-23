@@ -34,7 +34,8 @@ func (s *sessionStore) LiveOIDC(context.Context) ([]oidc.LiveSession, error) {
 	return s.live, s.listErr
 }
 
-func (s *sessionStore) End(_ context.Context, lineage, reason string) error {
+func (s *sessionStore) End(_ context.Context, session oidc.LiveSession, reason string) error {
+	lineage := session.Lineage
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.endErr != nil {

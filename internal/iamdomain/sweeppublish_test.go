@@ -55,7 +55,7 @@ func TestTwoNodesWithSkewedClocksDeleteIdenticalRows(t *testing.T) {
 	wall := time.Now().UTC()
 	live := rig.openSession(person, wall.Add(365*24*time.Hour))
 	ended := rig.openSession(person, wall.Add(365*24*time.Hour))
-	rig.closeSession(ended, "logout")
+	rig.closeSession(person, ended, "logout")
 	lapsed := rig.openSession(person, wall.Add(time.Hour))
 
 	sweeper := rig.sweeper(wall.Add(95 * 24 * time.Hour))
@@ -239,11 +239,11 @@ func (r *writeRig) openSession(person string, expires time.Time) string {
 	return lineage
 }
 
-// closeSession ends one and applies it.
-func (r *writeRig) closeSession(lineage, reason string) {
+// closeSession ends one of person's sessions and applies it.
+func (r *writeRig) closeSession(person, lineage, reason string) {
 	r.t.Helper()
 	if err := r.during(func() error {
-		_, err := r.writer.CloseSession(r.t.Context(), lineage, reason,
+		_, err := r.writer.CloseSession(r.t.Context(), lineage, person, reason,
 			"close:"+lineage)
 		return err
 	}); err != nil {
@@ -273,7 +273,7 @@ func newFollower(t *testing.T, nodeID string, now time.Time) *follower {
 			t.Errorf("close the second node's store: %v", err)
 		}
 	})
-	return &follower{t: t, db: db, applier: iamdomain.NewApplier(nodeID, nil), now: now}
+	return &follower{t: t, db: db, applier: iamdomain.NewApplier(nodeID, nil, nil), now: now}
 }
 
 // follow applies whatever the rig's log holds past what this node has.

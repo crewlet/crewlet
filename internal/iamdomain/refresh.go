@@ -378,8 +378,11 @@ func (p *ProbeSessions) LiveOIDC(ctx context.Context) ([]oidc.LiveSession, error
 // operation id derived from the lineage and the reason, so a retry of an
 // ambiguous close is the same operation. AN UNKNOWN OUTCOME IS AN ERROR: the
 // probe counts what it ended, and a close nothing can establish is not one.
-func (p *ProbeSessions) End(ctx context.Context, lineage, reason string) error {
-	at, err := p.writer.CloseSession(ctx, lineage, reason,
+func (p *ProbeSessions) End(ctx context.Context, session oidc.LiveSession,
+	reason string) error {
+
+	lineage := session.Lineage
+	at, err := p.writer.CloseSession(ctx, lineage, session.Person, reason,
 		"probe:"+reason+":"+lineage)
 	if err != nil {
 		return err
