@@ -542,8 +542,10 @@ type Role struct {
 
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty"`
 
-	// TokenBudget caps this seat's spend; 0 is unlimited.
-	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
+	// TokenBudget caps this seat's spend per calendar window; a window it
+	// does not name is uncapped, and the company's own ceilings apply on
+	// top of it.
+	TokenBudget TokenCeilings `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
 
 	// LLM is the provider chain used when a phase does not name its own.
 	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero"`
@@ -655,7 +657,7 @@ func (r *Role) humanForbidden() []string {
 		{"llm_judge", len(r.LLMJudge) > 0},
 		{"llm_sandbox", len(r.LLMSandbox) > 0},
 		{"sandbox", r.Sandbox != nil},
-		{"token_budget", r.TokenBudget != 0},
+		{"token_budget", len(r.TokenBudget) > 0},
 		{"workers", len(r.Workers) > 0},
 		{"learning_enabled", r.LearningEnabled.IsSet()},
 		{"schedules", len(r.Schedules) > 0},

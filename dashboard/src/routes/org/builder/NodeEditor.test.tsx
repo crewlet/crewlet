@@ -611,7 +611,7 @@ describe("seat fields", () => {
   // to correct a field nobody can type in would be a second, wrong one.
   test("a read-only editor asks nobody to correct a field", () => {
     const doc = fixtureCompany();
-    doc.units![0]!.roles![1]!.token_budget = -5;
+    doc.units![0]!.roles![1]!.token_budget = { week: -5 };
     edit(keyedState(doc), "seat:dev", { readOnly: true });
     expect(screen.getByText(/cannot be changed right now/)).toBeDefined();
     // The foot says the posture, not the field: a form nobody can write is
@@ -624,13 +624,36 @@ describe("seat fields", () => {
     expect(shownReason("Correct the token budget first.")).toBeDefined();
   });
 
-  test("a malformed token budget blocks Apply with the reason", () => {
+  test("a malformed token ceiling blocks Apply with the reason, under its own window", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
-    type("Token budget", "lots");
+    type("Weekly token ceiling", "lots");
     expect(applyRefuses()).toBe(true);
     expect(
-      screen.getByText("Give a whole number of tokens, or leave it empty for unlimited."),
+      screen.getByText("Give a whole number of tokens, or leave it empty for no weekly ceiling."),
     ).toBeDefined();
+  });
+
+  // A 0 WAS "UNLIMITED" AND IS REFUSED NOW, by the engine and so by the form
+  // before a save: the only way to leave a window uncapped is an empty box.
+  test("a ceiling of 0 is refused in the engine's words", () => {
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    type("Daily token ceiling", "0");
+    expect(applyRefuses()).toBe(true);
+    expect(
+      screen.getByText("A ceiling of 0 is refused: leave it empty for no daily ceiling."),
+    ).toBeDefined();
+  });
+
+  // ONE BOX PER WINDOW, and a saved window is shown in its own box: the
+  // form reads the mapping the engine writes, not one number.
+  test("each window the seat caps is shown in its own box", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1]!.token_budget = { day: 1500, month: 40000 };
+    edit(keyedState(doc), "seat:dev");
+    const box = (label: string) => field(label) as HTMLInputElement;
+    expect(box("Daily token ceiling").value).toBe("1500");
+    expect(box("Weekly token ceiling").value).toBe("");
+    expect(box("Monthly token ceiling").value).toBe("40000");
   });
 
   test("changing the kind is its own step: the editor closes and opens it, unless the form has changes", () => {
@@ -941,6 +964,22 @@ describe("problems", () => {
     expect(
       isDrawnAs(caution, Callout, { variant: "warning", children: "" }, { children: "" }),
     ).toBe(true);
+  });
+
+  // THE ENGINE REFUSES A CEILING AT ITS WINDOW'S KEY, so the refusal sits
+  // under that window's box and no other: a daily ceiling of 0 blamed on the
+  // monthly box is an operator correcting the wrong number.
+  test("a refused ceiling sits beside its own window's box", () => {
+    const state = checkWithProblems(keyedState(fixtureCompany()), [
+      problemAt(
+        ["units", 0, "roles", 1, "token_budget", "week"],
+        "units[0].roles[1].token_budget.week: must be at least 1 token",
+      ),
+    ]);
+    edit(state, "seat:dev");
+    expect(errorOf(field("Weekly token ceiling"))?.textContent).toContain("must be at least 1");
+    expect(errorOf(field("Daily token ceiling"))).toBeNull();
+    expect(errorOf(field("Monthly token ceiling"))).toBeNull();
   });
 
   test("a problem sits beside the field it names, and the rest are listed at the top", () => {

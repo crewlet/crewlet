@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // human returns a minimal valid human seat, with mutators applied.
@@ -104,7 +106,7 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 		{"llm_judge", func(r *Role) { r.LLMJudge = ProviderKeys{"gpt-4o"} }},
 		{"llm_sandbox", func(r *Role) { r.LLMSandbox = ProviderKeys{"sb"} }},
 		{"sandbox", func(r *Role) { r.Sandbox = &RoleSandbox{Enabled: true} }},
-		{"token_budget", func(r *Role) { r.TokenBudget = 1000 }},
+		{"token_budget", func(r *Role) { r.TokenBudget = TokenCeilings{period.Day: 1000} }},
 		{"learning_enabled", func(r *Role) { r.LearningEnabled = On() }},
 		{"schedules", func(r *Role) {
 			r.Schedules = []Schedule{{Name: "standup", Cron: "0 9 * * *", Task: "post"}}
@@ -213,7 +215,7 @@ func TestRoleValidateReportsEveryProblemAtOnce(t *testing.T) {
 	// aggregation exists to prevent.
 	r := human(func(r *Role) {
 		r.DeclaredHandle = "Sarah_Chen"
-		r.TokenBudget = 10
+		r.TokenBudget = TokenCeilings{period.Week: 10}
 		r.Contact = &HumanContact{}
 	})
 	err := r.Validate()

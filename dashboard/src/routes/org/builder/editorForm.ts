@@ -15,10 +15,10 @@
  * unchanged form applies nothing.
  *
  * A FIELD THE DOCUMENT OMITS AND A FIELD LEFT EMPTY ARE THE SAME. An empty
- * text, an empty list and a token budget of 0 (the engine reads both 0 and
- * absent as unlimited) are all written as the field removed, because a
- * `goal: ""` or `token_budget: 0` the base never had would read as an edit
- * nobody made.
+ * text, an empty list and an empty token ceiling are all written as the field
+ * removed, because a `goal: ""` the base never had would read as an edit
+ * nobody made — and an absent window is the only way the engine lets a
+ * ceiling say "none" (it refuses a 0 rather than reading it as unlimited).
  *
  * A BOX NOBODY TYPED IN IS NO CHANGE, whatever the form would write for it.
  * Single-line values are written trimmed, so a value the document stored
@@ -29,6 +29,7 @@
  * seat a new id. So every text field first asks whether its box changed.
  */
 
+import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import type {
   CompanyDocument,
   ConfigRole,
@@ -36,6 +37,7 @@ import type {
   HumanContactKey,
   PhaseLLM,
   ScheduleSpec,
+  TokenBudget,
 } from "~/protocol/index.ts";
 import type { NodeKey } from "./model/keys.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
@@ -86,8 +88,8 @@ export interface SeatForm {
    * a per-phase mapping, which the editor shows but does not edit.
    */
   readonly llm: readonly string[] | null;
-  /** As typed: digits, or empty for unlimited. */
-  readonly tokenBudget: string;
+  /** Each window's ceiling as typed: digits, or empty for no ceiling on that window. */
+  readonly tokenBudget: BudgetForm;
   readonly schedules: Readonly<Record<string, boolean>>;
   readonly githubTier: string;
   readonly githubRepos: readonly string[];
@@ -99,6 +101,12 @@ export interface SeatForm {
   readonly jira: string;
   readonly confluence: string;
 }
+
+/** A calendar window a `token_budget:` caps: `day`, `week` or `month`. */
+export type BudgetWindow = keyof TokenBudget;
+
+/** A seat's `token_budget:`, one typed box per window. */
+export type BudgetForm = Readonly<Record<BudgetWindow, string>>;
 
 // ---------------------------------------------------------------------------
 // Reading
@@ -153,9 +161,26 @@ export function llmChain(llm: PhaseLLM | undefined): string[] | null {
   return null;
 }
 
+/**
+ * A `token_budget:` as the boxes show it: each window's ceiling as the digits
+ * it holds, and empty where the document names none.
+ *
+ * WHATEVER NUMBER IS THERE, a 0 included. It is not "unlimited" any more, and
+ * showing a box empty over a 0 the engine refuses would hide the one value the
+ * form most needs the operator to see.
+ */
+export function budgetForm(budget: unknown): BudgetForm {
+  const windows = isRecord(budget) ? budget : {};
+  return Object.fromEntries(
+    BUDGET_WINDOWS.map(({ period }) => {
+      const value = windows[period];
+      return [period, typeof value === "number" ? String(value) : ""];
+    }),
+  ) as Record<BudgetWindow, string>;
+}
+
 export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
   const contact = isRecord(data.contact) ? data.contact : {};
-  const budget = data.token_budget;
   return {
     name: text(data.name),
     handle: text(data.handle),
@@ -170,7 +195,7 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
     ) as Record<HumanContactKey, string>,
     availability: text(data.availability),
     llm: llmChain(data.llm),
-    tokenBudget: typeof budget === "number" && budget !== 0 ? String(budget) : "",
+    tokenBudget: budgetForm(data.token_budget),
     schedules: scheduleToggles(data),
     githubTier: text(getPath(data, ["integrations", "github", "tier"])),
     githubRepos: strings(getPath(data, ["integrations", "github", "repos"])),
@@ -188,30 +213,47 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
 // ---------------------------------------------------------------------------
 
 /**
- * The largest token budget this form writes.
+ * The largest token ceiling this form writes.
  *
- * JAVASCRIPT'S CEILING, NOT THE ENGINE'S. The engine reads `token_budget` as a
- * Go `int64` and would take far more, but the value travels as a JSON number
- * and anything above 2^53-1 is rounded on the way through, so what the engine
- * stored would not be what somebody typed. A budget that large is a slipped
+ * JAVASCRIPT'S CEILING, NOT THE ENGINE'S. The engine reads a ceiling as a Go
+ * `int64` and would take far more, but the value travels as a JSON number and
+ * anything above 2^53-1 is rounded on the way through, so what the engine
+ * stored would not be what somebody typed. A ceiling that large is a slipped
  * key rather than a budget, so the form refuses it and names the largest one
  * it can write.
  */
-const MAX_TOKEN_BUDGET = Number.MAX_SAFE_INTEGER;
+const MAX_TOKEN_CEILING = Number.MAX_SAFE_INTEGER;
 
 /**
- * Why the typed token budget cannot be written, or `undefined` when it can.
- * A shape the form can see is caught here so Apply never records a value the
- * field could not hold; what the value MEANS is the engine's to judge.
+ * Why one window's typed ceiling cannot be written, or `undefined` when it
+ * can. A shape the form can see is caught here so Apply never records a value
+ * the engine would refuse; how the ceilings relate to each other is the
+ * engine's to judge, and it says so in its warnings.
+ *
+ * A 0 IS REFUSED, in the engine's own words. It used to mean "unlimited", and
+ * it is also what a ceiling of nothing would be; the engine takes neither
+ * reading and asks for the key to be left out, so the form does the same
+ * before a save rather than after one.
  */
-export function tokenBudgetError(typed: string): string | undefined {
+export function tokenBudgetError(window: BudgetWindow, typed: string): string | undefined {
   const value = typed.trim();
+  const none = BUDGET_WINDOWS.find(({ period }) => period === window)!.none.toLowerCase();
   if (value === "") return undefined;
-  if (!/^\d+$/.test(value))
-    return "Give a whole number of tokens, or leave it empty for unlimited.";
-  if (Number(value) > MAX_TOKEN_BUDGET)
-    return `Give a budget of at most ${MAX_TOKEN_BUDGET}, or leave it empty for unlimited.`;
+  if (!/^\d+$/.test(value)) return `Give a whole number of tokens, or leave it empty for ${none}.`;
+  if (Number(value) === 0) return `A ceiling of 0 is refused: leave it empty for ${none}.`;
+  if (Number(value) > MAX_TOKEN_CEILING)
+    return `Give a ceiling of at most ${MAX_TOKEN_CEILING}, or leave it empty for ${none}.`;
   return undefined;
+}
+
+/** Every window's refusal, in window order; empty when all can be written. */
+export function tokenBudgetErrors(form: BudgetForm): Partial<Record<BudgetWindow, string>> {
+  const out: Partial<Record<BudgetWindow, string>> = {};
+  for (const { period } of BUDGET_WINDOWS) {
+    const error = tokenBudgetError(period, form[period]);
+    if (error !== undefined) out[period] = error;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -330,9 +372,12 @@ export function seatParts(
   if (renames(initial.name, form.name)) {
     parts.push({ type: "renameSeat", target: key, name: form.name });
   }
-  const budget = (typed: string) => {
+  // One part PER WINDOW, never the whole mapping: a colleague's new weekly
+  // ceiling survives an update that only changed this seat's daily one, and
+  // clearing the last window removes the block (see `setPath`).
+  const ceiling = (typed: string) => {
     const value = typed.trim();
-    return value === "" || Number(value) === 0 ? undefined : Number(value);
+    return value === "" ? undefined : Number(value);
   };
   const set: FieldSet[] = [
     ...(editableHandle ? textPart(["handle"], initial.handle, form.handle, line) : []),
@@ -360,7 +405,13 @@ export function seatParts(
           llmValue(form.llm, Array.isArray(data.llm)),
         )
       : []),
-    ...changed(["token_budget"], budget(initial.tokenBudget), budget(form.tokenBudget)),
+    ...BUDGET_WINDOWS.flatMap(({ period }) =>
+      changed(
+        ["token_budget", period],
+        ceiling(initial.tokenBudget[period]),
+        ceiling(form.tokenBudget[period]),
+      ),
+    ),
     ...textPart(["integrations", "github", "tier"], initial.githubTier, form.githubTier, line),
     ...changed(
       ["integrations", "github", "repos"],

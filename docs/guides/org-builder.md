@@ -311,7 +311,7 @@ as `${NAME}` first; a reference is a name, so it survives the rename.
 | Manages | Seats and units. Seats this seat manages automatically as a unit's lead are listed apart, because the engine adds them whatever the list says. |
 | Contact identities, availability | Human seats. A human seat needs at least one contact identity. |
 | Model | Agent seats. An ordered chain of the company's `providers.llm` keys, tried in the order chosen; to change the order, remove a provider and choose it again. A seat with no model runs on the provider keyed `default`, else the first provider in the company's order. A per-phase mapping is shown and edited in the configuration document. |
-| Token budget | Agent seats. Empty or 0 is unlimited. |
+| Token ceilings: daily, weekly, monthly | Agent seats. One box per calendar window on the company's clock, each optional: an empty box is no ceiling on that window, and a 0 is refused rather than read as unlimited. A turn runs only while every capped window has room, and the company's own `token_budget` applies on top. The check warns about a ceiling that can never refuse anything — a week at or above seven days of the daily one, a seat at or above the company. |
 | Schedules: enabled | Agent seats. |
 | Integrations | Agent seats; see below. |
 | Owns: Jira project, Confluence space | Agent seats. Where unrouted work for the seat goes. Not a permission. |

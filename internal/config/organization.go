@@ -37,7 +37,7 @@ func (c *Company) organization() (*org.Organization, *identityIndex) {
 		Mission:        c.Mission,
 		Vision:         c.Vision,
 		Policies:       append([]string(nil), c.Policies...),
-		TokenBudget:    c.TokenBudget,
+		TokenBudget:    c.TokenBudget.Ceilings(),
 		KnowledgeScope: append([]string(nil), c.Knowledge.KnowledgeScope...),
 	}
 	for i := range c.Roles {

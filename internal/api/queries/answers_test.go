@@ -592,6 +592,9 @@ func TestBudgetsPairTheCapWithTheDurableCounter(t *testing.T) {
 	// THE CAP AND THE COUNTER GO TOGETHER, and neither is useful alone: a
 	// ceiling with no usage says nothing about how close a company is, and
 	// usage with no ceiling says nothing about whether it will be refused.
+	// The cap is the TIGHTEST window a scope caps, because that is the one
+	// the counter is held to: a month's ceiling beside it would draw
+	// headroom the gate does not grant.
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -601,11 +604,11 @@ roles:
   - name: CEO
     handle: ceo
     llm: p
-    token_budget: 500
+    token_budget: {day: 500, month: 12000}
   - name: Founder
     kind: human
     contact: {slack_user_id: U0F}
-token_budget: 10000
+token_budget: {week: 10000, month: 40000}
 `)
 	organization, err := cfg.Organization()
 	if err != nil {
@@ -663,7 +666,7 @@ roles:
   - name: CEO
     handle: ceo
     llm: p
-token_budget: 10000
+token_budget: {month: 10000}
 `)
 	r := registryOver(t, queries.Sources{
 		State: livestate.New(), Company: func() *config.Company { return cfg },
@@ -696,8 +699,8 @@ roles:
   - name: CEO
     handle: ceo
     llm: p
-    token_budget: 100
-token_budget: 10000
+    token_budget: {day: 100}
+token_budget: {day: 10000}
 `)
 	organization, err := cfg.Organization()
 	if err != nil {

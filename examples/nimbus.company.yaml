@@ -32,23 +32,32 @@ policies:
 # twice a year.  See docs/getting-started/configuration.md.
 timezone: "Europe/Berlin"
 
-# Company-wide token budget — a single hard cap on total LLM tokens across
-# EVERY agent (CEO, CTO, PM, DevRel, the three engineers, their sub-agents,
-# and the learning/aux passes).  The engine's BudgetManager charges this
-# org budget on every LLM completion BEFORE the per-agent budget; the first
-# completion that would push the running total past the cap stops that turn
-# immediately and emits a ``BudgetExhausted`` event (budget_type="org").
-# 0 (or omitting the field) means unlimited.  No per-agent ``token_budget``
-# is set below, so this 10M ceiling is the only budget in force and the
-# whole company shares it.
+# Company-wide token budget — ceilings on total LLM tokens across EVERY
+# agent (CEO, CTO, PM, DevRel, the three engineers, their sub-agents, and
+# the learning/aux passes), one per calendar WINDOW on the company clock
+# above.  Every model round is charged against the company's ceilings
+# BEFORE a seat's own; the first completion that would push a window past
+# its ceiling stops that turn and emits a ``budget_exhausted`` event
+# (budget_type="org").
 #
-# NOTE: usage is durable — the counter lives in the fleet's coordination
-# store, so it survives engine restarts and is one number for the whole
-# company however many nodes run it.  Reset it deliberately, against a
-# running node: ``crewlet budgets reset``.  See
-# docs/guides/deployment.md § Token Budgets and
-# docs/getting-started/quickstart.md § Token Budgets.
-token_budget: 10000000                          # 10M tokens, org-wide (all agents combined)
+# Each key is optional and a window with no key has no ceiling: ``day``
+# runs Berlin midnight to midnight, ``week`` is the ISO week from Monday,
+# ``month`` the calendar month, and each opens again on its own when it
+# turns over.  0 is refused rather than read as "unlimited" — leave the key
+# out instead.  Here the month is the bill (roughly four weeks of the
+# schedules below plus ordinary chat traffic for seven seats) and the day
+# is the fuse: a runaway loop burns at most one day's allowance before the
+# company stops, rather than the month's.  No per-agent ``token_budget`` is
+# set below, so these two are the only ceilings in force and the whole
+# company shares them.
+#
+# Usage is durable — the counter lives in the fleet's coordination store,
+# so it survives engine restarts and is one number for the whole company
+# however many nodes run it.  See docs/getting-started/configuration.md
+# § Token budgets and docs/guides/deployment.md § Token Budgets.
+token_budget:
+  day: 3000000                                  # 3M tokens per Berlin day, org-wide
+  month: 40000000                               # 40M tokens per calendar month, org-wide
 
 # Skill variables — generic name->value facts substituted into tool-skill
 # text wherever a skill writes ${name}.  NIMBUS DECLARES NONE, and that is

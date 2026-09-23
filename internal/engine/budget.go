@@ -134,7 +134,7 @@ func (e *Engine) meterFor(c *Company, handle string) toolloop.BudgetMeter {
 	if !ok {
 		return nil
 	}
-	orgLimit, agentLimit := c.Config.TokenBudget, seatBudget(c.Org, seat)
+	orgLimit, agentLimit := companyBudget(c.Org), seatBudget(c.Org, seat)
 	if orgLimit <= 0 && agentLimit <= 0 {
 		return nil
 	}
@@ -144,7 +144,17 @@ func (e *Engine) meterFor(c *Company, handle string) toolloop.BudgetMeter {
 	}
 }
 
-// seatBudget is a seat's own ceiling, 0 for unlimited.
+// companyBudget is the company's ceiling on the shared counter, 0 for
+// unlimited. See [counterCeiling].
+func companyBudget(o *org.Organization) int {
+	if o == nil {
+		return 0
+	}
+	return counterCeiling(o.TokenBudget)
+}
+
+// seatBudget is a seat's own ceiling on the shared counter, 0 for unlimited.
+// See [counterCeiling].
 //
 // The ROLE's, not the unit's: a unit budget would need a third counter scope
 // and a rule for which of three caps a refusal names, and no config field
@@ -153,5 +163,22 @@ func seatBudget(_ *org.Organization, seat *org.Role) int {
 	if seat == nil {
 		return 0
 	}
-	return seat.TokenBudget
+	return counterCeiling(seat.TokenBudget)
+}
+
+// counterCeiling is the one number the fleet's counter holds a scope to: the
+// tightest window the scope caps, and 0 — the counter's "unlimited" — where it
+// caps none.
+//
+// THE COUNTER KNOWS NO CALENDAR. [coord.Budgets] keeps one figure per scope,
+// its spend since the scope was last reset, so it can judge a charge against
+// one ceiling and no more. Of the windows a budget names, the tightest is the
+// one that never lets it admit a charge a window would refuse: that figure is
+// never below any one window's spend ([org.TokenCeilings.Tightest]). What it
+// cannot do is let a window's allowance come back when the window turns
+// over, so a scope held to it stays refused until the ceiling is raised or
+// its counter is reset.
+func counterCeiling(ceilings org.TokenCeilings) int {
+	limit, _ := ceilings.Tightest()
+	return limit
 }

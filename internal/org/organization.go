@@ -37,11 +37,12 @@ type Organization struct {
 	Roles []*Role `yaml:"roles,omitempty" json:"roles,omitempty"`
 	Units []*Unit `yaml:"units,omitempty" json:"units,omitempty"`
 
-	// TokenBudget is the org-wide cap; 0 is unlimited. It lives on the
-	// domain model for the same reason the per-seat cap does: the API
-	// serves the org from here, and a cap that existed only in the config
-	// layer could not be shown beside the meter that enforces it.
-	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
+	// TokenBudget is the org-wide ceiling per calendar window; a window it
+	// does not name is uncapped. It lives on the domain model for the same
+	// reason the per-seat ceilings do: the API serves the org from here,
+	// and a cap that existed only in the config layer could not be shown
+	// beside the meter that enforces it.
+	TokenBudget TokenCeilings `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
 
 	// KnowledgeScope is the org-wide knowledge READ scope — the only
 	// thing that narrows a knowledge search. Empty means unscoped, bounded

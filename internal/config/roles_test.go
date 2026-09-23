@@ -1,10 +1,12 @@
 package config
 
 import (
+	"maps"
 	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // A field that takes a scalar OR a list gets a named type with its own
@@ -114,7 +116,7 @@ roles:
     email: swe@example.com
     goal: ship
     manages: [Junior]
-    token_budget: 1000
+    token_budget: {day: 1000, month: 20000}
     mcp_env:
       gitlab:
         GITLAB_TOKEN: "${GL_SWE}"
@@ -160,6 +162,11 @@ roles:
 	}
 	if seat.MCPEnv["gitlab"]["GITLAB_TOKEN"] != "${GL_SWE}" {
 		t.Fatalf("mcp_env = %v", seat.MCPEnv)
+	}
+	// The windows the seat names and ONLY those: an absent week is no
+	// weekly ceiling, never a ceiling of 0.
+	if want := (org.TokenCeilings{period.Day: 1000, period.Month: 20000}); !maps.Equal(seat.TokenBudget, want) {
+		t.Fatalf("token_budget = %v, want %v", seat.TokenBudget, want)
 	}
 }
 

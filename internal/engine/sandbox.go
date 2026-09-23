@@ -1387,9 +1387,9 @@ func (e *Engine) sandboxAccountant() sandbox.Accountant {
 			c := e.Company()
 			id, err := uuid.Parse(agentID)
 			if err != nil {
-				return c.Config.TokenBudget, 0
+				return companyBudget(c.Org), 0
 			}
-			return c.Config.TokenBudget, seatBudget(c.Org, c.Org.AgentSeatByID(id))
+			return companyBudget(c.Org), seatBudget(c.Org, c.Org.AgentSeatByID(id))
 		},
 	}
 }

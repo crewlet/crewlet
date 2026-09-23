@@ -98,6 +98,7 @@ var contract = []Entry{
 
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},
+	{"BUDGET_WINDOWS", ReadLiteral, "internal/config.TestTheBudgetEditorOffersExactlyTheEnginesWindows"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,

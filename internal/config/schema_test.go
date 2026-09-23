@@ -304,7 +304,7 @@ name: Acme
 mission: ship
 policies: [write things down]
 timezone: Europe/Berlin
-token_budget: 1000000
+token_budget: {day: 1000000, week: 5000000, month: 20000000}
 skill_variables:
   wiki_base_url: "${WIKI_URL}"
 providers:
@@ -422,6 +422,28 @@ units:
 		{
 			name: "an mcp server with no name", tier: TierCompany, editorCatches: true,
 			yaml: "name: Acme\nmcp_servers:\n  - {command: uvx}\n",
+		},
+		// A TOKEN BUDGET IS A MAPPING OF WINDOWS, and both layers say so
+		// while the author is still typing: the one-number form every
+		// example used to show, a 0 that is no longer "unlimited", and a
+		// window the mapping does not have.
+		{
+			name: "a token budget that is one number", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\ntoken_budget: 1000000\n",
+		},
+		{
+			name: "a seat's daily ceiling of 0", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: Dev, token_budget: {day: 0}}\n",
+		},
+		{
+			name: "a token budget window that does not exist", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\ntoken_budget: {year: 1000000}\n",
+		},
+		// And the RELATIONS between ceilings are only ever warnings, so
+		// neither layer may refuse a budget whose week can never bind.
+		{
+			name: "a week ceiling seven days already reach", tier: TierCompany,
+			yaml: "name: Acme\ntoken_budget: {day: 100, week: 700}\n",
 		},
 		// EVERY VENDOR BLOCK IS SERVED NOW, so what these cases pin is
 		// the other direction: neither layer may refuse a config the

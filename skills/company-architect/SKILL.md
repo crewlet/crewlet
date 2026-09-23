@@ -136,7 +136,12 @@ live-editable, so the first version does not need to be the last.
    on the default backends that is the whole setup, and it is what gives
    a team somewhere to file work and write things down.
 5. **What model, and what budget?** One `providers.llm` entry is enough
-   to start. Ask whether they want a cost ceiling (`token_budget`).
+   to start. Ask whether they want a cost ceiling, and on which window:
+   `token_budget` is a mapping of `day`, `week` and `month` ceilings on the
+   company's clock, each optional — a month for the bill, a day as the fuse
+   that stops a runaway loop — e.g. `token_budget: {day: 3000000, month:
+   40000000}`. Never write `0` for "no ceiling" (it is refused); leave the
+   key out.
 
 If a founder gives you a vague answer ("a few engineers"), propose a
 concrete chart and let them correct it. Concrete beats complete.

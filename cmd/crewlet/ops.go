@@ -249,8 +249,8 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 
 func capOrDash(limit int) string {
 	if limit <= 0 {
-		// `token_budget: 0` is how an operator says "no ceiling", so a
-		// literal 0 in this column would read as the opposite.
+		// A scope whose `token_budget` caps no window is served as 0, so
+		// a literal 0 in this column would read as the opposite.
 		return "unlimited"
 	}
 	return strconv.Itoa(limit)
