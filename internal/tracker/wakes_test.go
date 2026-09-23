@@ -296,6 +296,46 @@ func TestWritingYourOwnPrioritiesWakesNobody(t *testing.T) {
 
 // ---- helpers ------------------------------------------------------------ //
 
+// A CHECKLIST WAKE IS ABOUT THE ITEM, NOT WHERE IT SITS OR HOW IT WAS READ.
+//
+// It compared whole items with `!=`, and an item carries its nesting as a
+// POINTER: the stored reading and a write's re-sent reading of one unchanged
+// nested item hold two addresses, so every nested item's assignee was woken by
+// any edit to the list. And an item carries its position: dragging one line
+// renumbered its neighbours and woke everybody on them — the positional diff
+// the function's own doc rules out. Only a change to the text, the done flag
+// or the holder is news to the person holding the item.
+func TestAChecklistWakeIsAboutTheItemNotItsLayout(t *testing.T) {
+	t.Parallel()
+	items := func(orderA, orderB int, doneC bool) []tracker.ChecklistItem {
+		// A FRESH POINTER PER READING, as two decodes of one document
+		// give: equal values at different addresses.
+		under := "i0"
+		return []tracker.ChecklistItem{
+			{ID: "ia", Name: "draft", Assignee: "di", Parent: &under, Order: orderA},
+			{ID: "ib", Name: "review", Assignee: "ed", Order: orderB},
+			{ID: "ic", Name: "ship", Assignee: "fa", Done: doneC},
+		}
+	}
+	task := tracker.Task{ID: "t", Key: "ENG-1", Project: "ENG",
+		Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted}
+	before, after := task, task
+	before.Checklists = []tracker.Checklist{{ID: "l", Items: items(1, 2, false)}}
+	// ia and ib swap places, and only ic is actually done.
+	after.Checklists = []tracker.Checklist{{ID: "l", Items: items(2, 1, true)}}
+
+	notify := tracker.Wake{Kind: tracker.ChangeChecklist, Before: before,
+		After: after}.Notify(fixedLeads{})
+	if notify == nil {
+		t.Fatal("the wake is quiet, so this case tests nothing")
+	}
+	if got := notify.Snapshot.ChecklistAssignees; !slices.Equal(got, []string{"fa"}) {
+		t.Errorf("the checklist wake reached %v, want only fa, whose item was "+
+			"done — a nested item re-read and two lines swapping places are "+
+			"news to nobody", got)
+	}
+}
+
 type fixedLeads struct{ project, unit string }
 
 func (f fixedLeads) ProjectLead(string) string { return f.project }

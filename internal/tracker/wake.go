@@ -245,9 +245,8 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 // BY ITEM ID rather than by position, because a checklist is reordered and
 // renamed constantly and a positional diff would report the whole list as
 // changed the first time somebody dragged a line. An item counts as touched
-// when it appeared, disappeared, or changed in any way its assignee would care
-// about — its text, its done flag, its owner, or the subtask it was promoted
-// into.
+// when it appeared, disappeared, or changed in a way its assignee would care
+// about — see [itemTouched].
 //
 // The set is SORTED and deduped, because two nodes read the record rather than
 // re-deriving it and a slice in map order would put two spellings of one
@@ -266,7 +265,7 @@ func checklistAssignees(before, after Task) []string {
 		switch {
 		case !held:
 			mark(item)
-		case previous != item:
+		case itemTouched(previous, item):
 			// BOTH OWNERS, because a reassigned item is news to the
 			// person who had it as much as to the person who has it.
 			mark(item)
@@ -284,6 +283,21 @@ func checklistAssignees(before, after Task) []string {
 	}
 	sort.Strings(out)
 	return capHandles(out, MaxChecklists)
+}
+
+// itemTouched reports whether an item changed in a way its assignee would care
+// about: its text, its done flag, or who holds it.
+//
+// NAMED FIELDS, NOT THE STRUCT. It was `!=` over the whole item, which asked
+// two wrong questions at once. `Parent` is a POINTER, so two decodings of one
+// unchanged nested item — the stored one and the one a checklist write
+// re-sends — compared unequal by address, and every nested item's assignee was
+// woken by any edit to its list. And `Order` and `Parent` are LAYOUT: dragging
+// one line renumbers its neighbours, so the reorder this function's own doc
+// says must not report the whole list woke everybody on it.
+func itemTouched(before, after ChecklistItem) bool {
+	return before.Name != after.Name || before.Done != after.Done ||
+		before.Assignee != after.Assignee
 }
 
 // itemsByID flattens a task's checklists to their items.
