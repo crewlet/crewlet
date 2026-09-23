@@ -114,9 +114,9 @@ func (s *stateLog) truncation(ctx context.Context, running *runningDomain,
 // observeTruncation hands one reading of the register to a domain's runner and
 // names both transitions — see [statelog.Runner.ObserveTruncation].
 func (s *stateLog) observeTruncation(ctx context.Context, name string,
-	runner *statelog.Runner, t *statelog.Truncation) {
+	runner *statelog.Runner, stance statelog.Stance, t *statelog.Truncation) {
 
-	established, cleared := runner.ObserveTruncation(t)
+	established, cleared := runner.ObserveTruncation(stance, t)
 	switch {
 	case established:
 		log.ErrorContext(ctx, "statelog_log_truncated",

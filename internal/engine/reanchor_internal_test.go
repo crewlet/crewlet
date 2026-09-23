@@ -142,7 +142,8 @@ func TestOnlyAPeerHoldingHistoryTheLogDoesNotCountsAsAhead(t *testing.T) {
 			t.Fatalf("a write: %+v, %v", res, err)
 		}
 	}
-	own, record := running.runner.CommittedRecord()
+	stance := running.runner.Stance()
+	own, record := stance.At, stance.StoredAt
 	_, _, below, held, err := running.log.At(t.Context(), own.Seq-1)
 	if err != nil || !held || record.IsZero() {
 		t.Fatalf("the log's record below the checkpoint = (%v, %v), the checkpoint's "+

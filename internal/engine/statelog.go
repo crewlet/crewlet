@@ -163,6 +163,10 @@ type stateLog struct {
 	db     *store.DB
 	fleet  coord.Fleet
 
+	// publishing serializes [stateLog.publishPositions], whose reading of
+	// the runners and write of the row must not interleave with another's.
+	publishing sync.Mutex
+
 	// clustered is whether the broker has peers, which is what a replicated
 	// create's budget branches on — and so how long a reanchor's steps after
 	// its append may take ([statelog.ReanchorDeps.CompletionBudget]).
@@ -3126,6 +3130,17 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	if s.fleet == nil {
 		return
 	}
+	// ONE PUBLISH AT A TIME, from the reading of the runners to the write of
+	// the row. The heartbeat and a reanchor both publish, and the register
+	// keeps whichever row is written LAST: a beat that read the runners
+	// before a reanchor re-keyed one, and wrote after the reanchor published,
+	// put the old generation back on this node's row — so the peers it had
+	// just re-anchored past went on serving that generation until the next
+	// beat, and the trim read a position in a number space the node had
+	// left. Serialized, the last row written is always read after every
+	// change before it.
+	s.publishing.Lock()
+	defer s.publishing.Unlock()
 	row := coord.NodePositions{
 		NodeID:        s.nodeID,
 		At:            time.Now().UTC(),
@@ -3157,7 +3172,8 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	}
 	for _, name := range s.order {
 		running := s.domains[name]
-		at, record := running.runner.CommittedRecord()
+		stance := running.runner.Stance()
+		at, record := stance.At, stance.StoredAt
 		// AND PASSED BY A REANCHOR: the same predicate the join asks, so
 		// the rejoin this requests is one the join then acts on. The
 		// runner is told first, which is what refuses this node's reads
@@ -3262,7 +3278,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 				truncation, truncErr := s.truncation(ctx, running, rows, at, stats.LastSeq)
 				switch {
 				case truncErr == nil:
-					s.observeTruncation(ctx, name, running.runner, truncation)
+					s.observeTruncation(ctx, name, running.runner, stance, truncation)
 				case ctx.Err() == nil:
 					log.WarnContext(ctx, "statelog_truncation_unread",
 						"node", s.nodeID, "domain", name, "error", truncErr.Error(),

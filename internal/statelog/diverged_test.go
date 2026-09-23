@@ -448,10 +448,10 @@ func TestAPeersTruncationIsTheRunnersWriteFenceNotItsIdentity(t *testing.T) {
 	h := appliedThrough(t, 3)
 	peer := &statelog.Truncation{Peer: "node-newer", Seq: 9, Last: 3}
 
-	if established, cleared := h.runner.ObserveTruncation(peer); !established || cleared {
+	if established, cleared := h.runner.ObserveTruncation(h.runner.Stance(), peer); !established || cleared {
 		t.Fatalf("the first reading = (established %v, cleared %v)", established, cleared)
 	}
-	if established, _ := h.runner.ObserveTruncation(peer); established {
+	if established, _ := h.runner.ObserveTruncation(h.runner.Stance(), peer); established {
 		t.Fatal("the same reading established the truncation twice")
 	}
 	err := h.runner.Truncated()
@@ -468,22 +468,22 @@ func TestAPeersTruncationIsTheRunnersWriteFenceNotItsIdentity(t *testing.T) {
 	}
 
 	diverged := &statelog.Truncation{Peer: "node-newer", Seq: 3, Last: 5, Diverged: true}
-	h.runner.ObserveTruncation(diverged)
+	h.runner.ObserveTruncation(h.runner.Stance(), diverged)
 	if err := h.runner.Truncated(); err == nil || !strings.Contains(err.Error(), "another record") {
 		t.Fatalf("a diverged peer's truncation reads %v", err)
 	}
 
-	if _, cleared := h.runner.ObserveTruncation(nil); !cleared {
+	if _, cleared := h.runner.ObserveTruncation(h.runner.Stance(), nil); !cleared {
 		t.Fatal("a reading that found no such peer did not clear the truncation")
 	}
-	if _, cleared := h.runner.ObserveTruncation(nil); cleared {
+	if _, cleared := h.runner.ObserveTruncation(h.runner.Stance(), nil); cleared {
 		t.Fatal("the truncation was cleared twice")
 	}
 	if err := h.runner.Truncated(); err != nil {
 		t.Fatalf("Truncated after clearing = %v", err)
 	}
 
-	h.runner.ObserveTruncation(peer)
+	h.runner.ObserveTruncation(h.runner.Stance(), peer)
 	at := statelog.Position{Stream: probeStream, Generation: 2, Seq: 3}
 	if err := h.runner.Reanchored(at, time.Now(), probeStoredAt(3)); err != nil {
 		t.Fatalf("Reanchored: %v", err)
@@ -651,5 +651,63 @@ func TestAMovedCheckpointEndsARecordedDivergence(t *testing.T) {
 					"want %d", rows, c.name, want)
 			}
 		})
+	}
+}
+
+// A TRUNCATION READING IS JUDGED AGAINST THE ROWS IT WAS ABOUT.
+//
+// The heartbeat reads the register, the log and the runner, and its verdict
+// reaches the runner a few broker round trips later. A reading taken before a
+// reanchor, handed over after it, set the write fence of a node whose rows now
+// head a generation of their own; one taken before a join, handed over after,
+// could clear a fence the rows still needed. And a join that adopted rows into
+// another generation left a truncation about the old one refusing every write
+// until a beat judged the new — while one into the same generation keeps it,
+// since the peers and the log it compared are the ones those rows are on.
+func TestATruncationReadingIsJudgedAgainstTheRowsItWasAbout(t *testing.T) {
+	t.Parallel()
+	h := appliedThrough(t, 3)
+	peer := &statelog.Truncation{Peer: "node-newer", Seq: 9, Last: 3}
+
+	// A READING FROM BEFORE A REANCHOR changes nothing after it.
+	before := h.runner.Stance()
+	at := statelog.Position{Stream: probeStream, Generation: 2, Seq: 3}
+	if err := h.runner.Reanchored(at, time.Now(), probeStoredAt(3)); err != nil {
+		t.Fatalf("Reanchored: %v", err)
+	}
+	if established, _ := h.runner.ObserveTruncation(before, peer); established ||
+		h.runner.Truncated() != nil {
+		t.Fatalf("a reading taken before the reanchor set the fence after it: %v",
+			h.runner.Truncated())
+	}
+
+	// A CURRENT ONE ESTABLISHES IT.
+	if established, _ := h.runner.ObserveTruncation(h.runner.Stance(), peer); !established {
+		t.Fatal("a current reading established nothing")
+	}
+
+	// A JOIN INTO THE SAME GENERATION KEEPS IT, and a reading from before the
+	// join clears nothing after it.
+	stale := h.runner.Stance()
+	keyed := h.runner.KeyedTo()
+	if err := h.runner.Rejoined(at, keyed, keyed); err != nil {
+		t.Fatalf("Rejoined: %v", err)
+	}
+	if h.runner.Truncated() == nil {
+		t.Fatal("a join into the same generation cleared the truncation — the peers " +
+			"and the log it compared are the ones the rows are on")
+	}
+	if _, cleared := h.runner.ObserveTruncation(stale, nil); cleared ||
+		h.runner.Truncated() == nil {
+		t.Fatal("a reading taken before the join cleared the fence after it")
+	}
+
+	// A JOIN INTO ANOTHER GENERATION ENDS IT.
+	next := statelog.Position{Stream: probeStream, Generation: 3, Seq: 3}
+	if err := h.runner.Rejoined(next, keyed, keyed); err != nil {
+		t.Fatalf("Rejoined: %v", err)
+	}
+	if err := h.runner.Truncated(); err != nil {
+		t.Fatalf("after a join into another generation the truncation still refuses: %v", err)
 	}
 }

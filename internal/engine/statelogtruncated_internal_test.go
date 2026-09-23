@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -187,5 +190,149 @@ func TestWhichPeersHoldWhatTheLogLost(t *testing.T) {
 				t.Fatalf("the finding names %q, want node-peer", got.Peer)
 			}
 		})
+	}
+}
+
+// wrappedFleet is the coordination store a test wraps, under a name of its own:
+// embedded as coord.Fleet, the field would take the name of a method the
+// interface declares.
+type wrappedFleet = coord.Fleet
+
+// heldFleet is a coordination store whose NEXT write of one node's row at one
+// tracker generation is held until released — a heartbeat that read the
+// runners and has not yet written — and which records the tracker generation
+// of every row that node's writes carried, in order.
+type heldFleet struct {
+	wrappedFleet
+
+	mu      sync.Mutex
+	node    string
+	hold    uint32
+	armed   bool
+	blocked chan struct{}
+	release chan struct{}
+	written []uint32
+}
+
+func (f *heldFleet) arm(node string, gen uint32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.node, f.hold, f.armed = node, gen, true
+	f.blocked, f.release = make(chan struct{}), make(chan struct{})
+}
+
+func (f *heldFleet) PutPositions(ctx context.Context, row coord.NodePositions) error {
+	gen := row.Domains[tracker.Domain{}.Name()].Generation
+	f.mu.Lock()
+	if f.node == "" || row.NodeID != f.node {
+		f.mu.Unlock()
+		return f.wrappedFleet.PutPositions(ctx, row)
+	}
+	hold := f.armed && gen == f.hold
+	release := f.release
+	if hold {
+		f.armed = false
+		close(f.blocked)
+	}
+	f.mu.Unlock()
+	if hold {
+		<-release
+	}
+	err := f.wrappedFleet.PutPositions(ctx, row)
+	f.mu.Lock()
+	f.written = append(f.written, gen)
+	f.mu.Unlock()
+	return err
+}
+
+func (f *heldFleet) last() (uint32, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.written) == 0 {
+		return 0, 0
+	}
+	return f.written[len(f.written)-1], len(f.written)
+}
+
+// A HEARTBEAT IN FLIGHT CANNOT PUT A REANCHORED NODE'S OLD GENERATION BACK.
+//
+// The heartbeat reads the runners and then writes this node's row, and a
+// reanchor publishes the row directly once its transition commits. The
+// register keeps whichever row is written LAST: a beat that read the tracker
+// before the reanchor re-keyed it, and wrote after the reanchor published, put
+// the old generation back — the peers it had just re-anchored past went on
+// serving that generation until the next beat. The publishes are serialized,
+// so the last row written is read after the reanchor.
+func TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	back, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	fleet := &heldFleet{wrappedFleet: back.Fleet}
+	back.Fleet = fleet
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	js := jetStreamOn(t, back)
+
+	s := e.native.Load().log
+	running := s.Domain(tracker.Domain{}.Name())
+	spec := running.domain.Stream()
+	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
+		res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("a write before the rebuild: %+v, %v", res, err)
+	}
+	gen := running.runner.Committed().Generation
+	rebuildLog(t, js, spec)
+	view, err := e.ReanchorStatus(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v", err)
+	}
+
+	// A BEAT IN FLIGHT: it has read the tracker at the old generation and is
+	// held at its write.
+	fleet.arm(e.native.Load().nodeID, gen)
+	beat := make(chan struct{})
+	go func() { defer close(beat); s.publishPositions(context.WithoutCancel(t.Context())) }()
+	select {
+	case <-fleet.blocked:
+	case <-time.After(20 * time.Second):
+		t.Fatal("no beat reached its write")
+	}
+
+	// THE REANCHOR, beside it.
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.Reanchor(context.WithoutCancel(t.Context()), ReanchorRequest{
+			Stream: spec.Name, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: "ops-1",
+		})
+		done <- err
+	}()
+	waitUntil(t, 20*time.Second, "the reanchor to re-key the tracker", func() bool {
+		return running.runner.Committed().Generation > gen
+	})
+	// WHATEVER THE REANCHOR WOULD PUBLISH ON ITS OWN, it has had the time to.
+	time.Sleep(300 * time.Millisecond)
+	close(fleet.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	<-beat
+	if last, n := fleet.last(); last <= gen {
+		t.Fatalf("after %d writes this node's row names generation %d, want the "+
+			"reanchored %d — the beat that read the tracker before the reanchor "+
+			"wrote after it", n, last, running.runner.Committed().Generation)
 	}
 }

@@ -527,14 +527,27 @@ func (r *Runner) Committed() Position {
 	return r.cursor
 }
 
-// CommittedRecord is [Runner.Committed] with the broker's instant for the record
-// at it — the one this node consumed there, zero where that is unknown — read
-// under one lock, because a sequence paired with another record's instant names
-// no record this node ever consumed ([Runner.checkpointAt]).
-func (r *Runner) CommittedRecord() (Position, time.Time) {
+// Stance is one reading of where a runner stands: its committed checkpoint, the
+// broker's instant for the record at it — the one this node consumed there,
+// zero where that is unknown — and WHICH COPY of its rows it was read from.
+//
+// ONE READ, under one lock, for two reasons. A sequence paired with another
+// record's instant names no record this node ever consumed
+// ([Runner.checkpointAt]). And a verdict reached from a reading has to be judged
+// against the rows the reading was about: a reanchor, a join or a reload
+// between the reading and the verdict makes it a finding about rows this runner
+// no longer holds ([Runner.ObserveTruncation]).
+type Stance struct {
+	At       Position
+	StoredAt time.Time
+	rows     uint64
+}
+
+// Stance reads where this runner stands — see [Stance].
+func (r *Runner) Stance() Stance {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.cursor, r.checkpointAt
+	return Stance{At: r.cursor, StoredAt: r.checkpointAt, rows: r.rows}
 }
 
 // StreamCreatedAt is the creation instant of the stream this runner's
@@ -842,9 +855,25 @@ func (r *Runner) StreamIdentity() error {
 // whether the log holds the record at a peer's checkpoint. A reading that could
 // not be taken is not handed here at all, so an unreadable register leaves the
 // verdict where it was rather than clearing it.
-func (r *Runner) ObserveTruncation(t *Truncation) (established, cleared bool) {
+//
+// # Judged against the rows the reading was about
+//
+// s is where this runner stood when the reading was taken ([Runner.Stance]), and
+// a reading about rows it no longer holds changes nothing — neither way. The
+// heartbeat reads the register, the log and the runner, and the reading reaches
+// here a broker round trip or three later: a reanchor or a join in between put
+// the runner in another generation, where the peers the reading compared are a
+// number space it has left, and a verdict written from it would refuse every
+// write of a node whose rows now head the log, until the next beat took it back
+// — or clear the fence of one that still needs it.
+func (r *Runner) ObserveTruncation(s Stance, t *Truncation) (established, cleared bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// THE ROWS' OWN COUNT, which every reload, reanchor and join moves — and
+	// every event that moves the generation is one of those three.
+	if s.rows != r.rows {
+		return false, false
+	}
 	had := r.truncated != nil
 	if t == nil {
 		r.truncated = nil
@@ -1224,6 +1253,16 @@ func (r *Runner) Rejoined(at Position, keyed, live time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	moved := at != r.cursor
+	// A PEER'S TRUNCATION WAS ABOUT PEERS IN THE GENERATION THESE ROWS STOOD
+	// AT, the one [Runner.Reanchored] clears for the same reason: rows
+	// adopted into another generation are a peer's history there, which the
+	// verdict said nothing about, and kept it refused every write until a
+	// beat judged the new generation. One adopted into the SAME generation
+	// stays under it — the peers and the log it compared are the ones these
+	// rows are on — until the next reading says otherwise.
+	if at.Generation != r.cursor.Generation {
+		r.truncated = nil
+	}
 	r.cursor = at
 	r.rows++
 	if IdentityOf(keyed, live, !keyed.IsZero()) == StreamRecreated {
