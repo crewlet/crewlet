@@ -111,8 +111,9 @@ type Turn struct {
 	Org *org.Organization
 
 	// Depth is the delegation depth this turn inherited, and Chain is who
-	// it came through. Both travel so a sub-agent or an A2A ask can refuse
-	// past the cap rather than discovering the loop at runtime.
+	// it came through. Both travel so an A2A ask can refuse past the cap
+	// rather than discovering the loop at runtime. A delegated worker needs
+	// neither: it is a leaf that contacts nobody (see agent/subagent).
 	Depth int
 	Chain []string
 
@@ -214,33 +215,4 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 		return nil, ErrNoSeat
 	}
 	return t.Seat, nil
-}
-
-// ForSubagent derives the context an ephemeral sub-agent runs under.
-//
-// It KEEPS the org (a sub-agent must see the same company its parent does) and
-// EXTENDS the delegation chain, refusing past the cap. The seat becomes the
-// child's own: a sub-agent acting as its parent would make the delegation cap
-// unenforceable, because nothing downstream could tell the two apart.
-func (t *Turn) ForSubagent(seat *org.Role, limit int) (*Turn, error) {
-	if t == nil {
-		return nil, ErrNoSeat
-	}
-	depth := t.Depth + 1
-	if limit > 0 && depth > limit {
-		return nil, fmt.Errorf("turnctx: delegation depth %d exceeds the limit of %d "+
-			"(chain: %v)", depth, limit, t.Chain)
-	}
-	// Copied, not appended in place: append can share a backing array, and
-	// two sub-agents derived from one parent would then write over each
-	// other's chain.
-	chain := make([]string, len(t.Chain), len(t.Chain)+1)
-	copy(chain, t.Chain)
-	if h := t.Handle(); h != "" {
-		chain = append(chain, h)
-	}
-	return &Turn{
-		RunID: t.RunID, WorkKey: t.WorkKey, WorkSince: t.WorkSince,
-		Seat: seat, Org: t.Org, Depth: depth, Chain: chain,
-	}, nil
 }
