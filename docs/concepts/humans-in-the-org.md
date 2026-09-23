@@ -609,7 +609,12 @@ reports `withheld_seats` and whether a `directory` was consulted.
 
 **A directory this node cannot read keeps the last reading** rather than
 falling back to the chart, which would hand every suspended person's seat
-back: it logs `party_directory_unreadable` and retries on the net.
+back: it logs `party_directory_unreadable` and retries on the net. **A node
+that has never read its directory fails closed**: the first registry is built
+at boot, with no last reading to keep, so if the directory cannot be read then
+every human seat is withheld (`directory_unread`) until the net's first
+successful read — people are briefly unreachable through the engine rather
+than a suspended person's accounts being routed to their seat.
 
 **A node that does not run the identity domain routes by the chart alone.**
 A seats-only satellite holds an empty copy of the directory, and an empty

@@ -271,6 +271,33 @@ func TestAFormerHandleAnotherSeatTookResolvesToThatSeat(t *testing.T) {
 	}
 }
 
+// AN UNREAD DIRECTORY WITHHOLDS EVERY HUMAN SEAT, and is a reading of its own.
+//
+// It is what a node builds from before it has ever read its directory, so it
+// must differ from both readings it could be confused with: chart-only, which
+// routes everybody, and an empty directory, which routes everybody the chart
+// declares — either of which, standing in for it, would compare Equal to the
+// net's first real reading and skip the rebuild that opens routing.
+func TestAnUnreadDirectoryWithholdsEveryHumanSeat(t *testing.T) {
+	t.Parallel()
+	o := company()
+	o.Normalize()
+	unread := notify.Unread()
+	seats := unread.Seats(o)
+	if why, ok := seats["dana-founder"]; !ok || why != notify.WithheldUnread {
+		t.Errorf("the human seat reads %q/%v, want %q", why, ok, notify.WithheldUnread)
+	}
+	if _, ok := seats["engineering-lead"]; ok {
+		t.Error("an unread directory withholds an agent seat, which declares no contact")
+	}
+	if !notify.WithheldUnread.Valid() {
+		t.Errorf("%q is not a Withholding this package names", notify.WithheldUnread)
+	}
+	if unread.Equal(notify.Standing{}) || unread.Equal(notify.StandingOf(nil)) {
+		t.Error("an unread reading equals one that routes everybody")
+	}
+}
+
 // renamedCompany is the fixture company after the founder's seat was renamed
 // from `dana-founder` to `dana`.
 func renamedCompany() *org.Organization {

@@ -110,6 +110,17 @@ func (e *Engine) partyDirectory() (notify.Directory, func() statelog.Position) {
 // over the same blip. What this node last KNEW is the standing the live
 // registry was built from, so that is what the next one is built from; the
 // failure is logged, and the periodic net retries it until a reading lands.
+//
+// # And with nothing to carry, it FAILS CLOSED
+//
+// The first registry a node builds — at boot, before anything is published —
+// has no live registry behind it, and what it used to carry was the zero
+// Standing: chart-only, the unsafe direction, for as long as the directory
+// stayed unreadable. So a node that has never read its directory builds from
+// [notify.Unread] instead, which withholds every human seat until the net's
+// first successful read replaces it. The same holds for a live registry that
+// was itself built unread: carrying its reading forward carries the closed
+// posture, never a chart-only one.
 func (e *Engine) readStandingLocked(ctx context.Context) notify.Standing {
 	dir, at := e.partyDirectory()
 	if dir == nil {
@@ -125,17 +136,24 @@ func (e *Engine) readStandingLocked(ctx context.Context) notify.Standing {
 	}
 	standing, err := notify.ReadStanding(ctx, dir)
 	if err != nil {
-		carried, withheld := notify.Standing{}, 0
-		if live := e.Registry(); live != nil {
-			carried, withheld = live.Standing(), len(live.Withheld())
-		}
 		e.notify.directoryFailed = true
+		live := e.Registry()
+		if live == nil || !live.Standing().Consulted() {
+			// NOTHING WAS EVER READ — see above. A live registry that
+			// consulted no directory was built before this node had one
+			// to read, which is the same absence of a reading.
+			log.WarnContext(ctx, "party_directory_unreadable", "error", err,
+				"detail", "this node has never read its identity directory, so "+
+					"no human seat's contact identities route until it does; it "+
+					"retries every "+DirectoryRefresh.String())
+			return notify.Unread()
+		}
 		log.WarnContext(ctx, "party_directory_unreadable", "error", err,
-			"withheld_seats", withheld,
+			"withheld_seats", len(live.Withheld()),
 			"detail", "this node could not read its identity directory, so its "+
 				"contact routing keeps the standing it last read; it retries "+
 				"every "+DirectoryRefresh.String())
-		return carried
+		return live.Standing()
 	}
 	e.notify.directoryFailed, e.notify.readAt = false, position
 	return standing

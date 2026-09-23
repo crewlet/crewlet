@@ -106,16 +106,24 @@ const (
 	// WithheldUnrecognised is a seat whose holder is at a stage this build
 	// cannot name — one a newer peer wrote.
 	WithheldUnrecognised Withholding = "unrecognised_stage"
+
+	// WithheldUnread is EVERY human seat on a node that has never managed
+	// to read its directory. See [Unread].
+	WithheldUnread Withholding = "directory_unread"
 )
 
 // withholdings is every [Withholding], in the order a seat with two holders
 // reports them: the one that is hardest to undo first, so the reason an
 // operator reads is the one that will still be true after they fix the other.
+//
+// [WithheldUnread] is last because it is never one holder's reason: it is the
+// whole reading's, and it never meets another in one seat.
 var withholdings = []Withholding{
 	WithheldRemoved, WithheldRetired, WithheldSuspended, WithheldUnrecognised,
+	WithheldUnread,
 }
 
-// Valid reports whether w is one of the four.
+// Valid reports whether w is one of the five.
 func (w Withholding) Valid() bool { return slices.Contains(withholdings, w) }
 
 // harder is whichever of two reasons for one seat an operator should read —
@@ -183,6 +191,8 @@ func withholding(h Holder) (Withholding, bool) {
 // ITS ZERO VALUE IS CHART-ONLY: nothing consulted, nothing withheld.
 type Standing struct {
 	consulted bool
+	// unread is a node that has never read its directory — see [Unread].
+	unread bool
 	// withheld is keyed on the handle each BINDING names.
 	withheld map[string]Withholding
 }
@@ -208,6 +218,22 @@ func StandingOf(holders []Holder) Standing {
 	return s
 }
 
+// Unread is the reading of a node that has NEVER managed to read its
+// directory: every human seat is withheld, as [WithheldUnread].
+//
+// # Fail closed, and only when there is nothing to carry
+//
+// An unreadable directory normally carries the last reading forward, because
+// what the node last knew is the best answer it has. The first registry a node
+// builds has no last reading — and the two answers left are not symmetric.
+// Chart-only would route every suspended, retired and removed holder's
+// accounts for as long as the directory stayed unreadable, which is the
+// direction a suspension exists to close; withholding every human seat makes
+// the company's people briefly unreachable through the engine, which is the
+// same trade a stage this build cannot name already makes. The periodic
+// re-read replaces it the moment a read lands.
+func Unread() Standing { return Standing{consulted: true, unread: true} }
+
 // ReadStanding reads the directory once and applies the rule.
 //
 // A NIL DIRECTORY IS CHART-ONLY and no error: it is a node that does not run
@@ -230,6 +256,9 @@ func ReadStanding(ctx context.Context, dir Directory) (Standing, error) {
 // opposed to the chart-only zero value.
 func (s Standing) Consulted() bool { return s.consulted }
 
+// Unread reports whether this is [Unread]'s fail-closed reading.
+func (s Standing) Unread() bool { return s.unread }
+
 // Withheld is every BINDING that withholds its seat, by the handle it names,
 // sorted. [Standing.Seats] is the same reading in terms of an organization's
 // seats.
@@ -249,6 +278,14 @@ func (s Standing) Withheld() []string {
 func (s Standing) Seats(o *org.Organization) map[string]Withholding {
 	out := map[string]Withholding{}
 	if o == nil {
+		return out
+	}
+	if s.unread {
+		for role := range o.AllRoles() {
+			if role.IsHuman() && role.Handle() != "" {
+				out[role.Handle()] = WithheldUnread
+			}
+		}
 		return out
 	}
 	if len(s.withheld) == 0 {
@@ -297,5 +334,6 @@ func seatAddresses(o *org.Organization) map[string]string {
 // the same reasons — which is what lets a directory trigger that found nothing
 // moved skip a rebuild rather than swap in an identical registry.
 func (s Standing) Equal(o Standing) bool {
-	return s.consulted == o.consulted && maps.Equal(s.withheld, o.withheld)
+	return s.consulted == o.consulted && s.unread == o.unread &&
+		maps.Equal(s.withheld, o.withheld)
 }

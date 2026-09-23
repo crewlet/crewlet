@@ -256,6 +256,64 @@ func TestAnUnreadableDirectoryCarriesTheLastReadingForward(t *testing.T) {
 	}
 }
 
+// A NODE THAT HAS NEVER READ ITS DIRECTORY FAILS CLOSED.
+//
+// The first registry is built at boot, with no live registry to carry a
+// reading from. What it carried used to be the zero Standing — chart-only —
+// so a directory unreadable at that moment registered every suspended,
+// retired and removed holder's accounts until the net's re-read landed. It now
+// withholds every human seat instead, and the net's first successful read is
+// what routes them: the control is that very read, which must restore the
+// seats a reading does not withhold.
+func TestAnUnreadableFirstReadingWithholdsEveryHumanSeat(t *testing.T) {
+	t.Parallel()
+	e := &Engine{directoryNudge: make(chan struct{}, 1)}
+	var failing atomic.Bool
+	failing.Store(true)
+	e.useDirectory(directoryFunc(func(context.Context) ([]notify.Holder, error) {
+		if failing.Load() {
+			return nil, sql.ErrConnDone
+		}
+		return []notify.Holder{{Seat: founderSeat, Stage: iam.StageSuspended}}, nil
+	}), nil)
+
+	company := directoryCompany(t, e)
+	e.refreshParties(t.Context(), company)
+	reg := e.Registry()
+	for _, id := range []string{founderSlack, colleagueSlack} {
+		if p, ok := reg.ByExternalID("slack", id); ok {
+			t.Errorf("a node that never read its directory routes %s to %q — the "+
+				"chart-only answer, which hands a suspended holder their seat", id,
+				p.Handle)
+		}
+	}
+	if why, ok := reg.Withholding(colleagueSeat); !ok || why != notify.WithheldUnread {
+		t.Errorf("the colleague's seat reports %q/%v, want %q", why, ok,
+			notify.WithheldUnread)
+	}
+	if _, ok := reg.ByHandle("ceo"); !ok {
+		t.Error("an unread directory took an agent seat out of the registry")
+	}
+
+	// A SECOND UNREADABLE PASS keeps it closed, even for a newly published
+	// company: an unread reading carried forward is still an unread one.
+	e.refreshParties(t.Context(), directoryCompany(t, e))
+	if _, ok := e.Registry().ByExternalID("slack", colleagueSlack); ok {
+		t.Error("a second unreadable pass reopened contact routing")
+	}
+
+	// THE CONTROL: the net's first successful read routes what the reading
+	// does not withhold, and withholds what it does.
+	failing.Store(false)
+	e.refreshDirectory(t.Context(), false)
+	if _, ok := e.Registry().ByExternalID("slack", colleagueSlack); !ok {
+		t.Error("the first successful reading did not route the colleague")
+	}
+	if _, ok := e.Registry().ByExternalID("slack", founderSlack); ok {
+		t.Error("the first successful reading routed a suspended founder")
+	}
+}
+
 // The fixture: a company with two human seats and a directory rig over a real
 // replicated estate, driven through the identity applier the register builds.
 
