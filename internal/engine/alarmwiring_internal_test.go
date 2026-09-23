@@ -233,25 +233,31 @@ func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 }
 
 // A RECORD FROM A NEWER BUILD, HELD PAST THE DEFERRAL GRACE, FIRES
-// `deferred_old` — from a real deferral on a real applier, dated by the real
-// position heartbeat — and says whether this node's seats move for it.
+// `deferred_old` ONCE FOR EACH LOG HOLDING ONE — from a real deferral on a real
+// applier, dated by the real position heartbeat — and each says whether this
+// node's seats move for it.
 //
 // The alarm could not fire before: the report stood the grace in for the age
-// whenever a record was held, and the rule fires past the grace. The record
-// here is what a peer one build ahead would publish — signed under this
+// whenever a record was held, and the rule fires past the grace. The records
+// here are what a peer one build ahead would publish — signed under this
 // fleet's keyring, at a record version this build does not read — so the
-// applier retains it exactly as a rolling upgrade makes it. And it said "its
-// seats move" of every log, where only the logs that gate seat admission move
-// any: the identity estate's is held on the request path instead.
+// appliers retain them exactly as a rolling upgrade makes them. And the node
+// holds one on TWO logs at once, which is what a build that moved two record
+// versions leaves behind: one gates seat admission and one gates none, so the
+// grace moves this node's seats for the first and moves nothing for the second.
+// A single alarm naming the node's oldest record said one of those about both.
 func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct {
+	ctx := t.Context()
+	e := bootDirectoryNode(t, nil)
+	r := quietRetention(t, e)
+	for _, tc := range []struct {
 		domain  string
 		version int
 		record  func(generation uint32) (statelog.Subject, []byte, error)
 		says    string
 	}{
-		"a log that gates seat admission": {
+		{
 			domain: tracker.Domain{}.Name(), version: tracker.RecordVersion,
 			record: func(generation uint32) (statelog.Subject, []byte, error) {
 				subject := tracker.TaskSubject("t-from-a-newer-build")
@@ -267,9 +273,9 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 					payload, err
 			},
-			says: "and this node's seats move at",
+			says: "at which this node's seats move to a peer",
 		},
-		"a log that gates none": {
+		{
 			domain: iamdomain.Domain{}.Name(), version: iamdomain.RecordVersion,
 			record: func(generation uint32) (statelog.Subject, []byte, error) {
 				person := uuid.Must(uuid.NewV7()).String()
@@ -286,81 +292,92 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 					payload, err
 			},
-			says: "that log does not gate seat admission, so this record moves no seats",
+			says: "this log does not gate seat admission, so it moves no seats",
 		},
 	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			ctx := t.Context()
-			e := bootDirectoryNode(t, nil)
-			r := quietRetention(t, e)
-			running := r.state.domains[tc.domain]
-			if running == nil {
-				t.Fatalf("the node runs no %s domain", tc.domain)
+		running := r.state.domains[tc.domain]
+		if running == nil {
+			t.Fatalf("the node runs no %s domain", tc.domain)
+		}
+		subject, payload, err := tc.record(running.runner.Committed().Generation)
+		if err != nil {
+			t.Fatalf("encode a %s record: %v", tc.domain, err)
+		}
+		signer, err := r.state.signerFor(running.domain)
+		if err != nil {
+			t.Fatalf("signer: %v", err)
+		}
+		address := running.domain.Stream().SubjectPrefix + "." + subject.String()
+		if _, _, err := running.log.Append(ctx, address, "op-from-a-newer-build",
+			nil, signer.Seal(payload)); err != nil {
+			t.Fatalf("append to the %s log: %v", tc.domain, err)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, held := running.runner.Deferred(); held {
+				break
 			}
-			subject, payload, err := tc.record(running.runner.Committed().Generation)
-			if err != nil {
-				t.Fatalf("encode: %v", err)
+			if time.Now().After(deadline) {
+				t.Fatalf("the %s applier never retained a record written at a "+
+					"newer version", tc.domain)
 			}
-			signer, err := r.state.signerFor(running.domain)
-			if err != nil {
-				t.Fatalf("signer: %v", err)
-			}
-			address := running.domain.Stream().SubjectPrefix + "." + subject.String()
-			if _, _, err := running.log.Append(ctx, address, "op-from-a-newer-build",
-				nil, signer.Seal(payload)); err != nil {
-				t.Fatalf("append: %v", err)
-			}
-			deadline := time.Now().Add(10 * time.Second)
-			for {
-				if _, held := running.runner.Deferred(); held {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("the applier never retained a record written at a newer version")
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-			// THE HEARTBEAT DATES IT, as it does on every node every ten
-			// seconds.
-			r.state.publishPositions(ctx)
-			sighted := time.Now().UTC()
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	// THE HEARTBEAT DATES BOTH, as it does on every node every ten seconds.
+	r.state.publishPositions(ctx)
+	sighted := time.Now().UTC()
 
-			r.now = func() time.Time { return sighted.Add(statelog.DeferralGrace - time.Minute) }
-			r.beat(ctx)
-			if alarmed(r.Report(ctx), statelog.KindDeferredOld) {
-				t.Fatal("a deferral inside the grace raised deferred_old")
-			}
-			r.now = func() time.Time {
-				return sighted.Add(statelog.DeferralGrace + statelog.AlarmInterval)
-			}
-			r.beat(ctx)
-			var fired statelog.Alarm
-			for _, a := range r.Report(ctx).Alarms {
-				if a.Kind == statelog.KindDeferredOld {
-					fired = a
-				}
-			}
-			if fired.Kind == "" {
-				t.Fatal("a record from a newer build held a beat past the grace " +
-					"raised no deferred_old")
-			}
-			want := fmt.Sprintf("the %s log at %s@", tc.domain, running.domain.Stream().Name)
-			version := fmt.Sprintf("written at record version %d against the %d "+
-				"this build reads", tc.version+1, tc.version)
-			if !strings.Contains(fired.Detail, want) ||
-				!strings.Contains(fired.Detail, version) {
-				t.Errorf("the alarm reads %q; it names the log, the position and "+
-					"the version an operator upgrades to", fired.Detail)
-			}
-			if !strings.Contains(fired.Detail, tc.says) {
-				t.Errorf("the alarm reads %q; want it to say %q", fired.Detail, tc.says)
-			}
-			if got := alarmGauge(t, e, statelog.KindDeferredOld); got != 1 {
-				t.Errorf("the alarm gauge for %s reads %v, want 1",
-					statelog.KindDeferredOld, got)
-			}
-		})
+	r.now = func() time.Time { return sighted.Add(statelog.DeferralGrace - time.Minute) }
+	r.beat(ctx)
+	if alarmed(r.Report(ctx), statelog.KindDeferredOld) {
+		t.Fatal("a deferral inside the grace raised deferred_old")
+	}
+	r.now = func() time.Time {
+		return sighted.Add(statelog.DeferralGrace + statelog.AlarmInterval)
+	}
+	r.beat(ctx)
+	byLog := map[string]statelog.Alarm{}
+	for _, a := range r.Report(ctx).Alarms {
+		if a.Kind != statelog.KindDeferredOld {
+			continue
+		}
+		domain, _, _ := strings.Cut(a.Detail, ": ")
+		byLog[domain] = a
+	}
+	for _, tc := range []struct {
+		domain  string
+		version int
+		says    string
+	}{
+		{tracker.Domain{}.Name(), tracker.RecordVersion, "at which this node's seats move to a peer"},
+		{iamdomain.Domain{}.Name(), iamdomain.RecordVersion,
+			"this log does not gate seat admission, so it moves no seats"},
+	} {
+		fired, found := byLog[tc.domain]
+		if !found {
+			t.Errorf("a record the %s log's applier held a beat past the grace "+
+				"raised no deferred_old of its own (raised: %v)", tc.domain, byLog)
+			continue
+		}
+		stream := r.state.domains[tc.domain].domain.Stream().Name
+		version := fmt.Sprintf("written at record version %d against the %d "+
+			"this build reads", tc.version+1, tc.version)
+		if !strings.Contains(fired.Detail, "at "+stream+"@") ||
+			!strings.Contains(fired.Detail, version) {
+			t.Errorf("the alarm reads %q; it names the position and the version an "+
+				"operator upgrades to", fired.Detail)
+		}
+		if !strings.Contains(fired.Detail, tc.says) {
+			t.Errorf("the alarm reads %q; want it to say %q", fired.Detail, tc.says)
+		}
+	}
+	if len(byLog) != 2 {
+		t.Errorf("raised deferred_old for %d log(s), want the two holding a record", len(byLog))
+	}
+	if got := alarmGauge(t, e, statelog.KindDeferredOld); got != 1 {
+		t.Errorf("the alarm gauge for %s reads %v, want 1",
+			statelog.KindDeferredOld, got)
 	}
 }
 
@@ -396,17 +413,23 @@ func TestTheFloorUnknownAlarmFiresOnARunningNode(t *testing.T) {
 	}
 	r.now = func() time.Time { return t0.Add(statelog.FloorCacheStale + statelog.AlarmInterval) }
 	r.beat(ctx)
-	var fired statelog.Alarm
+	var raised []statelog.Alarm
 	for _, a := range r.Report(ctx).Alarms {
 		if a.Kind == statelog.KindFloorUnknown {
-			fired = a
+			raised = append(raised, a)
 		}
 	}
-	if fired.Kind == "" {
+	if len(raised) == 0 {
 		t.Fatal("a floor this node could not use for five heartbeats raised no " +
 			"floor_unknown")
 	}
-	if !strings.Contains(fired.Detail, name+": ") ||
+	// THE ONE LOG WHOSE FLOOR IS AHEAD, and none of the others: every other
+	// log's floor is readable, and its reads are served.
+	if len(raised) != 1 {
+		t.Errorf("raised floor_unknown %d times for one unusable floor: %v", len(raised), raised)
+	}
+	fired := raised[0]
+	if !strings.HasPrefix(fired.Detail, name+": ") ||
 		!strings.Contains(fired.Detail, fmt.Sprintf("generation %d", generation+1)) {
 		t.Errorf("the alarm reads %q; it names the log and why its floor is unusable",
 			fired.Detail)

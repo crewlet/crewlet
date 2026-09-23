@@ -200,5 +200,10 @@
 // moves its seats, the budget a caller was promised, the replay window an
 // operator set a log's ceiling to hold — and ONE evaluation feeds every
 // surface, so a gauge, a log line and a screen cannot disagree about whether
-// something is wrong.
+// something is wrong. A condition that is a property of ONE LOG — its
+// headroom, its ceiling against its window, a blocked trim, a record held past
+// the deferral grace, a floor this node cannot read — is evaluated once per
+// log ([Report]), because its consequence and its remedy are that log's: the
+// grace moves a node's seats for one log and nothing for another, and a node
+// behind two re-anchors needs two.
 package statelog

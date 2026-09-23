@@ -236,29 +236,34 @@ type Reading struct {
 	TrimPastWindow uint64
 
 	// DeferredAge is how long this node has held the oldest record it
-	// could not apply — from the position heartbeat's first sighting of it,
-	// the instant [Health.Healthy] sheds this node's seats from, through
-	// [DeferredSince.Age] — and DeferredRecord which record that is, in the
-	// words an operator upgrades by: the log, the position and the record
-	// version it was written at.
+	// could not apply on one log — from the position heartbeat's first
+	// sighting of it, the instant [Health.Healthy] sheds this node's seats
+	// from, through [DeferredSince.Age] — and DeferredRecord which record
+	// that is, in the words an operator upgrades by: its position and the
+	// record version it was written at against the one this build reads.
+	// Per DOMAIN, like HeadroomFraction, and filled by the report from
+	// [DomainInputs] rather than by a node-wide caller.
 	//
 	// DeferredSheds is whether that log is a [Domain.ReadinessInput] — the
 	// tracker's, the knowledge base's and the chart's are; the identity
 	// estate's and the vectors' are not — which is whether the grace is ALSO
 	// when this node's seats move. The alarm fires at the grace either way,
 	// because an upgrade is the remedy either way; what it may not do is tell
-	// an operator a node's seats moved over a log that moves none.
+	// an operator a node's seats moved over a log that moves none — or that
+	// they did not, over the one log among several that moved them, which is
+	// why the three are a LOG's rather than the node's oldest.
 	DeferredAge    time.Duration
 	DeferredRecord string
 	DeferredSheds  bool
 
-	// FloorUnknownFor is how long the trim floor has been unreadable on
-	// this node — from the first alarm heartbeat that could not read it to
-	// the latest, never a persistence nobody observed — and
-	// FloorUnknownCause what the latest read said, naming the domain: an
-	// unreachable coordination store and a floor published at a
-	// generation this node has not reached are one refusal with two
-	// remedies.
+	// FloorUnknownFor is how long one log's trim floor has been unreadable
+	// on this node — from the first alarm heartbeat that could not read it
+	// to the latest, never a persistence nobody observed — and
+	// FloorUnknownCause what the latest read said: an unreachable
+	// coordination store and a floor published at a generation this node
+	// has not reached are one refusal with two remedies. Per DOMAIN too:
+	// the refusal is that log's, and one alarm naming the node's
+	// longest-unreadable floor hid every other log re-anchored beside it.
 	FloorUnknownFor   time.Duration
 	FloorUnknownCause string
 
@@ -530,17 +535,21 @@ var table = []rule{
 			"toward its ceiling by a day of records every day.",
 	},
 	{
+		// PER LOG, like the headroom, the ceiling and the blocked trim: the
+		// report evaluates it once for each log this node holds a record on,
+		// because what the grace does is the log's — see
+		// [Reading.DeferredSheds].
 		kind: KindDeferredOld,
 		fires: func(r Reading) (string, bool) {
-			what := "the oldest record this node cannot apply"
+			what := "the oldest record on this log that this node cannot apply"
 			if r.DeferredRecord != "" {
 				what += " (" + r.DeferredRecord + ")"
 			}
-			consequence := fmt.Sprintf("and this node's seats move at %s",
-				round(DeferralGrace))
+			consequence := fmt.Sprintf("past the %s deferral grace, at which "+
+				"this node's seats move to a peer", round(DeferralGrace))
 			if !r.DeferredSheds {
-				consequence = fmt.Sprintf("past the %s deferral grace; that log "+
-					"does not gate seat admission, so this record moves no seats",
+				consequence = fmt.Sprintf("past the %s deferral grace; this log "+
+					"does not gate seat admission, so it moves no seats",
 					round(DeferralGrace))
 			}
 			return fmt.Sprintf("%s has been held for %s, %s", what,
@@ -552,20 +561,24 @@ var table = []rule{
 			"the detail says — its seats have already moved to a peer.",
 	},
 	{
+		// PER LOG, for the same reason: a read of one log refuses on that
+		// log's floor, and a floor published ahead of this node is one
+		// log's re-anchor.
 		kind: KindFloorUnknown,
 		fires: func(r Reading) (string, bool) {
-			detail := fmt.Sprintf("the trim floor has been unreadable for %s",
-				round(r.FloorUnknownFor))
+			detail := fmt.Sprintf("this log's trim floor has been unreadable here "+
+				"for %s", round(r.FloorUnknownFor))
 			if r.FloorUnknownCause != "" {
 				detail += ": " + r.FloorUnknownCause
 			}
 			return detail, r.FloorUnknownFor > FloorCacheStale
 		},
 		remedy: "Read the cause. An unreachable coordination store clears when " +
-			"coordination does; a floor published at a later generation than this " +
-			"node's means the log was re-anchored and this node was not — see " +
-			"re-anchoring in docs/guides/retention.md. Every read on this node is " +
-			"refused until the floor can be read.",
+			"coordination does, and every log on this node says so at once; a floor " +
+			"published at a later generation than this node's means that log was " +
+			"re-anchored and this node was not — see re-anchoring in " +
+			"docs/guides/retention.md. Every read of the log on this node is " +
+			"refused until its floor can be read.",
 	},
 	{
 		kind: KindPrefetchSlow,

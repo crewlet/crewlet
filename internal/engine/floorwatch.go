@@ -2,13 +2,10 @@ package engine
 
 import (
 	"context"
-	"maps"
-	"slices"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // HOW LONG THIS NODE HAS BEEN UNABLE TO READ THE TRIM FLOOR, for
@@ -111,28 +108,31 @@ func (w *floorWatch) observe(ctx context.Context, now time.Time, subjects []floo
 	w.at = now
 }
 
-// fill writes the latest observation into a reading: the domain whose floor
-// has been unreadable longest, and what its latest read said.
+// of is the latest observation of one domain's floor: how long it has been
+// unreadable and what its latest read said, both zero while it is readable.
+//
+// PER DOMAIN, because the refusal is: a read of one log refuses on that log's
+// floor, and a floor published ahead of this node is one log's re-anchor. The
+// form this replaced reduced the watch to the domain unreadable longest, so a
+// node two logs behind a re-anchor named one of them — and an operator who
+// repaired it met the second only after the fix, under an alarm that had never
+// cleared. The report evaluates each domain's answer on its own and names the
+// log; a coordination outage that fails every domain at once raises one per
+// log, each saying so.
 //
 // FIRST SIGHTING TO LATEST OBSERVATION, never to now, for the binding watch's
 // reason: a report assembled between two beats knows only what the last one
 // found, and measuring to now would fire on a screen an alarm the gauge beside
 // it, set at the beat, does not.
-func (w *floorWatch) fill(out *statelog.Reading) {
+func (w *floorWatch) of(domain string) (time.Duration, string) {
 	if w == nil {
-		return
+		return 0, ""
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	// IN NAME ORDER, so a coordination outage that fails every domain at
-	// once names the same one on every beat rather than whichever a map
-	// happened to yield — a detail that changed per beat would read, to
-	// anybody tailing the log, as a different outage each time.
-	for _, domain := range slices.Sorted(maps.Keys(w.first)) {
-		age := w.at.Sub(w.first[domain])
-		if out.FloorUnknownCause == "" || age > out.FloorUnknownFor {
-			out.FloorUnknownFor = age
-			out.FloorUnknownCause = domain + ": " + w.cause[domain]
-		}
+	first, unreadable := w.first[domain]
+	if !unreadable {
+		return 0, ""
 	}
+	return w.at.Sub(first), w.cause[domain]
 }

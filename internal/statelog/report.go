@@ -393,6 +393,26 @@ type DomainInputs struct {
 	// SnapshotSkip is this node's snapshot loop's own reason for taking
 	// none, empty when it is taking them.
 	SnapshotSkip SkipReason
+
+	// DeferredAge, DeferredRecord and DeferredSheds are the oldest record
+	// this node holds on this log and cannot decode, exactly as [Reading]
+	// defines them, and zero while it holds none.
+	//
+	// HERE RATHER THAN ON THE NODE'S READING, because what the grace does
+	// is the log's: a record held past it on a log that gates seat
+	// admission has moved this node's seats and one on a log that gates
+	// none has moved nothing. Folded into one node-wide alarm naming the
+	// oldest, an identity record two hours old was reported as moving no
+	// seats while a tracker record forty minutes old had moved them all.
+	DeferredAge    time.Duration
+	DeferredRecord string
+	DeferredSheds  bool
+
+	// FloorUnknownFor and FloorUnknownCause are how long this node has been
+	// unable to read this log's trim floor and what the latest read said,
+	// as [Reading] defines them — zero while it can.
+	FloorUnknownFor   time.Duration
+	FloorUnknownCause string
 }
 
 // ReportInputs is everything the report is assembled from, already read.
@@ -406,10 +426,12 @@ type ReportInputs struct {
 	At          time.Time
 	BackupOwner string
 
-	// Reading is this node's alarm reading, MINUS the two conditions that
-	// are per domain: log headroom and a blocked trim are evaluated per
-	// domain here, from the domain rows, so a two-domain fleet reports
-	// which domain is full rather than that something is.
+	// Reading is this node's alarm reading, MINUS the conditions that are
+	// per domain: a log's headroom, its ceiling against its window, a
+	// blocked trim, a record held past the deferral grace and an unreadable
+	// floor are evaluated per domain here, from the domain rows and
+	// [DomainInputs], so a two-domain fleet reports which log is full,
+	// blocked, holding or refusing rather than that something is.
 	Reading Reading
 
 	// ReplayWindow is `stream.tracker_retention.min_age`: how much of its
@@ -777,16 +799,24 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 //
 // # Why the per-domain half is evaluated separately
 //
-// [Reading] describes ONE node, and three of its conditions — the log's
-// headroom, a ceiling too small for the log's own replay window, and a blocked
-// trim — are properties of a DOMAIN. Evaluating the node-wide reading once and
+// [Reading] describes ONE node, and five of its conditions — the log's
+// headroom, a ceiling too small for the log's own replay window, a blocked
+// trim, a record held past the deferral grace and a floor this node cannot
+// read — are properties of a DOMAIN. Evaluating the node-wide reading once and
 // each domain's own fields once per domain is what lets a two-domain fleet say
 // WHICH log is filling. Folding them into one reading would report the worst
 // of the two with no name on it, which is the number an operator then has to
-// go and find by hand.
+// go and find by hand — and for the last two it would say the WRONG thing
+// about the others, since what the grace does and which re-anchor a floor
+// needs differ from one log to the next.
+//
+// The domain rows are [ReportInputs.domain]'s, one per [ReportInputs.Domains]
+// entry and in the same order, so a row and the inputs it was built from share
+// an index.
 func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 	out := Evaluate(in.Reading)
-	for _, d := range domains {
+	for i, d := range domains {
+		held := in.Domains[i]
 		perDomain := Reading{
 			HeadroomFraction: d.HeadroomFraction,
 			TrimBlockedBy:    string(d.BlockedBy),
@@ -798,6 +828,14 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			LogBytesPerDay: d.BytesPerDay,
 			LogMaxBytes:    d.MaxBytes,
 			ReplayWindow:   in.ReplayWindow,
+			// WHAT THIS NODE HOLDS AND CANNOT READ on this log, as the
+			// caller measured it from its own applier and its own
+			// observations of the floor.
+			DeferredAge:       held.DeferredAge,
+			DeferredRecord:    held.DeferredRecord,
+			DeferredSheds:     held.DeferredSheds,
+			FloorUnknownFor:   held.FloorUnknownFor,
+			FloorUnknownCause: held.FloorUnknownCause,
 		}
 		if d.BlockedBy != "" && !d.BlockedSince.IsZero() {
 			perDomain.TrimBlockedFor = in.At.Sub(d.BlockedSince)

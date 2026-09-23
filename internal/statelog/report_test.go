@@ -526,6 +526,74 @@ func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
 	}
 }
 
+// A HELD RECORD AND AN UNREADABLE FLOOR ARE EACH LOG'S OWN ALARM, and each
+// says what is true of that log.
+//
+// What the deferral grace does is a log's: past it, a record held on a log that
+// gates seat admission has moved this node's seats and one held on a log that
+// gates none has moved nothing. The form this replaced reduced the node to its
+// OLDEST held record, so a node holding an identity record for two hours and a
+// tracker record for forty minutes raised one alarm saying the identity
+// record moved no seats — while the tracker's had moved them all. A floor is
+// the same: a read of one log refuses on that log's floor, and two logs
+// re-anchored while this node was not are two re-anchors, where the node's
+// longest named one.
+func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
+	t.Parallel()
+	identity := healthyDomain("iam", true)
+	identity.DeferredAge, identity.DeferredSheds = 2*time.Hour, false
+	identity.DeferredRecord = "at CREWLET_IAM@1:88, written at record version 2 against the 1 this build reads"
+	work := healthyDomain("tracker", true)
+	work.DeferredAge, work.DeferredSheds = 40*time.Minute, true
+	work.DeferredRecord = "at CREWLET_TRACKER@1:640, written at record version 3 against the 2 this build reads"
+	// AND ONE LOG'S FLOOR UNREADABLE, the other's fine.
+	work.FloorUnknownFor = 3 * time.Minute
+	work.FloorUnknownCause = "the published floor for tracker is at generation 2 and this node is on 1"
+	pages := healthyDomain("pages", true)
+
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, RegisterReadable: true,
+		ReplayWindow: replayWindow,
+		Domains:      []statelog.DomainInputs{identity, work, pages},
+	})
+	byLog := func(kind statelog.Kind) map[string]string {
+		out := map[string]string{}
+		for _, a := range rep.Alarms {
+			if a.Kind != kind {
+				continue
+			}
+			log, detail, _ := strings.Cut(a.Detail, ": ")
+			out[log] = detail
+		}
+		return out
+	}
+
+	held := byLog(statelog.KindDeferredOld)
+	if len(held) != 2 {
+		t.Fatalf("deferred_old was raised for %v; want each of the two logs "+
+			"holding a record past the grace, on its own", held)
+	}
+	for log, want := range map[string][]string{
+		"tracker": {"CREWLET_TRACKER@1:640", "held for 40m0s",
+			"at which this node's seats move to a peer"},
+		"iam": {"CREWLET_IAM@1:88", "held for 2h0m0s",
+			"this log does not gate seat admission, so it moves no seats"},
+	} {
+		for _, says := range want {
+			if !strings.Contains(held[log], says) {
+				t.Errorf("the %s log's deferred_old reads %q; want it to say %q",
+					log, held[log], says)
+			}
+		}
+	}
+
+	floors := byLog(statelog.KindFloorUnknown)
+	if len(floors) != 1 || !strings.Contains(floors["tracker"], "generation 2") {
+		t.Errorf("floor_unknown was raised for %v; want the tracker's log alone, "+
+			"naming its floor", floors)
+	}
+}
+
 // A BLOCKED DOMAIN WITH NO KNOWN INSTANT STILL CARRIES ONE.
 //
 // The first tick to see a block has nothing to date it from. The zero time

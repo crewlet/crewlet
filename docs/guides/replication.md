@@ -313,7 +313,11 @@ written at against the one this build reads. Where that log gates seat
 admission (the tracker's, the knowledge base's and the chart's do; the identity
 estate's and the vectors' do not) the node's seats move to a peer at the same
 moment, because both are measured from one instant — the position heartbeat's
-first sighting of the record — and the alarm says which of the two it is.
+first sighting of the record — and the alarm says which of the two it is. It
+is raised **once for each log** holding a record past the grace, so an upgrade
+that moved two logs' record versions raises two, each saying what its own
+grace did: one alarm naming the node's oldest record would have said the
+identity estate's moved no seats while the tracker's had moved them all.
 
 So a rolling upgrade should finish inside that window. An upgrade that stalls
 half-done leaves the old nodes holding records they cannot apply and refusing

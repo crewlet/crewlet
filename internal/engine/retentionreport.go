@@ -129,12 +129,50 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		in.Tombstones = append(in.Tombstones,
 			r.tombstones(ctx, running, d.Generation)...)
 		d.SnapshotSkip = r.skipFor(in.Register, name)
+		r.deferral(&d, running, now)
+		// THE HEARTBEAT'S OBSERVATION OF THIS LOG'S FLOOR, read back rather
+		// than taken, because its age is an interval between observations —
+		// one taken per poll would make it whatever the poll rate is.
+		d.FloorUnknownFor, d.FloorUnknownCause = r.floors.of(name)
 		in.Domains = append(in.Domains, d)
 	}
 
 	in.Reading = r.reading(ctx, now, newest, haveBackup)
 	in.Maintenance = r.openMaintenance(ctx)
 	return statelog.NewReport(in)
+}
+
+// deferral fills one log's held record: the oldest this node's applier retains
+// on it and cannot decode, how long it has been held, and whether holding it
+// past the grace moves this node's seats.
+//
+// THE MEASURED AGE, from the two facts the shed itself reads — the applier
+// holding a record it cannot decode NOW, and the position heartbeat's first
+// sighting of it — through the one arithmetic both share
+// ([statelog.DeferredSince.Age]). It stood the grace in for the age once, so a
+// rule firing past the grace compared the grace with itself and could never
+// fire.
+//
+// NOTHING HERE READS COORDINATION: both facts are this process's own memory,
+// so a coordination blip that fails a health read — or the floor, or the
+// register — neither clears a firing alarm nor hides a new one.
+//
+// PER LOG, which is the one arrangement in which the consequence the alarm
+// states is true: the question [stateLog.Healthy] asks before it lets a
+// deferral shed seats is the log's own [statelog.Domain.ReadinessInput], so two
+// logs holding records at once are two different answers.
+func (r *retention) deferral(d *statelog.DomainInputs, running *runningDomain,
+	now time.Time) {
+
+	record, holding := running.runner.Deferred()
+	if !holding {
+		return
+	}
+	d.DeferredAge = running.progress.deferredSinceValue().Age(now)
+	d.DeferredRecord = fmt.Sprintf("at %s, written at record version %d against "+
+		"the %d this build reads", record.Position, record.Version,
+		running.domain.RecordVersion())
+	d.DeferredSheds = running.domain.ReadinessInput()
 }
 
 // openMaintenance is the capacity operation currently holding the fleet, or
@@ -263,8 +301,10 @@ func (r *retention) replica() statelog.ReplicaReport {
 }
 
 // reading is this node's alarm inputs, MINUS the per-domain ones — the log's
-// headroom, its ceiling against its window, a blocked trim and what it keeps —
-// which the report evaluates from the domain rows.
+// headroom, its ceiling against its window, a blocked trim and what it keeps,
+// a record held past the deferral grace and an unreadable floor — which the
+// report evaluates from the domain rows and [retention.Report]'s own
+// per-domain inputs.
 //
 // A FIELD THIS NODE CANNOT MEASURE IS LEFT AT ITS ZERO VALUE, which every
 // condition reads as "nothing to report" rather than as "at the floor" — see
@@ -290,29 +330,6 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		if running == nil {
 			continue
 		}
-		// THE DEFERRAL'S MEASURED AGE, from the two facts the shed itself
-		// reads — the applier holding a record it cannot decode NOW, and
-		// the position heartbeat's first sighting of it — through the one
-		// arithmetic both share ([statelog.DeferredSince.Age]). It stood
-		// the grace in for the age once, so a rule firing past the grace
-		// compared the grace with itself and could never fire.
-		//
-		// BEFORE THE HEALTH READ, and not skipped with it: both facts are
-		// this process's own memory, and a coordination blip that fails
-		// the health read says nothing about a deferral — skipping it there
-		// would clear a firing alarm for the length of the blip.
-		if deferral, holding := running.runner.Deferred(); holding {
-			if age := running.progress.deferredSinceValue().Age(now); age > out.DeferredAge {
-				out.DeferredAge = age
-				out.DeferredRecord = fmt.Sprintf("the %s log at %s, written at record "+
-					"version %d against the %d this build reads", name,
-					deferral.Position, deferral.Version, running.domain.RecordVersion())
-				// THE SAME QUESTION [stateLog.Healthy] ASKS before it
-				// lets a deferral shed seats, so the alarm says a
-				// node's seats move exactly where they do.
-				out.DeferredSheds = running.domain.ReadinessInput()
-			}
-		}
 		health, err := r.state.health(ctx, running)
 		if err != nil {
 			continue
@@ -323,12 +340,12 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		out.ApplyLag = max(out.ApplyLag, applyLagOf(health, running))
 	}
 	out.SemanticCoverage = r.semanticCoverage()
-	// THE HEARTBEAT'S OBSERVATIONS, read back rather than taken, for the same
-	// reason as the rates — and because a binding's age and an unreadable
-	// floor's are intervals between observations, which one per poll would
-	// make whatever the poll rate is.
+	// THE HEARTBEAT'S OBSERVATION, read back rather than taken, for the same
+	// reason as the rates — and because a binding's age is an interval
+	// between observations, which one per poll would make whatever the poll
+	// rate is. An unreadable floor's age is one too, and is read back per
+	// log in [retention.Report].
 	r.bindings.fill(&out)
-	r.floors.fill(&out)
 	r.space(&out)
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)

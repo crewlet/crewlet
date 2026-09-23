@@ -63,15 +63,15 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,
 			statelog.Reading{DeferredAge: 31 * time.Minute, DeferredSheds: true,
-				DeferredRecord: "the tracker log at CREWLET_TRACKER_LOG@1:42"},
-			"(the tracker log at CREWLET_TRACKER_LOG@1:42) has been held for 31m0s, " +
-				"and this node's seats move at 30m0s",
+				DeferredRecord: "at CREWLET_TRACKER_LOG@1:42"},
+			"(at CREWLET_TRACKER_LOG@1:42) has been held for 31m0s, past the 30m0s " +
+				"deferral grace, at which this node's seats move to a peer",
 		},
 		"a floor nobody can read": {
 			statelog.KindFloorUnknown,
 			statelog.Reading{FloorUnknownFor: 2 * time.Minute,
-				FloorUnknownCause: "tracker: coordination unreachable"},
-			"unreadable for 2m0s: tracker: coordination unreachable",
+				FloorUnknownCause: "coordination unreachable"},
+			"unreadable here for 2m0s: coordination unreachable",
 		},
 		"a slow prefetch": {
 			statelog.KindPrefetchSlow,
