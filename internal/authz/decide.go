@@ -114,8 +114,8 @@ const (
 	// colleague may file work in a project and may not take it out again.
 	ClassDestructive Class = "destructive"
 
-	// ClassAuthored — editing and removing a page comment. Whoever wrote
-	// it, or the admin path.
+	// ClassAuthored — editing and removing a comment, on a page or on a
+	// work item. Whoever wrote it, or the admin path.
 	ClassAuthored Class = "authored"
 
 	// ClassOperator — the company's own controls: configuration, secrets,

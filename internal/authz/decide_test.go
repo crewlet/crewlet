@@ -353,6 +353,27 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			authz.ActionPageCommentEdit,
 			authz.Object{Kind: authz.KindPage, Author: "jane.doe"},
 			false, authz.ReasonNotAuthor},
+		// A WORK ITEM'S REMARK IS DECIDED BY THE SAME CLASS, and the seat
+		// a person is bound to is their authorship there: a comment a
+		// bound person wrote is recorded under their SEAT handle.
+		{"a bound person edits the remark their seat wrote",
+			personLeading("sre"), authz.ActionWorkCommentEdit,
+			authz.Object{Kind: authz.KindTask, Author: "sre"},
+			true, authz.ReasonAuthor},
+		{"and a colleague does not", personLeading("cto"),
+			authz.ActionWorkCommentEdit,
+			authz.Object{Kind: authz.KindTask, Author: "sre"},
+			false, authz.ReasonNotAuthor},
+
+		// --- a rank move ------------------------------------------------- //
+		// THE CAPABILITY THAT FILES WORK ARRANGES IT, and nothing less: a
+		// board's order is nobody's object, so the relation is none.
+		{"work:write moves a card", person("jane.doe", iam.GrantWorkWrite),
+			authz.ActionWorkRank, authz.Object{Kind: authz.KindTask},
+			true, authz.ReasonGrant},
+		{"state:read alone does not", person("jane.doe", iam.GrantStateRead),
+			authz.ActionWorkRank, authz.Object{Kind: authz.KindTask},
+			false, authz.ReasonNoGrant},
 
 		// --- operator ---------------------------------------------------- //
 		{"config:write patches the company",

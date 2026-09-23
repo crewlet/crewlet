@@ -259,6 +259,61 @@ func TestAnUndecidableRequestIsNotAForbiddenOne(t *testing.T) {
 	}
 }
 
+// A SURFACE'S OWN REFUSAL RENDERS WHAT THE ROUTER DECIDED, and nothing else.
+//
+// The seam exists so a surface whose verbs are also tools can answer in the
+// tools' own sentence; what it must never become is a second decision. So the
+// renderer sees every refusal and every undecidable request, and an ADMITTED
+// request never reaches it — a renderer that could be handed an allowed
+// request would be one that could turn it into a refusal.
+func TestARefusalRendererRendersOnlyWhatTheRouterRefused(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		guard    authz.Guard
+		rendered bool
+	}{
+		{"allowed", allow, false},
+		{"refused", func(*http.Request, authz.Policy) authz.Decision {
+			return authz.Decision{Reason: authz.ReasonNoGrant}
+		}, true},
+		{"undecidable", func(*http.Request, authz.Policy) authz.Decision {
+			return authz.Decision{Err: authz.ErrNoChart}
+		}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var seen *authz.Decision
+			mux := http.NewServeMux()
+			router := authz.NewRouter(mux, c.guard).Refusing(
+				func(w http.ResponseWriter, _ *http.Request, p authz.Policy,
+					d authz.Decision) {
+					seen = &d
+					if p.Action != authz.ActionWorkList {
+						t.Errorf("the renderer was handed %q, not the route's own "+
+							"policy", p.Action)
+					}
+					w.WriteHeader(http.StatusTeapot)
+				})
+			if err := router.Handle("GET /work/items",
+				authz.Policy{Action: authz.ActionWorkList}, ok200()); err != nil {
+				t.Fatalf("mount: %v", err)
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodGet, "http://x/work/items", nil))
+			switch {
+			case c.rendered && (seen == nil || rec.Code != http.StatusTeapot):
+				t.Errorf("a refusal answered %d without the surface's renderer",
+					rec.Code)
+			case !c.rendered && (seen != nil || rec.Code != http.StatusOK):
+				t.Errorf("an admitted request reached the renderer and answered %d",
+					rec.Code)
+			}
+		})
+	}
+}
+
 // --- fixtures -------------------------------------------------------- //
 
 // allow is a guard that permits everything, for the cases that are about

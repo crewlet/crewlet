@@ -39,6 +39,16 @@ type Policy struct {
 // package holds, and both of which a test wants to write down.
 type Guard func(r *http.Request, p Policy) Decision
 
+// Refusal renders a request the guard did not admit: refused, or undecidable.
+//
+// A SEAM because the WORDING of a refusal belongs to the surface that owns the
+// verb, not to the router that happened to stop it. A surface whose verbs are
+// also tools answers in the tools' own sentence, so a person reading a 403 and
+// a model reading a refused call read the same words — and a router that wrote
+// its own sentence would be the one place the two diverged. The decision is
+// still the router's alone: this is handed a refusal and can only render it.
+type Refusal func(w http.ResponseWriter, r *http.Request, p Policy, d Decision)
+
 // Mux is the part of *http.ServeMux registration uses, declared here so a
 // test can pass a recorder and walk what was mounted.
 type Mux interface {
@@ -53,8 +63,9 @@ type Mux interface {
 // way for the two to disagree. A pattern reached without a policy cannot
 // exist, because the only way to mount one is through here.
 type Router struct {
-	mux   Mux
-	guard Guard
+	mux    Mux
+	guard  Guard
+	refuse Refusal
 
 	mu       sync.Mutex
 	policies map[string]Policy
@@ -62,7 +73,36 @@ type Router struct {
 
 // NewRouter wraps a mux so every route mounted through it is guarded.
 func NewRouter(mux Mux, guard Guard) *Router {
-	return &Router{mux: mux, guard: guard, policies: map[string]Policy{}}
+	return &Router{mux: mux, guard: guard, refuse: plainRefusal,
+		policies: map[string]Policy{}}
+}
+
+// Refusing replaces how a refusal is RENDERED, and nothing about whether one
+// is made. Set before the first mount; see [Refusal].
+//
+// A NIL REFUSAL KEEPS THE PLAIN ONE rather than writing nothing, because a
+// wrapper that stopped a request and wrote no status would answer 200 with an
+// empty body — a refusal that reads, to every client, as the write landing.
+func (t *Router) Refusing(render Refusal) *Router {
+	if render != nil {
+		t.refuse = render
+	}
+	return t
+}
+
+// plainRefusal is the rendering every surface that states no wording of its
+// own gets.
+func plainRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decision) {
+	if d.Unknown() {
+		// UNKNOWN IS NOT A REFUSAL. This node could not decide — it is
+		// behind, or it holds no company yet — and 403 would send
+		// somebody to ask for an authority they already hold. See the
+		// package doc.
+		http.Error(w, "this node cannot decide authority for this "+
+			"request yet; try again", http.StatusServiceUnavailable)
+		return
+	}
+	http.Error(w, "forbidden: "+string(d.Reason), http.StatusForbidden)
 }
 
 // Handle mounts one guarded route.
@@ -117,19 +157,11 @@ func (t *Router) PolicyFor(pattern string) (Policy, bool) {
 func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		d := t.guard(r, p)
-		switch {
-		case d.Unknown():
-			// UNKNOWN IS NOT A REFUSAL. This node could not decide —
-			// it is behind, or it holds no company yet — and 403
-			// would send somebody to ask for an authority they
-			// already hold. See the package doc.
-			http.Error(w, "this node cannot decide authority for this "+
-				"request yet; try again", http.StatusServiceUnavailable)
-		case !d.Allowed:
-			http.Error(w, "forbidden: "+string(d.Reason), http.StatusForbidden)
-		default:
-			h.ServeHTTP(w, r)
+		if d.Unknown() || !d.Allowed {
+			t.refuse(w, r, p, d)
+			return
 		}
+		h.ServeHTTP(w, r)
 	})
 }
 

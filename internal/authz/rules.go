@@ -78,6 +78,14 @@ const (
 	ActionProjectPolicy  Action = "work.project.policy"
 	ActionProjectArchive Action = "work.project.archive"
 
+	// --- a gesture no tool makes ------------------------------------ //
+	//
+	// DOTTED for the same reason, and it is the HTTP write surface's
+	// alone: a rank move places one card between two neighbours on a
+	// board a PERSON is looking at, and no seat reorders a board it
+	// cannot see.
+	ActionWorkRank Action = "work.rank"
+
 	// --- a container's own policy ----------------------------------- //
 	ActionProjectWrite   Action = "write_project"
 	ActionCatalogueWrite Action = "write_work_catalogue"
@@ -97,6 +105,7 @@ const (
 	// --- what somebody wrote ---------------------------------------- //
 	ActionPageCommentEdit   Action = "pages.comment.edit"
 	ActionPageCommentRemove Action = "pages.comment.remove"
+	ActionWorkCommentEdit   Action = "work.comment.edit"
 
 	// --- the org chart ---------------------------------------------- //
 	//
@@ -209,6 +218,11 @@ var rules = map[Action]rule{
 	ActionWorkUpdate:  {class: ClassColleagueWrite},
 	ActionWorkComment: {class: ClassColleagueWrite},
 	ActionWorkMerge:   {class: ClassColleagueWrite},
+	// A RANK MOVE IS A COLLEAGUE WRITE ON THE TASK, although the record
+	// arbitrates on the project's ORDER rather than on the task: the order
+	// is an object nobody owns, so the only relation to ask about is none,
+	// and the capability that files work is the one that arranges it.
+	ActionWorkRank:    {class: ClassColleagueWrite},
 	ActionPageCreate:  {class: ClassColleagueWrite},
 	ActionPageSave:    {class: ClassColleagueWrite},
 	ActionPageComment: {class: ClassColleagueWrite},
@@ -275,6 +289,13 @@ var rules = map[Action]rule{
 
 	ActionPageCommentEdit:   {class: ClassAuthored},
 	ActionPageCommentRemove: {class: ClassAuthored},
+	// A WORK ITEM'S REMARK IS AUTHORED THE SAME WAY a page's is, and the
+	// class admits the deployment grant beside the author for the same
+	// reason — but the WRITER refuses anybody but the author, exactly as
+	// internal/pages does, because an edit puts words in somebody's mouth
+	// where a removal only takes them down. The class answers "may you
+	// touch this remark"; the writer answers "may you rewrite it".
+	ActionWorkCommentEdit: {class: ClassAuthored},
 
 	ActionChartRead: {class: ClassRead},
 	// THE RUNTIME HALF IS THE COMPANY DOCUMENT by another name — the same
