@@ -11,34 +11,43 @@ import (
 
 // fakePurgeNode answers the purge route, recording what it was asked.
 type fakePurgeNode struct {
-	server  *httptest.Server
-	query   url.Values
-	task    string
+	server *httptest.Server
+	query  url.Values
+	item   string
+	key    string
+
+	// status and outcome are what the next purge answers.
+	status  int
 	outcome string
 }
 
 func newFakePurgeNode(t *testing.T) *fakePurgeNode {
 	t.Helper()
-	n := &fakePurgeNode{outcome: "applied"}
+	n := &fakePurgeNode{status: http.StatusOK, outcome: "applied"}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /work/{id}/purge", func(w http.ResponseWriter, r *http.Request) {
-		n.task, n.query = r.PathValue("id"), r.URL.Query()
+	mux.HandleFunc("POST /work/items/{key}/purge", func(w http.ResponseWriter, r *http.Request) {
+		n.item, n.query = r.PathValue("key"), r.URL.Query()
+		n.key = r.Header.Get(idempotencyHeader)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"task": r.PathValue("id"), "key": r.URL.Query().Get("confirm"),
-			"project": r.URL.Query().Get("project"), "outcome": n.outcome,
-			"position": map[string]any{
-				"stream": "CREWLET_TRACKER_LOG", "seq": 918280009,
-			},
-			"op_id": "op-abc",
-		})
+		w.WriteHeader(n.status)
+		body := map[string]any{
+			"task": "t-1", "key": r.URL.Query().Get("confirm"),
+			"project": "ENG", "outcome": n.outcome,
+			"position": "CREWLET_TRACKER_LOG:1:918280009",
+			"op_id":    "op-abc",
+		}
+		if n.status == http.StatusServiceUnavailable {
+			body = map[string]any{"error": "unavailable", "op_id": "op-abc",
+				"detail": "this node cannot establish what happened to this change"}
+		}
+		_ = json.NewEncoder(w).Encode(body)
 	})
 	n.server = httptest.NewServer(mux)
 	t.Cleanup(n.server.Close)
 	return n
 }
 
-// THE ONE OPERATION NOTHING UNDOES HAD NO CALLER AT ALL.
+// THE ONE OPERATION NOTHING UNDOES REACHES THE WRITE SURFACE'S OWN ROUTE.
 //
 // `PurgeTask` existed, its record applied, its marker stopped a redelivery
 // resurrecting anything — and no CLI verb, no route and no tool reached it. A
@@ -48,20 +57,26 @@ func newFakePurgeNode(t *testing.T) *fakePurgeNode {
 func TestWorkPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
 	node := newFakePurgeNode(t)
 	stdout, stderr, err := cli(t, "work", "purge", "t-1",
-		"-project", "ENG", "-reason", "an erasure request", "-confirm", "ENG-42",
+		"-reason", "an erasure request", "-confirm", "ENG-42",
 		bootstrapForURL(t, node.server.URL))
 	if err != nil {
 		t.Fatalf("work purge: %v\n%s", err, stderr)
 	}
-	if node.task != "t-1" {
-		t.Errorf("the route was asked to purge %q", node.task)
+	if node.item != "t-1" {
+		t.Errorf("the route was asked to purge %q", node.item)
 	}
 	for key, want := range map[string]string{
-		"confirm": "ENG-42", "project": "ENG", "reason": "an erasure request",
+		"confirm": "ENG-42", "reason": "an erasure request",
 	} {
 		if got := node.query.Get(key); got != want {
 			t.Errorf("?%s= is %q, want %q", key, got, want)
 		}
+	}
+	// THE PROJECT IS THE NODE'S TO KNOW: the stored row says which it is,
+	// and a parameter the caller could set wrong filed a purge under a
+	// project it was not about.
+	if node.query.Has("project") {
+		t.Errorf("the command still names a project: %v", node.query)
 	}
 	// WHAT A PURGE DOES NOT REACH, printed where the gesture is run. An
 	// operator acting on an erasure request needs to know that an offline
@@ -74,19 +89,19 @@ func TestWorkPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
 
 // A CONFIRMATION THAT REPEATS THE ID CONFIRMS NOTHING, because the id is on
 // the command line already. The KEY has to be looked up, which is the point.
-func TestAPurgeWithoutTheTasksKeyIsRefused(t *testing.T) {
+func TestAPurgeWithoutTheItemsKeyIsRefused(t *testing.T) {
 	node := newFakePurgeNode(t)
 	for _, args := range [][]string{
-		{"work", "purge", "t-1", "-project", "ENG", "-reason", "why"},
-		{"work", "purge", "-project", "ENG", "-reason", "why", "-confirm", "ENG-42"},
+		{"work", "purge", "t-1", "-reason", "why"},
+		{"work", "purge", "-reason", "why", "-confirm", "ENG-42"},
 	} {
 		if _, _, err := cli(t, append(args,
 			bootstrapForURL(t, node.server.URL))...); err == nil {
 			t.Errorf("%v ran without a confirmation", args)
 		}
 	}
-	if node.task != "" {
-		t.Errorf("a refused purge still reached the node as %q", node.task)
+	if node.item != "" {
+		t.Errorf("a refused purge still reached the node as %q", node.item)
 	}
 }
 
@@ -95,54 +110,54 @@ func TestAPurgeWithoutTheTasksKeyIsRefused(t *testing.T) {
 // be at that key for whoever reads it a year later.
 func TestAPurgeWithNoReasonIsRefusedBeforeItIsSent(t *testing.T) {
 	node := newFakePurgeNode(t)
-	if _, _, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
+	if _, _, err := cli(t, "work", "purge", "t-1",
 		"-confirm", "ENG-42", bootstrapForURL(t, node.server.URL)); err == nil {
 		t.Fatal("a purge with no reason ran")
 	}
-	if node.task != "" {
-		t.Errorf("a purge with no reason still reached the node as %q", node.task)
+	if node.item != "" {
+		t.Errorf("a purge with no reason still reached the node as %q", node.item)
 	}
 }
 
-// `unknown` IS THE ONE OUTCOME TO RETRY, and a retry with a fresh operation id
-// would append a SECOND purge of a task the first one may already have
-// destroyed — so the id is printed and the flag that reuses it exists.
+// AN UNKNOWN OUTCOME IS THE ONE TO RETRY, and a retry with a fresh operation
+// id would append a SECOND purge of an item the first one may already have
+// destroyed — so the id is printed, and the flag that reuses it carries it to
+// the node as the operation key.
 func TestAnUnknownPurgeNamesTheIdToRetryWith(t *testing.T) {
 	node := newFakePurgeNode(t)
-	node.outcome = "unknown"
-	stdout, _, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
-		"-reason", "why", "-confirm", "ENG-42",
-		bootstrapForURL(t, node.server.URL))
-	if err != nil {
-		t.Fatalf("work purge: %v", err)
-	}
-	if !strings.Contains(stdout, "op-abc") {
-		t.Errorf("an unknown outcome never named the operation id:\n%s", stdout)
+	node.status = http.StatusServiceUnavailable
+	_, _, err := cli(t, "work", "purge", "t-1", "-reason", "why",
+		"-confirm", "ENG-42", bootstrapForURL(t, node.server.URL))
+	if err == nil || !strings.Contains(err.Error(), "-op-id op-abc") {
+		t.Fatalf("an unknown outcome did not name the id to retry with: %v", err)
 	}
 
 	// AND THE FLAG REACHES THE ROUTE, or the advice above is a sentence
 	// pointing at a flag that does nothing.
-	if _, _, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
-		"-reason", "why", "-confirm", "ENG-42", "-op-id", "op-abc",
+	node.status = http.StatusOK
+	if _, _, err := cli(t, "work", "purge", "t-1", "-reason", "why",
+		"-confirm", "ENG-42", "-op-id", "op-abc",
 		bootstrapForURL(t, node.server.URL)); err != nil {
 		t.Fatalf("retrying with the printed id failed: %v", err)
 	}
-	if got := node.query.Get("op_id"); got != "op-abc" {
-		t.Errorf("?op_id= is %q — a retry with a fresh id appends a second "+
-			"purge of a task the first one may already have destroyed", got)
+	if node.key != "op-abc" {
+		t.Errorf("the retry carried the key %q — a retry with a fresh one "+
+			"appends a second purge of an item the first may already have "+
+			"destroyed", node.key)
 	}
 }
 
 // `pending` IS NOT A FAILURE AND MUST NOT BE RETRIED: the record is on the log
-// and every node applies it as it reaches it.
+// and every node applies it as it reaches it. The node says so with a 202,
+// which the command used to read as an error — the ordinary next move after
+// which is running it again.
 func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {
 	node := newFakePurgeNode(t)
-	node.outcome = "pending"
-	stdout, _, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
-		"-reason", "why", "-confirm", "ENG-42",
-		bootstrapForURL(t, node.server.URL))
+	node.status, node.outcome = http.StatusAccepted, "pending"
+	stdout, _, err := cli(t, "work", "purge", "t-1", "-reason", "why",
+		"-confirm", "ENG-42", bootstrapForURL(t, node.server.URL))
 	if err != nil {
-		t.Fatalf("work purge: %v", err)
+		t.Fatalf("a pending purge was reported as a failure: %v", err)
 	}
 	if !strings.Contains(stdout, "Do not run this again") {
 		t.Errorf("a pending purge read as something to retry:\n%s", stdout)

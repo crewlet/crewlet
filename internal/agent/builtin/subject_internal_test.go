@@ -136,5 +136,6 @@ func toolsWithArguments() []tools.Callable {
 		&commentOnPage{}, &writeProject{},
 		&getPerson{}, &workInbox{}, &setPriorities{}, &myWork{},
 		&markInbox{}, &setPins{}, &saveWorkView{},
+		&removeWorkItem{}, &restoreWorkItem{},
 	}
 }

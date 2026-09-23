@@ -317,9 +317,10 @@ func seatHeld(e *engine.Engine) chartapi.Held {
 // reason: a node that runs no identity domain holds a legitimately empty copy
 // of that estate, and a surface over it would serve an empty directory as
 // though the company had nobody in it. The routes are ABSENT rather than
-// answering an error.
+// answering an error — which takes returning an untyped nil; see
+// [surfaceMounter] for what a typed one did.
 func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
-	auth *authapi.Service) (*iamapi.Service, error) {
+	auth *authapi.Service) (surfaceMounter, error) {
 
 	reader, writer := e.IAM(), e.IAMWriter()
 	if reader == nil || writer == nil {

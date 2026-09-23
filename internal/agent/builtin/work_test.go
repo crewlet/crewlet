@@ -1710,3 +1710,69 @@ func TestASceduleEditReachesTheNotification(t *testing.T) {
 		t.Errorf("estimate delta = %+v, want 30m → 90m", got)
 	}
 }
+
+// A CREATE ASKED TWICE UNDER ONE SEED FILES ONE ITEM.
+//
+// The operation a create is published under names the new item's id, so an
+// id minted fresh per call made every retry a fresh OPERATION: a redelivered
+// turn filed its item twice, and so did an HTTP create retried under its
+// Idempotency-Key after an `unknown`. The ledger that exists to recognise the
+// second arrival never saw one.
+//
+// The controls are the two things one seed must still tell apart: a
+// different item asked for in the same run, and a call with no seed at all.
+func TestACreateRetriedUnderOneSeedFilesOnce(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	create := func(title string) {
+		t.Helper()
+		if got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+			"title": title, "project": "ENG",
+		}); got.Failed {
+			t.Fatalf("create %q: %s", title, got.Output)
+		}
+	}
+	create("rotate the signing key")
+	create("rotate the signing key")
+	create("audit the access log")
+	if len(trk.created) != 3 {
+		t.Fatalf("filed %d creates, want three calls recorded", len(trk.created))
+	}
+	if trk.created[0].ID != trk.created[1].ID || trk.opIDs[0] != trk.opIDs[1] {
+		t.Errorf("one item asked for twice under one seed was two operations: "+
+			"%s/%s and %s/%s", trk.created[0].ID, trk.opIDs[0],
+			trk.created[1].ID, trk.opIDs[1])
+	}
+	if trk.created[2].ID == trk.created[0].ID {
+		t.Error("two different items in one run were given one id")
+	}
+
+	// AND WITH NO SEED there is nothing to be idempotent against, so two
+	// calls are two items — an operator filing the same title twice meant
+	// it twice.
+	plain := newFakeTracker()
+	operator := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+		return builtin.Actor{Handle: "token:ops", Kind: tracker.AuthorOperator}, nil
+	}
+	tools := builtin.OperatorTools(builtin.OperatorDeps{
+		Work:      builtin.WorkDeps{Reader: plain, Writer: plain.as, Actor: operator},
+		Authorize: builtin.Decide(chartLeads),
+	})
+	for _, tool := range tools {
+		if tool.Name() != builtin.CreateWorkItemTool {
+			continue
+		}
+		for range 2 {
+			got, err := tool.Call(everyGrant(), map[string]any{
+				"title": "rotate the signing key", "project": "ENG",
+			})
+			if err != nil || got.Failed {
+				t.Fatalf("operator create: %v %s", err, got.Output)
+			}
+		}
+	}
+	if len(plain.created) != 2 || plain.created[0].ID == plain.created[1].ID {
+		t.Errorf("two unseeded creates were given one id: %+v", plain.created)
+	}
+}

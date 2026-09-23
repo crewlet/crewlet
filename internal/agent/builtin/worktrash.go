@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -101,9 +102,16 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return failedBy(err, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(tracker.RemoveWorkItemTool, err)), nil
+		return readFailed(tracker.RemoveWorkItemTool, err), nil
+	}
+	// THE PROJECT IT IS FILED UNDER DECIDES, read off the row — see the
+	// `fromRow` entries in authority.go for why the gate could not ask.
+	if refused := t.deps.mayWrite(ctx, authz.ActionWorkRemove, authz.Object{
+		Kind: authz.KindTask, Container: before.Task.Project,
+	}); refused != nil {
+		return *refused, nil
 	}
 
 	after := before.Task
@@ -120,7 +128,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: tracker.ChangeRemoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.RemoveWorkItemTool, err)), nil
+		return writeFailed(tracker.RemoveWorkItemTool, err), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(map[string]any{
@@ -184,9 +192,14 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return failedBy(err, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(tracker.RestoreWorkItemTool, err)), nil
+		return readFailed(tracker.RestoreWorkItemTool, err), nil
+	}
+	if refused := t.deps.mayWrite(ctx, authz.ActionWorkRestore, authz.Object{
+		Kind: authz.KindTask, Container: before.Task.Project,
+	}); refused != nil {
+		return *refused, nil
 	}
 	if before.Task.Removed == nil {
 		return failed(fmt.Sprintf("%s is not in the trash, so there is "+
@@ -202,7 +215,7 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: tracker.ChangeRestored, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(tracker.RestoreWorkItemTool, err)), nil
+		return writeFailed(tracker.RestoreWorkItemTool, err), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	return jsonResult(map[string]any{

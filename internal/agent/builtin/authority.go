@@ -69,6 +69,16 @@ type Authorizer func(ctx context.Context, action authz.Action,
 // capability they already hold.
 var ErrRefused = errors.New("builtin: this party may not do that")
 
+// ErrUndecidable reports a call this node could not decide: the caller could
+// not be established, or the chart the rule reads could not be.
+//
+// A SENTINEL rather than "any error that is not [ErrRefused]", because the
+// surfaces that answer in status codes must tell three apart — refused,
+// undecidable, and a wiring that decided nothing ([ErrNoAuthorizer]) — and an
+// arm reading "everything else" would put the third in the second's 503,
+// telling a caller to retry a build that will never answer.
+var ErrUndecidable = errors.New("builtin: this node could not decide")
+
 // ErrNoAuthorizer reports deps nobody wired a decision into.
 //
 // ITS OWN SENTINEL so the refusal a caller sees names the WIRING rather than
@@ -90,21 +100,41 @@ func Decide(chart authz.Chart) Authorizer {
 		principal, how := iam.From(ctx)
 		switch how {
 		case iam.Unknown:
-			return fmt.Errorf("this node could not establish who is calling "+
-				"%s: %w", action, iam.Reason(ctx))
+			return fmt.Errorf("%w who is calling %s: %w", ErrUndecidable,
+				action, iam.Reason(ctx))
 		case iam.Anonymous:
-			return fmt.Errorf("%w: %s needs a credential and none was "+
-				"presented", ErrRefused, action)
+			return fmt.Errorf("%w: %s needs one and none was presented",
+				ErrUnauthenticated, action)
 		}
-		d := authz.Decide(ctx, principal, action, object, chart)
-		switch {
-		case d.Unknown():
-			return fmt.Errorf("this node could not decide %s: %w", action, d.Err)
-		case !d.Allowed:
-			return fmt.Errorf("%w: %s refused (%s)", ErrRefused, action, d.Reason)
-		}
-		return nil
+		return DecisionError(action,
+			authz.Decide(ctx, principal, action, object, chart))
 	}
+}
+
+// ErrUnauthenticated reports a call nobody presented a credential for.
+//
+// A REFUSAL — it wraps [ErrRefused] — and its own sentinel beside it, because
+// the HTTP surface answers it 401 where every other refusal is 403: "present
+// a credential" and "you may not" send a person to opposite places.
+var ErrUnauthenticated = fmt.Errorf("%w: nobody presented a credential", ErrRefused)
+
+// DecisionError is one authority decision as the error every surface reports
+// it with: nil for an allow, [ErrUndecidable] for a decision the node could
+// not take, [ErrRefused] for a refusal.
+//
+// EXPORTED so the one surface that decides before a tool runs — the HTTP
+// write surface, refusing at the route — words its refusal from the SAME
+// error the tool's own gate would have returned, through [Refusal]. Composed
+// twice, the two sentences would agree only for as long as nobody edited
+// either.
+func DecisionError(action authz.Action, d authz.Decision) error {
+	switch {
+	case d.Unknown():
+		return fmt.Errorf("%w %s: %w", ErrUndecidable, action, d.Err)
+	case !d.Allowed:
+		return fmt.Errorf("%w: %s refused (%s)", ErrRefused, action, d.Reason)
+	}
+	return nil
 }
 
 // subjectOf is what each tool is ABOUT, per tool, from its own arguments.
@@ -167,6 +197,19 @@ var subjectOf = map[string]subject{
 	// (`project:ENG`, `unit:eng`, `person:ana`, `workspace`), which is
 	// why this row states a parser rather than a kind.
 	"save_work_view": {kind: authz.KindView, owner: "owner", container: "container"},
+
+	// THE TRASH IS DECIDED BY THE TASK'S OWN PROJECT, which is a stored row
+	// and never an argument: the tools take a key or an id, and a key's
+	// prefix names the project the item was FILED under, which a move
+	// leaves behind as an alias. So the gate cannot form the object, and
+	// these tools ask the same action themselves once they have read it.
+	//
+	// Decided here with the empty object they had, every caller but the
+	// holder of the admin grant was refused as naming no project — a
+	// project's own lead could not take an item out of their own board,
+	// which is the one thing [authz.ClassDestructive] exists to let them do.
+	"remove_work_item":  {kind: authz.KindTask, fromRow: true},
+	"restore_work_item": {kind: authz.KindTask, fromRow: true},
 }
 
 // subject is what one tool is about, as the names of its own arguments.
@@ -181,6 +224,14 @@ type subject struct {
 	// container is the argument naming the project, unit or container
 	// the call is inside.
 	container string
+
+	// fromRow marks a verb whose object is a STORED ROW: the gate does not
+	// decide it, and the tool asks the same action through
+	// [WorkDeps.mayWrite] once it has read that row. A tool marked so and
+	// asking nothing would be ungated — which is why
+	// [TestARowDecidedToolAsksAfterItReads] calls each one as a caller the
+	// table refuses and requires the refusal.
+	fromRow bool
 }
 
 // objectFor is one call's object, from the caller and the arguments.
@@ -367,8 +418,15 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 	// here is only the personal default — whose record an unnamed verb is
 	// about — and a read that answers nothing leaves the owner empty,
 	// which is exactly what [Authorizer] is about to refuse on.
+	subject := subjectOf[g.Name()]
+	if subject.fromRow {
+		// THE TOOL ASKS, with the same action and the row's own object —
+		// see [subject.fromRow]. Deciding here as well, on an object with
+		// no container, would refuse everybody the tool is about to admit.
+		return nil
+	}
 	principal, _ := iam.From(ctx)
-	object := subjectOf[g.Name()].objectFor(principal, args)
+	object := subject.objectFor(principal, args)
 	return g.authorize(ctx, authz.Action(g.Name()), object)
 }
 
@@ -417,9 +475,29 @@ func askAuthority(ctx context.Context, authorize Authorizer,
 // refusal is something the model should see and reason about — "I may not do
 // that, so I will ask somebody who can" is a legitimate next move and an
 // invisible refusal is a round spent finding out nothing.
+//
+// THE REFUSAL RIDES AS THE CAUSE, so a surface answering in status codes reads
+// which of the three it was from the value rather than from the sentence.
 func refused(name string, why error) mcp.Result {
-	return mcp.Result{
-		Failed: true,
-		Output: fmt.Sprintf("%s was refused: %s", name, why.Error()),
-	}
+	return mcp.Result{Failed: true, Output: Refusal(name, why), Cause: why}
+}
+
+// Refusal is the ONE sentence an authority refusal reads as, on every surface
+// that serves these verbs: a seat's own turn, the operator's assistant over
+// MCP, and the HTTP write surface.
+//
+// EXPORTED FOR THE THIRD. The first two reach it through the gate, because
+// they call the tools; the HTTP surface refuses at its ROUTE — before the
+// tool runs, where the object is knowable from the path — and a route that
+// composed its own sentence would be where "you may not" first read two ways.
+// That is not cosmetic: a person told one thing by the dashboard and another
+// by their assistant about the same verb asks which of them is wrong, and the
+// answer is neither — so the only way to keep the question from arising is to
+// have one sentence and nowhere else to write one.
+//
+// IT NAMES THE VERB AND THE REASON AND NEVER THE CALLER. A wording that said
+// who was refused would differ for every caller asking the same question, and
+// the caller already knows who they are.
+func Refusal(verb string, why error) string {
+	return fmt.Sprintf("%s was refused: %s", verb, why.Error())
 }

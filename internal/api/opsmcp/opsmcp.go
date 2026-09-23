@@ -19,19 +19,23 @@
 // nobody looks at, and only one of the two is ever tested.
 //
 // What differs is WHO the write is attributed to. A seat's writes carry its
-// handle and its turn; these carry the operator's token label and
-// [work.AuthorOperator], so a person and the credential they used are two
-// separate facts on the record and an audit can tell an operator's edit from
-// an agent's.
+// handle and its turn; these carry what [builtin.PrincipalActor] makes of the
+// request's principal — a person bound to a seat writes AS that seat, with
+// kind `human`, and a credential nobody is bound through writes under its own
+// login with kind `operator`. The conversion is builtin's rather than this
+// surface's because the HTTP write surface makes the same one, and two copies
+// of "who is this" had already disagreed: this package recorded a person
+// under their TOKEN id, which is never a seat handle, so the tracker's rule
+// that nobody is woken about their own change never matched them.
 //
 // # It is ALWAYS authenticated
 //
 // Unlike the sandbox bridge at [mcpbridge.PathPrefix], which authenticates
 // with a signed per-run token in its own path because the box inside holds no
 // API credential, this surface is reached by a person's own client and is
-// guarded by the ordinary operator bearer token — the same one /config and
-// /secrets take. It WRITES to the company, so `allow_anonymous_read` does not
-// reach it: a write is a write whatever reads are open.
+// guarded by the ordinary credential guard — the same one /config and
+// /secrets sit behind — and it is not on the exemption list, because it WRITES
+// to the company and a write with nobody behind it has no author.
 package opsmcp
 
 import (
@@ -44,15 +48,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 var log = logging.Get("api.opsmcp")
@@ -237,67 +237,4 @@ func (s *Server) Handler() http.Handler {
 		}
 		streamable.ServeHTTP(w, r)
 	})
-}
-
-// ---- who a write is attributed to -------------------------------------- //
-
-// WorkActor and PageActor read the operator off the request's context.
-//
-// # An unbound token identifies as itself
-//
-// A Tier A token has a NAME — the key in `api.auth.tokens` — and that name is
-// what lands on the record: `founder`, `ci`, `ops-bot`. It is not a seat and
-// must not look like one, so the actor KIND is [tracker.AuthorOperator] — the
-// discriminator every renderer and every recipient rule already reads — and
-// the credential is recorded again in `OperatorID` so an audit can ask what
-// one token did without reasoning about kinds.
-//
-// The name goes in the author field rather than being left empty because the
-// tracker requires one: a record carrying no author is a history row nobody
-// can attribute, which is the single thing this surface exists to prevent.
-//
-// The alternative — asking the caller to name a seat to act as — was rejected:
-// it lets anybody with the token write as anybody, and a tracker whose author
-// field can be chosen by the writer is not an audit trail.
-func WorkActor(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
-	// AN ERROR RATHER THAN A FALLBACK NAME, unlike the HTTP surfaces'
-	// attribution helper: this is reached inside a TOOL CALL, where there
-	// is a caller waiting for an answer and the honest one is that the
-	// write did not happen. [auth.OperatorOf]'s total answer is right
-	// where a row is being written either way; here nothing has to be.
-	principal, how := iam.From(ctx)
-	id := auth.OperatorID(principal)
-	if how != iam.Resolved || id == "" {
-		return builtin.Actor{}, fmt.Errorf(
-			"opsmcp: this request carries no operator (%s)", how)
-	}
-	// THE OPERATOR'S OWN NAME IS THE HANDLE, and the kind says it is not a
-	// seat. A tracker whose author field is chosen by the writer is not an
-	// audit trail, so there is deliberately no way for a caller to name a
-	// seat to act as.
-	return builtin.Actor{
-		Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
-	}, nil
-}
-
-// PageActor is [WorkActor] for the knowledge base, and records the SAME
-// operator under the SAME name.
-//
-// THE HANDLE IS THE TOKEN'S OWN NAME, exactly as above. It used to be left
-// empty here, and `pages.Actor.Name` falls back to `"operator:" + OperatorID`
-// for an actor with no handle — so one person writing through one surface was
-// recorded as `founder` on a work commit and `operator:founder` on a page
-// commit. The kind is already on the row, in its own column, so the prefix was
-// a second encoding of a fact the row carries; what it bought was that the
-// audit feed, which is the one screen that reads both histories, showed the
-// same person as two people three rows apart, and that a reader filtering on
-// a name matched half of what they did.
-func PageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
-	principal, how := iam.From(ctx)
-	id := auth.OperatorID(principal)
-	if how != iam.Resolved || id == "" {
-		return pages.Actor{}, fmt.Errorf(
-			"opsmcp: this request carries no operator (%s)", how)
-	}
-	return pages.Actor{Handle: id, Kind: pages.AuthorOperator, OperatorID: id}, nil
 }

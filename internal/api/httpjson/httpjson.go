@@ -293,6 +293,27 @@ const (
 	// are held equal by a test in internal/api/auth, since this package
 	// is a leaf and cannot import that one to share the constant.
 	CodeSeatUnavailable Code = "seat_unavailable"
+
+	// CodeForbidden is a WRITE the authority table refused: a caller this
+	// node knows, whose grants or relations do not reach the verb.
+	//
+	// ITS OWN CODE rather than [CodeUnauthorized], whose sentence is about a
+	// query needing an operator token — which is the wrong thing to tell a
+	// signed-in person refused a write, and a sentence a dashboard renders
+	// verbatim. The detail carries the verb's own refusal, worded once for
+	// every surface that serves it.
+	CodeForbidden Code = "forbidden"
+
+	// CodeStale is a write that lost to somebody else's: a version that
+	// moved since it was read, a title somebody else took, a race lost too
+	// many times. The one refusal whose remedy is "read it again".
+	CodeStale Code = "stale"
+
+	// CodeRefused is a write the DOMAIN refused on its own rules — a status
+	// that does not exist, a field its declaration does not allow, a label
+	// the project never declared. The detail is the domain's own sentence,
+	// because it is the only thing that says what to change.
+	CodeRefused Code = "refused"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -370,6 +391,13 @@ var codes = map[Code]string{
 
 	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
 		"for a new one.",
+
+	CodeForbidden: "You are signed in, and you may not make this change. The " +
+		"detail names what it needs.",
+	CodeStale: "Somebody changed this after you read it, so nothing was " +
+		"written. Read it again and decide from what it says now.",
+	CodeRefused: "That change was refused and nothing was written. The detail " +
+		"says why.",
 }
 
 // Valid reports whether c is in the vocabulary — which is to say, whether the

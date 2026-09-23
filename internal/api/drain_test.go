@@ -73,7 +73,7 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
 // middleware and runs BEFORE the mux: it refuses on path and method alone, so
 // a refusal proves the rule whether or not a handler exists behind it. That is
-// what makes the refusal case above meaningful for all sixteen — and it is
+// what makes the refusal case above meaningful for every entry — and it is
 // also what would let an entry naming a path nothing serves sit here for ever
 // looking exactly like one that works. [TestNothingIsRefusedForDrainingBeforeADrain]
 // holds the declaration in BOTH directions for that reason, in the idiom
@@ -82,8 +82,9 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // grew a surface and left its declaration behind.
 //
 // [drainingApp] is a node with no store, no coordination store and no company,
-// so the three surfaces that need one (/config, /secrets, /setup) and the two
-// that need a tracker (/work/{id}/purge, /operator/mcp) are not mounted on it.
+// so the three surfaces that need one (/config, /secrets, /setup) and the ones
+// that need a tracker or a knowledge base (the write surface under
+// /work/items and /pages, and /operator/mcp) are not mounted on it.
 var startsWork = []struct {
 	method, path string
 	mounted      bool
@@ -102,7 +103,9 @@ var startsWork = []struct {
 	{http.MethodPost, "/budgets/reset", true},
 	{http.MethodPost, "/backup", true},
 	{http.MethodPost, "/work/retention/ack", true},
-	{http.MethodPost, "/work/ENG-1/purge", false},
+	{http.MethodPost, "/work/items/ENG-1/purge", false},
+	{http.MethodPatch, "/work/items/ENG-1", false},
+	{http.MethodPost, "/pages/p-1/restore", false},
 	{http.MethodPost, "/operator/mcp", false},
 }
 

@@ -84,7 +84,7 @@ func (t *getPerson) Call(ctx context.Context, args map[string]any) (tools.Result
 		Handle: handle, Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
-		return failed(readFailure(tracker.GetPersonTool, err)), nil
+		return readFailed(tracker.GetPersonTool, err), nil
 	}
 	return jsonResult(state)
 }
@@ -182,9 +182,9 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		resolved = append(resolved, id)
 	}
 	result, err := writer.WritePriorities(ctx,
-		"prio-"+handle+"-"+callKey(turn), handle, resolved, authority)
+		"prio-"+handle+"-"+callKey(actor), handle, resolved, authority)
 	if err != nil {
-		return failed(writeFailure(tracker.SetPrioritiesTool, err)), nil
+		return writeFailed(tracker.SetPrioritiesTool, err), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(map[string]any{
@@ -240,20 +240,32 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	return t.deps.writePins(ctx, actor, writer, actor.Handle, args,
+		ownWrite(actor)), nil
+}
+
+// writePins is set_pins' body for ONE named record under an authority the
+// caller has already decided — see [SetPinsFor].
+func (d WorkDeps) writePins(ctx context.Context, actor Actor, writer PersonWriter,
+	handle string, args map[string]any,
+	authority tracker.PersonAuthority) tools.Result {
+
 	favorites, bad := personFavorites(args)
 	if bad != "" {
-		return failed(bad), nil
+		return failed(bad)
 	}
 	result, err := writer.WritePins(ctx,
-		"pins-"+actor.Handle+"-"+callKey(turn), actor.Handle,
-		argStrings(args, "views"), favorites, ownWrite(actor))
+		"pins-"+handle+"-"+callKey(actor), handle,
+		argStrings(args, "views"), favorites, authority)
 	if err != nil {
-		return failed(writeFailure(tracker.SetPinsTool, err)), nil
+		return writeFailed(tracker.SetPinsTool, err)
 	}
-	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
-		"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
+	d.settle(ctx, result.Position)
+	answer, _ := jsonResult(map[string]any{
+		"handle": handle, "outcome": string(result.Outcome),
+		"position": positionOf(result.Position), "version": result.Version,
 	})
+	return answer
 }
 
 type markInbox struct{ deps WorkDeps }
@@ -331,40 +343,106 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	return t.deps.writeInbox(ctx, actor, writer, actor.Handle, args,
+		ownWrite(actor)), nil
+}
+
+// writeInbox is mark_inbox's body for ONE named record under an authority the
+// caller has already decided — see [MarkInboxFor].
+func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWriter,
+	handle string, args map[string]any,
+	authority tracker.PersonAuthority) tools.Result {
+
 	read, bad := inboxEntries(args, "read")
 	if bad != "" {
-		return failed(bad), nil
+		return failed(bad)
 	}
 	unread, bad := inboxEntries(args, "unread")
 	if bad != "" {
-		return failed(bad), nil
+		return failed(bad)
 	}
 	snoozed, bad := inboxEntries(args, "snoozed")
 	if bad != "" {
-		return failed(bad), nil
+		return failed(bad)
 	}
 	var reasons []tracker.Reason
 	for _, raw := range argStrings(args, "primary_reasons") {
 		reason := tracker.Reason(strings.TrimSpace(raw))
 		if !slices.Contains(tracker.Reasons, reason) {
 			return failed(fmt.Sprintf("%q is not a wake reason. The reasons "+
-				"are: %s.", raw, reasonList())), nil
+				"are: %s.", raw, reasonList()))
 		}
 		reasons = append(reasons, reason)
 	}
 	result, err := writer.WriteInbox(ctx,
-		"inbox-"+actor.Handle+"-"+callKey(turn), actor.Handle,
+		"inbox-"+handle+"-"+callKey(actor), handle,
 		read, unread, snoozed, reasons, tracker.Position{
 			Stream: strings.TrimSpace(argString(args, "seen_through_stream")),
 			Seq:    uint64(argFloat(args, "seen_through")),
-		}, ownWrite(actor))
+		}, authority)
 	if err != nil {
-		return failed(writeFailure(tracker.MarkInboxTool, err)), nil
+		return writeFailed(tracker.MarkInboxTool, err)
 	}
-	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
-		"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
+	d.settle(ctx, result.Position)
+	answer, _ := jsonResult(map[string]any{
+		"handle": handle, "outcome": string(result.Outcome),
+		"position": positionOf(result.Position), "version": result.Version,
 	})
+	return answer
+}
+
+// MarkInboxFor and SetPinsFor write SOMEBODY ELSE's inbox or pins, under an
+// authority the caller has already decided.
+//
+// # Why these are not arguments on the tools
+//
+// `mark_inbox` and `set_pins` take no handle, and that is deliberate: a model
+// that could name whose inbox to mark could mark anybody's, and the only
+// caller with a legitimate reason to reach another person's record is an
+// administrator unsticking a departed person's queue — a person at a screen,
+// never a seat in a turn. So the TOOLS stay narrow, and the one surface that
+// serves that administrator (the HTTP write surface, deciding
+// [authz.ActionInboxMark] or [authz.ActionPinsSet] on the record the path
+// names) reaches the same parsing, the same writer and the same receipt
+// through here. Two copies of "read an inbox mark out of a body" would drift
+// on exactly the parts nobody re-reads: which entries are dropped, what a bad
+// reason is refused with.
+//
+// # The authority is the caller's DECISION, not its inputs
+//
+// [tracker.PersonAuthority] states what the table answered; the tracker's own
+// rule — a seat never writes a colleague's record — still applies on top, so
+// an authority marked Agent is refused there whatever the table said.
+func MarkInboxFor(ctx context.Context, deps WorkDeps, handle string,
+	args map[string]any, authority tracker.PersonAuthority) tools.Result {
+
+	actor, writer, refusal := deps.personWriter(ctx, nil, tracker.MarkInboxTool)
+	if refusal != nil {
+		return *refusal
+	}
+	// THE HANDLE IS RESOLVED AGAINST THE CHART, for set_priorities' reason:
+	// a typo here writes a whole person record for somebody who does not
+	// exist.
+	whose, unknown := deps.resolveHandle(tracker.MarkInboxTool, "the person", handle)
+	if unknown != "" {
+		return failed(unknown)
+	}
+	return deps.writeInbox(ctx, actor, writer, whose, args, authority)
+}
+
+// SetPinsFor is [MarkInboxFor] for the pins.
+func SetPinsFor(ctx context.Context, deps WorkDeps, handle string,
+	args map[string]any, authority tracker.PersonAuthority) tools.Result {
+
+	actor, writer, refusal := deps.personWriter(ctx, nil, tracker.SetPinsTool)
+	if refusal != nil {
+		return *refusal
+	}
+	whose, unknown := deps.resolveHandle(tracker.SetPinsTool, "the person", handle)
+	if unknown != "" {
+		return failed(unknown)
+	}
+	return deps.writePins(ctx, actor, writer, whose, args, authority)
 }
 
 // ownWrite is the authority a tool writing the CALLER's own record passes.
@@ -401,8 +479,15 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 	return actor, d.PersonWriter(actor), nil
 }
 
-// callKey is the idempotency scope of ONE tool call — the turn's own key
-// inside a turn, and a fresh value outside one.
+// callKey is the idempotency scope of ONE tool call — the actor's own
+// operation seed where it has one, and a fresh value where it has none.
+//
+// THE ACTOR'S SEED AND NOT THE TURN'S KEY, because they are the same value
+// for a seat ([actorFor] copies the turn's key onto the actor) and different
+// for the one caller that has a seed and no turn: an HTTP write retried under
+// its Idempotency-Key, whose actor carries that key. Read off the turn, the
+// retry minted a fresh id and wrote the inbox, the pins or the priorities a
+// second time.
 //
 // AN OPERATOR HAS NO TURN and no redelivery: their client made one call, so
 // there is nothing to deduplicate against and two calls in one session are two
@@ -417,8 +502,8 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 // position and changed nothing. (The empty string the old comment named would
 // have done exactly the same: what makes a key unique is that it is fresh, not
 // that it is blank.) See [opIDFor], which had the same defect on the same day.
-func callKey(turn *turnctx.Turn) string {
-	if key := turnKey(turn); key != "" {
+func callKey(actor Actor) string {
+	if key := actor.OperationSeed(); key != "" {
 		return key
 	}
 	return "operator-" + uuid.NewString()
@@ -586,7 +671,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 	}
 	answer, err := t.deps.Inbox.Inbox(ctx, q, t.deps.now())
 	if err != nil {
-		return failed(readFailure(tracker.WorkInboxTool, err)), nil
+		return readFailed(tracker.WorkInboxTool, err), nil
 	}
 	return jsonResult(answer)
 }

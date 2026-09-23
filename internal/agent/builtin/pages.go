@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -195,7 +196,7 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		Limit:     argInt(args, "limit", 0),
 	}, seatRead)
 	if err != nil {
-		return failed(readFailure(ListPagesTool, err)), nil
+		return readFailed(ListPagesTool, err), nil
 	}
 	if len(got.Pages) == 0 {
 		return tools.Result{Output: "No pages match that filter."}, nil
@@ -259,10 +260,10 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
-		return failed(fmt.Sprintf("There is no page %q. Check the container and "+
+		return failedBy(err, fmt.Sprintf("There is no page %q. Check the container and "+
 			"title, or use search_knowledge to find it.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(GetPageTool, err)), nil
+		return readFailed(GetPageTool, err), nil
 	}
 	return jsonResult(detail)
 }
@@ -346,13 +347,14 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	}
 	got, err := t.deps.Writer.Create(ctx, actor, in)
 	if err != nil {
-		return failed(pageWriteFailure(WritePageTool, err)), nil
+		return pageWriteFailed(WritePageTool, err), nil
 	}
 	t.deps.settle(ctx, got.Outcome.Position)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "container": got.Page.Container,
 		"title": got.Page.Title, "version": got.Page.Version,
-		"revision": got.Revision,
+		"revision": got.Revision, "outcome": outcomeOf(got.Outcome),
+		"position": positionOf(got.Outcome.Position),
 	})
 }
 
@@ -432,11 +434,25 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
-		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
+		return failedBy(err, fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(SavePageTool, err)), nil
+		return readFailed(SavePageTool, err), nil
 	}
 
+	// A RENAME IS THE CONTAINER LEAD'S, however it is asked for. The tool's
+	// own gate decided the SAVE, which is any colleague's; an address change
+	// is [authz.ActionPageRename] and the container it is decided on is the
+	// stored page's, so it is asked here — and BEFORE the save, so a caller
+	// who may not rename lands nothing rather than half of what they sent.
+	// Without it a `title` on this tool was a way round the rule the rename
+	// verb itself is held to.
+	if _, renaming := args["title"]; renaming {
+		if refused := t.deps.mayWrite(ctx, authz.ActionPageRename, authz.Object{
+			Kind: authz.KindPage, Container: detail.Page.Container,
+		}); refused != nil {
+			return *refused, nil
+		}
+	}
 	save := pages.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message"))}
 	if _, ok := args["body"]; ok {
 		body := argString(args, "body")
@@ -456,10 +472,11 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 
 	got, err := t.deps.Writer.SavePage(ctx, actor, detail.Page.ID, save)
 	if err != nil {
-		return failed(pageWriteFailure(SavePageTool, err)), nil
+		return pageWriteFailed(SavePageTool, err), nil
 	}
 	at := got.Outcome.Position
 	revision := got.Revision
+	outcome := got.Outcome
 	// A RENAME IS ITS OWN WRITE, and it goes SECOND. An address change
 	// contends for the address and a content change contends for the page,
 	// so one record cannot arbitrate both — and doing the content first
@@ -476,7 +493,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		want := strings.TrimSpace(fmt.Sprint(title))
 		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false)
 		if err != nil {
-			return failed(fmt.Sprintf("The edit was saved and the rename to %q "+
+			return failedBy(err, fmt.Sprintf("The edit was saved and the rename to %q "+
 				"was not: %s", clip(want),
 				pageWriteFailure(SavePageTool, err))), nil
 		}
@@ -495,11 +512,16 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		if renamed.Outcome.Position.Packed() > at.Packed() {
 			at = renamed.Outcome.Position
 		}
+		// AND THE LESSER OF THE TWO OUTCOMES, because the answer is about
+		// the whole gesture: a save this node has applied and a rename it
+		// has not is a page this node would still show under its old name.
+		outcome = lesserOutcome(outcome, renamed.Outcome)
 	}
 	t.deps.settle(ctx, at)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "title": got.Page.Title,
 		"version": got.Page.Version, "revision": revision,
+		"outcome": outcomeOf(outcome), "position": positionOf(at),
 	})
 }
 
@@ -572,9 +594,9 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
-		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
+		return failedBy(err, fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(CommentOnPageTool, err)), nil
+		return readFailed(CommentOnPageTool, err), nil
 	}
 
 	// AN EDIT IS THE SAME GESTURE, which is why it is this tool rather than
@@ -585,12 +607,14 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body)
 		if err != nil {
-			return failed(pageWriteFailure(CommentOnPageTool, err)), nil
+			return pageWriteFailed(CommentOnPageTool, err), nil
 		}
 		t.deps.settle(ctx, written.Outcome.Position)
 		return jsonResult(map[string]any{
 			"comment_id": comment.ID, "page": detail.Page.Title,
 			"edited": true, "revision": written.Revision,
+			"outcome":  outcomeOf(written.Outcome),
+			"position": positionOf(written.Outcome.Position),
 		})
 	}
 
@@ -604,13 +628,50 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	comment, written, err := t.deps.Writer.Comment(ctx, actor, detail.Page.ID, in)
 	if err != nil {
-		return failed(pageWriteFailure(CommentOnPageTool, err)), nil
+		return pageWriteFailed(CommentOnPageTool, err), nil
 	}
 	t.deps.settle(ctx, written.Outcome.Position)
 	return jsonResult(map[string]any{
 		"comment_id": comment.ID, "page": detail.Page.Title,
 		"mentioned": comment.Mentions, "revision": written.Revision,
+		"outcome":  outcomeOf(written.Outcome),
+		"position": positionOf(written.Outcome.Position),
 	})
+}
+
+// outcomeOf is a page write's outcome as its receipt states it.
+//
+// THE SAME KEY EVERY WORK WRITE'S RECEIPT CARRIES, which these went without:
+// a caller reading the answer could not tell a write this node had applied
+// from one still on its way, and the HTTP surface that serves the same tools
+// answers the two differently (200 and 202), so it had nothing to decide on.
+//
+// AN EMPTY OUTCOME IS `applied`: the store answers a write that changed
+// nothing — the same title, the same comment body — with no record at all,
+// and there is nothing for this node to be behind on.
+func outcomeOf(r statelog.Result) string {
+	if r.Outcome == "" {
+		return string(statelog.OutcomeApplied)
+	}
+	return string(r.Outcome)
+}
+
+// lesserOutcome is the weaker of two outcomes: unknown below pending below
+// applied.
+func lesserOutcome(a, b statelog.Result) statelog.Result {
+	rank := func(r statelog.Result) int {
+		switch r.Outcome {
+		case statelog.OutcomeUnknown:
+			return 0
+		case statelog.OutcomePending:
+			return 1
+		}
+		return 2
+	}
+	if rank(b) < rank(a) {
+		return b
+	}
+	return a
 }
 
 // pageWriteFailure explains a write that did not land, in terms the model can

@@ -86,13 +86,6 @@ type App struct {
 	// seam from the one above. Nil on a process with no native tracker.
 	nodes NodeGate
 
-	// purger destroys a task, as the operator on the request. Its own
-	// field rather than a third method on the seam above, because it is
-	// the one write here attributed to a PERSON — see [TaskPurger]. Nil
-	// leaves the route absent, which is honest on a build that cannot
-	// serve it: an operator who cannot purge must not be told they can.
-	purger TaskPurger
-
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. On a node that is publishing the verb refuses rather than
 	// the route being absent, because "you are in the wrong mode" is the
@@ -329,6 +322,20 @@ type Options struct {
 	// least able to help.
 	IAM chartMounter
 
+	// Work serves the human write surface over the company's own tracker
+	// and knowledge base, normally a workapi.Service: the same tools a seat
+	// and the operator's assistant hold, as routes a person reaches from a
+	// browser or a script.
+	//
+	// OPTIONAL, and nil is a company on Jira and Confluence — there is no
+	// native tracker or knowledge base to write — so the routes are ABSENT
+	// rather than refusing, for [Options.IAM]'s reason. It is also where
+	// the one operation nothing undoes, destroying a work item, lives: it
+	// had a route of its own beside the retention gestures, with an
+	// operator check written there, and that check was the second answer
+	// to a question the authority table already answers.
+	Work chartMounter
+
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
 	Secrets routeMounter
@@ -379,10 +386,6 @@ type Options struct {
 	// Nodes installs and lifts the eviction gate. Nil leaves the evict and
 	// readmit routes answering 503.
 	Nodes NodeGate
-
-	// Purger destroys a task as the operator who asked. Nil leaves the
-	// purge route unmounted.
-	Purger TaskPurger
 
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
@@ -503,7 +506,7 @@ func New(opts Options) (*App, error) {
 	queries.Register(a.queries, sources)
 	a.budgets = opts.Budgets
 	a.backup = opts.Backup
-	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
+	a.retention, a.nodes = opts.Retention, opts.Nodes
 	a.capacity = opts.Capacity
 
 	mux := http.NewServeMux()
@@ -591,6 +594,13 @@ func New(opts Options) (*App, error) {
 	if opts.IAM != nil {
 		if err := opts.IAM.Routes(mux); err != nil {
 			return nil, fmt.Errorf("api: mount the identity surface: %w", err)
+		}
+	}
+	// AND THE HUMAN WRITE SURFACE, which fails the same way for the same
+	// reason: every route states its authority where it is mounted.
+	if opts.Work != nil {
+		if err := opts.Work.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the work surface: %w", err)
 		}
 	}
 	// THE BROWSER POSTURE WRAPS THE CREDENTIAL ONE, because a preflight

@@ -796,7 +796,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// refusal's own sentence, which names what would narrow it.
 		return failed(fmt.Sprintf("%s: %v", ListWorkItemsTool, err)), nil
 	case err != nil:
-		return failed(readFailure(ListWorkItemsTool, err)), nil
+		return readFailed(ListWorkItemsTool, err), nil
 	}
 	// A GROUPED ANSWER HAS NO FLAT ROWS BY CONSTRUCTION, so the empty
 	// message has to ask about the groups too — a board with five columns
@@ -1009,14 +1009,14 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	detail, err := t.deps.Reader.Task(ctx, id, want, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q. Check the key, or "+
+		return failedBy(err, fmt.Sprintf("There is no work item %q. Check the key, or "+
 			"use list_work_items to find it.", clip(id))), nil
 	case errors.Is(err, tracker.ErrNoComment):
 		return failed(fmt.Sprintf("Work item %q has no comment %q. Comment ids "+
 			"come from the `comments` in a read of the item itself — drop "+
 			"`comment` to see the thread.", clip(id), clip(want.Comment))), nil
 	case err != nil:
-		return failed(readFailure(GetWorkItemTool, err)), nil
+		return readFailed(GetWorkItemTool, err), nil
 	}
 	// THE CUT IS TAKEN HERE, where the budget is. The tracker answers the
 	// body whole because its other reader — the dashboard — renders a task
@@ -1190,7 +1190,6 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	now := t.deps.now()
 	task := tracker.Task{
 		V:           tracker.DocumentVersion,
-		ID:          uuid.NewString(),
 		Title:       strings.TrimSpace(argString(args, "title")),
 		Body:        argString(args, "body"),
 		Type:        strings.TrimSpace(argString(args, "type")),
@@ -1253,6 +1252,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				"in rather than guessing."), nil
 		}
 	}
+	task.ID = taskIDFor(actor, task.Project, task.Title)
 	// THE FILING SEAT'S OWN TEAM, on both unit fields, and open to every
 	// seat — deliberately unlike the re-route above. `FiledUnit` is the
 	// immutable record of where this came from; `RoutingUnit` is the
@@ -1313,7 +1313,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	got, err := writer.CreateTask(ctx, opIDFor(actor, "create", task.ID), task, notify)
 	if err != nil {
-		return failed(writeFailure(CreateWorkItemTool, err)), nil
+		return writeFailed(CreateWorkItemTool, err), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	answer := map[string]any{
@@ -1618,9 +1618,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return failedBy(err, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(UpdateWorkItemTool, err)), nil
+		return readFailed(UpdateWorkItemTool, err), nil
 	}
 
 	patch, kind, refusal := patchFromArgs(args, actor, t.deps.now(), t.deps.zone())
@@ -1730,7 +1730,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				Parent: t.deps.parentParty(ctx, before.Task, patch),
 			}.Notify(t.deps.Leads))
 		if err != nil {
-			return failed(writeFailure(UpdateWorkItemTool, err)), nil
+			return writeFailed(UpdateWorkItemTool, err), nil
 		}
 		t.deps.settle(ctx, got.Position)
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
@@ -1752,7 +1752,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
 			opIDFor(actor, "depend", before.Task.ID), change, t.deps.Leads)
 		if err != nil {
-			return failed(writeFailure(UpdateWorkItemTool, err)), nil
+			return writeFailed(UpdateWorkItemTool, err), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		if _, held := answer["outcome"]; !held {
@@ -2046,9 +2046,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return failedBy(err, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(CommentOnWorkTool, err)), nil
+		return readFailed(CommentOnWorkTool, err), nil
 	}
 
 	now := t.deps.now()
@@ -2138,7 +2138,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Thread: thread.ThreadParties,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(CommentOnWorkTool, err)), nil
+		return writeFailed(CommentOnWorkTool, err), nil
 	}
 	t.deps.settle(ctx, got.Position)
 	answer := map[string]any{
@@ -2189,6 +2189,33 @@ func commentID(actor Actor, taskID string) string {
 	}
 	return uuid.NewSHA1(commentNamespace, []byte(seed+"\x00"+taskID+"\x00"+actor.Handle)).String()
 }
+
+// taskIDFor is a new item's id: derived from the actor's operation seed where
+// there is one, and fresh where there is not.
+//
+// DERIVED, because the operation id a create is published under is built from
+// this id ([opIDFor] names the object) — so a fresh id made every retry a
+// fresh OPERATION, and the ledger that exists to recognise a second arrival
+// never saw one. A redelivered turn filed the same item twice, and an HTTP
+// create retried under its Idempotency-Key after an `unknown` did too.
+//
+// OVER THE PROJECT AND THE TITLE as well as the seed, because one turn files
+// several different items under one seed and each must be its own. Two
+// creates with the same title in the same project in one run are the same
+// item asked for twice, which is the case the seed exists to collapse.
+func taskIDFor(actor Actor, project, title string) string {
+	seed := actor.OperationSeed()
+	if seed == "" {
+		return uuid.NewString()
+	}
+	return uuid.NewSHA1(taskNamespace,
+		[]byte(seed+"\x00"+project+"\x00"+title)).String()
+}
+
+// taskNamespace is the uuid namespace a derived item id is minted under.
+// FIXED for the life of the format: an id is a primary key on every node, and
+// a new namespace would make a retry straddling an upgrade file a second item.
+var taskNamespace = uuid.MustParse("b3f1c0de-5a7e-5d42-8c19-6e0a2f4d7b31")
 
 // commentNamespace is the uuid namespace comment ids are derived under. Fixed
 // for the life of the format: it is durable in every comment row.

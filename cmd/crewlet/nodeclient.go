@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -132,6 +133,20 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 	return c.do(ctx, http.MethodPost, path, into)
 }
 
+// postKeyed is [nodeClient.post] carrying an operation key, which is what
+// makes a retry of the same gesture the same operation on the node's ledger.
+func (c *nodeClient) postKeyed(ctx context.Context, path, key string, into any) error {
+	header := http.Header{}
+	if key = strings.TrimSpace(key); key != "" {
+		header.Set(idempotencyHeader, key)
+	}
+	return c.send(ctx, http.MethodPost, path, header, into)
+}
+
+// idempotencyHeader is the header every write surface on a node reads an
+// operation key from.
+const idempotencyHeader = "Idempotency-Key"
+
 // maxNodeResponseBytes bounds one answer read back from a node.
 //
 // An error body is a sentence; a proxy's error page is not. The largest
@@ -142,9 +157,20 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 const maxNodeResponseBytes = 1 << 20
 
 func (c *nodeClient) do(ctx context.Context, method, path string, into any) error {
+	return c.send(ctx, method, path, nil, into)
+}
+
+func (c *nodeClient) send(ctx context.Context, method, path string,
+	header http.Header, into any) error {
+
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
 	if err != nil {
 		return fmt.Errorf("build the request: %w", err)
+	}
+	for name, values := range header {
+		for _, v := range values {
+			req.Header.Add(name, v)
+		}
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -177,7 +203,12 @@ func (c *nodeClient) do(ctx context.Context, method, path string, into any) erro
 				"-url names the engine rather than something in front of it",
 			path, maxNodeResponseBytes)
 	}
-	if resp.StatusCode != http.StatusOK {
+	// ANY 2xx IS AN ANSWER. A write surface says `202` for a change that
+	// is durable and not yet applied on this node, which is a success to
+	// report as such rather than an error — read as one, the CLI told an
+	// operator their purge had failed, and the ordinary next move was to
+	// run it again.
+	if resp.StatusCode/100 != 2 {
 		return nodeError(resp.StatusCode, body, c.token != "")
 	}
 	if into == nil {
@@ -195,8 +226,18 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		Error  string `json:"error"`
 		Detail string `json:"detail"`
 		Hint   string `json:"hint"`
+		OpID   string `json:"op_id"`
 	}
 	_ = json.Unmarshal(body, &payload)
+	// A WRITE THE NODE COULD NOT ACCOUNT FOR carries the operation key a
+	// retry must reuse, and that is the one fact the caller cannot recover
+	// any other way — so it survives whatever status it came with.
+	if payload.OpID != "" && status == http.StatusServiceUnavailable {
+		return &unsettledWrite{opID: payload.OpID, err: fmt.Errorf(
+			"the node could not establish whether this landed: %s",
+			withRefusalDetail(firstNonEmpty(payload.Error, "unknown outcome"),
+				payload.Detail, payload.Hint))}
+	}
 	switch status {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		if !sentToken {
@@ -223,3 +264,13 @@ func nodeError(status int, body []byte, sentToken bool) error {
 				payload.Detail, payload.Hint))
 	}
 }
+
+// unsettledWrite is a write whose outcome the node could not establish, and
+// the operation key a retry must carry to be the same operation.
+type unsettledWrite struct {
+	opID string
+	err  error
+}
+
+func (u *unsettledWrite) Error() string { return u.err.Error() }
+func (u *unsettledWrite) Unwrap() error { return u.err }

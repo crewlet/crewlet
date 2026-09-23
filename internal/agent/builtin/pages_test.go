@@ -587,3 +587,43 @@ func TestASaveThatAlsoRenamesWaitsForTheRenamesOwnPosition(t *testing.T) {
 			"save's", kb.awaited)
 	}
 }
+
+// A RENAME THROUGH save_page IS STILL A RENAME, and it is the container
+// lead's.
+//
+// The tool's own gate decides the SAVE, which any colleague may make; the
+// address change a `title` asks for is [authz.ActionPageRename], decided on
+// the stored page's container. Without the ask a colleague renamed any page
+// by editing it, which the rename verb itself would have refused them.
+//
+// And the refusal lands NOTHING: the body half of the same call is not saved
+// either, because a caller who may not do what they asked should not find a
+// different half of it done. The control is the same edit without a title.
+func TestARenameThroughSaveIsDecidedAsARename(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, builtin.Deps{
+		Pages:     builtin.PageDeps{Reader: kb, Writer: kb},
+		Authorize: builtin.Decide(chartRefuses),
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	renaming := callWorkAs(t, reg, colleagueCaller(), builtin.SavePageTool,
+		map[string]any{"page": "p1", "base_version": 4, "body": "new",
+			"title": "Deploy Runbook v2"})
+	if !renaming.Failed || !errors.Is(renaming.Cause, builtin.ErrRefused) {
+		t.Fatalf("a colleague who leads nothing renamed a page: %s",
+			renaming.Output)
+	}
+	if len(kb.saved)+len(kb.renames) != 0 {
+		t.Errorf("a refused rename still saved %d and renamed %d",
+			len(kb.saved), len(kb.renames))
+	}
+	// THE CONTROL: the same colleague, the same edit, no title.
+	if plain := callWorkAs(t, reg, colleagueCaller(), builtin.SavePageTool,
+		map[string]any{"page": "p1", "base_version": 4, "body": "new"}); plain.Failed {
+		t.Fatalf("the control was refused too, so the case asserts nothing: %s",
+			plain.Output)
+	}
+}

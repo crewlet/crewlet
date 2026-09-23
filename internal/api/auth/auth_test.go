@@ -90,9 +90,10 @@ func TestEveryGuardedRouteNeedsACredentialWhateverTheMethod(t *testing.T) {
 // This used to be a declared list — `GuardedPrefixes` — because everything NOT
 // on it followed `allow_anonymous_read` and served by default. The list is gone
 // with that posture: guarded is what a route IS unless [auth.Unguarded] exempts
-// it. What still has to be asserted is that none of these six ever lands on the
+// it. What still has to be asserted is that none of these ever lands on the
 // exemption list, because that is the one edit that would open them again, and
-// each is a surface whose READ is as sensitive as its write:
+// each is a surface whose READ is as sensitive as its write — or, for the last
+// two, whose every WRITE lands a record with an author:
 //
 //   - /config: the whole company document — its org chart, its integrations,
 //     and every ${VAR} reference in it by name.
@@ -107,10 +108,14 @@ func TestEveryGuardedRouteNeedsACredentialWhateverTheMethod(t *testing.T) {
 //   - /chart and /company: the org chart, whose other half is a seat's model
 //     chain, credentials, sandbox cell and mcp_env — the company configuration
 //     under another name.
+//   - /work and /pages: the human write surface over the tracker and the
+//     knowledge base. A write there with nobody behind it would be a record
+//     with no author, which is the one thing it exists never to write.
 func TestTheCompanysOwnSurfacesAreGuardedEvenForReads(t *testing.T) {
 	t.Parallel()
 	for _, prefix := range []string{
 		"/config", "/secrets", "/setup", "/operator", "/chart", "/company",
+		"/work", "/pages",
 	} {
 		for _, path := range []string{
 			prefix, prefix + "/", prefix + "/anything",

@@ -83,7 +83,7 @@ func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Re
 		Level: seatReadLevel,
 	})
 	if err != nil {
-		return failed(readFailure(tracker.ListWorkViewsTool, err)), nil
+		return readFailed(tracker.ListWorkViewsTool, err), nil
 	}
 	return jsonResult(map[string]any{
 		"count": len(listing.Views), "views": listing.Views,
@@ -211,7 +211,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	result, err := t.deps.ViewWriter(actor).WriteView(ctx, "view-"+id, view)
 	if err != nil {
-		return failed(writeFailure(tracker.SaveWorkViewTool, err)), nil
+		return writeFailed(tracker.SaveWorkViewTool, err), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(map[string]any{

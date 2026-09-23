@@ -108,7 +108,7 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"cannot answer that yet — it says nothing about whether the work " +
 			"exists. Try again shortly, or narrow it with list_work_items."), nil
 	case err != nil:
-		return failed(readFailure(tracker.SearchWorkItemsTool, err)), nil
+		return readFailed(tracker.SearchWorkItemsTool, err), nil
 	}
 	return jsonAnswer(map[string]any{
 		"query": text, "matches": hits, "count": len(hits),

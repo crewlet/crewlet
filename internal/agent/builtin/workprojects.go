@@ -106,7 +106,7 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Level: seatReadLevel,
 	})
 	if err != nil {
-		return failed(readFailure(tracker.ListProjectsTool, err)), nil
+		return readFailed(tracker.ListProjectsTool, err), nil
 	}
 	return jsonResult(listing)
 }
@@ -179,7 +179,7 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Level:   seatReadLevel,
 	})
 	if err != nil {
-		return failed(readFailure(tracker.DescribeProjectTool, err)), nil
+		return readFailed(tracker.DescribeProjectTool, err), nil
 	}
 	return jsonResult(detail)
 }

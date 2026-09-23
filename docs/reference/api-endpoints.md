@@ -138,21 +138,22 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `GET` | `/work/retention/maintenance` | Where that window stands and what is holding it |
 | `POST` | `/work/retention/maintenance/abandon` | Change what the operation is trying to reach, never the barrier it must cross |
 | `POST` | `/work/retention/maintenance/exclude` | Record that a participant's process is stopped and holds no outstanding request |
-| `POST` | `/work/{id}/purge` | Destroy a task and every row it produced, on every node. The one operation with no inverse: `?confirm=` repeats the task's KEY, `?project=` names the container the record arbitrates under, `?reason=` is required and is the only account of the task that survives, and `?op_id=` is how an `unknown` outcome is retried without appending a second purge. **Operator-only**, and absent rather than 503 on a build with no tracker |
 | `GET` | `/work/retention/reanchor` | The live stream's own `created_at`, which a reanchor's confirmation has to echo |
 | `POST` | `/work/retention/reanchor` | Adopt a recreated stream at the next generation |
-| `GET` | `/work/views` | One container's **view strip**: the six every container has without anybody saving one, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`) and `?viewer=` is whose personal views and pins order the strip — **your own seat, or operator-only for anybody else's**, the same scope rule as `/work/my-work`; absent is the shared strip, which needs no credential |
+| `GET` | `/work/views` | One container's **view strip**: the six every container has without anybody saving one, and whatever was saved beyond them. `?container=` takes the query grammar's own spelling (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`). The strip is ordered by **the caller's own** personal views and pins, and there is no parameter naming whose: a strip is furniture a person arranges for themselves, and a parameter that could name somebody else's was a way to read their arrangement. A caller bound to no seat gets the shared strip |
 | `GET` | `/work/catalogue` | The company's **vocabulary**: the task types a create may name and the workspace's custom-field declarations. `?archived=true` also lists what was retired. The types are the EFFECTIVE set — the six this build ships plus whatever the company declared, a declaration replacing a builtin of the same slug |
 | `GET` | `/work/projects` | Every **project** work is filed into, with its `task_counts` — the maintained `open`/`done`/`closed` columns, never an aggregate per poll — its chart-owned unit and its lead. `?q=` narrows by a word in the key, the name or the purpose; `?unit=` to the projects one unit owns; `?archived=true` includes the retired ones; `?limit=` caps at 200, which is also the default. A set read, so it carries `complete` and its `incomplete` beside the read level |
 | `GET` | `/work/projects/{key}` | One project in **full**: the six statuses with their labels, groups and descriptions; the effective types; the custom fields grouped by which type they apply to, required first, with the workspace ids this project **shadows** named; its tags; its default assignee, lead and owning unit. `?for_type=` narrows the fields to one type plus the ones that apply to every type. Unknown key answers 404 naming the nearest three |
 | `GET` | `/work/activity` | The **activity feed** — one durable row per applied commit, quiet ones included, at any age with no live/archive boundary to cross. Ordered by the COMPOSED LOG POSITION rather than by any clock, so `?since=` and `?cursor=` are both positions written `<stream>@<generation>:<sequence>` — which is what lets a cursor span a reanchor with no gap and no repeat. `?task=` (by key, id or a FORMER key), `?container=`, `?kinds=`, `?actor=`, `?assignee=`, `?notified=`, `?from=`/`?to=` (RFC3339, bounding the AUTHORED instants), `?limit=` ≤200. `?q=` is an escaped `LIKE` over the excerpt and is REFUSED unless it names a task, or a project **and** a `since` inside 90 days |
-| `GET` | `/work/my-work` | Everything one person is expected to look at, in seven bounded lists: `priorities` in the stored order, `assigned`, `asked_of_me` (each with the literal call that answers it), `checklist_items` (which live on other people's tasks and no assignee filter reaches), `collaborating`, `watching_recent` and `unblocked_recent`. `?handle=` is whose, and it **defaults to the caller's own seat** — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for). Naming somebody else's handle is operator-only |
+| `GET` | `/work/my-work` | Everything one person is expected to look at, in seven bounded lists: `priorities` in the stored order, `assigned`, `asked_of_me` (each with the literal call that answers it), `checklist_items` (which live on other people's tasks and no assignee filter reaches), `collaborating`, `watching_recent` and `unblocked_recent`. `?handle=` is whose, and it **defaults to the caller's own seat** — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for). Naming somebody else's takes whoever leads them, or `fleet:operate` |
 | `GET` | `/work/inbox` | One person's **inbox**: the notices a change wrote to them, each naming the ONE [reason](../guides/work-tracker.md) of eighteen it found them under, whether it **asks** something or merely informs, whether it arrived only because nobody better was found, and their own read and snooze marks. Same scope rule as `/work/my-work`. `?unread=`, `?primary_only=`, `?include_snoozed=` (a snooze means *not now*, so they are hidden by default), `?reasons=` (comma-separated, refused naming the eighteen), `?limit=` ≤50, `?cursor=`, and `?since=` — a LOG POSITION written `<stream>@<generation>:<sequence>`, which is what `seen_through` reports back, never a bare sequence: the comparison is on the packed `(generation << 40) | seq`, so a sequence with no generation re-delivers everything after a reanchor |
-| `GET` | `/work/people/{handle}` | One human's **own state**: their inbox (unread, read, snoozed, and which snoozes are now **due**), the order they mean to work in and who set it, and their pinned views. Same scope rule as `/work/my-work`, with the handle always named here because it is the path: your own seat's needs no credential, anybody else's is operator-only. A person nobody has written yet answers the EMPTY state with `held: false`, not a 404 — every human starts this way and the first write is what creates the record |
+| `GET` | `/work/people/{handle}` | One human's **own state**: their inbox (unread, read, snoozed, and which snoozes are now **due**), the order they mean to work in and who set it, and their pinned views. Same scope rule as `/work/my-work`, with the handle always named here because it is the path: your own seat's is yours, and anybody else's takes the same owner-or-lead rule. A person nobody has written yet answers the EMPTY state with `held: false`, not a 404 — every human starts this way and the first write is what creates the record |
 | `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
 | `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
 | `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` — the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply |
+| `POST` | `/work/items` `/pages` | **File an item, write a page** — and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded, and absent on a company whose tracker or knowledge base is not native |
+| `PATCH` | `/work/items/{key}` | Change an item — and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
 | `POST` | `/auth/login` | **Sign in.** Login or address, password, and a second factor where one is held. **Unguarded** and throttled per source. Every failure answers one code at one deadline — see [below](#every-failed-sign-in-is-one-refusal) |
 | `GET` | `/auth/config` | What a sign-in page needs to know before anybody has signed in: which backend, whether the first-operator route is still open, the password floor. **Unguarded**, and it carries **no user list and no count of people** |
 | `POST` | `/auth/bootstrap` | **The first person.** Redeems a one-time code this node wrote to a file beside its store, 0600, and creates an operator carrying the whole `max_grants` ceiling — the one stated exemption in the authority model. **Unguarded**, and closed for good the moment anybody is enrolled |
@@ -167,7 +168,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `POST` | `/auth/logout` | End **this** session. The cookie is cleared whatever the write did — a logout that answered 503 would leave somebody looking at a signed-in page on a shared machine |
 | `POST` | `/auth/logout/all` | End **every** session you hold, by bumping your own revocation epoch — the one move that is immediate on every node |
 | `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows and compared against the caller the guard resolved; `fleet:operate` may end one they do not own |
-| `GET` | `/viewer` | **Who is asking.** The presented credential's operator id, whether it is an operator one, and the seat that binds it — a human seat naming that id in `contact.crewlet_operator_id`. Three distinct states, and a caller must tell them apart: no credential at all, a credential no seat claims, and a bound one. An unbound token is an **ordinary state**, not an error — the remedy is a line of company configuration, so the id is answered with no seat rather than refused |
+| `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they hold, and the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through. An unbound credential is an **ordinary state**, not an error — a pipeline's token acts under its own login, and binding a person to a seat is a directory row rather than a different credential |
 | `GET` | `/chart` | The company's **org chart** — its units, its seats, every `manages:` edge and every unit's lead — with the position the answer was read at. The **runtime half of every object is stripped** unless the caller asks for it AND may read it; the answer says which it got in `runtime`. **Always needs a token** (see [below](#chart--the-org-chart-auth-gated)) |
 | `GET` | `/chart/units` `/chart/seats` | One half each, for a client that renders people constantly and the tree once |
 | `GET` | `/chart/units/{key}` | One unit, what it directly holds, and its own history |
@@ -311,16 +312,16 @@ as the first, which tells them to go and get a new credential.
 
 | Grant | What it reaches |
 |---|---|
-| `state:read` | The company's working state: `/agents`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, `/work/*`, `/pages/*`, `/containers`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
+| `state:read` | The company's working state: `/agents`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, the reads under `/work/*` and `/pages/*`, `/containers`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
 | `audit:read` | The record of what happened: `/events*`, the socket's `event` push and the snapshot's `events` section, `/agents/{id}/memory`, the turn, phase, trace, A2A-channel and conversation questions on the socket, and `/iam/audit`. Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
 | `config:read` | `/config*`, `/company/export`, `/integrations`, and the org chart's **runtime half** (`/chart?runtime=true`) — a seat's model chain, its credentials, its sandbox cell and its `mcp_env` |
 | `secrets:read` | `/secrets*`. The listing carries no values and still says which credentials a company holds and when each last changed |
 | `people:manage` | `/iam/*` — inviting somebody, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them. **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
-| `work:write` | Filing and moving work, and `/operator/mcp`'s write half |
-| `knowledge:write` | Writing the company's own pages |
+| `work:write` | Filing and moving work — the [write surface's](#the-human-write-surface) item routes — and `/operator/mcp`'s write half. Some of those verbs also ask a RELATION: re-routing, a project's policy and taking an item out of circulation are its project lead's |
+| `knowledge:write` | Writing the company's own pages. A rename, the trash and a restore are also the container's lead's; see [the write surface](#the-human-write-surface) |
 | `config:write` | `PUT`/`PATCH /config`, `/chart/batch`, the rename and import routes, and `/setup`'s writes |
 | `secrets:write` | `POST`/`DELETE /secrets/*` |
-| `fleet:operate` | The deployment rather than the company: `/fleet`, `/work/retention*`, `/backup`, `/budgets/reset` |
+| `fleet:operate` | The deployment rather than the company: `/fleet`, `/work/retention*`, `/backup`, `/budgets/reset`, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`) — which no seat may make whatever it holds. It is also the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `sandbox:run` | Starting a coding run |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -2111,7 +2112,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `a2a_channels` | `{}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
 | `integrations` | `{}` | `GET /integrations` |
-| `work_items` | `{container, status, status_group, assignee, reporter, watcher, collaborator, tag, type, priority, parent, root, q, key, removed, blocked, blocking, has_dependencies, has_open_asks, flag, asked_of, asked_by, subtasks, f.<slug>, view, preset, viewer, group_by, group_by2, group, subgroup, group_limit, totals, sort, cursor, limit, …}` | `GET /work`. `container` is the scope — `workspace`, or `project:ENG` (a bare `ENG` works too, and the key is upper-cased because the column is) — and an ABSENT container is neither: the engine refuses to default it, because an omitted key would otherwise be the most expensive query in the system. Every list key is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent; `status` also takes `!` negation. There is no `open` flag — open and closed are STATUS GROUPS (`not_started`, `active`, `done`, `closed`), which is the level every rule in the tracker is written at. `f.<slug>=<value>` filters on a custom field — resolved against the company's catalogue by slug, id or label, and compared on the column its DECLARED TYPE says, so `f.effort=gt:9` is a numeric comparison and not a lexical one; the seventeen operators are `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `contains`, `startswith`, `in`, `range`, `any`, `all`, `not_any`, `not_all`, `me`, `null` and `not_null` — and which of them a field admits is a property of its TYPE, so `eq` on a `labels` field is REFUSED naming `any`, `all`, `not_any` and `not_all` rather than compiling to a clause that matches nothing and reads as "no task has this label". `null` and `not_null` are on every type, because "is this set" is a question about the ROW. A bare value is the type's NATURAL comparison — `any` on a set, because naming a value is not claiming the set IS it, and `eq` everywhere else. A set operator takes a comma-separated list (`any:api,ui`, at most 16) and `range` takes both ends (`range:3..8`), because a range with one end is `gte` or `lte`. A value whose text begins `<scheme>://` is a VALUE rather than an operator call, so a `url` field can be filtered by what it holds — anything else before a colon is carried through as an operator, so a typo is refused naming the set rather than silently answered. `f.<slug>=me` is resolved to the reader by the SURFACE before the query is parsed, which is what makes one saved view mean whoever opens it. A ref nothing resolves is REFUSED naming it. `q=` is a FIND rather than a search — a substring of a key (from the front) or a title (anywhere), which is what finds the item somebody half remembers; there is no `mode`, because this grammar has no ranker and ranked search over the company's prose is `search_knowledge`'s. `key=ENG-1,ENG-7` narrows to keys a caller already holds — upper-cased, like `container=` and `references=`, because a key is what somebody pasted and the column it is compared against is minted upper-case — and `removed=true` is the TRASH — the only way to list what a removal hid, which is what a restore is a gesture about. A parameter this grammar does not read is REFUSED naming it, never ignored: a filter nobody parsed is a board showing more than the person asked for, silently. An unknown status or group is refused naming the closed set rather than matching nothing. A custom field VALUE is checked against its own declaration at the write and refused naming the rule — never rounded or coerced to fit; see the coercion table in [the work tracker guide](../guides/work-tracker.md). `flag=` is the ATTENTION queue and its values OR: `cycle`, `too_deep`, `inconsistent_project` and `key_collision` are facts about a task's own row, and `one_sided` and `one_sided_final` are about a DEPENDENCY of it — an authored `waiting_on` whose blocker does not list it, and one whose mirror was refused permanently (the blocker is gone, was removed, or is full). The first is what the `tracker` duty repairs 30 seconds on; the second is what a person resolves. They OR because an attention queue asks "is anything wrong with this", and a conjunction over six flags answers nothing on every company. `totals=<column>:<op>` adds aggregates over the WHOLE matched set rather than the page — a number that changed as somebody scrolled would be the one thing a header must not do. The five ops are `sum`, `avg`, `min`, `max` and `count`; the columns are the summable ones (`points`, `estimate_min`, the `spend_*` family, `reassignments`, `depth`), the date columns for `min`/`max` only (a sum of dates is a number of microseconds nobody meant), `tasks:count`, and `f.<slug>` for a declared number or date field. A total with nothing to add up is ABSENT rather than zero: "nothing is estimated" and "everything is estimated at nothing" are different facts. `subtasks=` is how a tree is filtered: `collapsed` (the default) and `expanded` filter ROOT tasks and let their subtrees ride along unfiltered — so a todo root brings its done subtask — while `separate` filters every task on its own. The first two answer the same SET and differ only in how a caller renders it. Asking for a subtree with `parent=` or `root=` turns the mode off, because those are questions *about* subtasks and filtering their roots would answer the parent's siblings. `any=[{…},{…}]` is one level of disjunction, ANDed with the top-level keys: a branch is a PREDICATE, so it may not carry the keys that decide the answer's own shape (`removed`, `archived`, `show_closed`, `subtasks`) or how fresh it must be (`read_level`, `max_lag_seconds`, `max_lag_seq`, `min_position`) — those are the same decision at every branch or they are incoherent, and a branch that carried one would narrow what was asked for at the top level rather than widening it. An empty branch is refused, because it matches every task and makes the others decoration. `view=<id>` and `preset=<name>` are loaded FIRST and every explicit key overrides them — a saved view is a set of defaults rather than a lock, so somebody who opens a board and picks another assignee gets the view with that one key changed. A view beats a preset (somebody saved it) and what was typed beats both. The five presets are `my_queue`, `priorities`, `triage`, `blocked` and `overdue`. `my_queue` is *what can I pick up*: a DISJUNCTION of the work the viewer holds and the work in their OWN project nobody holds, open and unblocked, most important first — both arms matter, because written as "assigned to me" alone a seat with an empty queue reads the company as having nothing for it while its project's unclaimed backlog sits there, and the second arm is scoped to their project because unscoped it offers every unassigned task in the company. `priorities` is the viewer's own ordered list, open tasks only, IN THE ORDER somebody arranged it — that order is the answer, so nothing sorts over it, and a finished task drops out of the answer without the list being rewritten. `triage` is the unassigned open work, which with one fixed status set is the honest definition of "needs somebody to decide". `my_queue` and `priorities` both need `viewer=` and are refused without one, because a list with nobody's name on it is everybody's. A `view=` nothing resolves is REFUSED, never answered as the whole board. `group_by=` turns the answer into a BOARD: `groups` replaces `rows` — returning both would be the same rows twice — and each column carries its own `count` over the whole set beside a bounded slice of its rows (`group_limit`, default 20, max 100). A grouped answer mints no cursor, because across a set of columns there is no single order to be after; `group=<value>` is how a board loads one column further, and it narrows the WHOLE query, so the hint and the totals describe that column too. `group_by2=` adds swimlanes inside each column and `subgroup=` names one — a swimlane board is bounded by its CELLS rather than by either axis alone, because the work it costs is the PRODUCT of the two, so asking for lanes lowers the column cap and `subgroups_dropped` says how many lanes a column has beyond it. A `group_by=` over the WHOLE COMPANY is refused when the query's own narrowed predicate still matches more than 20 000 tasks: a board is drawn by sorting every one of them, and the refusal names the ceiling and what narrows it. It is a bounded COUNT rather than a check for the presence of a filter key, deliberately — `status_group=not_started,active` is a filter and narrows nothing, so a gate spelled "needs a narrowing filter" is one a caller clears in a single attempt without making the query any cheaper. Scoping to one project with `container=project:<key>` lifts it, because there the input is an index range whose width is one project's own size. An absent value is its own labelled column — "nobody is assigned" is a question a board answers rather than a row it hides. `group_by=tag` is the one axis where a task is on several columns at once; the answer sets `groups_overlap` so a reader knows the counts do not sum to `total_hint`, and `groups_dropped` says how many columns did not fit. `sort=` takes `rank`, `updated`, `due`, `start`, `priority`, `created`, `title`, `estimate`, `points`, `spend` and `status_entered`, each reversible with a leading `-`. **An absent value sorts LAST in both directions**: "soonest first" and "latest first" are both questions about values, and a task with no due date is the answer to neither — so `sort=due` puts the undated at the end rather than ahead of the one due tomorrow, and a cursor resumes in the same place the order put it. `sort=f.<slug>` orders by a custom field, LEFT-joined so a task that set no value still appears — a sort that also filtered would be two things the caller asked for once, and such a task sorts last by the same rule. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, `totals`, `groups`, and an echo of the `view`/`preset` it was expanded from — these answers travel detached from their requests, so a board restored from a URL can still say which saved view it is showing — plus the coverage half below |
+| `work_items` | `{container, status, status_group, assignee, reporter, watcher, collaborator, tag, type, priority, parent, root, q, key, removed, blocked, blocking, has_dependencies, has_open_asks, flag, asked_of, asked_by, subtasks, f.<slug>, view, preset, group_by, group_by2, group, subgroup, group_limit, totals, sort, cursor, limit, …}` | `GET /work`. `container` is the scope — `workspace`, or `project:ENG` (a bare `ENG` works too, and the key is upper-cased because the column is) — and an ABSENT container is neither: the engine refuses to default it, because an omitted key would otherwise be the most expensive query in the system. Every list key is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent; `status` also takes `!` negation. There is no `open` flag — open and closed are STATUS GROUPS (`not_started`, `active`, `done`, `closed`), which is the level every rule in the tracker is written at. `f.<slug>=<value>` filters on a custom field — resolved against the company's catalogue by slug, id or label, and compared on the column its DECLARED TYPE says, so `f.effort=gt:9` is a numeric comparison and not a lexical one; the seventeen operators are `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `contains`, `startswith`, `in`, `range`, `any`, `all`, `not_any`, `not_all`, `me`, `null` and `not_null` — and which of them a field admits is a property of its TYPE, so `eq` on a `labels` field is REFUSED naming `any`, `all`, `not_any` and `not_all` rather than compiling to a clause that matches nothing and reads as "no task has this label". `null` and `not_null` are on every type, because "is this set" is a question about the ROW. A bare value is the type's NATURAL comparison — `any` on a set, because naming a value is not claiming the set IS it, and `eq` everywhere else. A set operator takes a comma-separated list (`any:api,ui`, at most 16) and `range` takes both ends (`range:3..8`), because a range with one end is `gte` or `lte`. A value whose text begins `<scheme>://` is a VALUE rather than an operator call, so a `url` field can be filtered by what it holds — anything else before a colon is carried through as an operator, so a typo is refused naming the set rather than silently answered. `f.<slug>=me` is resolved to the reader by the SURFACE before the query is parsed, which is what makes one saved view mean whoever opens it. A ref nothing resolves is REFUSED naming it. `q=` is a FIND rather than a search — a substring of a key (from the front) or a title (anywhere), which is what finds the item somebody half remembers; there is no `mode`, because this grammar has no ranker and ranked search over the company's prose is `search_knowledge`'s. `key=ENG-1,ENG-7` narrows to keys a caller already holds — upper-cased, like `container=` and `references=`, because a key is what somebody pasted and the column it is compared against is minted upper-case — and `removed=true` is the TRASH — the only way to list what a removal hid, which is what a restore is a gesture about. A parameter this grammar does not read is REFUSED naming it, never ignored: a filter nobody parsed is a board showing more than the person asked for, silently. An unknown status or group is refused naming the closed set rather than matching nothing. A custom field VALUE is checked against its own declaration at the write and refused naming the rule — never rounded or coerced to fit; see the coercion table in [the work tracker guide](../guides/work-tracker.md). `flag=` is the ATTENTION queue and its values OR: `cycle`, `too_deep`, `inconsistent_project` and `key_collision` are facts about a task's own row, and `one_sided` and `one_sided_final` are about a DEPENDENCY of it — an authored `waiting_on` whose blocker does not list it, and one whose mirror was refused permanently (the blocker is gone, was removed, or is full). The first is what the `tracker` duty repairs 30 seconds on; the second is what a person resolves. They OR because an attention queue asks "is anything wrong with this", and a conjunction over six flags answers nothing on every company. `totals=<column>:<op>` adds aggregates over the WHOLE matched set rather than the page — a number that changed as somebody scrolled would be the one thing a header must not do. The five ops are `sum`, `avg`, `min`, `max` and `count`; the columns are the summable ones (`points`, `estimate_min`, the `spend_*` family, `reassignments`, `depth`), the date columns for `min`/`max` only (a sum of dates is a number of microseconds nobody meant), `tasks:count`, and `f.<slug>` for a declared number or date field. A total with nothing to add up is ABSENT rather than zero: "nothing is estimated" and "everything is estimated at nothing" are different facts. `subtasks=` is how a tree is filtered: `collapsed` (the default) and `expanded` filter ROOT tasks and let their subtrees ride along unfiltered — so a todo root brings its done subtask — while `separate` filters every task on its own. The first two answer the same SET and differ only in how a caller renders it. Asking for a subtree with `parent=` or `root=` turns the mode off, because those are questions *about* subtasks and filtering their roots would answer the parent's siblings. `any=[{…},{…}]` is one level of disjunction, ANDed with the top-level keys: a branch is a PREDICATE, so it may not carry the keys that decide the answer's own shape (`removed`, `archived`, `show_closed`, `subtasks`) or how fresh it must be (`read_level`, `max_lag_seconds`, `max_lag_seq`, `min_position`) — those are the same decision at every branch or they are incoherent, and a branch that carried one would narrow what was asked for at the top level rather than widening it. An empty branch is refused, because it matches every task and makes the others decoration. `view=<id>` and `preset=<name>` are loaded FIRST and every explicit key overrides them — a saved view is a set of defaults rather than a lock, so somebody who opens a board and picks another assignee gets the view with that one key changed. A view beats a preset (somebody saved it) and what was typed beats both. The five presets are `my_queue`, `priorities`, `triage`, `blocked` and `overdue`. `my_queue` is *what can I pick up*: a DISJUNCTION of the work the viewer holds and the work in their OWN project nobody holds, open and unblocked, most important first — both arms matter, because written as "assigned to me" alone a seat with an empty queue reads the company as having nothing for it while its project's unclaimed backlog sits there, and the second arm is scoped to their project because unscoped it offers every unassigned task in the company. `priorities` is the viewer's own ordered list, open tasks only, IN THE ORDER somebody arranged it — that order is the answer, so nothing sorts over it, and a finished task drops out of the answer without the list being rewritten. `triage` is the unassigned open work, which with one fixed status set is the honest definition of "needs somebody to decide". `my_queue` and `priorities` are the CALLER's own — there is no parameter naming whose, because a question about somebody's queue asked on their behalf is the owner-or-lead rule's, not a filter's — and a caller bound to no seat is refused both, because a list with nobody's name on it is everybody's. A `view=` nothing resolves is REFUSED, never answered as the whole board. `group_by=` turns the answer into a BOARD: `groups` replaces `rows` — returning both would be the same rows twice — and each column carries its own `count` over the whole set beside a bounded slice of its rows (`group_limit`, default 20, max 100). A grouped answer mints no cursor, because across a set of columns there is no single order to be after; `group=<value>` is how a board loads one column further, and it narrows the WHOLE query, so the hint and the totals describe that column too. `group_by2=` adds swimlanes inside each column and `subgroup=` names one — a swimlane board is bounded by its CELLS rather than by either axis alone, because the work it costs is the PRODUCT of the two, so asking for lanes lowers the column cap and `subgroups_dropped` says how many lanes a column has beyond it. A `group_by=` over the WHOLE COMPANY is refused when the query's own narrowed predicate still matches more than 20 000 tasks: a board is drawn by sorting every one of them, and the refusal names the ceiling and what narrows it. It is a bounded COUNT rather than a check for the presence of a filter key, deliberately — `status_group=not_started,active` is a filter and narrows nothing, so a gate spelled "needs a narrowing filter" is one a caller clears in a single attempt without making the query any cheaper. Scoping to one project with `container=project:<key>` lifts it, because there the input is an index range whose width is one project's own size. An absent value is its own labelled column — "nobody is assigned" is a question a board answers rather than a row it hides. `group_by=tag` is the one axis where a task is on several columns at once; the answer sets `groups_overlap` so a reader knows the counts do not sum to `total_hint`, and `groups_dropped` says how many columns did not fit. `sort=` takes `rank`, `updated`, `due`, `start`, `priority`, `created`, `title`, `estimate`, `points`, `spend` and `status_entered`, each reversible with a leading `-`. **An absent value sorts LAST in both directions**: "soonest first" and "latest first" are both questions about values, and a task with no due date is the answer to neither — so `sort=due` puts the undated at the end rather than ahead of the one due tomorrow, and a cursor resumes in the same place the order put it. `sort=f.<slug>` orders by a custom field, LEFT-joined so a task that set no value still appears — a sort that also filtered would be two things the caller asked for once, and such a task sorts last by the same rule. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, `totals`, `groups`, and an echo of the `view`/`preset` it was expanded from — these answers travel detached from their requests, so a board restored from a URL can still say which saved view it is showing — plus the coverage half below |
 | `work_item` | `{id}` | `GET /work/{id}` — key or id. Answers `{task, comments, history, links, fields, blocked}` plus the same coverage half. `blocked` is on the ANSWER rather than on `task` because it is DERIVED — an open dependency edge, computed in the same transaction as the task, so the badge here and the badge on the board row cannot disagree; `links` say what the relations are, not whether any blocker is still open. `fields` are the task's CUSTOM fields resolved against the company's catalogue — each carrying its declared name, type and whether its declaration was archived — because a stored choice is an option's UUID and a panel rendering the raw value would print it under a heading |
 | `work_catalogue` | `{archived}` | `GET /work/catalogue`. Answers `{types, fields, policy_version, types_version, fields_version}` plus the coverage half. `policy_version` moves on every *fields* edit and is what a task's policy stamp records having validated against; a *types* edit does not move it, because the two are separate objects on separate subjects so an unrelated edit never invalidates every task's stamp |
 | `work_projects` | `{q, unit, archived, limit}` | `GET /work/projects`. `task_counts` is read from `tracker_projects.open_count/done_count/closed_count`, MAINTAINED by the task apply whenever a status group changes or a task enters, leaves or is removed — never aggregated per poll, which over every task in every project is what a sixty-second refresh used to cost. `unit.resolved` is a FIELD rather than an absence: "this project names a unit the chart no longer has" is a finding, and an absent unit would be indistinguishable from a project that names none |
@@ -2122,9 +2123,9 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_inbox` | `{handle, unread, primary_only, include_snoozed, reasons, limit, cursor, since}` | `GET /work/inbox`. One person's notices, newest first, 50 to a page. Each names the ONE reason of eighteen it reached them under, `addressed` (it asks something of them rather than informing them), `fallback` (nobody better was found), and their own read and snooze marks. `primary_reasons` is the split that was APPLIED, defaulted, so a caller renders *you are seeing these because* without repeating the rule; `unread` and `primary` are counts over the PAGE and say so, because a total over the table is a second scan of rows this answer did not return. `reasons` FILTERS rather than classifies — the primary split classifies the same rows — and an unknown one is refused naming the eighteen. `since` is a log POSITION (`<stream>@<generation>:<sequence>`, what `seen_through` renders), never a bare sequence. Same scope rule as `work_my_work` |
 | `work_search` | `{q, limit}` | `GET /work/search`. The company's work RANKED against a phrase — BM25 over the engine's own inverted list, which is the same ranking a seat gets from `search_work`. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Registered only where this node HOLDS an index, which is separate from holding the board: a node that joined recently has every row and no index, and answers `available: false` with `reason: "building"` rather than an error or an empty result — nothing is wrong, and a reader told *nothing matched* files the duplicate. A score is comparable WITHIN one answer and nowhere else, because the statistics it is computed against are this corpus's |
 | `work_routing` | `{record_id}` | `GET /work/routing/{record_id}`. Who ONE change woke, and under which reason — the fact no other tracker records. `tracker_notifications` has always been readable by RECIPIENT (`work_inbox`); this is the same rows by RECORD, which is a primary-key prefix scan and needs no index of its own. Each recipient names the ONE reason of eighteen that found them, `addressed` (it asks something of them), and `fallback`/`fallback_rank` (nobody better was found). `notified` is the history row's own flag and means the commit CARRIED a notification — never that somebody was woken, since the applier deliberately does not hold the roster that would need. So an empty recipient list is THREE facts and `delivery` tells them apart: `nobody` (announced, inside the retention window, and every candidate was the actor or has left), `swept` (older than `tracker.native.inbox_retention_days`, so their absence is not evidence), `unknown` (no horizon stated) and `quiet` (the commit announced nothing, which is most of them). `retained_from` is the instant that decision was made against |
-| `viewer` | `{}` | `GET /viewer`. `{operator_id, operator, handle, name, kind}`. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. Answers three states apart — anonymous (`operator_id` empty), bound (`handle` set), and presented-but-unbound (an id with no handle), which is an ordinary state rather than a refusal |
+| `viewer` | `{}` | `GET /viewer`. `{login, grants, handle, name, kind}`. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. A bound caller carries a `handle`; an unbound one carries a login and no seat, which is an ordinary state rather than a refusal |
 | `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own seat, somebody else's needs an operator credential. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person, which is how a lead's authority is made visible — every notification this domain carries is task-shaped, so one attached to a person record would render no card and reach nobody |
-| `work_views` | `{container, viewer}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. `viewer` is whose personal views appear and whose pins come first, and it takes the [personal scope rule](#whose-record-a-personal-question-answers-for): your own seat, or an operator credential for anybody else's. Absent is the shared strip — no pins and no personal views but the shared ones — which is what a screen asks for before it knows who is looking, and it needs no credential. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it |
+| `work_views` | `{container}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. Whose personal views appear and whose pins come first is the CALLER's, never a parameter; a caller bound to no seat gets the shared strip — no pins and no personal views but the shared ones. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it |
 | `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything |
 | `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
 | `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
@@ -2195,27 +2196,24 @@ Four questions answer about **one person** rather than about the company:
 `work_my_work`, `work_inbox`, `work_person` and `conversations`. Every one of
 them takes a `handle`, and the rule for whose is the same, in one place:
 
-1. **No handle** answers for the seat the caller's own credential is bound to.
+1. **No handle** answers for the seat the caller is bound to.
 2. **Your own handle** is the same thing said explicitly.
-3. **Anybody else's handle** needs an operator credential.
+3. **Anybody else's handle** is the authority table's owner-or-lead rule:
+   whoever leads that person, or a caller holding `fleet:operate`. A node that
+   cannot read the chart to tell answers `503`, never a refusal — a lead told
+   they lead nobody goes looking for an authority they already hold.
 
-The binding is a chain of two, and neither link is new. Tier A's
-`api.auth.tokens` maps a presented credential to an **operator id**; a human
-seat claims one with `contact.crewlet_operator_id`. `viewer` is the question
-that walks it, and it lives on the seat rather than in Tier A deliberately —
-Tier A is the root of trust and holds the keys to the secret store, so it
-resolves with `EnvOnly` and may never read a value out of Tier B.
+The binding is the **identity directory's**: a person's row names the seat they
+hold, and a Tier A token acts as a seat when the directory binds its login to
+one. A caller bound to no seat is refused `bad_params`, not `unauthorized`.
+Nobody was denied anything: there is no person to answer about, and the remedy
+is a binding in the directory rather than a different credential.
 
-A caller with no seat behind their credential is refused `bad_params`, not
-`unauthorized`. Nobody was denied anything: there is no person to answer about,
-and the remedy is a line of company configuration rather than a different
-token. A surface that reported it as an authorization failure would send
-somebody looking for a credential that does not exist.
-
-These were registered **operator-only** until recently, which made the one
-screen a human teammate lives on unreachable to them — and, for an operator,
-a stranger's day: the dashboard had no viewer at all, so "my work" fell back
-to the alphabetically first seat in the chart.
+There is no parameter naming a viewer anywhere on this surface. Whose board, whose queue and
+whose view strip is the CALLER's, and a question about somebody else takes the
+`handle` above and the rule that goes with it — a parameter that named a
+viewer was a way to be told somebody else's arrangement without being asked
+who you were.
 
 ### One frame per posture, and how a frame is routed
 
@@ -2548,7 +2546,7 @@ when it acquires the seat — and nothing on a person's record describes one.
 The trash is the last of them: a removal takes an item off every board in the
 company, and a seat that could hide work it did not want to do would be marking
 its own homework in the one way that leaves no trace. Neither destroys
-anything — a removal is reversible at any age, and `crewlet work purge` is the
+anything — a removal is reversible at any age, and a purge (`crewlet work purge`, or `POST /work/items/{key}/purge`) is the
 one that is not.
 
 Each tool appears only where its half of the company is native: a company on
@@ -2579,11 +2577,25 @@ prose. The reserved containers are refused to it exactly as they are to a seat.
 
 ### Who a write is attributed to
 
-The **token's own name** — the key in `api.auth.tokens` — with author kind
-`operator`. Not a seat: a token is not a colleague, and a name in the handle
-field would render as one in every thread it appeared in. So an audit can tell
-an operator's edit from an agent's, and a person and the credential they used
-stay two separate facts on the record.
+The **person or credential the request resolved to**, converted once for every
+surface that has a request rather than a turn — this one and the
+[write surface](#the-human-write-surface) below:
+
+| Who is calling | Recorded as | Author kind |
+|---|---|---|
+| A person the identity directory binds to a seat | the **seat's handle** | `human` |
+| A person bound to no seat | their **login** (`jane.doe`) | `operator` |
+| A Tier A token or a machine credential | its **whole login** (`token:ops`) | `operator` |
+
+The seat half is what lets the tracker leave you out of the wake your own
+change sends: nobody is woken about what they just did, and the tracker
+recognises the author by the name the record carries — so a person recorded
+under a token's id was woken about every edit they made. The login half keeps
+the colon: `token:ops` can never be a seat's handle, where the bare `ops` could
+be, and an own-record rule comparing names would then admit a credential into
+the record of the seat that shares its spelling. The credential is recorded
+again beside the author, so an audit can ask what one token did without
+reasoning about kinds.
 
 There is deliberately **no way for the caller to name a seat to act as**. That
 would let anybody holding the token write as anybody, and a tracker whose
@@ -2598,6 +2610,130 @@ per-run token in its own path is what authenticates it instead. Mounting a
 writable company surface under the same prefix would have put it behind no
 credential at all. `/operator` is its own always-guarded prefix, alongside
 `/config` and `/secrets`.
+
+## The human write surface
+
+Everything a person does to the company's own work and pages — filing an item,
+moving it, commenting, arranging a board, writing a page, taking one out of
+circulation — as HTTP routes, under the name of whoever the request resolved
+to. They are the **same tools** a seat holds in its turn and your own assistant
+holds over [`/operator/mcp`](#operatormcp--your-own-assistant): a route's body
+is the tool's own arguments, by the tool's own names, and its answer is the
+tool's own receipt. One implementation of "file an item" rather than three,
+because copies drift on exactly the parts nobody looks at — which field is
+trimmed, which default applies, what a refusal says.
+
+Every route is **guarded**, reads and writes alike, and the half whose backend
+is not native is **absent** rather than refusing: a company on
+`tracker.backend: jira` gets `404` from the work routes, not a `503` that reads
+as an outage.
+
+### The routes, and the authority each takes
+
+The authority is the [authority table's](#which-grant-a-route-needs), decided
+ONCE. Where the object is in the path — a project, a person — the route
+decides the verb itself. Where it needs a stored row — which project an item is
+filed under, which space a page is in, who wrote a comment — the route admits a
+reader and the verb is decided once the row is read, by the tool's own ask or,
+for a verb with no tool, by the route.
+
+| Method | Path | Does | Decided by |
+|---|---|---|---|
+| `POST` | `/work/items` | `create_work_item` | `work:write` |
+| `PATCH` | `/work/items/{key}` | `update_work_item`. `If-Match` is its `if_match` | `work:write`; re-routing asks the project's lead |
+| `POST` | `/work/items/{key}/comments` | `comment_on_work_item` | `work:write` |
+| `PATCH` | `/work/items/{key}/comments/{cid}` | Rewrite a remark: `{"body": …}` | its **author** — the table admits `fleet:operate` too, and the tracker then refuses anybody but the author, because a remark somebody else can rewrite is one attributed to a person who did not make it |
+| `POST` | `/work/items/{key}/rank` | Place the item `{"after": ref, "before": ref}` — one or both neighbours, in its own project | `work:write` |
+| `POST` | `/work/items/{key}/depend` | `update_work_item`'s `waiting_on`, `blocking` and `dependency_note`, and nothing else | `work:write` |
+| `POST` | `/work/items/{key}/relate` | `update_work_item`'s `linked` and `linked_pages`, and nothing else | `work:write` |
+| `DELETE` | `/work/items/{key}` | `remove_work_item` (`{"subtree": true}` takes its children) | the lead of the item's **own** project, or `fleet:operate` |
+| `POST` | `/work/items/{key}/restore` | `restore_work_item` | the same |
+| `POST` | `/work/items/{key}/purge` | Destroy it and every row it produced — see [below](#a-purge) | `fleet:operate`, and **never a seat** |
+| `PUT` | `/work/projects/{key}` | `write_project`'s policy: `fields`, `default_assignee`, `archived` | the project's lead or `fleet:operate`; archiving never a seat |
+| `POST` | `/work/projects/{key}/tags` | `write_project`'s `tags_add`, `tags_rename`, `tags_archive` | declaring: `work:write`; renaming and archiving: the project's lead |
+| `POST` | `/work/views` | `save_work_view` | a personal view is its owner's; a shared one its container's lead's |
+| `PUT` | `/work/catalogue` | `write_work_catalogue` | `config:write` |
+| `PUT` | `/work/people/{handle}/inbox` | `mark_inbox` — see [below](#somebody-elses-inbox) | the person, or `fleet:operate` |
+| `PUT` | `/work/people/{handle}/pins` | `set_pins` | the person, or `fleet:operate` |
+| `PUT` | `/work/people/{handle}/priorities` | `set_priorities` (`{"items": [...]}`) | the person, whoever leads them, or `fleet:operate`; never a seat reordering a colleague |
+| `POST` | `/pages` | `write_page` | `knowledge:write` |
+| `PUT` | `/pages/{id}` | `save_page`. `If-Match` is its required `base_version` | `knowledge:write`; a `title` in the body is a rename, and asks what a rename asks |
+| `POST` | `/pages/{id}/rename` | Move the page to a new title — its address: `{"title": …, "quiet": false}` | the lead of the page's container, or `fleet:operate` |
+| `POST` | `/pages/{id}/comments` | `comment_on_page` | `knowledge:write` |
+| `PATCH` | `/pages/{id}/comments/{cid}` | Rewrite a remark: `{"body": …}` | its **author** — for the work comment's reason |
+| `DELETE` | `/pages/{id}/comments/{cid}` | Take a remark down | its author, or `fleet:operate` as a moderator |
+| `DELETE` | `/pages/{id}` | Put the page in the trash | the lead of the page's container, or `fleet:operate` |
+| `POST` | `/pages/{id}/restore` | Take it back | the same |
+| `POST` | `/pages/{id}/purge` | Destroy it: `?confirm=` repeats its **title**, `?reason=` is required | `fleet:operate`, and **never a seat** |
+
+`{key}` is an item's key (`ENG-42`) or its id; `{id}` is a page's id. A body
+naming a different object than the path is refused `400` rather than
+overwritten, and a route that is a narrower door onto a wider tool — `/depend`,
+`/relate`, `/tags`, a project's policy — refuses an argument that belongs to
+another. A body over 1 MiB (twice a page at its own cap, for JSON escaping) is
+refused `413` before it is read.
+
+**Not here, and deliberately:** sprints and goals. The tracker has neither —
+both left the domain — so there is nothing to route.
+
+### What a request answers
+
+| Status | When | Carries |
+|---|---|---|
+| `200` | The write was **applied** on this node, so the next read here sees it | the tool's own receipt, its `outcome`, `position` and `op_id` |
+| `202` | The write is **pending**: durable, and not yet applied on this node | the same, and the `position` to read at |
+| `401` | Nobody presented a credential | |
+| `403` `forbidden` | The authority table refused | `detail`: the refusal, worded exactly as a seat and your assistant are told it |
+| `404` | The item, page or comment does not exist — or this node runs no such backend | |
+| `409` `stale` | Somebody changed it after you read it: a stale `If-Match`, a title taken, a race lost | `detail`: read it again |
+| `422` `refused` | The domain refused the write on its own rules | `detail`: the domain's own sentence |
+| `503` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), or cannot establish whether the write landed | a `Retry-After`, and — for an unknown outcome — the `op_id` to retry with |
+
+The `403` wording is the point of the second row: the three surfaces that serve
+these verbs refuse in ONE sentence, formed by one function, so a person told one
+thing by the dashboard and another by their assistant is never left asking
+which is wrong.
+
+### A retry is the same operation
+
+Send an `Idempotency-Key` header and every record the request writes derives
+its operation id from it; send none and a fresh key is minted and handed back
+as `op_id`. An `unknown` outcome is the one to retry — **with the same key**,
+sent back as `Idempotency-Key`, because a fresh one would defeat the ledger
+that makes a retry safe and a retried create would file the item twice.
+
+### A purge
+
+`POST /work/items/{key}/purge?confirm=<KEY>&reason=<why>` destroys an item and
+every row it produced, on every node, and nothing undoes it. It replaced
+the purge route that stood beside the retention gestures, and it differs in the
+three places that one was wrong:
+
+- **`?confirm=` is checked**, against the item the path resolves to — the key a
+  person sees on the board, not the id a script carries. A mismatch is `422`
+  and destroys nothing.
+- **The project is the stored row's.** There is no `?project=`: a key's prefix
+  names where the item was *filed*, which a move leaves behind as an alias, and
+  a purge filed under the wrong project blocks writes to a project it is not
+  about.
+- **A retry reuses the operation** through `Idempotency-Key`, like every write
+  here, rather than an `?op_id=` of its own.
+
+`?reason=` is required: the rows are destroyed and the deletion marker's reason
+is the whole account of what used to be at that key. A node that is offline or
+evicted keeps its copy until it replays, adopts a snapshot, is replaced or is
+destroyed. `crewlet work purge` is the same route from a shell.
+
+### Somebody else's inbox
+
+`mark_inbox` and `set_pins` write the **caller's own** record and take no
+handle — a model that could name whose inbox to mark could mark anybody's. So
+`PUT /work/people/{handle}/inbox` with your own handle goes through the tool
+exactly as your assistant's call would, and with **somebody else's** — which
+only an administrator is admitted to, to unstick a departed person's queue —
+through the same parsing and the same writer, with the table's answer as its
+authority. The handle is a **seat** handle: a person's record in the tracker is
+keyed on the seat they hold.
 
 ## The native tracker and knowledge base
 
@@ -2630,14 +2766,13 @@ because a client told to come back would go round a loop that cannot
 terminate; those are ordinary failures and the log names them. See
 [Read Consistency](../guides/consistency.md).
 
-**The item surface is read-only.** There is no `POST /work`. An item is filed
-and moved by a seat's own tools, or by an operator through the
-[MCP surface](../guides/tools-and-mcp.md), and both are attributed to somebody
-— where a dashboard button would write as "the dashboard", which is not a
-person and not a seat and cannot be asked why. The three routes under
-`/work/retention/` below are the exception, and they are not about items: they
-are operator gestures against the log's own history, attributed to the token
-that made them.
+**The reads are here and the writes are [the write surface's](#the-human-write-surface).**
+Every write is attributed to somebody — a seat through its own tools, a person
+or a credential through the write surface or the
+[MCP surface](../guides/tools-and-mcp.md) — and never to "the dashboard",
+which is not a person and not a seat and cannot be asked why. The routes under
+`/work/retention/` below are not about items: they are operator gestures
+against the log's own history, attributed to the token that made them.
 
 ### Paging and filters
 

@@ -36,7 +36,7 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	only := opsmcp.New(opsmcp.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
+			Merges: stubWorkMerger, Actor: builtin.PrincipalActor,
 		},
 	})
 	if only == nil {
@@ -63,22 +63,24 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	t.Parallel()
 	ctx := auth.WithOperator(t.Context(), "ops-bot")
 
-	actor, err := opsmcp.WorkActor(ctx, nil)
+	actor, err := builtin.PrincipalActor(ctx, nil)
 	if err != nil {
-		t.Fatalf("WorkActor: %v", err)
+		t.Fatalf("PrincipalActor: %v", err)
 	}
 	if actor.Kind != tracker.AuthorOperator {
 		t.Errorf("an operator write is attributed as %q", actor.Kind)
 	}
-	if actor.OperatorID != "ops-bot" {
+	if actor.OperatorID != "token:ops-bot" {
 		t.Errorf("the record names the operator %q", actor.OperatorID)
 	}
-	// THE AUTHOR IS THE TOKEN'S OWN NAME, and the KIND is what says it is
-	// not a seat. An empty author is the one thing this surface must never
+	// THE AUTHOR IS THE TOKEN'S WHOLE LOGIN, colon and all: the colon is
+	// what keeps the name out of the seat namespace, so the stripped id
+	// would be a name a seat can also hold. And the KIND says it is not a
+	// seat. An empty author is the one thing this surface must never
 	// record — a history row nobody can attribute — so the discriminator
 	// is the kind, which every renderer and every recipient rule already
 	// reads, rather than the emptiness of a string.
-	if actor.Handle != "ops-bot" {
+	if actor.Handle != "token:ops-bot" {
 		t.Errorf("an operator write is authored by %q, want the token's name",
 			actor.Handle)
 	}
@@ -95,11 +97,11 @@ func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
 	// filtering on a name matched half of what they did. The kind is already
 	// its own column on both rows, so the prefix was a second encoding of a
 	// fact the row carries.
-	page, err := opsmcp.PageActor(ctx, nil)
+	page, err := builtin.PrincipalPageActor(ctx, nil)
 	if err != nil {
-		t.Fatalf("PageActor: %v", err)
+		t.Fatalf("PrincipalPageActor: %v", err)
 	}
-	if page.Kind != pages.AuthorOperator || page.OperatorID != "ops-bot" {
+	if page.Kind != pages.AuthorOperator || page.OperatorID != "token:ops-bot" {
 		t.Errorf("a page write is attributed as %+v", page)
 	}
 	if page.Handle != actor.Handle {
@@ -126,10 +128,10 @@ func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
 		"an empty operator id":       auth.WithOperator(context.Background(), ""),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := opsmcp.WorkActor(ctx, nil); err == nil {
+			if _, err := builtin.PrincipalActor(ctx, nil); err == nil {
 				t.Error("a write with no operator was attributed rather than refused")
 			}
-			if _, err := opsmcp.PageActor(ctx, nil); err == nil {
+			if _, err := builtin.PrincipalPageActor(ctx, nil); err == nil {
 				t.Error("a page write with no operator was attributed rather than refused")
 			}
 		})
@@ -165,9 +167,9 @@ func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	s := opsmcp.New(opsmcp.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
+			Merges: stubWorkMerger, Actor: builtin.PrincipalActor,
 		},
-		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: opsmcp.PageActor},
+		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: builtin.PrincipalPageActor},
 	})
 	if s == nil {
 		t.Fatal("a company on both native backends got no surface")
@@ -299,11 +301,11 @@ func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 	s := opsmcp.New(opsmcp.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
+			Merges: stubWorkMerger, Actor: builtin.PrincipalActor,
 		},
 		Pages: builtin.PageDeps{
 			Reader: stubPageReader{}, Writer: stubPageWriter{},
-			Actor: opsmcp.PageActor,
+			Actor: builtin.PrincipalPageActor,
 		},
 	})
 	if s == nil {

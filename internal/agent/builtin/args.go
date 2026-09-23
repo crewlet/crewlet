@@ -191,6 +191,32 @@ func argStringMap(args map[string]any, key string) map[string]string {
 // of the loop tearing down.
 func failed(msg string) tools.Result { return tools.Result{Output: msg, Failed: true} }
 
+// failedBy is [failed] for a refusal something underneath decided — a read
+// that found nothing, a write the log refused — carrying that error as the
+// result's [tools.Result.Cause].
+//
+// THE MESSAGE IS STILL THE WHOLE ANSWER to a model; see the field's own doc.
+// What the cause buys is that a caller answering in STATUS CODES can tell an
+// item that does not exist from a version somebody moved from a node that
+// could not decide, without parsing a sentence written for a model.
+func failedBy(cause error, msg string) tools.Result {
+	return tools.Result{Output: msg, Failed: true, Cause: cause}
+}
+
+// readFailed, writeFailed and pageWriteFailed are the three failure
+// sentences, each carrying the error it explains.
+func readFailed(name string, err error) tools.Result {
+	return failedBy(err, readFailure(name, err))
+}
+
+func writeFailed(name string, err error) tools.Result {
+	return failedBy(err, writeFailure(name, err))
+}
+
+func pageWriteFailed(name string, err error) tools.Result {
+	return failedBy(err, pageWriteFailure(name, err))
+}
+
 // clip flattens a caller-supplied string echoed back into a tool result or a
 // log line.
 //

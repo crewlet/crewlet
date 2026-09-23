@@ -151,7 +151,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	answer, err := reader.Activity(ctx, q, t.deps.now())
 	if err != nil {
-		return failed(readFailure(tracker.TaskActivityTool, err)), nil
+		return readFailed(tracker.TaskActivityTool, err), nil
 	}
 	return jsonResult(answer)
 }
@@ -201,7 +201,7 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Handle: actor.Handle, Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
-		return failed(readFailure(tracker.MyWorkTool, err)), nil
+		return readFailed(tracker.MyWorkTool, err), nil
 	}
 	return jsonResult(out)
 }

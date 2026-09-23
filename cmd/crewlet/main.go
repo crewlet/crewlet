@@ -39,6 +39,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/api/workapi"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
@@ -1568,6 +1570,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
+	// AND THE WRITE SURFACE, nil on a company on Jira and Confluence.
+	workRoutes, err := workSurface(e)
+	if err != nil {
+		return nil, err
+	}
 
 	// The fleet's integration status, which both the reconcile loop and a
 	// pass run from the dashboard write.
@@ -1843,10 +1850,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// the difference between an operator reading a procedure and an
 		// operator looking for a version mismatch.
 		Capacity: e,
-		// THE ONE OPERATION NOTHING UNDOES, and it had no caller at
-		// all until this line: no verb, no route, no tool. A company
-		// could not destroy a task under any circumstances.
-		Purger: nativePurger(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
@@ -1868,6 +1871,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// THE COMPANY'S IDENTITY DIRECTORY, nil on a node that runs no
 		// identity domain — see [directorySurface].
 		IAM: directory,
+		// AND THE HUMAN WRITE SURFACE over the tracker and the knowledge
+		// base, nil on a company that runs neither natively — see
+		// [workSurface]. It is also where the one operation nothing
+		// undoes, destroying a work item, is reached.
+		Work: workRoutes,
 		// WHETHER THIS NODE'S REPLICATED COPY IS FIT TO ANSWER FROM, for
 		// /ready. The ENGINE's own verdict rather than a second one built
 		// here: it is the same question that decides whether this node may
@@ -2609,32 +2617,6 @@ func nativeNodes(e *engine.Engine) api.NodeGate {
 	return nil
 }
 
-// nativePurger is the purge route's writer, or nil.
-//
-// AN ADAPTER RATHER THAN THE WRITER ITSELF, because the API's seam takes the
-// operator as an argument: every other write on that surface is the fleet's
-// and the process's own writer is the right author, while a purge destroys a
-// company's data and the record has to carry the person who asked for it.
-// `As` is where that identity is bound, and it is a tracker concept the API
-// package deliberately does not import a concrete type for.
-func nativePurger(e *engine.Engine) api.TaskPurger {
-	w := e.TrackerWriter()
-	if w == nil {
-		return nil
-	}
-	return purgeAdapter{writer: w}
-}
-
-type purgeAdapter struct{ writer *tracker.Writer }
-
-func (p purgeAdapter) PurgeAs(ctx context.Context, operator, opID, id, project,
-	reason string) (tracker.WriteResult, error) {
-
-	return p.writer.As(operator, tracker.AuthorOperator,
-		tracker.Provenance{OperatorID: operator}).
-		PurgeTask(ctx, opID, id, project, reason)
-}
-
 func nativePages(e *engine.Engine) queries.PageReader {
 	if r := e.Pages(); r != nil {
 		return r
@@ -2657,8 +2639,58 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	if c := e.Company(); c != nil && c.Config != nil {
 		opts.Company = c.Config.Name
 	}
+	opts.Work, opts.Pages = nativeToolDeps(e)
+	// THE PRINCIPAL IS THE PARTY, and it comes from the request's context
+	// rather than from the call: a tracker whose author field is chosen by
+	// the writer is not an audit trail, and there is deliberately no way to
+	// name a seat to act as. [builtin.PrincipalActor] is the one conversion
+	// the HTTP write surface makes too.
+	opts.Work.Actor = builtin.PrincipalActor
+	opts.Pages.Actor = builtin.PrincipalPageActor
+	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
+	// unlike the ten write tools, ranked search over the company's own
+	// wiki is exactly as useful to an operator's assistant on Confluence.
+	if e.Knowledge() != nil {
+		opts.Knowledge = operatorKnowledge{engine: e}
+		// AND THE CHART BESIDE IT. An operator has no turn, so the org
+		// the search is scoped against comes from here; resolved per
+		// call, because a config apply replaces it.
+		opts.Org = func() *org.Organization {
+			c := e.Company()
+			if c == nil {
+				return nil
+			}
+			return c.Org
+		}
+	}
+	// THE AUTHORITY DECISION, which is the SAME one every seat's registry
+	// is built with — one table, one function, three surfaces. It reads
+	// the chart per call, because an apply replaces the epoch under a
+	// long-lived MCP session.
+	opts.Authorize = builtin.Decide(engine.ChartAuthorityOf(e))
+	return opsmcp.New(opts)
+}
+
+// nativeToolDeps are the deps the builtin tools are built from for a surface
+// whose caller is a PERSON rather than a seat: the operator's assistant over
+// MCP, and the HTTP write surface.
+//
+// ONE CONSTRUCTOR FOR BOTH, because the two serve the same tools and a field
+// wired on one and forgotten on the other is a tool that behaves differently
+// depending on where it was called from — which is the drift each of the
+// comments below records having happened once already. Actor and Authorize are
+// left for each surface to set: the first carries a per-request key on one of
+// them, and the second is decided where the surface is built.
+//
+// The DEFAULTS are deliberately absent. A seat files into its unit's project
+// when it names none, because a seat HAS a unit; a person does not, so the
+// argument is required and the tool refuses naming it rather than guessing a
+// project on somebody's behalf.
+func nativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
+	var work builtin.WorkDeps
+	var kb builtin.PageDeps
 	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
-		opts.Work = builtin.WorkDeps{
+		work = builtin.WorkDeps{
 			Reader: reader,
 			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
 			// from the request's context rather than from the call: a
@@ -2752,7 +2784,6 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			Leads:          engine.LiveLeads(e),
 			Units:          engine.LiveUnits(e),
 			DefaultProject: func(string) string { return "" },
-			Actor:          opsmcp.WorkActor,
 			// THE MENTION RESOLVER, which this surface went without: a
 			// comment's @-mention is turned into a wake by the tracker's
 			// recipients only when the writer resolved it, so an
@@ -2764,35 +2795,62 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 		}
 	}
 	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {
-		opts.Pages = builtin.PageDeps{
+		kb = builtin.PageDeps{
 			Reader: reader, Writer: writer,
-			Actor:    opsmcp.PageActor,
 			Mentions: engine.LiveMentions(e),
 			Await:    e.WaitCommitted,
 		}
 	}
-	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
-	// unlike the ten write tools, ranked search over the company's own
-	// wiki is exactly as useful to an operator's assistant on Confluence.
-	if e.Knowledge() != nil {
-		opts.Knowledge = operatorKnowledge{engine: e}
-		// AND THE CHART BESIDE IT. An operator has no turn, so the org
-		// the search is scoped against comes from here; resolved per
-		// call, because a config apply replaces it.
-		opts.Org = func() *org.Organization {
-			c := e.Company()
-			if c == nil {
-				return nil
-			}
-			return c.Org
+	return work, kb
+}
+
+// workSurface builds the human write surface, or nil where this node runs
+// neither a native tracker nor a native knowledge base.
+//
+// FROM THE SAME DEPS the operator's assistant is served from — see
+// [nativeToolDeps] — and deciding on the same chart, so a route and the tool
+// behind it answer one question one way. What it adds is the two writers the
+// tools never reach: the tracker's, bound to the caller, for a rank move, a
+// comment edit and the purge, and the knowledge base's store for its rename
+// and its three destructive verbs.
+func workSurface(e *engine.Engine) (surfaceMounter, error) {
+	work, kb := nativeToolDeps(e)
+	opts := workapi.Options{
+		Work: work, Pages: kb, Chart: engine.ChartAuthorityOf(e),
+	}
+	if writer := e.TrackerWriter(); writer != nil {
+		opts.Tracker = func(actor builtin.Actor) workapi.TrackerWriter {
+			return writer.As(actor.Handle, actor.Kind,
+				tracker.Provenance{OperatorID: actor.OperatorID})
 		}
 	}
-	// THE AUTHORITY DECISION, which is the SAME one every seat's registry
-	// is built with — one table, one function, three surfaces. It reads
-	// the chart per call, because an apply replaces the epoch under a
-	// long-lived MCP session.
-	opts.Authorize = builtin.Decide(engine.ChartAuthorityOf(e))
-	return opsmcp.New(opts)
+	// THE CONVERSION IS THE POINT, for [nativeWork]'s reason: a typed nil
+	// *pages.Store inside the interface would pass the surface's own
+	// check and panic on the first press.
+	if store := e.PagesStore(); store != nil {
+		opts.PageStore = store
+	}
+	surface, err := workapi.New(opts)
+	if err != nil {
+		return nil, fmt.Errorf("api: the work surface: %w", err)
+	}
+	if surface == nil {
+		return nil, nil
+	}
+	return surface, nil
+}
+
+// surfaceMounter is an optional API surface that mounts guarded routes.
+//
+// AN INTERFACE AND NOT A POINTER, for [nativeWork]'s reason and with its
+// failure: an absent surface returned as a nil *T is a NON-NIL interface once
+// it reaches api.Options, so the app's own "is there one" check passes and
+// mounts every route over a nil service — which answers each request with a
+// nil dereference instead of the 404 an absent surface is documented to be.
+// The conversion from a nil pointer to a nil interface has to happen where the
+// pointer is still typed, and that is here.
+type surfaceMounter interface {
+	Routes(mux authz.Mux) error
 }
 
 // operatorKnowledge resolves the node's searcher per call, for the reason the

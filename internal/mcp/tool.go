@@ -22,6 +22,22 @@ type Result struct {
 	// that is the point — but a reader can tell a tool that ran from one that
 	// refused.
 	Failed bool
+
+	// Cause is WHY a failed call failed, as a value a caller can branch on:
+	// an authority refusal, a stale version, a node that could not decide.
+	// Nil on a success, and nil on a refusal the tool worded itself with
+	// nothing underneath it — a missing argument, an item that does not
+	// exist.
+	//
+	// NEVER RENDERED, and that is the one rule this field carries. Output is
+	// still the whole of what anybody reads — the incident this struct's doc
+	// describes was a reason living in a second field while the first was
+	// shown — so Cause adds nothing a model sees. It exists for the caller
+	// that answers in a protocol with STATUS CODES, where "you may not",
+	// "somebody edited it first" and "this node could not tell" are 403,
+	// 409 and 503, and reading those back out of a sentence would make the
+	// wording of a refusal an API.
+	Cause error
 }
 
 // Callable is the least a phase surface needs to offer something to a model

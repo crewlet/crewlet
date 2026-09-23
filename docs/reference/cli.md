@@ -24,7 +24,7 @@ subcommand below is served by it.
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: declare every position below the next generation comparable and safely stale |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
-| `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet work purge <item> -reason TEXT -confirm <item-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token holding `fleet:operate`. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file and write **both halves**: the settings as a new `company_config` revision, and — through a running node — the `roles:` and `units:` to the [org chart](../concepts/chart-domain.md)'s own log. Offline it writes the settings alone and says so |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -839,15 +839,18 @@ what the copy is a copy *of*, and how a restore uses it.
 ## `crewlet work`
 
 ```
-crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>
+crewlet work purge <item> -reason TEXT -confirm <item-key>
     [-op-id ID] [<config.yaml>] [-url URL] [-token TOKEN]
 ```
 
-The gestures on work items that belong to a **person** rather than to a seat.
-Everything else a company does to its tasks is done by seats through their own
-tools, and that is the design — an engine whose operator edits work by hand is
-one whose org chart is decoration. The exception is the operation no seat may
-perform.
+The gestures on work items that belong on a **shell**. Everything else a
+company does to its tasks is done by seats through their own tools, or by a
+person through the [write surface](api-endpoints.md#the-human-write-surface)
+the dashboard is built on. The one here is the operation no seat may perform,
+which an operator acting on an erasure request runs from a terminal and a
+runbook — and it goes through that same surface's own route,
+`POST /work/items/{key}/purge`, so it is decided by the same authority table:
+`fleet:operate`, and never a seat.
 
 ### `crewlet work purge`
 
@@ -863,8 +866,12 @@ the body out of a single database, which is why this verb exists: an erasure
 request and a credential pasted into a task description both need the rows
 gone.
 
-**The confirmation is the task's key**, not its id. The id is on the command
-line already, so repeating it confirms nothing; the key has to be looked up.
+`<item>` is the task's key or its id. **The confirmation is the task's key**,
+and the node checks it against the task `<item>` resolves to — a mismatch
+destroys nothing. The id may be what is on the command line, so repeating it
+would confirm nothing; the key has to be looked up. **There is no `-project`**:
+the task's own stored row says which project the record is filed under, where
+a key's prefix names only where it was first filed.
 **The reason is required** because it is the only thing that survives — the
 marker's reason is the entire account of what used to be at that key for
 whoever reads it a year later.
@@ -877,9 +884,10 @@ leave every child pointing at an id that resolves to nothing.
 The outcome is three-valued, like every write here. `applied` means the rows
 are gone on this node and the record is durable. `pending` means the record is
 durable and this node has not applied it yet — **do not run it again**, because
-a second gesture appends a second purge. `unknown` is the one to retry, and the
-operation id it prints goes back in `-op-id` so the retry cannot append a
-second record.
+a second gesture appends a second purge. `unknown` exits non-zero naming the
+operation id; that id goes back in `-op-id`, which the command sends as the
+request's `Idempotency-Key`, so the retry is the same operation and cannot
+append a second record.
 
 What it does **not** reach: a node that is offline or evicted keeps its copy
 until it replays, adopts a snapshot, is replaced or is destroyed. There is no
