@@ -185,7 +185,11 @@ func TestABucketIsSweptOnlyOnceItIsASlackPastItsHorizon(t *testing.T) {
 func TestTheSweepTakesTheDeploymentsGrant(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	_, err := rig.writer.Sweep(t.Context(), defaultHorizons)
+	// NARROWED to people:manage alone: the rig's own party holds every
+	// grant, so the gate is exercised by saying which one is missing.
+	administrator := rig.writer.As("ana.admin", iam.KindPerson,
+		[]iam.Grant{iam.GrantPeopleManage})
+	_, err := administrator.Sweep(t.Context(), defaultHorizons)
 	if !errors.Is(err, iamdomain.ErrRefused) {
 		t.Fatalf("a party holding only %s swept the trail (err %v) — whoever "+
 			"administers people would decide how long their own changes are "+
