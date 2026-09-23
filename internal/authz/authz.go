@@ -164,6 +164,24 @@ type Decision struct {
 	// Err is why this node could not decide. NEVER a refusal — see the
 	// package doc, and [Decision.Unknown].
 	Err error
+
+	// Grants are the capabilities the deciding rule would have admitted
+	// THIS principal on, for THIS object — any one of them is enough.
+	// The capability a grant rule asks for, the admin grant a relation
+	// rule is overridden by, both directory grants a directory read
+	// accepts. Empty where no capability could have changed the answer:
+	// the self rule, which has no admin path, an object missing the field
+	// its rule reads before it consults any grant, and the refusals that
+	// are not about capability at all — an enrolment stage, a seat taking
+	// a human-only verb, a verb with no rule.
+	//
+	// ON THE DECISION rather than looked up beside it, because a refusal
+	// that names what would have admitted the caller has to name what the
+	// rule that decided actually consulted: a second function answering
+	// "what does this verb need" is a second copy of [Decide]'s switch,
+	// and it is the copy that drifts. A walk in this package's tests holds
+	// the two together over every verb, kind and grant.
+	Grants []iam.Grant
 }
 
 // Unknown reports a decision this node could not reach.

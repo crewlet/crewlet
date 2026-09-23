@@ -3,6 +3,7 @@ package authz_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -549,5 +550,63 @@ func TestAVerbWithNoRuleIsRefused(t *testing.T) {
 	if d.Unknown() {
 		t.Errorf("a verb with no rule decided UNKNOWN (%v), which a surface "+
 			"renders as a retry rather than as a refusal", d.Err)
+	}
+}
+
+// A REFUSAL NAMES EXACTLY THE GRANTS THAT WOULD HAVE ADMITTED THE CALLER.
+//
+// [authz.Decision.Grants] is what a surface puts in front of a person refused
+// — "this needs fleet:operate" — so it has to be the decision's own account
+// of what it consulted, never a guess made beside it. Held here against the
+// decision itself, over every verb, every kind of object and every grant: for
+// each refusal of a principal carrying nothing, the grants it names are
+// precisely those that, carried ALONE, turn the same question into an admit
+// on that grant. Both directions, because each fails differently: naming a
+// grant that would not have helped sends somebody to ask for authority that
+// changes nothing, and leaving one out tells them there is no way in when
+// there is.
+//
+// TWO OBJECTS PER KIND, because several rules refuse an object missing its
+// field BEFORE they consult any grant — no capability would change that
+// answer, so it names none — and an object with every field filled is the
+// one that reaches the relation and the admin path behind it. The chart
+// answers every relation with a firm no, so a lead relation never admits
+// anybody and never hides a grant.
+func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
+	t.Parallel()
+	nobody := func() iam.Principal { return person("jane.doe") }
+	for _, a := range authz.Actions() {
+		for _, kind := range authz.ObjectKinds {
+			for _, object := range []authz.Object{
+				{Kind: kind},
+				{Kind: kind, ID: "x", Owner: "somebody.else", Author: "somebody.else",
+					Container: "ELSEWHERE", ContainerKind: authz.KindProject},
+			} {
+				d := authz.Decide(t.Context(), nobody(), a, object, chart{})
+				if d.Unknown() {
+					t.Fatalf("%s on %+v was undecidable against a chart that "+
+						"answers: %v", a, object, d.Err)
+				}
+				if d.Allowed {
+					continue
+				}
+				var admits []iam.Grant
+				for _, g := range iam.AllGrants {
+					alone := person("jane.doe", g)
+					got := authz.Decide(t.Context(), alone, a, object, chart{})
+					if got.Allowed && got.Reason == authz.ReasonGrant {
+						admits = append(admits, g)
+					}
+				}
+				named := append([]iam.Grant(nil), d.Grants...)
+				slices.Sort(named)
+				slices.Sort(admits)
+				if !slices.Equal(named, admits) {
+					t.Errorf("%s on %+v refused (%s) naming %v; the grants "+
+						"that would have admitted it alone are %v",
+						a, object, d.Reason, named, admits)
+				}
+			}
+		}
 	}
 }

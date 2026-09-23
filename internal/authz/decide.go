@@ -227,30 +227,35 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 		return granted(p, writeGrantFor(o.Kind))
 
 	case ClassOwnRecord, ClassOwnOrLead:
+		// NO GRANT ON THE UNNAMED REFUSAL: it is taken before the admin
+		// path is consulted, so no capability would have changed it.
 		if o.Owner == "" {
 			return Decision{Reason: ReasonUnnamed}
 		}
 		if p.Login != "" && p.Login == o.Owner {
-			return Decision{Allowed: true, Reason: ReasonSelf}
+			return consulting(Decision{Allowed: true, Reason: ReasonSelf}, adminGrant)
 		}
 		// THE SEAT COUNTS AS THE LOGIN for a principal acting as one.
 		// A seat writes its own record as itself, and its login is the
 		// machine or person behind it — comparing only the login would
 		// refuse every seat its own inbox.
 		if p.Seat != "" && p.Seat == o.Owner {
-			return Decision{Allowed: true, Reason: ReasonSelf}
+			return consulting(Decision{Allowed: true, Reason: ReasonSelf}, adminGrant)
 		}
 		if p.Can(adminGrant) {
-			return Decision{Allowed: true, Reason: ReasonGrant}
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
 		}
 		if r.class == ClassOwnRecord {
-			return Decision{Reason: ReasonNotSelf}
+			return consulting(Decision{Reason: ReasonNotSelf}, adminGrant)
 		}
-		return leads(ctx, chart, actorOf(p), o.Owner, ReasonNotSelf)
+		return consulting(leads(ctx, chart, actorOf(p), o.Owner, ReasonNotSelf),
+			adminGrant)
 
 	case ClassSavedView:
+		// EVERY ANSWER BELOW IS ONE THE ADMIN GRANT WOULD HAVE
+		// OVERRIDDEN, because it is consulted first.
 		if p.Can(adminGrant) {
-			return Decision{Allowed: true, Reason: ReasonGrant}
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
 		}
 		// A PERSONAL VIEW IS A RECORD AND NOT A TAB, so it takes
 		// [ClassOwnRecord]'s answer and not [ClassOwnOrLead]'s: a lead
@@ -260,18 +265,18 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 			if p.Login != "" && p.Login == o.Owner ||
 				p.Seat != "" && p.Seat == o.Owner {
 
-				return Decision{Allowed: true, Reason: ReasonSelf}
+				return consulting(Decision{Allowed: true, Reason: ReasonSelf}, adminGrant)
 			}
-			return Decision{Reason: ReasonNotSelf}
+			return consulting(Decision{Reason: ReasonNotSelf}, adminGrant)
 		}
 		if o.Container == "" {
-			return Decision{Reason: ReasonUnnamed}
+			return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 		}
 		switch o.ContainerKind {
 		case KindProject:
-			return leadsProject(ctx, chart, actorOf(p), o.Container)
+			return consulting(leadsProject(ctx, chart, actorOf(p), o.Container), adminGrant)
 		case KindUnit:
-			return leadsUnit(ctx, chart, actorOf(p), o.Container)
+			return consulting(leadsUnit(ctx, chart, actorOf(p), o.Container), adminGrant)
 		case KindPerson:
 			// A SHARED VIEW ON SOMEBODY'S PAGE, which is theirs and
 			// their lead's — the opposite of the personal arm above,
@@ -280,21 +285,21 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 			if p.Login != "" && p.Login == o.Container ||
 				p.Seat != "" && p.Seat == o.Container {
 
-				return Decision{Allowed: true, Reason: ReasonSelf}
+				return consulting(Decision{Allowed: true, Reason: ReasonSelf}, adminGrant)
 			}
-			return leads(ctx, chart, actorOf(p), o.Container, ReasonNotSelf)
+			return consulting(leads(ctx, chart, actorOf(p), o.Container, ReasonNotSelf), adminGrant)
 		}
 		// THE WORKSPACE, and anything this build does not know. A tab
 		// every person in the company lands on is the admin path,
 		// which the grant check above is.
-		return Decision{Reason: ReasonNotLead}
+		return consulting(Decision{Reason: ReasonNotLead}, adminGrant)
 
 	case ClassContainer, ClassDestructive:
 		if p.Can(adminGrant) {
-			return Decision{Allowed: true, Reason: ReasonGrant}
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
 		}
 		if o.Container == "" {
-			return Decision{Reason: ReasonUnnamed}
+			return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 		}
 		// THE KIND PICKS THE RELATION, for [ClassChartObject]'s reason
 		// and [Chart.LeadsContainer]'s: a page container and a tracker
@@ -302,13 +307,13 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 		// and one relation asked with the other's key matches only a
 		// company that spelled them the same.
 		if o.Kind == KindContainer || o.Kind == KindPage {
-			return leadsContainer(ctx, chart, actorOf(p), o.Container)
+			return consulting(leadsContainer(ctx, chart, actorOf(p), o.Container), adminGrant)
 		}
-		return leadsProject(ctx, chart, actorOf(p), o.Container)
+		return consulting(leadsProject(ctx, chart, actorOf(p), o.Container), adminGrant)
 
 	case ClassChartObject:
 		if p.Can(adminGrant) {
-			return Decision{Allowed: true, Reason: ReasonGrant}
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
 		}
 		// THE KIND PICKS THE RELATION. See the class's own doc for why
 		// one relation cannot serve for all three, and what asking the
@@ -316,59 +321,65 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 		switch o.Kind {
 		case KindUnit:
 			if o.Container == "" {
-				return Decision{Reason: ReasonUnnamed}
+				return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 			}
-			return leadsUnit(ctx, chart, actorOf(p), o.Container)
+			return consulting(leadsUnit(ctx, chart, actorOf(p), o.Container), adminGrant)
 		case KindPerson:
 			if o.Owner == "" {
-				return Decision{Reason: ReasonUnnamed}
+				return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 			}
 			// NO SELF PATH, which is what makes this different from
 			// [ClassOwnOrLead]: a seat rewriting its own goal, its
 			// backstory and its responsibilities is a model editing
 			// the prompt it is about to run under, and nobody asked
 			// for that. Its LEAD edits it.
-			return leads(ctx, chart, actorOf(p), o.Owner, ReasonNotLead)
+			return consulting(leads(ctx, chart, actorOf(p), o.Owner, ReasonNotLead), adminGrant)
 		}
-		return Decision{Reason: ReasonUnnamed}
+		return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 
 	case ClassAuthored:
 		if o.Author == "" {
 			return Decision{Reason: ReasonUnnamed}
 		}
 		if p.Login != "" && p.Login == o.Author {
-			return Decision{Allowed: true, Reason: ReasonAuthor}
+			return consulting(Decision{Allowed: true, Reason: ReasonAuthor}, adminGrant)
 		}
 		if p.Seat != "" && p.Seat == o.Author {
-			return Decision{Allowed: true, Reason: ReasonAuthor}
+			return consulting(Decision{Allowed: true, Reason: ReasonAuthor}, adminGrant)
 		}
 		if p.Can(adminGrant) {
-			return Decision{Allowed: true, Reason: ReasonGrant}
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
 		}
-		return Decision{Reason: ReasonNotAuthor}
+		return consulting(Decision{Reason: ReasonNotAuthor}, adminGrant)
 
 	case ClassOperator:
 		return granted(p, r.grant)
 
 	case ClassDirectoryRead, ClassDirectorySelf:
+		// THE TWO WAYS IN BY CAPABILITY, and the read has one more than
+		// the gesture: an auditor establishes who can reach a company
+		// and never changes it.
+		ways := []iam.Grant{iam.GrantPeopleManage}
+		if r.class == ClassDirectoryRead {
+			ways = append(ways, iam.GrantAuditRead)
+		}
 		// THE PERSON THEMSELVES FIRST, compared on the ID and never on
 		// a name. An object naming nobody — a listing — cannot reach
 		// this arm, which is correct: a listing is not about anybody
 		// in particular, so it falls through to the capabilities.
 		if o.Owner != "" && p.ID != uuid.Nil && p.ID.String() == o.Owner {
-			return Decision{Allowed: true, Reason: ReasonSelf}
+			return consulting(Decision{Allowed: true, Reason: ReasonSelf}, ways...)
 		}
-		if p.Can(iam.GrantPeopleManage) {
-			return Decision{Allowed: true, Reason: ReasonGrant}
-		}
-		if r.class == ClassDirectoryRead && p.Can(iam.GrantAuditRead) {
-			return Decision{Allowed: true, Reason: ReasonGrant}
+		for _, g := range ways {
+			if p.Can(g) {
+				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, ways...)
+			}
 		}
 		// NO GRANT rather than NOT SELF, because the capability is what
 		// almost every caller here is missing and the self arm is the
 		// exception — telling an administrator without people:manage
 		// that they "are not that person" sends them to the wrong fix.
-		return Decision{Reason: ReasonNoGrant}
+		return consulting(Decision{Reason: ReasonNoGrant}, ways...)
 	}
 	// UNREACHABLE WHILE Classes AND THIS SWITCH AGREE, which a test in
 	// this package asserts in both directions. It is a refusal rather
@@ -378,11 +389,31 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 }
 
 // granted is the capability check, with the two reasons it produces.
+//
+// An EMPTY grant names nothing in [Decision.Grants], because there is no
+// capability that would have admitted anybody: it is a gate somebody forgot
+// to fill in, and a refusal naming "" as the remedy would send a reader to
+// ask for a grant that does not exist.
 func granted(p iam.Principal, g iam.Grant) Decision {
-	if g != "" && p.Can(g) {
-		return Decision{Allowed: true, Reason: ReasonGrant}
+	if g == "" {
+		return Decision{Reason: ReasonNoGrant}
 	}
-	return Decision{Reason: ReasonNoGrant}
+	if p.Can(g) {
+		return consulting(Decision{Allowed: true, Reason: ReasonGrant}, g)
+	}
+	return consulting(Decision{Reason: ReasonNoGrant}, g)
+}
+
+// consulting records which capabilities the rule that decided would have
+// admitted the principal on — see [Decision.Grants].
+//
+// ONE HELPER RATHER THAN A FIELD SET AT EACH RETURN, so an arm reads as the
+// rule it is and the grant list is stated once per arm rather than once per
+// outcome. The slice is always fresh: a caller appending to one decision's
+// grants must not be editing another's.
+func consulting(d Decision, grants ...iam.Grant) Decision {
+	d.Grants = append([]iam.Grant(nil), grants...)
+	return d
 }
 
 // leadsUnit asks the chart whether the actor leads one unit.
