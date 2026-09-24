@@ -120,4 +120,5 @@ six false statements by the time anybody checked.
 | [0018](0018-the-company-has-one-clock.md) | The company has one clock | `TestTheRetiredClocksAreRefused` |
 | [0019](0019-a-token-budget-is-a-periodic-window.md) | A token budget is a periodic window, and the window's turnover is its only reset | `TestAWindowRollsAtItsBoundary` |
 | [0020](0020-a-nodes-own-day-is-a-compacted-domain.md) | A node's own day is a compacted domain, and every node writes only its own | `TestADepartedNodesSpendIsStillAnswered` |
+| [0022](0022-a-turn-is-charged-to-one-work-item.md) | A turn is charged to one work item, per segment, and never split | `TestTaskSpendNeverExceedsTheRollup` |
 | [0024](0024-the-dashboard-acts-as-the-person-its-token-is-bound-to.md) | The dashboard acts as the person its token is bound to, and nobody else acts through it | `TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat`, `TestAnUnboundOrAnonymousCallerCannotAct` |

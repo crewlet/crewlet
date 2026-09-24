@@ -36,7 +36,10 @@ import (
 // statelogtest's declaration case refuses a build that reads a version no
 // field introduced, because such a build would accept a newer peer's record
 // at that version and drop the field it was minted for.
-const RecordVersion = 1
+//
+// Version 2 is the turn record's spend split: [TurnSpend.Workers] and
+// [TurnSpend.SentBack].
+const RecordVersion = 2
 
 // versionedFields is every field a tracker record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
@@ -54,10 +57,21 @@ const RecordVersion = 1
 // statelogtest candidate that carries it, which is what certifies the path is
 // the one the encoder actually writes.
 //
-// EMPTY while every field is in the base format. A field that no tag has
-// shipped is still a field two builds of one rolling upgrade disagree about,
-// so "nothing has been released" does not exempt a new field from its row.
-var versionedFields = statelog.RecordFields{}
+// A field that no tag has shipped is still a field two builds of one rolling
+// upgrade disagree about, so "nothing has been released" does not exempt a new
+// field from its row.
+var versionedFields = statelog.RecordFields{
+	// THE TURN'S SPEND SPLIT, both at version 2. A build reading 1 adds a
+	// turn's tokens to its task and has no column for how many workers it
+	// delegated to or how often a reviewer sent it back — applied there,
+	// the task's `spend_workers` and `spend_sent_back` would stay behind
+	// its peers' for good. Scoped to the turn op because `workers` is the
+	// kind of key another payload could come to carry.
+	{Name: "TurnSpend.Workers", Since: 2, Op: string(OpTurn),
+		Path: []string{"mutation", "spend", "workers"}},
+	{Name: "TurnSpend.SentBack", Since: 2, Op: string(OpTurn),
+		Path: []string{"mutation", "spend", "sent_back"}},
+}
 
 // VersionedFields is the table, for the conformance suite and for an operator
 // surface that names why a record was held back.
@@ -832,8 +846,8 @@ func (e *ErrFutureVersion) Error() string {
 func (r MutationRecord) Encode() ([]byte, error) { return r.encodeWith(versionedFields) }
 
 // encodeWith is [MutationRecord.Encode] under a named field table — the seam
-// the stamping rule is tested through, since the production table is empty
-// until a field needs a row.
+// the stamping rule is tested through with fields a later build would add,
+// independent of whichever rows the production table holds today.
 func (r MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, error) {
 	stamp := r.V == 0
 	if stamp {
@@ -1328,6 +1342,14 @@ func (n *Notify) checkSnapshot() error {
 // that insert affected a row, in the same transaction. A redelivery therefore
 // cannot double-count, and an update affecting zero rows is a malformed record
 // that stops the loop rather than a rounding error nobody sees.
+//
+// WHAT A TURN'S TOKENS ARE is the engine's to decide (see ADR-0022): its own
+// phases, the workers it delegated to and the extension judge, plus a
+// collected coding run's tokens on the segment that resumed from it. Workers
+// and SentBack are COUNTS beside those tokens, not more tokens — how many
+// delegated tasks ran and how many reviews sent the work back — and both are
+// version-2 fields (see [versionedFields]), OMITTED AT ZERO so a turn that
+// delegated nothing and passed its first review stays readable by every build.
 type TurnSpend struct {
 	Turns      int `json:"turns,omitempty"`
 	Rounds     int `json:"rounds,omitempty"`
@@ -1336,6 +1358,8 @@ type TurnSpend struct {
 	CacheRead  int `json:"cache_read,omitempty"`
 	CacheWrite int `json:"cache_write,omitempty"`
 	WallMs     int `json:"wall_ms,omitempty"`
+	Workers    int `json:"workers,omitempty"`
+	SentBack   int `json:"sent_back,omitempty"`
 }
 
 // Tokens is the derived eighth counter, so nothing else adds the two halves.

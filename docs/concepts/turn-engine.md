@@ -701,6 +701,17 @@ wrote before the park travels on its suspended conversation, and a segment that
 parks concludes no sole write — the resumed half may write a second item — so
 the segment that finishes the turn judges "exactly one" over the whole turn.
 
+**A native item is charged for the turn.** Each completed segment adds what it
+spent to the task's own counters — its phases, its delegated workers, the
+round-cap judge and, on a resumed segment, the coding run it collected — under
+an id naming the segment (`turn/<turn_id>/dispatch`,
+`turn/<turn_id>/resume/<launch_id>`), so a segment recorded twice counts once
+and only the dispatch segment counts a turn. A parked segment on nothing hands
+what it spent on with its suspended conversation, and the segment that finishes
+the turn pays it if a sole write charges the turn. See
+[Spend is on the task](../guides/work-tracker.md#spend-is-on-the-task) and
+[ADR-0022](https://github.com/crewlet/crewlet/blob/main/adr/0022-a-turn-is-charged-to-one-work-item.md).
+
 ### A turn's stages
 
 One `turn_id` moves through four stages, and the records say which it is in:

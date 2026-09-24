@@ -897,20 +897,117 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	})
 }
 
-// RecordTurn adds a turn's spend to a task.
+// TurnRecord is one completed turn segment charged to a task: the payload a
+// turn record carries.
+//
+// ONE SHAPE FOR BOTH ENDS. The writer encodes it and [Applier.applyTurn]
+// decodes into it, so a field added to one side is a field the other reads —
+// two anonymous structs spelling the same keys is how a writer grows a key the
+// applier silently never sees.
+type TurnRecord struct {
+	// Task is the task id the turn is charged to, never its key: a key
+	// moves with the task and an id does not.
+	Task string `json:"task"`
+	// Seat is the handle of the seat whose turn it was.
+	Seat string `json:"seat"`
+	// TurnID is the run the segment belongs to (ADR-0017), which a task's
+	// turn list groups segments by.
+	TurnID string `json:"turn_id"`
+	// Trigger is what woke the turn — the trigger type a reader filters by.
+	Trigger string `json:"trigger"`
+	// Outcome is how the segment ended: the turn's own decision, `failed`,
+	// or `suspended` for a segment that parked on a coding run.
+	Outcome string `json:"outcome"`
+	// Phases are the phases that ran in the segment, in first-run order.
+	Phases []string `json:"phases"`
+	// Spend is what the segment cost.
+	Spend TurnSpend `json:"spend"`
+}
+
+// recordTurnAttempts bounds how often [Writer.RecordTurn] re-reads a task's
+// project that moved between the read and the decide. Each attempt absorbs
+// one move landing inside a window of milliseconds; three in a row is not a
+// race but a task being moved continuously, and the charge is refused naming
+// it rather than chased.
+const recordTurnAttempts = 3
+
+// errTurnTaskMoved is the decide's report that the task left the project its
+// scope was formed from — the one refusal [Writer.RecordTurn] retries.
+var errTurnTaskMoved = errors.New("tracker: the task moved project while its turn was recorded")
+
+// RecordTurn charges one completed turn segment to a task.
 //
 // THE ONE ADDITIVE WRITE: it carries no expectation and races nobody, because
 // a turn records something that already happened. Its idempotency is its own
-// row's insert rather than an arbitration.
-func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
-	payload any) (WriteResult, error) {
-
-	if project == "" {
-		return WriteResult{}, invalid("tracker: a turn on task %s names "+
-			"no project — a turn's path is its task's, so one without a project "+
-			"files under a container the task is not in", taskID)
+// row's insert rather than an arbitration — the op id IS the turn row's id, so
+// a segment recorded twice is counted once.
+//
+// # What it refuses, and what it does not
+//
+// A task this node does not hold is refused, and so is a PURGED one: a purge
+// removes the rows a charge would add to, and its marker is permanent. A
+// TOMBSTONED task is charged — a removal hides a task and destroys nothing,
+// and the work was done on it whether or not somebody filed it away since.
+// The purge that lands AFTER this decide is the one case a refusal here cannot
+// see, and the applier's deletion gate is what reads the record past then
+// (see [Applier.Gated]).
+//
+// THE PROJECT IS READ, NEVER TAKEN FROM THE CALLER. A turn names its item as
+// it read when the turn was woken, and a task moved since would put the
+// record's scope in a container its rows are no longer in — a deferral in the
+// project the task now lives in would not see it. So the project is read off
+// the task's own row, and the decide confirms it inside its snapshot.
+func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (WriteResult, error) {
+	switch {
+	case opID == "":
+		return WriteResult{}, invalid("tracker: a turn on task %s names no "+
+			"operation id — the id is the turn row's own, and it is what "+
+			"makes a segment recorded twice count once", turn.Task)
+	case turn.Task == "":
+		return WriteResult{}, invalid("tracker: a turn names no task")
+	case w.db == nil:
+		return WriteResult{}, invalid("tracker: this writer holds no " +
+			"replicated estate, and a turn's scope is its task's project, " +
+			"which only the task's own row can say")
 	}
-	subject := TurnSubject(taskID)
+	for attempt := 1; ; attempt++ {
+		project, err := w.projectOfTask(ctx, turn.Task)
+		if err != nil {
+			return WriteResult{}, err
+		}
+		result, err := w.recordTurnIn(ctx, opID, project, turn)
+		if !errors.Is(err, errTurnTaskMoved) || attempt == recordTurnAttempts {
+			return result, err
+		}
+	}
+}
+
+// projectOfTask is the project a task's own row names, read ahead of the
+// decide so the record's scope can be formed. Empty for a task this node does
+// not hold, which the decide then refuses with the message that says why.
+func (w *Writer) projectOfTask(ctx context.Context, id string) (string, error) {
+	var project string
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx,
+			`SELECT project_key FROM tracker_tasks WHERE id = ?`, id).Scan(&project)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("tracker: read the project of task %s to "+
+			"scope its turn: %w", id, err)
+	}
+	return project, nil
+}
+
+// recordTurnIn is one attempt at [Writer.RecordTurn], scoped to the project
+// the task was read in.
+func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
+	turn TurnRecord) (WriteResult, error) {
+
+	subject := TurnSubject(turn.Task)
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
@@ -919,10 +1016,40 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 		OpID:     opID,
 		MintedAt: at,
 		Pattern:  statelog.PatternAdditive,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpTurn, "", scope, opID, payload, nil, at)
+		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			if err := chargeable(ctx, tx, turn.Task, project); err != nil {
+				return statelog.Decision{}, err
+			}
+			return w.decide(subject, OpTurn, "", scope, opID, turn, nil, at)
 		},
 	})
+}
+
+// chargeable is the decide's own read of the task a turn is charged to.
+func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
+	var purged int
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tracker_deletions WHERE task_id = ?`, id).Scan(&purged); {
+	case err != nil:
+		return fmt.Errorf("tracker: read the deletion marker of task %s: %w", id, err)
+	case purged > 0:
+		return invalid("tracker: task %s was purged, and a turn cannot be "+
+			"charged to rows that no longer exist — the spend is still on the "+
+			"seat's own counters", id)
+	}
+	var home string
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT project_key FROM tracker_tasks WHERE id = ?`, id).Scan(&home); {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("tracker: task %s is not on this node, so a turn "+
+			"cannot be charged to it: %w", id, statelog.ErrUnavailable)
+	case err != nil:
+		return fmt.Errorf("tracker: read task %s to charge a turn: %w", id, err)
+	case home != project:
+		return fmt.Errorf("%w: task %s is in %s and the record was scoped to %s",
+			errTurnTaskMoved, id, home, project)
+	}
+	return nil
 }
 
 // checkChangeKind is the rule that a record which writes a history row states

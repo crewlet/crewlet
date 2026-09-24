@@ -9,9 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// novelFields is a field table with one row, standing in for the first field a
-// later build adds: the production table is empty until a field needs a row,
-// and the rule has to be pinned before that commit rather than by it.
+// novelFields is a field table with one row, standing in for a field a later
+// build adds: the stamping rule is pinned over a table the test controls,
+// independent of whichever rows the production table holds today.
 var novelFields = statelog.RecordFields{
 	{Name: "Comment.Novel", Since: 2, Op: string(OpPatch), Path: []string{"mutation", "comment", "novel"}},
 }

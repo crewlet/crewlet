@@ -185,7 +185,7 @@ func TestATotalThatMeansNothingIsRefused(t *testing.T) {
 	seedFields(t, r)
 
 	for name, tc := range map[string]struct{ totals, want string }{
-		"an op that is not one": {"points:median", "not an aggregate"},
+		"an op that is not one": {"points:mode", "not an aggregate"},
 		"a column with no meaning summed": {"status:sum",
 			"not a column a total may be taken over"},
 		"a sum of dates":           {"due_at:sum", "number of microseconds"},
@@ -231,13 +231,16 @@ func TestACustomFieldsTotalAddsUpItsValues(t *testing.T) {
 
 	answer := r.ask(map[string]any{
 		"container": "project:ENG",
-		"totals":    "f.effort:sum,f.effort:max,f.effort:count",
+		"totals":    "f.effort:sum,f.effort:max,f.effort:count,f.effort:median,f.effort:p90",
 	})
 	for key, want := range map[string]float64{
 		"f.effort:sum": 10, "f.effort:max": 8,
 		// THREE TASKS AND TWO SET IT: a count over a field is how many
 		// tasks have one, never how many value rows it produced.
 		"f.effort:count": 2,
+		// AND AN ORDER STATISTIC IS OVER THE VALUES SET, never a zero
+		// for the task that set none: 2 and 8, the lower middle is 2.
+		"f.effort:median": 2, "f.effort:p90": 8,
 	} {
 		got := totalOf(t, answer, key)
 		if got.Value == nil || *got.Value != want {

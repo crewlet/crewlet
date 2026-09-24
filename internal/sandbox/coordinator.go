@@ -96,6 +96,18 @@ type ResumeRequest struct {
 	// the run that is still going.
 	CostUSD       float64
 	DeliveredRefs []string
+
+	// InputTokens and OutputTokens are what the job this resume collected
+	// cost, for the resumed segment's charge to the turn's work item
+	// (ADR-0022): that segment is the job's, so it pays for it.
+	//
+	// UNLIKE the cost above, a person's answer carries them too — the
+	// tokens of the job that asked, recorded on the row when it parked
+	// ([PendingRun.ParkedInputTokens]). The answer's resume is the ONLY
+	// segment that job ever gets, so it is the one that pays; the
+	// completion that parked resumed nothing.
+	InputTokens  int
+	OutputTokens int
 }
 
 // Accountant post-charges a collected run's tokens.
@@ -572,16 +584,21 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// does not is an ending.
 	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
 		CostUSD: result.CostUSD, DeliveredRefs: result.DeliveredRefs,
+		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 	})
 	return err
 }
 
 // runOutcome is what a finished run reported about itself, for the resumed
-// phase's own record. Zero where no run finished — a person answering a parked
-// clarification resumes the turn without collecting anything.
+// phase's own record and the resumed segment's charge. The cost and the refs
+// are zero where no run finished — a person answering a parked clarification
+// resumes the turn without collecting anything — while the tokens are the
+// job's either way: see [ResumeRequest.InputTokens].
 type runOutcome struct {
 	CostUSD       float64
 	DeliveredRefs []string
+	InputTokens   int
+	OutputTokens  int
 }
 
 // collect reconnects, reads the result, and PAUSES the box rather than tearing
@@ -729,6 +746,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
 		Question: result.Question, Audience: result.AskTo,
 		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
+		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 	}); err != nil {
 		// THE WAIT DID NOT LAND, so this run is not parked and this turn
 		// is not waiting for anybody: the row is still in the claim that
@@ -897,7 +915,11 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle string, co
 	// NO OUTCOME: this resume collects no run. The box is still parked and
 	// its cost is charged where it is collected, so reporting one here would
 	// bill the same run twice.
-	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger, runOutcome{})
+	// THE PARKED JOB'S TOKENS, off the row it parked on: this resume is
+	// that job's one segment, so it is the one that charges them.
+	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger, runOutcome{
+		InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
+	})
 	if disposition == AnswerDeferred {
 		// The claim went back and the run is awaiting this same answer
 		// again — so the delivery has to come back, up to the budget
@@ -966,6 +988,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
+		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) {
 			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand

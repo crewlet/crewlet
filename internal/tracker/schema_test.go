@@ -231,8 +231,8 @@ func TestEveryTrackerTableIsAccountedFor(t *testing.T) {
 
 // THE SPEND COLUMNS ARE ONE LIST, AND THE DDL IS DRIVEN FROM IT.
 //
-// Eight column names written out in the struct, the DDL and the applier's
-// statement is three chances to add the ninth to two of them — and the failure
+// Ten column names written out in the struct, the DDL and the applier's
+// statement is three chances to add the eleventh to two of them — and the failure
 // is silent: a counter nothing increments reads zero for ever, which looks
 // exactly like a task nobody has worked on.
 func TestTheSpendColumnsMatchTheSchema(t *testing.T) {

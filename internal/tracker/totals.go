@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -57,16 +58,43 @@ import (
 // stops at a ceiling because an exact count over an unbounded set turns a poll
 // into a scan, and a count ASKED FOR is a caller who wants the number and has
 // said so.
+//
+// `median` and `p90` are ORDER STATISTICS, answered by nearest rank: the value
+// at 1-based position ⌈p·n⌉ of the set's non-null values in ascending order —
+// so the median of four values is the second, never an average of two. A
+// value the set does not hold would be a number no task has, and a header
+// saying "median 3.5 points" over a board of 3s and 4s describes nobody. The
+// same rule answers both, which is why they are two names for one expression.
 const (
-	TotalSum   = "sum"
-	TotalAvg   = "avg"
-	TotalMin   = "min"
-	TotalMax   = "max"
-	TotalCount = "count"
+	TotalSum    = "sum"
+	TotalAvg    = "avg"
+	TotalMin    = "min"
+	TotalMax    = "max"
+	TotalCount  = "count"
+	TotalMedian = "median"
+	TotalP90    = "p90"
 )
 
-// TotalOps are the five.
-var TotalOps = []string{TotalSum, TotalAvg, TotalMin, TotalMax, TotalCount}
+// TotalOps are the seven.
+var TotalOps = []string{TotalSum, TotalAvg, TotalMin, TotalMax, TotalCount,
+	TotalMedian, TotalP90}
+
+// rankOf is each order statistic's p, as the numerator over [rankDenominator]
+// — integer arithmetic, so ⌈p·n⌉ is exact in SQL rather than a float rounded
+// on one engine and truncated on another.
+var rankOf = map[string]int{TotalMedian: 50, TotalP90: 90}
+
+const rankDenominator = 100
+
+// orderStatistic reports whether an op answers with one of the set's own
+// values — the four that may be taken over a date.
+func orderStatistic(op string) bool {
+	switch op {
+	case TotalMin, TotalMax, TotalMedian, TotalP90:
+		return true
+	}
+	return false
+}
 
 // totalColumns is what a total may be taken over, beside a custom field.
 //
@@ -82,9 +110,12 @@ var totalColumns = map[string]string{
 	"spend_cache_read":  "t.spend_cache_read",
 	"spend_cache_write": "t.spend_cache_write",
 	"spend_wall_ms":     "t.spend_wall_ms",
+	"spend_workers":     "t.spend_workers",
+	"spend_sent_back":   "t.spend_sent_back",
 	"estimate_min":      "t.estimate_min",
 	"points":            "t.points",
 	"reassignments":     "t.reassignments",
+	"reopens":           "t.reopens",
 	"depth":             "t.depth",
 	"due_at":            "t.due_at",
 	"start_at":          "t.start_at",
@@ -94,7 +125,8 @@ var totalColumns = map[string]string{
 }
 
 // instantColumns are the totals whose value is an INSTANT rather than a
-// number, so `min` and `max` on them answer a time.
+// number, so an order statistic on them — `min`, `max`, `median`, `p90` —
+// answers a time.
 var instantColumns = map[string]bool{
 	"due_at": true, "start_at": true, "created_at": true,
 	"updated_at": true, "finished_at": true,
@@ -114,7 +146,8 @@ type Total struct {
 	// the first is how an empty board reads as free.
 	Value *float64 `json:"value,omitempty"`
 
-	// At is the instant, for a min or a max over a date column.
+	// At is the instant, for an order statistic — min, max, median, p90 —
+	// over a date column.
 	At *time.Time `json:"at,omitempty"`
 
 	// instant is decided at COMPILE time, from the column's declared
@@ -123,6 +156,17 @@ type Total struct {
 	// DECLARATION, which the scan cannot see and the compiler already
 	// resolved.
 	instant bool
+
+	// rank is an order statistic's p over [rankDenominator], zero for
+	// every other op, and ranked the FROM … WHERE clause over the values it
+	// is taken from, with rankArgs its arguments. The statement's own
+	// column for such a total is the COUNT of those values, and the value
+	// itself is read by a second statement once the count says which
+	// position to read — see [readRanked].
+	rank     int
+	ranked   string
+	value    string
+	rankArgs []any
 }
 
 // compileTotals turns the asked-for entries into aggregate expressions.
@@ -141,7 +185,7 @@ func compileTotals(entries []string, fields map[string]resolvedField) (
 		column, op = strings.TrimSpace(column), strings.ToLower(strings.TrimSpace(op))
 		if !validTotalOp(op) {
 			return nil, nil, nil, fmt.Errorf("tracker: %q is not an aggregate "+
-				"— the five are %s", op, strings.Join(TotalOps, ", "))
+				"— the seven are %s", op, strings.Join(TotalOps, ", "))
 		}
 		total := Total{Key: entry, Column: column, Op: op}
 		expr, values, instant, err := totalExpr(column, op, fields)
@@ -149,15 +193,20 @@ func compileTotals(entries []string, fields map[string]resolvedField) (
 			return nil, nil, nil, err
 		}
 		total.instant = instant
+		if rank, ranked := rankOf[op]; ranked {
+			total.rank = rank
+			total.value, total.ranked, total.rankArgs = rankedValues(column, fields)
+		}
 		if instant {
-			// ONLY min AND max ANSWER AN INSTANT. A sum of dates is a
-			// number of microseconds since 1970, which is a value
-			// nothing renders and nobody meant.
-			if op != TotalMin && op != TotalMax {
+			// ONLY AN ORDER STATISTIC ANSWERS AN INSTANT: it is one of
+			// the set's own values. A sum of dates is a number of
+			// microseconds since 1970, which is a value nothing renders
+			// and nobody meant.
+			if !orderStatistic(op) {
 				return nil, nil, nil, fmt.Errorf("tracker: %s is a date, and "+
 					"%s over dates is a number of microseconds rather than a "+
-					"time — the two that answer an instant are %s and %s",
-					column, op, TotalMin, TotalMax)
+					"time — the four that answer an instant are %s, %s, %s and %s",
+					column, op, TotalMin, TotalMax, TotalMedian, TotalP90)
 			}
 		}
 		totals = append(totals, total)
@@ -201,6 +250,15 @@ func totalExpr(column, op string, fields map[string]resolvedField) (
 			           AND v.task_id IN (SELECT id FROM matched))`,
 				[]any{field.ID}, false, nil
 		}
+		if _, ranked := rankOf[op]; ranked {
+			// THE COUNT OF THE VALUES, which is this statement's column
+			// for an order statistic — see [readRanked].
+			return `(SELECT COUNT(v.` + value + `)
+			         FROM tracker_field_values v
+			         WHERE v.field_id = ? AND ` + liveFieldValue + `
+			           AND v.task_id IN (SELECT id FROM matched))`,
+				[]any{field.ID}, value == "at", nil
+		}
 		return `(SELECT ` + strings.ToUpper(op) + `(v.` + value + `)
 		         FROM tracker_field_values v
 		         WHERE v.field_id = ? AND ` + liveFieldValue + `
@@ -223,7 +281,28 @@ func totalExpr(column, op string, fields map[string]resolvedField) (
 	if op == TotalCount {
 		return "COUNT(" + expr + ")", nil, false, nil
 	}
+	if _, ranked := rankOf[op]; ranked {
+		// THE COUNT OF THE VALUES, which is this statement's column for
+		// an order statistic — see [readRanked].
+		return "COUNT(" + expr + ")", nil, instantColumns[column], nil
+	}
 	return strings.ToUpper(op) + "(" + expr + ")", nil, instantColumns[column], nil
+}
+
+// rankedValues is the value expression and the FROM … WHERE clause an order
+// statistic reads its values from, with the clause's arguments. Called only
+// for a column [totalExpr] has already accepted.
+func rankedValues(column string, fields map[string]resolvedField) (string, string, []any) {
+	if ref, ok := strings.CutPrefix(column, FieldKeyPrefix); ok && ref != "" {
+		field := fields[ref]
+		value := "v." + FieldValueColumn(field.Type)
+		return value, `FROM tracker_field_values v
+		         WHERE v.field_id = ? AND ` + liveFieldValue + `
+		           AND v.task_id IN (SELECT id FROM matched)
+		           AND ` + value + ` IS NOT NULL`, []any{field.ID}
+	}
+	expr := totalColumns[column]
+	return expr, `FROM matched t WHERE ` + expr + ` IS NOT NULL`, nil
 }
 
 // readTotals runs the one statement every total is a column of.
@@ -237,15 +316,7 @@ func readTotals(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
 	if len(totals) == 0 {
 		return nil, nil
 	}
-	query := `WITH matched AS (SELECT t.id, t.spend_tokens, t.spend_turns,
-	                                  t.spend_rounds, t.spend_input,
-	                                  t.spend_output, t.spend_cache_read,
-	                                  t.spend_cache_write, t.spend_wall_ms,
-	                                  t.estimate_min, t.points,
-	                                  t.reassignments, t.depth, t.due_at,
-	                                  t.start_at, t.created_at, t.updated_at,
-	                                  t.finished_at
-	                             FROM tracker_tasks t WHERE ` + where + `)
+	query := matchedSet(where) + `
 	          SELECT ` + strings.Join(exprs, ", ") + ` FROM matched t`
 	// THE EXPRESSION ARGUMENTS COME AFTER THE PREDICATE'S, because the
 	// common table expression is written first and its placeholders are
@@ -263,21 +334,80 @@ func readTotals(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
 	out := make([]Total, 0, len(totals))
 	for i, total := range totals {
 		number, held := asFloat(cells[i])
-		if !held {
-			// ABSENT RATHER THAN ZERO — see [Total.Value].
-			out = append(out, total)
-			continue
+		if held && total.rank > 0 {
+			// THE CELL IS A COUNT, and the value is the one at its
+			// nearest-rank position.
+			var err error
+			if number, held, err = readRanked(ctx, tx, where, whereArgs, total, int64(number)); err != nil {
+				return nil, err
+			}
 		}
-		if total.instant {
-			at := store.DecodeTime(int64(number))
-			total.At = &at
-			out = append(out, total)
-			continue
-		}
-		total.Value = &number
-		out = append(out, total)
+		out = append(out, total.answered(number, held))
 	}
 	return out, nil
+}
+
+// answered is the total with its value in the field its type reads.
+func (t Total) answered(number float64, held bool) Total {
+	if !held {
+		// ABSENT RATHER THAN ZERO — see [Total.Value].
+		return t
+	}
+	if t.instant {
+		at := store.DecodeTime(int64(number))
+		t.At = &at
+		return t
+	}
+	t.Value = &number
+	return t
+}
+
+// readRanked reads an order statistic's value: the one at 1-based position
+// ⌈rank·n/100⌉ of the set's n values in ascending order.
+//
+// A SECOND STATEMENT over the same predicate, in the same read transaction,
+// so it sees exactly the set the count was taken over. It is not folded into
+// the first as a subquery because the engine does not resolve the common
+// table expression inside a LIMIT or OFFSET expression ("no such table:
+// matched", measured), and a window function would number every row of the
+// set to read one. An EMPTY set has no position to read and answers absent,
+// like every other aggregate over nothing.
+func readRanked(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
+	total Total, n int64) (float64, bool, error) {
+
+	if n <= 0 {
+		return 0, false, nil
+	}
+	offset := (n*int64(total.rank)+rankDenominator-1)/rankDenominator - 1
+	query := matchedSet(where) + `
+	          SELECT ` + total.value + ` ` + total.ranked + `
+	          ORDER BY ` + total.value + ` LIMIT 1 OFFSET ?`
+	args := append(append(append([]any{}, whereArgs...), total.rankArgs...), offset)
+	var cell any
+	switch err := tx.QueryRowContext(ctx, query, args...).Scan(&cell); {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("tracker: read the %s of %s: %w",
+			total.Op, total.Column, err)
+	}
+	number, held := asFloat(cell)
+	return number, held, nil
+}
+
+// matchedSet is the common table expression every total is read over: the
+// answer's own predicate, and every column a total may name.
+func matchedSet(where string) string {
+	return `WITH matched AS (SELECT t.id, t.spend_tokens, t.spend_turns,
+	                                  t.spend_rounds, t.spend_input,
+	                                  t.spend_output, t.spend_cache_read,
+	                                  t.spend_cache_write, t.spend_wall_ms,
+	                                  t.spend_workers, t.spend_sent_back,
+	                                  t.estimate_min, t.points,
+	                                  t.reassignments, t.reopens, t.depth, t.due_at,
+	                                  t.start_at, t.created_at, t.updated_at,
+	                                  t.finished_at
+	                             FROM tracker_tasks t WHERE ` + where + `)`
 }
 
 // asFloat reads whatever the driver handed back for an aggregate.

@@ -367,6 +367,8 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Trigger:       req.Trigger,
 		CostUSD:       req.CostUSD,
 		DeliveredRefs: req.DeliveredRefs,
+		InputTokens:   req.InputTokens,
+		OutputTokens:  req.OutputTokens,
 	})
 }
 
@@ -424,6 +426,12 @@ type resumeInput struct {
 	// parked clarification: nothing was collected.
 	CostUSD       float64
 	DeliveredRefs []string
+
+	// InputTokens and OutputTokens are the resumed job's tokens, which this
+	// segment's charge to the turn's work item includes — see
+	// [sandbox.ResumeRequest.InputTokens].
+	InputTokens  int
+	OutputTokens int
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -628,7 +636,12 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// rather than the retry rule above: a resumed turn that suspended AGAIN
 	// keeps it, because the same box is still working.
 	working = res.Suspended
-	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
+	// THE SEGMENT'S CHARGE, decided once for the suspension below and the
+	// charge after the completion — see turnspend.go.
+	spend := r.Spend()
+	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
+	e.publishTurnCompleted(ctx, tel, spend, res, err)
+	e.recordTurnSpend(ctx, charge)
 	if err != nil {
 		if reason, abandon := turn.Abandon(res, err); abandon {
 			// The same decision the dispatcher makes on the other path
@@ -682,7 +695,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written))
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge.carry))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -823,9 +836,11 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // WHAT THE TURN HAS WRITTEN SO FAR rides the suspension too (see
 // execstate.State.Written): the segment that finishes the turn may be charged
 // by a sole write, and it can only judge "exactly one" over the whole turn if
-// the half before the park travels with the conversation.
+// the half before the park travels with the conversation. So does what the
+// segments so far spent and charged to nothing (execstate.State.Uncharged),
+// for that same finishing segment to pay — see turnspend.go.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
-	written *turnctx.Written,
+	written *turnctx.Written, uncharged *execstate.Uncharged,
 ) (bool, error) {
 	if e.sandboxPending == nil || e.sandboxCoordinator == nil {
 		// No store and no coordinator: nothing recorded the run, nothing
@@ -839,6 +854,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		return false, nil
 	}
 	suspension.State.Written, suspension.State.WrittenMany = written.Items()
+	suspension.State.Uncharged = uncharged
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
 		e.failSuspension(ctx, turnID, "sandbox_suspension_unserializable",

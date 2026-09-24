@@ -385,6 +385,14 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 		t.Errorf("the suspension carries %+v, want the task written before the park",
 			state.Written)
 	}
+	// AND WHAT THE HALF BEFORE THE PARK SPENT, charged to nothing yet: a
+	// chat wake names no item, so the segment that finishes the turn is the
+	// one that may charge it by its sole write — and it pays this half too,
+	// turn count included (see turnspend.go).
+	if state.Uncharged == nil || state.Uncharged.Turns != 1 {
+		t.Errorf("the suspension hands on %+v, want the parked segment's spend "+
+			"and its one turn", state.Uncharged)
+	}
 }
 
 // THE TURN'S TOOLS AND ITS COMPLETION SHARE ONE SET.

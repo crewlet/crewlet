@@ -1,0 +1,46 @@
+-- A task counts the workers its turns delegated to, the reviews that sent its
+-- work back, and how often it was reopened.
+--
+-- # Two spend counters, and why they are counters beside the tokens
+--
+-- `spend_workers` and `spend_sent_back` join the spend family, and they are
+-- COUNTS rather than more tokens: how many delegated tasks a turn charged to
+-- this task ran, and how many of its reviews returned the work for another
+-- pass. The tokens those workers and those extra passes cost are already in
+-- `spend_input` / `spend_output`; what the tokens cannot say is WHY a task
+-- was expensive — fanned out, or argued over — and these two are that answer.
+-- Both are written the way every spend column is: the turn record carries
+-- them, and the applier adds them to the task in the transaction that inserts
+-- the turn's own row, so a redelivered turn adds nothing.
+--
+-- They ride the turn record as version-2 fields (`TurnSpend.Workers`,
+-- `TurnSpend.SentBack`), so a node still reading version 1 retains a record
+-- carrying either rather than applying it without them — which is what would
+-- leave that node's counters behind its peers' for good.
+--
+-- # A reopen counter, and why it is DERIVED rather than carried
+--
+-- `reopens` is how many times the task left a finished status group (done or
+-- closed) for an unfinished one. No writer states it: it is a fact about the
+-- sequence of status changes, and the applier sees every one of them as it
+-- writes the history row that records it. So it is maintained INCREMENTALLY by
+-- the task apply, and it is a DERIVED COLUMN in the sense migration 0018
+-- names — a build that adds it meets rows its predecessor wrote without it.
+--
+-- This migration therefore adds the column, defaulted, and NOTHING ELSE. The
+-- backfill is not an UPDATE here: it is the applier's own Rederive, run once
+-- by the first boot whose derivation rules differ from the ones on the
+-- checkpoint row, in the same Go that maintains the column afterwards. A
+-- backfill written again in SQL is a second implementation of "what counts as
+-- a reopen", and two implementations of one rule are two answers the day
+-- either is edited.
+--
+-- # No index
+--
+-- `reopens` is sorted and totalled over a task set the query's own predicate
+-- has already narrowed, like `reassignments` beside it. An index on a column
+-- that is zero on nearly every row is one a planner would drive on and should
+-- not.
+ALTER TABLE tracker_tasks ADD COLUMN spend_workers INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tracker_tasks ADD COLUMN spend_sent_back INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tracker_tasks ADD COLUMN reopens INTEGER NOT NULL DEFAULT 0;

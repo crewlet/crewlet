@@ -248,6 +248,11 @@ them with the new part dropped — which is what would leave its copy of that
 object different from its peers' for good. An upgrade that adds no record field
 holds nothing back at all.
 
+In the tracker today, version 2 is carried by one kind of record only: a turn's
+charge to its task when it counts delegated workers or reviews that sent the
+work back. An old node holds those back, with the task they are charged to, and
+applies every other write as it arrives.
+
 ### Values the engine computes are recomputed once
 
 Some columns are not copied out of any record but computed from the history a
@@ -257,7 +262,9 @@ from the rows it holds, in the same transaction that records which rules the
 rows now follow, before it applies anything new. It happens once per change,
 on every node, including a node that just adopted a snapshot from a peer on a
 different build; the `statelog_rederived` log line names the domain, the rule
-versions it moved between and how many rows it wrote.
+versions it moved between and how many rows it wrote. The tracker's first such
+column is a task's `reopens`, recomputed from its history rows the first time a
+build that counts it boots.
 
 ### The other direction: a kind that was removed
 

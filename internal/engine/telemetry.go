@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -89,6 +90,16 @@ type turnTelemetry struct {
 	// every tool call and delegate worker through the turn context and read
 	// back at completion for the one rule dispatch cannot decide.
 	written *turnctx.Written
+
+	// resumed marks a segment that re-entered a parked run, and launchID
+	// the coding run it collected — together they name the segment its
+	// charge is recorded under (see turnspend.go). jobInput and jobOutput
+	// are that run's tokens, which the segment pays, and uncharged what the
+	// segments before it spent and charged to nothing.
+	resumed             bool
+	launchID            string
+	jobInput, jobOutput int
+	uncharged           *execstate.Uncharged
 }
 
 // newRunID mints the identity of ONE EXECUTION of a turn.
@@ -581,6 +592,11 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	// judges the whole turn rather than its second half.
 	t.workItem, t.workItemBasis = resumedWorkItem(in.Run)
 	t.written = turnctx.WrittenFrom(in.State.Written, in.State.WrittenMany)
+	// THE SEGMENT, for its charge: the job it collected and what that job
+	// cost, and what the segments before it spent that nothing paid for.
+	t.resumed, t.launchID = true, in.Run.LaunchID
+	t.jobInput, t.jobOutput = in.InputTokens, in.OutputTokens
+	t.uncharged = in.State.Uncharged
 	// Re-derived from the org when the row predates a rename, so a resumed
 	// turn is still attributed to a seat that exists.
 	if role, agentID := seatIdentity(company, in.Run.AgentHandle); role != "" {

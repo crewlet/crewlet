@@ -2,10 +2,12 @@ package tracker_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -38,8 +40,50 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// kind nothing writes is a row nothing ever reads — so a
 			// partial list here would report the FIXTURE as the fault.
 			Kinds: suiteKinds(),
+			// THE PRODUCTION TABLE, and a record carrying each of its
+			// fields built through the writer's own encoder — which is
+			// what proves each row's path is where that field is
+			// actually written.
+			Fields:   tracker.VersionedFields(),
+			Carrying: carryingSuiteField,
 		}
 	})
+}
+
+// carryingSuiteField builds a valid record carrying exactly one versioned
+// field, with its version left for the encoder to stamp.
+//
+// EVERY FIELD THE TABLE NAMES HAS A CASE, and a field without one fails here
+// rather than passing unexamined: the suite reads the version this returns,
+// and a record that did not carry the field would be stamped at 1 and reported
+// as the path being wrong, which is a fixture fault dressed as a domain one.
+func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
+	at := time.Unix(1_700_000_000, 0).UTC()
+	spend := tracker.TurnSpend{Turns: 1, Input: 100, Output: 50}
+	switch field.Name {
+	case "TurnSpend.Workers":
+		spend.Workers = 2
+	case "TurnSpend.SentBack":
+		spend.SentBack = 1
+	default:
+		return nil, fmt.Errorf("the suite has no record carrying %s — add one "+
+			"beside the field's row", field.Name)
+	}
+	body, err := json.Marshal(tracker.TurnRecord{
+		Task: "suite-task", Seat: "dev", TurnID: "run-1", Outcome: "done",
+		Phases: []string{"execute"}, Spend: spend,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			OpID: "suite-carrying", Subject: tracker.TurnSubject("suite-task"),
+			Op: tracker.OpTurn, CreatedAt: at, Writer: "suite-node",
+			Scope: tracker.ScopeSet{Subject: true, Container: "SUITE"},
+		},
+		Mutation: body, Actor: "dev", ActorKind: tracker.AuthorAgent,
+	}.Encode()
 }
 
 // encodeSuiteRecord builds one valid record at an arbitrary version.

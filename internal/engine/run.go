@@ -1596,6 +1596,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// spent only on a settled outcome, which the empty decision of a
 		// turn that never reached its loop is not.
 		e.publishTurnCompleted(ctx, tel, runner.Spend{}, turn.Result{}, err)
+		// AND CHARGED LIKE ANY OTHER ENDING: the run happened, on the
+		// item it names, and a task's turn count is its attempts.
+		e.recordTurnSpend(ctx, tel.chargeFor(runner.Spend{}, turn.Result{}, err, time.Now().UTC()))
 		return turn.Result{}, err
 	}
 
@@ -1626,14 +1629,22 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// intent to park and a run that can actually be resumed are different
 	// facts, and this call is where the second one is established. See
 	// [stillWorking].
+	//
+	// THE SEGMENT'S CHARGE IS DECIDED FIRST, because a segment charged to
+	// nothing hands what it spent to the suspension this call writes.
+	spend := r.Spend()
+	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel.written))
+		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel.written, charge.carry))
 	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase
 	// events already put the seat into `working`, and returning without this
 	// leaves it there until the seat happens to take another turn.
-	e.publishTurnCompleted(ctx, tel, r.Spend(), res, err)
+	e.publishTurnCompleted(ctx, tel, spend, res, err)
+	// AND CHARGED to the work item it was on, after the record of the turn
+	// exists — see turnspend.go.
+	e.recordTurnSpend(ctx, charge)
 	// AND, if a colleague asked for this turn, the answer they are waiting
 	// for. Here because this is the one frame holding both the result and
 	// the trigger; after the completion event because the reply wakes

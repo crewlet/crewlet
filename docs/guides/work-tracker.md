@@ -164,7 +164,8 @@ answer is that there is no such work.
 | **checklist** | items with their own assignees. |
 | **relations**, **dependencies** | links between tasks, and blocking edges. |
 | **linked pages**, **references** | into the knowledge base and out to third-party systems. |
-| **spend** | turns, rounds, tokens and wall-clock this task has cost. |
+| **spend** | turns, rounds, tokens, cache, wall-clock, delegated workers and review send-backs this task has cost — see [Spend is on the task](#spend-is-on-the-task). |
+| **reopens** | how many times the task left a finished status for an unfinished one. |
 
 ### Status groups
 
@@ -176,12 +177,61 @@ re-teach every query what "finished" means.
 the slug. A cancelled task is finished work that produced nothing, which is a
 different fact from an open one and the same fact for anything counting.
 
+A task that leaves `done` or `closed` for an unfinished status is **reopened**,
+and the task counts it (`reopens`). Done → closed is not a reopen — the work
+stayed finished — and neither is `todo` → `in_progress`. It is counted by
+group, so a status a company adds or renames does not change what a reopen is.
+Sort by it with `sort=reopens`, and total it with `totals=reopens:sum`.
+
 ### Spend is on the task
 
 Every turn an agent spends on a task adds to that task's own counters. That is
 what makes "what did this cost" a question about a piece of work rather than
 about a seat's month, and it is the number a founder actually wants when a
 task has been reopened four times.
+
+**One turn, one task.** A turn is charged to the one work item it is on, or to
+nothing — never split. The item is the one its wake was about (a task
+notification, or a Jira, GitHub or GitLab event about one issue), the one the
+colleague who asked for help was on, or the one a coding run it resumes was
+launched on; failing all three, the one task its own writes touched, if they
+touched exactly one. A chat message that leads to no task write is charged to
+nothing. Only the engine's own tasks carry counters: a turn on a Jira issue is
+attributed on its events and adds to no row here.
+
+**What a turn's tokens include.** Its own phases, the workers it delegated to,
+the round-cap judge, and the coding runs it detached — in input and output,
+with the prompt cache's share of the input beside them. Learning afterwards
+(reflection, diary, skills) is the seat's own and is not charged to the task.
+Beside the tokens, two counts say *why* a task was expensive: `spend_workers`,
+how many delegated tasks its turns ran, and `spend_sent_back`, how many reviews
+returned the work for another pass.
+
+**A turn that parks is charged per segment.** A turn that launches a coding run
+completes once when it parks and again each time a run it launched is
+collected — often minutes later, on another node. Each segment adds what it
+spent, and only the first counts as a turn, so a turn that parked twice is
+still one turn on the task. The segment that collects a run pays for that run.
+A turn charged only because of what it wrote is charged when it ends, for
+every segment before it too.
+
+**Counted once.** Each segment is recorded under an id of its own, and the
+counters move only when that record's row is new — so a segment retried after
+a failed resume, or a record delivered twice, adds nothing.
+
+**Removed versus purged.** A task in the trash is still charged: removing a
+task hides it and destroys nothing, and the work was done on it. A **purged**
+task is not — the charge is refused, and a charge that was already on its way
+when the purge landed is dropped on every node rather than stopping them. The
+tokens are still on the seat's own counters and in the spend history; only the
+task's share is gone, with the task.
+
+The counters are `spend_turns`, `spend_rounds`, `spend_input`, `spend_output`,
+`spend_cache_read`, `spend_cache_write`, `spend_wall_ms`, `spend_tokens`
+(input plus output — the `sort=spend` key), `spend_workers` and
+`spend_sent_back`. Every one can be totalled over a board — including as a
+`median` or `p90`, which answer the value a task actually holds rather than an
+average of two.
 
 ## The catalogue
 

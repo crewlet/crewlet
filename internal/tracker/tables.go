@@ -10,13 +10,15 @@ import "slices"
 // and the migration, the snapshot's scrub list and the identity claim for the
 // second.
 
-// SpendColumns are the seven counters and the derived sort key, in the order
-// the applier writes them.
+// SpendColumns are the counters and the derived sort key, in the order the
+// applier writes them.
 //
-// ONE LIST, read by the struct, the DDL and the applier's own statement. Eight
-// column names typed out three times is three chances to add the ninth to two
-// of them — and the failure is silent: a counter nothing increments reads zero
-// for ever, which looks exactly like a task nobody has worked on.
+// ONE LIST, read by the struct, the DDL and the applier's own statement. Ten
+// column names typed out three times is three chances to add the eleventh to
+// two of them — and the failure is silent: a counter nothing increments reads
+// zero for ever, which looks exactly like a task nobody has worked on. That is
+// exactly what every one of these read until a turn was actually charged to
+// its task (ADR-0022): the write existed and had no caller.
 //
 // `spend_tokens` is DERIVED — input plus output — rather than transmitted,
 // because it is the sort key and a sort key that can disagree with the columns
@@ -24,6 +26,7 @@ import "slices"
 var SpendColumns = []string{
 	"spend_turns", "spend_rounds", "spend_input", "spend_output",
 	"spend_cache_read", "spend_cache_write", "spend_wall_ms", "spend_tokens",
+	"spend_workers", "spend_sent_back",
 }
 
 // ReproducibleTables is every table a record's payload must be able to rebuild.

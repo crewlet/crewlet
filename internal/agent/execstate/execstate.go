@@ -143,6 +143,24 @@ type State struct {
 	Written     []types.WorkItem `json:"written,omitempty"`
 	WrittenMany bool             `json:"written_many,omitempty"`
 
+	// Uncharged is what the turn's segments cost that no work item has been
+	// charged for yet — the half before a park, when nothing at dispatch
+	// named an item and the segment that parked could not conclude one.
+	//
+	// HERE for the reason Written is: a turn charged at its END by a sole
+	// write is charged by a segment that is not the one that spent most of
+	// it. Without this the resumed segment would pay only its own share,
+	// and a turn that filed its task, launched a coding run and resumed
+	// would be charged for the collection and not for the work — and never
+	// counted as a turn at all, since only the first segment counts one.
+	// When the finishing segment is charged, it pays this as well; when it
+	// is not, nothing ever is, which is what an unattributed turn is.
+	//
+	// Additive within v2: a row written before this existed decodes to nil,
+	// and resumes charging only what its second half spent — which is what
+	// that build's first half was charged, too.
+	Uncharged *Uncharged `json:"uncharged,omitempty"`
+
 	// ElapsedMS is how long this phase had already been running when it
 	// suspended, so the resumed half reports the WHOLE phase rather than the
 	// re-entry.
@@ -190,6 +208,22 @@ type State struct {
 	// A false value is what every earlier row decodes to and is exactly
 	// right for them: they are all native suspensions.
 	AgentRun bool `json:"agent_run,omitempty"`
+}
+
+// Uncharged is spend carried across a park, in the counters a work item's
+// charge is made of (see tracker.TurnSpend, which it mirrors field for field:
+// this package is the conversation's wire format and does not import a
+// domain).
+type Uncharged struct {
+	Turns      int `json:"turns,omitempty"`
+	Rounds     int `json:"rounds,omitempty"`
+	Input      int `json:"input,omitempty"`
+	Output     int `json:"output,omitempty"`
+	CacheRead  int `json:"cache_read,omitempty"`
+	CacheWrite int `json:"cache_write,omitempty"`
+	WallMs     int `json:"wall_ms,omitempty"`
+	Workers    int `json:"workers,omitempty"`
+	SentBack   int `json:"sent_back,omitempty"`
 }
 
 // ErrUnknownVersion reports a state this build cannot read.

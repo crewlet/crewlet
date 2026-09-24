@@ -367,12 +367,12 @@ func TestEncodeRefusesARecordThatCannotBeApplied(t *testing.T) {
 // nothing to notice.
 func TestTheBarrierRecordIsItsMeasuredLiteral(t *testing.T) {
 	t.Parallel()
-	body, err := json.Marshal(tracker.RecordEnvelope{
-		V:       tracker.RecordVersion,
-		Subject: tracker.BarrierSubject(),
-		Op:      tracker.OpBarrier,
-		Gen:     3,
-		Scope:   tracker.ScopeSet{Subject: true},
+	// THROUGH THE ENCODER THE READ INDEX CALLS, so the literal is what is
+	// actually appended — version stamp included. A barrier carries no
+	// versioned field, so it is stamped 1 whatever version this build
+	// reads, and every build there is can apply it.
+	body, err := tracker.EncodeBarrier(statelog.Envelope{
+		Kind: statelog.BarrierKind, Gen: 3,
 	})
 	if err != nil {
 		t.Fatalf("encode: %v", err)

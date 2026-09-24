@@ -200,7 +200,7 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 		// THE DELETION GATE FIRST, because it is permanent where an
 		// eviction can be reversed: a caller told "evicted" retries after
 		// a readmission, and a caller told "deleted" never should.
-		if ObjectKind(subj.Kind) == KindTask {
+		if ObjectKind(subj.Kind).GatedByPurge() {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx,
 				`SELECT purge_record_id FROM tracker_deletions WHERE task_id = ?`,

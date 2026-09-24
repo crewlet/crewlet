@@ -385,6 +385,25 @@ type PendingRun struct {
 	Question string `json:"question"`
 	Audience string `json:"audience"`
 
+	// ParkedInputTokens and ParkedOutputTokens are what the job that
+	// asked the question cost, recorded with the question.
+	//
+	// ON THE ROW because the segment that pays for them is not the one
+	// that collected them: a job that parks on a question is collected,
+	// charged to the counters and parked, and the turn resumes only when a
+	// person answers — possibly days later, on another node, with nothing
+	// collected at all. That resumed segment is the job's segment (it
+	// resumes under the same launch), and its charge to the turn's work
+	// item includes the job's tokens exactly as a completion's resume does
+	// (ADR-0022). Without these the answer's resume charged the task for
+	// the collection and never for the coding run that asked.
+	//
+	// ADDITIVE, for the reason every field here is: a row parked by a
+	// build without them decodes to zero, and its resume charges what that
+	// build would have — nothing for the job.
+	ParkedInputTokens  int `json:"parked_input_tokens,omitempty"`
+	ParkedOutputTokens int `json:"parked_output_tokens,omitempty"`
+
 	// WorkItem is the one work item the launching turn was charged to, nil
 	// when it was on nothing.
 	//
@@ -943,6 +962,12 @@ type Clarification struct {
 	// while the question waits.
 	Branch    string
 	SessionID string
+
+	// InputTokens and OutputTokens are what the job that asked cost,
+	// carried to the resume its answer drives — see
+	// [PendingRun.ParkedInputTokens].
+	InputTokens  int
+	OutputTokens int
 }
 
 // BoxRef is the box and command a run is attached to.

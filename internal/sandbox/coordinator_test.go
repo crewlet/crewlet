@@ -395,7 +395,55 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 	if !strings.Contains(calls[0].Answer, "do NOT redo it") {
 		t.Fatalf("the answer does not stop the executor redoing the work: %q", calls[0].Answer)
 	}
+	// THE JOB'S TOKENS REACH THE SEGMENT THAT PAYS FOR THEM: the resumed
+	// turn charges its work item for the job it collected (ADR-0022).
+	if calls[0].InputTokens != 900 || calls[0].OutputTokens != 200 {
+		t.Fatalf("the resume carries %d/%d tokens, want the job's 900/200",
+			calls[0].InputTokens, calls[0].OutputTokens)
+	}
 	rig.finished("t1")
+}
+
+// A JOB THAT PARKED ON A QUESTION IS PAID FOR BY THE ANSWER'S RESUME.
+//
+// The completion that parked resumes nothing, so the answer's resume is that
+// job's ONLY segment — days later, possibly on another node, with nothing
+// collected. The job's tokens therefore travel on the row with its question,
+// or the turn's work item is charged for the collection and never for the
+// coding run that asked.
+func TestAParkedJobsTokensReachTheAnswersResume(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("asks")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{
+		NeedsInput: true, Question: "which branch?", AskTo: "requester",
+		InputTokens: 700, OutputTokens: 80,
+	})
+	payload, ev := rig.completion("asks")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := len(rig.resumer.calls()); got != 0 {
+		t.Fatalf("a job that asked a question resumed %d times before any answer", got)
+	}
+	if run := rig.get("asks"); run.ParkedInputTokens != 700 || run.ParkedOutputTokens != 80 {
+		t.Fatalf("the parked row holds %d/%d tokens, want the job's 700/80",
+			run.ParkedInputTokens, run.ParkedOutputTokens)
+	}
+
+	disposition, err := rig.coordinator.TryResumeFromAnswer(
+		t.Context(), "swe", answerOnTheDM, "use main", nil)
+	if err != nil || disposition != AnswerConsumed {
+		t.Fatalf("TryResumeFromAnswer = %q, %v", disposition, err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 || calls[0].InputTokens != 700 || calls[0].OutputTokens != 80 {
+		t.Fatalf("the answer's resume carries %+v, want the parked job's 700/80 tokens", calls)
+	}
+	if calls[0].CostUSD != 0 {
+		t.Errorf("the answer's resume claims a cost of %v for a run that did "+
+			"not finish", calls[0].CostUSD)
+	}
 }
 
 // A START EVENT REDELIVERED WHILE THE RESUME RUNS must not park the seat for

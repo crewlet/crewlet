@@ -412,8 +412,8 @@ func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 	// the meter, so folding it in would stop the phase events summing to the
 	// turn's number.
 	spend := r.Spend()
-	if spend.Judged != 1 || spend.JudgeTokens != 30 {
-		t.Errorf("judge tally = %d calls / %d tokens, want 1/30", spend.Judged, spend.JudgeTokens)
+	if spend.Judged != 1 || spend.JudgeTokens() != 30 {
+		t.Errorf("judge tally = %d calls / %d tokens, want 1/30", spend.Judged, spend.JudgeTokens())
 	}
 }
 
