@@ -75,8 +75,9 @@ type fakeTracker struct {
 	threadQuery tracker.ThreadQuery
 	threadErr   error
 
-	// depended is every dependency change the tool composed, and
-	// dependErr what the sequence answers.
+	// depended is every dependency change the tool composed, dependErr
+	// what the sequence answers, and dependAnswer — when set — the result
+	// it answers in place of the default applied commit.
 	depended     []tracker.DependencyChange
 	dependErr    error
 	dependAnswer *tracker.DependencyResult

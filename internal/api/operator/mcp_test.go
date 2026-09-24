@@ -2,6 +2,9 @@ package operator_test
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -9,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -261,6 +265,35 @@ func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 	}
 }
 
+// A REQUEST THE GUARD NEVER SAW IS REFUSED IN THE ENGINE'S OWN WORDS: JSON
+// with the guard's `invalid_token`, not net/http's text/plain. Unreachable
+// behind the app's guard — which is exactly why its shape went unchecked — and
+// a client reads a 401 carrying no code as something in front of the node.
+func TestAnUnguardedMCPRequestIsRefusedAsJSON(t *testing.T) {
+	t.Parallel()
+	s := operator.New(operator.Options{
+		Work: builtin.WorkDeps{
+			Reader: stubWorkReader{}, Writer: stubWorkWriter,
+			Actor: operator.WorkActor(nil),
+		},
+	})
+	rec := httptest.NewRecorder()
+	s.MCPHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		operator.MCPPath, strings.NewReader(`{}`)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a request with no operator answered %d, want 401", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("the refusal is %q, want application/json", ct)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil ||
+		body["error"] != string(httpjson.CodeInvalidToken) {
+		t.Errorf("the refusal is %q, want JSON with the code %s", rec.Body.String(),
+			httpjson.CodeInvalidToken)
+	}
+}
+
 // EVERY TOOL AN OPERATOR IS OFFERED IS ONE A SEAT HAS. Not a subset check for
 // tidiness: a name here that no seat tool answers would be a second
 // implementation, which is what this whole seam exists to avoid.
@@ -389,7 +422,7 @@ func (stubPageWriter) SavePage(context.Context, pages.Actor, string, pages.Save)
 	return pages.Written{}, nil
 }
 
-func (stubPageWriter) Rename(context.Context, pages.Actor, string, string, bool) (pages.Written, error) {
+func (stubPageWriter) Rename(context.Context, pages.Actor, string, string, bool, pages.CallKey) (pages.Written, error) {
 	return pages.Written{}, nil
 }
 
@@ -397,7 +430,8 @@ func (stubPageWriter) Comment(context.Context, pages.Actor, string, pages.NewCom
 	return pages.Comment{}, pages.Written{}, nil
 }
 
-func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string, string) (pages.Comment, pages.Written, error) {
+func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string, string,
+	pages.CallKey) (pages.Comment, pages.Written, error) {
 	return pages.Comment{}, pages.Written{}, nil
 }
 

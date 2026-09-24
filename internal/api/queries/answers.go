@@ -70,6 +70,13 @@ type Sources struct {
 	// process booted on would describe a company that is no longer running.
 	Company func() *config.Company
 
+	// OperatorActs names the tools the act transport serves
+	// (`internal/api/operator`'s Server.Acts), which `viewer` answers a
+	// person as `acts` so a screen enables exactly the controls a press of
+	// would be served. Nil serves none — a company with no native backend
+	// has nothing a person could act on.
+	OperatorActs func() []string
+
 	// Coord is the lease table: the fleet's one shared answer to "which
 	// node holds what". Nil leaves the fleet question unregistered.
 	Coord coord.Backend

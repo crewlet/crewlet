@@ -4,6 +4,7 @@ package queries_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -160,6 +161,49 @@ func TestADisabledGuardIsNeverAPerson(t *testing.T) {
 	if got["operator_id"] != caller {
 		t.Errorf("operator_id = %v, want the reserved id the guard stamped",
 			got["operator_id"])
+	}
+}
+
+// THE VIEWER NAMES WHAT IT MAY ACT ON, and only a person may act on anything.
+// The act transport admits a token bound to a seat and nobody else
+// (ADR-0024), so the list a screen enables its controls from is that
+// transport's own for a bound token and EMPTY for everybody else — an array
+// either way, because "may do nothing" is a value a screen tests, not an
+// absence it has to guess the meaning of.
+func TestTheViewerNamesWhatItMayAct(t *testing.T) {
+	t.Parallel()
+	served := []string{"create_work_item", "mark_inbox"}
+	sources := viewerSources(t, &stubWork{})
+	sources.OperatorActs = func() []string { return served }
+	r := queries.NewRegistry()
+	queries.Register(r, sources)
+	for _, tc := range []struct {
+		name, operatorID string
+		want             []string
+	}{
+		{"a bound token", "ops-1", served},
+		{"an unbound token", "ops-nobody", []string{}},
+		{"an anonymous reader", "", []string{}},
+		{"a disabled guard's caller", org.ReservedOperatorID, []string{}},
+	} {
+		answered, err := r.Answer(t.Context(), "viewer", nil, tc.operatorID)
+		got := answerMap(t, answered, err)
+		acts, ok := got["acts"].([]string)
+		if !ok {
+			t.Errorf("%s: acts is %#v, want an array", tc.name, got["acts"])
+			continue
+		}
+		if !slices.Equal(acts, tc.want) {
+			t.Errorf("%s: acts = %v, want %v", tc.name, acts, tc.want)
+		}
+	}
+	// AND A NODE WITH NOTHING TO SERVE ANSWERS AN EMPTY LIST to a bound
+	// person too, rather than a null a screen would read as "not loaded".
+	bare := queries.NewRegistry()
+	queries.Register(bare, viewerSources(t, &stubWork{}))
+	answered, err := bare.Answer(t.Context(), "viewer", nil, "ops-1")
+	if acts, ok := answerMap(t, answered, err)["acts"].([]string); !ok || len(acts) != 0 {
+		t.Errorf("a bound person on a node serving no acts got %#v", acts)
 	}
 }
 

@@ -12,6 +12,37 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
+// operationKey is the context key [WithOperation] stores under. An unexported
+// type, so no other package can write or shadow it.
+type operationKey struct{}
+
+// WithOperation marks ctx as carrying the operation a transport named for ONE
+// call — the identity a retry of that call repeats, and the one every write
+// the call makes is derived from ([builtin.Actor.Operation],
+// [builtin.PageDeps.Operation]).
+//
+// A TRANSPORT SETS IT, never a tool argument: the operation decides which
+// writes are one, and a caller who could put it in the arguments of an
+// ordinary call could collapse somebody else's write by guessing theirs. The
+// act transport derives it from its envelope's `request_id` and the token that
+// sent it ([builtin.RequestOperation]), so a request id names only that
+// credential's own writes. A transport that names no request — MCP — sets
+// nothing: there, a tracker write names its own operation ([builtin.OperatorTools]
+// mints one and answers it as `op_id`, and the call brought back with it is
+// that operation again), and a page write is a new one.
+//
+// An empty operation is none: stored as given and read back as "", which
+// every consumer treats exactly as a call that named none.
+func WithOperation(ctx context.Context, op string) context.Context {
+	return context.WithValue(ctx, operationKey{}, op)
+}
+
+// operationFrom reads the operation [WithOperation] stored, or "".
+func operationFrom(ctx context.Context) string {
+	op, _ := ctx.Value(operationKey{}).(string)
+	return op
+}
+
 // WorkActor and PageActor read the operator off the request's context.
 //
 // # An unbound token identifies as itself
@@ -64,6 +95,10 @@ func WorkActor(chart func() *org.Organization) func(
 			Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
 		}
 		actor.Seat = seatFor(chart, id)
+		// AND THE OPERATION THE TRANSPORT NAMED, where it named one: it
+		// is what makes a retried request the same writes. See
+		// [WithOperation].
+		actor.Operation = operationFrom(ctx)
 		return actor, nil
 	}
 }

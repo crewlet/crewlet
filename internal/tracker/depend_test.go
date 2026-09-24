@@ -465,6 +465,38 @@ func TestABlockingOnlyChangeReturnsAPosition(t *testing.T) {
 	}
 }
 
+// A DEPENDENCY CHANGE ANSWERS AT ITS LAST COMMIT, end to end.
+//
+// A waiting-on change authors its edge on this task and then mirrors onto the
+// blocker, so the mirror is the later record: a read barriered at the
+// authored commit comes back without the blocker's side of the edge. The
+// per-commit folding — which version, which outcome — is pinned against
+// values in TestADependencyResultFoldsEveryCommit, since this harness applies
+// nothing until it drains and so answers every commit `pending`.
+func TestADependencyAnswersAtItsLastCommit(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "dep")
+	filedTask(t, r, "blk")
+
+	result, err := r.writer.Depend(t.Context(), "op-every", tracker.DependencyChange{
+		Task: "dep", Project: "ENG", WaitingOnAdd: []string{"blk"},
+	}, fixedLeads{})
+	if err != nil {
+		t.Fatalf("Depend: %v", err)
+	}
+	r.drain()
+	blk := r.task(t, "blk")
+	if uint64(result.Position.Packed()) != blk.Task.Version {
+		t.Errorf("the call answered position %s and its last commit — the "+
+			"mirror on the blocker — is at %d: a read barriered at the answer "+
+			"can miss it", result.Position, blk.Task.Version)
+	}
+	if result.Outcome != statelog.OutcomePending {
+		t.Errorf("outcome = %q over two pending commits", result.Outcome)
+	}
+}
+
 // THE OPEN-ASK INFERENCE IS INDEX-SERVED, and the term that makes it so is
 // one a reader would delete as redundant.
 //

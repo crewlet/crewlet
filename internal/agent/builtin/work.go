@@ -393,6 +393,16 @@ type Actor struct {
 	// turn is the identity.
 	Operation string
 
+	// requested is whether [Actor.Operation] is the one a transport named
+	// from its request rather than one the caller brought back or was
+	// minted — decided by [WorkDeps.bindOperation], which is the only frame
+	// that sees the call arrive with it, and never by the transport. It
+	// changes WHAT A CALLER IS TOLD, not what is written: such a caller
+	// repeats its request and has no `op_id` to bring back (one beside the
+	// request is refused), so its answer carries none ([withOperation]) and
+	// "make the same call again" names the request ([sameCall]).
+	requested bool
+
 	Chain []string
 }
 
@@ -1578,6 +1588,16 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return jsonResult(answer)
 		}
 		t.deps.settle(ctx, result.Position)
+		// THE CALL ANSWERS FOR BOTH RECORDS, never for the create alone:
+		// the dependency lands after it, so the create's position is a
+		// floor below the edge and a read at it shows the item without
+		// its blocker, and an `unknown` dependency beside an applied
+		// create is not a call anybody may treat as landed. The version
+		// moves too, since the authored edge is a commit on this item.
+		outcome, at, version := joinDepend(got.Outcome, got.Position,
+			got.Version, result)
+		answer["outcome"], answer["position"] = string(outcome), positionOf(at)
+		answer["version"] = version
 		if len(result.OneSided) > 0 {
 			answer["dependencies_pending_mirror"] = len(result.OneSided)
 		}
@@ -1734,12 +1754,48 @@ func dependencyFailure(key, id string, err error) string {
 // [unknownWrite] for the sentence and why it is a failed result rather than a
 // receipt.
 //
-// [tools.RefusalUnavailable]: nothing about the request was wrong, and this
-// node cannot say what became of it. ONE CONSTRUCTOR, so every write tool's
-// unknown carries one class and a reader that is not a model can never be
-// handed an unknown under the argument class `failed` gives.
+// [tools.RefusalUnavailable], the class the operator's act transport already
+// answers an interrupted call under: nothing about the request was wrong, and
+// this node cannot say what became of it. ONE CONSTRUCTOR, so every write
+// tool's unknown carries one class and a reader that is not a model can never
+// be handed an unknown under the argument class `failed` gives — and it sets
+// [mcp.Result.Unknown], because that class alone is also what a tool answers
+// when it refused BEFORE writing anything, and a person's surface that read the
+// two alike would say "nothing happened" about a write that may have landed.
 func unknownOutcome(sentence string) tools.Result {
-	return refused(tools.RefusalUnavailable, sentence)
+	result := refused(tools.RefusalUnavailable, sentence)
+	result.Unknown = true
+	return result
+}
+
+// joinDepend folds a dependency sequence that ran AFTER a call's first record
+// into that call's one answer: the less certain outcome, the later position,
+// and the item's later version.
+//
+// ONE RULE FOR EVERY TOOL THAT APPENDS MORE THAN ONE RECORD, which is the rule
+// save_page follows for a save and its rename ([statelog.LessCertain],
+// [statelog.Later]). A caller barriers on the position before its next read
+// and treats the outcome as "may I stop looking": answering the first
+// record's hands it a floor below the edge it just wrote and reports an
+// unknown dependency as applied. A sequence that appended nothing leaves the
+// answer as it was.
+//
+// THE VERSION IS THIS ITEM'S OWN, never the sequence's last commit's: a
+// dependency change writes other items too — each blocker's mirror, each
+// dependent's edge — and [tracker.DependencyResult]'s version is the one its
+// commits on THIS item's subject reached, zero where it landed none there.
+// Where both wrote this item the dependency's is the newer, since its
+// `waiting_on` commit lands on the same subject after the patch; answering the
+// patch's handed the caller an `if_match` its own call's second write had
+// already moved past.
+func joinDepend(outcome statelog.Outcome, at statelog.Position, version int64,
+	result tracker.DependencyResult) (statelog.Outcome, statelog.Position, int64) {
+
+	if !result.Wrote() {
+		return outcome, at, version
+	}
+	return statelog.LessCertain(outcome, result.Outcome),
+		statelog.Later(at, result.Position), max(version, result.Version)
 }
 
 // resolveRef turns what a model typed — a key like ENG-7, or an id — into the
@@ -1970,6 +2026,63 @@ func createdTaskID(opID string) string {
 // createdTaskNamespace is the uuid namespace a created task's id is derived
 // under. Fixed for the life of the format: it is durable in every task row.
 var createdTaskNamespace = uuid.MustParse("8677bb1c-20e0-4fbe-ab44-846868b79b37")
+
+// callOutcome is one tool call's answer over EVERY record it appended: the
+// less certain outcome and the later position, which is the rule [joinDepend]
+// and save_page follow ([statelog.LessCertain], [statelog.Later]).
+//
+// FOR A TOOL WHOSE RECORDS ARE REPORTED FACET BY FACET — a project's tags and
+// its policy, the catalogue's types and its fields — and which therefore had
+// no top-level answer at all. Every transport reads the call's outcome and
+// position from the top of the answer (a caller barriers on the position
+// before its next read), so a tool that stated them only per facet handed the
+// act transport nothing, and it reported `applied` at no position over records
+// whose outcome may have been `unknown`.
+type callOutcome struct {
+	outcome statelog.Outcome
+	at      statelog.Position
+}
+
+// add folds one record's result in. A result that appended nothing is left
+// out ([statelog.Result.Wrote]): it claims no record a caller must wait for.
+func (c *callOutcome) add(r statelog.Result) {
+	if !r.Wrote() {
+		return
+	}
+	c.outcome = statelog.LessCertain(c.outcome, r.Outcome)
+	c.at = statelog.Later(c.at, r.Position)
+}
+
+// stamp writes the call's answer onto the top of a tool's result. A call that
+// appended nothing is `applied` at no position — nothing is outstanding.
+func (c callOutcome) stamp(answer map[string]any) {
+	outcome := c.outcome
+	if outcome == "" {
+		outcome = statelog.OutcomeApplied
+	}
+	answer["outcome"], answer["position"] = string(outcome), positionOf(c.at)
+}
+
+// partlyWritten is the refusal of a call whose LATER record was refused after
+// an earlier one landed: the later write's class, and a sentence that says
+// what did land and where.
+//
+// THE SAME SHAPE save_page gives a refused rename after a landed save, and for
+// the same reason. The unmarked refusal says "the change was NOT made", which
+// over a call that already replaced a tag set or a type list tells a caller to
+// redo — or to report as undone — a change that is on every node.
+func partlyWritten(failure tools.Result, landed, refusedPart string, call callOutcome) tools.Result {
+	outcome := call.outcome
+	if outcome == "" {
+		outcome = statelog.OutcomeApplied
+	}
+	where := "and appended nothing"
+	if !call.at.IsZero() {
+		where = "at " + call.at.String()
+	}
+	return refused(failure.Refusal, fmt.Sprintf("%s (%s, %s) and %s were not: %s",
+		landed, outcome, where, refusedPart, failure.Output))
+}
 
 // ---- update_work_item -------------------------------------------------- //
 
@@ -2242,9 +2355,11 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	answer := withOperation(map[string]any{
 		"key": before.Task.Key, "labels_created": declared,
 	}, actor)
-	// patchedAt is where the patch landed, when it ran: the dependency step
-	// below replaces the answer's position only with a LATER one.
-	var patchedAt statelog.Position
+	var (
+		patchOutcome statelog.Outcome
+		patchAt      statelog.Position
+		patchVersion int64
+	)
 	// THE PATCH IS SKIPPED WHEN THIS CALL IS ONLY A DEPENDENCY CHANGE.
 	// An empty patch is a real write — it stamps a version and writes a
 	// history row — and spending one on a call that changed no field of
@@ -2273,9 +2388,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 				!change.Empty())), nil
 		}
 		t.deps.settle(ctx, got.Position)
-		patchedAt = got.Position
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
 		answer["position"] = positionOf(got.Position)
+		patchOutcome, patchAt, patchVersion = got.Outcome, got.Position, got.Version
 		// THE WARNINGS THE WRITE PRODUCED, which today is the one the
 		// coercion table can raise: a timestamp truncated to its date on
 		// a field that holds no time. A change the engine made to a
@@ -2296,33 +2411,19 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			return writeFailure(actor, UpdateWorkItemTool, err), nil
 		}
 		t.deps.settle(ctx, result.Position)
-		_, patchRan := answer["outcome"]
-		// THE LATER OF THE TWO POSITIONS, with the outcome that goes with
-		// it. The dependency step runs after the patch and the tracker's
-		// log is strictly ordered, so where its last commit is later it is
-		// the one this call is durable — and applied here, or not — at:
-		// an answer carrying the patch's position had a caller settle
-		// short of its own call's writes.
-		if later, err := patchedAt.Before(result.Position); !patchRan ||
-			(err == nil && later) {
-			answer["outcome"] = string(result.Outcome)
+		// THE CALL ANSWERS FOR BOTH RECORDS when the patch appended one
+		// too — see [joinDepend], which also says why the version is this
+		// item's own — and for the sequence alone otherwise, where a
+		// version of zero (nothing landed on this item's own subject) is
+		// no `if_match` condition at all.
+		if _, held := answer["outcome"]; held {
+			outcome, at, version := joinDepend(patchOutcome, patchAt,
+				patchVersion, result)
+			answer["outcome"], answer["version"] = string(outcome), version
+			answer["position"] = positionOf(at)
+		} else {
+			answer["outcome"], answer["version"] = string(result.Outcome), result.Version
 			answer["position"] = positionOf(result.Position)
-		}
-		// THIS ITEM'S OWN VERSION, never the last commit's. A dependency
-		// change writes other items too — each blocker's mirror, each
-		// dependent's edge — and the last of those is somebody else's
-		// version: handed back as `if_match` on this item it was refused
-		// as stale. Zero where the call landed nothing on this item's own
-		// subject, which as `if_match` is no condition at all — and so,
-		// where the patch ran, the patch's version stands.
-		//
-		// WHERE BOTH WROTE THIS ITEM, THE DEPENDENCY'S IS THE NEWER: its
-		// `waiting_on` commit lands on the same subject after the patch.
-		// Answering the patch's version handed the caller an `if_match`
-		// its own call's second write had already moved past, and the
-		// next update was refused as stale by nobody but itself.
-		if !patchRan || result.TaskVersion != 0 {
-			answer["version"] = result.TaskVersion
 		}
 		// THE HALF-WRITTEN EDGES ARE REPORTED, never swallowed. A
 		// dependency whose mirror lost its race is durable on the
@@ -3190,12 +3291,25 @@ func writeFailure(actor Actor, name string, err error) tools.Result {
 // ([statelog.ReasonOpReused]) rather than answering a write that is not this
 // one. The remedy is the one thing a generic "NOT made" leaves out: this write
 // needs an operation of its own. ONLY where the caller named the operation — a
-// seat's ids are derived and it has no `op_id` to leave out.
+// seat's ids are derived and it has no operation to leave out.
+//
+// A REQUEST'S OPERATION MEETS IT THE SAME WAY — a retried request whose item
+// somebody moved in between — and its remedy is the same move in that
+// caller's own terms: a new request, since its operation IS the request and
+// it has no `op_id` to leave out ([sameCall] makes the same split).
 func reusedOperation(actor Actor, tool string, err error) string {
 	var refusal *statelog.Unavailable
 	if actor.Operation == "" || !errors.As(err, &refusal) ||
 		refusal.Reason != statelog.ReasonOpReused {
 		return ""
+	}
+	if actor.requested {
+		return fmt.Sprintf("%s was refused, and this request's change was NOT "+
+			"made: the operation this request names (%s) already wrote to "+
+			"something else (%v) — what it names has changed since the request "+
+			"was first sent — so it cannot finish that request here. Read the "+
+			"item again, and send this as a new request, under a new request id.",
+			tool, actor.Operation, err)
 	}
 	return fmt.Sprintf("%s was refused, and this call's change was NOT made: "+
 		"the operation `op_id` %q names already wrote to something else (%v) — "+
@@ -3208,15 +3322,20 @@ func reusedOperation(actor Actor, tool string, err error) string {
 // sameCall says how this caller makes THIS call again as the same operation,
 // as a clause to be told — or "" where no repeat is the same operation.
 //
-// ONE PLACE, because it is three different answers and every failure that
+// ONE PLACE, because it is four different answers and every failure that
 // says "call again" has to give the right one. A SEAT's ids are derived from
 // its turn, the call's own arguments and how many different calls to the tool
 // came first ([opIDFor]), so the same arguments before any different call to
-// it are the same operation, and reworded they are a new one. An OPERATOR's
-// call is the operation it brings back as `op_id`. A caller with neither mints
-// afresh on every call, and a repeat it is told to make is a second write.
+// it are the same operation, and reworded they are a new one. A call whose
+// transport named its operation from the REQUEST is that request sent again
+// ([RequestOperation]). Any other OPERATOR's call is the operation it brings
+// back as `op_id`. A caller with none of these mints afresh on every call,
+// and a repeat it is told to make is a second write.
 func sameCall(actor Actor, tool string) string {
 	switch {
+	case actor.requested:
+		return fmt.Sprintf("send the same %s request again — the same request "+
+			"id, with exactly the same arguments", tool)
 	case actor.Operation != "":
 		return fmt.Sprintf("call %s again with exactly the same arguments and "+
 			"`op_id` %q", tool, actor.Operation)
@@ -3252,17 +3371,26 @@ const opIDArg = "op_id"
 // unreachable. A create repeated filed a second item, and an update
 // conditioned on a version was refused as stale by its own first copy.
 //
-// So each call there IS an operation: one minted for it and answered as
-// `op_id` ([withOperation]), or the one the caller brought back,
-// held to the same rule every surface that takes one holds it to
-// ([statelog.CheckCallerOpID]). Every write the call makes derives from it.
+// So each call there IS an operation ([Actor.Operation]), named in one of
+// three ways, and every write the call makes derives from it:
 //
-// # Why a brought-back id must come with its own call
+//   - a TRANSPORT THAT NAMES ITS REQUESTS already set it — the dashboard's,
+//     whose retry repeats its request id ([RequestOperation]). The request is
+//     the identity, so an `op_id` beside it is refused, as a turn's is;
+//   - the caller BROUGHT ONE BACK as `op_id`, held to the same rule every
+//     surface that takes one holds it to ([statelog.CheckCallerOpID]);
+//   - or it is minted for this call and answered as `op_id`
+//     ([withOperation]), so the call can be brought back.
 //
-// The id is minted NAMING the call — the tool and a digest of its arguments
-// ([callName]) — and brought back it is accepted only with that call. With any
-// other it is refused before a single write: see [callName] for the second
-// items and the half-applied gestures a looser rule let through.
+// # Why an operation must come with its own call
+//
+// Every one of them NAMES the call — the tool and a digest of its arguments
+// ([callName]) — and is accepted only with that call. With any other it is
+// refused before a single write: see [callName] for the second items and the
+// half-applied gestures a looser rule let through. A transport's operation is
+// held to it too, although the transport derived it for this very call: the
+// rule is about what an operation IS, and a check that exempted one source of
+// them would be the place a transport that derived it wrong wrote anyway.
 //
 // # Why a turn's call is refused one
 //
@@ -3287,6 +3415,15 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 		}
 		return actor, ""
 	}
+	if actor.Operation != "" {
+		if brought {
+			return actor, fmt.Sprintf("%s takes no `op_id` here: this request "+
+				"already names its operation — the request id a retry of it "+
+				"repeats — so the same request sent again is already the same "+
+				"operation. Leave it out.", tool)
+		}
+		return bindRequest(actor, tool, args)
+	}
 	call := callName(tool, args)
 	if !brought {
 		actor.Operation = statelog.NewOpID(time.Now(), call)
@@ -3308,8 +3445,88 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 	return actor, ""
 }
 
-// callName is the name an operator's operation id carries: the tool, and a
-// digest of the arguments of the call it is minted for.
+// bindRequest holds an operation a TRANSPORT named to the call it was derived
+// for ([RequestOperation]) and marks the actor as the request's — see
+// [Actor.requested]. It is [WorkDeps.bindOperation]'s transport half, and on
+// its own it is what the writes that take no `op_id` call: write_project and
+// write_work_catalogue restate what they declare, so a repeat under a NEW
+// operation already changes nothing a first attempt landed and there is no
+// operation for a caller to bring back — but a request's operation reaches
+// them all the same, their records are its steps, and a check that exempted
+// them would be where one derived for another call answered this one from
+// that call's ledger rows. No operation — a turn's call, or a call no
+// transport named — passes untouched.
+func bindRequest(actor Actor, tool string, args map[string]any) (Actor, string) {
+	if actor.Operation == "" {
+		return actor, ""
+	}
+	if !answeredFor(actor.Operation, callName(tool, args)) {
+		return actor, foreignRequest(tool)
+	}
+	actor.requested = true
+	return actor, ""
+}
+
+// foreignRequest refuses a call whose transport named an operation derived
+// for another call. One sentence for the work tools and the page tools alike
+// ([WorkDeps.bindOperation], [PageDeps.foreignOperation]): it is one rule.
+func foreignRequest(tool string) string {
+	return fmt.Sprintf("%s refused this request, and nothing was written: the "+
+		"operation it was sent under was derived for another call — another "+
+		"tool, or this one with other arguments — and an operation finishes "+
+		"only the call it names.", tool)
+}
+
+// RequestOperation is the operation one call through a transport that names
+// its requests is: the operator's act transport, whose client — the
+// dashboard — mints a request id once per gesture and sends it again,
+// unchanged, on a retry. The transport sets it on the call's actor
+// ([Actor.Operation]); nothing else may.
+//
+// DERIVED from the request id and the credential that sent it, so a retry of
+// the request is the operation its first attempt was, and the ledger answers
+// what landed. And NAMING THE CALL ([callName]) exactly as a minted `op_id`
+// does, so a tool accepts it only with the call it was derived for
+// ([WorkDeps.bindOperation]) — and a second, different call sent under one
+// request id is a second operation rather than the first one's retry.
+//
+// THE CREDENTIAL IS PART OF IT, so a request id names only its own sender's
+// writes: nobody can make their write the first attempt of somebody else's by
+// sending that request id first.
+//
+// THE INSTANT IS THE REQUEST ID'S OWN, which is why the id must be a UUIDv7:
+// it is when the gesture began, every retry reproduces it, and it is what the
+// state log reads to decide whether this node's operation ledger can vouch for
+// the operation ([statelog.OpMintedAt]). An id carrying none would be read as
+// minted before every loss the ledger has had, and on a node whose ledger ever
+// lost a row — every deployment older than the ledger's retention — every
+// write under it would answer `unknown` without publishing, first attempt
+// included. So it is refused, naming what to send, rather than accepted into a
+// write that could never run. The id is canonicalised first, so one id spelled
+// two ways — upper case, braces, a `urn:uuid:` prefix — is one request.
+func RequestOperation(sender, requestID, tool string, args map[string]any) (string, error) {
+	id, err := uuid.Parse(strings.TrimSpace(requestID))
+	if err != nil {
+		return "", fmt.Errorf("the request id is not a UUID: %w", err)
+	}
+	at, minted := statelog.OpMintedAt(id.String())
+	if !minted {
+		return "", fmt.Errorf("the request id %s carries no instant: it must be a "+
+			"UUIDv7 minted when the gesture began (its first 48 bits the Unix "+
+			"millisecond), sent again unchanged on every retry", id)
+	}
+	return statelog.DeriveOpID(at, callName(tool, args), requestOperationNamespace,
+		sender, id.String()), nil
+}
+
+// requestOperationNamespace keeps an operation derived from a request apart
+// from every other derivation of the same parts. FIXED for the life of the
+// format: changing it makes every retry straddling the change a second write.
+const requestOperationNamespace = "crewlet.builtin.request"
+
+// callName is the name an operator's operation id carries — minted, brought
+// back or derived from a request: the tool, and a digest of the arguments of
+// the call it is for.
 //
 // # Why the arguments are in the operation
 //
@@ -3342,9 +3559,9 @@ func callName(tool string, args map[string]any) string {
 
 // callDigestLen is how many hex digits of the arguments' digest an operator's
 // operation id carries: 64 bits, far past any accidental collision, in an id
-// of at most 74 bytes with the longest tool that offers one
-// (comment_on_work_item: 36 + 1 + 20 + 1 + 16) — well inside
-// [statelog.MaxCallerOpIDBytes].
+// of at most 74 bytes with the longest operator write's name
+// (comment_on_work_item, write_work_catalogue: 36 + 1 + 20 + 1 + 16) — well
+// inside [statelog.MaxCallerOpIDBytes].
 const callDigestLen = 16
 
 // answeredFor reports whether op was minted for call: a uuid and exactly that
@@ -3359,8 +3576,13 @@ func answeredFor(op, call string) bool {
 // withOperation puts the call's operation on its answer, where it has one:
 // the `op_id` a caller brings back to make this call again as the same
 // operation. See [WorkDeps.bindOperation].
+//
+// NOT WHERE A TRANSPORT NAMED IT FROM ITS REQUEST: that caller makes the call
+// again by repeating its request, and an `op_id` beside the request is
+// refused — so one on its answer would be an instruction it cannot follow,
+// and a second retry identity for a surface that has exactly one.
 func withOperation(answer map[string]any, actor Actor) map[string]any {
-	if actor.Operation != "" {
+	if actor.Operation != "" && !actor.requested {
 		answer[opIDArg] = actor.Operation
 	}
 	return answer

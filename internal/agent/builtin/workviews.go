@@ -230,6 +230,12 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Default:   argBool(args, "default"),
 		Icon:      strings.TrimSpace(argString(args, "icon")),
 	}
+	// THE OPERATION IS THE CALL'S, not the view's. It was `view-<id>` —
+	// one fixed id for every save of one view, so inside the broker's
+	// duplicate window a second edit of the same view was collapsed into
+	// the first and answered `applied` without landing. Derived from the
+	// call ([opIDFor]), a retry is one write and a second edit is a second
+	// one.
 	opID := opIDFor(actor, t.Name(), "view", id, args)
 	result, err := t.deps.ViewWriter(actor).WriteView(ctx, opID, view)
 	if err != nil {
@@ -256,8 +262,9 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // createdViewID is the id a new view is saved under: a UUIDv5 over the call's
-// operation where it has one ([Actor.Operation]), so the call brought back
-// under its `op_id` saves the same view — and a fresh one where it has none.
+// operation where it has one ([Actor.Operation]), so the call made again under
+// it — an `op_id` brought back, or a person's retry of one request — saves the
+// same view, and a fresh one where it has none.
 func createdViewID(actor Actor) string {
 	if actor.Operation == "" {
 		return uuid.NewString()

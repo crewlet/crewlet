@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -160,6 +159,10 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 	if t.deps.CatalogueWriter == nil {
 		return unconfigured(tracker.WriteWorkCatalogueTool), nil
 	}
+	actor, denied := bindRequest(actor, tracker.WriteWorkCatalogueTool, args)
+	if denied != "" {
+		return failed(denied), nil
+	}
 	_, hasTypes := args["types"]
 	_, hasFields := args["fields"]
 	if !hasTypes && !hasFields {
@@ -168,18 +171,38 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 	}
 	writer := t.deps.CatalogueWriter(actor)
 	out := map[string]any{}
+	// THE CALL ANSWERS FOR BOTH RECORDS at the top, and each list keeps its
+	// own detail beneath it — see [callOutcome].
+	var call callOutcome
+
+	// BOTH LISTS ARE READ BEFORE EITHER IS WRITTEN. A malformed `fields`
+	// used to be found only after `types` had landed, and the call answered
+	// the parse refusal alone — a caller told its call failed, holding a
+	// catalogue whose types had already been replaced.
+	var types []tracker.TaskType
+	var fields []tracker.FieldDef
+	if hasTypes {
+		var refusal string
+		if types, refusal = catalogueTypes(args); refusal != "" {
+			return failed(refusal), nil
+		}
+	}
+	if hasFields {
+		var refusal string
+		if fields, refusal = catalogueFields(args); refusal != "" {
+			return failed(refusal), nil
+		}
+	}
 
 	// TWO WRITES, NEVER ONE, because they are two objects on two subjects
 	// — see internal/tracker/catalogue.go. A call sending both does them
-	// in order, and the second still runs if the first was refused only
-	// in the sense that it does NOT: an operator who sent both meant both,
-	// and reporting one applied and one refused is the honest shape.
+	// in order; a refused second write after a landed first is reported as
+	// exactly that ([partlyWritten]), because the first list IS replaced.
 	if hasTypes {
-		types, refusal := catalogueTypes(args)
-		if refusal != "" {
-			return failed(refusal), nil
-		}
-		opID := statelog.NewOpID(time.Now(), "types")
+		// DERIVED from the call, like every write it makes, so the call
+		// made again — a seat's re-run, an operator's retry — replaces the
+		// list once ([opIDFor]).
+		opID := opIDFor(actor, t.Name(), "types", "workspace", args)
 		result, err := writer.WriteTypes(ctx, opID, types)
 		if err != nil {
 			return writeFailure(actor, tracker.WriteWorkCatalogueTool, err), nil
@@ -197,20 +220,22 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 				"the types were written", opID, result.Unvouched, next)), nil
 		}
 		t.deps.settle(ctx, result.Position)
+		call.add(result.Result)
 		out["types"] = map[string]any{
 			"count": len(types), "outcome": string(result.Outcome), "position": positionOf(result.Position),
 			"version": result.Version,
 		}
 	}
 	if hasFields {
-		fields, refusal := catalogueFields(args)
-		if refusal != "" {
-			return failed(refusal), nil
-		}
-		opID := statelog.NewOpID(time.Now(), "fields")
+		opID := opIDFor(actor, t.Name(), "fields", "workspace", args)
 		result, err := writer.WriteFields(ctx, opID, fields)
 		if err != nil {
-			return writeFailure(actor, tracker.WriteWorkCatalogueTool, err), nil
+			failure := writeFailure(actor, tracker.WriteWorkCatalogueTool, err)
+			if hasTypes {
+				return partlyWritten(failure, "The types were replaced", "the fields",
+					call), nil
+			}
+			return failure, nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
 			next := restateNext("Read the catalogue with get_work_catalogue")
@@ -221,11 +246,13 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 				"the fields were written", opID, result.Unvouched, next)), nil
 		}
 		t.deps.settle(ctx, result.Position)
+		call.add(result.Result)
 		out["fields"] = map[string]any{
 			"count": len(fields), "outcome": string(result.Outcome), "position": positionOf(result.Position),
 			"version": result.Version,
 		}
 	}
+	call.stamp(out)
 	return jsonResult(out)
 }
 

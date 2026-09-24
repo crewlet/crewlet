@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -164,6 +163,10 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.ProjectWriter == nil {
 		return unconfigured(tracker.WriteProjectTool), nil
 	}
+	actor, denied := bindRequest(actor, tracker.WriteProjectTool, args)
+	if denied != "" {
+		return failed(denied), nil
+	}
 	key := strings.TrimSpace(argString(args, "project"))
 	if key == "" {
 		key = t.deps.defaultProject(actor)
@@ -219,12 +222,19 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	person := actor.Kind.Person()
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}
+	// THE CALL ANSWERS FOR BOTH RECORDS at the top, and each facet keeps its
+	// own detail beneath it — see [callOutcome].
+	var call callOutcome
 
 	// THE TAGS FIRST, because the policy half may archive the project and
 	// a tag declared into an archived project is the one order that reads
 	// as a mistake. Two writes, never one — two objects on two subjects.
+	//
+	// EACH UNDER AN OPERATION DERIVED FROM THE CALL ([opIDFor]) — its
+	// verb telling the two records apart — so the call made again, a seat's
+	// re-run or an operator's retry, writes each record once.
 	if !tagEdit.Empty() {
-		opID := statelog.NewOpID(time.Now(), "tags-"+key)
+		opID := opIDFor(actor, t.Name(), "tags", key, args)
 		result, err := writer.WriteTags(ctx, opID, key,
 			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
 		if err != nil {
@@ -243,6 +253,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				result.Unvouched, next)), nil
 		}
 		t.deps.settle(ctx, result.Position)
+		call.add(result.Result)
 		tags := map[string]any{
 			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
@@ -252,11 +263,16 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["tags"] = tags
 	}
 	if !edit.Empty() {
-		opID := statelog.NewOpID(time.Now(), "policy-"+key)
+		opID := opIDFor(actor, t.Name(), "policy", key, args)
 		result, err := writer.WriteProject(ctx, opID, key,
 			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
 		if err != nil {
-			return writeFailure(actor, tracker.WriteProjectTool, err), nil
+			failure := writeFailure(actor, tracker.WriteProjectTool, err)
+			if !tagEdit.Empty() {
+				return partlyWritten(failure, "The tag change was written",
+					"the project settings", call), nil
+			}
+			return failure, nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
 			next := restateNext(fmt.Sprintf("Read %s with describe_project", key))
@@ -268,10 +284,12 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				result.Unvouched, next)), nil
 		}
 		t.deps.settle(ctx, result.Position)
+		call.add(result.Result)
 		out["policy"] = map[string]any{
 			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
 	}
+	call.stamp(out)
 	return jsonResult(out)
 }
 

@@ -49,10 +49,22 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		"handle":   "",
 		"name":     "",
 		"kind":     "",
+		// WHAT THIS CALLER MAY DO on the act transport, which admits a
+		// person and nobody else (ADR-0024): empty for an anonymous
+		// reader and for a token no seat binds, so a screen disables its
+		// write controls with the reason rather than offering a press
+		// the engine refuses. ALWAYS AN ARRAY, never null, so "may do
+		// nothing" is a value a reader can test rather than an absence.
+		"acts": []string{},
 	}
 	seat := s.seatForOperator(operatorID)
 	if seat == nil {
 		return out, nil
+	}
+	if s.OperatorActs != nil {
+		if acts := s.OperatorActs(); acts != nil {
+			out["acts"] = acts
+		}
 	}
 	out["handle"] = seat.Handle()
 	out["name"] = seat.Name

@@ -13,3 +13,6 @@ func (s *Server) Dispatch(ctx context.Context, name string,
 
 	return s.catalogue.call(ctx, name, args)
 }
+
+// ReceiptOf is the act transport's reading of a tool's answer.
+var ReceiptOf = receiptOf

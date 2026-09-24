@@ -188,7 +188,9 @@ type Options struct {
 
 	// Operator is the company's own tracker and knowledge base as ONE tool
 	// catalogue, served to the people who run it — over MCP for an
-	// operator's own AI assistant. Nil serves none and the route is ABSENT,
+	// operator's own AI assistant, and over the act transport for a person
+	// at the dashboard, who must hold a token bound to their seat
+	// (ADR-0024). Nil serves none and both routes are ABSENT,
 	// which is the honest shape for a company on Jira and Confluence: there
 	// is nothing here it could manage.
 	//
@@ -334,8 +336,9 @@ func New(opts Options) (*App, error) {
 	// binds no socket. See retention.go.
 	a.mountCapacity(mux)
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
-	// The OPERATOR MCP surface: the same tracker and knowledge tools a
-	// seat holds, offered to a person's own assistant. Under its own
+	// The OPERATOR surface: the same tracker and knowledge tools a seat
+	// holds, offered to a person's own assistant over MCP and to the person
+	// themself over the act transport. Under its own
 	// always-guarded prefix rather than under /mcp/, which is exempt
 	// wholesale for the sandbox bridge — see operator.MCPPath.
 	a.mountOperator(mux, opts.Operator)

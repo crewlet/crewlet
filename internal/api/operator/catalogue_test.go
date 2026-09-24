@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -111,6 +114,95 @@ func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 	}
 }
 
+// A PERSON'S RETRIED COMMENT IS ONE COMMENT, and the page half of the call's
+// operation is wired by the surface itself rather than by whoever builds its
+// deps.
+//
+// The work tools carry the operation on their actor; the page tools read it
+// through [builtin.PageDeps.Operation], which [operator.New] sets because this
+// package is the one that puts the operation on the context. Left to the
+// caller, one side is wired and the other is not, and a comment posted twice
+// by a retry is two comments on somebody's page.
+func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
+	t.Parallel()
+	kb := &recordingPages{}
+	s := operator.New(operator.Options{
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor},
+	})
+	if s == nil {
+		t.Fatal("a company on the native knowledge base got no surface")
+	}
+	args := map[string]any{"page": "Runbook", "body": "the step is wrong"}
+	op, err := builtin.RequestOperation("founder", requestA, builtin.CommentOnPageTool, args)
+	if err != nil {
+		t.Fatalf("RequestOperation: %v", err)
+	}
+	comment := func(op string) {
+		ctx := auth.WithOperator(t.Context(), "founder")
+		if op != "" {
+			ctx = operator.WithOperation(ctx, op)
+		}
+		got, served, err := s.Dispatch(ctx, builtin.CommentOnPageTool, args)
+		if err != nil || !served || got.Failed {
+			t.Fatalf("comment: served=%v err=%v result=%+v", served, err, got)
+		}
+	}
+	comment(op)
+	comment(op)
+	comment("")
+	comment("")
+
+	keys := kb.keys()
+	if len(keys) != 4 {
+		t.Fatalf("four comments wrote %d", len(keys))
+	}
+	if keys[0].Seed == "" || keys[0] != keys[1] {
+		t.Errorf("a retried request commented under %+v and then %+v — the "+
+			"ledger cannot collapse the retry, so it is a second comment",
+			keys[0], keys[1])
+	}
+	// AND AT THE REQUEST'S OWN INSTANT, which is what the node's operation
+	// ledger judges the retry by: a key with none reads as minted before
+	// every row the ledger ever lost, and is answered `unknown` unmade.
+	if want, _ := statelog.OpMintedAt(op); !keys[0].Since.Equal(want) || want.IsZero() {
+		t.Errorf("the comment's key carries the instant %v, want the request's %v",
+			keys[0].Since, want)
+	}
+	if keys[2].Seed != "" || keys[3].Seed != "" {
+		t.Errorf("a call naming no request carried the keys %+v and %+v — a "+
+			"stable key collapses an assistant's second comment into its first",
+			keys[2], keys[3])
+	}
+}
+
+// AND THE WORK ACTOR CARRIES THE OPERATION, and carries nothing where none was
+// set — an MCP call's operation is named later, by the tool, from what it was
+// asked ([builtin.OperatorTools]).
+func TestTheWorkActorCarriesTheOperation(t *testing.T) {
+	t.Parallel()
+	ctx := auth.WithOperator(t.Context(), "founder")
+	op, err := builtin.RequestOperation("founder", requestA, builtin.CreateWorkItemTool,
+		map[string]any{"title": "x"})
+	if err != nil {
+		t.Fatalf("RequestOperation: %v", err)
+	}
+	named, err := operator.WorkActor(nil)(operator.WithOperation(ctx, op), nil)
+	if err != nil {
+		t.Fatalf("WorkActor: %v", err)
+	}
+	if named.Operation != op || named.OperationSeed() != "" {
+		t.Errorf("a call under %s resolved to %+v (seed %q) — a person's call is "+
+			"its operation, never a turn's seed", op, named, named.OperationSeed())
+	}
+	plain, err := operator.WorkActor(nil)(ctx, nil)
+	if err != nil {
+		t.Fatalf("WorkActor: %v", err)
+	}
+	if plain.Operation != "" || plain.OperationSeed() != "" {
+		t.Errorf("a call naming no operation resolved to %+v", plain)
+	}
+}
+
 // dialOperator connects an MCP client to the surface as one token.
 //
 // THE GUARD IS STOOD IN FOR by stamping the operator on the context, which is
@@ -144,4 +236,37 @@ func textOf(res *mcp.CallToolResult) string {
 		}
 	}
 	return b.String()
+}
+
+// recordingPages is a knowledge base holding one page, recording the call key
+// every comment arrives with.
+type recordingPages struct {
+	stubPageWriter
+	mu       sync.Mutex
+	callKeys []pages.CallKey
+}
+
+func (*recordingPages) List(context.Context, pages.Filter,
+	statelog.Freshness) (pages.Listing, error) {
+	return pages.Listing{}, nil
+}
+
+func (*recordingPages) Get(context.Context, string,
+	statelog.Freshness) (pages.Detail, error) {
+	return pages.Detail{Page: pages.Page{ID: "p-1", Title: "Runbook"}}, nil
+}
+
+func (p *recordingPages) Comment(_ context.Context, _ pages.Actor, _ string,
+	in pages.NewComment) (pages.Comment, pages.Written, error) {
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.callKeys = append(p.callKeys, in.CallKey)
+	return pages.Comment{ID: "c-1"}, pages.Written{}, nil
+}
+
+func (p *recordingPages) keys() []pages.CallKey {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]pages.CallKey(nil), p.callKeys...)
 }

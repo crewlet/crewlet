@@ -298,8 +298,10 @@ func TestADependencyOnlyUpdateReportsTheItemsOwnVersion(t *testing.T) {
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 44},
 			Version:  44,
 		}},
-		TaskVersion: 42,
 	}
+	// THE DEPENDENCY RESULT'S VERSION IS THIS ITEM'S OWN — the tracker
+	// folds every commit into it — and 44 is the blocker's mirror's.
+	trk.dependAnswer.Version = 42
 	got := callWork(t, workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Dependencies: trk.depends,
 	}), builtin.UpdateWorkItemTool, map[string]any{
@@ -347,8 +349,10 @@ func TestAnUpdateThatAlsoChangesDependenciesReportsTheItemsNewestVersion(t *test
 					Position: statelog.Position{Stream: "S", Generation: 1, Seq: 90},
 					Version:  90,
 				}},
-				TaskVersion: tc.task,
 			}
+			// This item's own version after the dependency: zero where it
+			// landed nothing on this item's subject.
+			trk.dependAnswer.Version = tc.task
 			got := callWork(t, workRegistry(t, builtin.WorkDeps{
 				Reader: trk, Writer: trk.as, Dependencies: trk.depends,
 			}), builtin.UpdateWorkItemTool, map[string]any{

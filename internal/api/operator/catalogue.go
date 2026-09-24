@@ -15,11 +15,11 @@
 //
 // The catalogue (catalogue.go) is the tool set, resolved against this
 // company's backends by [builtin.OperatorTools] ONCE, in [New]. A transport
-// (MCP at [MCPPath], for an assistant) adapts a request into a call through
-// the catalogue's own dispatch and nothing else: it does not decide which
-// tools exist, what a schema says, which hints a tool carries or how a
-// refusal is worded. A
-// transport that built its own catalogue would be a second call to the same
+// — MCP at [MCPPath] for an assistant, and the act transport at [ActPattern]
+// for a person at the dashboard (act.go) — adapts a request into a call
+// through the catalogue's own dispatch and nothing else: it does not decide
+// which tools exist, what a schema says, which hints a tool carries or how a
+// refusal is worded. A transport that built its own catalogue would be a second call to the same
 // constructor with a second chance to pass it different deps — and the
 // difference would surface as a verb that works from one surface and is
 // missing from the other, which nobody tests for because each surface looks
@@ -39,6 +39,27 @@
 // separate facts on the record and an audit can tell an operator's edit from
 // an agent's. See [WorkActor] in actor.go.
 //
+// # A retry is the same operations
+//
+// A person has no turn and nothing redelivers their call, but they RETRY: a
+// write whose answer never arrived is sent again. So every call here IS an
+// operation, and every write it makes — each record's step, a created item's,
+// view's or page's own id, a comment's — is derived from it, so the call made
+// again is the first attempt's writes rather than new ones, exactly as a
+// redelivered turn's are. The transports differ in who names it:
+//
+//   - the act transport's client names its REQUEST: the dashboard mints a
+//     `request_id` (a UUIDv7, whose instant is when the gesture began) once
+//     per gesture and sends it again on a retry, and the transport derives the
+//     call's operation from it and the token that sent it
+//     ([builtin.RequestOperation]) and puts it on the context
+//     ([WithOperation]), where the actor and the page seam read it;
+//   - an MCP client names none, so each of its calls is a new operation — two
+//     calls from an assistant are two writes — and a tracker write answers
+//     with the `op_id` that operation was, which the assistant sends back with
+//     the same arguments to finish a write that answered `unknown` or stopped
+//     part of the way through, rather than file it twice.
+//
 // # It is ALWAYS authenticated
 //
 // Unlike the sandbox bridge at [mcpbridge.PathPrefix], which authenticates
@@ -47,6 +68,21 @@
 // guarded by the ordinary operator bearer token — the same one /config and
 // /secrets take. It WRITES to the company, so `allow_anonymous_read` does not
 // reach it: a write is a write whatever reads are open.
+//
+// # The act transport admits a PERSON, and nobody else (ADR-0024)
+//
+// The two transports differ in exactly one rule. MCP admits any token, bound
+// or not, because an assistant connected with a CI token is a credential
+// acting as itself. The act transport — the dashboard's buttons — admits only
+// a token `contact.crewlet_operator_id` binds to a human seat, and refuses
+// every other caller `unbound`: a disabled guard's anonymous caller, and a
+// credential nobody bound. A button is pressed by somebody, and the only
+// somebody a browser session can honestly claim to be is the person the token
+// names; a write attributed to "the dashboard" would be the one actor an audit
+// cannot ask why. The attribution itself does not change — the author is still
+// the token, the kind still `operator`, and the person rides beside it as the
+// actor's seat — so an audit reads a dashboard write exactly as it reads the
+// same person's assistant. See [ActPattern].
 package operator
 
 import (
@@ -105,6 +141,11 @@ type Options struct {
 type Server struct {
 	catalogue catalogue
 	mcp       mcpTransport
+
+	// chart is [Options.Org], kept for the one decision a transport makes
+	// about the caller rather than the tool: whether the token is bound to
+	// a person, which is the whole of the act transport's admission rule.
+	chart func() *org.Organization
 }
 
 // catalogue is the tool set every transport serves, in the order
@@ -149,6 +190,12 @@ func (c catalogue) names() []string {
 // that exists and lists no tools reads to an operator as broken, while one
 // that is not there matches what their config says.
 func New(opts Options) *Server {
+	// THE PAGE TOOLS READ THE CALL'S OPERATION THROUGH THEIR OWN SEAM, and
+	// it is this package's to wire because this package is the one that
+	// puts it on the context: an operation whose writer and reader were
+	// wired in two places is one somebody wires on only one side. The work
+	// tools carry it on the actor instead — see [WorkActor].
+	opts.Pages.Operation = operationFrom
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
 		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
@@ -156,7 +203,7 @@ func New(opts Options) *Server {
 	if len(callables) == 0 {
 		return nil
 	}
-	s := &Server{catalogue: newCatalogue(callables)}
+	s := &Server{catalogue: newCatalogue(callables), chart: opts.Org}
 	s.mcp = newMCPTransport(s.catalogue, opts.Company)
 	return s
 }

@@ -52,9 +52,9 @@ type PageReader interface {
 type PageWriter interface {
 	Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error)
 	SavePage(ctx context.Context, actor pages.Actor, pageID string, save pages.Save) (pages.Written, error)
-	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool) (pages.Written, error)
+	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool, key pages.CallKey) (pages.Written, error)
 	Comment(ctx context.Context, actor pages.Actor, pageID string, in pages.NewComment) (pages.Comment, pages.Written, error)
-	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string) (pages.Comment, pages.Written, error)
+	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string, key pages.CallKey) (pages.Comment, pages.Written, error)
 }
 
 // PageDeps are the knowledge base's halves plus what a write needs.
@@ -80,12 +80,107 @@ type PageDeps struct {
 	// this is a seam rather than a second copy of these five tools.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error)
 
+	// Operation reads the operation a transport named for this call off a
+	// request made outside a turn, or "" — the page half of
+	// [Actor.Operation], which the work tools carry on their actor. It is a
+	// seam of its own because [pages.Actor] is the knowledge base's
+	// attribution record and an operation is not attribution: nothing
+	// about it is written to a history row. Nil, which is every seat's
+	// surface, reads "".
+	//
+	// What it buys is that a person's retried write is ONE write: every
+	// page write's operation id — a create's, a save's, a rename's, a
+	// comment's and a comment edit's — and a created page's id are derived
+	// from it exactly as from a turn's key (see [PageDeps.callKey]). The
+	// operator's act transport sets it from the request ([RequestOperation]);
+	// the page tools take no `op_id`, so over MCP each page write is a new
+	// one.
+	Operation func(ctx context.Context) string
+
 	// Await blocks until this node's projection has applied a revision.
 	// See [WorkDeps.Await]: same seam, same reason, and it matters more
 	// here — a page's SavePage takes the version it read, so a turn that
 	// writes and then re-reads through a projection that has not caught
 	// up gets a stale version and its next save is refused.
 	Await func(ctx context.Context, at statelog.Position) error
+}
+
+// operation is the transport's operation for this call, or "" — see
+// [PageDeps.Operation].
+func (d PageDeps) operation(ctx context.Context) string {
+	if d.Operation == nil {
+		return ""
+	}
+	return d.Operation(ctx)
+}
+
+// callKey is the key every page write this call makes is derived from — the
+// package doc's one rule, "How a write is made once", typed for the store
+// ([pages.CallKey]):
+//
+//   - IN A TURN, the turn's seed ([turnKey]), the instant it began
+//     ([turnSince]) and this call's repeat count in the run
+//     ([turnctx.CallLog.Ordinal]) — what [opIDFor] derives a work write
+//     from, so a remark made again after a different one is a second
+//     comment and a re-run's is the first;
+//   - OUTSIDE ONE, the operation the transport named for this call
+//     ([PageDeps.Operation]), carrying that operation's own instant — it
+//     already names the call, so it takes no repeat count;
+//   - or none, which the store mints afresh.
+func (d PageDeps) callKey(ctx context.Context, turn *turnctx.Turn, tool string,
+	args map[string]any) pages.CallKey {
+
+	if seed := turnKey(turn); seed != "" {
+		return pages.CallKey{Seed: seed, Since: turnSince(turn),
+			Repeat: turn.CallLog().Ordinal(tool, args)}
+	}
+	if op := d.operation(ctx); op != "" {
+		at, _ := statelog.OpMintedAt(op)
+		return pages.CallKey{Seed: op, Since: at}
+	}
+	return pages.CallKey{}
+}
+
+// foreignOperation refuses a page write whose transport named an operation
+// derived for ANOTHER call — [WorkDeps.bindOperation]'s rule, held on the
+// page tools for its reason: a check that exempted one source of operations
+// would be where a transport that derived one wrong wrote anyway, and here it
+// would write a page, a revision or a comment under ids the other call
+// derives. The page tools take no `op_id`, so a transport's operation is the
+// only one they meet. "" where the call has none, is a turn's (whose key wins
+// — see [PageDeps.callKey]), or names this call.
+func (d PageDeps) foreignOperation(ctx context.Context, turn *turnctx.Turn,
+	tool string, args map[string]any) string {
+
+	if turnKey(turn) != "" {
+		return ""
+	}
+	op := d.operation(ctx)
+	if op == "" || answeredFor(op, callName(tool, args)) {
+		return ""
+	}
+	return foreignRequest(tool)
+}
+
+// sameCall says how this caller makes a page write again as the same
+// operation — [sameCall]'s rule for the knowledge base's keys — or "" where no
+// repeat is the same operation.
+func (k pageCaller) sameCall(tool string) string {
+	switch {
+	case k.turn:
+		return fmt.Sprintf("call %s again with exactly the same arguments, "+
+			"before calling it with any others", tool)
+	case k.key.String() != "":
+		return "send the same request again, unchanged"
+	}
+	return ""
+}
+
+// pageCaller is who made a page write, as far as repeating it goes: a turn,
+// or a caller whose transport named its operation, or neither.
+type pageCaller struct {
+	turn bool
+	key  pages.CallKey
 }
 
 // settle waits for a write to reach this node's own applied rows. Best effort;
@@ -340,6 +435,9 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if t.deps.Writer == nil {
 		return unconfiguredKB(WritePageTool), nil
 	}
+	if denied := t.deps.foreignOperation(ctx, turn, WritePageTool, args); denied != "" {
+		return failed(denied), nil
+	}
 	in := pages.NewPage{
 		Title:     strings.TrimSpace(argString(args, "title")),
 		Body:      argString(args, "body"),
@@ -347,6 +445,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		ParentID:  strings.TrimSpace(argString(args, "parent")),
 		Labels:    argStrings(args, "labels"),
 		Message:   strings.TrimSpace(argString(args, "message")),
+		CallKey:   t.deps.callKey(ctx, turn, t.Name(), args),
 	}
 	if in.Container == "" {
 		if t.deps.DefaultContainer != nil {
@@ -448,6 +547,9 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfiguredKB(SavePageTool), nil
 	}
+	if denied := t.deps.foreignOperation(ctx, turn, SavePageTool, args); denied != "" {
+		return failed(denied), nil
+	}
 	ref := strings.TrimSpace(argString(args, "page"))
 	if ref == "" {
 		return failed("save_page needs a `page` — an id, or \"CONTAINER/Title\"."), nil
@@ -466,7 +568,11 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return pageReadFailure(SavePageTool, err), nil
 	}
 
-	save := pages.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message"))}
+	key := t.deps.callKey(ctx, turn, t.Name(), args)
+	save := pages.Save{
+		BaseVersion: base, Message: strings.TrimSpace(argString(args, "message")),
+		CallKey: key,
+	}
 	if _, ok := args["body"]; ok {
 		body := argString(args, "body")
 		save.Body = &body
@@ -509,7 +615,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		// as stale. See [PageDeps.Await], which exists for exactly this.
 		t.deps.settle(ctx, at)
 		want := strings.TrimSpace(fmt.Sprint(title))
-		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false)
+		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false, key)
 		if err != nil {
 			// THE RENAME'S CLASS, because the rename is the half that
 			// failed: the save already landed and nothing about it is
@@ -538,9 +644,13 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		if renamed.Revision > revision {
 			revision = renamed.Revision
 		}
-		if renamed.Outcome.Position.Packed() > at.Packed() {
-			at = renamed.Outcome.Position
-			outcome = renamed.Outcome.Outcome
+		at = statelog.Later(at, renamed.Outcome.Position)
+		// AND THE LESS CERTAIN OF THE TWO OUTCOMES, where the rename
+		// appended anything: the call answers for both records, and
+		// `applied` over a rename the broker never confirmed would tell
+		// a caller it can stop looking at a write it cannot vouch for.
+		if renamed.Outcome.Wrote() {
+			outcome = statelog.LessCertain(outcome, renamed.Outcome.Outcome)
 		}
 	}
 	t.deps.settle(ctx, at)
@@ -609,6 +719,9 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if t.deps.Writer == nil || t.deps.Reader == nil {
 		return unconfiguredKB(CommentOnPageTool), nil
 	}
+	if denied := t.deps.foreignOperation(ctx, turn, CommentOnPageTool, args); denied != "" {
+		return failed(denied), nil
+	}
 	ref := strings.TrimSpace(argString(args, "page"))
 	body := strings.TrimSpace(argString(args, "body"))
 	switch {
@@ -631,7 +744,8 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// — lives in the store either way.
 	if edit := strings.TrimSpace(argString(args, "edit")); edit != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body)
+		comment, written, err := t.deps.Writer.EditComment(ctx, actor, detail.Page.ID, edit, body,
+			t.deps.callKey(ctx, turn, t.Name(), args))
 		if err != nil {
 			return pageWriteFailure(CommentOnPageTool, err), nil
 		}
@@ -651,14 +765,11 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 
 	in := pages.NewComment{
-		Body:      body,
-		ReplyTo:   strings.TrimSpace(argString(args, "reply_to")),
-		TurnKey:   turnKey(turn),
-		TurnSince: turnSince(turn),
-		// HOW MANY DIFFERENT CALLS TO THIS TOOL CAME FIRST in this run —
-		// see [opIDFor] for what a remark made again after another one
-		// cost without it.
-		Repeat: turn.CallLog().Ordinal(t.Name(), args),
+		Body:    body,
+		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
+		// THE CALL'S KEY, repeat count included — see [opIDFor] for what a
+		// remark made again after another one cost without it.
+		CallKey: t.deps.callKey(ctx, turn, t.Name(), args),
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)
@@ -673,14 +784,13 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// comment: under a lost acknowledgement it posts once, and where
 		// this node's ledger cannot vouch for it the repeat publishes
 		// nothing and answers the same way — safe, and no answer sooner
-		// than looking. An operator's has no turn to derive from, so its
-		// repeat is a new comment, and a second one if the first landed.
-		// [unknownNext] is the rule every tracker write already answers by.
-		again := ""
-		if in.TurnKey != "" {
-			again = "call comment_on_page again with exactly the same " +
-				"arguments, before calling it with any others"
-		}
+		// than looking. A person's retry of one request is the same
+		// comment too. An operator's assistant names no operation for a
+		// page write, so its repeat is a new comment, and a second one if
+		// the first landed. [unknownNext] is the rule every tracker write
+		// already answers by.
+		again := pageCaller{turn: turnKey(turn) != "", key: in.CallKey}.
+			sameCall(CommentOnPageTool)
 		return unknownOutcome(pageUnknown(CommentOnPageTool, written.Outcome,
 			unknownNext(written.Outcome.Unvouched, again,
 				"Read the page's comments with get_page",
@@ -704,7 +814,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 // same OPERATION asked here answers the same way every time, and another node
 // — or a person looking at the page — is what can tell. Whether a caller's
 // repeat is that same operation is `next`'s to say: a seat's comment is, and
-// an operator's is not.
+// so is a person's retry of one request, and an operator's assistant's is not.
 func pageUnknown(name string, result statelog.Result, next string) string {
 	why := "the write's acknowledgement was lost"
 	if result.Unvouched {
