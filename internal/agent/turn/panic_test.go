@@ -36,11 +36,11 @@ func (p *panicking) Review(ctx context.Context, round int, w turn.Work, h []ledg
 	return p.fake.Review(ctx, round, w, h)
 }
 
-func (p *panicking) Resume(ctx context.Context, h []ledger.Iteration) (turn.Work, turn.Surface, error) {
+func (p *panicking) Resume(ctx context.Context, round int, h []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	if p.in == "resume" {
 		panic(p.value)
 	}
-	return p.fake.Resume(ctx, h)
+	return p.fake.Resume(ctx, round, h)
 }
 
 // wantUnhandled asserts the shape every recovered panic must leave: an error

@@ -177,8 +177,7 @@ type Health struct {
 	// Evicted reports this node's own eviction, as the domain's write fence
 	// reads it ([Fence.Evicted]): the eviction this node has APPLIED, fresh
 	// to its applied prefix and read without a coordination round trip — so
-	// it is still fresh when the coordination path is wedged, which is a
-	// precondition of an eviction being permitted at all.
+	// it answers whether or not coordination does.
 	Evicted bool
 
 	// Lag is the stream's last sequence minus this node's position, and

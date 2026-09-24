@@ -216,10 +216,12 @@ func TestBudgetsShowListsWhatEachScopeSpent(t *testing.T) {
 	}
 }
 
-// A REFUSING SCOPE SAYS SO, and since when. The refusal stamp is the gate's own
-// record of turning a charge away, which neither USED nor CAP carries, so the
-// table prints it last in the row, and a dash for a scope that is not refusing.
-func TestBudgetsShowNamesAScopeThatIsRefusing(t *testing.T) {
+// A SCOPE'S LAST REFUSAL IS PRINTED, and a dash for a scope with none standing.
+// The stamp is the gate's own record of when it last turned a round away, which
+// neither USED nor CAP carries, so the table prints it last in the row. It is a
+// date and never the verdict: swe here is under its cap with a stamp set, which
+// is what a revision raising the cap leaves until the next admitted charge.
+func TestBudgetsShowPrintsWhenEachScopeLastRefused(t *testing.T) {
 	node := newFakeNode(t)
 	node.budgets = []byte(`{"durable":true,
 	  "org":{"max_tokens":10000,"durable_used":1200,"durable_updated_at":"2026-08-01T00:00:00Z",
@@ -234,7 +236,7 @@ func TestBudgetsShowNamesAScopeThatIsRefusing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("budgets show: %v", err)
 	}
-	if !strings.Contains(out, "REFUSING SINCE") {
+	if !strings.Contains(out, "LAST REFUSED") {
 		t.Fatalf("the table has no refusal column: %q", out)
 	}
 	for _, line := range strings.Split(out, "\n") {
@@ -245,11 +247,11 @@ func TestBudgetsShowNamesAScopeThatIsRefusing(t *testing.T) {
 		switch fields[0] {
 		case "swe":
 			if fields[len(fields)-1] != "2026-08-01T00:05:00Z" {
-				t.Errorf("the refusing seat's row = %q, want its refusal stamp last", line)
+				t.Errorf("the seat that refused reads %q, want its last refusal last", line)
 			}
 		case "ops", "org":
 			if fields[len(fields)-1] != "-" {
-				t.Errorf("a scope that is not refusing reads %q, want a dash last", line)
+				t.Errorf("a scope with no refusal standing reads %q, want a dash last", line)
 			}
 		}
 	}

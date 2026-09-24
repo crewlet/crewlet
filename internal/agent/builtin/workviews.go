@@ -94,6 +94,11 @@ func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Re
 type saveWorkView struct{ deps WorkDeps }
 
 var _ tools.Callable = (*saveWorkView)(nil)
+var _ tools.Sequenced = (*saveWorkView)(nil)
+
+// Sequenced marks this tool as naming its writes after the calls before
+// it; see operation.go.
+func (*saveWorkView) Sequenced() {}
 
 func (t *saveWorkView) Name() string { return tracker.SaveWorkViewTool }
 
@@ -208,14 +213,18 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Default:   argBool(args, "default"),
 		Icon:      strings.TrimSpace(argString(args, "icon")),
 	}
-	result, err := t.deps.ViewWriter(actor).WriteView(ctx, "view-"+id, view)
+	// THE OPERATION IS THE CALL'S, not the view's: an id named after the
+	// view alone is one the ledger has already applied from the second save
+	// of that view on, and answers `applied` without writing it.
+	op := opIDFor(actor, operationsBefore(turn), "view", id)
+	result, err := t.deps.ViewWriter(actor).WriteView(ctx, op, view)
 	if err != nil {
-		return failed(writeFailure(tracker.SaveWorkViewTool, err)), nil
+		return refusedAfter(writeFailure(tracker.SaveWorkViewTool, err), op), nil
 	}
 	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
+	return receipt(map[string]any{
 		"id": id, "outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
-	})
+	}, op)
 }
 
 // containerParameter is the one container argument both tools take.

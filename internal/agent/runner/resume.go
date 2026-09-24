@@ -50,14 +50,25 @@ func (r *Runner) Suspended() (Suspension, bool) {
 //
 // THE RECORD IT PUBLISHES COVERS THE WHOLE PHASE, pre-suspend rounds
 // included — their calls, their narration, what they wrote that no round
-// kept, their tokens and their clock, each carried on the pending-run row
+// kept and their clock, each carried on the pending-run row
 // ([execstate.State]). A suspending phase returns before `emit.completed`
 // runs, so it publishes no completed event at all, and its
 // `agent_turn_progress` frames are stream-only and refused by the event
 // store: this record is the only durable account the phase has, and one that
 // covered the re-entry alone would lose every round before the suspend, the
-// `run_sandbox` call that caused it included.
-func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
+// `run_sandbox` call that caused it included. Their TOKENS, and what the
+// collected run cost, are counted by the first record any attempt at this
+// resume publishes, success or failure, and by no later one; see
+// [Resume.CarriedCounted].
+//
+// ROUND IS THE LOOP'S, and the record is filed under it rather than under
+// the round the state names: the loop numbers the re-entered round on from
+// the turn's closed rounds, and a record filed under any other number would
+// sit apart from the round's own review.
+//
+// The Work it returns carries the whole phase's calls on every path, with
+// [turn.Work.Carried] saying how many of them this re-entry did not make.
+func (r *Runner) Resume(ctx context.Context, round int, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	if r.cfg.Resume == nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: resume with no suspended state")
 	}
@@ -70,7 +81,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		// been applied in the days it was parked — see
 		// [execstate.State.AgentRun].
 		r.setDropped(r.cfg.Resume.BridgedDropped)
-		return r.resumeAgentRun(ctx, state, answer, r.cfg.Resume.Bridged)
+		return r.resumeAgentRun(ctx, round, state, answer, r.cfg.Resume.Bridged)
 	}
 	// A native resume's record is its own surface's, which holds every call.
 	r.setDropped(DroppedCalls{})
@@ -85,58 +96,61 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return resumedCalls(surface, state, answer) },
+			func() []ledger.Call { whole, _ := resumedCalls(surface, state, answer); return whole },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, history, snapshot, submit,
+	built, err := r.surfaceWith(ctx, phase.Execute, round, history, snapshot, submit,
 		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
 
+	// WHICH BOX. This phase suspended on a coding run and is being
+	// re-entered with its result, which is the one thing that makes it a
+	// sandbox phase rather than a native one. With the pre-suspend rounds,
+	// it is the carried spend the record below counts, unless an earlier
+	// attempt's record already did.
+	prior, run := r.carried(priorRounds(state, answer), r.cfg.Resume.Run)
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface,
 		rounds: r.cfg.Caps.ExecutorRounds, ceiling: r.cfg.Caps.ExecutorCeiling,
-		iteration:      state.Round,
+		iteration:      round,
 		seed:           state.Answer(answer),
 		terminateAfter: []string{SubmitWorkTool},
 		// A resumed executor can suspend AGAIN: it may call run_sandbox a
 		// second time to continue in the same box.
 		allowSuspend: true,
-		prior:        priorRounds(state, answer),
+		prior:        prior,
+		run:          run,
 		// What the pre-suspend half already spent, so this phase's record
 		// reports the whole of it.
 		priorElapsed: time.Duration(state.ElapsedMS) * time.Millisecond,
 	})
+	// THE WHOLE PHASE'S CALLS on every path below, the broken one included,
+	// with the prefix this re-entry did not make counted beside them: the
+	// delivery questions read the whole list, and [turn.Acted] reads what
+	// follows the prefix — see [turn.Work.Carried].
+	phaseCalls, carried := resumedCalls(surface, state, answer)
 	if err != nil {
-		// THIS RE-ENTRY'S OWN CALLS, and only those. What a broken phase's
-		// calls decide is one question — [turn.Abandon], through
-		// [turn.Acted]: would a retry repeat a write outside the engine? —
-		// and a retry of a resume re-enters the conversation the pending-run
-		// row holds.
-		// Every call made before the suspend is answered in that
-		// conversation, the coding run's launch among them, so no retry
-		// makes it again; what this re-entry did before it broke, it would.
-		// Handed the carried calls, a provider's 503 would read as a turn
-		// that had acted, and the finished run would be settled and its
-		// record deleted rather than handed back for the retry.
-		//
-		// The phase's RECORD is not this list: runPhase published it on the
-		// way out, pre-suspend rounds and launch included.
-		return turn.Work{Calls: calls(surface)}, describe(surface), err
+		// runPhase published this phase's record on the way out, and it
+		// counted the carried spend.
+		r.noteCountedCarried()
+		return turn.Work{Calls: phaseCalls, Carried: carried}, describe(surface), err
 	}
 
 	if res.Suspended {
 		// Published only if recording the suspension panics; see
-		// [closing]. No prompts, as on the record below.
-		base := ranRecord(phase.Execute, state.Round, "", "", res, surface)
-		base.Run = r.cfg.Resume.Run
+		// [closing]. No prompts, as on the record below. Nothing counted
+		// the carried spend: it is in res, and so in the suspension the
+		// next resume counts it from.
+		base := ranRecord(phase.Execute, round, "", "", res, surface)
+		base.Run = run
 		closer := r.closing(phaseCtx, base)
 		defer closer.onPanic()
-		r.recordSuspension(phaseCtx, state.Round, surface, res.Result, history, res.Elapsed)
+		r.recordSuspension(phaseCtx, round, surface, res.Result, history, res.Elapsed)
 		return turn.Work{
-			Text: res.Text, Calls: resumedCalls(surface, state, answer), Suspended: true,
+			Text: res.Text, Calls: phaseCalls, Carried: carried, Suspended: true,
 		}, describe(surface), nil
 	}
 
@@ -147,37 +161,33 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// No system or user prompt on the record: this phase did not open a
 	// conversation, it re-entered one, and publishing the original opening
 	// again would show a reader a prompt that was not sent this time.
-	work, described := r.finishWork(phaseCtx, state.Round, work{
-		submit: submit, res: res, surface: surface, snapshot: snapshot,
-		// WHICH BOX. This phase suspended on a coding run and is being
-		// re-entered with its result, which is the one thing that makes it
-		// a sandbox phase rather than a native one.
-		run: r.cfg.Resume.Run,
+	work, described := r.finishWork(phaseCtx, round, work{
+		submit: submit, res: res, surface: surface, snapshot: snapshot, run: run,
 	})
-	// The WHOLE phase's calls, pre-suspend rounds included — see
-	// resumedCalls.
-	work.Calls = resumedCalls(surface, state, answer)
+	r.noteCountedCarried()
+	work.Calls, work.Carried = phaseCalls, carried
 	return work, described, nil
 }
 
 // resumedCalls is what the WHOLE executor phase called, pre-suspend rounds
 // included — the call it suspended on among them, answered with answer
-// ([suspendedOn]) — for a re-entry that finished or suspended again.
+// ([suspendedOn]) — and how many of those, from the front, were answered
+// before this re-entry: every call but the ones this re-entry's own surface
+// recorded.
 //
 // The delivery check, the submission's own citations, the reviewer's evidence,
-// the iteration ledger and the conversation ledger all read this list, and all
-// of them are about the turn rather than about one re-entry: a resumed turn
-// that saw only the post-resume calls would read a delivery made before the
-// suspend as never having happened, and re-fire it, and its reviewer would
-// judge a coding turn without the coding run's report.
+// the iteration ledger and the conversation ledger all read the whole list,
+// and all of them are about the turn rather than about one re-entry: a
+// resumed turn that saw only the post-resume calls would read a delivery made
+// before the suspend as never having happened, and re-fire it, and its
+// reviewer would judge a coding turn without the coding run's report.
 //
-// [turn.Acted] reads it too, and so a re-entry that FINISHED counts as having
-// reached outside the engine whenever the phase ever did — the launch is on
-// this list, and run_sandbox is open-world. A turn that breaks after this
-// round, in its review or in a later round, is therefore abandoned rather than
-// retried, whatever it did after re-entering. A re-entry that broke hands back
-// its own calls instead; see [Runner.Resume].
-func resumedCalls(s *tools.Surface, state execstate.State, answer string) []ledger.Call {
+// [turn.Acted] reads only what follows the carried prefix. A retry of a
+// resumed turn re-enters the conversation the pending-run row holds, in which
+// every carried call — the coding run's launch among them — is already
+// answered and is not made again; what this re-entry made itself, a retry
+// would make again.
+func resumedCalls(s *tools.Surface, state execstate.State, answer string) (whole []ledger.Call, carried int) {
 	prior := make([]ledger.Call, 0, len(state.ToolExecutions)+1)
 	for _, exec := range state.ToolExecutions {
 		call := ledger.Call{}
@@ -201,7 +211,7 @@ func resumedCalls(s *tools.Surface, state execstate.State, answer string) []ledg
 	if name, args, ok := suspendedOn(state); ok {
 		prior = append(prior, ledger.Call{Name: name, Args: args, Result: answer})
 	}
-	return append(prior, calls(s)...)
+	return append(prior, calls(s)...), len(prior)
 }
 
 // suspendedOn is the call the phase suspended on: the one its conversation

@@ -182,9 +182,9 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request) []learning.Di
 		out = append(out, entry)
 	}
 
-	if vector, ok := f.embed(ctx, r.Task); ok {
+	if vector, model, ok := f.embed(ctx, r.Task); ok {
 		hits, err := f.src.Diary.Recall(ctx, r.AgentID, learning.RecallQuery{
-			Handle: r.AgentID, Embedding: vector, Limit: memoryVectorLimit,
+			Handle: r.AgentID, Embedding: vector, Model: model, Limit: memoryVectorLimit,
 		}, now)
 		if err != nil {
 			log.WarnContext(ctx, "memory_recall_failed", "agent_id", r.AgentID, "error", err.Error())
@@ -365,19 +365,20 @@ func jsonArray(text string) string {
 	return text[start : end+1]
 }
 
-// embed turns text into a vector, or reports that it cannot.
-func (f *Fetcher) embed(ctx context.Context, text string) ([]float32, bool) {
-	if f.src.Embed == nil {
-		return nil, false
+// embed turns text into a vector, with the model that made it, or reports that
+// it cannot. The model is what a recall compares the vector under.
+func (f *Fetcher) embed(ctx context.Context, text string) ([]float32, string, bool) {
+	if !f.src.Embed.Usable() {
+		return nil, "", false
 	}
-	vector, err := f.src.Embed(ctx, text)
+	vector, err := f.src.Embed.Embed(ctx, text)
 	if err != nil || len(vector) == 0 {
 		if err != nil {
 			log.WarnContext(ctx, "prefetch_embedding_failed", "error", err.Error())
 		}
-		return nil, false
+		return nil, "", false
 	}
-	return vector, true
+	return vector, f.src.Embed.Model, true
 }
 
 // subjectLabel renders a counterparty as the filter and the profile block

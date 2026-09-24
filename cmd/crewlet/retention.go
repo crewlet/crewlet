@@ -529,7 +529,8 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	// THE WATERMARK BEFORE AND AFTER, so an operator sees what the gesture
 	// did rather than being told it succeeded. The trim floor is what an
 	// eviction is FOR — it is how a floor an absent node is pinning gets
-	// to move — and a readmission can be refused by exactly that number.
+	// to move. A readmission is not refused on it: a readmitted node the
+	// log has trimmed past adopts a peer's snapshot.
 	before := retentionFloors(client)
 	var answer struct {
 		Node    string `json:"node"`

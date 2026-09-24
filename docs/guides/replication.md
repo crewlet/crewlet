@@ -51,9 +51,16 @@ different with each.
   record the first attempt landed, that node's operation ledger answers the
   retry `applied` at the record's position and publishes nothing — for thirty
   days, which is how long a node keeps a ledger row. What that leaves:
-  - **A first record the node has not applied yet.** The retry waits for it,
-    inside the five-second budget, and is refused `behind` past it; retry
-    again and the ledger answers.
+  - **A first record the node has not applied yet.** A create, or a write on
+    an object the node has consumed nothing on, waits for the record inside
+    the five-second budget and is refused `behind` past it; retry again and
+    the ledger answers. An update does the same with `stream.replicas: 1`,
+    where the broker refuses its expectation first. With `stream.replicas`
+    above 1 the broker checks the operation id first, so inside its two-minute
+    duplicate window the update is acknowledged as the first record's
+    duplicate and answers `applied` once the node has applied that record, or
+    `pending` at its position if it has not within the budget; past the
+    window it is refused and waits, as with one replica.
   - **An additive write** — a turn's spend recorded on a task. It takes no
     expectation, so past the broker's two-minute duplicate window a retry of
     one whose first record the node has not applied lands a second record,
@@ -65,7 +72,9 @@ different with each.
     the write can show its operation was minted before the adoption: then an
     append the broker acknowledges as the first record's duplicate answers
     `applied` at that record, and one that goes unanswered answers `unknown`
-    rather than deciding again.
+    rather than deciding again when a record the ledger does not name has
+    landed on the object above the state the retry decided from. With nothing
+    landed there, the retry is decided again.
 
 `pending` is the outcome an ordinary busy fleet produces most often under load:
 the applier is 16 seconds into a bulk apply and a small write's five-second wait

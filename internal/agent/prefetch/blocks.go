@@ -79,7 +79,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 		// recent work rather than its most relevant.
 		return EmptyRecallHint
 	}
-	vector, ok := f.embed(ctx, r.Task)
+	vector, model, ok := f.embed(ctx, r.Task)
 	if !ok {
 		// NO FALLBACK TO RECENCY. Episode recall's whole claim is "this
 		// resembles what you are doing now"; the three most recent turns
@@ -88,7 +88,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 		return ""
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
-		Handle: handle, Embedding: vector, Limit: recallHits,
+		Handle: handle, Embedding: vector, Model: model, Limit: recallHits,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "episode_recall_failed", "seat", handle, "error", err.Error())

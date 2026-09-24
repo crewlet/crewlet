@@ -119,6 +119,15 @@ type DiaryEntry struct {
 	// can, by nothing more than a re-embed.
 	Embedding []float32
 
+	// EmbeddingModel is the model that made Embedding: filled with it at the
+	// write when [Diary.Write] embeds, and taken from the caller when the
+	// caller brought the vector. Empty is UNKNOWN — a note with no vector, or
+	// one written by a build or at a time that did not record its model —
+	// and [Diary.Recall] ranks only the notes of its query's own model, so
+	// an unknown one is left out of the similarity half of the memory pool.
+	// See [Embedder] for why a matching width is not enough.
+	EmbeddingModel string
+
 	CreatedAt time.Time
 }
 
@@ -131,9 +140,10 @@ func (d DiaryEntry) Expired(now time.Time) bool {
 type Diary struct {
 	db *store.DB
 
-	// embed fills [DiaryEntry.Embedding] on the way in, or is nil where a
-	// company configured no vector backend. See [WithEmbedding].
-	embed Embed
+	// embed fills [DiaryEntry.Embedding] and its model on the way in, or is
+	// nil where a company configured no vector backend. See
+	// [WithEmbedding].
+	embed *Embedder
 }
 
 // DiaryOption configures a diary at construction.
@@ -151,7 +161,7 @@ type DiaryOption func(*Diary)
 // A nil embedder is allowed and means the same thing as omitting the option:
 // a company with no providers.embeddings writes notes with no vector. See
 // [DiaryEntry.Embedding] for what that costs.
-func WithEmbedding(embed Embed) DiaryOption {
+func WithEmbedding(embed *Embedder) DiaryOption {
 	return func(d *Diary) { d.embed = embed }
 }
 
@@ -207,15 +217,22 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 	// THE VECTOR IS MADE HERE, before anything is encoded, and only when the
 	// caller brought none: an entry that already carries one was given it by
 	// whoever built it, and re-embedding would spend a provider call to
-	// replace a value somebody chose.
+	// replace a value somebody chose. A vector made here is stamped with the
+	// model that made it; one the caller brought keeps the model the caller
+	// named, which is unknown when it named none.
 	if len(e.Embedding) == 0 {
 		e.Embedding = d.vector(ctx, e)
+		e.EmbeddingModel = ""
+		if len(e.Embedding) > 0 {
+			e.EmbeddingModel = d.embed.Model
+		}
 	}
 
 	// Same policy as an episode's embedding, and for the same reason — see
 	// Episodes.encodeEmbedding. A wrong width fails the write; a non-finite
 	// component costs the vector and not the observation.
 	var blob any
+	model := ""
 	if len(e.Embedding) > 0 {
 		packed, err := d.db.EncodeVector(e.Embedding)
 		switch {
@@ -224,7 +241,10 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 		case err != nil:
 			return fmt.Errorf("learning: encode diary embedding: %w", err)
 		default:
-			blob = packed
+			// THE MODEL ONLY BESIDE A VECTOR, for the reason an episode
+			// row gives: named on a row whose vector was discarded, it
+			// would describe nothing.
+			blob, model = packed, e.EmbeddingModel
 		}
 	}
 	// ONE TRANSACTION for the count and the insert. [store.DB.Tx] takes the
@@ -239,11 +259,13 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 		}
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO agent_diary (id, agent_id, kind, content, ttl_until, source,
-				turn_id, metadata, retrieval_count, last_retrieved_at, embedding, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+				turn_id, metadata, retrieval_count, last_retrieved_at, embedding,
+				embedding_model, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
 			ON CONFLICT (id) DO NOTHING`,
 			e.ID, e.AgentID, string(e.Kind), e.Content, store.NullTime(e.TTLUntil),
-			e.Source, e.TurnID, jsonObject(e.Metadata), blob, store.EncodeTime(e.CreatedAt))
+			e.Source, e.TurnID, jsonObject(e.Metadata), blob, store.NullText(model),
+			store.EncodeTime(e.CreatedAt))
 		return err
 	})
 	var full *DiaryFullError
@@ -318,10 +340,10 @@ func refuseWhenFull(ctx context.Context, q interface {
 // already bounds the call it makes. A timeout here would be a second opinion
 // about one round trip, free to disagree with the first.
 func (d *Diary) vector(ctx context.Context, e DiaryEntry) []float32 {
-	if d.embed == nil || strings.TrimSpace(e.Content) == "" {
+	if !d.embed.Usable() || strings.TrimSpace(e.Content) == "" {
 		return nil
 	}
-	v, err := d.embed(ctx, e.Content)
+	v, err := d.embed.Embed(ctx, e.Content)
 	if err != nil {
 		log.WarnContext(ctx, "diary_embedding_failed", "entry", e.ID,
 			"agent_id", e.AgentID, "error", err.Error(),
@@ -340,7 +362,8 @@ func (d *Diary) vector(ctx context.Context, e DiaryEntry) []float32 {
 }
 
 const diaryColumns = `id, agent_id, kind, content, ttl_until, source, turn_id,
-	metadata, retrieval_count, last_retrieved_at, embedding, created_at`
+	metadata, retrieval_count, last_retrieved_at, embedding, embedding_model,
+	created_at`
 
 func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 	var (
@@ -349,9 +372,11 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 		created            int64
 		ttl, lastRetrieved sql.NullInt64
 		embedding          []byte
+		model              sql.NullString
 	)
 	if err := rows.Scan(&e.ID, &e.AgentID, &kind, &e.Content, &ttl, &e.Source,
-		&e.TurnID, &metadata, &e.RetrievalCount, &lastRetrieved, &embedding, &created,
+		&e.TurnID, &metadata, &e.RetrievalCount, &lastRetrieved, &embedding, &model,
+		&created,
 	); err != nil {
 		return DiaryEntry{}, err
 	}
@@ -359,6 +384,7 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 	e.TTLUntil = store.TimeAt(ttl)
 	e.LastRetrievedAt = store.TimeAt(lastRetrieved)
 	e.CreatedAt = store.DecodeTime(created)
+	e.EmbeddingModel = store.Text(model)
 	if err := json.Unmarshal([]byte(metadata), &e.Metadata); err != nil {
 		// The observation itself is what the seat needs; its metadata is
 		// provenance. Losing the second must not cost the first.
@@ -420,13 +446,17 @@ func (d *Diary) Recent(ctx context.Context, agentID string, now time.Time, limit
 //
 // It answers empty for a row with no vector, which is a real and supported
 // state rather than a failure — see [DiaryEntry.Embedding] for the two ways
-// a note reaches the store without one.
+// a note reaches the store without one — and it ranks only the notes the
+// query's own model embedded, for the reason [RecallQuery.Model] gives.
 func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now time.Time) ([]DiaryHit, error) {
 	if agentID == "" {
 		return nil, fmt.Errorf("learning: diary recall needs an agent")
 	}
 	if len(q.Embedding) == 0 {
 		return nil, ErrNoEmbedding
+	}
+	if q.Model == "" {
+		return nil, ErrNoModel
 	}
 	limit, floor := q.Limit, q.MinSimilarity
 	if limit <= 0 {
@@ -448,13 +478,14 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 		        WHERE agent_id = ?
 		          AND embedding IS NOT NULL
 		          AND length(embedding) = ?
+		          AND embedding_model = ?
 		          AND (ttl_until IS NULL OR ttl_until > ?)
 		    )
 		    WHERE distance <= ?
 		    ORDER BY distance ASC, created_at DESC, id DESC
 		    LIMIT ?
 		 )`,
-		probe, agentID, width, store.EncodeTime(now), 1-floor, limit)
+		probe, agentID, width, q.Model, store.EncodeTime(now), 1-floor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: diary recall for %s: %w", agentID, err)
 	}

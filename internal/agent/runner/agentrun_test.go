@@ -161,7 +161,7 @@ func TestAResumedAgentRunReportsWhatTheRunSubmitted(t *testing.T) {
 		},
 	})
 
-	w, _, err := r.Resume(context.Background(), nil)
+	w, _, err := r.Resume(context.Background(), 1, nil)
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -180,6 +180,12 @@ func TestAResumedAgentRunReportsWhatTheRunSubmitted(t *testing.T) {
 	if len(w.Calls) != 2 || w.Calls[0].Name != "slack_post" {
 		t.Errorf("calls = %+v, want the run's own log", w.Calls)
 	}
+	// EVERY ONE CARRIED: the run made them in its box before this pass
+	// began, and a retry of the pass replays the same log rather than
+	// making any of them again.
+	if w.Carried != len(w.Calls) || len(w.Made()) != 0 {
+		t.Errorf("Carried = %d of %d calls, want all of them", w.Carried, len(w.Calls))
+	}
 }
 
 // AN ABSENT SUBMISSION IS NOT A VALUE — the same rule a native pass follows.
@@ -195,7 +201,7 @@ func TestAnAgentRunThatNeverSubmittedIsRescued(t *testing.T) {
 		Bridged: []ledger.Call{{Name: "slack_history", Result: "read"}},
 	})
 
-	w, _, err := r.Resume(context.Background(), nil)
+	w, _, err := r.Resume(context.Background(), 1, nil)
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -233,7 +239,7 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 		},
 	})
 
-	w, _, err := r.Resume(context.Background(), nil)
+	w, _, err := r.Resume(context.Background(), 1, nil)
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -257,7 +263,7 @@ func TestAMalformedSubmissionRescuesRatherThanFailing(t *testing.T) {
 		},
 	})
 
-	w, _, err := r.Resume(context.Background(), nil)
+	w, _, err := r.Resume(context.Background(), 1, nil)
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -296,7 +302,7 @@ func TestANativeSuspensionResumesNativelyEvenInAgentMode(t *testing.T) {
 		},
 	})
 
-	w, _, err := r.Resume(context.Background(), nil)
+	w, _, err := r.Resume(context.Background(), 1, nil)
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -380,7 +386,7 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 		},
 	})
 
-	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+	if _, _, err := r.Resume(context.Background(), 1, nil); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
 
@@ -479,7 +485,7 @@ func TestAResumedRunsDroppedCallsAreSaidWhereTheyFell(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	w, _, err := r.Resume(ctx, nil)
+	w, _, err := r.Resume(ctx, 1, nil)
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}

@@ -96,8 +96,8 @@ func NewFence(db *store.DB, nodeID string) *Fence {
 // ON EVERY APPEND, and therefore answered from what this node already knows:
 // the durable row its own applier wrote, which is one indexed single-row read
 // of a table this node owns. A coordination round trip here would put a
-// NETWORK call on the hot path of every write in the company, and it would be
-// a call to the estate an eviction has already established is silent.
+// NETWORK call on the hot path of every write in the company, and one that
+// fails whenever coordination does, which the row this node applied does not.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	var from, readmitted sql.NullInt64
 	err := f.db.Replicated().Read(ctx, func(tx *sql.Tx) error {

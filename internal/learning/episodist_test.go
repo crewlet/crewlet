@@ -279,9 +279,9 @@ func TestAnUnreachableEmbedderStillWritesTheEpisode(t *testing.T) {
 	t.Parallel()
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(context.Context, string) ([]float32, error) {
+		o.Embed = embedderOf(func(context.Context, string) ([]float32, error) {
 			return nil, errors.New("the provider is down")
-		}
+		})
 	})
 	reflectEpisode(t, w, epTurn())
 
@@ -292,6 +292,9 @@ func TestAnUnreachableEmbedderStillWritesTheEpisode(t *testing.T) {
 	if got[0].Embeddings != nil {
 		t.Errorf("embeddings = %v, want none", got[0].Embeddings)
 	}
+	if got[0].EmbeddingModel != "" {
+		t.Errorf("a row with no vector names the model %q", got[0].EmbeddingModel)
+	}
 }
 
 func TestAReachableEmbedderStampsTheVector(t *testing.T) {
@@ -299,10 +302,10 @@ func TestAReachableEmbedderStampsTheVector(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var embedded string
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(_ context.Context, text string) ([]float32, error) {
+		o.Embed = embedderOf(func(_ context.Context, text string) ([]float32, error) {
 			embedded = text
 			return []float32{0.5, 0.5, 0.5, 0.5}, nil
-		}
+		})
 	})
 	reflectEpisode(t, w, epTurn())
 
@@ -313,6 +316,12 @@ func TestAReachableEmbedderStampsTheVector(t *testing.T) {
 	if len(got[0].Embeddings) != 1 || len(got[0].Embeddings[0]) != 4 {
 		t.Fatalf("embeddings = %v, want one 4-wide vector", got[0].Embeddings)
 	}
+	// AND THE MODEL THAT MADE IT, which is what a recall compares it under:
+	// a vector filed under no model is recalled by nothing.
+	if got[0].EmbeddingModel != testModel {
+		t.Errorf("the vector is filed under model %q, want the embedder's %q",
+			got[0].EmbeddingModel, testModel)
+	}
 }
 
 // A SLOW EMBEDDER IS A MISSING VECTOR, not a stalled pass: the write must not
@@ -322,10 +331,10 @@ func TestASlowEmbedderIsBoundedAndYieldsNoVector(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
 		o.EmbedTimeout = 10 * time.Millisecond
-		o.Embed = func(ctx context.Context, _ string) ([]float32, error) {
+		o.Embed = embedderOf(func(ctx context.Context, _ string) ([]float32, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
-		}
+		})
 	})
 	reflectEpisode(t, w, epTurn())
 
@@ -367,10 +376,10 @@ func TestAnEmptySummaryNeverReachesTheEmbedder(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var calls int
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(context.Context, string) ([]float32, error) {
+		o.Embed = embedderOf(func(context.Context, string) ([]float32, error) {
 			calls++
 			return []float32{1, 0, 0, 0}, nil
-		}
+		})
 	})
 	turn := epTurn()
 	turn.Event.TaskSummary = ""
@@ -413,10 +422,10 @@ func TestEveryWordOfALongSummaryReachesAVector(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var sent []string
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(_ context.Context, text string) ([]float32, error) {
+		o.Embed = embedderOf(func(_ context.Context, text string) ([]float32, error) {
 			sent = append(sent, text)
 			return []float32{1, 0, 0, 0}, nil
-		}
+		})
 	})
 	turn := epTurn()
 	// ~36 KB, comfortably past the old 8 000-byte cut and past one window.
@@ -450,10 +459,10 @@ func TestNoWindowSplitsARune(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var sent []string
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(_ context.Context, text string) ([]float32, error) {
+		o.Embed = embedderOf(func(_ context.Context, text string) ([]float32, error) {
 			sent = append(sent, text)
 			return []float32{1, 0, 0, 0}, nil
-		}
+		})
 	})
 	turn := epTurn()
 	// Three-byte runes and NO whitespace: nothing for the word-edge walk
@@ -490,10 +499,10 @@ func TestAShortSummaryIsOneUntouchedWindow(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	var sent []string
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(_ context.Context, text string) ([]float32, error) {
+		o.Embed = embedderOf(func(_ context.Context, text string) ([]float32, error) {
 			sent = append(sent, text)
 			return []float32{1, 0, 0, 0}, nil
-		}
+		})
 	})
 	turn := epTurn()
 	reflectEpisode(t, w, turn)
@@ -524,19 +533,19 @@ func TestARecallMatchingOnlyTheTailFindsTheEpisode(t *testing.T) {
 	head, _ := wordySummary(4000)
 	summary := head + " " + needle
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(_ context.Context, text string) ([]float32, error) {
+		o.Embed = embedderOf(func(_ context.Context, text string) ([]float32, error) {
 			if strings.Contains(text, needle) {
 				return []float32{1, 0, 0, 0}, nil
 			}
 			return []float32{0, 1, 0, 0}, nil
-		}
+		})
 	})
 	turn := epTurn()
 	turn.Event.TaskSummary = summary
 	reflectEpisode(t, w, turn)
 
 	hits, err := store.Recall(context.Background(), learning.RecallQuery{
-		Handle: "dev", Embedding: []float32{1, 0, 0, 0},
+		Handle: "dev", Model: testModel, Embedding: []float32{1, 0, 0, 0},
 	})
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -559,7 +568,7 @@ func TestARecallMatchingOnlyTheTailFindsTheEpisode(t *testing.T) {
 	// AND THE HEAD IS STILL REACHABLE. Windowing must not trade one end of
 	// a summary for the other.
 	fromHead, err := store.Recall(context.Background(), learning.RecallQuery{
-		Handle: "dev", Embedding: []float32{0, 1, 0, 0},
+		Handle: "dev", Model: testModel, Embedding: []float32{0, 1, 0, 0},
 	})
 	if err != nil || len(fromHead) != 1 {
 		t.Fatalf("a query matching the head returned %d hits (%v), want the "+
@@ -576,13 +585,13 @@ func TestOneFailedWindowKeepsTheRest(t *testing.T) {
 	store := episodes(t, func(o *store.Options) { o.EmbeddingDim = 4 })
 	calls := 0
 	w := episodist(t, store, func(o *learning.EpisodistOptions) {
-		o.Embed = func(context.Context, string) ([]float32, error) {
+		o.Embed = embedderOf(func(context.Context, string) ([]float32, error) {
 			calls++
 			if calls == 1 {
 				return nil, errors.New("rate limited")
 			}
 			return []float32{1, 0, 0, 0}, nil
-		}
+		})
 	})
 	turn := epTurn()
 	summary, _ := wordySummary(4000)

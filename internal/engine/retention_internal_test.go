@@ -691,7 +691,7 @@ func TestTheReportCarriesARunOfRefusedReadsToTheAlarm(t *testing.T) {
 }
 
 // AN UNREADABLE EVICTION TABLE IS WRITTEN DOWN ONCE A TRIM INTERVAL, and at once
-// again after a read of it has answered.
+// again after a read of it has answered — each gated log's table on its own.
 //
 // Every report reads the table, and one is assembled on every alarm pass as
 // well as on every operator request — so a table that stays unreadable,
@@ -700,21 +700,32 @@ func TestTheReportCarriesARunOfRefusedReadsToTheAlarm(t *testing.T) {
 // missing tombstones hold back runs. A read that answers clears the stamp, so a
 // failure after it is news and is written at once.
 //
+// And each gated log keeps its own table, read one after another on every
+// pass: a readable tracker table must not clear the stamp an unreadable pages
+// table was written down under, or that table's line repeats on every pass.
+//
 // Mutation: drop the stamp check and the second read writes a second line;
 // drop the clear on a read that answers and the failure after it writes
-// nothing.
+// nothing; share one stamp between the logs and the pages table's first
+// failure, which follows the tracker's, writes nothing.
 func TestAnUnreadableEvictionTableIsWrittenDownOnceATrimInterval(t *testing.T) {
 	t.Parallel()
 	healthy := freshStore(t)
 	broken := freshStore(t)
-	if _, err := broken.Replicated().SQL().ExecContext(t.Context(),
-		`DROP TABLE tracker_evictions`); err != nil {
-		t.Fatalf("drop the eviction table: %v", err)
+	pagesBroken := freshStore(t)
+	for db, table := range map[*store.DB]string{
+		broken: "tracker_evictions", pagesBroken: "pages_evictions",
+	} {
+		if _, err := db.Replicated().SQL().ExecContext(t.Context(),
+			`DROP TABLE `+table); err != nil {
+			t.Fatalf("drop %s: %v", table, err)
+		}
 	}
 	var out bytes.Buffer
 	r := &retention{logger: slog.New(slog.NewJSONHandler(&out, nil))}
-	running := &runningDomain{domain: tracker.Domain{}}
-	read := func(db *store.DB, want int, when string) {
+	trackerLog := &runningDomain{domain: tracker.Domain{}}
+	pagesLog := &runningDomain{domain: pages.Domain{}}
+	read := func(db *store.DB, running *runningDomain, want int, when string) {
 		t.Helper()
 		r.db = db
 		if got := r.tombstones(t.Context(), running, 1); len(got) != 0 {
@@ -726,12 +737,17 @@ func TestAnUnreadableEvictionTableIsWrittenDownOnceATrimInterval(t *testing.T) {
 		}
 	}
 
-	read(broken, 1, "the first read that fails")
-	read(broken, 1, "a second read inside the interval")
-	r.evictionsWarnedAt = r.evictionsWarnedAt.Add(-RetentionInterval)
-	read(broken, 2, "a read one interval after the last line")
-	read(healthy, 2, "a read that answers")
-	read(broken, 3, "the first failure after a read that answered")
+	read(broken, trackerLog, 1, "the first read that fails")
+	read(broken, trackerLog, 1, "a second read inside the interval")
+	r.evictionsWarnedAt[tracker.Domain{}.Name()] =
+		r.evictionsWarnedAt[tracker.Domain{}.Name()].Add(-RetentionInterval)
+	read(broken, trackerLog, 2, "a read one interval after the last line")
+	read(healthy, trackerLog, 2, "a read that answers")
+	read(broken, trackerLog, 3, "the first failure after a read that answered")
+
+	read(pagesBroken, pagesLog, 4, "the pages table's first failure")
+	read(pagesBroken, trackerLog, 4, "the tracker's table answering beside it")
+	read(pagesBroken, pagesLog, 4, "the pages table failing again inside its interval")
 }
 
 // EACH GATED LOG'S TOMBSTONES COME FROM ITS OWN APPLIER'S ROWS.
@@ -789,9 +805,9 @@ func TestEachGatedLogsTombstonesComeFromItsOwnRows(t *testing.T) {
 // AN EVICTION LANDS ON EVERY GATED LOG, AND ONLY FOR A NODE THAT IS SILENT.
 //
 // Each applier drops an evicted node's records by its own domain's table, so a
-// gesture that recorded the eviction on one log left the node's writes to the
-// other applying on every peer. And the permission the whole design rests on —
-// an eviction only once the node has stopped reaching coordination — is
+// gesture that recorded the eviction on one log would leave the node's writes
+// to the other applying on every peer. And the permission — a node still
+// holding its presence lease is refused unless the gesture is forced — is
 // checked by the gesture itself rather than stated beside it.
 //
 // Mutation: skip the pages log and its table never names the node; drop the

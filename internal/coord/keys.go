@@ -217,3 +217,33 @@ func unhexSegment(c byte) (byte, bool) {
 	// Upper case only, so two keys can never decode to one segment set.
 	return 0, false
 }
+
+// awaitingClass is the class of an [AwaitingRun]'s key.
+const awaitingClass = "awaiting"
+
+// AwaitingRunKey is an entry's key: its class, its seat, its conversation and
+// its run, each a segment, so one seat's one conversation is a class of its
+// own that [AwaitingRunsFilter] selects.
+func AwaitingRunKey(entry AwaitingRun) string {
+	return DocumentKey(awaitingClass, entry.Handle, entry.Conversation, entry.TurnID)
+}
+
+// AwaitingRunsFilter selects the entries of one seat's one conversation. Both
+// are required: an empty segment composes a filter that matches nothing, which
+// a listing reports exactly as a conversation nobody is parked on.
+func AwaitingRunsFilter(handle, conversation string) string {
+	return DocumentFilter(awaitingClass, handle, conversation)
+}
+
+// AllAwaitingRunsFilter selects every entry of the index.
+func AllAwaitingRunsFilter() string { return DocumentFilter(awaitingClass) }
+
+// AwaitingRunOf recovers the entry an [AwaitingRunKey] names, reporting false
+// for any other key — a run's own among them, which is one segment.
+func AwaitingRunOf(key string) (AwaitingRun, bool) {
+	segments, ok := DocumentSegments(key)
+	if !ok || len(segments) != 4 || segments[0] != awaitingClass {
+		return AwaitingRun{}, false
+	}
+	return AwaitingRun{Handle: segments[1], Conversation: segments[2], TurnID: segments[3]}, true
+}

@@ -808,11 +808,13 @@ token_budget: 10000
 
 func TestBudgetsCarryTheRefusalTheCounterRecorded(t *testing.T) {
 	t.Parallel()
-	// "Exhausted" is a refusal, never durable_used >= max_tokens: a refused
-	// charge increments nothing, so a seat charged in rounds stalls short
-	// of its cap and never reads as full. The stamp is what says the gate
-	// is turning turns away, so the answer carries it for the scope that
-	// refused and leaves it empty for the one that did not.
+	// Exhausted is durable_used at or past max_tokens: the engine sends no
+	// round for a scope there, and post-charges a round its cap refused, so
+	// a refusal leaves the counter past the cap. refused_at says WHEN the
+	// cap last turned a round away, which the counter cannot, so the answer
+	// carries it for the scope that refused and leaves it empty for the one
+	// that did not. This counter is charged through the gate alone, which
+	// counts nothing it refuses, so the seat reads the 90 that fit.
 	cfg := parsed(t, `
 name: Acme
 providers:

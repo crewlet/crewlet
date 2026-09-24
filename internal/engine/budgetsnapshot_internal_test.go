@@ -27,12 +27,15 @@ func scopeOf(t *testing.T, c *Company, seat *org.Role) string {
 	return coord.AgentScope(id.String())
 }
 
-// A FRAME CARRIES THE REFUSAL OF THE SCOPE THAT MADE IT.
+// A FRAME CARRIES THE REFUSAL OF THE SCOPE THAT MADE IT, beside its spend.
 //
-// "Refusing charges" is what the dashboard's attention rows and the budget
-// badges key on, and a refused charge increments nothing, so a counter never
-// reads as full. A frame that dropped the stamp left every one of those
-// surfaces unreachable while the gate was turning turns away.
+// The two answer different questions. Whether a scope is exhausted is its spend
+// at or past its cap — what [meter.Room] stops a round on — and a refusal
+// leaves the counter there, because the engine post-charges the refused round
+// ([meter.Spend]). The stamp says WHEN the cap last turned a round away, which
+// the counter cannot, and it stands until the scope next admits a charge — so
+// the frame carries it as the counter holds it, whatever the spend reads
+// against the cap, as for Lead and the org here.
 func TestABudgetFrameCarriesEachScopesRefusal(t *testing.T) {
 	t.Parallel()
 	lead := &org.Role{Name: "Lead", TokenBudget: 400}

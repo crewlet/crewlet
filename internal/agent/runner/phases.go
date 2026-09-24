@@ -190,6 +190,19 @@ type Resume struct {
 
 	// Run describes the detached run this resume is collecting.
 	Run RunRecord
+
+	// CarriedCounted says an earlier attempt at this resume already
+	// published a record that counted the phase's CARRIED SPEND: the tokens
+	// its rounds billed before it suspended ([execstate.State.InputTokens]
+	// and OutputTokens) and what the collected run reported it cost
+	// ([RunRecord.CostUSD]).
+	//
+	// That spend was billed once, and every record counts what it carries,
+	// so it is counted by exactly one: the first record the resumed phase
+	// publishes, success or failure. An attempt handed this true counts
+	// only what it bills itself, and carries the pre-suspend rounds as
+	// evidence alone — see [Runner.CountedCarried] for the other half.
+	CarriedCounted bool
 }
 
 // DroppedCalls is a stretch of a bridged run's calls that no log holds.
@@ -281,9 +294,49 @@ type Runner struct {
 	// onboardedThisTurn suppresses the executor prompt's onboarding hint for a
 	// seat that has just been through the pass. See [Runner.Onboard].
 	onboardedThisTurn bool
+
+	// countedCarried is set once a record this turn published counted the
+	// resumed phase's carried spend. See [Runner.CountedCarried].
+	countedCarried bool
 }
 
 var _ turn.Phases = (*Runner)(nil)
+
+// CountedCarried reports whether a record this turn published counted the
+// resumed phase's carried spend — see [Resume.CarriedCounted].
+//
+// Read by the engine once a resumed turn has returned, so that a turn handed
+// back for a retry tells the retry, through the run's row, that the spend is
+// already counted. False on a turn that resumed nothing, on one whose resumed
+// phase suspended again — the carried spend then rides on the new suspension
+// — and on one handed [Resume.CarriedCounted] already.
+func (r *Runner) CountedCarried() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.countedCarried
+}
+
+// noteCountedCarried records that the resumed phase has published the record
+// that counts its carried spend, unless an earlier attempt's did.
+func (r *Runner) noteCountedCarried() {
+	if r.cfg.Resume == nil || r.cfg.Resume.CarriedCounted {
+		return
+	}
+	r.mu.Lock()
+	r.countedCarried = true
+	r.mu.Unlock()
+}
+
+// carried is the resumed phase's carried spend as this attempt's records
+// count it: all of it, or — when an earlier attempt's record already counted
+// it — none, leaving the pre-suspend rounds on the record as evidence.
+func (r *Runner) carried(prior toolloop.Result, run RunRecord) (toolloop.Result, RunRecord) {
+	if r.cfg.Resume != nil && r.cfg.Resume.CarriedCounted {
+		prior.InputTokens, prior.OutputTokens = 0, 0
+		run.CostUSD = 0
+	}
+	return prior, run
+}
 
 // onboardingHint is the prefetched hint, unless this turn's own onboarding
 // pass just ran.
@@ -840,7 +893,19 @@ type phaseRun struct {
 	// resume was not a second half, it was the ONLY half, with the
 	// `run_sandbox` call that caused the suspension gone from the store for
 	// good and the round numbers claiming to be the phase's first.
+	//
+	// Its TOKENS are the carried spend, seeded into the phase's totals like
+	// everything else here, so the record this attempt publishes counts
+	// them whether the attempt succeeds or fails. The caller hands them in
+	// zeroed once an earlier attempt's record has counted them
+	// ([Resume.CarriedCounted]), which is what makes one record across
+	// every attempt at a resume the one that counts them.
 	prior toolloop.Result
+
+	// run is the box the phase is re-entering from, for its failure record,
+	// which a success's record takes from its caller. Zero for a phase that
+	// ran only in this process.
+	run RunRecord
 
 	// priorElapsed is the wall clock that same pre-suspend half already
 	// spent, folded in so the resumed phase's `duration_ms` covers the WHOLE
@@ -966,6 +1031,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// same record without it.
 			Elapsed: time.Since(began),
 			Failed:  true, Err: err,
+			// The box a re-entered phase came back from, as its success
+			// record names it: failing does not make it a native phase.
+			Run: in.run,
 		})
 	}
 	// Returns the phase context too, so `return fail(err)` stays a single
@@ -1114,8 +1182,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	}
 }
 
-// recordPanic publishes the failure record of a phase that panicked, through
-// runPhase's own failure path.
+// recordPanic hands the error a panicking phase is recorded under to failed,
+// the publish its caller supplies — runPhase passes its own failure path, so
+// the record is the one a phase that failed any other way publishes.
 //
 // A SECOND PANIC DOES NOT REPLACE THE FIRST. Were building or publishing the
 // record to panic in its turn, that panic would reach the turn's guard in

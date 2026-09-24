@@ -8,7 +8,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // The epoch and how a new one replaces it.
@@ -163,11 +168,18 @@ func embeddingWidth(c *Company) int {
 
 // Apply publishes a new epoch, reporting what happened to this node.
 //
-// The build comes first and touches nothing: [NewCompany] validates, resolves
-// the org and constructs the providers without reaching the network. So a
-// revision that cannot be built is refused with the previous epoch still
-// current and still correct — there is no rollback path because there was no
-// mutation, which is the point of publishing rather than mutating.
+// TWO HALVES, and the line between them is the whole design. The BUILD
+// constructs the new epoch — [NewCompanyWith] validates, resolves the org and
+// constructs the providers without reaching the network; the sandbox manager
+// and the epoch's own tools are built beside it — and touches nothing this
+// node is serving. Every refusal a revision can earn happens there, so a
+// refused revision leaves the previous epoch current and still correct, with
+// no rollback because there was no mutation. The COMMIT changes the node:
+// the party index, the inbound edge, the shared MCP children, the reflection
+// workers, the sandbox manager, the epoch itself and everything read off it
+// afterwards. Nothing in it refuses, with the one exception of a node's first
+// company, whose two starts are refusals that take back what they started
+// ([Engine.startEdge]).
 //
 // The three outcomes belong to the control plane, not to this function's
 // convenience:
@@ -175,16 +187,17 @@ func embeddingWidth(c *Company) int {
 //   - ok      — published, and this node is serving it.
 //   - error   — refused; this node still serves the PRIOR epoch correctly,
 //     which is a legitimate degraded-but-correct state and safe to route to.
-//   - degraded — the apply failed AFTER a restart-required subsystem was
-//     mutated, so rollback could not restore it.
+//   - degraded — the apply failed AFTER a subsystem that cannot be put back
+//     was changed.
 //
-// DEGRADED IS NOT REACHABLE YET, and saying so is more useful than a hook with
-// nothing behind it. It becomes reachable when the first subsystem that cannot
-// be un-applied is wired: the per-role MCP children (Phase 6) and the
-// notification transports (Phase 7). Both are applied LAST when they arrive,
-// for exactly this reason — every step before them rolls back by publishing
-// the previous epoch, so the window in which degraded is reachable is as small
-// as the ordering can make it.
+// DEGRADED IS NOT REACHABLE, and the ordering is what keeps it so: every step
+// that can refuse runs before the first one that changes this node's state,
+// and every step that changes it — a shared server stopped, a transport
+// reconnected — runs where nothing after it can refuse. A step added to the
+// commit that can fail must either be moved into the build or be one this
+// function can take back, or degraded becomes reachable and this function
+// has to report it.
+//
 // ONE CALLER: the reconciler's tick, which is synchronous. The API's write
 // path does NOT reach here: it activates a revision and lets the tick apply
 // it, because activation also has to move the pointer, record the outcome and
@@ -196,11 +209,11 @@ func embeddingWidth(c *Company) int {
 // them. The drain waits for an apply in flight, and an apply that starts after
 // it is refused with [errStopped].
 //
-// The second return is the subsystems this apply GOT THROUGH, in the order it
-// went through them. On a failure it is what was already mutated when the
-// refusal happened, which is the whole of what makes a degraded apply
-// diagnosable after the fact — it travels on ConfigRevisionApplied into the
-// audit event log, where it outlives the fleet view's one-minute bucket.
+// The second return is the stages this apply GOT THROUGH, in the order it
+// went through them. A refused apply names the build stages it finished, and
+// nothing a first company's start took back; it travels on
+// ConfigRevisionApplied into the audit event log, where it outlives the fleet
+// view's one-minute bucket.
 func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.ApplyStatus, []string, error) {
 	e.applying.Lock()
 	defer e.applying.Unlock()
@@ -208,66 +221,58 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 		return configplane.StatusError, nil, errStopped
 	}
 	var applied []string
+	refuse := func(err error, detail string) (configplane.ApplyStatus, []string, error) {
+		log.WarnContext(ctx, "config_apply_failed", "error", err, "detail", detail)
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
+
+	// ---- THE BUILD: every refusal, and nothing this node serves moves ----
+
 	// THE SNAPSHOT FIRST, because re-activating an unchanged revision is
 	// the documented rotation gesture: the payload has not moved, so the
 	// only thing that can have is what its ${VAR} references resolve to.
 	// Rebuilding the epoch without re-reading the store would make that
-	// gesture a no-op and rotation impossible without a restart.
+	// gesture a no-op and rotation impossible without a restart. It is the
+	// one write this half makes, and it is not the revision's: it is the
+	// fleet's secret store as it stands, which the previous epoch resolves
+	// through too, so a refusal has nothing of it to take back.
 	e.refreshSecrets(ctx)
 	applied = append(applied, "secrets")
 	next, err := NewCompanyWith(cfg, e.resolver())
 	if err != nil {
-		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the revision was refused before anything changed; "+
-				"this node still serves the previous epoch")
-		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+		return refuse(err, "the revision was refused before anything changed; "+
+			"this node still serves the previous epoch")
 	}
 	applied = append(applied, "company")
-	// Equipped before it is published, for the same reason as at boot: a
-	// turn can start the instant the pointer moves, and a revision that
-	// silently dropped every builtin would look like a model that stopped
-	// using its tools.
-	if err := e.equip(ctx, next); err != nil {
-		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the revision built but could not be equipped with this "+
-				"node's tools; the previous epoch is still current")
-		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
-	}
-	applied = append(applied, "tools")
-	// The learning workers are rebuilt for the new epoch — they hold its
-	// org and its model registry — while the dispatcher, its subscription
-	// and its redelivery ring stay put. A failure leaves the previous
-	// epoch's workers serving rather than failing the apply: reflecting
-	// against a stale org is a far smaller wrong than not reflecting. The
-	// one refusal is a node's FIRST company, whose dispatcher is attached
-	// here and would otherwise not exist at all.
-	if err := e.reconfigureReflection(ctx, next); err != nil {
-		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the reflect dispatcher could not be attached for this "+
-				"node's first company; the revision is not served here yet")
-		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
-	}
-	applied = append(applied, "learning")
-	// The sandbox MANAGER is swapped, and only the manager: the coordinator
-	// and the waiter hold this process's busy set and poll loop, so
-	// rebuilding them would forget which seats are mid-run and start a
-	// second loop against the same rows. A revision whose provider block is
-	// broken is refused here rather than published — the alternative serves
-	// a company whose sandbox-enabled seats plan around a box that will
-	// never be minted.
+	// THE SANDBOX MANAGER IS BUILT HERE AND INSTALLED WITH THE EPOCH. The
+	// build is construction — it reaches no box and starts nothing — so a
+	// revision whose provider block is broken is refused while nothing has
+	// moved; the alternative serves a company whose sandbox-enabled seats
+	// plan around a box that will never be minted. Only the manager: the
+	// coordinator and the waiter hold this process's busy set and poll
+	// loop, so rebuilding them would forget which seats are mid-run and
+	// start a second loop against the same rows.
+	var manager *sandbox.Manager
 	if e.sandboxCoordinator != nil {
-		manager, err := buildSandbox(next.Config, e.resolver(), e.sandboxOtel)
-		if err != nil {
-			log.WarnContext(ctx, "config_apply_failed", "error", err,
-				"detail", "the revision's providers.sandbox could not be built; "+
-					"the previous epoch is still current")
-			return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
-		}
-		if manager != nil {
-			e.sandboxCoordinator.SetManager(manager)
+		if manager, err = buildSandbox(next.Config, e.resolver(), e.sandboxOtel); err != nil {
+			return refuse(err, "the revision's providers.sandbox could not be "+
+				"built; the previous epoch is still current")
 		}
 		applied = append(applied, "sandbox")
 	}
+	// EQUIPPED BEFORE IT IS PUBLISHED, for the same reason as at boot: a
+	// turn can start the instant the pointer moves, and a revision that
+	// silently dropped every builtin would look like a model that stopped
+	// using its tools. The half that writes only into the epoch; the shared
+	// MCP children, which are this node's processes, start in the commit.
+	if err := e.equipEpoch(next); err != nil {
+		return refuse(err, "the revision built but could not be equipped with "+
+			"this node's tools; the previous epoch is still current")
+	}
+	applied = append(applied, "tools")
+
+	// ---- THE COMMIT: this node's state moves, and nothing refuses but a
+	// first company's two starts, which take back what they started ----
 
 	// The party index is rebuilt BEFORE the epoch is published, and the
 	// order is a choice between two brief windows. Refreshing first means
@@ -276,39 +281,16 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// ADDED is unresolvable while the epoch that has it is already
 	// current — and during a rollout the new company is the one being
 	// adopted, so the window that favours it is the right one.
-	e.refreshParties(next)
-	applied = append(applied, "parties")
-	if e.inboundStarted() {
-		// The TRACKER is rebuilt on the same edge and for the same
-		// reason: its lead map is derived from the org, so a node that
-		// kept its boot-time parser would route the new revision's work
-		// items by the old company's org chart.
-		e.reconcileConfluence(next)
-		e.reconcileDatadog(ctx, next)
-		e.reconcileJira(ctx, next)
-		e.reconcileGitLab(ctx, next)
-		e.reconcileGitHub(ctx, next)
-		// AND THE TWO CHAT SURFACES, which had no reconciler at all:
-		// their parsers were assembled once at boot, so a company that
-		// connected either one after starting had every delivery
-		// verified at the edge and routed to nobody until the process
-		// was restarted. See [Engine.reconcileSlack] for why one rebuilds
-		// unconditionally and the other does not.
-		e.reconcileSlack(ctx, next)
-		e.reconcileMattermost(ctx, next)
-	} else if err := e.startInbound(ctx, next); err != nil {
-		// A NODE THAT BOOTED WITH NO COMPANY has no inbound edge for
-		// the reconcilers above to rebuild, and each of them returns
-		// early without one. So its first company STARTS the edge, and
-		// a start that fails is refused like a build: a company served
-		// with no inbound edge looks healthy and hears nothing, and the
-		// retry the refusal earns starts it again. See
-		// [Engine.startInbound].
-		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the inbound edge could not be started for this node's "+
-				"first company; the revision is not served here yet")
-		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	attached, err := e.startEdge(ctx, next)
+	if err != nil {
+		return refuse(err, "this node's first company could not be started "+
+			"here, and what the attempt started has been taken back; the "+
+			"revision is not served here yet")
 	}
+	if attached {
+		applied = append(applied, "learning")
+	}
+	applied = append(applied, "parties", "integrations")
 	// AND WHAT THE LOOP LAST CONCLUDED IS NOW OLD NEWS. Its cadence is for
 	// asking a third-party app again, not for asking this document again,
 	// and the answer just changed here. See [integration.Worker.MarkStale].
@@ -318,23 +300,57 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// those follow a coordination family, which a company revision does
 	// not change — see [Engine.reconcileNative].
 	e.reconcileNative(ctx, next)
-	// AND THE TOOL SKILLS' SOURCE, after the knowledge base's own reconcile
-	// above, because the Confluence source is read off the wiring it left
-	// running. See [Engine.reconcileSkills].
-	e.reconcileSkills(next)
-	applied = append(applied, "integrations")
+	// THE SHARED MCP SERVERS, into the new epoch's registry, because this is
+	// the surface every seat's is cloned from. Here and not in the build:
+	// reconciling them stops the children the revision dropped, and a
+	// refusal after that would leave the served epoch's registry naming the
+	// tools of servers that are gone. Per-role children are NOT here: they
+	// belong to a seat's lease rather than to the epoch — see mcp.go.
+	//
+	// A server that will not start does not fail the apply. It costs that
+	// server's tools; refusing the epoch over it would take a working
+	// company down because one vendor's binary was missing.
+	e.startSharedServers(ctx, next)
+	applied = append(applied, "mcp_servers")
+	// THE REFLECTION WORKERS, handed over immediately before the install. The
+	// dispatcher reflects every completed turn with whatever workers it
+	// holds, so a turn completing on the new epoch needs them the moment it
+	// is current — and any earlier, a turn the served epoch completed would
+	// be reflected by a revision it did not run. A first company's
+	// dispatcher was attached with them by [Engine.startEdge].
+	if !attached {
+		// A SWAP, which cannot refuse: the dispatcher exists by now, and
+		// attaching one is the only failure this has. So an error here is
+		// logged rather than refused — the node's state has already moved.
+		if err := e.reconfigureReflection(ctx, next); err != nil {
+			log.ErrorContext(ctx, "reflection_reconfigure_failed", "error", err,
+				"detail", "the previous revision's learning workers keep serving")
+		}
+		applied = append(applied, "learning")
+	}
+	if manager != nil {
+		e.sandboxCoordinator.SetManager(manager)
+	}
 
 	previous := e.Company()
 	e.installEpoch(next)
 	applied = append(applied, "epoch")
 
+	// THE TOOL SKILLS' SOURCE, after the knowledge base's own reconcile
+	// above, because the Confluence source is read off the wiring it left
+	// running — and after the install, because the walk the source change
+	// asks for checks every skill against the ${var} map the install wrote
+	// ([Engine.installEpoch]), which before it is the previous revision's.
+	// See [Engine.reconcileSkills].
+	e.reconcileSkills(next)
+	applied = append(applied, "skills")
+
 	// AFTER the epoch is published, because a seat registry is a clone of
 	// the CURRENT company's surface: rebuilding from `next` before it is
 	// current would hand every held seat the new revision's builtins while
-	// its turns still read the outgoing epoch — and an apply refused after
-	// this point would leave them cloned from a revision that never became
-	// current. The per-role CHILDREN are deliberately untouched: they
-	// belong to the seat's lease, not to the epoch.
+	// its turns still read the outgoing epoch. The per-role CHILDREN are
+	// deliberately untouched: they belong to the seat's lease, not to the
+	// epoch.
 	e.refileSeatTools(ctx, next)
 	applied = append(applied, "seat_tools")
 
@@ -389,4 +405,119 @@ func seatCount(c *Company) int {
 		return 0
 	}
 	return len(c.Seats())
+}
+
+// startEdge brings the party index, the inbound edge and — on a node's first
+// company — the reflect dispatcher to the revision an apply is committing,
+// reporting whether it attached the dispatcher.
+//
+// A NODE SERVING A COMPANY reconciles: the index is rebuilt and every inbound
+// surface brought in line, and none of it refuses. A NODE'S FIRST COMPANY
+// starts what later ones reconfigure — the dispatcher that reflects on
+// completed turns, then the edge that routes deliveries — and either start
+// can fail. Each failure refuses the apply like a refused build, because a
+// company served without either looks healthy and learns or hears nothing;
+// so a start that fails takes back what this call did before it, and the
+// retry the refusal earns starts from nothing.
+//
+// THE DISPATCHER FIRST, because it is the one of the two that can be taken
+// back: its subscription is one the queue detaches ([Engine.detachReflection]),
+// while the edge's service, once started, runs for the life of the process.
+// [Engine.startInbound] takes down what a start of its own that failed brought
+// up.
+//
+// THE INDEX BEFORE THE EDGE, because the transports the edge starts register
+// the identities they resolve into it — so it is rebuilt here for a first
+// company too, and put back if the edge will not start.
+func (e *Engine) startEdge(ctx context.Context, next *Company) (attached bool, err error) {
+	if e.reflector == nil {
+		if err := e.reconfigureReflection(ctx, next); err != nil {
+			return false, err
+		}
+		attached = e.reflector != nil
+	}
+	index := e.partyIndex()
+	e.refreshParties(next)
+	if e.inboundStarted() {
+		e.reconcileInbound(ctx, next)
+		return attached, nil
+	}
+	if err := e.startInbound(ctx, next); err != nil {
+		e.restoreParties(index)
+		if attached {
+			e.detachReflection(ctx)
+		}
+		return false, err
+	}
+	return attached, nil
+}
+
+// reconcileInbound brings every surface of a running inbound edge in line with
+// a revision. None of them refuses: a surface whose new wiring does not build
+// keeps its previous one and says so in its own log line.
+func (e *Engine) reconcileInbound(ctx context.Context, next *Company) {
+	// The TRACKER is rebuilt on the same edge as the party index and for the
+	// same reason: its lead map is derived from the org, so a node that kept
+	// its boot-time parser would route the new revision's work items by the
+	// old company's org chart.
+	e.reconcileConfluence(next)
+	e.reconcileDatadog(ctx, next)
+	e.reconcileJira(ctx, next)
+	e.reconcileGitLab(ctx, next)
+	e.reconcileGitHub(ctx, next)
+	// AND THE TWO CHAT SURFACES: their parsers are assembled when the edge
+	// starts, so without these a company that connected either one after
+	// its node started would have every delivery verified at the edge and
+	// routed to nobody until the process restarted. See
+	// [Engine.reconcileSlack] for why one rebuilds unconditionally and the
+	// other does not.
+	e.reconcileSlack(ctx, next)
+	e.reconcileMattermost(ctx, next)
+}
+
+// partyIndex is the party registry as it stands, and the company it indexes.
+type partyIndex struct {
+	registry *notify.Registry
+	of       *Company
+}
+
+// partyIndex reads the live index, for a first company's start to put back if
+// it refuses.
+func (e *Engine) partyIndex() partyIndex {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	return partyIndex{registry: e.notify.registry, of: e.notify.registryFor}
+}
+
+// restoreParties puts back an index [Engine.partyIndex] read.
+func (e *Engine) restoreParties(p partyIndex) {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	e.notify.registry, e.notify.registryFor = p.registry, p.of
+}
+
+// detachReflection takes back a reflect dispatcher [Engine.startEdge] attached
+// for a first company whose edge then would not start.
+//
+// DETACHED, not deleted: the subscription is the fleet's group, which every
+// node's dispatcher consumes, so only this process's consumer on it is
+// closed. The dispatcher is dropped whatever the queue answers, because both
+// queue backends refuse a detach only when the broker is not running, which
+// holds no consumer to leave behind — and a dispatcher kept after its
+// subscription went would have the retry swap workers into something nothing
+// feeds.
+func (e *Engine) detachReflection(ctx context.Context) {
+	if e.reflector == nil {
+		return
+	}
+	e.reflector = nil
+	if e.backends == nil || e.backends.Queue == nil {
+		return
+	}
+	if _, err := e.backends.Queue.Detach(context.WithoutCancel(ctx),
+		topics.Event(types.TurnCompleted{}.EventType()), learning.ReflectGroup); err != nil {
+		log.WarnContext(ctx, "reflection_detach_failed", "error", err,
+			"detail", "the dispatcher attached for a company this node then "+
+				"refused could not be detached")
+	}
 }

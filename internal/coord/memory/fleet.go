@@ -40,6 +40,7 @@ type Fleet struct {
 	follows      map[string]followEntry
 	fires        map[string]time.Time
 	runs         map[string]coord.Record
+	awaiting     map[coord.AwaitingRun]struct{}
 	bridge       map[coord.BridgeLaunch]*bridgeLaunch
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
@@ -92,6 +93,7 @@ func NewFleet() *Fleet {
 		follows:      map[string]followEntry{},
 		fires:        map[string]time.Time{},
 		runs:         map[string]coord.Record{},
+		awaiting:     map[coord.AwaitingRun]struct{}{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
 		mailboxes:    map[string]coord.MailboxRecord{},
@@ -666,6 +668,61 @@ func (f *Fleet) DeleteSandboxRun(_ context.Context, turnID string, version uint6
 	}
 	delete(f.runs, turnID)
 	return true, nil
+}
+
+// ---- the index of runs parked on an answer ------------------------------ //
+
+// FileAwaitingRun files one entry.
+func (f *Fleet) FileAwaitingRun(_ context.Context, entry coord.AwaitingRun) error {
+	if err := entry.Validate(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.awaiting[entry] = struct{}{}
+	return nil
+}
+
+// AwaitingRunsOn returns the runs filed for one seat's one conversation, by
+// turn id.
+func (f *Fleet) AwaitingRunsOn(_ context.Context, handle, conversation string) ([]string, error) {
+	if handle == "" || conversation == "" {
+		return nil, fmt.Errorf("coord/memory: an awaiting-run listing names its seat and its "+
+			"conversation, got %q and %q", handle, conversation)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []string{}
+	for entry := range f.awaiting {
+		if entry.Handle == handle && entry.Conversation == conversation {
+			out = append(out, entry.TurnID)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// AllAwaitingRuns returns every entry, ordered by seat, conversation and run.
+func (f *Fleet) AllAwaitingRuns(context.Context) ([]coord.AwaitingRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := slices.Collect(maps.Keys(f.awaiting))
+	slices.SortFunc(out, func(a, b coord.AwaitingRun) int {
+		return cmp.Or(cmp.Compare(a.Handle, b.Handle),
+			cmp.Compare(a.Conversation, b.Conversation), cmp.Compare(a.TurnID, b.TurnID))
+	})
+	return out, nil
+}
+
+// DropAwaitingRun removes one entry.
+func (f *Fleet) DropAwaitingRun(_ context.Context, entry coord.AwaitingRun) error {
+	if err := entry.Validate(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.awaiting, entry)
+	return nil
 }
 
 // copyRecord hands back a value whose bytes the caller cannot write through.

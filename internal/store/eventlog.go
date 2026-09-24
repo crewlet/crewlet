@@ -182,8 +182,8 @@ type EventRecord struct {
 // every row the dashboard renders.
 type Spend struct {
 	// Phase is which phase ran; HostPhase is the phase a nested call ran
-	// under, and Worker names the auxiliary worker when Phase is
-	// "auxiliary" — which is why the worker rollup keys on the pair.
+	// under, and Worker names the `workers:` template a "subagent" phase
+	// ran — the worker rollup keys on the pair (internal/tokens).
 	Phase     string `json:"phase,omitempty"`
 	HostPhase string `json:"host_phase,omitempty"`
 	Worker    string `json:"worker,omitempty"`

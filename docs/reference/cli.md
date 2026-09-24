@@ -12,7 +12,7 @@ subcommand below is served by it.
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
 | `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
-| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node, because the counter is the fleet's and not this file's. `REFUSING SINCE` names a scope whose cap is turning charges away |
+| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node, because the counter is the fleet's and not this file's. A scope is out when `USED` is at or past `CAP`; `LAST REFUSED` says when its cap last turned a round away |
 | `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
@@ -514,7 +514,8 @@ database that exists leaves beside it what any open of it does: its `-wal`,
 and a `.lock` if it had none — so run the check as the user the engine runs as
 (see [Deployment § The store](../guides/deployment.md#the-store)). Like every
 command that opens the store, it takes the store's lock, so against a node
-whose engine is running it is refused, naming the process that holds the file.
+whose engine is running it is refused, naming the process that holds the file:
+stop `crewlet run` on that node and run the check again.
 
 ---
 
@@ -566,14 +567,17 @@ The **caps** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process
 derives the same numbers without coordinating. Only the usage is shared.
 
-`show` prints a `REFUSING SINCE` column: when that scope's cap last turned a
-charge away, or `-` while it is not refusing. The next charge the scope admits
-clears it, and so does a reset. A scope is out of budget when that column is
-set or `USED` is at or past `CAP`: a refused round has already been billed and
-is counted all the same, so `USED` reads past `CAP` after a refusal, and a
-coding run's tokens, counted when the run is collected, can take it past `CAP`
-with no refusal at all. Either way the scope's next round is refused before it
-is sent.
+A scope is out of budget when `USED` is at or past `CAP`, and that is the
+reading the engine checks before it sends a round: no round is sent for a scope
+there. A refused round has already been billed and is counted all the same, so
+`USED` reads past `CAP` after a refusal, and a coding run's tokens, counted when
+the run is collected, can take it past `CAP` with no refusal at all.
+
+`show` also prints a `LAST REFUSED` column: when that scope's cap last turned a
+round away, or `-` if none is standing. It is a date, not the verdict. The next
+charge the scope admits clears it, and so does a reset — but raising the cap in
+a new revision does not, so after a raise the column can be set on a scope
+whose `USED` is under its new `CAP` and whose next round is sent.
 
 `show` refuses rather than printing zeros when the node reports it could not
 read the counter (`durable: false` on the query surface). A counter nobody
@@ -864,11 +868,15 @@ It moves the named log's checkpoint and no other log's, and the node running it
 follows the live stream without a restart. A second node re-anchoring the same
 log is refused, naming the operation that already holds the new generation.
 
-It refuses while any peer reports a position at this node's generation with
-anything applied, **naming the peer** — adopting that peer's snapshot recovers
-what a reanchor would discard — and no flag overrides that. `-force` overrides
-the other two refusals: a positions register that cannot be read, and a node
-that is not the most caught-up one.
+It refuses while any peer is hydrated on the live stream — reports a position
+on it with anything applied, at any generation — **naming the peer**: adopting
+that peer's snapshot recovers what a reanchor would discard, and no flag
+overrides that. A fleet whose log was rebuilt under it is not refused on that
+ground, because every node is still counting on the deleted stream until one
+re-anchors.
+`-force` overrides the other two refusals: a positions register that cannot be
+read, and a node that is not the most caught-up one on its stream. A refused
+reanchor stops nothing on the node.
 
 It does not recover records that were on the old stream and were never applied
 here, and the refusal says so. See

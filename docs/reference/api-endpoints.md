@@ -2462,19 +2462,40 @@ letting it write again are not reads, whatever a laptop deployment allows.
 | Route | What it does |
 |---|---|
 | `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
-| `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate. |
-| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit. |
+| `POST /work/retention/evict/{node}?confirm={node}[&force=true]` | Installs the eviction gate: one record on every log whose applier installs it. Refused while the node still holds its presence lease, or when the fleet's presence leases cannot be listed, unless `force=true`. |
+| `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on the same logs. Never refused on the node's position: a readmitted node the log has trimmed past adopts a peer's snapshot. |
 
-`confirm` echoes the node id, and a mismatch is `400`. Both gate routes answer
-with the write's **three-valued outcome** — `applied`, `pending` or `unknown` —
-its position and its operation id: a gate the caller believes has landed and
-which is only `pending` is the difference between a node that has stopped
-writing and one that is about to.
+`confirm` echoes the node id, and a mismatch is `400 confirm_required`; a call
+carrying no operator identity is `403 operator_required`, because every log's
+record names who ran the gesture. Both gate routes answer with `node`,
+`evicted` (true on the eviction route), `op_id` — one fresh operation id per
+press, shared by every log's record — and `domains`, one entry per log the
+gesture reached:
 
-A node whose company runs no native tracker has no eviction gate, and both gate
-routes answer `503 no_tracker` rather than `404`. The routes exist on this
-build, and telling an operator they do not sends them looking for a version
-mismatch that is not there.
+```json
+{
+  "node": "node-4", "evicted": true, "op_id": "8c1e…",
+  "domains": [
+    {"domain": "tracker", "stream": "CREWLET_TRACKER_LOG", "outcome": "applied",
+     "position": {"stream": "CREWLET_TRACKER_LOG", "generation": 1, "seq": 918100}},
+    {"domain": "pages", "stream": "CREWLET_PAGES_LOG", "outcome": "pending",
+     "position": {"stream": "CREWLET_PAGES_LOG", "generation": 1, "seq": 4410}}
+  ]
+}
+```
+
+`outcome` is the write's **three-valued outcome** — `applied`, `pending` or
+`unknown`: a gate the caller believes has landed and which is only `pending` is
+the difference between a node that has stopped writing and one that is about
+to. A refused permission is `409 eviction_refused`, decided before any log is
+written, so its `domains` is empty. A failure is `500 gate_failed`, whose
+`domains` lists every log the gesture reached, the failing one last — a gesture
+that reached one log and not the next has changed the fleet. Both carry `error`
+and `detail` beside `node`, `evicted` and `op_id`.
+
+A node that runs no state log answers both gate routes `503 no_state_log`
+rather than `404`. The routes exist on this build, and telling an operator they
+do not sends them looking for a version mismatch that is not there.
 
 ### The capacity window
 
@@ -2504,15 +2525,38 @@ would drift.
 
 | Route | What it does |
 |---|---|
-| `GET /work/retention/reanchor?stream=NAME` | The stream's own `created_at` and the current generation. |
-| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true]` | Runs the generation transition, answering with the new generation. |
+| `GET /work/retention/reanchor?stream=NAME` | `stream`, the live stream's own `created_at` — read from the broker when the call is made, not the instant this node's applier started against, which names a deleted stream once a log is rebuilt under a running node — and `generation`, the one this node's rows on that log stand at. `400 stream_required` without `stream`, `404 unknown_stream` for a stream no domain on this node runs on (every stream, on a node running no state log), and `503 stream_unreadable` when the broker does not answer: the instant to confirm is the live stream's, and nothing stands in for it. |
+| `POST /work/retention/reanchor?stream=NAME&confirm=<created_at>[&force=true]` | Runs the generation transition on that one log, answering `stream` and the new `generation`. |
 
 `confirm` is the value the `GET` returns, supplied by the caller: the
 confirmation means *I looked at the thing I am re-anchoring*, so the two are
 deliberately separate round trips rather than one route that reads and acts.
-`force=true` is refused-by-default's escape, for a fleet whose hydrated peer
-cannot be reached — adopting that peer's snapshot is strictly the better
-recovery, and the refusal names it.
+It is compared to the second, so the form the `GET` returns, with the broker's
+fractional digits, and the same instant without them both confirm it.
+
+**Only the named log moves**, and the node running it follows the live stream
+without a restart. The `POST` answers:
+
+- `400 confirm_required` when `stream` or `confirm` is missing, and
+  `403 operator_required` when the call carries no operator identity — the
+  generation record and the audit row both name who re-anchored.
+- `404 unknown_stream`, as the `GET`.
+- `409 reanchor_refused`, with the reason in `detail`: a confirmation naming
+  another instant, or a live instant the broker would not give; a peer
+  hydrated on the live stream, named; a positions register that cannot be
+  read, or a node that is not the most caught-up one on its stream; another
+  reanchor's generation record already holding the new generation; and a
+  transition already running on this node — an adoption of a peer's snapshot,
+  or another reanchor. A refusal stops nothing: the log's applier runs on.
+- `500 reanchor_failed` for a failure partway, which the transition's step
+  order makes safe to run again.
+
+`force=true` overrides the two refusals that rest on the positions register —
+one that cannot be read, and a node that is not the most caught-up one — and
+what it accepts losing is every record the fleet applied above this node's own
+position. It never overrides a hydrated peer: adopting that peer's snapshot is
+the recovery then. See
+[Re-anchoring a recreated stream](../guides/retention.md#re-anchoring-a-recreated-stream).
 
 ## Agent Memory
 
@@ -3224,7 +3268,7 @@ beside it.
         "plan":      { "input_tokens": 1500, "output_tokens": 400,  "total_tokens": 1900, "calls": 1 },
         "execute":   { "input_tokens": 14000,"output_tokens": 2000, "total_tokens": 16000,"calls": 2 },
         "review":    { "input_tokens": 1200, "output_tokens": 200,  "total_tokens": 1400, "calls": 1 },
-        "auxiliary": { "input_tokens": 800,  "output_tokens": 100,  "total_tokens": 900,  "calls": 1 }
+        "subagent":  { "input_tokens": 800,  "output_tokens": 100,  "total_tokens": 900,  "calls": 1 }
       }
     },
     ...
@@ -3246,20 +3290,24 @@ Notes:
 
 - `by_phase` covers every phase emitted by the
   [Turn Engine](../concepts/turn-engine.md): `onboarding`, `execute`,
-  `review`, `subagent` (a delegated worker), `auxiliary`, and `judge`
-  (the round-cap extension judge). A store that predates the two-stage
-  redesign also holds `plan` rows, and they still roll up.
-- `by_worker` covers the rows that name one: an `auxiliary` row's worker
-  is the learning-subsystem caller (e.g. `persist_decider`,
-  `counterparty_profiler`, `skill_synthesizer`), and a `subagent` row's
-  is the `workers:` template it ran — empty on a delegation that wrote
-  its prompt inline, which therefore counts toward `by_phase` but toward no
-  worker. A worker row is keyed on its **`phase` and its name together**:
-  nothing reserves a learning worker's name from the `workers:` grammar, so
-  a template called `persist_decider` and the learning worker of that name
-  are two rows rather than one figure belonging to neither.
-- `by_model` is useful when roles override `llm_auxiliary` with a
-  cheaper model for reflection / summarisation work.
+  `review`, `subagent` (a delegated worker), and `judge` (the round-cap
+  extension judge). A store that predates the two-stage redesign also holds
+  `plan` rows, and they still roll up.
+- **Auxiliary calls are in no row.** The calls the learning workers and a
+  turn's context prefetch make on the `llm_auxiliary` model publish no phase
+  record, so this rollup never counts them. Where a cap is set they are
+  charged to the budget counter all the same, so
+  [`GET /budgets`](#get-budgets) counts spend that nothing here does. A
+  [coding run's](../concepts/code-sandbox.md#budgets) own tokens are in no
+  row either: the resumed phase's record carries the executor's rounds and
+  what the run reported it cost (`cost_usd`), and the run's tokens reach the
+  budget counter alone.
+- `by_worker` covers the rows that name one: a `subagent` row's worker is
+  the `workers:` template it ran — empty on a delegation that wrote its
+  prompt inline, which therefore counts toward `by_phase` but toward no
+  worker. A worker row is keyed on its **`phase` and its name together**.
+- `by_model` names the model each completion reported, never a provider's
+  configured name, so the members of a fallback chain are separate rows.
 - All lists are sorted by `total_tokens` descending; `by_turn` is
   sorted by `ended_at` descending and capped at `recent_turns`.
   `turns_total` is how many turns the window actually held, so a full
@@ -3353,10 +3401,8 @@ Notes:
   is what the bands do cover, so the gap is a number rather than an
   inference a reader has to make by subtracting.
 - A `worker` band's `group` is **`<phase>/<name>`** — `subagent/researcher`
-  for a `workers:` template, `auxiliary/persist_decider` for a learning
-  worker — for the reason a `by_worker` row carries its `phase`: nothing
-  keeps the two kinds' names apart, and a band keyed on the name alone would
-  chart two workers' spend as one.
+  for a `workers:` template — for the reason a `by_worker` row carries its
+  `phase`.
 - `at` is the bucket's **start**, never its middle or its end. A bucket
   reaches from `at` to `at` plus one hour or one day.
 - A window longer than 1000 buckets keeps the **newest** of them and

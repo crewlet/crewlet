@@ -73,17 +73,13 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 
 	schemas, err := store.Pending(ctx, boot.Store.Path, opts)
 	if err != nil {
-		// READING IS ALSO A SECOND PROCESS ON THE FILE, and until Pending
-		// took the lock this was the one path that did not say so: -check
-		// reported the schema of a live engine's database, and only the
-		// apply below was refused. The remedy differs from the apply's,
-		// though — nothing here would change the file, so an operator
-		// wanting the answer has a route that does not involve stopping
-		// the company.
+		// READING IS ALSO A SECOND PROCESS ON THE FILE. -check applies
+		// nothing, but it reads the store's files, and the lock admits one
+		// process at a time — so against a running engine the remedy is the
+		// apply's: stop it, and run the check again.
 		return engineHoldsTheStore(err, bootstrapPath,
-			"Stop `crewlet run` on this node and re-run. A running engine has "+
-				"already applied every migration this binary carries, so a node "+
-				"that is up is a node with nothing pending.")
+			"Stop `crewlet run` on this node and re-run the check: it reads "+
+				"the store's files, which the running engine holds.")
 	}
 	// BOTH ESTATES, ALWAYS BOTH. A node is two databases with two
 	// independent sequences, and a report that named one of them would be
@@ -215,12 +211,15 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 		return errors.New("the node could not read the counter; " +
 			"its `durable` flag is false, so nothing here can be stated")
 	}
-	// REFUSING SINCE is the column that says a scope is out, and USED
-	// against CAP is not: a refused charge increments nothing, so a seat
-	// charged in rounds stalls short of its cap and its row would otherwise
-	// read as headroom.
+	// USED AGAINST CAP says whether a scope is out: the engine sends no
+	// round for a scope at or past its cap, and it counts a round the cap
+	// refused, so a refusal leaves USED past CAP. LAST REFUSED says when the
+	// cap last turned a round away, which the two numbers cannot — and it is
+	// a date, not a state: it stands until the scope next admits a charge,
+	// so after a revision raises the cap it is still set on a scope with
+	// room.
 	const row = "%-32s %12s %12s  %-30s  %s\n"
-	fmt.Fprintf(stdout, row, "SCOPE", "USED", "CAP", "LAST CHARGED", "REFUSING SINCE")
+	fmt.Fprintf(stdout, row, "SCOPE", "USED", "CAP", "LAST CHARGED", "LAST REFUSED")
 	fmt.Fprintf(stdout, row, "org", strconv.Itoa(answer.Org.DurableUsed),
 		capOrDash(answer.Org.MaxTokens), dashIfEmpty(answer.Org.DurableUpdatedAt),
 		dashIfEmpty(answer.Org.RefusedAt))

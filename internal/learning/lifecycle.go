@@ -119,6 +119,11 @@ type Summary struct {
 	// recall and still read by every time-window query. Losing the summary
 	// because its vector could not be computed would be the worse trade.
 	Embedding []float32
+
+	// EmbeddingModel is the model that made Embedding. A summary vector with
+	// none named is stored as of unknown model, which recall leaves out —
+	// see [Episode.EmbeddingModel].
+	EmbeddingModel string
 }
 
 // Summarizer folds a cluster of similar turns into one summary.
@@ -1359,6 +1364,7 @@ func (l *Lifecycle) buildCompacted(handle string, cluster, exemplars []Episode, 
 		// unbounded; a summary of summaries is bounded by the model call
 		// that produced it.
 		Embeddings:        oneWindow(s.Embedding),
+		EmbeddingModel:    s.EmbeddingModel,
 		Kind:              KindCompacted,
 		Count:             len(cluster),
 		WorkKey:           foldKey(ids),

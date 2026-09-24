@@ -32,7 +32,17 @@ import (
 func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 	src := prefetch.Sources{
 		Knowledge: e.Knowledge(),
-		Models:    company.Models,
+		// METERED, like every learning worker's model: the episode
+		// briefing, the knowledge query and the memory filter are auxiliary
+		// calls on the seat's behalf, and a call resolved off the bare
+		// registry is spend no counter hears about. One the budget has no
+		// room for is refused before it is sent, and its block degrades the
+		// way it does for any failed auxiliary call — the episode briefing
+		// to its raw bullets, the knowledge block to none, the memory block
+		// to its hint to re-run the filter. This fetcher is also the recall
+		// behind the memory-refresh tool (equip.go), so that re-filter is
+		// charged the same way.
+		Models: e.meteredModelsFor(company),
 		// SummarizeEpisodes gates ONLY the episode summary. Wiring this
 		// switch by passing a nil provider pool silently disables the
 		// memory and knowledge filters too — an operator turning off a

@@ -57,6 +57,10 @@ type turnTelemetry struct {
 	startedAt time.Time
 	trace     events.TraceContext
 
+	// triggeredAt is [turnctx.Turn.TriggeredAt] for this turn: the earliest
+	// instant an operation id its writes derive can have been minted.
+	triggeredAt time.Time
+
 	// interactions is who spoke to this seat and what they said, one per
 	// constituent of the partition. It rides the completed-turn event
 	// because the reflect dispatcher is a QUEUE CONSUMER: it can run on a
@@ -112,6 +116,10 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		convKey:   req.ConversationKey,
 		startedAt: time.Now().UTC(),
 	}
+	// OFF THE PARTITION'S OWN EVENTS, the ones the work key is derived
+	// from — never the merged digest a coalesced turn is handed, which is
+	// minted fresh on every merge.
+	t.triggeredAt = turnctx.TriggerInstant(req.WorkKey, req.Events, t.startedAt)
 	t.role, t.agentID = seatIdentity(company, req.Handle)
 	// OFF THE ASK: a coalesced conversation's interactions come from the
 	// merged digest's own constituent list, which is the same set the
@@ -158,6 +166,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 		Context: &turnctx.Turn{
 			RunID:   t.runID,
 			WorkKey: t.workKey,
+			// When the ids those two seed can first have been minted,
+			// which is what every write this turn makes is stamped with.
+			TriggeredAt: t.triggeredAt,
 			// The seat and the ORG both come off the pinned epoch, so a
 			// colleague lookup mid-turn resolves against the roster this
 			// turn started under rather than one that changed underneath
@@ -346,9 +357,11 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 		return
 	}
 
-	// BUDGET BEFORE PROVIDER. A refused charge is reported by the phase as
-	// its own error and never reaches a provider at all, so the two are
-	// disjoint in practice — but ordering them makes that a property of this
+	// BUDGET BEFORE PROVIDER. A budget refusal — a room read that stopped a
+	// call before it was sent, or a charge that refused a round after its
+	// provider had answered — is a [toolloop.BudgetError] built from the
+	// meter's answer alone, so it never wraps a provider's error and the two
+	// are disjoint in practice. Ordering them makes that a property of this
 	// function rather than of whichever wrapper happened to be outermost.
 	var budget *toolloop.BudgetError
 	if errors.As(err, &budget) {
@@ -527,8 +540,13 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		workKey:   in.Run.UnitOfWork(),
 		convKey:   in.Run.ConversationKey,
 		startedAt: time.Now().UTC(),
-		role:      in.Run.Role,
-		agentID:   in.Run.AgentID,
+		// THE RUN'S FIRST LAUNCH, the earliest instant its row records. It
+		// is later than every operation the turn named before it suspended,
+		// so it bounds only the ones the resume names afresh; the original
+		// turn's own instant, which the row does not carry, bounds all.
+		triggeredAt: in.Run.CreatedAt,
+		role:        in.Run.Role,
+		agentID:     in.Run.AgentID,
 		// The resumed turn's OWN span, opened by resumeTurn under the
 		// reconstructed suspended one. This used to be built by hand as
 		// `{TraceID: run.TraceID, ParentSpanID: run.SpanID}` with SpanID

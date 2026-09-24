@@ -76,6 +76,13 @@ type Episode struct {
 	// outage must never cost an episode.
 	Embeddings [][]float32
 
+	// EmbeddingModel is the model that made Embeddings, and empty when there
+	// are none — or when the row was written by a build or at a time that
+	// did not record one. Recall compares a query only with the episodes of
+	// its own model, so an empty one is left out of similarity ranking; see
+	// [Embedder] for why a matching width is not enough.
+	EmbeddingModel string
+
 	Kind  Kind
 	Count int
 
@@ -109,10 +116,11 @@ const episodeInsertSQL = `
 INSERT INTO episodes (
 	id, agent_handle, agent_role, task_id, turn_id, started_at, ended_at,
 	plan_summary, task_summary, tool_sequence, skills_used, review_outcome,
-	duration_ms, embedding, embedding_windows, kind, count, exemplar_turn_ids,
-	consolidated_into_skill_id, common_task_pattern, common_outcome,
-	success_rate, subjects_involved, notable_patterns, work_key, conversation_key
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	duration_ms, embedding, embedding_windows, embedding_model, kind, count,
+	exemplar_turn_ids, consolidated_into_skill_id, common_task_pattern,
+	common_outcome, success_rate, subjects_involved, notable_patterns, work_key,
+	conversation_key
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (agent_handle, work_key) DO NOTHING`
 
 // episodeInsertArgs binds [episodeInsertSQL], once, for every writer of the
@@ -128,12 +136,20 @@ ON CONFLICT (agent_handle, work_key) DO NOTHING`
 // blob and windows come from [Episodes.encodeEmbedding] together, because they
 // are one fact about one value: a blob of N packed vectors and a count that
 // said anything but N would make recall read somebody else's bytes as a vector.
+//
+// THE MODEL IS WRITTEN ONLY BESIDE A BLOB. A row whose every window was
+// refused lands with no vector, and a model named on it would be a claim
+// about a vector that is not there.
 func episodeInsertArgs(ep Episode, blob any, windows int) []any {
+	model := ""
+	if blob != nil {
+		model = ep.EmbeddingModel
+	}
 	return []any{
 		ep.ID, ep.Handle, ep.Role, ep.TaskID, ep.TurnID,
 		store.EncodeTime(ep.StartedAt), store.EncodeTime(ep.EndedAt),
 		ep.PlanSummary, ep.TaskSummary, jsonList(ep.ToolSequence), jsonList(ep.SkillsUsed),
-		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob, windows,
+		ep.ReviewOutcome, ep.Duration.Milliseconds(), blob, windows, store.NullText(model),
 		string(ep.Kind), ep.Count, jsonList(ep.ExemplarTurnIDs),
 		store.NullText(ep.ConsolidatedInto), ep.CommonTaskPattern, ep.CommonOutcome,
 		ep.SuccessRate, jsonList(ep.SubjectsInvolved), ep.NotablePatterns,
@@ -255,7 +271,7 @@ func (e *Episodes) encodeEmbedding(windows [][]float32) (any, int, error) {
 const episodeColumns = `id, agent_handle, agent_role, task_id, turn_id,
 	started_at, ended_at, plan_summary, task_summary, tool_sequence,
 	skills_used, review_outcome, duration_ms, embedding, embedding_windows,
-	kind, count,
+	embedding_model, kind, count,
 	exemplar_turn_ids, consolidated_into_skill_id, common_task_pattern,
 	common_outcome, success_rate, subjects_involved, notable_patterns,
 	work_key, conversation_key`
@@ -266,6 +282,7 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 		started, ended, durationMS             int64
 		embedding                              []byte
 		windows                                int
+		model                                  sql.NullString
 		kind                                   string
 		toolSeq, skills, exemplars, subjects   string
 		consolidated, workKey, conversationKey sql.NullString
@@ -274,7 +291,7 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 		&ep.ID, &ep.Handle, &ep.Role, &ep.TaskID, &ep.TurnID,
 		&started, &ended, &ep.PlanSummary, &ep.TaskSummary, &toolSeq,
 		&skills, &ep.ReviewOutcome, &durationMS, &embedding, &windows,
-		&kind, &ep.Count,
+		&model, &kind, &ep.Count,
 		&exemplars, &consolidated, &ep.CommonTaskPattern,
 		&ep.CommonOutcome, &ep.SuccessRate, &subjects, &ep.NotablePatterns,
 		&workKey, &conversationKey,
@@ -292,6 +309,7 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 	ep.ConsolidatedInto = store.Text(consolidated)
 	ep.WorkKey = store.Text(workKey)
 	ep.ConversationKey = store.Text(conversationKey)
+	ep.EmbeddingModel = store.Text(model)
 	if len(embedding) > 0 {
 		vectors, err := splitWindows(embedding, windows)
 		if err != nil {
@@ -556,3 +574,8 @@ func parseList(raw string) []string {
 
 // ErrNoEmbedding reports a recall asked for without a query vector.
 var ErrNoEmbedding = errors.New("learning: recall needs a query embedding")
+
+// ErrNoModel reports a recall whose query vector names no model. Such a vector
+// is comparable with nothing stored — see [RecallQuery.Model] — so the recall
+// is refused rather than answered with a ranking of nothing.
+var ErrNoModel = errors.New("learning: recall needs the model its query embedding was made by")

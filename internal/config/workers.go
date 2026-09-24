@@ -531,13 +531,16 @@ type Delegation struct {
 
 	// BudgetFraction is the share of the parent turn's REMAINING tokens
 	// one delegate call's rounds are admitted against — the total across
-	// every worker in it, not each. A round is charged once its model call
-	// has answered, so the round that finds the share spent has been billed
-	// and is counted against it all the same. A fifth leaves the parent four
-	// fifths to finish the turn the fan-out was supposed to serve, which is
-	// the whole point: a worker that consumed the turn's budget has answered
-	// a question nobody can now act on.
-	BudgetFraction float64 `yaml:"budget_fraction,omitempty" json:"budget_fraction,omitempty" js:"min=0;max=1" desc:"Share of the parent's remaining budget one delegate call's rounds are admitted against."`
+	// every worker in it, not each. A worker's round is read for room
+	// before its model call is sent, so a round that finds the share spent
+	// is never sent. The round that goes past the share is the one whose
+	// own charge overruns it: a round is charged once its model call has
+	// answered, so that one has been billed, and is counted against the
+	// share all the same. A fifth leaves the parent four fifths to finish
+	// the turn the fan-out was supposed to serve, which is the whole point:
+	// a worker that consumed the turn's budget has answered a question
+	// nobody can now act on.
+	BudgetFraction float64 `yaml:"budget_fraction,omitempty" json:"budget_fraction,omitempty" js:"min=0;max=1" desc:"Share of the parent's remaining budget one delegate call's rounds are admitted against; a worker round that finds it spent is not sent."`
 
 	// MinTokensPerTask floors each worker's share. A call whose slice
 	// divided by its task count falls below this is refused UP FRONT: N

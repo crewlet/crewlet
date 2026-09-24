@@ -309,8 +309,12 @@ func TestLabelsAreDeclaredBeforeTheTaskIsFiled(t *testing.T) {
 		"title": "A task", "labels": []any{"regression"},
 		"labels_create_missing": true,
 	})
-	if len(trk.opIDs) < 2 || !strings.HasPrefix(trk.opIDs[0], "tags-") {
-		t.Fatalf("the first write was %v, want the tag declare", trk.opIDs)
+	// The writes in the order they reached the tracker, each by the verb
+	// its operation names.
+	if len(trk.opIDs) != 2 || !strings.Contains(trk.opIDs[0], "-labels-") ||
+		!strings.Contains(trk.opIDs[1], "-create-") {
+		t.Fatalf("the writes were %v, want the tag declare and then the create",
+			trk.opIDs)
 	}
 }
 

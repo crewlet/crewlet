@@ -535,8 +535,14 @@ func (r *Runner) Anchor(ctx context.Context, subject string) (Position, error) {
 // carry an op id forward and re-ask, and it does that on its next wake —
 // hours later, and after a weekend
 // for a seat that only runs on a schedule. An op id that outlives its row is
-// decided again: its retry finds no row, decides from the rows its first
-// record already moved, and lands a second record — the work done twice.
+// decided again, and what that costs depends on how the write arbitrates
+// ([Pattern]): an arbitrated retry decides from the rows its first record
+// already moved and, unless that decision is empty, lands a second record —
+// the work done twice; a create's retry meets the guarding row its first
+// record wrote and is refused [ErrExists], so an operation that landed is
+// reported as an object that already existed; and an additive retry lands a
+// second record, which the pattern's own precondition has its apply fold to
+// nothing.
 //
 // It costs about 29 MB steady at the census rate (6 518 commits a day, ~150
 // bytes a row) against 357 MB a year kept for ever — and "for ever" is what

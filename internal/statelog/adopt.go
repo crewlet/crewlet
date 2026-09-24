@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"slices"
 	"time"
 
@@ -215,10 +214,17 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 	defer release()
 
 	part := a.deps.LivePath + AdoptPartSuffix
-	// A part file from a previous attempt is debris rather than a resume
-	// point: only this path is written here, and a partial one that
-	// survived would be refused as an existing destination for ever.
-	_ = os.Remove(part)
+	// A COPY FROM A PREVIOUS ATTEMPT IS DEBRIS rather than a resume point:
+	// only this path is written here, and a partial one that survived would
+	// be refused as an existing destination for ever. ITS SIDECARS GO WITH
+	// IT — the steps below open the copy, which grows a -wal and this
+	// store's lock beside it, and a stale -wal beside a fresh copy is
+	// applied to it on the next open ([store.RemoveCopy]).
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := store.RemoveCopy(part); err != nil {
+		return Manifest{}, fmt.Errorf("statelog: clear a previous attempt's "+
+			"copy: %w", err)
+	}
 
 	// 3. TRANSFER.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -226,10 +232,14 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 		return Manifest{}, err
 	}
 	defer func() {
-		// Removed on every path that did not install it.
+		// ON EVERY PATH, the install's included: an installed copy has
+		// been renamed away, and what is left at its name is the lock it
+		// was opened under.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if _, err := os.Stat(part); err == nil {
-			_ = os.Remove(part)
+		if err := store.RemoveCopy(part); err != nil {
+			a.log.WarnContext(ctx, "statelog_adoption_copy_left",
+				"node", a.deps.NodeID, "path", part, "error", err.Error(),
+				"detail", "the next adoption clears it before it fetches")
 		}
 	}()
 

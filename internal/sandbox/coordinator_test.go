@@ -1661,6 +1661,252 @@ func TestARetriedResumeChargesTheRunOnce(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------
+// a resume the budget would stop waits for room
+// ---------------------------------------------------------------------
+
+// roomSpy is a seat budget whose room a case sets, counting its reads.
+type roomSpy struct {
+	mu    sync.Mutex
+	room  Room
+	err   error
+	reads int
+}
+
+func (r *roomSpy) Room(context.Context, string) (Room, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reads++
+	return r.room, r.err
+}
+
+func (r *roomSpy) set(room Room, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.room, r.err = room, err
+}
+
+// budgeted is a coordinator over the rig's store, box and resumer that reads
+// the seat's budget from room before it claims a completion.
+func (r *coordRig) budgeted(t *testing.T, room Headroom) *Coordinator {
+	t.Helper()
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: r.queue, Pending: r.pending, Manager: r.manager,
+		Resume: r.resumer, Account: r.accountant, Headroom: room,
+		Now: func() time.Time { return r.now },
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	return coordinator
+}
+
+// publishedOf is how many events of one type the coordinator published.
+func (r *coordRig) publishedOf(eventType string) int {
+	r.queue.mu.Lock()
+	defer r.queue.mu.Unlock()
+	n := 0
+	for _, p := range r.queue.published {
+		if p.event.Type == eventType {
+			n++
+		}
+	}
+	return n
+}
+
+// A RESUME THE BUDGET WOULD STOP WAITS, AND SAYS SO ONCE.
+//
+// The resumed turn's first round is refused before it is sent when a scope is
+// at its cap. Claimed anyway, the run was collected, its turn failed and
+// announced, the claim handed back — and the next poll's completion did it
+// again, until the cap moved. With no room the completion is left unclaimed:
+// nothing is collected, nothing resumed, nothing charged, the seat stays busy,
+// and the one announcement is the budget_exhausted that says why. Once room
+// returns, the next completion resumes the turn as any other would.
+func TestAResumeWithNoBudgetRoomWaitsWithoutCollecting(t *testing.T) {
+	rig := newCoordRig(t)
+	budget := &roomSpy{room: Room{Scope: "org", Used: 1000, Limit: 1000}}
+	coordinator := rig.budgeted(t, budget)
+	launched := rig.launch("t1")
+	coordinator.markBusy("swe")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 90, OutputTokens: 10})
+
+	payload, ev := rig.completion("t1")
+	for poll := range 3 {
+		if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("poll %d: a completion left to wait was reported as a failure: %v", poll+1, err)
+		}
+	}
+	got := rig.get("t1")
+	if got.Status != StatusRunning || got.LaunchID != launched.LaunchID || got.Paused() {
+		t.Errorf("the waiting run reads status=%q launch-kept=%v paused=%v, want its job left "+
+			"running and its box untouched", got.Status, got.LaunchID == launched.LaunchID, got.Paused())
+	}
+	if n := len(rig.resumer.calls()); n != 0 {
+		t.Errorf("the turn was resumed %d times into a budget with no room", n)
+	}
+	if n := rig.accountant.asked(); n != 0 {
+		t.Errorf("the run was collected and charged %d times while it waited", n)
+	}
+	if !coordinator.AwaitingSandbox("swe") {
+		t.Error("the seat was freed while its run waited, so its mail would start turns the budget refuses")
+	}
+	if n := rig.publishedOf("budget_exhausted"); n != 1 {
+		t.Errorf("the wait was announced %d times over three polls, want once", n)
+	}
+	if n := len(rig.queue.topics()); n != 1 {
+		t.Errorf("the waiting run published %d events, want the one announcement", n)
+	}
+
+	budget.set(Room{OK: true}, nil)
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the completion that found room: %v", err)
+	}
+	if n := len(rig.resumer.calls()); n != 1 {
+		t.Fatalf("resumed %d times once the budget had room, want once", n)
+	}
+	rig.finished("t1")
+	if n := rig.accountant.asked(); n != 1 {
+		t.Errorf("the run was charged %d times, want once, when it was collected", n)
+	}
+}
+
+// A COUNTER THAT CANNOT BE READ WAITS TOO: the turn's first round would be
+// refused on it as well, and a claim would buy nothing but the same loop.
+func TestAResumeWhoseBudgetCannotBeReadWaits(t *testing.T) {
+	rig := newCoordRig(t)
+	budget := &roomSpy{err: errors.New("the coordination store is unreachable")}
+	coordinator := rig.budgeted(t, budget)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning || len(rig.resumer.calls()) != 0 {
+		t.Errorf("status=%q, resumes=%d: a completion on an unreadable budget was claimed",
+			got.Status, len(rig.resumer.calls()))
+	}
+	if n := rig.publishedOf("budget_exhausted"); n != 0 {
+		t.Errorf("an unreadable counter was announced as an exhausted budget %d times", n)
+	}
+}
+
+// A RELAUNCH STARTS A NEW WAIT, announced again: the job the budget holds back
+// now is a different one.
+func TestARelaunchThatWaitsIsAnnouncedAgain(t *testing.T) {
+	rig := newCoordRig(t)
+	budget := &roomSpy{room: Room{Scope: "agent", Used: 500, Limit: 500}}
+	coordinator := rig.budgeted(t, budget)
+	rig.launch("t1")
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	rig.launch("t1")
+	payload, ev = rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if n := rig.publishedOf("budget_exhausted"); n != 2 {
+		t.Errorf("two launches waiting were announced %d times, want once each", n)
+	}
+}
+
+// AN ANSWER THE BUDGET WOULD STOP IS NOT HANDED OVER. The parked run is not
+// claimed and not resumed, so it goes on waiting for that answer, and the
+// answer stays the caller's to deliver again; the wait is announced once. Once
+// the budget has room, the same answer resumes the turn.
+func TestAnAnswerWithNoBudgetRoomIsNotHandedOver(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	budget := &roomSpy{room: Room{Scope: "org", Used: 1000, Limit: 1000}}
+	coordinator := rig.budgeted(t, budget)
+
+	for attempt := range 2 {
+		handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+		if handled || !errors.Is(err, ErrNoBudgetRoom) {
+			t.Fatalf("attempt %d: TryResumeFromAnswer = %v, %v, want the answer left with the "+
+				"caller naming the budget", attempt+1, handled, err)
+		}
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting || len(rig.resumer.calls()) != 0 {
+		t.Fatalf("status=%q resumes=%d: a run whose turn the budget would stop was claimed",
+			got.Status, len(rig.resumer.calls()))
+	}
+	if n := rig.publishedOf("budget_exhausted"); n != 1 {
+		t.Errorf("the wait was announced %d times over two answers, want once", n)
+	}
+
+	budget.set(Room{OK: true}, nil)
+	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+	if err != nil || !handled {
+		t.Fatalf("TryResumeFromAnswer with room = %v, %v, want it handed over", handled, err)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, "use main") {
+		t.Fatalf("resumes = %+v, want the answer resumed once", calls)
+	}
+}
+
+// A RETRY IS TOLD THAT A RECORD ALREADY COUNTED THE CARRIED SPEND.
+//
+// The first attempt's resumed phase published the record that counts what the
+// phase billed before it suspended, and then the turn broke and was handed
+// back. The retry publishes a record of its own, and the run's row — the one
+// thing it reads — is what tells it to count only what it bills itself: the
+// release that hands the claim back writes it, from the resumer's error.
+func TestARetryIsToldTheCarriedSpendWasCounted(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.failWith(fmt.Errorf("the review's provider went away (%w)", ErrCarriedCounted))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	if got := rig.get("t1"); !got.CarriedCounted || got.Status != StatusRunning {
+		t.Fatalf("the handed-back run reads counted=%v status=%q, want the record on the row "+
+			"the retry claims", got.CarriedCounted, got.Status)
+	}
+
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 || !calls[0].Run.CarriedCounted {
+		t.Fatalf("the retry was handed %+v, want one resume told the carried spend is counted", calls)
+	}
+}
+
+// A resume that failed before any record counted it hands the claim back with
+// nothing recorded, so its retry's record counts it.
+func TestAFailureThatCountedNothingLeavesTheCarriedSpendToTheRetry(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 || calls[0].Run.CarriedCounted {
+		t.Fatalf("the retry was handed %+v, want the carried spend still its own to count", calls)
+	}
+}
+
 // THE RECORD IS THE FLEET'S, NOT THE COORDINATOR'S. A failed resume's retry
 // goes wherever the seat is, which after a lease move or a restart is a
 // coordinator that never saw the first charge. Only the run's own row can tell

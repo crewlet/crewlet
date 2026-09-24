@@ -3,6 +3,8 @@ package turn_test
 import (
 	"context"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,8 +29,11 @@ type fake struct {
 	resumeRounds          int
 	resumeErr             error
 	notesSeen             []string
-	historySeen           [][]ledger.Iteration
-	reviewedWork          []turn.Work
+	// roundsSeen is the round number each executor pass was handed, the
+	// resumed one included, in the order they ran.
+	roundsSeen   []int
+	historySeen  [][]ledger.Iteration
+	reviewedWork []turn.Work
 }
 
 func at[T any](s []T, round int) T {
@@ -44,6 +49,7 @@ func at[T any](s []T, round int) T {
 
 func (f *fake) Execute(_ context.Context, round int, notes string, h []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	f.workRounds++
+	f.roundsSeen = append(f.roundsSeen, round)
 	f.notesSeen = append(f.notesSeen, notes)
 	f.historySeen = append(f.historySeen, h)
 	// THE PARTIAL RECORD TRAVELS WITH THE ERROR, which is what the real
@@ -53,8 +59,9 @@ func (f *fake) Execute(_ context.Context, round int, notes string, h []ledger.It
 	return at(f.works, round), at(f.surfaces, round), f.workErr
 }
 
-func (f *fake) Resume(_ context.Context, h []ledger.Iteration) (turn.Work, turn.Surface, error) {
+func (f *fake) Resume(_ context.Context, round int, h []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	f.resumeRounds++
+	f.roundsSeen = append(f.roundsSeen, round)
 	f.historySeen = append(f.historySeen, h)
 	if f.resumeErr != nil {
 		return at(f.works, 1), at(f.surfaces, 1), f.resumeErr
@@ -685,6 +692,284 @@ func TestAResumedTurnCanSuspendAgain(t *testing.T) {
 	}
 	if !res.Suspended {
 		t.Error("a resumed turn that called the sandbox again did not suspend")
+	}
+}
+
+// --- a resumed turn is the same turn, numbered and capped as one ------------
+
+// closedRounds is a ledger of n closed rounds, numbered 1..n as the loop
+// numbers them.
+func closedRounds(n int) []ledger.Iteration {
+	out := make([]ledger.Iteration, 0, n)
+	for i := 1; i <= n; i++ {
+		out = append(out, ledger.Iteration{Iteration: i, Intent: "round " + strconv.Itoa(i)})
+	}
+	return out
+}
+
+// iterationsOf is the round numbers a ledger holds, in order.
+func iterationsOf(its []ledger.Iteration) []int {
+	out := make([]int, 0, len(its))
+	for _, it := range its {
+		out = append(out, it.Iteration)
+	}
+	return out
+}
+
+// THE RESUMED TURN NUMBERS ON FROM THE ROUNDS IT CLOSED. They are the same
+// turn's rounds under the same turn id, so a round 1 after them is a second
+// round 1 in the ledger recall_iteration reads and beside the first one's
+// records.
+func TestAResumedTurnNumbersOnFromTheRoundsItClosed(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works:    []turn.Work{delivered("re-entered")},
+		surfaces: []turn.Surface{slackSurface()},
+		// The reviews are read at the loop's round number, so rounds 4 and
+		// 5 read the last two slots.
+		reviews: []turn.Review{
+			{Decision: phase.SelfIterate, Notes: "again"}, {Decision: phase.SelfIterate, Notes: "again"},
+			{Decision: phase.SelfIterate, Notes: "again"}, {Decision: phase.SelfIterate, Notes: "again"},
+			{Decision: phase.Done},
+		},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 5},
+		turn.Input{RunID: "t1", Reply: turn.ToolReply(""), Resume: true, History: closedRounds(3)})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Equal(f.roundsSeen, []int{4, 5}) {
+		t.Errorf("the executor passes were handed rounds %v, want [4 5]: the re-entered "+
+			"round is the fourth of the turn, not a new first", f.roundsSeen)
+	}
+	if got := iterationsOf(res.Iterations); !slices.Equal(got, []int{1, 2, 3, 4}) {
+		t.Errorf("ledger rounds = %v, want [1 2 3 4]: every number once", got)
+	}
+	if res.Rounds != 5 || res.Decision != phase.Done {
+		t.Errorf("rounds = %d, decision = %s, want round 5 done", res.Rounds, res.Decision)
+	}
+}
+
+// THE CAP IS THE TURN'S. Three rounds closed before the suspend and a cap of
+// four leave the resumed turn one round, not four more.
+func TestAResumedTurnsCapCountsTheRoundsItClosed(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works:    []turn.Work{delivered("re-entered")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 4},
+		turn.Input{RunID: "t1", Reply: turn.ToolReply(""), Resume: true, History: closedRounds(3)})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Equal(f.roundsSeen, []int{4}) || f.workRounds != 0 {
+		t.Errorf("passes = %v (%d fresh), want the re-entered round 4 alone: a cap of four "+
+			"with three rounds closed leaves one", f.roundsSeen, f.workRounds)
+	}
+	if res.Breach == nil || res.Breach.Kind != types.GuardMaxIter {
+		t.Fatalf("breach = %+v, want max_iterations", res.Breach)
+	}
+	if got := iterationsOf(res.Iterations); !slices.Equal(got, []int{1, 2, 3, 4}) {
+		t.Errorf("ledger rounds = %v, want [1 2 3 4]", got)
+	}
+}
+
+// THE RE-ENTERED ROUND ALWAYS RUNS. A cap lowered while the turn was parked, to
+// or below the rounds it had already closed, must not leave the coding run's
+// answer unread.
+func TestTheReenteredRoundRunsWhenTheCapWasLoweredWhileParked(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works:    []turn.Work{delivered("re-entered")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 2},
+		turn.Input{RunID: "t1", Reply: turn.ToolReply(""), Resume: true, History: closedRounds(3)})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.resumeRounds != 1 || f.workRounds != 0 {
+		t.Errorf("resume %d / execute %d, want the conversation re-entered once and "+
+			"nothing after it", f.resumeRounds, f.workRounds)
+	}
+	if res.Breach == nil || res.Breach.Kind != types.GuardMaxIter {
+		t.Fatalf("breach = %+v, want max_iterations after the one round", res.Breach)
+	}
+}
+
+// A LEDGER HOLDING ONE NUMBER TWICE still numbers on past every closed round:
+// the highest, not the last.
+func TestAResumeNumbersOnFromTheHighestClosedRound(t *testing.T) {
+	t.Parallel()
+	history := append(closedRounds(3), ledger.Iteration{Iteration: 1, Intent: "a second round 1"})
+	f := &fake{
+		works:    []turn.Work{delivered("re-entered")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.Done}},
+	}
+	if _, err := turn.Run(context.Background(), f, turn.Settings{MaxIterations: 9},
+		turn.Input{RunID: "t1", Reply: turn.ToolReply(""), Resume: true, History: history}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Equal(f.roundsSeen, []int{4}) {
+		t.Errorf("the re-entered round was handed %v, want [4]", f.roundsSeen)
+	}
+}
+
+// THE WALL-CLOCK CAP SPARES THE FIRST ROUND THIS RUN STARTS, which on a resume
+// is the round that re-enters: a guard that read it as a later round would
+// refuse the coding run's answer before anything read it.
+func TestTheWallClockCapSparesTheRoundThatReenters(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(0, 0)
+	f := &fake{
+		works:    []turn.Work{delivered("re-entered")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{
+		MaxIterations: 9,
+		MaxWallClock:  30 * time.Second,
+		// One minute passes per read, so every boundary after the first is
+		// past the cap.
+		Now: func() time.Time { now = now.Add(time.Minute); return now },
+	}, turn.Input{RunID: "t1", Reply: turn.ToolReply(""), Resume: true, History: closedRounds(2)})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.resumeRounds != 1 {
+		t.Fatalf("the conversation was re-entered %d times, want once", f.resumeRounds)
+	}
+	if res.Breach == nil || res.Breach.Kind != types.GuardScheduledTimeout {
+		t.Fatalf("breach = %+v, want the wall-clock cap after the re-entered round", res.Breach)
+	}
+	if !strings.Contains(res.Breach.Detail, "across 1 round(s)") {
+		t.Errorf("breach detail = %q, want it to count the one round this run ran", res.Breach.Detail)
+	}
+}
+
+// --- what a resumed turn is judged on when it breaks -------------------------
+
+// resumedSurface is a chat surface a coding run was launched from: the post
+// reaches the asker, and run_sandbox leaves the process.
+func resumedSurface() turn.Surface {
+	return turn.Surface{
+		Catalogue:      []string{"chat_post", "run_sandbox"},
+		Deliveries:     map[string]string{"chat_post": "chat"},
+		KnownOpenWorld: []string{"run_sandbox"},
+	}
+}
+
+// A FINISHED RE-ENTRY WHOSE REVIEW BROKE IS RETRIED. Everything its record
+// holds was answered before it re-entered — the post before the suspend and
+// the launch it suspended on — so a retry re-enters the same conversation and
+// makes none of them again. Judged on the carried calls, a provider's 503 in
+// the review would settle the finished run instead of handing it back.
+func TestAFinishedReentryWhoseReviewBrokeIsRetried(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works: []turn.Work{{
+			Outcome: turn.OutcomeDelivered, Summary: "reported the fix",
+			Deliveries: []string{"chat_post"},
+			Calls:      []ledger.Call{{Name: "chat_post"}, {Name: "run_sandbox", Result: "fixed"}},
+			Carried:    2,
+		}},
+		surfaces: []turn.Surface{resumedSurface()},
+		revErr:   errors.New("review provider: 503 service unavailable"),
+	}
+	res, err := turn.Run(context.Background(), f, settings(),
+		turn.Input{RunID: "t1", Reply: turn.ToolReply("chat"), Resume: true, History: closedRounds(1)})
+	if err == nil {
+		t.Fatal("a broken review was reported as a turn outcome")
+	}
+	if res.Acted {
+		t.Error("the turn claimed to have acted on calls it only carried")
+	}
+	if reason, abandon := turn.Abandon(res, err); abandon {
+		t.Errorf("Abandon = %q: a re-entry that made nothing itself must keep its retry", reason)
+	}
+}
+
+// ONE THAT POSTED AFTER RE-ENTERING AND THEN BROKE IS ABANDONED: that post is
+// the round's own, and a retry would make it again.
+func TestAReentryThatPostedAndThenBrokeIsAbandoned(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works: []turn.Work{{
+			Outcome: turn.OutcomeDelivered, Summary: "reported the fix",
+			Deliveries: []string{"chat_post"},
+			Calls: []ledger.Call{
+				{Name: "chat_post"}, {Name: "run_sandbox", Result: "fixed"},
+				{Name: "chat_post", Args: map[string]any{"text": "the fix is up"}},
+			},
+			Carried: 2,
+		}},
+		surfaces: []turn.Surface{resumedSurface()},
+		revErr:   errors.New("review provider: 503 service unavailable"),
+	}
+	res, err := turn.Run(context.Background(), f, settings(),
+		turn.Input{RunID: "t1", Reply: turn.ToolReply("chat"), Resume: true, History: closedRounds(1)})
+	if err == nil {
+		t.Fatal("a broken review was reported as a turn outcome")
+	}
+	if reason, abandon := turn.Abandon(res, err); !abandon || reason != turn.AbandonedActed {
+		t.Errorf("Abandon = %q, %v: the post the re-entry made would be made again by a retry",
+			reason, abandon)
+	}
+}
+
+// A CARRIED DELIVERY STILL ANSWERS THE ASKER. Only the retry question narrows
+// to the calls a round made; the delivery check reads every call, or a resumed
+// turn whose answer went out before the suspend would be sent round to post
+// it again.
+func TestACarriedDeliveryStillAnswersTheAsker(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works: []turn.Work{{
+			Outcome: turn.OutcomeDelivered, Summary: "answered before the run",
+			Deliveries: []string{"chat_post"},
+			Calls:      []ledger.Call{{Name: "chat_post"}, {Name: "run_sandbox", Result: "fixed"}},
+			Carried:    2,
+		}},
+		surfaces: []turn.Surface{resumedSurface()},
+		reviews:  []turn.Review{{Decision: phase.Done}},
+	}
+	res, err := turn.Run(context.Background(), f, settings(),
+		turn.Input{RunID: "t1", Reply: turn.ToolReply("chat"), Resume: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Decision != phase.Done || !res.Delivered {
+		t.Errorf("decision = %s, delivered = %v: the post made before the suspend is the "+
+			"answer, and it was read as none", res.Decision, res.Delivered)
+	}
+}
+
+// Made is the calls after the carried prefix, and a prefix outside the list is
+// clamped rather than trusted.
+func TestMadeIsWhatFollowsTheCarriedCalls(t *testing.T) {
+	t.Parallel()
+	calls := []ledger.Call{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	for _, tc := range []struct {
+		carried int
+		want    []string
+	}{
+		{0, []string{"a", "b", "c"}},
+		{2, []string{"c"}},
+		{3, nil},
+		{7, nil},
+		{-1, []string{"a", "b", "c"}},
+	} {
+		var got []string
+		for _, c := range (turn.Work{Calls: calls, Carried: tc.carried}).Made() {
+			got = append(got, c.Name)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("Carried %d: Made = %v, want %v", tc.carried, got, tc.want)
+		}
 	}
 }
 

@@ -45,6 +45,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"follows", followCases},
 		{"fires", fireCases},
 		{"sandbox_runs", runCases},
+		{"awaiting_runs", awaitingCases},
 		{"bridge_calls", bridgeCallCases},
 		{"secrets", secretCases},
 		{"integrations", integrationCases},
@@ -1255,11 +1256,12 @@ var budgetCases = []fleetCase{{
 }, {
 	name: "a refusal is recorded on the scope that refused and on no other",
 	fn: func(h *fleetHarness) {
-		// "Exhausted" is a refusal, never used >= max: a refused charge
-		// increments nothing, so a counter stalls short of its cap by the
-		// size of the round that did not fit. The stamp is the only honest
-		// record of the gate saying no, and it belongs to the scope that
-		// said it.
+		// The gate counts nothing it refuses — spend that has already
+		// happened reaches the counter through PostCharge, a separate call
+		// that can take it past its cap with no refusal at all — so the
+		// counter cannot say whether the gate said no, or when. The stamp
+		// is the gate's own record of saying it, and it belongs to the
+		// scope that said it.
 		if got := h.charge(testSeat, 90, 100, 0); !got.OK {
 			h.t.Fatalf("the first charge was refused: %+v", got)
 		}

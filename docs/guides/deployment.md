@@ -928,9 +928,10 @@ intended reader — filters, traces and event detail, over the same
 one implementation.
 
 For ad-hoc SQL, point any SQLite-compatible client at `store.path` while the
-engine is stopped, or use the read-only endpoints under
-[`/events`](../reference/api-endpoints.md) while it runs. Do **not** open the
-file with a second writer against a running engine.
+engine is stopped, and run it as the user the engine runs as: the store's files
+are owner-only (see [The store](#the-store)). While the engine runs, use the
+read-only endpoints under [`/events`](../reference/api-endpoints.md) instead.
+Do **not** open the file with a second writer against a running engine.
 
 ### Tracing
 
@@ -1389,15 +1390,21 @@ after a refusal the counter reads past the cap by that round, and the phase's
 own record and the counter agree on what it cost. Before every round's model
 call the counters are read, counting nothing, and no round is sent while either
 scope is at or past its cap. The same read stops the
-[reflection pass](../concepts/agent-learning.md) from starting, and every other
-auxiliary call a learning worker makes from being sent. A cap raised in a new
-revision, or a counter reset, is what lets the seat run again.
+[reflection pass](../concepts/agent-learning.md) from starting, and every
+auxiliary call a learning worker or a turn's context prefetch makes from being
+sent — a prefetch block whose call is refused is assembled the way it is when
+that call fails. A cap raised in a new revision, or a counter reset, is what
+lets the seat run again.
 
-A refusal is also recorded beside the counter, as when that scope last refused
-a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
-and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
-and the next charge the scope admits clears it. Exhausted is either that stamp
-or a counter at or past its cap.
+**A scope is exhausted when its counter is at or past its cap**, and that is the
+only reading anything checks. A refusal is also recorded beside the counter, as
+when that scope's cap last refused a round (`refused_at` on
+[`GET /budgets`](../reference/api-endpoints.md#get-budgets) and on the
+[live token meter](../reference/api-endpoints.md#the-live-token-meter)), but
+that stamp is a date, not the verdict: the next charge the scope admits clears
+it, and so does a reset, while a cap raised in a new revision does not. Between
+a raise and the seat's next round the stamp stands on a scope whose counter is
+under its new cap — a scope with room, whose next round is sent.
 
 A coding run's tokens are known only when the run is collected, minutes or
 hours after its box started spending while the turn was suspended, so they are
@@ -1405,6 +1412,14 @@ hours after its box started spending while the turn was suspended, so they are
 un-spend them. A run that takes a counter past its cap is logged as
 `sandbox_spend_over_budget`, and the next round the seat or the company attempts
 is refused against the recorded figure before it is sent.
+
+A suspended turn is not resumed while its seat or the company has no room,
+since its first round would be refused before it was sent: its coding job's
+completion is withheld until the budget has room again, and an answer to its
+question is not handed over while it has none. The wait publishes one
+`budget_exhausted` naming the scope and the turn when it starts. How long an
+answer is kept waiting is in
+[Code Sandbox § Budgets](../concepts/code-sandbox.md#budgets).
 
 ### Structured Logging
 

@@ -79,7 +79,7 @@ func TestRecallScansOneSeatRatherThanTheTable(t *testing.T) {
 			t.Parallel()
 			statement, filterArgs := recallStatement([]Kind{KindRaw}, filter)
 			assertSeatScopedRecall(t, plan(t, db, statement,
-				recallArgs(filterArgs, 1, probe, "ceo", width, 0.7, 5, 0)...))
+				recallArgs(filterArgs, 1, probe, "ceo", width, "m", 0.7, 5, 0)...))
 		})
 	}
 }
@@ -141,7 +141,7 @@ func assertSeatScopedRecall(t *testing.T, lines []string) {
 func TestTheOrdinalCountIsAnsweredFromThePartialIndex(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
-	lines := plan(t, db, widestWindowStatement, "ceo", 16)
+	lines := plan(t, db, widestWindowStatement, "ceo", 16, "m")
 	for _, line := range lines {
 		if strings.Contains(line, "episodes_agent_windows_idx") {
 			return

@@ -90,6 +90,29 @@ func refusePurged(ctx context.Context, tx *sql.Tx, id, role string) error {
 		ErrPurged, role, key, id, by, store.DecodeTime(at).Format(time.RFC3339))
 }
 
+// refuseRemovedParent refuses a task placed under a parent that is in the
+// trash, read inside the decide's own snapshot for [refusePurged]'s reason.
+//
+// A LIVE CHILD UNDER A REMOVED PARENT is the orphan a subtree removal is
+// ordered to avoid (see the trash's own file head): on every list, under a
+// parent none of them shows. A removed task is frozen besides, and a child
+// placed under it changes its subtree. [Writer.PromoteItem] refuses the same
+// parent for the same reason, and the remedy is the same: restore it first.
+//
+// A parent this node does not hold passes this check.
+func refuseRemovedParent(ctx context.Context, tx *sql.Tx, parent string) error {
+	current, held, err := readTask(ctx, tx, parent)
+	switch {
+	case err != nil:
+		return err
+	case !held || current.Removed == nil:
+		return nil
+	}
+	return fmt.Errorf("tracker: task %s was removed by %s at %s; restore it "+
+		"before placing anything under it", parent, current.Removed.By,
+		current.Removed.At.Format(time.RFC3339))
+}
+
 // NoIfMatch omits an update's version precondition, which MERGES the patch
 // onto whatever the task currently is. Named rather than a bare zero, because
 // a literal 0 in a seven-argument call says nothing about which of the two
@@ -667,6 +690,9 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			// one is a purge this refuses — see [refusePurged].
 			if patch.Parent != nil && *patch.Parent != "" {
 				if err = refusePurged(ctx, tx, *patch.Parent, "parent"); err != nil {
+					return statelog.Decision{}, err
+				}
+				if err = refuseRemovedParent(ctx, tx, *patch.Parent); err != nil {
 					return statelog.Decision{}, err
 				}
 			}

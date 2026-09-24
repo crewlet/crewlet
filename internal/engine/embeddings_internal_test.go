@@ -193,7 +193,11 @@ func TestAStoredEmbedderIsHandedOutAsItsEmbedMethod(t *testing.T) {
 	if embed == nil {
 		t.Fatal("a stored embedder handed out nothing")
 	}
-	v, err := embed(t.Context(), "the quick brown fox")
+	if embed.Model != "fake" {
+		t.Fatalf("the embedder names model %q, want the epoch's %q: a vector filed under another "+
+			"model's id is compared with that model's vectors", embed.Model, "fake")
+	}
+	v, err := embed.Embed(t.Context(), "the quick brown fox")
 	if err != nil {
 		t.Fatalf("embed: %v", err)
 	}

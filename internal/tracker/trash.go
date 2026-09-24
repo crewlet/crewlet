@@ -84,7 +84,10 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 	// is an ordinary state somebody can undo; a live child under a removed
 	// parent is the orphan this order exists to avoid.
 	result, err := w.tombstone(ctx, opID, id, project, stamp, notify)
-	if err != nil {
+	if err != nil || result.Outcome == statelog.OutcomeUnknown {
+		// AN UNRESOLVED ROOT IS ANSWERED AS IT IS, before any descendant
+		// is touched: `unknown` is the one outcome its caller retries,
+		// under this op id, and the retry walks the subtree.
 		return result, err
 	}
 	for i, descendant := range descendants {
@@ -95,8 +98,12 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 		// happened, and a subtree of forty would otherwise send forty
 		// notifications for it — the root's is the one that says what
 		// was done.
-		if _, err := w.tombstone(ctx, stepID(opID, fmt.Sprintf("d%d", i)),
-			descendant.ID, descendant.Project, child, nil); err != nil {
+		step, err := w.tombstone(ctx, descendantStep(opID, descendant.ID),
+			descendant.ID, descendant.Project, child, nil)
+		if err == nil {
+			err = unresolved(step, descendant.ID)
+		}
+		if err != nil {
 			return result, fmt.Errorf("tracker: the root of %s is in the trash "+
 				"and %d of %d descendants followed it; re-run the removal to "+
 				"finish, which is idempotent: %w",
@@ -104,6 +111,34 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 		}
 	}
 	return result, nil
+}
+
+// descendantStep is the operation one descendant's commit publishes under.
+//
+// NAMED BY THE DESCENDANT, because a re-run of a gesture under the same op id
+// is how an interrupted one finishes, and the re-run must reach the same
+// descendant under the same step id. The lists these walks read are not
+// stable between runs — a restore's shrinks by every task the first run
+// already restored — so a step named by its place in the list names a
+// different task the second time, and the ledger answers it `applied` from
+// the first run's record of somebody else.
+func descendantStep(opID, descendant string) string {
+	return stepID(opID, "d/"+descendant)
+}
+
+// unresolved turns one descendant's `unknown` outcome into the error that
+// stops the walk.
+//
+// A WALK CANNOT STEP PAST AN UNKNOWN: the record may land and may not, so the
+// gesture's own answer would claim a subtree this node cannot vouch for. The
+// caller's remedy is the one `unknown` always has — the same op id again —
+// and [descendantStep] is what makes that re-run land on this descendant.
+func unresolved(step WriteResult, descendant string) error {
+	if step.Outcome != statelog.OutcomeUnknown {
+		return nil
+	}
+	return fmt.Errorf("tracker: the commit for %s is unresolved — its record "+
+		"may be on the log and may not: %w", descendant, statelog.ErrUnavailable)
 }
 
 // RestoreTask clears a tombstone, at any age.
@@ -130,14 +165,19 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 	}
 	// THE ROOT FIRST AGAIN, and for the mirror of the removal's reason: a
 	// child restored under a still-removed parent is reachable from
-	// nothing until the parent follows.
+	// nothing until the parent follows. So an unresolved root stops here
+	// too, answered `unknown` for its caller to retry under this op id.
 	result, err := w.clearTombstone(ctx, opID, id, project, notify)
-	if err != nil {
+	if err != nil || result.Outcome == statelog.OutcomeUnknown {
 		return result, err
 	}
 	for i, descendant := range removedWith {
-		if _, err := w.clearTombstone(ctx, stepID(opID, fmt.Sprintf("d%d", i)),
-			descendant.ID, descendant.Project, nil); err != nil {
+		step, err := w.clearTombstone(ctx, descendantStep(opID, descendant.ID),
+			descendant.ID, descendant.Project, nil)
+		if err == nil {
+			err = unresolved(step, descendant.ID)
+		}
+		if err != nil {
 			return result, fmt.Errorf("tracker: %s is out of the trash and %d "+
 				"of %d tasks removed with it followed; re-run the restore to "+
 				"finish, which is idempotent: %w",

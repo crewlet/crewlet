@@ -327,7 +327,9 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           run a second time
 //	runs       none at all, a sharper version of the channels case: a run
 //	           parked on a person's answer waits DAYS, and its record is
-//	           the only thing that knows a billed box exists
+//	           the only thing that knows a billed box exists. The index of
+//	           runs awaiting an answer shares it as a class of its own,
+//	           because it lives exactly as long as the runs it indexes
 //	calls      none at all, for the runs' reason: a bridged run's tool
 //	           calls are what its resume is judged on, and that resume can
 //	           come days later. Its own bucket rather than a class in the
@@ -2043,6 +2045,10 @@ type fireRecord struct {
 
 // ---- the detached sandbox runs ----------------------------------------- //
 
+// runKeys selects every key of exactly one token, which is every run's own:
+// a run is keyed by its turn id alone ([encodeKey]).
+const runKeys = "*"
+
 // SandboxRun reads one run's record.
 func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Record, bool, error) {
 	entry, err := f.runs.Get(ctx, encodeKey(turnID))
@@ -2061,8 +2067,12 @@ func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
 	// there is nothing to recover, which abandons a billed box — the exact
 	// failure this bucket exists to end. eachEntry raises on a short answer
 	// rather than returning one, which is what makes that true.
+	//
+	// ONE-TOKEN KEYS, which is exactly a run's: the bucket also holds the
+	// index of runs awaiting an answer, a class of four-segment keys this
+	// listing has no use for, and the broker leaves them out.
 	var out []coord.Record
-	err := f.each(ctx, f.runs, func(kve jetstream.KeyValueEntry) error {
+	err := f.eachUnder(ctx, f.runs, runKeys, "the sandbox runs", func(kve jetstream.KeyValueEntry) error {
 		turnID, ok := decodeKey(kve.Key())
 		if !ok {
 			return nil
@@ -2153,6 +2163,95 @@ func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, versio
 	default:
 		return false, unavailable("delete the sandbox run", err)
 	}
+}
+
+// ---- the index of runs parked on an answer ------------------------------ //
+//
+// IN THE RUNS BUCKET, as a class of its own. Its lifetime is the runs' —
+// none, since a parked run waits days — which is the one thing a bucket
+// decides, and an entry is a small key beside the record it indexes. The runs'
+// own listing reads single-segment keys and this class's keys are four
+// segments, so neither listing reads the other's records: [FleetStore.SandboxRuns]
+// asks the broker for one-token keys, and a build that walks the whole bucket
+// decodes a four-segment key as no run and skips it (decodeKey).
+
+// awaitingValue is what an entry holds. The key is the whole of an entry, and
+// a value is still written because a KV entry is a message.
+var awaitingValue = []byte("{}")
+
+// FileAwaitingRun files one entry.
+func (f *FleetStore) FileAwaitingRun(ctx context.Context, entry coord.AwaitingRun) error {
+	if err := entry.Validate(); err != nil {
+		return err
+	}
+	if _, err := f.runs.Put(ctx, coord.AwaitingRunKey(entry), awaitingValue); err != nil {
+		return unavailable("file the awaiting run", err)
+	}
+	return nil
+}
+
+// AwaitingRunsOn returns the runs filed for one seat's one conversation, by
+// turn id — the broker selects them by the class and the two segments.
+func (f *FleetStore) AwaitingRunsOn(ctx context.Context, handle, conversation string) ([]string, error) {
+	if handle == "" || conversation == "" {
+		return nil, fmt.Errorf("coord/kv: an awaiting-run listing names its seat and its "+
+			"conversation, got %q and %q", handle, conversation)
+	}
+	var out []string
+	err := eachKeyUnder(ctx, f.runs, coord.AwaitingRunsFilter(handle, conversation),
+		"the runs awaiting an answer", func(key string) error {
+			// DECODED AT ITS OWN DEPTH, so a key the filter matched and
+			// this grammar did not write is skipped rather than read as
+			// an entry.
+			if entry, ok := coord.AwaitingRunOf(key); ok &&
+				entry.Handle == handle && entry.Conversation == conversation {
+				out = append(out, entry.TurnID)
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// AllAwaitingRuns returns every entry.
+func (f *FleetStore) AllAwaitingRuns(ctx context.Context) ([]coord.AwaitingRun, error) {
+	var out []coord.AwaitingRun
+	err := eachKeyUnder(ctx, f.runs, coord.AllAwaitingRunsFilter(),
+		"the runs awaiting an answer", func(key string) error {
+			if entry, ok := coord.AwaitingRunOf(key); ok {
+				out = append(out, entry)
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, compareAwaiting)
+	return out, nil
+}
+
+// DropAwaitingRun removes one entry.
+//
+// Purge rather than Delete, for the runs' reason: a Delete leaves a tombstone
+// revision, and a bucket with no age keeps every one of them.
+func (f *FleetStore) DropAwaitingRun(ctx context.Context, entry coord.AwaitingRun) error {
+	if err := entry.Validate(); err != nil {
+		return err
+	}
+	err := f.runs.Purge(ctx, coord.AwaitingRunKey(entry))
+	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return unavailable("drop the awaiting run", err)
+	}
+	return nil
+}
+
+// compareAwaiting orders entries by seat, conversation and run.
+func compareAwaiting(a, b coord.AwaitingRun) int {
+	return cmp.Or(cmp.Compare(a.Handle, b.Handle),
+		cmp.Compare(a.Conversation, b.Conversation), cmp.Compare(a.TurnID, b.TurnID))
 }
 
 // ---- the integration reconcile status ---------------------------------- //

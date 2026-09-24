@@ -197,10 +197,12 @@ type Sources struct {
 	// comment on why there is no unfiltered fallback.
 	Models Models
 
-	// Embed turns text into a vector for the similarity searches. Nil
-	// falls back to recency alone, which is a real degradation rather
-	// than a failure: recent memories are still this seat's memories.
-	Embed func(ctx context.Context, text string) ([]float32, error)
+	// Embed turns text into a vector for the similarity searches, and names
+	// the model it embeds with — a query is compared only with what that
+	// model embedded ([learning.Embedder]). Nil falls back to recency
+	// alone, which is a real degradation rather than a failure: recent
+	// memories are still this seat's memories.
+	Embed *learning.Embedder
 
 	// SummarizeEpisodes is the operator's switch for whether episode hits
 	// are passed through the auxiliary model. It gates ONLY that call.

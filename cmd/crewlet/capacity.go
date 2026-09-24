@@ -380,9 +380,12 @@ func retentionReanchor(args []string, stdout, stderr io.Writer) error {
 				"the live stream's own created_at, which this verb prints when "+
 					"it is omitted")
 			force = fs.Bool("force", false,
-				"re-anchor even though a peer is hydrated on the live stream. "+
-					"Adopting that peer's snapshot is strictly better, so this "+
-					"is for the case where it cannot be reached")
+				"re-anchor although the positions register cannot be read, or "+
+					"although this node is not the most caught-up one on its "+
+					"stream, accepting the loss of every record the fleet "+
+					"applied above this node's position. It never overrides a "+
+					"peer hydrated on the live stream: adopt that peer's "+
+					"snapshot instead")
 		})
 	if err != nil {
 		return err

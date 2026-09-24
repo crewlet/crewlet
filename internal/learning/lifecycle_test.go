@@ -24,6 +24,10 @@ var t0 = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 
 func daysAgo(n int) time.Time { return t0.AddDate(0, 0, -n) }
 
+// lifecycleModel is the embedding model the fixtures here file a vector under,
+// and every recall here asks with.
+const lifecycleModel = "test-model"
+
 func rawEp(id string, at time.Time, tools ...string) Episode {
 	return Episode{
 		ID: id, Handle: "ceo", Role: "CEO", TurnID: "turn-" + id,
@@ -31,6 +35,7 @@ func rawEp(id string, at time.Time, tools ...string) Episode {
 		PlanSummary: "plan " + id, TaskSummary: "task " + id,
 		ToolSequence: tools, ReviewOutcome: "done",
 		Duration: 2 * time.Second, WorkKey: "wk-" + id,
+		EmbeddingModel: lifecycleModel,
 	}
 }
 
@@ -1259,6 +1264,7 @@ func TestACompactedRowRoundTripsThroughTheEpisodeScanner(t *testing.T) {
 			SubjectsInvolved:  []string{"finance", "legal"},
 			NotablePatterns:   "escalated twice",
 			Embedding:         []float32{0.1, 0.2, 0.3, 0.4},
+			EmbeddingModel:    lifecycleModel,
 		}, nil
 	}
 	mustPass(t, l)
@@ -1283,6 +1289,10 @@ func TestACompactedRowRoundTripsThroughTheEpisodeScanner(t *testing.T) {
 	if len(c.Embeddings) != 1 || len(c.Embeddings[0]) != 4 || c.Embeddings[0][3] != 0.4 {
 		t.Errorf("embeddings = %v, want the summary's one window", c.Embeddings)
 	}
+	if c.EmbeddingModel != lifecycleModel {
+		t.Errorf("the summary's vector is filed under model %q, want the %q "+
+			"its summarizer named", c.EmbeddingModel, lifecycleModel)
+	}
 	if c.ConsolidatedInto != "" || c.ConversationKey != "" {
 		t.Errorf("a summary spans conversations and belongs to no skill: %+v", c)
 	}
@@ -1291,7 +1301,7 @@ func TestACompactedRowRoundTripsThroughTheEpisodeScanner(t *testing.T) {
 	}
 	// And it is recallable, which is the only reason the vector is carried.
 	hits, err := e.Recall(context.Background(), RecallQuery{
-		Handle: "ceo", Embedding: []float32{0.1, 0.2, 0.3, 0.4},
+		Handle: "ceo", Model: lifecycleModel, Embedding: []float32{0.1, 0.2, 0.3, 0.4},
 		Kinds: []Kind{KindCompacted},
 	})
 	if err != nil || len(hits) != 1 || hits[0].Episode.ID != c.ID {
@@ -1952,7 +1962,7 @@ func BenchmarkRecallScan(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			q := RecallQuery{Handle: "ceo", Embedding: vec(), Limit: 5}
+			q := RecallQuery{Handle: "ceo", Model: lifecycleModel, Embedding: vec(), Limit: 5}
 			b.ResetTimer()
 			for b.Loop() {
 				if _, err := e.Recall(context.Background(), q); err != nil {
@@ -2023,7 +2033,7 @@ func BenchmarkRecallOneLongEpisode(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			q := RecallQuery{Handle: "ceo", Embedding: vec(), Limit: 5}
+			q := RecallQuery{Handle: "ceo", Model: lifecycleModel, Embedding: vec(), Limit: 5}
 			b.ResetTimer()
 			for b.Loop() {
 				if _, err := e.Recall(b.Context(), q); err != nil {

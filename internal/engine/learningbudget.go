@@ -146,8 +146,9 @@ func seatHandle(seat *org.Role) string {
 	return seat.Handle()
 }
 
-// meteredModelsFor is the seat-model seam every learning worker resolves
-// through, with charging attached when the epoch has a ceiling to enforce.
+// meteredModelsFor is the seat-model seam the learning workers and the
+// turn-start prefetch (prefetch.go) resolve through, with charging attached
+// when the epoch has a ceiling to enforce.
 func (e *Engine) meteredModelsFor(c *Company) learningModels {
 	if c == nil || c.Models == nil {
 		return nil

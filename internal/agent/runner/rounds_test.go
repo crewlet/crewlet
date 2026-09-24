@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -279,7 +281,7 @@ func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
 	})
 
-	w, _, err := r.Resume(context.Background(), nil)
+	w, _, err := r.Resume(context.Background(), 1, nil)
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -292,6 +294,11 @@ func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
 	}
 	if !held {
 		t.Errorf("the resumed turn's calls %+v lack the run_sandbox call it suspended on", w.Calls)
+	}
+	// The pre-suspend read and the launch were answered before the re-entry,
+	// and the post and the submission are its own.
+	if w.Carried != 2 || len(w.Made()) != len(w.Calls)-2 {
+		t.Errorf("Carried = %d of %d calls, want the 2 answered before the re-entry", w.Carried, len(w.Calls))
 	}
 
 	done := completedPhase(t, pub, "execute")
@@ -417,6 +424,150 @@ func TestAResumeThatWroteBeforeItBrokeIsAbandoned(t *testing.T) {
 	if _, abandon := turn.Abandon(res, err); !abandon {
 		t.Error("a re-entry that posted before it broke would be retried, and post again")
 	}
+}
+
+// A FINISHED RE-ENTRY WHOSE REVIEW BREAKS IS RETRIED. The re-entry made nothing
+// outside the engine itself — it submitted — and every call before it, the
+// open-world launch included, is answered in the conversation a retry
+// re-enters. Judged on the whole phase's calls, the review's 503 would settle
+// a finished run instead of handing it back.
+func TestAFinishedReentryWhoseReviewBrokeIsRetried(t *testing.T) {
+	t.Parallel()
+	prov := &failsReview{exec: &scriptedProvider{execute: []llm.Completion{submitWork(t)}}}
+	r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
+	})
+	if err := reg.RegisterWith(stubTool{name: runner.RunSandboxTool, out: "launched"},
+		tools.OriginBuiltin, tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes,
+		}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	res, err := turn.Run(context.Background(), r, settings(), turn.Input{
+		RunID: "t-review-503", Reply: turn.ToolReply(""), Resume: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "review") {
+		t.Fatalf("Run = %v, want the review's failure", err)
+	}
+	if reason, abandon := turn.Abandon(res, err); abandon {
+		t.Errorf("Abandon = %q: a re-entry that finished having made nothing outside the "+
+			"engine must be handed back for a retry", reason)
+	}
+}
+
+// ONE THAT POSTED AFTER RE-ENTERING AND THEN WHOSE REVIEW BROKE IS ABANDONED:
+// the post is the re-entry's own, and a retry would post again.
+func TestAReentryThatPostedAndWhoseReviewBrokeIsAbandoned(t *testing.T) {
+	t.Parallel()
+	prov := &failsReview{exec: &scriptedProvider{execute: []llm.Completion{
+		{ToolCalls: []llm.ToolCall{{ID: "post", Name: "slack_post",
+			Arguments: map[string]any{"text": "the fix is up"}}}},
+		submitCall(t, runner.SubmitWorkTool,
+			`{"outcome":"delivered","summary":"told them","deliveries":["slack_post"]}`),
+	}}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
+	})
+
+	res, err := turn.Run(context.Background(), r, settings(), turn.Input{
+		RunID: "t-posted-review-503", Reply: turn.ToolReply(""), Resume: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "review") {
+		t.Fatalf("Run = %v, want the review's failure", err)
+	}
+	if reason, abandon := turn.Abandon(res, err); !abandon || reason != turn.AbandonedActed {
+		t.Errorf("Abandon = %q, %v: the re-entry posted, and a retry would post again", reason, abandon)
+	}
+}
+
+// THE CARRIED SPEND IS COUNTED ONCE ACROSS EVERY ATTEMPT AT A RESUME.
+//
+// The pre-suspend rounds billed their tokens once, and the collected run
+// reported its cost once, and the resumed phase's record is the only place
+// either is reported. A resume that fails is retried, and each attempt
+// publishes a record of its own: the first counts the carried spend, and the
+// retry — told so by the run's row — counts only what it bills itself, while
+// still carrying the pre-suspend rounds as evidence. Folded through the same
+// rollup the Tokens view reads, the two records sum to what was billed.
+func TestACarriedSpendIsCountedOnceAcrossTheAttemptsAtAResume(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	box := runner.RunRecord{CodingAgent: "claude-code", SandboxID: "box-1", CostUSD: 1.25}
+
+	// The first attempt bills a round, then its provider fails.
+	billed := thinkAndCall(t, "lookup_colleague", `{"query":"ana"}`, "who asked")
+	first, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &postsThenFails{post: billed}}},
+		buildOpts{pub: pub, resume: &runner.Resume{
+			State: suspendedAfterTwoRounds(), Answer: "the run succeeded", Run: box,
+		}})
+	if _, _, err := first.Resume(context.Background(), 1, nil); err == nil {
+		t.Fatal("the first attempt's provider failed and the resume reported no error")
+	}
+	if !first.CountedCarried() {
+		t.Fatal("the first attempt's failure record counted the carried spend and did not say so")
+	}
+
+	// The retry, told by the row that a record already counted it.
+	finish := submitWork(t)
+	finish.InputTokens, finish.OutputTokens = 30, 20
+	second, _ := buildWith(t, []phase.Entry{{Key: "default",
+		Provider: &scriptedProvider{execute: []llm.Completion{finish}}}},
+		buildOpts{pub: pub, resume: &runner.Resume{
+			State: suspendedAfterTwoRounds(), Answer: "the run succeeded", Run: box,
+			CarriedCounted: true,
+		}})
+	if _, _, err := second.Resume(context.Background(), 1, nil); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if second.CountedCarried() {
+		t.Error("the retry claims to have counted a carried spend it was told was counted")
+	}
+
+	records := phasesOfKind(t, pub, "execute")
+	if len(records) != 2 {
+		t.Fatalf("%d execute records, want one per attempt", len(records))
+	}
+	var fold []tokens.Record
+	for _, rec := range records {
+		fold = append(fold, tokens.Record{
+			Phase: string(rec.Phase), TurnID: "t1", Iteration: rec.Iteration,
+			InputTokens: rec.InputTokens, OutputTokens: rec.OutputTokens,
+			TotalTokens: rec.TotalTokens, CostUSD: rec.CostUSD,
+		})
+	}
+	rollup := tokens.Aggregate(fold, tokens.Options{})
+	// 500 before the suspend, 100 in the first attempt's round, 50 in the
+	// retry's.
+	if got := rollup.Totals.TotalTokens; got != 500+100+50 {
+		t.Errorf("the two attempts roll up to %d tokens, want 650: the carried 500 counted once", got)
+	}
+	if got := rollup.Totals.CostUSD; got != 1.25 {
+		t.Errorf("the two attempts roll up to $%.2f, want the run's $1.25 once", got)
+	}
+	// The retry's record still shows the rounds it carried.
+	retry := records[1]
+	if retry.RoundsUsed < 3 || retry.Backend != types.BackendSandbox {
+		t.Errorf("the retry's record ran %d rounds on backend %q, want the carried rounds and "+
+			"the box it came back from", retry.RoundsUsed, retry.Backend)
+	}
+	if failed := records[0]; !failed.Failed || failed.Backend != types.BackendSandbox {
+		t.Errorf("the first record is failed=%v on backend %q, want a failure from the box",
+			failed.Failed, failed.Backend)
+	}
+}
+
+// failsReview answers the executor from its script and fails every review
+// with a server error.
+type failsReview struct{ exec *scriptedProvider }
+
+func (p *failsReview) Model() string { return "fails-review" }
+
+func (p *failsReview) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	if slices.Contains(toolNames(req.Tools), runner.SubmitReviewTool) {
+		return unavailable{}.Complete(ctx, req)
+	}
+	return p.exec.Complete(ctx, req)
 }
 
 // postsThenFails answers its first call with a post and fails every call after.

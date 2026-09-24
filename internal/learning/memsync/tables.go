@@ -87,7 +87,12 @@ var tables = []table{
 		columns: []string{
 			"id", "agent_id", "kind", "content", "ttl_until", "source",
 			"turn_id", "metadata", "retrieval_count", "last_retrieved_at",
-			"embedding", "created_at",
+			// THE MODEL TRAVELS WITH THE VECTOR, for the reason the
+			// window count below does: recall compares a query only
+			// with vectors of its own model (node migration 0031), so
+			// a vector that arrived without it would be recalled by
+			// nothing on the node the seat moved to.
+			"embedding", "embedding_model", "created_at",
 		},
 		blobs: []string{"embedding"},
 	},
@@ -108,8 +113,10 @@ var tables = []table{
 			// default of one — and recall's width check would then read
 			// it as a vector three times too wide and skip the row on
 			// every query. A seat that moved node would look exactly as
-			// if it had never been embedded.
-			"embedding", "embedding_windows", "kind", "count", "exemplar_turn_ids",
+			// if it had never been embedded. The model travels for the
+			// diary's reason above.
+			"embedding", "embedding_windows", "embedding_model",
+			"kind", "count", "exemplar_turn_ids",
 			"consolidated_into_skill_id", "common_task_pattern",
 			"common_outcome", "success_rate", "subjects_involved",
 			"notable_patterns", "work_key", "conversation_key",

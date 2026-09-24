@@ -238,7 +238,12 @@ func memory(id, content string) learning.DiaryEntry {
 	}
 }
 
-func embeds(context.Context, string) ([]float32, error) { return []float32{0.1, 0.2}, nil }
+// embeds is an embedder that always answers, filed under a model of its own so
+// a test can tell that a recall names the model its query vector came from.
+var embeds = &learning.Embedder{
+	Model: "test-model",
+	Embed: func(context.Context, string) ([]float32, error) { return []float32{0.1, 0.2}, nil },
+}
 
 func fetch(t *testing.T, src prefetch.Sources, r prefetch.Request) prefetch.Blocks {
 	t.Helper()
@@ -840,6 +845,25 @@ func TestTheSearchHidesUnreviewedDrafts(t *testing.T) {
 	}
 }
 
+// THE BLOCK'S SEARCH SAYS IT IS THE PREFETCH. The backend files each search's
+// duration under who asked, and the turn-start search and a deliberate one
+// are held to different latency figures: filed as a deliberate search, every
+// turn's own search counts against the interactive target and none against
+// the prefetch budget, so the alarm on that budget has no input at all.
+//
+// Mutation: drop Prefetch from the block's query and this fails.
+func TestTheBlocksSearchIsFiledAsThePrefetch(t *testing.T) {
+	t.Parallel()
+	pages := &searcher{}
+	fetch(t, prefetch.Sources{
+		Knowledge: pages, Models: models{provider: &aux{answers: []string{"q"}}},
+	}, request(t))
+	if asked := pages.asked(); len(asked) != 1 || !asked[0].Prefetch {
+		t.Fatalf("the block's search was asked as %+v, want it marked as the "+
+			"turn's own prefetch", asked)
+	}
+}
+
 func TestASearchThatFindsNothingSaysToLookAgain(t *testing.T) {
 	t.Parallel()
 	got := fetch(t, prefetch.Sources{
@@ -1269,6 +1293,41 @@ func (r recordingEpisodes) Recall(_ context.Context, q learning.RecallQuery) ([]
 	return nil, nil
 }
 
+// recordingDiary is the [diary] fake that keeps the recall query it was asked.
+type recordingDiary struct {
+	diary
+	asked *learning.RecallQuery
+}
+
+func (r recordingDiary) Recall(_ context.Context, _ string, q learning.RecallQuery, _ time.Time) ([]learning.DiaryHit, error) {
+	*r.asked = q
+	return nil, nil
+}
+
+// BOTH TURN-START RECALLS NAME THE MODEL THEIR QUERY VECTOR CAME FROM — the
+// personal-memory candidates and the similar-work block alike. The store
+// ranks a stored vector only against a query of the model that made it, so a
+// query naming another model, or none, is compared with nothing it holds.
+//
+// Mutation: leave Model off either query and its assertion fails.
+func TestTheTurnStartRecallsNameTheirQuerysModel(t *testing.T) {
+	t.Parallel()
+	var memoryAsked, episodesAsked learning.RecallQuery
+	fetch(t, prefetch.Sources{
+		Diary:    recordingDiary{asked: &memoryAsked},
+		Episodes: recordingEpisodes{&episodesAsked},
+		Embed:    embeds,
+	}, request(t))
+	if memoryAsked.Model != embeds.Model || len(memoryAsked.Embedding) == 0 {
+		t.Errorf("the memory recall was asked %+v, want a vector under model %q",
+			memoryAsked, embeds.Model)
+	}
+	if episodesAsked.Model != embeds.Model || len(episodesAsked.Embedding) == 0 {
+		t.Errorf("the similar-work recall was asked %+v, want a vector under model %q",
+			episodesAsked, embeds.Model)
+	}
+}
+
 // THE PULL NARROWS WHAT THE STORE RANKS. The filter and the offset are handed
 // to the store's own recall rather than applied to what it returned, so the
 // limit is taken over the turns that match.
@@ -1284,6 +1343,13 @@ func TestAPulledRecallCarriesItsFilterAndOffsetToTheStore(t *testing.T) {
 	}
 	if asked.Filter != filter || asked.Offset != 4 || asked.Limit != 3 {
 		t.Errorf("the store was asked for %+v, want the filter, offset 4 and limit 3", asked)
+	}
+	// AND THE MODEL ITS QUERY VECTOR CAME FROM, which is what the store
+	// compares stored vectors under: a query naming none is compared with
+	// nothing.
+	if asked.Model != embeds.Model {
+		t.Errorf("the store was asked under model %q, want the embedder's %q",
+			asked.Model, embeds.Model)
 	}
 }
 
@@ -1304,7 +1370,8 @@ func TestAFailedEmbeddingIsNotReportedAsNoEmbeddings(t *testing.T) {
 
 	outage := errors.New("provider is rate limited")
 	failing := prefetch.New(prefetch.Sources{Episodes: store,
-		Embed: func(context.Context, string) ([]float32, error) { return nil, outage }})
+		Embed: &learning.Embedder{Model: "test-model",
+			Embed: func(context.Context, string) ([]float32, error) { return nil, outage }}})
 	_, err = failing.RecallEpisodes(t.Context(), seat, "a deploy", learning.EpisodeFilter{}, 0, 3)
 	if errors.Is(err, prefetch.ErrNoSimilarity) || !errors.Is(err, outage) {
 		t.Errorf("a failing embedder = %v, want the provider's own error, not ErrNoSimilarity", err)

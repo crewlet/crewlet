@@ -376,16 +376,21 @@ var errTransitionRunning = errors.New("engine: this node is already " +
 
 // beginReanchor claims the one estate transition this node may run, or
 // refuses naming the one already running.
+//
+// A REFUSAL, carrying [statelog.ErrReanchorRefused] like every other: the
+// operator's remedy is to wait for the transition that is running, never to
+// treat the reanchor as failed.
 func (s *stateLog) beginReanchor() error {
 	s.rejoinMu.Lock()
 	defer s.rejoinMu.Unlock()
 	switch {
 	case s.rejoining:
-		return fmt.Errorf("%w: it is adopting a peer's snapshot, which "+
+		return fmt.Errorf("%w: %w: it is adopting a peer's snapshot, which "+
 			"replaces the estate a reanchor writes — run the reanchor once the "+
-			"adoption has finished", errTransitionRunning)
+			"adoption has finished", statelog.ErrReanchorRefused, errTransitionRunning)
 	case s.reanchoring:
-		return fmt.Errorf("%w: another reanchor is running on it", errTransitionRunning)
+		return fmt.Errorf("%w: %w: another reanchor is running on it",
+			statelog.ErrReanchorRefused, errTransitionRunning)
 	}
 	s.reanchoring = true
 	return nil
@@ -2673,8 +2678,13 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	for _, name := range s.order {
 		running := s.domains[name]
 		at := running.runner.Committed()
+		// THE STREAM THESE NUMBERS COUNT ON, which is the one the applier
+		// runs against rather than the live one: after a rebuild the two
+		// differ, and a peer deciding whether this node holds the live
+		// stream's history has to be told it does not.
 		pos := coord.DomainPosition{
 			Seq: at.Seq, Generation: at.Generation, AppliedThrough: at.Seq,
+			StreamCreatedAt: running.identity().UTC(),
 		}
 		running.floor.observe(row.At, readOf(floors, floorsErr, name, at.Generation))
 		// APPLIED_THROUGH IS LOWER WHEN SOMETHING IS DEFERRED, and the

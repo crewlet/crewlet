@@ -311,8 +311,7 @@ func TestAPurgedPageStaysPurgedHoweverLateARecordArrives(t *testing.T) {
 // TestAnEvictedNodesRecordsApplyNowhere, and a readmission takes it back.
 //
 // The fence depends on nothing but the log's own order, which is what makes it
-// hold when coordination cannot be reached at all — and a wedged coordination
-// path is a precondition of an eviction being permitted.
+// hold when coordination cannot be reached at all.
 func TestAnEvictedNodesRecordsApplyNowhere(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, nil)
