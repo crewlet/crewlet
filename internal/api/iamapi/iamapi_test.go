@@ -1125,6 +1125,29 @@ func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
 	}
 }
 
+// A WRITE THAT KEPT LOSING ITS RACE IS STALE, NOT A BAD REQUEST.
+//
+// The framework gives up on a write whose snapshot kept moving under it with
+// statelog.ErrConflict, and the same request read again resolves it. This
+// surface answered it `bad_params`, whose contract is a request that can never
+// succeed however often it is sent — so a client following the code would drop
+// a write it only had to retry. `/work` answers the same error `stale`.
+//
+// Mutation: map the conflict back to `bad_params` and this goes red.
+func TestAWriteThatLostItsRaceIsStale(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.writer.err = fmt.Errorf("%w: the person moved under this write",
+		statelog.ErrConflict)
+	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
+		"login": "dana.sre", "email": "dana@example.com", "name": "Dana",
+	})
+	if got.status != http.StatusConflict || got.body["error"] != "stale" {
+		t.Errorf("a lost race answered %d %v, want 409 stale", got.status,
+			got.body)
+	}
+}
+
 // A BODY OVER THE CAP IS ANSWERED 413, not abandoned — for chartapi's reason:
 // the handler returned without writing a status, and an empty 200 reads as a
 // person created.

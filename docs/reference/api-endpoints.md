@@ -720,7 +720,9 @@ hands out no link and a mint hands out no token, because either would be a
 value that answers `410` or `401` the first time somebody uses it. A write this
 node refused to decide at all — it is behind, below the trim floor, or holding
 a record it cannot decode — is `503 unavailable` with the same `Retry-After`
-and op id.
+and op id. A write whose snapshot kept moving under it until the framework
+gave up is `409 stale`, as on `/chart` and `/work`: nothing about the request
+was wrong, and the same request read again lands.
 
 **A gesture that is several records answers its weakest.** A create with a
 seat, an edit that moves a login and a stage, and a reset followed by its

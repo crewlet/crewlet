@@ -326,7 +326,11 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 			map[string]string{"detail": err.Error()})
 		return
 	case errors.Is(err, statelog.ErrConflict):
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
+		// A LOST RACE — the write's snapshot kept moving under it — which
+		// the same request resolves once read again. `stale` says exactly
+		// that, as it does on /work; `bad_params` said the request could
+		// never succeed however often it was sent.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeStale,
 			map[string]string{"detail": err.Error()})
 		return
 	case errors.Is(err, statelog.ErrUnavailable):
