@@ -439,3 +439,99 @@ test("a pasted operation id is the one the gesture is sent under", async () => {
   await waitFor(() => expect(sent.length).toBe(1));
   expect(sent[0]!.query.get("op_id")).toBe(earlier);
 });
+
+// A FINISH NOBODY ANSWERED KEEPS WHAT THE GESTURE ALREADY HEARD, as a refused
+// one does. It replaced the gesture with the operation id and the reason
+// alone, so the per-log outcomes left the screen — and the two paths disagreed
+// about whether a Finish that failed to settle anything erased what was known.
+test("a finish that goes unanswered keeps the answer the gesture already had", async () => {
+  const result = answer("unknown");
+  engine({ status: 504, body: { message: "gateway timeout" } });
+  const held: (GateGesture | null)[] = [];
+  render(
+    <GateDialog
+      node="node-4"
+      evict
+      held={{ opId: result.op_id, force: false, answer: result }}
+      onHeld={(g) => held.push(g)}
+      onClose={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Finish this gesture" }));
+  await waitFor(() => expect(screen.getByText(/No answer/)).toBeTruthy());
+  // THE PER-LOG ANSWER IS STILL ON SCREEN, and HELD with the gesture.
+  expect(screen.getByText(/may or may not be on the log/)).toBeTruthy();
+  expect(screen.getByText(/CREWLET_TRACKER_LOG 918280002/)).toBeTruthy();
+  expect(held.at(-1)?.answer).toEqual(result);
+  expect(held.at(-1)?.unanswered).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Finish this gesture" })).toBeTruthy();
+});
+
+// A PASTED ID THE ROUTE REFUSED CAN BE CORRECTED. After a first request was
+// refused, the field was hidden and the refused id re-sent by every submit
+// until the dialog was closed — `op_id_invalid` each time.
+test("a refused pasted id stays editable, and a corrected one is what is sent", async () => {
+  const good = answer("unknown").op_id;
+  const sent = engine(
+    { status: 400, body: { error: "op_id_invalid", detail: "not an id this engine minted" } },
+    { status: 200, body: answer("applied") },
+  );
+  render(<GateDialog node="node-4" evict onHeld={() => {}} onClose={() => {}} />);
+  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
+    target: { value: "not-an-id" },
+  });
+  confirmAndPress("node-4", "Evict");
+  await waitFor(() => expect(screen.getByText(/not an id this engine minted/)).toBeTruthy());
+  expect(sent[0]!.query.get("op_id")).toBe("not-an-id");
+
+  // STILL THERE, and the corrected id is the one sent.
+  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
+    target: { value: good },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Evict" }));
+  await waitFor(() => expect(sent.length).toBe(2));
+  expect(sent[1]!.query.get("op_id")).toBe(good);
+});
+
+// AND A REFUSED PASTED ID IS NOT TAKEN UP: cleared, the next attempt is a
+// fresh gesture rather than the refused id sent again.
+test("a refused pasted id, cleared, is not sent again", async () => {
+  const sent = engine(
+    { status: 400, body: { error: "op_id_invalid", detail: "not an id this engine minted" } },
+    { status: 200, body: answer("applied") },
+  );
+  render(<GateDialog node="node-4" evict onHeld={() => {}} onClose={() => {}} />);
+  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
+    target: { value: "not-an-id" },
+  });
+  confirmAndPress("node-4", "Evict");
+  await waitFor(() => expect(screen.getByText(/not an id this engine minted/)).toBeTruthy());
+  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
+    target: { value: "" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Evict" }));
+  await waitFor(() => expect(sent.length).toBe(2));
+  expect(sent[1]!.query.get("op_id")).not.toBe("not-an-id");
+  expect(sent[1]!.query.get("op_id")).toMatch(OP_ID);
+});
+
+// AND A REFUSED FIRST ATTEMPT UNDER A MINTED ID LEAVES THE FIELD THERE: an
+// operator refused here — the node is live, say — may be finishing a gesture
+// started on another node, and the field that takes its id was hidden the
+// moment the dialog held an id of its own.
+test("after a refused first attempt, an earlier gesture's id can still be pasted", async () => {
+  const earlier = answer("unknown").op_id;
+  const sent = engine(golden.refusals["eviction_refused"]!, {
+    status: 200,
+    body: answer("applied"),
+  });
+  render(<GateDialog node="node-4" evict onHeld={() => {}} onClose={() => {}} />);
+  confirmAndPress("node-4", "Evict");
+  await waitFor(() => expect(screen.getByText(/may not be evicted/)).toBeTruthy());
+  fireEvent.change(screen.getByLabelText("Operation id of the earlier gesture"), {
+    target: { value: earlier },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Evict" }));
+  await waitFor(() => expect(sent.length).toBe(2));
+  expect(sent[1]!.query.get("op_id")).toBe(earlier);
+});

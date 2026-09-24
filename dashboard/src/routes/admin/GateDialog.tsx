@@ -94,7 +94,11 @@ export interface GateGesture {
   force: boolean;
   /** The last answer the engine gave, past the judgement. */
   answer?: RetentionGateResult;
-  /** The last request nobody answered — timed out or dropped — and why. */
+  /**
+   * Why the LATEST request went unanswered — timed out, dropped, or answered
+   * by something in front of the node. Beside `answer` when that request was
+   * a Finish: the answer before it is still what the logs last said.
+   */
   unanswered?: string;
 }
 
@@ -209,7 +213,18 @@ export function GateDialog({
         // finishes a gesture whatever happens to the connection, so it may
         // have reached every log. The id is kept, and Finish asks again
         // under it.
-        const next: GateGesture = { opId, force, unanswered: unansweredWhy(err) };
+        //
+        // AND SO IS WHAT THE GESTURE ALREADY HEARD, for the reason a refused
+        // Finish keeps it: a Finish nobody answered says nothing about the
+        // logs the earlier request reached, and dropping their answer took
+        // the per-log outcomes off the screen while a refusal left them on.
+        const heard = gesture?.opId === opId ? gesture.answer : undefined;
+        const next: GateGesture = {
+          opId,
+          force,
+          unanswered: unansweredWhy(err),
+          ...(heard ? { answer: heard } : {}),
+        };
         setGesture(next);
         setForcing(false);
         setTypedForce("");
@@ -224,7 +239,16 @@ export function GateDialog({
         // already heard is KEPT and the refusal renders beside it: dropped,
         // the dialog fell back to "Type node-4 to confirm" with the per-log
         // answer and the operation id gone from the screen.
-        setGesture((prev) => (prev?.opId === opId ? { ...prev, force } : { opId, force }));
+        //
+        // AN ID PASTED TO FINISH A GESTURE STARTED ELSEWHERE IS NOT TAKEN UP
+        // on a refusal before anything answered: the field still shows it to
+        // correct, and held it was re-sent by every submit — the field
+        // cleared included — refused `op_id_invalid` each time until the
+        // dialog was closed.
+        const pasted = !(gesture?.answer || gesture?.unanswered) && opId === earlier.trim();
+        setGesture((prev) =>
+          pasted ? prev : prev?.opId === opId ? { ...prev, force } : { opId, force },
+        );
         setRefusal(
           err instanceof RestError
             ? {
@@ -246,11 +270,22 @@ export function GateDialog({
     if (busy) return;
     if (forcing) {
       if (!forceConfirmed) return;
-      void send(gesture?.opId ?? newGateOpID(sign, node), true);
+      void send(nextOpId(), true);
       return;
     }
     if (!confirmed) return;
-    void send(earlier.trim() || gesture?.opId || newGateOpID(sign, node), false);
+    void send(nextOpId(), false);
+  }
+
+  /**
+   * The operation the next request goes under: an answered gesture's own, and
+   * before anything answered the id pasted to finish one started elsewhere,
+   * then the one this dialog minted for an earlier refused attempt, then a
+   * fresh one.
+   */
+  function nextOpId(): string {
+    if (gesture && answered) return gesture.opId;
+    return earlier.trim() || gesture?.opId || newGateOpID(sign, node);
   }
 
   function finish() {
@@ -373,25 +408,24 @@ export function GateDialog({
           {/* FINISHING A GESTURE STARTED ELSEWHERE. A node that is itself
               evicted cannot write, so its unfinished gesture is finished
               through another node — under the SAME id, which is how every log
-              that already holds the record answers from its own rows. */}
-          {!gesture && (
-            <details>
-              <summary className="t-caption">Finish a gesture started elsewhere</summary>
-              <label className="col" style={{ gap: 6, marginTop: 8 }}>
-                <span className="t-caption">
-                  Its operation id, exactly as it was answered — a fresh one would be a second
-                  gesture
-                </span>
-                <Input
-                  value={earlier}
-                  onChange={(e) => setEarlier(e.target.value)}
-                  spellCheck={false}
-                  disabled={busy}
-                  aria-label="Operation id of the earlier gesture"
-                />
-              </label>
-            </details>
-          )}
+              that already holds the record answers from its own rows. SHOWN
+              FOR AS LONG AS THIS FORM IS, a refusal included: hidden after
+              one, a pasted id the route refused could not be corrected. */}
+          <details>
+            <summary className="t-caption">Finish a gesture started elsewhere</summary>
+            <label className="col" style={{ gap: 6, marginTop: 8 }}>
+              <span className="t-caption">
+                Its operation id, exactly as it was answered — a fresh one would be a second gesture
+              </span>
+              <Input
+                value={earlier}
+                onChange={(e) => setEarlier(e.target.value)}
+                spellCheck={false}
+                disabled={busy}
+                aria-label="Operation id of the earlier gesture"
+              />
+            </label>
+          </details>
         </>
       )}
 
@@ -413,8 +447,15 @@ export function GateDialog({
         </Callout>
       )}
 
-      {gesture?.answer && !gesture.unanswered && (
-        <GateOutcome result={gesture.answer} evict={evict} />
+      {gesture?.answer && (
+        <>
+          {gesture.unanswered && (
+            <span className="t-caption">
+              What the logs answered before the Finish that went unanswered:
+            </span>
+          )}
+          <GateOutcome result={gesture.answer} evict={evict} />
+        </>
       )}
 
       {/* A REFUSAL RENDERS WHEREVER IT ARRIVED — beside the answer a gesture

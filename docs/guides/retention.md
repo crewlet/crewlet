@@ -593,7 +593,10 @@ or the reason it was not written and what to do.
   (`wrong_stream`) a re-anchor — neither has a control here, so each names its
   command — and a node that is itself evicted (`evicted`) cannot write, so the
   gesture is finished from the dashboard on a node the fleet still counts,
-  under the same id (**Finish a gesture started elsewhere** takes it). The
+  under the same id (**Finish a gesture started elsewhere** takes it, and stays
+  on the form until something answers — a refused id can be corrected, and one
+  refused is not taken up as the gesture's own). The same goes for an `unknown`
+  this node cannot tell about. The
   gesture's own id is what finishes each of them; a fresh one would write every
   log that already holds the record again and re-date each eviction.
 - Only an operation no request can finish — `superseded`, `op_reused` — offers
@@ -614,7 +617,8 @@ or the reason it was not written and what to do.
   this node cannot read or a node still catching up can refuse it — wrote
   nothing, and the answer the gesture already had stays on screen beside the
   refusal, with its operation id and **Finish**, and **Force eviction** where
-  the refusal offers it.
+  the refusal offers it. A Finish nobody answered keeps that answer too, below
+  its **No answer** notice.
 - A node still holding a live presence lease is marked **live** beside its
   **Evict…**, and its eviction is refused. The refusal — and the one for a
   lease listing this node cannot read — offers **Force eviction**, behind a
