@@ -147,6 +147,22 @@ type HumanContact struct {
 	CrewletOperatorID string `yaml:"crewlet_operator_id,omitempty" json:"crewlet_operator_id,omitempty"`
 }
 
+// ReservedOperatorID is the attribution stamped on every request a DISABLED
+// auth guard serves: nobody presented a credential, so nobody is named.
+//
+// # Why it lives in org
+//
+// Three rules read it and must never disagree about which id it is. Tier A
+// refuses it as an `api.auth.tokens[].id`, so no real credential's writes are
+// confused in an audit row with the ones made while the guard was off; the API
+// stamps it on a disabled-mode request; and the chart refuses it as a
+// `contact.crewlet_operator_id`, so a disabled guard's caller is never a
+// PERSON. The last rule is the one that forces the home: config imports org,
+// so org is the lowest package all three can reach, and a second copy of the
+// string is how the reservation would stop covering what is actually stamped —
+// silently, because each side would stay self-consistent.
+const ReservedOperatorID = "anonymous"
+
 // contactField describes one identity field: what an operator writes, how
 // its literal values are normalised, and where the value lives.
 type contactField struct {
@@ -261,6 +277,23 @@ func (c *HumanContact) faults() []fieldError {
 		return nil
 	}
 	var out []fieldError
+	// A LITERAL binding of the reserved id. Folded because the lookup folds:
+	// Normalize has usually lowercased it already, but Validate is exported
+	// and a caller need not have normalised first, and "Anonymous" binds
+	// exactly what "anonymous" does. A ${VAR} is not caught here — its value
+	// lives in an environment validation may not be able to see — and is
+	// dropped where it is resolved instead (see [HumanContact.ResolvedIdentities]).
+	if v := strings.TrimSpace(c.CrewletOperatorID); strings.EqualFold(v, ReservedOperatorID) {
+		out = append(out, fieldError{
+			field: []any{"contact", "crewlet_operator_id"},
+			err: fmt.Errorf("contact.crewlet_operator_id: %w: %q is the attribution "+
+				"a disabled api.auth guard stamps on every caller, so binding it "+
+				"makes everybody who reaches the engine with the guard off this "+
+				"person, and files every disabled-mode write under their name. "+
+				"Bind one of api.auth.tokens[].id instead",
+				ErrReservedOperatorID, v),
+		})
+	}
 	for _, f := range contactFields {
 		v := strings.TrimSpace(*f.value(c))
 		if !strings.Contains(v, "${") {
@@ -351,6 +384,16 @@ func (c *HumanContact) ResolvedIdentities(lookup EnvLookup) []Identity {
 		}
 		if f.lowercase {
 			resolved = strings.ToLower(resolved)
+		}
+		// A REFERENCE THAT RESOLVES TO THE RESERVED ID BINDS NOBODY. Validation
+		// refuses the literal, but a ${VAR}'s value lives in an environment it
+		// cannot always see, so the refusal has to be repeated where the value
+		// is known. Omitted, like an unset variable, rather than returned:
+		// every consumer of this identity — the seat a credential resolves to,
+		// the alias a personal read matches, the registry — would otherwise
+		// make a disabled guard's caller this person.
+		if t.transport == TransportCrewlet && resolved == ReservedOperatorID {
+			continue
 		}
 		out = append(out, Identity{Transport: t.transport, ExternalID: resolved})
 	}
