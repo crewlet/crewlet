@@ -157,6 +157,14 @@ live database: the checkpoint commits with the rows, so the position inside a
 file is the only one that describes that file, and the applier ran throughout
 the copy.
 
+**Every backup taken over `POST /backup` is audited.** Once the copy begins,
+the node writes a `backup_requested` event to its own event store — who asked
+(the token's name, and the person it is bound to), which node, which directory,
+and whether it finished — a failed run included, since it can leave files
+behind. Filter the event log on `source=operator` to see it beside every other
+change a person made through the engine; see
+[the runtime audit](../reference/api-endpoints.md#the-runtime-audit-sourceoperator).
+
 ### One node, or every node?
 
 `crewlet backup` runs against **one** node and copies what that node can

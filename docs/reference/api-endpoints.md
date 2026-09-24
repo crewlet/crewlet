@@ -1500,8 +1500,60 @@ must distinguish it from quiet, rather than drawing the gap as silence.
 `category` is a filter for the same reason paging exists at all —
 filtering a paged list client-side silently excludes, because a 100-row
 page holding 2 matches reads as "only 2 exist". Its vocabulary is a closed
-set of ten values, and which event type lands under which is in
+set of eight values, and which event type lands under which is in
 [Deployment § What gets stored](../guides/deployment.md#what-gets-stored-and-under-which-category).
+
+### The runtime audit: `source=operator`
+
+Every change a person makes through a running node leaves one event, whether
+or not it went through:
+
+| Event type | Written for |
+|---|---|
+| `operator_acted` | Every [operator tool](#operatormcp--your-own-assistant) call that is not a proven read, on **both** transports — a button on the dashboard (`/operator/act`) and a person's own assistant (`/operator/mcp`) |
+| `backup_requested` | Every [`POST /backup`](#post-backup) that began copying, whether the copy finished or not |
+
+Each carries `source: "operator"` on the envelope, so
+`GET /events?source=operator` is the runtime audit on its own; its actor is the
+token's own name (`operator_id`), with `actor_seat` naming the person the token
+is bound to by `contact.crewlet_operator_id` (absent for a token nobody bound).
+Both are filed under `lifecycle`.
+
+```json
+{"type": "operator_acted", "source": "operator",
+ "operator_id": "founder", "actor_seat": "jane-founder",
+ "transport": "act", "tool": "update_work_item",
+ "request_id": "0f7c1a4e-9b2d-4e51-8c3a-6d7e8f9a0b1c",
+ "outcome": "applied", "position": "CREWLET_TRACKER_LOG@1:4711"}
+```
+
+`outcome` is one of five: `applied`, `pending` and `unknown` are the write's own
+answer, exactly as the call returned it — and a call interrupted before it
+answered is `unknown`, because whether it landed is precisely what nobody
+knows; `refused` names the tool's refusal class in `refusal`; `failed` is a
+failure the tool did not classify. The last two also carry `failed: true`, so
+the row is tagged failed and the log's failure filter finds it. `request_id`
+is the act transport's own (MCP sends none), so every retry of one gesture
+reads as the same request. A backup's record names the `node` whose disk it
+was written to, the `dir`, and the number of `streams` the manifest covers.
+
+**The arguments are never recorded.** A page body or a comment is the
+company's content and already lives in the history of the object it changed;
+the audit says who called what, and what became of it.
+
+**What is not here.** A request refused before any tool ran — a read sent to
+the write transport, a token that is nobody, a malformed body, a backup with
+no destination — changed nothing and is not recorded. A proven read over MCP is
+not recorded either: an assistant asks many questions, and a row per question
+would bury the writes. Configuration and credentials keep their own records
+(a revision names who created it, a credential who stored it), which is why
+`/config` and `/secrets` publish nothing here. And like every event, the row
+is written by the node the call reached, so a fleet's audit is the union of
+its nodes' logs.
+
+A record that could not be published is logged as
+`operator_audit_not_published` at error on that node; the call itself has
+already been answered, and its tracker or page history is unaffected.
 
 ### The event log's time axis
 
@@ -2191,6 +2243,10 @@ There is deliberately **no way for the caller to name a seat to act as**. That
 would let anybody holding the token write as anybody, and a tracker whose
 author field is chosen by the writer is not an audit trail.
 
+Every call that is not a proven read also leaves one `operator_acted` event —
+the same record a dashboard press leaves, with `transport: "mcp"` — in the
+node's event store: see [the runtime audit](#the-runtime-audit-sourceoperator).
+
 ### Why it is not under `/mcp/`
 
 `/mcp/` is exempt from authentication wholesale, because the sandbox
@@ -2330,7 +2386,10 @@ with the same `request_id`. No transport code is also a refusal class, so a
 client branches on `error` alone.
 
 Every act is logged as `operator_act` at info with the tool, the operator id,
-the seat, the request id and the outcome or refusal — never the arguments.
+the seat, the request id and the outcome or refusal — never the arguments —
+and every act that reached its tool leaves an `operator_acted` event with the
+same facts in this node's event store, whatever became of it: see
+[the runtime audit](#the-runtime-audit-sourceoperator).
 
 ## The native tracker and knowledge base
 
@@ -2889,6 +2948,11 @@ Three refusals, each pointing somewhere different:
   cluster has no connection to snapshot the streams over, so its manifest
   carries the store copies alone and `crewlet backup` says where the rest
   lives. Back that half up at the cluster, from the same moment.
+
+Every backup that began copying leaves a `backup_requested` event naming the
+caller, the node, the directory and whether it finished — a failed one
+included, since it may have left files there: see
+[the runtime audit](#the-runtime-audit-sourceoperator).
 
 ### `GET /integrations`
 

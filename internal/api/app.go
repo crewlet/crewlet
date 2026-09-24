@@ -56,6 +56,10 @@ type App struct {
 	// backup takes a copy of this node's durable state.
 	backup backupTaker
 
+	// audit publishes the runtime audit record every backup leaves; see
+	// [operator.Audit].
+	audit operator.AuditPublisher
+
 	// retention is the fleet's own record of what the log may delete, for
 	// the one gesture that WRITES to it: an operator's backup
 	// acknowledgement.
@@ -102,7 +106,7 @@ type routeMounter interface {
 //
 // Runtime, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
 // Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup, Budgets,
-// Retention, Capacity and Backup are REQUIRED, and [New] refuses a missing one
+// Retention, Capacity, Backup and Audit are REQUIRED, and [New] refuses a missing one
 // by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
@@ -218,6 +222,12 @@ type Options struct {
 	// names.
 	Backup backupTaker
 
+	// Audit is where a backup publishes its runtime audit record — this
+	// node's own queue, whose publish listener writes the event store. The
+	// operator surface is handed the same one by whoever builds it
+	// ([operator.Options.Audit]).
+	Audit operator.AuditPublisher
+
 	// Assets overrides the embedded dashboard tree. Nil serves the one
 	// compiled into the binary, which is what every deployment does; a
 	// test supplies its own to assert about serving rather than about the
@@ -310,7 +320,7 @@ func New(opts Options) (*App, error) {
 	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
-	a.backup = opts.Backup
+	a.backup, a.audit = opts.Backup, opts.Audit
 	a.retention, a.nodes, a.purger = opts.Retention, opts.Nodes, opts.Purger
 	a.capacity = opts.Capacity
 
@@ -419,6 +429,7 @@ func (o Options) missing() error {
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
 		{"Backup", o.Backup == nil},
+		{"Audit", o.Audit == nil},
 	} {
 		if field.absent {
 			names = append(names, "Options."+field.name)

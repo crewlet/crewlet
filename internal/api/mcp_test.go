@@ -101,7 +101,7 @@ func TestTheActRouteIsMountedBehindTheGuard(t *testing.T) {
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
 		Runtime:   &fakeRuntime{},
-		Operator: operator.New(operator.Options{
+		Operator: operatorSurface(t, operator.Options{
 			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil)},
 		}),
 	})

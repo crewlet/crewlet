@@ -1527,7 +1527,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 	// ONE operator surface, handed to the routes that serve it and to the
 	// viewer that says what it serves.
-	operators := operatorSurface(e)
+	operators, err := operatorSurface(e)
+	if err != nil {
+		return nil, err
+	}
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
 	// a bounded context of their own instead of inheriting one, which is
@@ -1703,7 +1706,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
-		Backup:  backups,
+		Backup: backups,
+		// THE RUNTIME AUDIT goes onto this node's own queue, whose
+		// publish listener writes the event store here — the same
+		// publisher the operator surface audits through.
+		Audit:   e.Backends().Queue,
 		Config:  configSurface,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
@@ -2482,8 +2489,10 @@ func operatorWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Writer {
 // named. It used to be stamped from the caller's own team, which an operator
 // has not got — so every item filed here read "Filed into: no unit" beside a
 // project page naming its unit.
-func operatorSurface(e *engine.Engine) *operator.Server {
-	var opts operator.Options
+func operatorSurface(e *engine.Engine) (*operator.Server, error) {
+	// EVERY CALL THAT MAY WRITE is audited onto this node's own queue, so
+	// the event store here holds who did what through either transport.
+	opts := operator.Options{Audit: e.Backends().Queue}
 	if c := e.Company(); c != nil && c.Config != nil {
 		opts.Company = c.Config.Name
 	}

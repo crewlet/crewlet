@@ -16,3 +16,6 @@ func (s *Server) Dispatch(ctx context.Context, name string,
 
 // ReceiptOf is the act transport's reading of a tool's answer.
 var ReceiptOf = receiptOf
+
+// AuditOutcomeOf is the audit's reading of what became of one call.
+var AuditOutcomeOf = auditOutcome

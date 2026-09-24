@@ -23,7 +23,12 @@ import (
 // their config says.
 func TestNoNativeBackendServesNothing(t *testing.T) {
 	t.Parallel()
-	if s := operator.New(operator.Options{}); s != nil {
+	// NO AUDIT EITHER, and that is not refused: there is nothing to audit.
+	s, err := operator.New(operator.Options{})
+	if err != nil {
+		t.Fatalf("a surface with nothing to serve was refused: %v", err)
+	}
+	if s != nil {
 		t.Errorf("a company with no native backend got a surface serving %v", s.Tools())
 	}
 }
@@ -34,7 +39,7 @@ func TestNoNativeBackendServesNothing(t *testing.T) {
 // that fail at the call.
 func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	t.Parallel()
-	only := operator.New(operator.Options{
+	only := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
 			Merges: stubWorkMerger, Actor: operator.WorkActor(nil),
@@ -266,7 +271,7 @@ func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 // implementation, which is what this whole seam exists to avoid.
 func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	t.Parallel()
-	s := operator.New(operator.Options{
+	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
 			Merges: stubWorkMerger, Actor: operator.WorkActor(nil),
@@ -401,7 +406,7 @@ func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string, 
 // client that skips the prompt for a read prompted on every one.
 func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
 	t.Parallel()
-	s := operator.New(operator.Options{
+	s := newSurface(t, operator.Options{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
 			Merges: stubWorkMerger, Actor: operator.WorkActor(nil),

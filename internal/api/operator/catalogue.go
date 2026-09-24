@@ -74,10 +74,24 @@
 // the token, the kind still `operator`, and the person rides beside it as the
 // actor's seat — so an audit reads a dashboard write exactly as it reads the
 // same person's assistant. See [ActPattern].
+//
+// # Every call that may write is audited, on both transports
+//
+// The history of a work item or a page records what CHANGED; it has nothing
+// to say about a call that was refused, one whose answer never came back, or
+// a verb that is not a tracker or wiki write. So every call that is not a
+// proven read publishes one `operator_acted` event (audit.go) — the
+// credential, the person it is bound to, the transport, the tool, the request
+// id and what became of it, never the arguments — and the event store writes
+// it on this node. It is done in the ONE dispatch both transports call, so
+// what is recorded about a person cannot depend on whether they pressed a
+// button or asked their assistant. [New] refuses a surface with tools and no
+// [Options.Audit].
 package operator
 
 import (
 	"context"
+	"errors"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -126,6 +140,12 @@ type Options struct {
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
+
+	// Audit is where every call that is not a proven read publishes its
+	// runtime audit record (see [Audit]). REQUIRED whenever the catalogue
+	// serves anything: a surface that writes to the company and records
+	// nothing about who called it is the one [New] refuses to build.
+	Audit AuditPublisher
 }
 
 // Server is the operator surface: the catalogue, and the transports over it.
@@ -133,10 +153,14 @@ type Server struct {
 	catalogue catalogue
 	mcp       mcpTransport
 
-	// chart is [Options.Org], kept for the one decision a transport makes
+	// chart is [Options.Org], kept for the decisions a transport makes
 	// about the caller rather than the tool: whether the token is bound to
-	// a person, which is the whole of the act transport's admission rule.
+	// a person, which is the whole of the act transport's admission rule,
+	// and which person an audit record names.
 	chart func() *org.Organization
+
+	// audit is [Options.Audit].
+	audit AuditPublisher
 }
 
 // catalogue is the tool set every transport serves, in the order
@@ -175,12 +199,19 @@ func (c catalogue) names() []string {
 	return out
 }
 
+// ErrNoAudit refuses a surface that would serve tools and publish no audit
+// record of them.
+var ErrNoAudit = errors.New("operator: Options.Audit is required: every call " +
+	"that is not a proven read publishes a runtime audit record, and a surface " +
+	"that writes to the company without one is a wiring mistake")
+
 // New builds the surface, or nil when there is nothing to serve.
 //
 // NIL RATHER THAN AN EMPTY SERVER, so no route is mounted at all: an endpoint
 // that exists and lists no tools reads to an operator as broken, while one
-// that is not there matches what their config says.
-func New(opts Options) *Server {
+// that is not there matches what their config says. A surface with tools to
+// serve and no [Options.Audit] is refused with [ErrNoAudit].
+func New(opts Options) (*Server, error) {
 	// THE PAGE TOOLS READ THE REQUEST KEY THROUGH THEIR OWN SEAM, and it is
 	// this package's to wire because this package is the one that puts it
 	// on the context: a key whose writer and reader were wired in two
@@ -192,11 +223,14 @@ func New(opts Options) *Server {
 		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
 	})
 	if len(callables) == 0 {
-		return nil
+		return nil, nil
 	}
-	s := &Server{catalogue: newCatalogue(callables), chart: opts.Org}
-	s.mcp = newMCPTransport(s.catalogue, opts.Company)
-	return s
+	if opts.Audit == nil {
+		return nil, ErrNoAudit
+	}
+	s := &Server{catalogue: newCatalogue(callables), chart: opts.Org, audit: opts.Audit}
+	s.mcp = newMCPTransport(s, opts.Company)
+	return s, nil
 }
 
 // Tools names what this surface serves, for the operator log line.
@@ -232,8 +266,9 @@ func (s *Server) Annotations(name string) tools.Annotations {
 	return builtin.AnnotationsFor(name)
 }
 
-// call runs one catalogue tool by name — the one path every transport takes
-// into a tool, so a transport cannot reach one the catalogue does not hold.
+// call runs one catalogue tool by name, so a transport cannot reach one the
+// catalogue does not hold. Transports go through [Server.dispatch], which
+// audits the call; this is the tool half of it.
 // served is false for a name the catalogue does not hold, which the transport
 // refuses in its own vocabulary.
 func (c catalogue) call(ctx context.Context, name string,

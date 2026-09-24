@@ -144,6 +144,7 @@ func wireAPI(
 		Retention: backends.Fleet,
 		Capacity:  e,
 		Backup:    copier,
+		Audit:     backends.Queue,
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,
