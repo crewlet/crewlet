@@ -157,7 +157,8 @@ func TestSettingASecretSendsTheRawValue(t *testing.T) {
 	node := newFakeSecretsNode(t)
 	value := "-----BEGIN KEY-----\nline two\n\ttabbed \n"
 
-	if err := node.client(t).Set(t.Context(), "GL_TOKEN", value, "ignored", "cli", time.Now()); err != nil {
+	if _, err := node.client(t).Set(t.Context(), "GL_TOKEN", value,
+		secrets.Author{Name: "ignored"}, "cli", time.Now()); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if node.last.body != value {
@@ -171,6 +172,39 @@ func TestSettingASecretSendsTheRawValue(t *testing.T) {
 	}
 	if node.last.auth != "Bearer ops-token" {
 		t.Errorf("auth = %q, want the bearer token", node.last.auth)
+	}
+}
+
+// THE AUTHOR PRINTED IS THE ONE THE NODE RECORDED, and the one this command
+// offers never travels.
+//
+// The node stamps the party its guard authenticated, so the shell's user is
+// not who a fleet row names — and the command used to print it anyway, telling
+// an operator writing through a Tier A token that the row carried their name.
+func TestASecretWriteReportsTheAuthorTheNodeRecorded(t *testing.T) {
+	t.Setenv(apiTokenEnv, "ops-token")
+	node := newFakeSecretsNode(t)
+	node.body = `{"name":"GL_TOKEN","bytes":5,"key_id":"k1",` +
+		`"updated_by":"jane.doe","updated_by_kind":"operator",` +
+		`"operator_id":"pat:0192f00d-0000-7000-8000-00000000000a"}`
+
+	recorded, err := node.client(t).Set(t.Context(), "GL_TOKEN", "value",
+		secrets.Author{Name: "shell-user", Kind: "operator"}, "cli", time.Now())
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	want := secrets.Author{Name: "jane.doe", Kind: "operator",
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+	if recorded != want {
+		t.Errorf("recorded = %+v, want the node's own answer %+v", recorded, want)
+	}
+	if strings.Contains(node.last.path+node.last.query+node.last.body, "shell-user") {
+		t.Errorf("the offered author travelled (%s?%s), so a client could "+
+			"choose who a fleet row names", node.last.path, node.last.query)
+	}
+	if got := describeAuthor(recorded.Name, recorded.OperatorID); got !=
+		"jane.doe (through pat:0192f00d-0000-7000-8000-00000000000a)" {
+		t.Errorf("printed author = %q, want the name and the credential beside it", got)
 	}
 }
 
@@ -217,7 +251,7 @@ func TestTheCredentialIsTheEnvironmentsAndNotTheConfigs(t *testing.T) {
 func TestAnAwkwardNameIsEscapedIntoThePath(t *testing.T) {
 	t.Setenv(apiTokenEnv, cliFixtureToken)
 	node := newFakeSecretsNode(t)
-	if err := node.client(t).Set(t.Context(), "a/b c", "v", "", "", time.Now()); err != nil {
+	if _, err := node.client(t).Set(t.Context(), "a/b c", "v", secrets.Author{}, "", time.Now()); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if node.last.path != "/secrets/a/b c" {
@@ -267,7 +301,7 @@ func TestARejectedTokenSaysWhatToSet(t *testing.T) {
 	node := newFakeSecretsNode(t)
 	node.status = http.StatusUnauthorized
 
-	err := node.client(t).Set(t.Context(), "T", "v", "", "", time.Now())
+	_, err := node.client(t).Set(t.Context(), "T", "v", secrets.Author{}, "", time.Now())
 	if err == nil || !strings.Contains(err.Error(), apiTokenEnv) {
 		t.Fatalf("err = %v, want it to name %s", err, apiTokenEnv)
 	}
@@ -281,7 +315,7 @@ func TestTheNodesHintIsCarriedIntoTheError(t *testing.T) {
 	node.status = http.StatusServiceUnavailable
 	node.body = `{"error":"no_keyring","hint":"run crewlet secrets keygen"}`
 
-	err := node.client(t).Set(t.Context(), "T", "v", "", "", time.Now())
+	_, err := node.client(t).Set(t.Context(), "T", "v", secrets.Author{}, "", time.Now())
 	if err == nil {
 		t.Fatal("a 503 was accepted as success")
 	}
@@ -301,7 +335,7 @@ func TestRekeySendsTheKeyIDItExpects(t *testing.T) {
 	node := newFakeSecretsNode(t)
 	node.body = `{"moved":["A","B"],"engine_keys_moved":3}`
 
-	moved, err := node.client(t).Rekey(t.Context(), "key-2", "op", time.Now())
+	moved, err := node.client(t).Rekey(t.Context(), "key-2")
 	if err != nil {
 		t.Fatalf("rekey: %v", err)
 	}

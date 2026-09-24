@@ -57,6 +57,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -150,8 +151,9 @@ type Options struct {
 	// API.
 	Passes *setup.Runner
 
-	// Sink builds the recorder a pass writes minted credentials through.
-	Sink func(operator string) (provision.TokenSink, error)
+	// Sink builds the recorder a pass writes minted credentials through,
+	// recording each under the party the pass runs for.
+	Sink func(by iam.Actor) (provision.TokenSink, error)
 
 	// Status is where a pass records what it found: the SAME fleet row the
 	// reconcile loop writes, so the two cannot disagree.
@@ -361,14 +363,14 @@ type configWriter struct {
 type SeatDocuments interface {
 	SeatDocument(ctx context.Context, handle string) ([]byte, error)
 	SetSeatDocument(ctx context.Context, handle string, body []byte,
-		summary, operator string) (statelog.Position, error)
+		summary string, by iam.Actor) (statelog.Position, error)
 }
 
 func (c configWriter) Apply(
-	ctx context.Context, patch []byte, summary, operator, expect string,
+	ctx context.Context, patch []byte, summary string, by iam.Actor, expect string,
 ) (string, int64, error) {
 	applied, err := c.svc.Apply(ctx, configapi.ApplyRequest{
-		Patch: patch, Summary: summary, Operator: operator, Expect: expect,
+		Patch: patch, Summary: summary, By: by, Expect: expect,
 	})
 	return applied.RevisionID, applied.Epoch, err
 }
@@ -377,8 +379,8 @@ func (c configWriter) Current(ctx context.Context) (string, error) {
 	return c.svc.ActiveRevision(ctx)
 }
 
-func (c configWriter) Reload(ctx context.Context, summary, operator string) (string, int64, error) {
-	applied, err := c.svc.Reload(ctx, summary, operator)
+func (c configWriter) Reload(ctx context.Context, summary string, by iam.Actor) (string, int64, error) {
+	applied, err := c.svc.Reload(ctx, summary, by)
 	return applied.RevisionID, applied.Epoch, err
 }
 
@@ -397,9 +399,10 @@ func (c configWriter) Seat(ctx context.Context, handle string) ([]byte, error) {
 }
 
 func (c configWriter) SetSeat(
-	ctx context.Context, handle string, body []byte, summary, operator, _ string,
+	ctx context.Context, handle string, body []byte, summary string, by iam.Actor,
+	_ string,
 ) (string, error) {
-	at, err := c.seats.SetSeatDocument(ctx, handle, body, summary, operator)
+	at, err := c.seats.SetSeatDocument(ctx, handle, body, summary, by)
 	if err != nil {
 		return "", err
 	}
@@ -2069,7 +2072,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	summary := auditSummary(kind, req.Summary)
 	result, err := s.writer.Write(r.Context(), against, setup.Submission{
 		Kind: kind, Values: values, Seat: req.Seat,
-		Summary: summary, Operator: operatorOf(r), Expect: req.IfMatch,
+		Summary: summary, By: attributionOf(r), Expect: req.IfMatch,
 	})
 	if err != nil {
 		s.refuse(w, r, err, result)
@@ -2082,7 +2085,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	log.InfoContext(r.Context(), "setup_inputs_written",
 		"kind", kind, "revision", result.RevisionID, "epoch", result.Epoch,
 		"secrets", strings.Join(result.Secrets, ","), "reloaded", result.Reloaded,
-		"operator", operatorOf(r))
+		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 
 	after, afterRoster := s.company()
 	// THE ADDRESS THIS SURFACE WAS SET UP AGAINST, for the surfaces whose
@@ -2195,7 +2198,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		}
 		log.InfoContext(r.Context(), "setup_disconnect_requested",
 			"integration", kind, "remove_seats", req.RemoveSeats,
-			"operator", operatorOf(r))
+			"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 		httpjson.Write(w, http.StatusAccepted, map[string]any{
 			"key": kind, "removed": false, "disconnecting": true,
 			"remove_seats": req.RemoveSeats,
@@ -2212,10 +2215,10 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 
 	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
 	applied, err := s.config.Apply(r.Context(), configapi.ApplyRequest{
-		Patch:    patch,
-		Summary:  "disconnect " + string(kind),
-		Operator: operatorOf(r),
-		Expect:   strings.TrimSpace(r.Header.Get("If-Match")),
+		Patch:   patch,
+		Summary: "disconnect " + string(kind),
+		By:      attributionOf(r),
+		Expect:  strings.TrimSpace(r.Header.Get("If-Match")),
 	})
 	if err != nil {
 		s.refuse(w, r, err, setup.Result{})
@@ -2233,7 +2236,8 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// with no block behind it and nothing to remove it again.
 	s.forgetUnderGuard(r.Context(), kind)
 	log.InfoContext(r.Context(), "setup_disconnected",
-		"kind", kind, "revision", applied.RevisionID, "operator", operatorOf(r))
+		"kind", kind, "revision", applied.RevisionID,
+		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"key": kind, "removed": true,
 		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
@@ -2325,13 +2329,15 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	}
 }
 
-// operatorOf is who a write on this request is attributed to.
+// attributionOf is who a write on this request is attributed to: the author,
+// its kind and the credential it came through, which every revision, seat
+// record and sealed row this surface writes keeps.
 //
-// TOTAL, never empty, for [auth.OperatorOf]'s reason: this surface is always
+// TOTAL, never empty, for [auth.AttributionOf]'s reason: this surface is always
 // guarded, so what is left is a handler mounted outside the guard — and a
 // credential sealed under an empty author is one nobody can trace.
-func operatorOf(r *http.Request) string {
-	return auth.OperatorOf(r.Context())
+func attributionOf(r *http.Request) iam.Actor {
+	return auth.AttributionOf(r.Context())
 }
 
 // disconnectRequest is what the Disconnect dialog sends.

@@ -479,7 +479,7 @@ func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) erro
 		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}
 	defer closeStore()
-	if err := sv.Set(ctx, name, value, currentOperator(), "llm-login", time.Now().UTC()); err != nil {
+	if _, err := sv.Set(ctx, name, value, hostAuthor(), "llm-login", time.Now().UTC()); err != nil {
 		return fmt.Errorf("writing %s: %w", name, err)
 	}
 	return nil

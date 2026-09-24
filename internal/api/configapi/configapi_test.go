@@ -81,6 +81,10 @@ type surface struct {
 	// unless a case about authority narrows them, so a case about what the
 	// surface DOES is never quietly a case about who may.
 	grants []iam.Grant
+
+	// caller replaces the Tier A token [surface.do] attaches, for a case
+	// about who a write is recorded as.
+	caller *iam.Principal
 }
 
 func newSurface(t *testing.T, cipher secrets.Cipher) *surface {
@@ -164,11 +168,15 @@ func (s *surface) do(t *testing.T, method, path, body string, headers map[string
 	// FRESH IN BOTH STEP-UP WINDOWS, as the guard stamps every Tier A
 	// token: presenting it is the proof, so a write here is decided on its
 	// grant alone.
-	req = req.WithContext(iam.WithPrincipal(req.Context(), iam.Principal{
+	caller := iam.Principal{
 		ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")), Login: iam.TokenLogin("ops"),
 		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: s.grants,
 		ReauthAt: time.Now().Add(time.Hour), SensitiveReauthAt: time.Now().Add(time.Hour),
-	}))
+	}
+	if s.caller != nil {
+		caller = *s.caller
+	}
+	req = req.WithContext(iam.WithPrincipal(req.Context(), caller))
 	res := httptest.NewRecorder()
 	s.mux.ServeHTTP(res, req)
 	return res
@@ -1162,6 +1170,95 @@ func TestAWritePublishesTheActivationNudge(t *testing.T) {
 	if payload.RevisionSummary != "raise the cap" {
 		t.Errorf("summary = %q — an operator reading the feed wants to know WHAT changed",
 			payload.RevisionSummary)
+	}
+}
+
+// A REVISION NAMES ITS AUTHOR BESIDE THE CREDENTIAL, on the row, in the
+// listing, on the fleet's pointer and in the nudge.
+//
+// `created_by` held one name and it was the credential: a person writing
+// through their own machine token was recorded as `pat:<id>`, and the token's
+// row — the only thing that says whose it was — is swept a week after it
+// lapses, while a revision is kept for ever. The pointer is what every OTHER
+// node records the revision from, so a pointer without the author left every
+// node but this one naming `peer`. Mutation: record the credential as the
+// author (the old conversion) and the first check fails; drop the author from
+// the activation request and the pointer's does.
+func TestARevisionNamesItsAuthorBesideTheCredential(t *testing.T) {
+	t.Parallel()
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	for name, tc := range map[string]struct {
+		caller *iam.Principal
+		want   iam.Actor
+	}{
+		"a person through their own machine token": {
+			caller: &iam.Principal{
+				ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+				Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
+				ReauthAt:          time.Now().Add(time.Hour),
+				SensitiveReauthAt: time.Now().Add(time.Hour),
+			},
+			want: iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator, OperatorID: pat},
+		},
+		"a Tier A token, whose login is its credential": {
+			want: iam.Actor{Name: "token:ops", Kind: iam.ActorOperator,
+				OperatorID: "token:ops"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pub := &nudgeRecorder{}
+			s := newSurfaceWith(t, func(o *configapi.Options) { o.Queue = pub })
+			s.caller = tc.caller
+			res := s.do(t, http.MethodPut, "/config", companyDoc,
+				map[string]string{"X-Summary": "raise the cap"})
+			if res.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want 201 (body %s)", res.Code, res.Body)
+			}
+
+			active, _, err := s.configs.Active(t.Context())
+			if err != nil {
+				t.Fatalf("Active: %v", err)
+			}
+			if got := (iam.Actor{Name: active.CreatedBy,
+				Kind:       iam.ActorKind(active.CreatedByKind),
+				OperatorID: active.OperatorID}); got != tc.want {
+				t.Errorf("the revision records %+v, want %+v", got, tc.want)
+			}
+
+			listing := s.do(t, http.MethodGet, "/config/revisions", "", nil)
+			var revisions []map[string]any
+			if err := json.Unmarshal(listing.Body.Bytes(), &revisions); err != nil {
+				t.Fatal(err)
+			}
+			if len(revisions) == 0 || revisions[0]["created_by"] != tc.want.Name ||
+				revisions[0]["created_by_kind"] != string(tc.want.Kind) ||
+				revisions[0]["operator_id"] != tc.want.OperatorID {
+				t.Errorf("the listing answers %v, want %+v", revisions, tc.want)
+			}
+
+			target, _, err := s.plane.Target(t.Context())
+			if err != nil {
+				t.Fatalf("Target: %v", err)
+			}
+			if target.CreatedBy != tc.want.Name ||
+				target.CreatedByKind != string(tc.want.Kind) ||
+				target.OperatorID != tc.want.OperatorID {
+				t.Errorf("the fleet's pointer carries %q/%q/%q, want %+v — every "+
+					"other node records the revision from it", target.CreatedBy,
+					target.CreatedByKind, target.OperatorID, tc.want)
+			}
+
+			if len(pub.sent) != 1 {
+				t.Fatalf("published %d events, want the one nudge", len(pub.sent))
+			}
+			nudge, _ := pub.sent[0].Data.(*types.ConfigRevisionActivated)
+			if nudge == nil || nudge.CreatedBy != tc.want.Name ||
+				nudge.CreatedByKind != string(tc.want.Kind) ||
+				nudge.OperatorID != tc.want.OperatorID {
+				t.Errorf("the nudge carries %+v, want %+v", nudge, tc.want)
+			}
+		})
 	}
 }
 

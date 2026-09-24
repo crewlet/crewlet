@@ -56,7 +56,7 @@ func TestARotatedSecretBeatsAStaleEnvironment(t *testing.T) {
 		t.Fatalf("before any store read, ${SOME_TOKEN} = %q", got)
 	}
 	if err := sv.Set(t.Context(), "SOME_TOKEN", "the-rotated-one",
-		"operator", "cli", time.Now().UTC()); err != nil {
+		testAuthor, "cli", time.Now().UTC()); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	e.refreshSecrets(t.Context())
@@ -73,7 +73,7 @@ func TestTheEnvironmentStillAnswersWhatTheStoreDoesNot(t *testing.T) {
 	e, sv := engineWithSecrets(t)
 	t.Setenv("PLAIN_URL", "https://tracker.example.com")
 	if err := sv.Set(t.Context(), "SOME_TOKEN", "sealed",
-		"operator", "cli", time.Now().UTC()); err != nil {
+		testAuthor, "cli", time.Now().UTC()); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	e.refreshSecrets(t.Context())
@@ -110,7 +110,7 @@ func TestAnUnreadableStoreKeepsThePreviousSnapshot(t *testing.T) {
 	e, sv := engineWithSecrets(t)
 	t.Setenv("SOME_TOKEN", "the-stale-one")
 	if err := sv.Set(t.Context(), "SOME_TOKEN", "the-rotated-one",
-		"operator", "cli", time.Now().UTC()); err != nil {
+		testAuthor, "cli", time.Now().UTC()); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	e.refreshSecrets(t.Context())
@@ -219,10 +219,10 @@ func engineWithFleetSecrets(t *testing.T) (*Engine, *store.SecretValues, *fleets
 // every node but this one.
 func TestTheFleetsSecretBeatsASurvivingLocalRow(t *testing.T) {
 	e, local, fleet := engineWithFleetSecrets(t)
-	if err := local.Set(t.Context(), "GL", "the-old-token", "sam", "cli", time.Now().UTC()); err != nil {
+	if err := local.Set(t.Context(), "GL", "the-old-token", testAuthor, "cli", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := fleet.Set(t.Context(), "GL", "the-rotated-token", "sam", "cli", time.Now().UTC()); err != nil {
+	if err := fleet.Set(t.Context(), "GL", "the-rotated-token", testAuthor, "cli", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -245,10 +245,10 @@ func TestNoReferenceReachesTheEnginesOwnKeys(t *testing.T) {
 	e, _, fleet := engineWithFleetSecrets(t)
 	const key = "iam/session/018f3a9c-0000-7000-8000-000000000001/refresh"
 	if err := fleet.Estate().Set(t.Context(), key, "a-live-refresh-token",
-		"node-a", "iam", time.Now().UTC()); err != nil {
+		secrets.Author{Name: "node-a", Kind: "system"}, "iam", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := fleet.Set(t.Context(), "GL", "glpat-x", "sam", "cli",
+	if err := fleet.Set(t.Context(), "GL", "glpat-x", testAuthor, "cli",
 		time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestNoReferenceReachesTheEnginesOwnKeys(t *testing.T) {
 // runs.
 func TestALocalRowTheFleetLacksStillResolves(t *testing.T) {
 	e, local, _ := engineWithFleetSecrets(t)
-	if err := local.Set(t.Context(), "ONLY_LOCAL", "v", "sam", "cli", time.Now().UTC()); err != nil {
+	if err := local.Set(t.Context(), "ONLY_LOCAL", "v", testAuthor, "cli", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -292,7 +292,7 @@ func TestALocalRowTheFleetLacksStillResolves(t *testing.T) {
 // shadowing a later unset on the fleet at every boot from now on.
 func TestTheBootMigrationMovesTheLocalRowsAndClearsThem(t *testing.T) {
 	e, local, fleet := engineWithFleetSecrets(t)
-	if err := local.Set(t.Context(), "GL", "glpat-x", "sam", "cli", time.Now().UTC()); err != nil {
+	if err := local.Set(t.Context(), "GL", "glpat-x", testAuthor, "cli", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -335,7 +335,7 @@ func (refusingFleet) PutSecret(context.Context, coord.SecretRecord) error {
 // copy must survive, or the credential is gone from the only place it existed.
 func TestAFailedMigrationLeavesTheNodeServing(t *testing.T) {
 	e, local, _ := engineWithFleetSecrets(t)
-	if err := local.Set(t.Context(), "GL", "glpat-x", "sam", "cli", time.Now().UTC()); err != nil {
+	if err := local.Set(t.Context(), "GL", "glpat-x", testAuthor, "cli", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	e.backends.Fleet = refusingFleet{fleetBackend: e.backends.Fleet}

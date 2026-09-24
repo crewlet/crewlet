@@ -66,19 +66,25 @@ func (d *DB) SecretValues(cipher secrets.Cipher) *SecretValues {
 }
 
 const secretUpsertSQL = `
-INSERT INTO secret_values (name, value, key_id, updated_at, updated_by, source)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO secret_values (name, value, key_id, updated_at, updated_by,
+                           updated_by_kind, operator_id, source)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (name) DO UPDATE SET
     value = excluded.value, key_id = excluded.key_id,
     updated_at = excluded.updated_at, updated_by = excluded.updated_by,
-    source = excluded.source`
+    updated_by_kind = excluded.updated_by_kind,
+    operator_id = excluded.operator_id, source = excluded.source`
 
 // Set seals a secret and stores it under name, replacing any prior value.
 //
 // AN UPSERT rather than a read-then-write, because rotation is the common
 // path and two operators rotating at once must not produce a row that holds
 // neither of their values.
-func (s *SecretValues) Set(ctx context.Context, name, value, by, source string, now time.Time) error {
+//
+// BY IS THE AUTHOR AND THE CREDENTIAL, both kept — see [secrets.Author].
+func (s *SecretValues) Set(ctx context.Context, name, value string,
+	by secrets.Author, source string, now time.Time) error {
+
 	if s.cipher == nil {
 		return secrets.ErrNoKeyring
 	}
@@ -102,7 +108,7 @@ func (s *SecretValues) Set(ctx context.Context, name, value, by, source string, 
 		return fmt.Errorf("store: seal %s: the cipher produced no key id", name)
 	}
 	_, err = s.db.sql.ExecContext(ctx, secretUpsertSQL, name, sealed, keyID,
-		EncodeTime(now), by, source)
+		EncodeTime(now), by.Name, by.Kind, by.OperatorID, source)
 	if err != nil {
 		return fmt.Errorf("store: write secret %s: %w", name, err)
 	}
@@ -145,7 +151,8 @@ func (s *SecretValues) Get(ctx context.Context, name string) (string, error) {
 // put every credential a company has into one scrollback buffer.
 func (s *SecretValues) List(ctx context.Context) ([]secrets.Record, error) {
 	rows, err := s.db.sql.QueryContext(ctx,
-		`SELECT name, key_id, updated_at, updated_by, source
+		`SELECT name, key_id, updated_at, updated_by, updated_by_kind,
+		        operator_id, source
 		 FROM secret_values ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list secrets: %w", err)
@@ -155,7 +162,8 @@ func (s *SecretValues) List(ctx context.Context) ([]secrets.Record, error) {
 	for rows.Next() {
 		var r secrets.Record
 		var micros int64
-		if err := rows.Scan(&r.Name, &r.KeyID, &micros, &r.UpdatedBy, &r.Source); err != nil {
+		if err := rows.Scan(&r.Name, &r.KeyID, &micros, &r.UpdatedBy,
+			&r.UpdatedByKind, &r.OperatorID, &r.Source); err != nil {
 			return nil, fmt.Errorf("store: scan secret: %w", err)
 		}
 		r.UpdatedAt = DecodeTime(micros)
@@ -225,7 +233,14 @@ func (s *SecretValues) All(ctx context.Context) (map[string]string, error) {
 // One transaction: a rekey interrupted halfway leaves rows under a key the
 // operator is about to retire, and the whole point of the pass is being able
 // to retire it.
-func (s *SecretValues) Rekey(ctx context.Context, activeKeyID, by string, now time.Time) ([]string, error) {
+//
+// THE PROVENANCE IS KEPT: a rekey re-seals a value it did not choose, so the
+// row goes on saying who stored it, through what and when. It used to stamp
+// the rekeyer and `rekey` over every row, which made every credential in the
+// company read as set by whoever rotated the keyring — erasing the one record
+// of who set each, the loss [secrets.Author] exists to prevent. Who rotated
+// the keyring is the rotation's own fact, and its caller reports it.
+func (s *SecretValues) Rekey(ctx context.Context, activeKeyID string) ([]string, error) {
 	if s.cipher == nil {
 		return nil, secrets.ErrNoKeyring
 	}
@@ -267,8 +282,9 @@ func (s *SecretValues) Rekey(ctx context.Context, activeKeyID, by string, now ti
 			if err != nil {
 				return fmt.Errorf("store: re-seal %s: %w", name, err)
 			}
-			if _, err := tx.ExecContext(ctx, secretUpsertSQL, name, sealed,
-				activeKeyID, EncodeTime(now), by, "rekey"); err != nil {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE secret_values SET value = ?, key_id = ? WHERE name = ?`,
+				sealed, activeKeyID, name); err != nil {
 				return fmt.Errorf("store: write re-sealed %s: %w", name, err)
 			}
 			moved = append(moved, name)

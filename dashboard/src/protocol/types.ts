@@ -2628,7 +2628,17 @@ export interface RevisionMeta {
   parent_revision_id?: string;
   summary: string;
   source: string;
+  /** The revision's AUTHOR — a seat's handle for a person bound to one, a
+   *  login otherwise, `token:<id>` for a Tier A token, the engine's own name
+   *  for a write a timer made. */
   created_by: string;
+  /** `agent`, `human`, `operator` or `system`; empty on a revision written
+   *  before the kind was recorded. */
+  created_by_kind?: string;
+  /** The credential the revision was written through — a machine token's
+   *  `pat:<id>`, a browser session's `session:<lineage>` — and empty for a
+   *  write no credential made. */
+  operator_id?: string;
   created_at: string;
   activated_at?: string;
   is_active?: boolean;
@@ -2975,7 +2985,12 @@ export interface SecretRow {
   name: string;
   key_id: string;
   updated_at: string;
+  /** Who last stored the value, and — beside them — what sort of author and
+   *  the credential they stored it through, as a revision records the same
+   *  three. Both are empty on a row written before either was recorded. */
   updated_by: string;
+  updated_by_kind?: string;
+  operator_id?: string;
   source: string;
 }
 

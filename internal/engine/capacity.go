@@ -42,8 +42,13 @@ type CapacityRequest struct {
 	Stream         string
 	TargetMaxBytes uint64
 
-	// By names the operator, for the record.
-	By string
+	// By names the operator, for the record — the AUTHOR, internal/iam's
+	// ActorFor name — and OperatorID the credential they acted through,
+	// kept apart for the reason every other trail keeps them apart: a
+	// person's machine token is swept a week after it lapses, and an
+	// operation that named only `pat:<id>` would name nobody by then.
+	By         string
+	OperatorID string
 
 	// Assert is the operator's explicit statement that they have excluded
 	// every publisher, required only on a broker the engine does not run.
@@ -254,6 +259,7 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		Participants:     participants,
 		EnteredAt:        time.Now().UTC(),
 		By:               req.By,
+		OperatorID:       req.OperatorID,
 	}
 	// RETRIED WITH THE SAME ID, bounded, because an absent read after an
 	// unknown create establishes nothing at all.
@@ -270,7 +276,8 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 			log.InfoContext(ctx, "capacity_operation_opened",
 				"stream", op.Stream, "operation", op.OperationID,
 				"target", op.TargetMaxBytes, "was", op.OriginalMaxBytes,
-				"participants", op.Participants, "by", op.By)
+				"participants", op.Participants, "by", op.By,
+				"operator", op.OperatorID)
 			return held, nil
 		case held.OperationID == op.OperationID:
 			// AN EARLIER ATTEMPT OF MINE WON and its answer was lost.

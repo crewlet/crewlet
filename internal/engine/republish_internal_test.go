@@ -5,7 +5,12 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
+
+// as is a party named name, for a request the republisher credits.
+func as(name string) iam.Actor { return iam.Actor{Name: name, Kind: iam.ActorOperator} }
 
 // A recorder for what the republisher actually ran.
 type republishLog struct {
@@ -18,9 +23,9 @@ func newRepublishLog() *republishLog {
 	return &republishLog{done: make(chan struct{}, 16)}
 }
 
-func (l *republishLog) run(_ context.Context, operator string) {
+func (l *republishLog) run(_ context.Context, by iam.Actor) {
 	l.mu.Lock()
-	l.operators = append(l.operators, operator)
+	l.operators = append(l.operators, by.Name)
 	l.mu.Unlock()
 	select {
 	case l.done <- struct{}{}:
@@ -65,7 +70,7 @@ func TestTheFirstRepublishRunsImmediately(t *testing.T) {
 	r := &republisher{now: func() time.Time { return time.Unix(0, 0) }}
 	t.Cleanup(r.stop)
 
-	r.request("founder@example.com", log.run)
+	r.request(as("founder@example.com"), log.run)
 	log.waitFor(t, 1)
 
 	if got := log.calls(); len(got) != 1 || got[0] != "founder@example.com" {
@@ -93,7 +98,7 @@ func TestTheCallerDoesNotWaitForTheRebuild(t *testing.T) {
 	t.Cleanup(func() { close(blocked) })
 	done := make(chan struct{})
 	go func() {
-		r.request("founder@example.com", func(context.Context, string) { <-blocked })
+		r.request(as("founder@example.com"), func(context.Context, iam.Actor) { <-blocked })
 		close(done)
 	}()
 
@@ -134,9 +139,9 @@ func TestABurstOfSealsBecomesOneRepublish(t *testing.T) {
 	t.Cleanup(r.stop)
 
 	// Six seals inside one window, which is one operator pressing Connect.
-	r.request("atlassian", log.run)
+	r.request(as("atlassian"), log.run)
 	for _, who := range []string{"jira", "confluence", "datadog", "gitlab", "founder"} {
-		r.request(who, log.run)
+		r.request(as(who), log.run)
 	}
 
 	// One ran immediately; the other five are owed, not gone.
@@ -179,7 +184,7 @@ func TestARunawayPassCannotOutrunTheWindow(t *testing.T) {
 	// A hundred seals at one instant, which is the loop with the clock
 	// held still: nothing may run but the first.
 	for range 100 {
-		r.request("runaway", log.run)
+		r.request(as("runaway"), log.run)
 	}
 	log.waitFor(t, 1)
 
@@ -203,12 +208,12 @@ func TestStoppingDisarmsAnOwedRepublish(t *testing.T) {
 		now:    func() time.Time { return time.Unix(0, 0) },
 	}
 
-	r.request("first", log.run)
+	r.request(as("first"), log.run)
 	// AWAITED BEFORE THE SECOND, so "the one that ran before the stop" is a
 	// fact rather than a race: the immediate run is no longer complete when
 	// request returns.
 	log.waitFor(t, 1)
-	r.request("owed", log.run)
+	r.request(as("owed"), log.run)
 	r.stop()
 
 	// Well past the window it would have fired in.
@@ -218,7 +223,7 @@ func TestStoppingDisarmsAnOwedRepublish(t *testing.T) {
 		t.Errorf("calls = %v after stop, want only the one that ran before it", got)
 	}
 	// AND A REQUEST AFTER STOP IS REFUSED RATHER THAN RE-ARMING.
-	r.request("late", log.run)
+	r.request(as("late"), log.run)
 	if got := log.calls(); len(got) != 1 {
 		t.Errorf("calls = %v, want a request after stop to do nothing", got)
 	}
@@ -241,7 +246,7 @@ func TestTheWindowReopensForALaterSeal(t *testing.T) {
 	}
 	t.Cleanup(r.stop)
 
-	r.request("first", log.run)
+	r.request(as("first"), log.run)
 	// AWAITED, so the clock only moves once the first run has happened: the
 	// immediate run is asynchronous now, and moving the clock under it would
 	// be asserting the reopened window against a race.
@@ -249,7 +254,7 @@ func TestTheWindowReopensForALaterSeal(t *testing.T) {
 	mu.Lock()
 	clock = clock.Add(time.Hour + time.Second)
 	mu.Unlock()
-	r.request("much-later", log.run)
+	r.request(as("much-later"), log.run)
 	log.waitFor(t, 2)
 
 	got := log.calls()
@@ -282,7 +287,7 @@ func TestStoppingWaitsForARepublishAlreadyRunning(t *testing.T) {
 	)
 	r := &republisher{now: func() time.Time { return time.Unix(0, 0) }}
 
-	r.request("founder@example.com", func(ctx context.Context, _ string) {
+	r.request(as("founder@example.com"), func(ctx context.Context, _ iam.Actor) {
 		close(entered)
 		// HELD INSIDE THE RUN, which is the window: stop is called while
 		// this goroutine is between its own guard and its return.

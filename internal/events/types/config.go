@@ -27,10 +27,17 @@ func init() {
 // payload field here: the envelope owns that key and drops a colliding one, so
 // declaring it would produce a field that silently never arrives. Read the
 // envelope's Source instead.
+//
+// CreatedBy is the revision's AUTHOR, and CreatedByKind and OperatorID are the
+// two facts every other trail records beside one: what sort of author, and
+// the credential the write was made through — empty on a write no credential
+// made. Additive, so a peer that knows neither round-trips both.
 type ConfigRevisionActivated struct {
 	RevisionID      string `json:"revision_id"`
 	RevisionSummary string `json:"revision_summary"`
 	CreatedBy       string `json:"created_by"`
+	CreatedByKind   string `json:"created_by_kind,omitempty"`
+	OperatorID      string `json:"operator_id,omitempty"`
 }
 
 // EventType is the "config_revision_activated" wire type.

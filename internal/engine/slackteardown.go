@@ -157,7 +157,7 @@ func (e *Engine) clearSlackSeat(ctx context.Context, handle string) error {
 		return fmt.Errorf("engine: encode the seat %s: %w", handle, err)
 	}
 	return writer.SetSeat(ctx, handle, updated,
-		"disconnect slack: remove "+handle+"'s app credentials", "reconcile loop")
+		"disconnect slack: remove "+handle+"'s app credentials", loopActor())
 }
 
 // slackTeardown is Slack's disconnect step, in the shape every other

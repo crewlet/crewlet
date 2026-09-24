@@ -474,7 +474,7 @@ func TestAKeyARemovalDestroyedIsNeverWrittenBackByAMint(t *testing.T) {
 	}
 	ctx := t.Context()
 	id := uuid.Must(uuid.NewV7()).String()
-	if err := sealer.Mint(ctx, id, "node-a", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, id, mintedBy, time.Now()); err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
 	artefact, err := sealer.Seal(ctx, id, iamdomain.FieldName, "Sarah Chen")
@@ -484,7 +484,7 @@ func TestAKeyARemovalDestroyedIsNeverWrittenBackByAMint(t *testing.T) {
 	if destroyed, err := sealer.Shred(ctx, id); err != nil || !destroyed {
 		t.Fatalf("Shred = (%v, %v)", destroyed, err)
 	}
-	if err := sealer.Mint(ctx, id, "node-a", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, id, mintedBy, time.Now()); err != nil {
 		t.Fatalf("the stale mint: %v", err)
 	}
 	if plain, err := sealer.Open(ctx, id, iamdomain.FieldName, artefact); err == nil {

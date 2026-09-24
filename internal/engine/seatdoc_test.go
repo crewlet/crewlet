@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // TestASeatIsReadAndWrittenThroughTheChart is the seam a provisioning pass
@@ -40,8 +43,13 @@ func TestASeatIsReadAndWrittenThroughTheChart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A PERSON THROUGH THEIR OWN MACHINE TOKEN, so the chart's author and
+	// its credential are two different values and a write recording one as
+	// both is caught.
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	by := iam.Actor{Name: "jane.doe", Kind: iam.ActorHuman, OperatorID: pat}
 	at, err := e.SetSeatDocument(t.Context(), handle, updated,
-		"record a bot token", "test-operator")
+		"record a bot token", by)
 	if err != nil {
 		t.Fatalf("SetSeatDocument: %v", err)
 	}
@@ -61,6 +69,34 @@ func TestASeatIsReadAndWrittenThroughTheChart(t *testing.T) {
 	}
 	if !strings.Contains(string(back), "${SLACK_BOT_TOKEN_TEST}") {
 		t.Fatalf("the seat does not carry what was written: %s", back)
+	}
+	// THE CHART RECORDS THE PERSON AS THE AUTHOR, of their kind, WITH THE
+	// TOKEN BESIDE THEM. It was handed one name and recorded it as both, and
+	// the name was the credential's — so the seat's history named `pat:<id>`,
+	// of kind operator, and nothing in it said whose token it was once the
+	// token's row was swept. Mutation: author the record as the credential
+	// and this fails.
+	changes, _, err := e.Chart().History(t.Context(), 10, statelog.Freshness{
+		Level: statelog.ReadLinearizable})
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	var found bool
+	for _, change := range changes {
+		if change.Object.ID != handle {
+			continue
+		}
+		found = true
+		if change.Actor != by.Name || change.ActorKind != chart.AuthorHuman ||
+			change.OperatorID != pat {
+			t.Errorf("the chart records the write as %q (%s) through %q, want "+
+				"jane.doe (human) through %s", change.Actor, change.ActorKind,
+				change.OperatorID, pat)
+		}
+		break
+	}
+	if !found {
+		t.Errorf("the chart's history holds no change to %s: %+v", handle, changes)
 	}
 	// AND THE PUBLIC HALF SURVIVED IT. A content record is full
 	// post-state, so a write that carried only the block it edited would
@@ -88,7 +124,7 @@ func TestAnUnknownSeatIsNamedRatherThanAnsweredEmpty(t *testing.T) {
 		t.Errorf("the refusal does not name the seat: %v", err)
 	}
 	if _, err := e.SetSeatDocument(t.Context(), "nobody-called-this",
-		[]byte(`{"name":"X"}`), "s", "o"); err == nil {
+		[]byte(`{"name":"X"}`), "s", iam.Actor{Name: "o", Kind: iam.ActorOperator}); err == nil {
 
 		t.Fatal("a write to a seat nobody holds was accepted")
 	}

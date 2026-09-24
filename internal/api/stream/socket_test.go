@@ -481,7 +481,7 @@ func TestTheSocketsCallerReachesTheQuery(t *testing.T) {
 			seen <- "unresolved: " + string(how)
 			return nil, nil
 		}
-		seen <- auth.OperatorID(principal)
+		seen <- iam.ActorFor(principal).OperatorID
 		return nil, nil
 	})
 	conn, _, err := f.dial(t, "secret")
@@ -493,8 +493,8 @@ func TestTheSocketsCallerReachesTheQuery(t *testing.T) {
 	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "config"})
 	select {
 	case got := <-seen:
-		if got != "founder" {
-			t.Errorf("operator = %q, want founder", got)
+		if got != "token:founder" {
+			t.Errorf("operator = %q, want token:founder", got)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the query never ran")
@@ -563,7 +563,7 @@ func TestABadFrameTokenDoesNotDowngradeAnAuthenticatedSocket(t *testing.T) {
 			seen <- "unresolved: " + string(how)
 			return nil, nil
 		}
-		seen <- auth.OperatorID(principal)
+		seen <- iam.ActorFor(principal).OperatorID
 		return nil, nil
 	})
 	conn, _, err := f.dial(t, "secret")
@@ -575,7 +575,7 @@ func TestABadFrameTokenDoesNotDowngradeAnAuthenticatedSocket(t *testing.T) {
 	write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "config", "token": "garbled"})
 	select {
 	case got := <-seen:
-		if got != "founder" {
+		if got != "token:founder" {
 			t.Errorf("query ran as %q, want the socket's own operator: a bad "+
 				"frame token demoted an authenticated socket", got)
 		}

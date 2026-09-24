@@ -134,9 +134,11 @@ type MaintenanceReport struct {
 
 	// Since is when the exclusion was taken and By which operator ran the
 	// verb — the two things somebody finding this at an inconvenient hour
-	// needs before anything else.
-	Since time.Time `json:"since"`
-	By    string    `json:"by,omitempty"`
+	// needs before anything else — with OperatorID the credential they ran
+	// it through, which tells their own gesture from their token's.
+	Since      time.Time `json:"since"`
+	By         string    `json:"by,omitempty"`
+	OperatorID string    `json:"operator_id,omitempty"`
 
 	// ParticipantsMissing names the nodes whose acknowledgement the seal
 	// is still waiting for. EMPTY IS NOT THE SAME AS UNKNOWN: an

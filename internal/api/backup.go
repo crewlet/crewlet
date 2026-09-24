@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Taking a backup over HTTP.
@@ -60,7 +61,7 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	operator := auth.OperatorID(caller)
+	by := iam.ActorFor(caller)
 	// WithoutCancel: a backup that has begun copying should finish and
 	// leave one coherent artifact rather than a directory abandoned
 	// halfway because the client hung up. The pieces already written are
@@ -72,7 +73,8 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 		// The reason goes to the LOG rather than the body, like every
 		// other route here — except the two an operator can actually act
 		// on, which are their own fault and are named.
-		log.Warn("api_backup_failed", "operator", operator, "dir", dir, "error", err)
+		log.Warn("api_backup_failed", "by", by.Name, "operator", by.OperatorID,
+			"dir", dir, "error", err)
 		// THE DETAIL IS RETURNED ONLY FOR THE CALLER'S OWN MISTAKE.
 		// Everywhere else on this surface the internal reason goes to
 		// the log alone, and that holds here: a copy that failed on the
@@ -89,7 +91,7 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 		httpjson.FailWith(w, status, httpjson.CodeBackupFailed, detail)
 		return
 	}
-	log.Info("backup_taken", "operator", operator, "dir", dir,
+	log.Info("backup_taken", "by", by.Name, "operator", by.OperatorID, "dir", dir,
 		"streams", len(manifest.Streams))
 	writeJSON(w, http.StatusOK, manifest)
 }

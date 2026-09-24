@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -212,6 +214,14 @@ func boolPtr(v bool) *bool { return &v }
 
 // --- the ordered write ------------------------------------------------------ //
 
+// founder is the party every submission here is made by: a person through
+// their own machine token, so each part of the attribution is distinct.
+var founder = iam.Actor{Name: "founder", Kind: iam.ActorHuman,
+	OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+
+// founderRecorded is founder as the recorder logs a write's author.
+const founderRecorded = "founder/human/pat:0192f00d-0000-7000-8000-00000000000a"
+
 // recorder stands in for the two stores, and records the ORDER, which is what
 // this whole file is about.
 type recorder struct {
@@ -223,7 +233,9 @@ type recorder struct {
 	seat    []byte
 }
 
-func (r *recorder) Set(_ context.Context, name, value, by, source string, _ time.Time) error {
+func (r *recorder) Set(_ context.Context, name, value string, by secrets.Author,
+	source string, _ time.Time) error {
+
 	if r.failSet != nil {
 		return r.failSet
 	}
@@ -231,15 +243,19 @@ func (r *recorder) Set(_ context.Context, name, value, by, source string, _ time
 		r.secrets = map[string]string{}
 	}
 	r.secrets[name] = value
-	r.events = append(r.events, "secret:"+name+" by="+by+" source="+source)
+	r.events = append(r.events, "secret:"+name+" by="+by.Name+"/"+by.Kind+"/"+
+		by.OperatorID+" source="+source)
 	return nil
 }
 
-func (r *recorder) Apply(_ context.Context, patch []byte, summary, _, expect string) (string, int64, error) {
+func (r *recorder) Apply(_ context.Context, patch []byte, summary string, by iam.Actor,
+	expect string) (string, int64, error) {
+
 	if r.failApp != nil {
 		return "", 0, r.failApp
 	}
-	r.events = append(r.events, "patch:"+string(patch)+" summary="+summary+" expect="+expect)
+	r.events = append(r.events, "patch:"+string(patch)+" summary="+summary+
+		" expect="+expect+" by="+by.Name+"/"+string(by.Kind)+"/"+by.OperatorID)
 	return "rev-1", 7, nil
 }
 
@@ -251,13 +267,15 @@ func (r *recorder) Seat(_ context.Context, handle string) ([]byte, error) {
 }
 
 func (r *recorder) SetSeat(
-	_ context.Context, handle string, body []byte, summary, _, expect string,
+	_ context.Context, handle string, body []byte, summary string, by iam.Actor,
+	expect string,
 ) (string, error) {
 	if r.failApp != nil {
 		return "", r.failApp
 	}
 	r.events = append(r.events,
-		"seat:"+handle+" body="+string(body)+" summary="+summary+" expect="+expect)
+		"seat:"+handle+" body="+string(body)+" summary="+summary+" expect="+expect+
+			" by="+by.Name+"/"+string(by.Kind)+"/"+by.OperatorID)
 	return "CREWLET_CHART_LOG@1:9", nil
 }
 
@@ -268,7 +286,7 @@ func (r *recorder) Current(context.Context) (string, error) {
 	return r.active, nil
 }
 
-func (r *recorder) Reload(_ context.Context, summary, _ string) (string, int64, error) {
+func (r *recorder) Reload(_ context.Context, summary string, _ iam.Actor) (string, int64, error) {
 	if r.failApp != nil {
 		return "", 0, r.failApp
 	}
@@ -343,7 +361,7 @@ func TestTheSecretIsWrittenBeforeTheConfigPointsAtIt(t *testing.T) {
 	result, err := writer(rec).Write(context.Background(), datadogReqs, setup.Submission{
 		Kind:    integration.KindDatadog,
 		Values:  map[string]string{"webhook_token": "s3cr3t-value", "route_to": "sre-lead"},
-		Summary: "connect datadog", Operator: "founder",
+		Summary: "connect datadog", By: founder,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -372,6 +390,16 @@ func TestTheSecretIsWrittenBeforeTheConfigPointsAtIt(t *testing.T) {
 	if len(result.Secrets) != 1 || result.Secrets[0] != "DATADOG_WEBHOOK_TOKEN" {
 		t.Errorf("wrote_secrets = %v", result.Secrets)
 	}
+	// BOTH WRITES ARE THE SUBMITTER'S, whole: the author, their kind and
+	// the credential they submitted through, on the sealed row and on the
+	// revision alike. Mutation: hand either write only the name and its
+	// half fails.
+	for i, what := range []string{"the sealed row", "the revision"} {
+		if !strings.Contains(rec.events[i], " by="+founderRecorded) {
+			t.Errorf("%s is written %q, want by=%s", what, rec.events[i],
+				founderRecorded)
+		}
+	}
 	if rec.secrets["DATADOG_WEBHOOK_TOKEN"] != "s3cr3t-value" {
 		t.Errorf("the sealed value is %q", rec.secrets["DATADOG_WEBHOOK_TOKEN"])
 	}
@@ -387,7 +415,7 @@ func TestRotatingAValueStillAdvancesTheEpoch(t *testing.T) {
 	result, err := writer(rec).Write(context.Background(), rotating, setup.Submission{
 		Kind:    integration.KindDatadog,
 		Values:  map[string]string{"webhook_token": "fresh"},
-		Summary: "rotate datadog", Operator: "founder",
+		Summary: "rotate datadog", By: founder,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -518,7 +546,7 @@ func TestAPerSeatSubmissionWritesThroughTheSeat(t *testing.T) {
 	}}
 	result, err := writer(rec).Write(context.Background(), reqs, setup.Submission{
 		Kind: integration.KindSlack, Seat: "sre-lead",
-		Values: map[string]string{"bot_token": "xoxb-value"}, Operator: "founder",
+		Values: map[string]string{"bot_token": "xoxb-value"}, By: founder,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -584,7 +612,7 @@ func TestASubmittedReferenceIsStoredAsAPointer(t *testing.T) {
 	result, err := writer(rec).Write(context.Background(), datadogReqs, setup.Submission{
 		Kind:    integration.KindDatadog,
 		Values:  map[string]string{"webhook_token": "${SHARED_TOKEN}", "route_to": "sre-lead"},
-		Summary: "point datadog at a stored secret", Operator: "founder",
+		Summary: "point datadog at a stored secret", By: founder,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -619,7 +647,7 @@ func TestACompositeIsSealedRatherThanPointedAt(t *testing.T) {
 	if _, err := writer(rec).Write(context.Background(), datadogReqs, setup.Submission{
 		Kind:    integration.KindDatadog,
 		Values:  map[string]string{"webhook_token": "https://${HOST}/hook"},
-		Summary: "connect datadog", Operator: "founder",
+		Summary: "connect datadog", By: founder,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -736,7 +764,7 @@ func TestASubmissionIsTrimmedAndRefusesASpaceInsideAToken(t *testing.T) {
 			// FREE TEXT KEEPS ITS SPACES. A role is several words.
 			"role": "  Datadog Read Only Role  ",
 		},
-		Summary: "connect jira", Operator: "founder",
+		Summary: "connect jira", By: founder,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -754,7 +782,7 @@ func TestASubmissionIsTrimmedAndRefusesASpaceInsideAToken(t *testing.T) {
 	_, err := writer(&recorder{}).Write(context.Background(), reqs, setup.Submission{
 		Kind:    integration.KindJira,
 		Values:  map[string]string{"email": "ops@acme example.com"},
-		Summary: "connect jira", Operator: "founder",
+		Summary: "connect jira", By: founder,
 	})
 	if err == nil {
 		t.Fatal("a space inside an email was accepted")
@@ -782,7 +810,7 @@ func TestAnInteriorSpaceIsRefusedNamingTheValue(t *testing.T) {
 	_, err := writer(rec).Write(context.Background(), reqs, setup.Submission{
 		Kind:    integration.KindGitLab,
 		Values:  map[string]string{"url": "https://gitlab example.com"},
-		Summary: "connect gitlab", Operator: "founder",
+		Summary: "connect gitlab", By: founder,
 	})
 	if err == nil {
 		t.Fatal("a url with a space in the middle was accepted")

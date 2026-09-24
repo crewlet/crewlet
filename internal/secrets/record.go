@@ -33,17 +33,59 @@ type Record struct {
 
 	UpdatedAt time.Time
 
-	// UpdatedBy and Source are provenance: who wrote it and through what —
-	// an operator at the CLI, a provisioning run that minted a token.
-	// Answering "where did this credential come from" months later is the
-	// whole reason they are fields rather than a log line.
-	UpdatedBy string
-	Source    string
+	// UpdatedBy, UpdatedByKind, OperatorID and Source are provenance: who
+	// wrote it, what sort of author that is, the credential they acted
+	// through, and the surface it arrived by — an operator at the CLI, a
+	// provisioning run that minted a token. Answering "where did this
+	// credential come from" months later is the whole reason they are
+	// fields rather than a log line. See [Author] for why the first three
+	// are three.
+	UpdatedBy     string
+	UpdatedByKind string
+	OperatorID    string
+	Source        string
 
 	// Version is the store's own revision of the row, where the store has
 	// one: what a write or a delete conditioned on "nothing has changed
 	// since I read it" names. Zero where the store keeps none.
 	Version uint64
+}
+
+// Author is who writes a secret: the three facts every other trail in the
+// engine records beside a change — the NAME the change is attributed to, what
+// KIND of author that is, and the CREDENTIAL the write was made through.
+//
+// # Why two names and not one
+//
+// The store used to record one, and it was the credential: right for a Tier A
+// token, whose name is its credential, and a loss for everybody else. A person
+// writing through their own machine token was recorded as `pat:<id>`, and the
+// token's row — the one thing that says whose it was — is swept a week after
+// it expires, so the credential's name outlived the only record of its owner.
+// The author is whose authority was exercised; the credential is what it was
+// exercised through; a trail that can answer only one of "who" and "how"
+// cannot answer an investigation, which asks both.
+//
+// # Why it restates iam.Actor rather than importing it
+//
+// This package imports nothing from the rest of the engine, which is what lets
+// config depend on it. So the shape is restated as strings, and the surface
+// that holds a principal fills it from internal/iam's ActorFor — the one
+// function every trail's author comes from.
+type Author struct {
+	// Name is the author: a seat's handle for a person bound to one, a
+	// login otherwise, `token:<id>` for a Tier A token, the node for the
+	// engine's own writes.
+	Name string
+
+	// Kind is internal/iam's actor kind — agent, human, operator, system.
+	Kind string
+
+	// OperatorID is the credential the write was made through: a machine
+	// token's `pat:<id>`, a browser session's `session:<lineage>`, a Tier
+	// A token's login. EMPTY for a write no credential made — the engine's
+	// own, and a command run on the host while the engine was stopped.
+	OperatorID string
 }
 
 // ErrNoKeyring reports a secret store asked to work without one.

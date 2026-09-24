@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // Writing a submission: the secret first, then the pointer, then the epoch.
@@ -38,7 +40,8 @@ import (
 // uses: the fleet store's own type has a rekey, a lister and a reader, and a
 // setup route must never be able to read a value back.
 type Secrets interface {
-	Set(ctx context.Context, name, value, by, source string, now time.Time) error
+	Set(ctx context.Context, name, value string, by secrets.Author,
+		source string, now time.Time) error
 }
 
 // Config is the company document this package patches.
@@ -46,9 +49,15 @@ type Secrets interface {
 // One method, and it is the exported core of PATCH /config, so a setup write
 // merges, validates, seals and activates through exactly the code an operator
 // driving that route by hand goes through.
+//
+// BY IS WHO THE WRITE IS ATTRIBUTED TO, whole — [iam.ActorFor]'s author, kind
+// and credential — because every revision and every seat record it produces
+// keeps all three.
 type Config interface {
-	Apply(ctx context.Context, patch []byte, summary, operator, expect string) (revisionID string, epoch int64, err error)
-	Reload(ctx context.Context, summary, operator string) (revisionID string, epoch int64, err error)
+	Apply(ctx context.Context, patch []byte, summary string, by iam.Actor,
+		expect string) (revisionID string, epoch int64, err error)
+	Reload(ctx context.Context, summary string, by iam.Actor) (
+		revisionID string, epoch int64, err error)
 	// Current is the revision a conditional submission is checked against
 	// BEFORE anything is sealed. Apply performs the same check, and has
 	// to, because the document can move between here and there. But by
@@ -71,7 +80,14 @@ type Config interface {
 	// writes above and IGNORED here: it is an `If-Match` against a
 	// revision, and there is none to match.
 	Seat(ctx context.Context, handle string) ([]byte, error)
-	SetSeat(ctx context.Context, handle string, body []byte, summary, operator, expect string) (position string, err error)
+	SetSeat(ctx context.Context, handle string, body []byte, summary string,
+		by iam.Actor, expect string) (position string, err error)
+}
+
+// authorOf is a write's attribution as the secret store records an author.
+func authorOf(by iam.Actor) secrets.Author {
+	return secrets.Author{Name: by.Name, Kind: string(by.Kind),
+		OperatorID: by.OperatorID}
 }
 
 // Source is the value the secret store records for a row this package wrote,
@@ -98,8 +114,9 @@ type Submission struct {
 	// screen.
 	Summary string
 
-	// Operator is who the revision and the secret rows record.
-	Operator string
+	// By is who the revision, the seat record and the secret rows record:
+	// the author, its kind and the credential the submission came through.
+	By iam.Actor
 
 	// Expect is the revision the requirement list was computed against.
 	Expect string
@@ -252,7 +269,7 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 	written := []string{}
 	for _, p := range secretsToWrite {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := w.Secrets.Set(ctx, p.name, p.value, in.Operator, Source, now); err != nil {
+		if err := w.Secrets.Set(ctx, p.name, p.value, authorOf(in.By), Source, now); err != nil {
 			// Named, never valued. The name is a fact an operator needs;
 			// the value is the one thing that must not reach a log or a
 			// response body.
@@ -269,7 +286,7 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 			return Result{}, fmt.Errorf("setup: the submission carried no values")
 		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.Operator)
+		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.By)
 		if err != nil {
 			return Result{}, err
 		}
@@ -280,7 +297,7 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 	if err != nil {
 		return Result{}, fmt.Errorf("setup: encode the patch: %w", err)
 	}
-	id, epoch, err := w.Config.Apply(ctx, body, in.Summary, in.Operator, in.Expect)
+	id, epoch, err := w.Config.Apply(ctx, body, in.Summary, in.By, in.Expect)
 	if err != nil {
 		// THE SECRETS STAY. A value sealed under a name nothing points at
 		// yet is inert and harmless, and deleting it here would be a
@@ -372,7 +389,7 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 	written := []string{}
 	for _, p := range secretsToWrite {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := w.Secrets.Set(ctx, p.name, p.value, in.Operator, Source, now); err != nil {
+		if err := w.Secrets.Set(ctx, p.name, p.value, authorOf(in.By), Source, now); err != nil {
 			return Result{}, fmt.Errorf("setup: seal %s: %w", p.name, err)
 		}
 		written = append(written, p.name)
@@ -386,7 +403,7 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 			return Result{}, fmt.Errorf("setup: the submission carried no values")
 		}
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.Operator)
+		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.By)
 		if err != nil {
 			return Result{}, err
 		}
@@ -397,7 +414,7 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 	if err != nil {
 		return Result{}, fmt.Errorf("setup: encode seat %s: %w", in.Seat, err)
 	}
-	at, err := w.Config.SetSeat(ctx, in.Seat, body, in.Summary, in.Operator, in.Expect)
+	at, err := w.Config.SetSeat(ctx, in.Seat, body, in.Summary, in.By, in.Expect)
 	if err != nil {
 		return Result{Secrets: written}, err
 	}

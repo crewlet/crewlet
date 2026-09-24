@@ -94,8 +94,11 @@ func operatorName(name string) error {
 	return nil
 }
 
-// Set seals a value and writes it for the whole fleet.
-func (s *Store) Set(ctx context.Context, name, value, by, source string, now time.Time) error {
+// Set seals a value and writes it for the whole fleet, recording its author
+// and the credential beside them — see [secrets.Author].
+func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
+	source string, now time.Time) error {
+
 	if s == nil || s.cipher == nil {
 		return secrets.ErrNoKeyring
 	}
@@ -113,33 +116,45 @@ func (s *Store) Set(ctx context.Context, name, value, by, source string, now tim
 
 // put seals a value under its own name and writes it, once the caller's view
 // has established the name is one it may write.
-func (s *Store) put(ctx context.Context, name, value, by, source string, now time.Time) error {
-	rec, err := s.seal(name, value, by, source, now)
+func (s *Store) put(ctx context.Context, name, value string, by secrets.Author,
+	source string, now time.Time) error {
+
+	rec, err := s.seal(provenance(name, by, source, now), value)
 	if err != nil {
 		return err
 	}
 	return s.fleet.PutSecret(ctx, rec)
 }
 
-// seal is one value as the row every write hands coordination: sealed under
-// its own name, with the key id denormalised beside it.
-func (s *Store) seal(name, value, by, source string, now time.Time) (
-	coord.SecretRecord, error) {
+// provenance is a row's name and who is writing it, before anything is
+// sealed: the author, what sort of author, the credential beside them, the
+// surface it arrived by and when.
+func provenance(name string, by secrets.Author, source string,
+	now time.Time) coord.SecretRecord {
 
-	sealed, err := s.cipher.Encrypt(value, secrets.AADForVar(name))
+	return coord.SecretRecord{
+		Name: name, UpdatedAt: now.UTC(), UpdatedBy: by.Name,
+		UpdatedByKind: by.Kind, OperatorID: by.OperatorID, Source: source,
+	}
+}
+
+// seal is value sealed into rec, under rec's own name and with the key id
+// denormalised beside it — the row every write hands coordination, with its
+// provenance as rec states it. A write names who is writing it; a rekey keeps
+// the provenance the row already carries.
+func (s *Store) seal(rec coord.SecretRecord, value string) (coord.SecretRecord, error) {
+	sealed, err := s.cipher.Encrypt(value, secrets.AADForVar(rec.Name))
 	if err != nil {
 		return coord.SecretRecord{}, fmt.Errorf("fleetsecrets: seal %s: %w",
-			displayName(name), err)
+			displayName(rec.Name), err)
 	}
 	keyID, ok := secrets.EnvelopeKeyID(sealed)
 	if !ok {
 		return coord.SecretRecord{}, fmt.Errorf("fleetsecrets: seal %s: the "+
-			"cipher produced no key id", displayName(name))
+			"cipher produced no key id", displayName(rec.Name))
 	}
-	return coord.SecretRecord{
-		Name: name, Value: sealed, KeyID: keyID,
-		UpdatedAt: now.UTC(), UpdatedBy: by, Source: source,
-	}, nil
+	rec.Value, rec.KeyID = sealed, keyID
+	return rec, nil
 }
 
 // Get unseals one value.
@@ -333,7 +348,14 @@ type Rekeyed struct {
 // A row already under the active key is left alone, so a second run reports
 // nothing and costs one read — which is what makes this safe to put in a
 // deploy script.
-func (s *Store) Rekey(ctx context.Context, activeKeyID, by string, now time.Time) (Rekeyed, error) {
+//
+// THE PROVENANCE IS KEPT: a rekey re-seals a value it did not choose, so each
+// row goes on saying who stored it, through what and when. It used to stamp
+// the rekeyer and `rekey` over every row, which made every credential in the
+// company read as set by whoever rotated the keyring — erasing the one record
+// of who set each, the loss [secrets.Author] exists to prevent. Who rotated
+// the keyring is the rotation's own fact, and its caller reports it.
+func (s *Store) Rekey(ctx context.Context, activeKeyID string) (Rekeyed, error) {
 	var out Rekeyed
 	if s == nil || s.cipher == nil {
 		return out, secrets.ErrNoKeyring
@@ -343,7 +365,7 @@ func (s *Store) Rekey(ctx context.Context, activeKeyID, by string, now time.Time
 		return out, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
 	}
 	for _, row := range rows {
-		moved, err := s.rekeyRow(ctx, row, activeKeyID, by, now)
+		moved, err := s.rekeyRow(ctx, row, activeKeyID)
 		if err != nil {
 			// The names moved so far come back WITH the error: a
 			// partial rekey is a fact an operator has to act on, and
@@ -386,8 +408,8 @@ const movedRowAttempts = 3
 // removal promises cannot happen. So a row that moved is read again and judged
 // on what it holds now (a writer on the active key already has nothing to
 // move), and a row that went is left gone.
-func (s *Store) rekeyRow(ctx context.Context, row coord.SecretRecord, activeKeyID,
-	by string, now time.Time) (bool, error) {
+func (s *Store) rekeyRow(ctx context.Context, row coord.SecretRecord,
+	activeKeyID string) (bool, error) {
 
 	for attempt := 1; ; attempt++ {
 		if row.KeyID == activeKeyID {
@@ -406,7 +428,7 @@ func (s *Store) rekeyRow(ctx context.Context, row coord.SecretRecord, activeKeyI
 			return false, fmt.Errorf("fleetsecrets: open %s for rekey: %w",
 				displayName(row.Name), err)
 		}
-		resealed, err := s.seal(row.Name, value, by, "rekey", now)
+		resealed, err := s.seal(row, value)
 		if err != nil {
 			return false, err
 		}
@@ -449,7 +471,8 @@ func displayName(name string) string {
 func record(row coord.SecretRecord) secrets.Record {
 	return secrets.Record{
 		Name: row.Name, KeyID: row.KeyID, UpdatedAt: row.UpdatedAt,
-		UpdatedBy: row.UpdatedBy, Source: row.Source, Version: row.Version,
+		UpdatedBy: row.UpdatedBy, UpdatedByKind: row.UpdatedByKind,
+		OperatorID: row.OperatorID, Source: row.Source, Version: row.Version,
 	}
 }
 
@@ -482,7 +505,9 @@ func (e *Estate) Get(ctx context.Context, name string) (string, error) {
 }
 
 // Set seals and writes one of the engine's own rows.
-func (e *Estate) Set(ctx context.Context, name, value, by, source string, now time.Time) error {
+func (e *Estate) Set(ctx context.Context, name, value string, by secrets.Author,
+	source string, now time.Time) error {
+
 	if e == nil || e.store.cipher == nil {
 		return secrets.ErrNoKeyring
 	}
@@ -501,8 +526,8 @@ func (e *Estate) Set(ctx context.Context, name, value, by, source string, now ti
 // old key unreadable; a read-then-put that found none races the next minter to
 // the same outcome. Only the store can decide "none is there" and "write mine"
 // as one step.
-func (e *Estate) Create(ctx context.Context, name, value, by, source string,
-	now time.Time) (bool, error) {
+func (e *Estate) Create(ctx context.Context, name, value string, by secrets.Author,
+	source string, now time.Time) (bool, error) {
 
 	if e == nil || e.store.cipher == nil {
 		return false, secrets.ErrNoKeyring
@@ -510,7 +535,7 @@ func (e *Estate) Create(ctx context.Context, name, value, by, source string,
 	if err := secrets.CheckEstateName(name); err != nil {
 		return false, err
 	}
-	rec, err := e.store.seal(name, value, by, source, now)
+	rec, err := e.store.seal(provenance(name, by, source, now), value)
 	if err != nil {
 		return false, err
 	}
@@ -540,8 +565,8 @@ func (e *Estate) Create(ctx context.Context, name, value, by, source string,
 //
 // NO KEYRING NEEDED: the envelope is written back as it was read, so nothing
 // is opened or sealed.
-func (e *Estate) Touch(ctx context.Context, name, by, source string,
-	now time.Time) (bool, error) {
+func (e *Estate) Touch(ctx context.Context, name string, by secrets.Author,
+	source string, now time.Time) (bool, error) {
 
 	if e == nil {
 		return false, secrets.ErrNoKeyring
@@ -558,8 +583,10 @@ func (e *Estate) Touch(ctx context.Context, name, by, source string,
 		if !found {
 			return false, nil
 		}
-		touched := row
-		touched.UpdatedAt, touched.UpdatedBy, touched.Source = now.UTC(), by, source
+		// THE ENVELOPE AS IT WAS, the provenance as this gesture: who
+		// re-used the key is exactly what the new write time is about.
+		touched := provenance(name, by, source, now)
+		touched.Value, touched.KeyID = row.Value, row.KeyID
 		wrote, err := e.store.fleet.UpdateSecret(ctx, touched, row.Version)
 		if err != nil {
 			return false, fmt.Errorf("fleetsecrets: touch %s: %w", displayName(name), err)

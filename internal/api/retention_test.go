@@ -14,7 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // fakeBackupRegister records the point the acknowledgement wrote.
@@ -39,6 +41,10 @@ func (f *fakeBackupRegister) PutBackupPoint(_ context.Context, p coord.BackupPoi
 type fakeStateLog struct {
 	generations map[string]uint32
 	asked       string
+
+	// capacity is the last resize asked for, which is where a case about
+	// who pressed it looks.
+	capacity engine.CapacityRequest
 }
 
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
@@ -57,10 +63,28 @@ func (f *fakeStateLog) Reanchor(context.Context, engine.ReanchorRequest) (uint32
 	return 0, errors.New("not exercised here")
 }
 
-func (f *fakeStateLog) SetCapacity(context.Context, engine.CapacityRequest) (
+func (f *fakeStateLog) SetCapacity(_ context.Context, req engine.CapacityRequest) (
 	coord.MaintenanceOperation, error) {
 
+	f.capacity = req
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
+}
+
+// fakeNodeGate records who each eviction and readmission was written as.
+type fakeNodeGate struct{ by []iam.Actor }
+
+func (g *fakeNodeGate) EvictNode(_ context.Context, _, _ string, by iam.Actor) (
+	tracker.WriteResult, error) {
+
+	g.by = append(g.by, by)
+	return tracker.WriteResult{}, nil
+}
+
+func (g *fakeNodeGate) ReadmitNode(_ context.Context, _, _ string, by iam.Actor) (
+	tracker.WriteResult, error) {
+
+	g.by = append(g.by, by)
+	return tracker.WriteResult{}, nil
 }
 
 func (f *fakeStateLog) AbandonCapacity(context.Context, string) (
@@ -100,6 +124,42 @@ func postAck(t *testing.T, a *api.App, path string) (int, map[string]any) {
 	var body map[string]any
 	_ = json.NewDecoder(rec.Result().Body).Decode(&body)
 	return rec.Code, body
+}
+
+// THE FLEET'S CONTROLS RECORD WHO PRESSED THEM: the eviction gate is handed
+// the caller whole, and a resize and a re-anchor name the caller's author and
+// the credential beside it.
+//
+// The gate was handed nothing about its caller, so an eviction recorded this
+// node's own writer; and a resize recorded one name, the credential's.
+// Mutation: hand the gate an empty party, or drop the credential from the
+// resize, and the matching half fails.
+func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
+	t.Parallel()
+	gate := &fakeNodeGate{}
+	log := &fakeStateLog{}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: gate})
+	want := iam.Actor{Name: "token:founder", Kind: iam.ActorOperator,
+		OperatorID: "token:founder"}
+
+	for _, path := range []string{"/work/retention/evict/n1?confirm=n1",
+		"/work/retention/readmit/n1?confirm=n1"} {
+		if code, body := postAck(t, a, path); code != http.StatusOK {
+			t.Fatalf("%s answered %d: %v", path, code, body)
+		}
+	}
+	if len(gate.by) != 2 || gate.by[0] != want || gate.by[1] != want {
+		t.Errorf("the gate was written as %+v, want %+v twice", gate.by, want)
+	}
+
+	postAck(t, a, "/work/retention/capacity?stream=CREWLET_TRACKER_LOG"+
+		"&bytes=1048576&confirm=1048576")
+	if log.capacity.By != want.Name || log.capacity.OperatorID != want.OperatorID {
+		t.Errorf("the resize names %q through %q, want %q through %q",
+			log.capacity.By, log.capacity.OperatorID, want.Name, want.OperatorID)
+	}
 }
 
 // AN ACKNOWLEDGEMENT IS STAMPED WITH THE NAMED STREAM'S OWN GENERATION.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Writing ONE entity from inside this process.
@@ -37,8 +38,8 @@ type ApplyEntityRequest struct {
 	// Body is the entity's JSON, whole.
 	Body []byte
 
-	Summary  string
-	Operator string
+	Summary string
+	By      iam.Actor
 
 	// Expect is the revision the caller built this edit on, empty for
 	// unconditional. See [ApplyRequest.Expect].
@@ -62,7 +63,7 @@ func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Appl
 	if err != nil {
 		return Applied{}, err
 	}
-	return s.commit(ctx, prepared, req.Summary, req.Operator)
+	return s.commit(ctx, prepared, req.Summary, req.By)
 }
 
 // entityDraft replaces the entity of one kind under one id.

@@ -250,11 +250,14 @@ type MaintenanceOperation struct {
 	Blocked string `json:"blocked,omitempty"`
 
 	// EnteredAt is when the exclusion was taken and By which operator ran
-	// the verb. Revision is the store's own, for the compare-and-set every
-	// mutation is.
-	EnteredAt time.Time `json:"entered_at"`
-	By        string    `json:"by"`
-	Revision  uint64    `json:"-"`
+	// the verb — the author — with OperatorID the credential they ran it
+	// through, empty on an operation a build that did not record it opened.
+	// Revision is the store's own, for the compare-and-set every mutation
+	// is.
+	EnteredAt  time.Time `json:"entered_at"`
+	By         string    `json:"by"`
+	OperatorID string    `json:"operator_id,omitempty"`
+	Revision   uint64    `json:"-"`
 }
 
 // MaintenanceAck is one participant's evidence that its process restarted.

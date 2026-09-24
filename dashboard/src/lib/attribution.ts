@@ -97,3 +97,30 @@ export function attribution(history: readonly WorkChange[] | undefined): Map<str
   }
   return out;
 }
+
+/**
+ * The credential a write was made through, where it says something its author
+ * does not — or empty.
+ *
+ * TWO NAMES, because every trail records two: the AUTHOR whose authority a
+ * write exercised, and the CREDENTIAL it was made through — a person's machine
+ * token (`pat:<id>`) or browser session (`session:<lineage>`). A Tier A token's
+ * login is both, and "token:ops through token:ops" says one thing twice, so
+ * that credential is not repeated. The engine's command line draws the same
+ * line (`describeAuthor` in cmd/crewlet).
+ */
+export function throughOf(author: string, operatorId: string | undefined): string {
+  return operatorId && operatorId !== author ? operatorId : "";
+}
+
+/**
+ * A recorded author and the credential beside it, as one line a person reads:
+ * `jane.doe (through pat:…)`, or the author alone where [throughOf] has
+ * nothing to add. Empty where no author was recorded, which a caller renders
+ * as its own "nobody recorded" rather than as a name.
+ */
+export function authorLabel(author: string, operatorId: string | undefined): string {
+  if (!author) return "";
+  const through = throughOf(author, operatorId);
+  return through ? `${author} (through ${through})` : author;
+}

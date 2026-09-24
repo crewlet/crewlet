@@ -40,6 +40,8 @@ type keyStore struct {
 	// version an earlier one had.
 	versions map[string]uint64
 	version  uint64
+	// by is who each value was last written as.
+	by map[string]secrets.Author
 	// fail, when set, is what every call answers. It is what stands in for
 	// a coordination store this node cannot reach.
 	fail error
@@ -82,21 +84,23 @@ func (k *keyStore) Keys(_ context.Context, prefix string) ([]secrets.Record, err
 
 func newKeyStore() *keyStore {
 	return &keyStore{values: map[string]string{}, written: map[string]time.Time{},
-		versions: map[string]uint64{}}
+		versions: map[string]uint64{}, by: map[string]secrets.Author{}}
 }
 
-// store writes one value at the next version. The caller holds the lock.
-func (k *keyStore) store(name, value string, now time.Time) {
+// store writes one value at the next version, as by. The caller holds the
+// lock.
+func (k *keyStore) store(name, value string, by secrets.Author, now time.Time) {
 	k.version++
 	k.values[name] = value
 	k.written[name] = now
 	k.versions[name] = k.version
+	k.by[name] = by
 }
 
 // Create writes a value only where none is stored, as the real store's
 // create-only write does.
-func (k *keyStore) Create(_ context.Context, name, value, _, _ string,
-	now time.Time) (bool, error) {
+func (k *keyStore) Create(_ context.Context, name, value string, by secrets.Author,
+	_ string, now time.Time) (bool, error) {
 
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -106,12 +110,13 @@ func (k *keyStore) Create(_ context.Context, name, value, _, _ string,
 	if _, exists := k.values[name]; exists {
 		return false, nil
 	}
-	k.store(name, value, now)
+	k.store(name, value, by, now)
 	return true, nil
 }
 
 // Touch re-dates a value only while it is there, moving its version.
-func (k *keyStore) Touch(_ context.Context, name, _, _ string, now time.Time) (bool, error) {
+func (k *keyStore) Touch(_ context.Context, name string, by secrets.Author, _ string,
+	now time.Time) (bool, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.fail != nil {
@@ -121,7 +126,7 @@ func (k *keyStore) Touch(_ context.Context, name, _, _ string, now time.Time) (b
 	if !exists {
 		return false, nil
 	}
-	k.store(name, value, now)
+	k.store(name, value, by, now)
 	return true, nil
 }
 
@@ -141,7 +146,15 @@ func (k *keyStore) UnsetAt(_ context.Context, name string, version uint64) (bool
 	delete(k.values, name)
 	delete(k.written, name)
 	delete(k.versions, name)
+	delete(k.by, name)
 	return true, nil
+}
+
+// author is who the value under name was last written as.
+func (k *keyStore) author(name string) secrets.Author {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.by[name]
 }
 
 // value and put are how a case reaches inside the fake, under its own lock.
@@ -154,7 +167,7 @@ func (k *keyStore) value(name string) string {
 func (k *keyStore) put(name, value string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.store(name, value, k.written[name])
+	k.store(name, value, k.by[name], k.written[name])
 }
 
 // count is how many reads the fake has served, under its own lock.
@@ -184,13 +197,15 @@ func (k *keyStore) Get(_ context.Context, name string) (string, error) {
 	return value, nil
 }
 
-func (k *keyStore) Set(_ context.Context, name, value, _, _ string, now time.Time) error {
+func (k *keyStore) Set(_ context.Context, name, value string, by secrets.Author,
+	_ string, now time.Time) error {
+
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.fail != nil {
 		return k.fail
 	}
-	k.store(name, value, now)
+	k.store(name, value, by, now)
 	return nil
 }
 
@@ -207,10 +222,14 @@ func (k *keyStore) Unset(_ context.Context, name string) (bool, error) {
 	delete(k.values, name)
 	delete(k.written, name)
 	delete(k.versions, name)
+	delete(k.by, name)
 	return had, nil
 }
 
 const who = "018f3a9c-0000-7000-8000-000000000001"
+
+// mintedBy is the party a case's key mint records.
+var mintedBy = secrets.Author{Name: "operator", Kind: string(iam.ActorOperator)}
 
 func newSealer(t *testing.T) (*iamdomain.Sealer, *keyStore) {
 	t.Helper()
@@ -233,7 +252,7 @@ func TestARemovalMakesANameUnrecoverableFromAnEarlierArtefact(t *testing.T) {
 	t.Parallel()
 	sealer, _ := newSealer(t)
 	ctx := t.Context()
-	if err := sealer.Mint(ctx, who, "operator", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, who, mintedBy, time.Now()); err != nil {
 		t.Fatalf("mint: %v", err)
 	}
 
@@ -282,7 +301,7 @@ func TestASecondRemovalIsAnOrdinaryNoOpThatSaysSo(t *testing.T) {
 	t.Parallel()
 	sealer, _ := newSealer(t)
 	ctx := t.Context()
-	if err := sealer.Mint(ctx, who, "operator", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, who, mintedBy, time.Now()); err != nil {
 		t.Fatalf("mint: %v", err)
 	}
 	first, err := sealer.Shred(ctx, who)
@@ -310,7 +329,7 @@ func TestAMintOverALiveKeyKeepsTheKeyItFound(t *testing.T) {
 	t.Parallel()
 	sealer, _ := newSealer(t)
 	ctx := t.Context()
-	if err := sealer.Mint(ctx, who, "operator", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, who, mintedBy, time.Now()); err != nil {
 		t.Fatalf("mint: %v", err)
 	}
 	sealed, err := sealer.Seal(ctx, who, iamdomain.FieldName, "Sarah Chen")
@@ -318,7 +337,7 @@ func TestAMintOverALiveKeyKeepsTheKeyItFound(t *testing.T) {
 		t.Fatalf("seal: %v", err)
 	}
 	// The retry: the same record, applied again, on this node or another.
-	if err := sealer.Mint(ctx, who, "operator", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, who, mintedBy, time.Now()); err != nil {
 		t.Fatalf("a repeated mint failed: %v — the record that asks for one is "+
 			"replayed on every node", err)
 	}
@@ -342,7 +361,7 @@ func TestAnUnreachableStoreNeverReadsAsNoKey(t *testing.T) {
 	t.Parallel()
 	sealer, store := newSealer(t)
 	ctx := t.Context()
-	if err := sealer.Mint(ctx, who, "operator", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, who, mintedBy, time.Now()); err != nil {
 		t.Fatalf("mint: %v", err)
 	}
 	sealed, err := sealer.Seal(ctx, who, iamdomain.FieldName, "Sarah Chen")
@@ -354,7 +373,7 @@ func TestAnUnreachableStoreNeverReadsAsNoKey(t *testing.T) {
 	store.mu.Lock()
 	store.fail = errors.New("the coordination store could not be reached")
 	store.mu.Unlock()
-	if err := sealer.Mint(ctx, who, "operator", time.Now()); err == nil {
+	if err := sealer.Mint(ctx, who, mintedBy, time.Now()); err == nil {
 		t.Fatal("a mint against a store that answered nothing reported success")
 	}
 	store.mu.Lock()
@@ -401,13 +420,13 @@ func TestTwoMintsOfOneIDSealUnderOneKey(t *testing.T) {
 	)
 	go func() {
 		defer close(done)
-		if firstErr = sealer.Mint(ctx, who, "node-a", time.Now()); firstErr != nil {
+		if firstErr = sealer.Mint(ctx, who, mintedBy, time.Now()); firstErr != nil {
 			return
 		}
 		first, firstErr = sealer.Seal(ctx, who, iamdomain.FieldName, "Dana (first attempt)")
 	}()
 	<-firstRead
-	if err := sealer.Mint(ctx, who, "node-a", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, who, mintedBy, time.Now()); err != nil {
 		t.Fatalf("the second mint: %v", err)
 	}
 	second, err := sealer.Seal(ctx, who, iamdomain.FieldName, "Dana (the retry)")
@@ -454,7 +473,7 @@ func TestOnePersonsSealedValueDoesNotOpenUnderAnother(t *testing.T) {
 	ctx := t.Context()
 	const other = "018f3a9c-0000-7000-8000-000000000002"
 	for _, id := range []string{who, other} {
-		if err := sealer.Mint(ctx, id, "operator", time.Now()); err != nil {
+		if err := sealer.Mint(ctx, id, mintedBy, time.Now()); err != nil {
 			t.Fatalf("mint %s: %v", id, err)
 		}
 	}
@@ -477,7 +496,7 @@ func TestOneFieldsSealedValueDoesNotOpenAsAnother(t *testing.T) {
 	t.Parallel()
 	sealer, _ := newSealer(t)
 	ctx := t.Context()
-	if err := sealer.Mint(ctx, who, "operator", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, who, mintedBy, time.Now()); err != nil {
 		t.Fatalf("mint: %v", err)
 	}
 	address, err := sealer.Seal(ctx, who, iamdomain.FieldEmail, "sarah.chen@example.com")
@@ -502,7 +521,7 @@ func TestNoKeyIsCachedAcrossOpens(t *testing.T) {
 	t.Parallel()
 	sealer, store := newSealer(t)
 	ctx := t.Context()
-	if err := sealer.Mint(ctx, who, "operator", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, who, mintedBy, time.Now()); err != nil {
 		t.Fatalf("mint: %v", err)
 	}
 	sealed, err := sealer.Seal(ctx, who, iamdomain.FieldName, "Sarah Chen")
@@ -537,7 +556,7 @@ func TestASealerRefusesWhatWouldSharOneKeyBetweenEverybody(t *testing.T) {
 	if _, err := sealer.Seal(ctx, "", iamdomain.FieldName, "Sarah Chen"); err == nil {
 		t.Error("a value was sealed for nobody")
 	}
-	if err := sealer.Mint(ctx, "", "operator", time.Now()); err == nil {
+	if err := sealer.Mint(ctx, "", mintedBy, time.Now()); err == nil {
 		t.Error("a key was minted for nobody")
 	}
 	if _, err := sealer.Shred(ctx, ""); err == nil {
@@ -621,7 +640,7 @@ func TestAnIDNoKeyCanBeAddressedUnderIsRefused(t *testing.T) {
 	t.Parallel()
 	sealer, store := newSealer(t)
 	for _, id := range []string{"018F3A9C-UPPER", "a/b", "with space"} {
-		if err := sealer.Mint(t.Context(), id, "operator", time.Now()); err == nil {
+		if err := sealer.Mint(t.Context(), id, mintedBy, time.Now()); err == nil {
 			t.Errorf("a key was minted for %q", id)
 		}
 	}
@@ -645,7 +664,7 @@ func TestAPersonsKeyLivesAndDiesInTheRealSecretStore(t *testing.T) {
 	}
 	ctx := t.Context()
 	id := uuid.Must(uuid.NewV7()).String()
-	if err := sealer.Mint(ctx, id, "node-a", time.Now()); err != nil {
+	if err := sealer.Mint(ctx, id, mintedBy, time.Now()); err != nil {
 		t.Fatalf("the real store refused a person's key: %v", err)
 	}
 	sealed, err := sealer.Seal(ctx, id, iamdomain.FieldName, "Sarah Chen")

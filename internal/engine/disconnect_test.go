@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -43,12 +44,12 @@ func TestEverySurfaceHasADisconnector(t *testing.T) {
 // short-circuits before the vendor step is ever reached.
 type noopWriter struct{}
 
-func (noopWriter) Apply(context.Context, []byte, string, string) error { return nil }
-func (noopWriter) Seat(context.Context, string) ([]byte, error)        { return nil, nil }
-func (noopWriter) SetSeat(context.Context, string, []byte, string, string) error {
+func (noopWriter) Apply(context.Context, []byte, string, iam.Actor) error { return nil }
+func (noopWriter) Seat(context.Context, string) ([]byte, error)           { return nil, nil }
+func (noopWriter) SetSeat(context.Context, string, []byte, string, iam.Actor) error {
 	return nil
 }
-func (noopWriter) Reload(context.Context, string, string) error { return nil }
+func (noopWriter) Reload(context.Context, string, iam.Actor) error { return nil }
 
 // A NODE WITH NO ACTIVE REVISION DOES NOT DIE ON A DISCONNECT IT CANNOT DO.
 //
@@ -164,7 +165,7 @@ roles:
 // operator's problem, at a third-party app, for about thirty-five seconds.
 func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
 	e, _ := sealingEngine(t, "https://jira.example.com")
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		t.Fatalf("SetupSink: %v", err)
 	}
@@ -208,7 +209,7 @@ func TestTheCredentialsOfARemovedAccountAreDeleted(t *testing.T) {
 // disconnect that only withdrew a webhook from touching the store at all.
 func TestATeardownThatRemovedNothingDeletesNothing(t *testing.T) {
 	e, _ := sealingEngine(t, "https://jira.example.com")
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		t.Fatalf("SetupSink: %v", err)
 	}
@@ -238,7 +239,7 @@ func TestATeardownThatRemovedNothingDeletesNothing(t *testing.T) {
 func TestANodeWithNoKeyringReportsTheCredentialsItCannotDelete(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	if _, err := e.SetupSink("test"); err == nil {
+	if _, err := e.SetupSink(testParty); err == nil {
 		t.Fatal("precondition: a node with no keyring must refuse a sink")
 	}
 
@@ -277,7 +278,7 @@ func TestADisconnectDeletesWhatItsTeardownStranded(t *testing.T) {
 	e.epoch.current.Store(company)
 	e.UseConfigWriter(noopWriter{})
 
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		t.Fatalf("SetupSink: %v", err)
 	}

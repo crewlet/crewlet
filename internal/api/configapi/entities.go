@@ -429,7 +429,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			s.refuseEntity(w, kind, id, err)
 			return
 		}
-		applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+		applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))
 		if err != nil {
 			s.refuseApply(w, err)
 			return

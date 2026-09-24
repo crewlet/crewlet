@@ -97,7 +97,10 @@ func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]
 			// stamped: "who set this" is the question the provenance
 			// columns exist to answer, and answering it with the
 			// migration would erase the only record of it.
-			if err := to.Set(ctx, row.Name, value, row.UpdatedBy, MigrateSource, now); err != nil {
+			if err := to.Set(ctx, row.Name, value, secrets.Author{
+				Name: row.UpdatedBy, Kind: row.UpdatedByKind,
+				OperatorID: row.OperatorID,
+			}, MigrateSource, now); err != nil {
 				return moved, fmt.Errorf("fleetsecrets: migrate %s: %w", row.Name, err)
 			}
 			moved = append(moved, row.Name)

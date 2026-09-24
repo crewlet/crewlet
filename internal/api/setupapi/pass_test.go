@@ -32,7 +32,7 @@ func TestTheSurfaceLeaseIsHeldWhenThePassIsRecorded(t *testing.T) {
 	for _, name := range []string{"GL_SIGN", "GL_ADMIN"} {
 		if err := s.vault.Set(t.Context(), name,
 			"whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM=",
-			"test", "test", pinned); err != nil {
+			testAuthor, "test", pinned); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -84,7 +84,7 @@ func TestThePassesOfOneSurfaceAreListable(t *testing.T) {
 	for _, name := range []string{"GL_SIGN", "GL_ADMIN"} {
 		if err := s.vault.Set(t.Context(), name,
 			"whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM=",
-			"test", "test", pinned); err != nil {
+			testAuthor, "test", pinned); err != nil {
 			t.Fatal(err)
 		}
 	}

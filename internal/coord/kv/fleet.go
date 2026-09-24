@@ -1619,6 +1619,13 @@ type activationRecord struct {
 	RevisionID string    `json:"revision_id"`
 	At         time.Time `json:"at"`
 	Summary    string    `json:"summary,omitempty"`
+
+	// The revision's author, ADDITIVE: a pointer a build without them
+	// published decodes with all three empty, and a build without them
+	// ignores them on the way in.
+	CreatedBy     string `json:"created_by,omitempty"`
+	CreatedByKind string `json:"created_by_kind,omitempty"`
+	OperatorID    string `json:"operator_id,omitempty"`
 }
 
 // Activate publishes a new target revision.
@@ -1639,6 +1646,8 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	}
 	raw, err := json.Marshal(activationRecord{
 		RevisionID: req.RevisionID, At: req.At.UTC(), Summary: req.Summary,
+		CreatedBy: req.CreatedBy, CreatedByKind: req.CreatedByKind,
+		OperatorID: req.OperatorID,
 	})
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/kv: encode the activation: %w", err)
@@ -1671,10 +1680,13 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 		return coord.Activation{}, err
 	}
 	return coord.Activation{
-		Epoch:      int64(revision),
-		RevisionID: req.RevisionID,
-		At:         req.At.UTC(),
-		Summary:    req.Summary,
+		Epoch:         int64(revision),
+		RevisionID:    req.RevisionID,
+		At:            req.At.UTC(),
+		Summary:       req.Summary,
+		CreatedBy:     req.CreatedBy,
+		CreatedByKind: req.CreatedByKind,
+		OperatorID:    req.OperatorID,
 	}, nil
 }
 
@@ -1822,10 +1834,13 @@ func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error)
 		return coord.Activation{}, false, unavailable("decode the activation pointer", err)
 	}
 	return coord.Activation{
-		Epoch:      int64(entry.Revision()),
-		RevisionID: record.RevisionID,
-		At:         record.At,
-		Summary:    record.Summary,
+		Epoch:         int64(entry.Revision()),
+		RevisionID:    record.RevisionID,
+		At:            record.At,
+		Summary:       record.Summary,
+		CreatedBy:     record.CreatedBy,
+		CreatedByKind: record.CreatedByKind,
+		OperatorID:    record.OperatorID,
 	}, true, nil
 }
 
@@ -1903,13 +1918,18 @@ func (f *FleetStore) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
 // keyring, which lives on each node's disk and never reaches this store — so
 // nothing here can open it and the key id beside it is the only thing a
 // rotation sweep needs to read.
+//
+// THE PROVENANCE IS ADDITIVE: a record an older build wrote carries no kind
+// and no credential, and decodes with both empty, which is what it knows.
 type secretRecord struct {
-	Name      string    `json:"name"`
-	Value     string    `json:"value"`
-	KeyID     string    `json:"key_id"`
-	UpdatedAt time.Time `json:"updated_at"`
-	UpdatedBy string    `json:"updated_by,omitempty"`
-	Source    string    `json:"source,omitempty"`
+	Name          string    `json:"name"`
+	Value         string    `json:"value"`
+	KeyID         string    `json:"key_id"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	UpdatedBy     string    `json:"updated_by,omitempty"`
+	UpdatedByKind string    `json:"updated_by_kind,omitempty"`
+	OperatorID    string    `json:"operator_id,omitempty"`
+	Source        string    `json:"source,omitempty"`
 }
 
 // Secret reads one sealed value.
@@ -1994,7 +2014,9 @@ func encodeSecret(rec coord.SecretRecord) ([]byte, error) {
 	}
 	raw, err := json.Marshal(secretRecord{
 		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
-		UpdatedAt: rec.UpdatedAt.UTC(), UpdatedBy: rec.UpdatedBy, Source: rec.Source,
+		UpdatedAt: rec.UpdatedAt.UTC(), UpdatedBy: rec.UpdatedBy,
+		UpdatedByKind: rec.UpdatedByKind, OperatorID: rec.OperatorID,
+		Source: rec.Source,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: encode the secret: %w", err)
@@ -2106,7 +2128,9 @@ func decodeSecret(raw []byte) (coord.SecretRecord, bool) {
 	}
 	return coord.SecretRecord{
 		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
-		UpdatedAt: rec.UpdatedAt, UpdatedBy: rec.UpdatedBy, Source: rec.Source,
+		UpdatedAt: rec.UpdatedAt, UpdatedBy: rec.UpdatedBy,
+		UpdatedByKind: rec.UpdatedByKind, OperatorID: rec.OperatorID,
+		Source: rec.Source,
 	}, true
 }
 

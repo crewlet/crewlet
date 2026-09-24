@@ -135,6 +135,7 @@ test("a tracker commit, a page change and a config revision land in one list", a
           kind: "saved",
           actor: "ada",
           actor_kind: "human",
+          operator_id: "session:0192f00e",
           at: RECENTLY,
           log_seq: 2,
           title: "Deploy runbook",
@@ -150,6 +151,8 @@ test("a tracker commit, a page change and a config revision land in one list", a
         summary: "turn on the Slack integration",
         source: "dashboard",
         created_by: "founder",
+        created_by_kind: "human",
+        operator_id: "pat:0192f00d",
         created_at: RECENTLY,
       },
     ],
@@ -163,6 +166,11 @@ test("a tracker commit, a page change and a config revision land in one list", a
   // separates "a person did this" from "a token did" from "the engine did".
   expect(screen.getAllByText("operator").length).toBeGreaterThan(0);
   expect(screen.getAllByText("human").length).toBeGreaterThan(0);
+  // AND THE CREDENTIAL BESIDE THE WRITER, on every source that records one:
+  // a revision a person's token wrote is theirs, and saying which token is
+  // what tells it from one they wrote by hand.
+  expect(screen.getByText("through pat:0192f00d")).toBeTruthy();
+  expect(screen.getByText("through session:0192f00e")).toBeTruthy();
 });
 
 // A PURGED TASK IS NOT A LINK.
@@ -246,14 +254,16 @@ test("the export escapes what a spreadsheet would otherwise split", () => {
       source: "config",
       kind: "dashboard",
       actor: "founder",
-      actorKind: "operator",
+      actorKind: "human",
+      through: "pat:0192f00d",
       subject: "rev-1",
       detail: 'turn on Slack, and say "done"',
     },
   ]);
   const [header, row] = csv.split("\n");
-  expect(header).toBe("at,where,who,who_kind,what,to,detail");
+  expect(header).toBe("at,where,who,who_kind,through,what,to,detail");
+  expect(row).toContain('"pat:0192f00d"');
   expect(row).toContain('"turn on Slack, and say ""done"""');
-  // Seven columns, whatever the detail held.
-  expect(row?.match(/","/g)?.length).toBe(6);
+  // Eight columns, whatever the detail held.
+  expect(row?.match(/","/g)?.length).toBe(7);
 });

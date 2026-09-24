@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -133,7 +134,14 @@ func newWriteRigWith(t *testing.T,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an unclaimed address.
 	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
-	waiter := &rigWaiter{}
+	// AT THE STREAM'S ORIGIN, as the framework's own applier starts: a
+	// waiter at the zero position names no stream, so a gesture's second
+	// step compared its own position against it and failed on the
+	// comparison — an error a case asserting only "not refused" read as
+	// success, which is how one of them passed without its gesture ever
+	// landing.
+	waiter := &rigWaiter{at: statelog.Position{
+		Stream: iamdomain.Domain{}.Stream().Name}}
 	var appender statelog.Appender = log
 	if wrap != nil {
 		appender = wrap(log)
@@ -1058,12 +1066,14 @@ func TestAnAdministrativeRecordNeedsPeopleManageAndNotTheCompanysGrant(t *testin
 	rig := newWriteRig(t)
 	person := "018f3a9c-0000-7000-8000-0000000000b1"
 	enrol := func(w *iamdomain.Writer, op string) error {
-		_, err := w.Enrol(rig.t.Context(), iamdomain.Enrolment{
-			PersonID: person + op, Kind: iam.KindMachine,
-			Stage: iam.StageActive, Login: "svc:" + op,
-			OpID: op, Reason: "a hire",
+		return rig.draining(func() error {
+			_, err := w.Enrol(rig.t.Context(), iamdomain.Enrolment{
+				PersonID: person + op, Kind: iam.KindMachine,
+				Stage: iam.StageActive, Login: "svc:" + op,
+				OpID: op, Reason: "a hire",
+			})
+			return err
 		})
-		return err
 	}
 	company := rig.writer.As(principalNamed("automation", iam.KindMachine,
 		[]iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate}))
@@ -1072,11 +1082,42 @@ func TestAnAdministrativeRecordNeedsPeopleManageAndNotTheCompanysGrant(t *testin
 			"(%v) — config:write rebuilds a company's tools and must not also "+
 			"decide who may do that tomorrow", err)
 	}
+	// THE CONTROL LANDS, and is required to: asserting only "not refused"
+	// let this arm pass on an error that was not a refusal at all.
 	directory := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
 		[]iam.Grant{iamdomain.AdminGrant}))
-	if err := enrol(directory, "op-directory"); errors.Is(err, iamdomain.ErrRefused) {
-		t.Errorf("a party holding %s was refused an enrolment: %v",
+	if err := enrol(directory, "op-directory"); err != nil {
+		t.Errorf("a party holding %s could not enrol somebody: %v",
 			iamdomain.AdminGrant, err)
+	}
+}
+
+// A PERSON'S KEY IS MINTED UNDER THE PARTY WHOSE GESTURE NEEDED IT, with the
+// credential that party acted through beside them — the three every trail of
+// the secret store records. It was the writer's bare name, so a key minted by
+// an administrator's machine token recorded the token's owner and nothing to
+// say a token was used. Mutation: mint under w.Actor alone and the credential
+// half fails.
+func TestAPersonsKeyIsMintedUnderTheWritersParty(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	admin := principalNamed("ana.admin", iam.KindPerson, iam.AllGrants)
+	admin.Via = pat
+	person := "018f3a9c-0000-7000-8000-0000000000c1"
+	if err := rig.draining(func() error {
+		_, err := rig.writer.As(admin).Enrol(rig.t.Context(), iamdomain.Enrolment{
+			PersonID: person, Kind: iam.KindMachine, Stage: iam.StageActive,
+			Login: "svc:keys", OpID: "op-keys", Reason: "a hire",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	want := secrets.Author{Name: "ana.admin", Kind: string(iam.ActorOperator),
+		OperatorID: pat}
+	if got := rig.keys.author(iamdomain.PersonDEKName(person)); got != want {
+		t.Errorf("the key records %+v, want %+v", got, want)
 	}
 }
 

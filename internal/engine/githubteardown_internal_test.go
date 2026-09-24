@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -42,7 +43,7 @@ func newSeatWriter(handle string, app map[string]any) *seatWriter {
 	}}
 }
 
-func (w *seatWriter) Apply(context.Context, []byte, string, string) error { return nil }
+func (w *seatWriter) Apply(context.Context, []byte, string, iam.Actor) error { return nil }
 
 func (w *seatWriter) Seat(_ context.Context, handle string) ([]byte, error) {
 	w.mu.Lock()
@@ -55,7 +56,7 @@ func (w *seatWriter) Seat(_ context.Context, handle string) ([]byte, error) {
 }
 
 func (w *seatWriter) SetSeat(
-	_ context.Context, handle string, body []byte, summary, _ string,
+	_ context.Context, handle string, body []byte, summary string, _ iam.Actor,
 ) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -71,7 +72,7 @@ func (w *seatWriter) SetSeat(
 	return nil
 }
 
-func (w *seatWriter) Reload(context.Context, string, string) error { return nil }
+func (w *seatWriter) Reload(context.Context, string, iam.Actor) error { return nil }
 
 // installation reads back what one seat's record now claims.
 func (w *seatWriter) installation(handle string) (any, bool) {

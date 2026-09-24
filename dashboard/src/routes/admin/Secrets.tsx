@@ -59,6 +59,7 @@ import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { authorLabel, throughOf } from "~/lib/attribution.ts";
 import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
 import type { ConfigReference, QueryErrorCode, SecretRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -283,7 +284,10 @@ function credentialFacts(row: SecretRow, paths: string[] | null, now: number): F
   return [
     { label: "Read by", value: <Readers paths={paths} /> },
     { label: "Key id", value: <span className="mono">{row.key_id}</span> },
-    { label: "Set by", value: row.updated_by || "nobody recorded" },
+    {
+      label: "Set by",
+      value: authorLabel(row.updated_by, row.operator_id) || "nobody recorded",
+    },
     { label: "Updated", value: <DateCell at={row.updated_at} now={now} /> },
   ];
 }
@@ -373,6 +377,12 @@ function CredentialBody({
                 },
                 { label: "Key id", value: row.key_id, code: true },
                 { label: "Set by", value: row.updated_by || undefined },
+                {
+                  label: "Through",
+                  value: throughOf(row.updated_by, row.operator_id) || undefined,
+                  code: true,
+                  title: "the credential the value was stored through",
+                },
                 { label: "Updated", value: fmtDateTime(row.updated_at) },
               ],
             },
@@ -631,7 +641,7 @@ export function Secrets({ name }: { name?: string }) {
                 // for an empty string the reader would read as a name.
                 cell: (s) =>
                   s.updated_by ? (
-                    <TextCell>{s.updated_by}</TextCell>
+                    <TextCell>{authorLabel(s.updated_by, s.operator_id)}</TextCell>
                   ) : (
                     <EmptyValue label="Nobody recorded" />
                   ),

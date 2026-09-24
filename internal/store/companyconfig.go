@@ -25,9 +25,20 @@ type Revision struct {
 	ParentID string
 
 	CreatedAt time.Time
-	CreatedBy string
-	Source    string
-	Summary   string
+
+	// CreatedBy is the revision's AUTHOR, CreatedByKind what sort of
+	// author, and OperatorID the credential it was written through — empty
+	// for a write no credential made. Three rather than the one this used
+	// to be, which held the credential and so named, for a revision written
+	// through a person's machine token, a token whose row the identity
+	// sweep collects a week after it lapses. See
+	// `0033_a_write_names_its_author_beside_its_credential.sql`.
+	CreatedBy     string
+	CreatedByKind string
+	OperatorID    string
+
+	Source  string
+	Summary string
 
 	// Payload is the document as stored. When a keyring is configured this
 	// is the sealed envelope rather than the plaintext structure — opaque
@@ -73,8 +84,8 @@ type Configs struct{ db *DB }
 func (d *DB) Configs() *Configs { return &Configs{db: d} }
 
 const revisionColumns = `revision_id, parent_revision_id, created_at, created_by,
-	source, summary, payload, is_active, activated_at, scrubbed_at,
-	chart_position`
+	created_by_kind, operator_id, source, summary, payload, is_active,
+	activated_at, scrubbed_at, chart_position`
 
 // InsertActive writes a new revision and makes it the active one, returning
 // its id.
@@ -154,17 +165,20 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO company_config
 			     (revision_id, parent_revision_id, created_at, created_by,
-			      source, summary, payload, is_active, activated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			      created_by_kind, operator_id, source, summary, payload,
+			      is_active, activated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
-			r.Source, r.Summary, string(payload), isActive, activatedAt)
+			r.CreatedByKind, r.OperatorID, r.Source, r.Summary,
+			string(payload), isActive, activatedAt)
 		return err
 	})
 	if err != nil {
 		return "", fmt.Errorf("store: insert config revision: %w", err)
 	}
 	log.InfoContext(ctx, "config_revision_stored",
-		"revision", id, "source", r.Source, "by", r.CreatedBy, "active", active)
+		"revision", id, "source", r.Source, "by", r.CreatedBy,
+		"operator", r.OperatorID, "active", active)
 	return id, nil
 }
 
@@ -259,11 +273,13 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO company_config
 			     (revision_id, parent_revision_id, created_at, created_by,
-			      source, summary, payload, is_active, activated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+			      created_by_kind, operator_id, source, summary, payload,
+			      is_active, activated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
 			 ON CONFLICT (revision_id) DO NOTHING`,
 			r.ID, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
-			r.Source, r.Summary, string(payload), EncodeTime(at)); err != nil {
+			r.CreatedByKind, r.OperatorID, r.Source, r.Summary,
+			string(payload), EncodeTime(at)); err != nil {
 			return err
 		}
 		// The row may already have been here — the conflict above did
@@ -356,9 +372,9 @@ func scanRevision(rows *sql.Rows) (Revision, error) {
 	var createdAt int64
 	var activatedAt, scrubbedAt, chartPosition sql.NullInt64
 	var active int64
-	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy, &r.Source,
-		&r.Summary, &payload, &active, &activatedAt, &scrubbedAt,
-		&chartPosition); err != nil {
+	if err := rows.Scan(&r.ID, &parent, &createdAt, &r.CreatedBy,
+		&r.CreatedByKind, &r.OperatorID, &r.Source, &r.Summary, &payload,
+		&active, &activatedAt, &scrubbedAt, &chartPosition); err != nil {
 		return Revision{}, fmt.Errorf("store: read config revision: %w", err)
 	}
 	if chartPosition.Valid {

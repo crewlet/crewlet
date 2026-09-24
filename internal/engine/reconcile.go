@@ -657,8 +657,15 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 		return store.Revision{}, fmt.Errorf("engine: %w: %s",
 			store.ErrNoRevision, target.RevisionID)
 	}
+	// THE AUTHOR IS THE POINTER'S, which carries the three the writing
+	// node recorded. This said `peer`, so a revision named whoever wrote it
+	// on the node it was written on and nobody on every other node — the
+	// history an operator read depended on which node answered. A pointer
+	// a build that did not carry the author published leaves the three
+	// empty, which is what this node knows.
 	revision := store.Revision{
-		ID: target.RevisionID, Source: "fleet", CreatedBy: "peer",
+		ID: target.RevisionID, Source: "fleet", CreatedBy: target.CreatedBy,
+		CreatedByKind: target.CreatedByKind, OperatorID: target.OperatorID,
 		Summary: target.Summary, Payload: payload, CreatedAt: target.At,
 	}
 	if err := r.configs.Adopt(ctx, revision); err != nil {

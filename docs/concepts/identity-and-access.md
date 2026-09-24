@@ -844,9 +844,11 @@ one that acts as anybody else.
 it is their authority being exercised — and the credential rides beside them
 as `operator_id: pat:<credential id>` on every work item, page and chart change
 it writes, so what somebody's assistant filed is never mistaken for what they
-filed themselves. The trails with room for one name (a configuration revision's
-`created_by`, a secret's `set_by`) record `pat:<credential id>`, and the
-identity estate's audit events carry it beside `by`. The `pat` class is
+filed themselves. A configuration revision and a stored secret record the same
+two — the owner as `created_by` / `updated_by`, with its kind beside it, and
+`pat:<credential id>` as `operator_id` — where they used to have room for one
+name and gave it to the credential, which named nobody once the token's own
+row was swept. The identity estate's audit events carry it beside `by`. The `pat` class is
 reserved for exactly this: no service account may enrol under a login that
 starts `pat:`, so the name always means a machine token. See [who a write is
 attributed to](../reference/api-endpoints.md#who-a-write-is-attributed-to).

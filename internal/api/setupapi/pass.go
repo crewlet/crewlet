@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -189,7 +190,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 			})
 			return
 		}
-		sink, err := s.sink(operatorOf(r))
+		sink, err := s.sink(attributionOf(r))
 		if err != nil {
 			// NO Retry-After: waiting installs no key — see
 			// [httpjson.CodeNoKeyring].
@@ -231,7 +232,8 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		// three-valued and is NOT evidence that somebody else is minting.
 		// There is nothing to record, because nothing was observed.
 		log.ErrorContext(r.Context(), "setup_pass_not_started",
-			"integration", kind, "error", err.Error(), "operator", operatorOf(r))
+			"integration", kind, "error", err.Error(),
+			"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 		// UNAVAILABLE AND NOT internal_error: the store could not say, which
 		// is transient, and a client told "internal error" treats it as
 		// terminal. Retried on the undecidable scale — a coordination blip
@@ -281,7 +283,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	if err != nil {
 		log.ErrorContext(r.Context(), "setup_pass_failed",
 			"integration", kind, "run", run.ID, "error", err.Error(),
-			"operator", operatorOf(r))
+			"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 		httpjson.FailWithFields(w, http.StatusBadGateway,
 			httpjson.CodeVendorRefused, httpjson.Detail{
 				// THE WHOLE RUN, with its findings and attempts — a
@@ -299,7 +301,8 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	}
 	log.InfoContext(r.Context(), "setup_pass_ran",
 		"integration", kind, "run", run.ID, "read_only", readOnly,
-		"findings", len(run.Findings), "operator", operatorOf(r))
+		"findings", len(run.Findings),
+		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	httpjson.Write(w, http.StatusOK, run)
 }
 
@@ -484,8 +487,9 @@ func (s *Service) now() time.Time {
 	return time.Now().UTC()
 }
 
-// sinkFactory is how the service obtains a recorder for a pass.
-type sinkFactory func(operator string) (provision.TokenSink, error)
+// sinkFactory is how the service obtains a recorder for a pass, recording
+// what it seals under the party the pass runs for.
+type sinkFactory func(by iam.Actor) (provision.TokenSink, error)
 
 // errorOrBusy names why a status write did not happen: the store's own failure
 // when there was one, or the peer that holds the surface when there was not.

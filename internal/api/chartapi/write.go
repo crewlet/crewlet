@@ -308,24 +308,6 @@ func (s *Service) writerFor(r *http.Request) Writer {
 	// question with more context than the domain has; passing them on is
 	// what makes the two answers one answer rather than two that could
 	// drift.
-	return s.authority(actor.Name, authorKindOf(actor.Kind), p.Grants,
+	return s.authority(actor.Name, chart.AuthorKindOf(actor.Kind), p.Grants,
 		chart.Provenance{OperatorID: actor.OperatorID})
-}
-
-// authorKindOf maps the identity vocabulary's four actor kinds onto the
-// chart's three.
-//
-// THE ENGINE'S OWN WRITES ARE OPERATOR WRITES here, because the chart has no
-// fourth kind and inventing one would be a value migration for a distinction
-// this domain never makes: what a reader of a chart history asks is whether a
-// person, an agent or the deployment changed the structure, and the engine
-// seeding a chart at boot is the deployment.
-func authorKindOf(k iam.ActorKind) chart.AuthorKind {
-	switch k {
-	case iam.ActorAgent:
-		return chart.AuthorAgent
-	case iam.ActorHuman:
-		return chart.AuthorHuman
-	}
-	return chart.AuthorOperator
 }

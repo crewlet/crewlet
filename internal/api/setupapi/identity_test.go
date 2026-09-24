@@ -69,7 +69,7 @@ func TestAWorkingSeatNamesTheAccountItIsAtEachApp(t *testing.T) {
 		"SRE_DATADOG":   "dd-key",
 		"SRE_MM":        "mm-token",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, "test", "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
 			t.Fatal(err)
 		}
 	}

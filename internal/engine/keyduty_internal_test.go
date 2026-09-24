@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -167,7 +168,7 @@ func TestALivePersonsKeySurvivesOnANodeThatRetainedTheirEnrolment(t *testing.T) 
 
 			// THE CONTROL.
 			refused := uuid.Must(uuid.NewV7()).String()
-			if err := sealer.Mint(ctx, refused, "node-a", past); err != nil {
+			if err := sealer.Mint(ctx, refused, secrets.Author{Name: "node-a", Kind: string(iam.ActorSystem)}, past); err != nil {
 				t.Fatalf("mint the refused enrolment's key: %v", err)
 			}
 			if report := pass(); len(report.Collected) != 1 || report.Collected[0] != refused {
@@ -178,7 +179,7 @@ func TestALivePersonsKeySurvivesOnANodeThatRetainedTheirEnrolment(t *testing.T) 
 
 			// THE PEER'S ENROLMENT, RETAINED HERE.
 			person := uuid.Must(uuid.NewV7()).String()
-			if err := sealer.Mint(ctx, person, "node-peer", past); err != nil {
+			if err := sealer.Mint(ctx, person, secrets.Author{Name: "node-peer", Kind: string(iam.ActorSystem)}, past); err != nil {
 				t.Fatalf("mint the person's key: %v", err)
 			}
 			retain(t, e, b, why, claimRecord(t, person, "dana.sre"))

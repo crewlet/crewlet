@@ -1,8 +1,10 @@
 package auth_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,13 +31,17 @@ func withTokens(tokens ...config.APIToken) func(*config.APIAuth) {
 }
 
 // serve runs one request through the guard and returns the response and the
-// operator id the handler saw.
+// credential a write the handler made would be attributed through.
 func serve(t *testing.T, g *auth.Guard, method, path, header string) (*http.Response, string) {
 	t.Helper()
 	var seen string
 	handler := g.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if principal, how := iam.From(r.Context()); how == iam.Resolved {
-			seen = auth.OperatorID(principal)
+			seen = auth.AttributionOf(r.Context()).OperatorID
+			if seen != iam.ActorFor(principal).OperatorID {
+				t.Errorf("the attribution a write takes (%q) is not the "+
+					"principal's own (%q)", seen, iam.ActorFor(principal).OperatorID)
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -231,7 +237,7 @@ func TestTheBearerSchemeIsCaseInsensitiveAndTrimmed(t *testing.T) {
 		if res.StatusCode != http.StatusOK {
 			t.Errorf("%q: status = %d", header, res.StatusCode)
 		}
-		if seen != "founder" {
+		if seen != "token:founder" {
 			t.Errorf("%q: operator = %q", header, seen)
 		}
 	}
@@ -333,12 +339,12 @@ func TestAValidTokenIsAttributedEvenWhereItIsNotRequired(t *testing.T) {
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 
 	// An unguarded route under an open read posture.
-	if _, seen := serve(t, g, "GET", "/events", "Bearer secret"); seen != "founder" {
-		t.Errorf("operator = %q on an unguarded read, want founder", seen)
+	if _, seen := serve(t, g, "GET", "/events", "Bearer secret"); seen != "token:founder" {
+		t.Errorf("operator = %q on an unguarded read, want token:founder", seen)
 	}
 	// And an exempt one.
-	if _, seen := serve(t, g, "GET", "/health", "Bearer secret"); seen != "founder" {
-		t.Errorf("operator = %q on an exempt route, want founder", seen)
+	if _, seen := serve(t, g, "GET", "/health", "Bearer secret"); seen != "token:founder" {
+		t.Errorf("operator = %q on an exempt route, want token:founder", seen)
 	}
 }
 
@@ -420,8 +426,8 @@ func TestASocketCanAttachItsOwnOperator(t *testing.T) {
 	// and hands the id down the same way the middleware does.
 	ctx := auth.WithOperator(t.Context(), "founder")
 	principal, how := iam.From(ctx)
-	if how != iam.Resolved || auth.OperatorID(principal) != "founder" {
-		t.Errorf("operator = %q/%v", auth.OperatorID(principal), how)
+	if how != iam.Resolved || iam.ActorFor(principal).OperatorID != "token:founder" {
+		t.Errorf("operator = %q/%v", iam.ActorFor(principal).OperatorID, how)
 	}
 	// AND IT CARRIES NO AUTHORITY, which is what makes attaching one
 	// outside the guard safe: it names a writer and opens nothing.
@@ -434,6 +440,25 @@ func TestASocketCanAttachItsOwnOperator(t *testing.T) {
 	// is safe to serve because nothing told it otherwise.
 	if _, how := iam.From(t.Context()); how != iam.Unknown {
 		t.Errorf("a bare context resolved as %q, want unknown", how)
+	}
+}
+
+// A WRITE NOBODY RESOLVED IS ATTRIBUTED TO `anonymous`, of the operator kind
+// and through no credential — never to an empty name, which reads as a write
+// nobody made, and never to a guess. Mutation: answer the zero Actor for the
+// unresolved arms and the empty author is what a revision records.
+func TestAWriteNobodyResolvedIsAttributedToAnonymous(t *testing.T) {
+	t.Parallel()
+	want := iam.Actor{Name: iam.AnonymousActor, Kind: iam.ActorOperator}
+	for name, ctx := range map[string]context.Context{
+		"a context no resolver touched": t.Context(),
+		"a resolver that found nobody":  iam.WithAnonymous(t.Context()),
+		"a resolver that could not say": iam.WithUnresolved(t.Context(),
+			errors.New("the identity estate is behind")),
+	} {
+		if got := auth.AttributionOf(ctx); got != want {
+			t.Errorf("%s: attributed to %+v, want %+v", name, got, want)
+		}
 	}
 }
 
@@ -571,7 +596,7 @@ func TestTheSocketPathTakesItsTokenFromTheQuery(t *testing.T) {
 	})
 
 	res, seen := serve(t, g, http.MethodGet, auth.SocketPath+"?token=secret", "")
-	if res.StatusCode != http.StatusOK || seen != "founder" {
+	if res.StatusCode != http.StatusOK || seen != "token:founder" {
 		t.Fatalf("a valid query token on the socket path = %d as %q, want 200 as founder",
 			res.StatusCode, seen)
 	}
@@ -581,7 +606,7 @@ func TestTheSocketPathTakesItsTokenFromTheQuery(t *testing.T) {
 	}
 	// The header still works there, and wins over a stale query.
 	res, seen = serve(t, g, http.MethodGet, auth.SocketPath+"?token=stale", "Bearer secret")
-	if res.StatusCode != http.StatusOK || seen != "founder" {
+	if res.StatusCode != http.StatusOK || seen != "token:founder" {
 		t.Errorf("a header beside a stale query = %d as %q, want 200 as founder", res.StatusCode, seen)
 	}
 	// And a token in the URL of any OTHER route authenticates nobody: a URL

@@ -122,9 +122,10 @@ type capacityOperation struct {
 		ResolvedAt time.Time `json:"resolved_at"`
 		Evidence   string    `json:"evidence"`
 	} `json:"journal"`
-	Blocked   string    `json:"blocked"`
-	EnteredAt time.Time `json:"entered_at"`
-	By        string    `json:"by"`
+	Blocked    string    `json:"blocked"`
+	EnteredAt  time.Time `json:"entered_at"`
+	By         string    `json:"by"`
+	OperatorID string    `json:"operator_id"`
 }
 
 // printOperation renders one operation, and what an operator does next.
@@ -137,7 +138,8 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation) {
 	if op.ObservedMaxBytes > 0 {
 		fmt.Fprintf(w, "OBSERVED\t%s\t\n", humanBytes(int64(op.ObservedMaxBytes)))
 	}
-	fmt.Fprintf(w, "OPENED\t%s\tby %s\n", stampOrDash(op.EnteredAt), op.By)
+	fmt.Fprintf(w, "OPENED\t%s\tby %s\n", stampOrDash(op.EnteredAt),
+		describeAuthor(op.By, op.OperatorID))
 	fmt.Fprintf(w, "THIS NODE\tmode %s\t\n", mode)
 	if op.Blocked != "" {
 		fmt.Fprintf(w, "BLOCKED\t%s\t\n", op.Blocked)

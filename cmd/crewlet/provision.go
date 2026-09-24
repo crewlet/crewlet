@@ -10,11 +10,13 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // The provisioning commands, and the flags they share.
@@ -106,7 +108,19 @@ func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenS
 	if err != nil {
 		return nil, nil, err
 	}
-	return provision.NewSecretStoreSink(sv, currentOperator()), closeStore, nil
+	return provision.NewSecretStoreSink(sinkStore{sv}, hostAuthor()), closeStore, nil
+}
+
+// sinkStore is a secret target as a provisioning sink's store. The author a
+// row records is the store's to report and a sink has nobody to tell, so the
+// answer is dropped here rather than widening the sink's own seam.
+type sinkStore struct{ *secretTarget }
+
+func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Author,
+	source string, now time.Time) error {
+
+	_, err := s.secretTarget.Set(ctx, name, value, by, source, now)
+	return err
 }
 
 // companyResolver builds the chain a run resolves Tier B ${VAR} references

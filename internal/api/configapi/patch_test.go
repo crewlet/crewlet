@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -475,7 +476,7 @@ func TestAnExpectAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 			sent := strings.ReplaceAll(expect, id, current.ID)
 			if _, err := s.svc.Apply(t.Context(), configapi.ApplyRequest{
 				Patch:   []byte(`{"mission": "ship the thing"}`),
-				Summary: "a patch", Operator: "operator", Expect: sent,
+				Summary: "a patch", By: iam.Actor{Name: "operator", Kind: iam.ActorOperator}, Expect: sent,
 			}); err != nil {
 				t.Errorf("Apply with %s (%q) = %v", name, sent, err)
 			}
@@ -492,7 +493,7 @@ func TestAStalePreconditionIsStillRefused(t *testing.T) {
 
 	_, err := s.svc.Apply(t.Context(), configapi.ApplyRequest{
 		Patch:   []byte(`{"mission": "ship the thing"}`),
-		Summary: "a patch", Operator: "operator",
+		Summary: "a patch", By: iam.Actor{Name: "operator", Kind: iam.ActorOperator},
 		Expect: `"a-revision-that-never-existed"`,
 	})
 	var raced *configapi.RacedError

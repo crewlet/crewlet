@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -79,7 +80,10 @@ const refreshGrantVersion = 1
 // Refreshes keeps the refresh tokens the deactivation probe asks with.
 type Refreshes struct {
 	keys RefreshStore
-	by   string
+
+	// by is the node holding custody, as every row it writes records its
+	// author: the engine's own, since nobody typed a refresh token.
+	by secrets.Author
 }
 
 // NewRefreshes builds custody over the company's secret store, writing as by.
@@ -93,7 +97,10 @@ func NewRefreshes(keys RefreshStore, by string) (*Refreshes, error) {
 		return nil, errors.New("iamdomain: refresh custody needs to say who " +
 			"wrote a grant, which is what a secret listing shows beside it")
 	}
-	return &Refreshes{keys: keys, by: by}, nil
+	// THE ENGINE'S OWN WRITE, with no credential behind it: custody is the
+	// node's, whichever sign-in handed it the token.
+	return &Refreshes{keys: keys, by: secrets.Author{
+		Name: by, Kind: string(iam.ActorSystem)}}, nil
 }
 
 // Hold takes custody of one session's refresh token.

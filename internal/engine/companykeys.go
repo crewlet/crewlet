@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -168,9 +169,12 @@ func (e *Engine) mintKey(ctx context.Context, store *fleetsecrets.Estate, name,
 		return "", fmt.Errorf("engine: mint %s: %w", name, err)
 	}
 	// A CREATE, which a key that landed first refuses — see the file's
-	// header — and whoever's landed is the one read back.
-	if _, err := store.Create(ctx, name, secrets.EncodeKey(minted), e.id, source,
-		time.Now().UTC()); err != nil {
+	// header — and whoever's landed is the one read back. THE NODE, AS THE
+	// ENGINE: nobody asked for this key — the first write that needed one
+	// did — so no credential made it either.
+	if _, err := store.Create(ctx, name, secrets.EncodeKey(minted), secrets.Author{
+		Name: e.id, Kind: string(iam.ActorSystem),
+	}, source, time.Now().UTC()); err != nil {
 		return "", fmt.Errorf("engine: store %s: %w", name, err)
 	}
 	// READ BACK rather than returning what was minted: what every other

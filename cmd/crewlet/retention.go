@@ -125,6 +125,7 @@ type maintenanceRow struct {
 	OriginalMaxBytes    uint64    `json:"original_max_bytes"`
 	Since               time.Time `json:"since"`
 	By                  string    `json:"by"`
+	OperatorID          string    `json:"operator_id"`
 	ParticipantsMissing []string  `json:"participants_missing"`
 	Blocked             string    `json:"blocked"`
 }
@@ -243,7 +244,7 @@ func retentionStatus(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "  phase %s, attempt %d, open since %s",
 			m.Phase, m.Attempt, m.Since.UTC().Format(time.RFC3339))
 		if m.By != "" {
-			fmt.Fprintf(stdout, ", run by %s", m.By)
+			fmt.Fprintf(stdout, ", run by %s", describeAuthor(m.By, m.OperatorID))
 		}
 		fmt.Fprintln(stdout, ".")
 		if m.Blocked != "" {

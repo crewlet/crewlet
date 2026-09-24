@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -72,9 +73,17 @@ type Writer struct {
 	blinds Blinds
 	sealer *Sealer
 
-	// Actor and ActorKind are who this writer acts as.
+	// Actor and ActorKind are who this writer acts as. ActorKind is the
+	// PRINCIPAL's kind — person, machine, engine — because that is what
+	// this domain's own records carry.
 	Actor     string
 	ActorKind iam.Kind
+
+	// authorKind is the same party in the vocabulary every OTHER trail
+	// records an author in — iam.ActorFor's agent, human, operator or
+	// system — for the one write this domain makes outside its own log: a
+	// key in the company's secret store ([Writer.secretAuthor]).
+	authorKind iam.ActorKind
 
 	// OperatorID is the credential this writer's party acts THROUGH —
 	// [iam.Actor.OperatorID], a machine token's `pat:<id>` beside the owner
@@ -229,6 +238,8 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 		publisher: deps.Publisher, db: deps.DB,
 		blinds: deps.Blinds, sealer: deps.Sealer,
 		Actor: deps.Actor, ActorKind: deps.ActorKind,
+		authorKind: iam.ActorFor(iam.Principal{
+			Kind: deps.ActorKind, Login: deps.Actor}).Kind,
 		Grants: deps.Grants, Now: now, events: deps.Events,
 	}, nil
 }
@@ -261,6 +272,7 @@ func (w *Writer) As(p iam.Principal) *Writer {
 	next := *w
 	next.Actor = actor.Name
 	next.ActorKind = p.Kind
+	next.authorKind = actor.Kind
 	next.Grants = p.Grants
 	next.OperatorID = actor.OperatorID
 	next.Principal = ""
@@ -269,6 +281,14 @@ func (w *Writer) As(p iam.Principal) *Writer {
 	}
 	next.seq = &sequence{}
 	return &next
+}
+
+// secretAuthor is this writer's party as the company's secret store records
+// an author: the name, its kind in the actor vocabulary, and the credential it
+// acted through — empty for the node's own writer, which acted through none.
+func (w *Writer) secretAuthor() secrets.Author {
+	return secrets.Author{Name: w.Actor, Kind: string(w.authorKind),
+		OperatorID: w.OperatorID}
 }
 
 // sequence is one party's high-water mark across the calls of a request.

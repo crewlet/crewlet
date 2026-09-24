@@ -608,17 +608,26 @@ CREATE TABLE company_config (
     revision_id        TEXT    NOT NULL PRIMARY KEY,
     parent_revision_id TEXT    REFERENCES company_config(revision_id),
     created_at         INTEGER NOT NULL,          -- unix seconds, UTC
-    created_by         TEXT    NOT NULL,          -- the credential: a token id ("founder"),
-                                                  -- a login, or a machine token's pat:<id>
-    source             TEXT    NOT NULL,          -- "api" | "cli" | "api.revert" | "api.entity"
+    created_by         TEXT    NOT NULL,          -- the AUTHOR: a seat's handle for a person
+                                                  -- bound to one, a login otherwise,
+                                                  -- token:<id> for a Tier A token, the
+                                                  -- engine's own name for its own writes
+    created_by_kind    TEXT    NOT NULL DEFAULT '', -- agent | human | operator | system
+    operator_id        TEXT    NOT NULL DEFAULT '', -- the credential it was written
+                                                  -- through: pat:<id>, session:<lineage>,
+                                                  -- a Tier A token's login; empty for a
+                                                  -- write no credential made
+    source             TEXT    NOT NULL,          -- "api" | "file" | "rekey" | "fleet"
     summary            TEXT    NOT NULL,          -- short human-readable change note
     payload            TEXT    NOT NULL,          -- the whole document as JSON, or the
                                                   -- sealed envelope when a keyring is set
     is_active          INTEGER NOT NULL DEFAULT 0,
     activated_at       INTEGER,
-    scrubbed_at        INTEGER                    -- when `crewlet config scrub`
+    scrubbed_at        INTEGER,                   -- when `crewlet config scrub`
                                                   -- erased this revision's
                                                   -- personal fields
+    chart_position     INTEGER                    -- where the org chart's log stood
+                                                  -- when this node applied it
 );
 
 -- At most one active revision, enforced by the database rather than by the
@@ -703,13 +712,17 @@ A written document is refused for breaking one. A stored revision that breaks on
 **Every route requires a credential, reads included.** The only exceptions are
 the handful that authenticate by other means or must be reachable to obtain a
 credential at all, listed below. Tokens are listed in Tier A under
-`api.auth.tokens` and resolved from environment variables at API startup. The
-credential a request presented is recorded as `created_by` on each revision it
-produces — a Tier A token's `id` (`ci-pipeline`, `ops`), a signed-in person's
-login (`jane.doe`), a machine token's `pat:<credential id>` — so revision
-history carries meaningful attribution rather than generic strings, and a
-revision somebody's token wrote is never mistaken for one they wrote
-themselves.
+`api.auth.tokens` and resolved from environment variables at API startup. Each
+revision a request produces records its **author** as `created_by` — a Tier A
+token's whole login (`token:ci-pipeline`), a signed-in person's login
+(`jane.doe`) or the seat the directory binds them to — with its kind as
+`created_by_kind` and the **credential** it came through as `operator_id`: a
+machine token's `pat:<credential id>`, a browser session's `session:<lineage>`.
+So revision history carries meaningful attribution rather than generic strings,
+and a revision somebody's token wrote is theirs and is never mistaken for one
+they wrote themselves. Every node's copy says the same: the three travel on the
+activation pointer, so a node adopting the revision from its fleet records the
+writer rather than `peer`.
 
 ### What `allow_anonymous_read` was, and why deleting it was the only fix
 
@@ -833,7 +846,11 @@ short enough that removing an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).
 Failed attempts log `api_auth_failed` at WARNING (never the candidate token
-value); successes log `api_auth_ok` at DEBUG with `operator_id` and `route`.
+value); successes log `api_auth_ok` at DEBUG with `actor` (who a write would
+be attributed to), `operator_id` (the credential it came through) and `route`.
+Every write this surface logs — `config_revision_written`, `secret_written`,
+`backup_taken`, `retention_gate` and the rest — carries the same pair as `by`
+and `operator`.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
 

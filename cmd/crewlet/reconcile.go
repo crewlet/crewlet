@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -180,13 +181,17 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	// STORED FIRST, then pointed at: a crash between the two leaves a
 	// revision nothing points at, which the next boot re-seeds over. The
 	// other order would point the fleet at a payload no node can read.
-	id, err := configs.InsertActive(ctx, store.Revision{
-		ParentID: parent, Source: "file", CreatedBy: "node",
-		Summary: summary, Payload: payload,
-	})
+	// THE ENGINE IS THE AUTHOR: a boot imported this file, and no
+	// credential made the write.
+	seeded := store.Revision{
+		ParentID: parent, Source: "file", CreatedBy: seedAuthor,
+		CreatedByKind: string(iam.ActorSystem), Summary: summary, Payload: payload,
+	}
+	id, err := configs.InsertActive(ctx, seeded)
 	if err != nil {
 		return fmt.Errorf("seed the company config: %w", err)
 	}
+	seeded.ID = id
 	// UNCONDITIONAL, and that is the seed's whole posture: it is asserting
 	// what this node booted with, not editing something it read. There is
 	// no earlier revision it derived from, so there is nothing it could
@@ -194,11 +199,12 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	// fail against a fleet that had moved on for perfectly good reasons.
 	published, err := plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: summary, Payload: payload, At: time.Now().UTC(),
+		CreatedBy: seeded.CreatedBy, CreatedByKind: seeded.CreatedByKind,
 	})
 	if err != nil {
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
-	nudge(ctx, pub, id, summary, log)
+	nudge(ctx, pub, seeded, log)
 	log.InfoContext(ctx, "company_config_seeded", "revision", id, "epoch", published.Epoch,
 		"parent", parent, "sealed", cipher != nil)
 	return nil
@@ -254,14 +260,19 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 	// legitimate, and every node converges on whichever landed. A
 	// compare-and-set would turn that into a boot-time failure to retry
 	// for nothing. It is the EDIT path that must not lose a write.
+	// THE REVISION'S OWN AUTHOR travels with it — the operator who ran the
+	// offline import, most often — so every peer that adopts it records who
+	// wrote it rather than the node that happened to publish it.
 	published, err := plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: active.ID, Summary: active.Summary,
 		Payload: active.Payload, At: active.ActivatedAt,
+		CreatedBy: active.CreatedBy, CreatedByKind: active.CreatedByKind,
+		OperatorID: active.OperatorID,
 	})
 	if err != nil {
 		return fmt.Errorf("publish the active revision: %w", err)
 	}
-	nudge(ctx, pub, active.ID, active.Summary, log)
+	nudge(ctx, pub, active, log)
 	log.InfoContext(ctx, "local_revision_published", "revision", active.ID, "epoch", published.Epoch)
 	return nil
 }
@@ -272,18 +283,32 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 // BEST EFFORT, and thin by design: the event carries no payload, because the
 // authoritative path is the pointer and a node acts by re-reading it. Losing
 // one costs a reconcile interval and never a revision.
-func nudge(ctx context.Context, pub queue.Publisher, revisionID, summary string, log *slog.Logger) {
+//
+// THE REVISION'S AUTHOR, not the node's: this said `node` for every
+// activation it announced, including an operator's offline import published
+// at the next start, so the audit feed credited the engine with a change a
+// person made.
+func nudge(ctx context.Context, pub queue.Publisher, revision store.Revision,
+	log *slog.Logger) {
+
 	if pub == nil {
 		return
 	}
 	ev := events.New(types.ConfigRevisionActivated{
-		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: "node",
+		RevisionID: revision.ID, RevisionSummary: revision.Summary,
+		CreatedBy: revision.CreatedBy, CreatedByKind: revision.CreatedByKind,
+		OperatorID: revision.OperatorID,
 	}, tracing.TraceOf(ctx))
 	if err := pub.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
-		log.WarnContext(ctx, "activation_nudge_not_published", "revision", revisionID,
+		log.WarnContext(ctx, "activation_nudge_not_published", "revision", revision.ID,
 			"error", err, "detail", "peers converge on their reconcile interval instead")
 	}
 }
+
+// seedAuthor is who a revision this node imported from its own command line
+// at boot records as its author: the engine, of the system kind, with no
+// credential beside it — none made the write.
+const seedAuthor = "node"
 
 // companyFromStore is the epoch a node with no Tier B file boots on.
 //

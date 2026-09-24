@@ -2571,28 +2571,29 @@ func operatorLogFormat() logging.Format {
 	return logging.ParseFormat(os.Getenv("CREWLET_LOG_FORMAT"))
 }
 
-// engineConfigWriter lets the reconcile loop remove a block through the same
-// PATCH /config surface every other write uses: one merge, one validation,
-// one compare-and-set onto the document.
 // engineConfigWriter is the engine's own way back onto the company, and it
 // reaches TWO surfaces because a company is two things: the settings, through
-// the config service, and the org chart, through the engine itself.
+// the same PATCH /config surface every other write uses — one merge, one
+// validation, one compare-and-set onto the document — and the org chart,
+// through the engine itself.
 type engineConfigWriter struct {
 	surface *configapi.Service
 	engine  *engine.Engine
 }
 
-func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, operator string) error {
+func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary string,
+	by iam.Actor) error {
+
 	_, err := w.surface.Apply(ctx, configapi.ApplyRequest{
-		Patch: patch, Summary: summary, Operator: operator,
+		Patch: patch, Summary: summary, By: by,
 	})
 	return err
 }
 
 // Reload re-activates the current document, which is how a pass that sealed a
 // credential gets everything built at apply time rebuilt against it.
-func (w engineConfigWriter) Reload(ctx context.Context, summary, operator string) error {
-	_, err := w.surface.Reload(ctx, summary, operator)
+func (w engineConfigWriter) Reload(ctx context.Context, summary string, by iam.Actor) error {
+	_, err := w.surface.Reload(ctx, summary, by)
 	return err
 }
 
@@ -2605,9 +2606,9 @@ func (w engineConfigWriter) Seat(ctx context.Context, handle string) ([]byte, er
 }
 
 func (w engineConfigWriter) SetSeat(
-	ctx context.Context, handle string, body []byte, summary, operator string,
+	ctx context.Context, handle string, body []byte, summary string, by iam.Actor,
 ) error {
-	_, err := w.engine.SetSeatDocument(ctx, handle, body, summary, operator)
+	_, err := w.engine.SetSeatDocument(ctx, handle, body, summary, by)
 	return err
 }
 
@@ -2662,9 +2663,32 @@ func nativeWork(e *engine.Engine) queries.WorkReader {
 // registration check and panic on the first press.
 func nativeNodes(e *engine.Engine) api.NodeGate {
 	if w := e.TrackerWriter(); w != nil {
-		return w
+		return nodeGate{writer: w}
 	}
 	return nil
+}
+
+// nodeGate writes an eviction or a readmission AS the party that pressed it,
+// through the node's own tracker writer: the record's author is theirs, of
+// their kind, with the credential they pressed it through, rather than the
+// node that happened to serve the request.
+type nodeGate struct{ writer *tracker.Writer }
+
+func (g nodeGate) EvictNode(ctx context.Context, opID, nodeID string,
+	by iam.Actor) (tracker.WriteResult, error) {
+
+	return g.as(by).EvictNode(ctx, opID, nodeID)
+}
+
+func (g nodeGate) ReadmitNode(ctx context.Context, opID, nodeID string,
+	by iam.Actor) (tracker.WriteResult, error) {
+
+	return g.as(by).ReadmitNode(ctx, opID, nodeID)
+}
+
+func (g nodeGate) as(by iam.Actor) *tracker.Writer {
+	return g.writer.As(by.Name, tracker.AuthorKind(by.Kind),
+		tracker.Provenance{OperatorID: by.OperatorID})
 }
 
 func nativePages(e *engine.Engine) queries.PageReader {

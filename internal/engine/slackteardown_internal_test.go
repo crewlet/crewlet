@@ -73,7 +73,7 @@ func slackEngine(t *testing.T) (*Engine, *seatWriter) {
 	}
 	e.epoch.current.Store(company)
 
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		t.Fatalf("SetupSink: %v", err)
 	}

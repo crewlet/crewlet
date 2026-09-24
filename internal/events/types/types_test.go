@@ -295,7 +295,7 @@ var wireTags = map[string][]string{
 	"org_stopped":                     {"org_name"},
 	"agent_spawned":                   {"agent_id", "role"},
 	"agent_terminated":                {"agent_id", "reason", "role"},
-	"config_revision_activated":       {"created_by", "revision_id", "revision_summary"},
+	"config_revision_activated":       {"created_by", "created_by_kind", "operator_id", "revision_id", "revision_summary"},
 	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
 	"config_revision_scrubbed":        {"fields", "revision_id", "scrubbed_by"},
 	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},

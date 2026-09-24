@@ -15,9 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -311,12 +313,13 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	// GitHub had created it, and the crash landed before its key was
 	// sealed, so the key was gone for good.
 	now := s.now()
-	if err := s.secrets.Set(ctx, keyVar, app.PEM, "setup", "setup", now); err != nil {
+	by := completionAuthor()
+	if err := s.secrets.Set(ctx, keyVar, app.PEM, by, "setup", now); err != nil {
 		return handle, fmt.Errorf("setupapi: seal the app key for %s: %w", handle, err)
 	}
 	sealedHook := strings.TrimSpace(app.WebhookSecret) != ""
 	if sealedHook {
-		if err := s.secrets.Set(ctx, hookVar, app.WebhookSecret, "setup", "setup", now); err != nil {
+		if err := s.secrets.Set(ctx, hookVar, app.WebhookSecret, by, "setup", now); err != nil {
 			return handle, fmt.Errorf("setupapi: seal the webhook secret for %s: %w", handle, err)
 		}
 	}
@@ -384,11 +387,19 @@ func (s *Service) recordSeatApp(
 		return fmt.Errorf("setupapi: encode the seat %s: %w", handle, err)
 	}
 	_, err = s.writer.Config.SetSeat(ctx, handle, updated,
-		"give "+handle+" its own GitHub App", "setup", "")
+		"give "+handle+" its own GitHub App", iam.Actor{
+			Name: completionAuthor().Name, Kind: iam.ActorSystem,
+		}, "")
 	if err != nil {
 		return fmt.Errorf("setupapi: record the app for %s: %w", handle, err)
 	}
 	return nil
+}
+
+// completionAuthor is who a completion's writes are recorded under: the setup
+// surface itself, since the callback that makes them carries no credential.
+func completionAuthor() secrets.Author {
+	return secrets.Author{Name: "setup", Kind: string(iam.ActorSystem)}
 }
 
 // InstallURL is where the operator installs the app a seat now has.

@@ -396,6 +396,8 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	f.target = coord.Activation{
 		Epoch: f.epoch, RevisionID: req.RevisionID,
 		At: req.At.UTC(), Summary: req.Summary,
+		CreatedBy: req.CreatedBy, CreatedByKind: req.CreatedByKind,
+		OperatorID: req.OperatorID,
 	}
 	f.set = true
 	return f.target, nil

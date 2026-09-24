@@ -456,9 +456,19 @@ func (g *Guard) Presented(r *http.Request) (string, bool) {
 // operatorKey carries the authenticated operator id down the handler chain.
 type operatorKey struct{}
 
-// OperatorOf is the id a write on this request is ATTRIBUTED to, and it is
-// total: a request nobody resolved answers [iam.AnonymousActor] rather than
-// the empty string.
+// AttributionOf is who a write on this request is ATTRIBUTED to, and it is
+// total: a request nobody resolved answers [iam.AnonymousActor] rather than an
+// empty name.
+//
+// # The author AND the credential
+//
+// [iam.ActorFor]'s whole answer: the name the write is recorded under, its
+// kind, and the credential it was made through. The trails that key on this —
+// a configuration revision, a stored secret — used to record ONE name, and it
+// was the credential: `pat:<id>` for a person writing through their own
+// machine token, a name the identity sweep can no longer resolve to anybody a
+// week after the token lapses, on a revision kept for ever. They record both
+// now, as every other trail in the engine does.
 //
 // # Why it has no second value, and why that is not the discarded bool
 //
@@ -473,33 +483,12 @@ type operatorKey struct{}
 // write nobody made, and a reader filtering the audit trail would never find
 // it; `anonymous` is a name config refuses to every real credential, so the
 // row says plainly that this engine could not name its author.
-func OperatorOf(ctx context.Context) string {
+func AttributionOf(ctx context.Context) iam.Actor {
 	principal, how := iam.From(ctx)
 	if how != iam.Resolved {
-		return iam.AnonymousActor
+		return iam.Actor{Name: iam.AnonymousActor, Kind: iam.ActorOperator}
 	}
-	return OperatorID(principal)
-}
-
-// OperatorID is the id a principal is recorded under on the surfaces that key
-// on one: the CREDENTIAL — the bare token id, without the `token:` class its
-// login carries, because that is the string a stored revision's `created_by`
-// and a secret's `set_by` already hold; a machine token's `pat:<id>`; and a
-// signed-in person's login.
-//
-// THE CREDENTIAL AND NOT THE OWNER, for a machine token too, because these
-// columns have room for one name and it has to be the one that tells a
-// token's write from its owner's: a revision written through somebody's token
-// and recorded under their login is indistinguishable from one they wrote
-// themselves, and the token names its owner in the credential listing and in
-// the identity trail's mint row. [iam.ActorFor] is where the owner and the
-// credential sit side by side, which is what these columns predate.
-//
-// A CONVERSION RATHER THAN A SECOND IDENTITY — it is [iam.ActorFor]'s own
-// operator, with the Tier A class stripped — so the day those two tables take
-// their author and kind from that function nothing migrates.
-func OperatorID(p iam.Principal) string {
-	return strings.TrimPrefix(iam.ActorFor(p).OperatorID, iam.TokenLoginPrefix)
+	return iam.ActorFor(principal)
 }
 
 // WithOperator attaches a principal carrying one operator id and NO GRANTS.
@@ -631,7 +620,9 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
-		log.Debug("api_auth_ok", "operator_id", OperatorID(principal), "route", path)
+		actor := iam.ActorFor(principal)
+		log.Debug("api_auth_ok", "actor", actor.Name, "operator_id",
+			actor.OperatorID, "route", path)
 		entry, tierA := TierA(r.Context())
 		if !tierA {
 			next.ServeHTTP(w, r)

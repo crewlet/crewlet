@@ -137,18 +137,31 @@ func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	t.Helper()
 	document := yamlToJSON(t, doc)
 	id, err := p.store.Configs().InsertActive(ctx, store.Revision{
-		Source: "test", CreatedBy: "operator", Summary: "revision",
+		Source: "test", CreatedBy: revisionAuthor, CreatedByKind: "operator",
+		OperatorID: revisionCredential, Summary: "revision",
 		Payload: document, CreatedAt: pinnedNow,
 	})
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
-	published, err := p.fleet.Activate(ctx, coord.ActivationRequest{RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow})
+	// THE AUTHOR RIDES THE POINTER, as the config surface publishes it.
+	published, err := p.fleet.Activate(ctx, coord.ActivationRequest{
+		RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow,
+		CreatedBy: revisionAuthor, CreatedByKind: "operator",
+		OperatorID: revisionCredential,
+	})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
 	return published.Epoch
 }
+
+// revisionAuthor and revisionCredential are who [plane.activate] writes a
+// revision as: a person through their own machine token.
+const (
+	revisionAuthor     = "jane.doe"
+	revisionCredential = "pat:0192f00d-0000-7000-8000-00000000000a"
+)
 
 // activatePayload is activate for a document that is not a company — a broken
 // one, or a sealed one. Same two writes, because a payload the fleet does not
@@ -1060,6 +1073,16 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	}
 	if !adopted.Active {
 		t.Error("the adopted revision is not the peer's active one")
+	}
+	// AND IT NAMES WHO WROTE IT. The copy said `peer`, so the author was on
+	// the one node the write reached and nobody on every other — the history
+	// an operator reads depended on which node answered. Mutation: adopt as
+	// `peer` and this fails.
+	if adopted.CreatedBy != revisionAuthor || adopted.CreatedByKind != "operator" ||
+		adopted.OperatorID != revisionCredential || adopted.Source != "fleet" {
+		t.Errorf("the peer's copy records %q/%q/%q from %q, want the writer's "+
+			"%s/operator/%s from the fleet", adopted.CreatedBy, adopted.CreatedByKind,
+			adopted.OperatorID, adopted.Source, revisionAuthor, revisionCredential)
 	}
 	// The SETTINGS of the revision it converged on, not the one it booted
 	// with. Not its seats: those come from the chart's own log, which a

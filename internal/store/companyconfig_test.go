@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -259,6 +261,54 @@ func TestTheChainStopsAtAParentThisNodeNeverAdopted(t *testing.T) {
 	}
 	if len(chain) != 1 || chain[0].ID != id {
 		t.Errorf("chain = %+v, want the one revision this node holds", chain)
+	}
+}
+
+// A REVISION KEEPS ITS AUTHOR AND THE CREDENTIAL APART, through every write
+// and every read — including the copy a node ADOPTS from its fleet, which is
+// the only copy every node but the writer's ever holds. Mutation: drop either
+// column from the insert, the adopt or the scan and a case here fails.
+func TestARevisionKeepsItsAuthorAndTheCredentialApart(t *testing.T) {
+	t.Parallel()
+	c := configsFor(t)
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	id, err := c.InsertActive(t.Context(), store.Revision{
+		CreatedBy: "jane.doe", CreatedByKind: "operator", OperatorID: pat,
+		Source: "api", Summary: "written", CreatedAt: time.Now().UTC(),
+		Payload: json.RawMessage(`{"name":"written"}`),
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	adopted := uuid.NewString()
+	if err := c.Adopt(t.Context(), store.Revision{
+		ID: adopted, ParentID: id, Source: "fleet", Summary: "adopted",
+		CreatedBy: "sam", CreatedByKind: "human",
+		OperatorID: "session:0192f00d-0000-7000-8000-0000000000b0",
+		CreatedAt:  time.Now().UTC(), Payload: json.RawMessage(`{"name":"adopted"}`),
+	}); err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	for _, want := range []struct {
+		id, by, kind, operator string
+	}{
+		{id, "jane.doe", "operator", pat},
+		{adopted, "sam", "human", "session:0192f00d-0000-7000-8000-0000000000b0"},
+	} {
+		got, found, err := c.Get(t.Context(), want.id)
+		if err != nil || !found {
+			t.Fatalf("get %s: %v (found=%v)", want.id, err, found)
+		}
+		if got.CreatedBy != want.by || got.CreatedByKind != want.kind ||
+			got.OperatorID != want.operator {
+			t.Errorf("%s reads back %q/%q/%q, want %q/%q/%q", want.id, got.CreatedBy,
+				got.CreatedByKind, got.OperatorID, want.by, want.kind, want.operator)
+		}
+	}
+	listed, err := c.List(t.Context(), 0, 0)
+	if err != nil || len(listed) != 2 || listed[0].OperatorID == "" ||
+		listed[1].OperatorID == "" {
+		t.Errorf("the listing reads %+v (%v), want both credentials", listed, err)
 	}
 }
 

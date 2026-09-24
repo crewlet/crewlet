@@ -75,11 +75,13 @@ func (c *secretsClient) Describe() string {
 func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 	var body struct {
 		Secrets []struct {
-			Name      string `json:"name"`
-			KeyID     string `json:"key_id"`
-			UpdatedAt string `json:"updated_at"`
-			UpdatedBy string `json:"updated_by"`
-			Source    string `json:"source"`
+			Name          string `json:"name"`
+			KeyID         string `json:"key_id"`
+			UpdatedAt     string `json:"updated_at"`
+			UpdatedBy     string `json:"updated_by"`
+			UpdatedByKind string `json:"updated_by_kind"`
+			OperatorID    string `json:"operator_id"`
+			Source        string `json:"source"`
 		} `json:"secrets"`
 	}
 	if err := c.call(ctx, http.MethodGet, "/secrets", nil, &body); err != nil {
@@ -94,23 +96,36 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 		at, _ := time.Parse(time.RFC3339Nano, row.UpdatedAt)
 		out = append(out, secrets.Record{
 			Name: row.Name, KeyID: row.KeyID, UpdatedAt: at,
-			UpdatedBy: row.UpdatedBy, Source: row.Source,
+			UpdatedBy: row.UpdatedBy, UpdatedByKind: row.UpdatedByKind,
+			OperatorID: row.OperatorID, Source: row.Source,
 		})
 	}
 	return out, nil
 }
 
-// Set stores or rotates one value.
+// Set stores or rotates one value, and reports the author the node recorded.
 //
-// `by` is DELIBERATELY not sent. The node stamps the operator id its own
-// guard authenticated, which is the only attribution that means anything on
-// this path — a client-supplied author would be a field the caller chooses.
-func (c *secretsClient) Set(ctx context.Context, name, value, _, source string, _ time.Time) error {
+// `by` is DELIBERATELY not sent. The node stamps the party its own guard
+// authenticated, which is the only attribution that means anything on this
+// path — a client-supplied author would be a field the caller chooses — and
+// it answers with what it stamped, which is what the command prints.
+func (c *secretsClient) Set(ctx context.Context, name, value string, _ secrets.Author,
+	source string, _ time.Time) (secrets.Author, error) {
+
 	path := "/secrets/" + url.PathEscape(name)
 	if source != "" {
 		path += "?source=" + url.QueryEscape(source)
 	}
-	return c.call(ctx, http.MethodPut, path, []byte(value), nil)
+	var body struct {
+		UpdatedBy     string `json:"updated_by"`
+		UpdatedByKind string `json:"updated_by_kind"`
+		OperatorID    string `json:"operator_id"`
+	}
+	if err := c.call(ctx, http.MethodPut, path, []byte(value), &body); err != nil {
+		return secrets.Author{}, err
+	}
+	return secrets.Author{Name: body.UpdatedBy, Kind: body.UpdatedByKind,
+		OperatorID: body.OperatorID}, nil
 }
 
 // Get reads one value back. Break-glass, and the node logs it by name.
@@ -144,7 +159,7 @@ func (c *secretsClient) Unset(ctx context.Context, name string) (bool, error) {
 // names a different active key than the node's is an operator rekeying onto a
 // key the fleet will not be sealing with — silent success there would report
 // a completed rotation over rows sealed under something else.
-func (c *secretsClient) Rekey(ctx context.Context, activeKeyID, _ string, _ time.Time) (fleetsecrets.Rekeyed, error) {
+func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (fleetsecrets.Rekeyed, error) {
 	var body struct {
 		Moved      []string `json:"moved"`
 		EngineKeys int      `json:"engine_keys_moved"`

@@ -342,9 +342,9 @@ func TestABoundOwnersTokenActsAsTheirSeat(t *testing.T) {
 // own, and a token minted on somebody's account filed, edited and closed
 // their work with nothing saying a token was used. The author stays the owner
 // (their seat, bound), and the operator is `pat:<id>` — through the one
-// conversion every row-writer asks, and through the single-column one config
-// revisions and secrets take. Mutation: drop Via from the arm and the operator
-// is the owner's login.
+// conversion every row-writer asks, which is also what a configuration
+// revision and a stored secret record now, both halves apart. Mutation: drop
+// Via from the arm and the operator is the owner's login.
 func TestATokensWriteIsAttributedToTheToken(t *testing.T) {
 	t.Parallel()
 	for _, bound := range []bool{false, true} {
@@ -370,22 +370,25 @@ func TestATokensWriteIsAttributedToTheToken(t *testing.T) {
 			t.Errorf("bound=%v: a write is recorded as %q through %q, want %q "+
 				"through %q", bound, actor.Name, actor.OperatorID, author, want)
 		}
-		if op := auth.OperatorID(got.principal); op != want {
-			t.Errorf("bound=%v: a single-column trail records %q, want the "+
-				"token %q", bound, op, want)
+		ctx := iam.WithPrincipal(t.Context(), got.principal)
+		if by := auth.AttributionOf(ctx); by != actor {
+			t.Errorf("bound=%v: a revision or a secret records %+v, want the "+
+				"author and the token apart, %+v", bound, by, actor)
 		}
 	}
-	// THE CONTROL: a Tier A bearer is its own credential, and a trail keeps
-	// recording it under the id it always has.
+	// THE CONTROL: a Tier A bearer is its own credential, and its login is
+	// both the author and the credential a write records.
 	b := config.Bootstrap{}
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "ops-token-value-long-enough-26",
 		Grants: []iam.Grant{iam.GrantStateRead}}}
 	got, _ := present(t, auth.New(&b), http.MethodGet, "/agents",
 		"ops-token-value-long-enough-26")
+	by := auth.AttributionOf(iam.WithPrincipal(t.Context(), got.principal))
 	if got.how != iam.Resolved || got.principal.Via != "" ||
-		auth.OperatorID(got.principal) != "ops" {
-		t.Errorf("a Tier A bearer resolved %v through %q, recorded as %q",
-			got.how, got.principal.Via, auth.OperatorID(got.principal))
+		by.Name != "token:ops" || by.OperatorID != "token:ops" {
+		t.Errorf("a Tier A bearer resolved %v through %q, recorded as %q "+
+			"through %q, want token:ops through token:ops", got.how,
+			got.principal.Via, by.Name, by.OperatorID)
 	}
 }
 

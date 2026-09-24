@@ -323,8 +323,8 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 		return err
 	}
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
-		ParentID: parent, Source: "file", CreatedBy: currentOperator(),
-		Summary: summary,
+		ParentID: parent, Source: "file", CreatedBy: hostActor().Name,
+		CreatedByKind: string(hostActor().Kind), Summary: summary,
 		Payload: payload,
 	})
 	if err != nil {
@@ -402,7 +402,8 @@ func listRevisions(ctx context.Context, cs *configStore, limit int, stdout io.Wr
 			marker = "*"
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", marker, r.ID,
-			r.CreatedAt.Format(time.RFC3339), r.CreatedBy, r.Source, r.Summary)
+			r.CreatedAt.Format(time.RFC3339),
+			describeAuthor(r.CreatedBy, r.OperatorID), r.Source, r.Summary)
 	}
 	return w.Flush()
 }

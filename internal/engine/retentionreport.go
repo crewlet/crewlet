@@ -157,7 +157,7 @@ func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceRe
 			Stream: op.Stream, OperationID: op.OperationID,
 			Phase: string(op.Phase), Attempt: op.Attempt,
 			TargetMaxBytes: op.TargetMaxBytes, OriginalMaxBytes: op.OriginalMaxBytes,
-			Since: op.EnteredAt.UTC(), By: op.By,
+			Since: op.EnteredAt.UTC(), By: op.By, OperatorID: op.OperatorID,
 			ParticipantsMissing: outstanding(ctx, r.fleet, op),
 			Blocked:             op.Blocked,
 		}

@@ -57,6 +57,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -257,8 +258,9 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	operator := auth.OperatorID(caller)
-	log.WarnContext(r.Context(), "secret_revealed", "name", name, "operator", operator)
+	by := iam.ActorFor(caller)
+	log.WarnContext(r.Context(), "secret_revealed", "name", name,
+		"by", by.Name, "operator", by.OperatorID)
 	// NO-STORE, and it is not decoration: without it a value can sit in a
 	// shared proxy's cache, which is a credential leak with no log line
 	// anywhere and no way to find it afterwards.
@@ -307,21 +309,31 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	operator := auth.OperatorID(caller)
+	by := iam.ActorFor(caller)
 	source := r.URL.Query().Get("source")
 	if source == "" {
 		source = "api"
 	}
-	if err := s.store.Set(r.Context(), name, string(body), operator, source, s.now()); err != nil {
+	// THE AUTHOR AND THE CREDENTIAL BOTH, on the row: a row that named only
+	// the credential named, for a person's machine token, something the
+	// identity sweep deletes a week after it lapses.
+	if err := s.store.Set(r.Context(), name, string(body), secrets.Author{
+		Name: by.Name, Kind: string(by.Kind), OperatorID: by.OperatorID,
+	}, source, s.now()); err != nil {
 		s.fail(w, "store the secret", err)
 		return
 	}
 	// The NAME and the byte count. Confirming the value would undo the
 	// reason it was sent as a body in the first place.
 	log.InfoContext(r.Context(), "secret_written", "name", name,
-		"bytes", len(body), "operator", operator, "source", source)
+		"bytes", len(body), "by", by.Name, "operator", by.OperatorID,
+		"source", source)
+	// THE AUTHOR THE ROW RECORDS, in the answer: a client offering its own
+	// name has no say in it, so the only honest confirmation is the node's.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name": name, "bytes": len(body), "key_id": s.keyID,
+		"updated_by": by.Name, "updated_by_kind": string(by.Kind),
+		"operator_id": by.OperatorID,
 	})
 }
 
@@ -349,9 +361,9 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	operator := auth.OperatorID(caller)
+	by := iam.ActorFor(caller)
 	log.InfoContext(r.Context(), "secret_removed", "name", name,
-		"removed", removed, "operator", operator)
+		"removed", removed, "by", by.Name, "operator", by.OperatorID)
 	writeJSON(w, http.StatusOK, map[string]any{"name": name, "removed": removed})
 }
 
@@ -391,8 +403,10 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	operator := auth.OperatorID(caller)
-	rekeyed, err := s.store.Rekey(r.Context(), s.keyID, operator, s.now())
+	// WHO ROTATED is this gesture's own fact, and it is logged here: the
+	// rows keep who stored each value, which a rekey did not choose.
+	by := iam.ActorFor(caller)
+	rekeyed, err := s.store.Rekey(r.Context(), s.keyID)
 	if err != nil {
 		// THE NAMES THAT DID MOVE travel with the refusal. A partial
 		// rekey is a fact an operator has to act on, and a bare 500
@@ -400,7 +414,7 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 		// are already under the new key.
 		log.ErrorContext(r.Context(), "secret_rekey_failed", "error", err,
 			"moved", rekeyed.Moved, "engine_keys_moved", rekeyed.EngineKeys,
-			"operator", operator)
+			"by", by.Name, "operator", by.OperatorID)
 		httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeRekeyIncomplete, httpjson.Detail{
 			"moved":             nonNil(rekeyed.Moved),
 			"engine_keys_moved": rekeyed.EngineKeys,
@@ -411,7 +425,7 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 	}
 	log.InfoContext(r.Context(), "secrets_rekeyed", "moved", rekeyed.Moved,
 		"engine_keys_moved", rekeyed.EngineKeys, "key_id", s.keyID,
-		"operator", operator)
+		"by", by.Name, "operator", by.OperatorID)
 	// THE ENGINE'S KEYS AS A COUNT beside the operator's names: the operator
 	// retiring the old key needs to know they moved, and nothing more.
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -451,7 +465,12 @@ func render(row secrets.Record) map[string]any {
 		"key_id":     row.KeyID,
 		"updated_at": row.UpdatedAt.Format(time.RFC3339Nano),
 		"updated_by": row.UpdatedBy,
-		"source":     row.Source,
+		// THE KIND AND THE CREDENTIAL BESIDE THE AUTHOR, empty on a row
+		// written before either was recorded, and the credential empty on
+		// one no credential wrote.
+		"updated_by_kind": row.UpdatedByKind,
+		"operator_id":     row.OperatorID,
+		"source":          row.Source,
 	}
 }
 

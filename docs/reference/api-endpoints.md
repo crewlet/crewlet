@@ -1235,10 +1235,10 @@ for none (see
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
-| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`, and `engine_keys` — a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them. **Never a value** |
+| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source`, and `engine_keys` — a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator |
-| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`). `400 invalid_name` when the name is not an environment-variable name |
+| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`). The author is the caller the guard resolved and never anything the request names; the answer carries `updated_by`, `updated_by_kind` and `operator_id` as the row records them, which is the only confirmation a client that could not choose them gets. `400 invalid_name` when the name is not an environment-variable name |
 | `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false}` |
 | `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id` — the engine's own keys included — answering the names of yours it moved and `engine_keys_moved`, a count of the engine's. `?key_id=` is refused with `409` when it names a different key |
 
@@ -1332,7 +1332,9 @@ Response (`200 OK`):
       "revision_id": "11111111-1111-1111-1111-111111111111",
       "parent_revision_id": "00000000-0000-0000-0000-000000000000",
       "created_at": "2026-05-17T10:31:02.118431+00:00",
-      "created_by": "founder",
+      "created_by": "jane.doe",
+      "created_by_kind": "operator",
+      "operator_id": "pat:0192f00d-0000-7000-8000-00000000000a",
       "source": "api",
       "summary": "add Designer role",
       "is_active": true,
@@ -1343,6 +1345,14 @@ Response (`200 OK`):
 ```
 
 Payloads are NOT included — fetch a specific revision via `GET /config/revisions/{id}` for the full JSON.
+
+`created_by` is the revision's author, `created_by_kind` its kind and
+`operator_id` the credential it was written through — see [who a write is
+attributed to](#who-a-write-is-attributed-to). A revision a node adopted from
+its fleet names the same three the writing node recorded, because they travel
+on the activation pointer; before they did, every node but the writer's
+recorded `peer`. All three are empty on a revision written before they were
+recorded.
 
 ### `GET /config/revisions/{id}/diff`
 
@@ -1784,11 +1794,16 @@ A submission for one of them names it:
 {"seat": "sre-lead", "values": {"bot_token": "...", "signing_secret": "..."}}
 ```
 
-Those write through the **entity route** rather than a merge patch, because a
-merge patch replaces an array wholesale and patching the roster to change one
-seat would delete every other one. The engine addresses the seat by its handle,
-which is its identity rather than its position, and everything the submission
-did not send stays exactly as stored.
+Those write through the **org chart** rather than a merge patch: a merge patch
+replaces an array wholesale, and a seat is not in the settings at all any more —
+it is its own object on the chart's log, arbitrated on its handle, so two seats'
+submissions never contend. The engine addresses the seat by its handle, which
+is its identity rather than its position, and everything the submission did
+not send stays exactly as stored. The seat's chart record is written as the
+caller, [attributed](#who-a-write-is-attributed-to) like every other write
+here: a person connecting their seat through their own machine token is its
+author, of their own kind, with `pat:<id>` beside them — it used to record the
+token as the author, of the operator kind.
 
 Every agent seat is listed, configured or not: the list is what a screen
 renders a form from, so leaving out a seat with no app yet would leave an
@@ -3080,10 +3095,16 @@ sign-ins made the write — it used to repeat their login, which the author
 already names, so two browsers, or a tab left open on a shared machine, were
 one name in every trail. The lineage is what an investigation follows from a
 row to the sign-in behind it: `GET /iam/people/{id}/sessions` lists it, and
-`iam_session_started` announced it. The trails with room for one name — a configuration revision's
-`created_by`, a secret's `set_by` — record the credential for the same reason:
-`pat:<id>` for a machine token, whose owner the credential listing and the
-identity trail's mint row name. The identity estate's own audit events
+`iam_session_started` announced it. A configuration revision and a stored
+secret record all three the same way: `created_by` / `updated_by` is the author,
+`created_by_kind` / `updated_by_kind` its kind, and `operator_id` the
+credential. They had room for one name and gave it to the credential, so a
+revision written through somebody's machine token named `pat:<id>` — and the
+token's row, the one thing that said whose it was, is swept a week after it
+lapses while a revision is kept for ever. A Tier A token is recorded as
+`token:<id>` in both, since its login is its credential; the engine's own
+writes (the reconcile loop, a boot import, a key the engine minted) record
+their own name, of kind `system`, and no credential. The identity estate's own audit events
 (`iam_credential_revoked`, `iam_session_ended`,
 `iam_session_generation_bumped`, …) carry it as `operator_id` beside `by`; the
 `iam_history` rows `GET /iam/audit` reads name the actor alone, because they
@@ -3454,6 +3475,15 @@ with the write's **three-valued outcome** — `applied`, `pending` or `unknown` 
 its position and its operation id: a gate the caller believes has landed and
 which is only `pending` is the difference between a node that has stopped
 writing and one that is about to.
+
+The gate is written **as the caller**: the eviction's `by` — what `crewlet
+retention status` prints as "evicted by" — is their name as [a write is
+attributed](#who-a-write-is-attributed-to), and the record carries the
+credential they pressed it through beside it. It used to be written as the
+serving node's own writer, so "who stopped this machine writing" had one
+answer, whichever node the request happened to reach. A capacity operation
+names its opener the same way, `by` beside `operator_id`, on the operation and
+in the report's `maintenance` block.
 
 A node whose company runs no native tracker has no eviction gate, and both gate
 routes answer `503 no_tracker` rather than `404`. The routes exist on this

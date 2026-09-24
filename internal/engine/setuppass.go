@@ -13,10 +13,12 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
@@ -179,7 +181,7 @@ func (p *atlassianPass) recordSite(
 	if err != nil {
 		return "the discovered Atlassian site could not be encoded: " + err.Error()
 	}
-	if err := writer.Apply(ctx, body, "record the Atlassian site", reconcileOperator); err != nil {
+	if err := writer.Apply(ctx, body, "record the Atlassian site", loopActor()); err != nil {
 		return "the Atlassian site could not be recorded: " + err.Error()
 	}
 	return ""
@@ -563,15 +565,21 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 // credential minted from the dashboard and one minted from a shell land in
 // the same place under the same envelope. Write-through, so a value is
 // durable before the next one is minted.
-func (e *Engine) SetupSink(operator string) (provision.TokenSink, error) {
+//
+// BY IS WHO THE RUN IS FOR — the person who pressed Connect, with the
+// credential they pressed it through, or [loopActor] for a timer's pass — and
+// every row the sink seals and the revision its rebuild writes record it.
+func (e *Engine) SetupSink(by iam.Actor) (provision.TokenSink, error) {
 	if e.cipher == nil {
 		return nil, fmt.Errorf("engine: this node has no keyring, so a minted credential cannot be sealed")
 	}
 	return &refreshingSink{
 		TokenSink: provision.NewSecretStoreSink(
-			fleetsecrets.New(e.backends.Fleet, e.cipher), operator),
-		engine:   e,
-		operator: operator,
+			fleetsecrets.New(e.backends.Fleet, e.cipher), secrets.Author{
+				Name: by.Name, Kind: string(by.Kind), OperatorID: by.OperatorID,
+			}),
+		engine: e,
+		by:     by,
 	}, nil
 }
 
@@ -602,16 +610,15 @@ type refreshingSink struct {
 	provision.TokenSink
 	engine *Engine
 
-	// operator is who this run is for, and it reaches the REVISION the
-	// rebuild writes. [configapi.Service.Reload] writes a new revision
-	// rather than re-pointing the old one precisely so "the credentials
-	// were reloaded at 04:12" is a fact somebody can find later, and a
-	// revision attributed to a constant answers half of that: an operator
-	// who connected an integration from the dashboard saw the resulting
-	// revision credited to the reconcile loop. The sink already stamps this
-	// name on every secret record it writes; spending it here costs
-	// nothing and is the same name.
-	operator string
+	// by is who this run is for, and it reaches the REVISION the rebuild
+	// writes. [configapi.Service.Reload] writes a new revision rather than
+	// re-pointing the old one precisely so "the credentials were reloaded at
+	// 04:12" is a fact somebody can find later, and a revision attributed to
+	// a constant answers half of that: an operator who connected an
+	// integration from the dashboard saw the resulting revision credited to
+	// the reconcile loop. The sink already stamps this party on every secret
+	// record it writes; spending it here costs nothing and is the same party.
+	by iam.Actor
 
 	sealed  bool
 	flushed bool
@@ -651,7 +658,7 @@ func (s *refreshingSink) Flush(ctx context.Context) error {
 		// itself. Handing this one over is the defect that made a pass which
 		// used its four minutes spend the lease's last minute here.
 		//nolint:contextcheck // detached by design; see [republisher.request]
-		s.engine.republish.request(s.operator, s.engine.rebuildForSealedSecrets)
+		s.engine.republish.request(s.by, s.engine.rebuildForSealedSecrets)
 	}
 	return err
 }
@@ -712,7 +719,7 @@ func (s *refreshingSink) Flush(ctx context.Context) error {
 // operator connecting a third-party app produces anyway (the setup dialog
 // writes one request per surface), and the rebuild rate is bounded by
 // something other than a promise about somebody else's code.
-func (e *Engine) rebuildForSealedSecrets(ctx context.Context, operator string) {
+func (e *Engine) rebuildForSealedSecrets(ctx context.Context, by iam.Actor) {
 	writer := e.configWriterOrNil()
 	if writer == nil {
 		// A node with no config surface — a worker-only one, or the few
@@ -732,11 +739,11 @@ func (e *Engine) rebuildForSealedSecrets(ctx context.Context, operator string) {
 	// finished is how the stale wiring survives.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), setup.RecordDeadline)
 	defer cancel()
-	if operator == "" {
-		operator = reconcileOperator
+	if by.Name == "" {
+		by = loopActor()
 	}
 	if err := writer.Reload(ctx,
-		"reload after provisioning sealed a credential", operator); err != nil {
+		"reload after provisioning sealed a credential", by); err != nil {
 		log.ErrorContext(ctx, "sealed_credentials_not_republished", "error", err,
 			"detail", "the credentials are sealed and resolvable, but the seat "+
 				"identities, parsers and tool children built at the last apply "+

@@ -247,13 +247,8 @@ func (e *Engine) chartSealer() chart.Sealer {
 	if e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
 		return nil
 	}
-	node := ""
-	if e.node != nil {
-		node = e.node.ID()
-	}
 	return &chartSealer{
 		store: fleetsecrets.New(e.backends.Fleet, e.cipher),
-		node:  node,
 		now:   time.Now,
 	}
 }
@@ -261,18 +256,20 @@ func (e *Engine) chartSealer() chart.Sealer {
 // chartSealer adapts the company's secret store to [chart.Sealer].
 type chartSealer struct {
 	store *fleetsecrets.Store
-	node  string
 	now   func() time.Time
 }
 
-// Seal stores one value under the name the chart derived.
-func (c *chartSealer) Seal(ctx context.Context, name, value string) error {
+// Seal stores one value under the name the chart derived, recording the party
+// writing the seat as its author.
+func (c *chartSealer) Seal(ctx context.Context, name, value string,
+	by secrets.Author) error {
+
 	// SOURCE "chart", which is what an operator listing their secrets reads
 	// to tell a credential a founder typed into a seat from one a
 	// provisioner minted. The two have different remedies when they stop
 	// working, and a listing that called both "api" would send somebody to
 	// the wrong place.
-	return c.store.Set(ctx, name, value, c.node, "chart", c.now())
+	return c.store.Set(ctx, name, value, by, "chart", c.now())
 }
 
 // personSealer is the per-person key store, which seals a person's own values

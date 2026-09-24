@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Resetting a token counter over HTTP.
@@ -72,8 +73,9 @@ func (a *App) serveBudgetReset(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeBudgetResetFailed)
 		return
 	}
-	operator := auth.OperatorID(caller)
-	log.Info("budget_reset", "operator", operator, "scope", scope, "cleared", n)
+	by := iam.ActorFor(caller)
+	log.Info("budget_reset", "by", by.Name, "operator", by.OperatorID,
+		"scope", scope, "cleared", n)
 	if cleared == nil {
 		cleared = []string{}
 	}

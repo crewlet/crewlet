@@ -57,20 +57,26 @@ func surface(t *testing.T, cipher secrets.Cipher, keyID string) (http.Handler, c
 // exactly these grants.
 func mounted(t *testing.T, opts secretsapi.Options, grants ...iam.Grant) http.Handler {
 	t.Helper()
+	// FRESH IN BOTH STEP-UP WINDOWS, as the guard stamps every Tier A
+	// token, so a case here is decided on its grants alone.
+	return mountedAs(t, opts, iam.Principal{
+		ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
+		Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: grants,
+		ReauthAt:          time.Now().Add(time.Hour),
+		SensitiveReauthAt: time.Now().Add(time.Hour),
+	})
+}
+
+// mountedAs builds the surface and serves it as caller.
+func mountedAs(t *testing.T, opts secretsapi.Options, caller iam.Principal) http.Handler {
+	t.Helper()
 	mux := http.NewServeMux()
 	if err := newService(t, opts).Routes(mux); err != nil {
 		t.Fatalf("Routes: %v", err)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// FRESH IN BOTH STEP-UP WINDOWS, as the guard stamps every Tier A
-		// token, so a case here is decided on its grants alone.
-		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), iam.Principal{
-			ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
-			Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
-			Stage: iam.StageActive, Grants: grants,
-			ReauthAt:          time.Now().Add(time.Hour),
-			SensitiveReauthAt: time.Now().Add(time.Hour),
-		})))
+		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), caller)))
 	})
 }
 
@@ -143,7 +149,7 @@ func TestAPlainReadCarriesNoValue(t *testing.T) {
 	if strings.Contains(body, `"value"`) {
 		t.Fatalf("a plain read has a value field at all: %s", body)
 	}
-	for _, want := range []string{`"key_id":"k1"`, `"updated_by":"ops"`} {
+	for _, want := range []string{`"key_id":"k1"`, `"updated_by":"token:ops"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the answer omits %s: %s", want, body)
 		}
@@ -345,7 +351,8 @@ func TestTheEnginesOwnKeysAreUnreachableHere(t *testing.T) {
 	fleet := coordmem.NewFleet()
 	const key = "iam/person/018f3a9c-0000-7000-8000-000000000001/dek"
 	if err := fleetsecrets.New(fleet, cipherFor(t, "k1", "k2")).Estate().Set(
-		t.Context(), key, "the-person-key", "node-a", "iam", clock); err != nil {
+		t.Context(), key, "the-person-key", secrets.Author{Name: "node-a",
+			Kind: string(iam.ActorSystem)}, "iam", clock); err != nil {
 		t.Fatalf("seed the engine key: %v", err)
 	}
 	h := mounted(t, secretsapi.Options{
@@ -450,9 +457,47 @@ func TestTheAuthenticatedOperatorIsRecordedAsTheAuthor(t *testing.T) {
 	call(t, h, http.MethodPut, "/secrets/A?source=gitlab-provision", "v")
 
 	_, body := call(t, h, http.MethodGet, "/secrets/A", "")
-	for _, want := range []string{`"updated_by":"ops"`, `"source":"gitlab-provision"`} {
+	for _, want := range []string{`"updated_by":"token:ops"`,
+		`"updated_by_kind":"operator"`, `"operator_id":"token:ops"`,
+		`"source":"gitlab-provision"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the row omits %s: %s", want, body)
+		}
+	}
+}
+
+// A PERSON'S TOKEN RECORDS THE PERSON AS THE AUTHOR, AND THE TOKEN BESIDE THEM.
+//
+// The row had room for one name and took the credential: `pat:<id>`, whose own
+// row — the one thing saying whose it was — the identity sweep deletes a week
+// after it lapses. So a credential in the store named, a month on, nobody. The
+// write's answer says the same thing the row does, because it is the only
+// confirmation a client that could not choose the author gets. Mutation:
+// record the credential as the author and every assertion here fails.
+func TestAPersonsTokenIsRecordedBesideThePerson(t *testing.T) {
+	t.Parallel()
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	h := mountedAs(t, secretsapi.Options{
+		Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1",
+		Now: func() time.Time { return clock },
+	}, iam.Principal{
+		ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
+		ReauthAt:          time.Now().Add(time.Hour),
+		SensitiveReauthAt: time.Now().Add(time.Hour),
+	})
+	code, written := call(t, h, http.MethodPut, "/secrets/A", "v")
+	if code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", code, written)
+	}
+	_, row := call(t, h, http.MethodGet, "/secrets/A", "")
+	for name, body := range map[string]string{"the write's answer": written,
+		"the row": row} {
+		for _, want := range []string{`"updated_by":"jane.doe"`,
+			`"updated_by_kind":"operator"`, `"operator_id":"` + pat + `"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s omits %s: %s", name, want, body)
+			}
 		}
 	}
 }

@@ -81,8 +81,12 @@ func (e *Engine) SeatDocument(ctx context.Context, handle string) ([]byte, error
 // THE POSITION RATHER THAN A REVISION, because there is no revision: a seat
 // is not part of the stored configuration any more. A caller that reported a
 // revision id here would be reporting the one this write did not make.
+//
+// BY IS THE PARTY THE RECORD RECORDS, whole: the author, its kind and the
+// credential the write came through — the same three `/chart` records for a
+// write it takes itself.
 func (e *Engine) SetSeatDocument(ctx context.Context, handle string, body []byte,
-	summary, operator string) (statelog.Position, error) {
+	summary string, by iam.Actor) (statelog.Position, error) {
 
 	reader, writer := e.Chart(), e.ChartWriter()
 	if reader == nil || writer == nil {
@@ -115,17 +119,22 @@ func (e *Engine) SetSeatDocument(ctx context.Context, handle string, body []byte
 		return statelog.Position{}, fmt.Errorf("engine: this company has no seat %q",
 			handle)
 	}
-	// THE OPERATOR IS THE PARTY, and the grant is the company's: this write
+	// THE CALLER IS THE PARTY, and the grant is the company's: this write
 	// carries the opaque half — a vendor credential pointer, an app id —
 	// which internal/chart refuses below the grant that writes the company
 	// document. Every caller of this method has already been authorized at
 	// its own door; what this says is which party the record records.
 	//
-	// THE OPERATOR IS ALSO THE CREDENTIAL, because this surface is handed
-	// one name and it is the credential's: a Tier A token's id, a machine
-	// token's `pat:<id>`, a signed-in person's login.
-	party := writer.As(operator, chart.AuthorOperator,
-		[]iam.Grant{iam.GrantConfigWrite}, chart.Provenance{OperatorID: operator})
+	// THE AUTHOR AND THE CREDENTIAL APART, as `/chart` records them. This
+	// was handed one name and recorded it as both, and the name was the
+	// credential's: a person connecting their seat's integration through
+	// their own machine token was the chart AUTHOR `pat:<id>`, of kind
+	// operator — so the seat's history named a token rather than the person
+	// whose authority it was, and nothing in it said who that was once the
+	// token's row was swept.
+	party := writer.As(by.Name, chart.AuthorKindOf(by.Kind),
+		[]iam.Grant{iam.GrantConfigWrite},
+		chart.Provenance{OperatorID: by.OperatorID})
 	result, err := party.WriteSeat(ctx, uuid.NewString(), chart.SeatContent{
 		Handle: detail.Seat.Handle, Kind: detail.Seat.Kind,
 		Unit: detail.Seat.UnitKey,

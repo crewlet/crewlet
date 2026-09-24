@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -190,10 +191,16 @@ func isFlagSet(fs *flag.FlagSet, name string) bool {
 // visible is the line printed after a write, which is [secretTarget.where].
 type secretBackend interface {
 	List(ctx context.Context) ([]secrets.Record, error)
-	Set(ctx context.Context, name, value, by, source string, now time.Time) error
+
+	// Set stores one value and reports the author the row RECORDS, which
+	// is not always the one offered: on the fleet's store the node stamps
+	// the party its own guard authenticated, and this command printed the
+	// shell's user as the author of a row that named the API token instead.
+	Set(ctx context.Context, name, value string, by secrets.Author, source string,
+		now time.Time) (secrets.Author, error)
 	Get(ctx context.Context, name string) (string, error)
 	Unset(ctx context.Context, name string) (bool, error)
-	Rekey(ctx context.Context, activeKeyID, by string, now time.Time) (fleetsecrets.Rekeyed, error)
+	Rekey(ctx context.Context, activeKeyID string) (fleetsecrets.Rekeyed, error)
 
 	// EngineKeys counts the engine's own key material the store holds,
 	// per keyring key, naming none of it — which is what a rotation has
@@ -209,10 +216,16 @@ type secretBackend interface {
 // moves the operator's rows alone.
 type localSecrets struct{ *store.SecretValues }
 
-func (l localSecrets) Rekey(ctx context.Context, activeKeyID, by string,
-	now time.Time) (fleetsecrets.Rekeyed, error) {
+// Set writes the row under the author offered, which on this node's own table
+// is what it records.
+func (l localSecrets) Set(ctx context.Context, name, value string, by secrets.Author,
+	source string, now time.Time) (secrets.Author, error) {
 
-	moved, err := l.SecretValues.Rekey(ctx, activeKeyID, by, now)
+	return by, l.SecretValues.Set(ctx, name, value, by, source, now)
+}
+
+func (l localSecrets) Rekey(ctx context.Context, activeKeyID string) (fleetsecrets.Rekeyed, error) {
+	moved, err := l.SecretValues.Rekey(ctx, activeKeyID)
 	return fleetsecrets.Rekeyed{Moved: moved}, err
 }
 
@@ -391,8 +404,13 @@ func listSecrets(ctx context.Context, sv *secretTarget, stdout io.Writer) error 
 		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tKEY\tUPDATED\tBY\tSOURCE")
 		for _, r := range rows {
+			// THE AUTHOR, AND THE CREDENTIAL BESIDE IT where one made the
+			// write: a row a person wrote through their machine token is
+			// theirs, and saying which token is what tells it from one
+			// they wrote themselves.
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.KeyID,
-				r.UpdatedAt.Format(time.RFC3339), r.UpdatedBy, r.Source)
+				r.UpdatedAt.Format(time.RFC3339),
+				describeAuthor(r.UpdatedBy, r.OperatorID), r.Source)
 		}
 		if err := w.Flush(); err != nil {
 			return err
@@ -430,13 +448,15 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 		}
 		value = read
 	}
-	who := currentOperator()
-	if err := sv.Set(ctx, name, value, who, source, time.Now().UTC()); err != nil {
+	recorded, err := sv.Set(ctx, name, value, hostAuthor(), source, time.Now().UTC())
+	if err != nil {
 		return err
 	}
 	// The NAME and nothing else. Confirming the value would undo the whole
-	// reason it was read from stdin.
-	fmt.Fprintf(stdout, "stored %s (%d bytes) as %s\n", name, len(value), who)
+	// reason it was read from stdin. The author is the one the ROW records,
+	// and the credential beside it where one made the write.
+	fmt.Fprintf(stdout, "stored %s (%d bytes) as %s\n", name, len(value),
+		describeAuthor(recorded.Name, recorded.OperatorID))
 	// SAID EVERY TIME, because the difference between the two stores is
 	// invisible afterwards and decides whether a fleet has the value: an
 	// operator who cannot tell which one they wrote finds out when a vendor
@@ -554,7 +574,7 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, bootstrapPath string,
 			"under %s\n", stale, engineStale, active)
 		return nil
 	}
-	rekeyed, err := sv.Rekey(ctx, active, currentOperator(), time.Now().UTC())
+	rekeyed, err := sv.Rekey(ctx, active)
 	if err != nil {
 		return err
 	}
@@ -638,6 +658,28 @@ func keyEnvVar(keyID string) string {
 	upper = strings.ReplaceAll(upper, "-", "_")
 	upper = strings.ReplaceAll(upper, ".", "_")
 	return "CREWLET_SECRET_KEY_" + upper
+}
+
+// hostAuthor is who a command run on this host records as a row's author: the
+// shell's account, of the operator kind, and NO credential — none made the
+// write. A write through a running node is attributed by the node instead.
+func hostAuthor() secrets.Author {
+	return secrets.Author{Name: currentOperator(), Kind: string(iam.ActorOperator)}
+}
+
+// hostActor is [hostAuthor] for a configuration revision.
+func hostActor() iam.Actor {
+	return iam.Actor{Name: currentOperator(), Kind: iam.ActorOperator}
+}
+
+// describeAuthor renders a recorded author for a line an operator reads: the
+// name, and the credential beside it when one made the write and it is not
+// the name itself — a Tier A token's is.
+func describeAuthor(name, operatorID string) string {
+	if operatorID == "" || operatorID == name {
+		return name
+	}
+	return name + " (through " + operatorID + ")"
 }
 
 // currentOperator names who wrote a row, for the provenance column.

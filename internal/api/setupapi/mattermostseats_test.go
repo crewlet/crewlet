@@ -55,7 +55,7 @@ func TestTheMattermostRosterNamesEveryAgentsBot(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, mattermostDoc)
 	if err := s.vault.Set(t.Context(), "SRE_MATTERMOST_TOKEN", "a-real-bot-token",
-		"test", "test", pinned); err != nil {
+		testAuthor, "test", pinned); err != nil {
 		t.Fatal(err)
 	}
 	// THE PASS THIS APP HAS, because what the roster tells a seat with no

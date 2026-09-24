@@ -831,7 +831,11 @@ var planeCases = []fleetCase{{
 }, {
 	name: "an activation is readable with the epoch the store assigned",
 	fn: func(h *fleetHarness) {
-		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"name":"Acme"}`), At: h.now()})
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"name":"Acme"}`),
+			At: h.now(), CreatedBy: "jane.doe", CreatedByKind: "operator",
+			OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a",
+		})
 		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
@@ -844,6 +848,16 @@ var planeCases = []fleetCase{{
 		}
 		if got.Epoch != published.Epoch || got.RevisionID != "rev-1" {
 			h.t.Fatalf("target = %+v, want the published %+v", got, published)
+		}
+		// THE AUTHOR TRAVELS WITH THE POINTER, whole: a node adopting the
+		// revision records who wrote it from here, and a backend that
+		// dropped any of the three would have every other node's history
+		// name nobody.
+		if got.CreatedBy != "jane.doe" || got.CreatedByKind != "operator" ||
+			got.OperatorID != "pat:0192f00d-0000-7000-8000-00000000000a" {
+			h.t.Fatalf("target author = %q/%q/%q, want the published "+
+				"jane.doe/operator/pat:…", got.CreatedBy, got.CreatedByKind,
+				got.OperatorID)
 		}
 	},
 }, {
@@ -2475,7 +2489,8 @@ func (h *fleetHarness) putSecret(name, sealed, keyID string) {
 	h.t.Helper()
 	err := h.f.PutSecret(h.ctx, coord.SecretRecord{
 		Name: name, Value: sealed, KeyID: keyID,
-		UpdatedAt: h.now(), UpdatedBy: "operator", Source: "cli",
+		UpdatedAt: h.now(), UpdatedBy: "jane.doe", UpdatedByKind: "operator",
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a", Source: "cli",
 	})
 	if err != nil {
 		h.t.Fatalf("PutSecret(%s): %v", name, err)
@@ -2522,8 +2537,15 @@ var secretCases = []fleetCase{{
 		if rec.KeyID != "key-1" {
 			h.t.Errorf("KeyID = %q — a rotation sweep cannot find stale rows without it", rec.KeyID)
 		}
-		if rec.UpdatedBy != "operator" || rec.Source != "cli" {
-			h.t.Errorf("provenance lost: by=%q source=%q", rec.UpdatedBy, rec.Source)
+		// ALL FOUR, and the credential beside the author above all: a
+		// store that kept only one of the two names lost whichever it
+		// dropped — the author once the credential's row was swept, or
+		// the credential for good.
+		if rec.UpdatedBy != "jane.doe" || rec.UpdatedByKind != "operator" ||
+			rec.OperatorID != "pat:0192f00d-0000-7000-8000-00000000000a" ||
+			rec.Source != "cli" {
+			h.t.Errorf("provenance lost: by=%q kind=%q operator=%q source=%q",
+				rec.UpdatedBy, rec.UpdatedByKind, rec.OperatorID, rec.Source)
 		}
 	},
 }, {

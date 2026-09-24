@@ -290,8 +290,10 @@ chart currently holds — exactly as the `-api` route would have.
 
 `-summary` is the audit note recorded with the revision (default
 `imported from <path>`). The revision history is the record of who changed what
-and why, so a fleet-wide write is worth a sentence; `created_by` is the token's
-id when it goes through the API, and the invoking operator when it does not.
+and why, so a fleet-wide write is worth a sentence; `created_by` is whoever the
+node resolved the request to when it goes through the API — `token:<id>` for a
+Tier A token, the owner for a person's machine token with `operator_id` naming
+the token beside them — and the invoking operator when it does not.
 
 It does **not** refuse because a revision is already active, and there is no
 flag to force it past one: the pointer is append-only, so an import *chains* a
@@ -301,7 +303,8 @@ back to any earlier id.
 **Idempotent by content**, the same rule the [boot seed](#crewlet-run) follows:
 a file that already matches the active revision imports nothing and says so, an
 edited one imports once. The audit note is `imported from <path>`, `created_by`
-is the invoking operator and `source` is `file` — all three are recorded for
+is the invoking operator (of the `operator` kind, with no credential beside
+them: none made the write) and `source` is `file` — all three are recorded for
 you and none is settable from the command line. (`PUT /config` takes an
 `X-Summary` header; the CLI has no equivalent.)
 
@@ -336,7 +339,10 @@ Errors with ``no revision is active; run `crewlet config import` `` when nothing
 crewlet config revisions [-config PATH] [-limit 20]
 ```
 
-Lists recent revisions. The active revision is marked with `*`.
+Lists recent revisions. The active revision is marked with `*`. `BY` is the
+revision's author, with the credential it was written through beside them where
+that names something the author does not — `jane.doe (through pat:…)` for a
+person's machine token; a Tier A token's `token:<id>` is both, and says so once.
 
 ### `crewlet config diff`
 
@@ -612,7 +618,7 @@ crewlet secrets set <NAME> [-value V] [-source STR] [-config PATH] [-api URL]
 
 Stores one encrypted secret under `NAME`, which must be a valid environment-variable name — a name outside the `${VAR}` grammar could never be read back, so it is rejected. Existing names are replaced.
 
-The value comes from **stdin** by default (`echo "$TOKEN" | crewlet secrets set GITLAB_TOKEN_SWE`), or from an interactive prompt on a terminal. `-value` exists for scripted use, but an argv value is visible in `ps` and lands in shell history, so prefer stdin. `-source` records provenance (default `cli`); the provisioning CLIs stamp their own. The **author** is the Tier A token's id when the write goes through a running node, and `$CREWLET_OPERATOR`/`$USER` when it goes to the local table.
+The value comes from **stdin** by default (`echo "$TOKEN" | crewlet secrets set GITLAB_TOKEN_SWE`), or from an interactive prompt on a terminal. `-value` exists for scripted use, but an argv value is visible in `ps` and lands in shell history, so prefer stdin. `-source` records provenance (default `cli`); the provisioning CLIs stamp their own. The **author** is the node's to decide when the write goes through a running node — whoever the credential in `CREWLET_API_TOKEN` resolves to, `token:<id>` for a Tier A token or the owner with the token beside them for a machine token — and the line printed after the write is what the node recorded, never the shell's own user; it is `$CREWLET_OPERATOR`/`$USER`, with no credential, when the write goes to the local table.
 
 A running engine picks the new value up at its next config activation or restart, not immediately — the command says so after each write, along with which of the two stores it wrote.
 
@@ -622,7 +628,7 @@ A running engine picks the new value up at its next config activation or restart
 crewlet secrets list [-config PATH] [-api URL]
 ```
 
-Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp, who wrote it, and source. It names the store it read first, because a stopped node's own empty table and a fleet with nothing in it look identical otherwise. **Never** prints a value — the listing drops the envelope on the way out and the route behind it has no value field at all. Works without a keyring on the fleet's store, so an operator locked out of the key can still take inventory.
+Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp, who wrote it — with the credential beside them where one made the write and names something they do not (`jane.doe (through pat:…)`) — and source. It names the store it read first, because a stopped node's own empty table and a fleet with nothing in it look identical otherwise. **Never** prints a value — the listing drops the envelope on the way out and the route behind it has no value field at all. Works without a keyring on the fleet's store, so an operator locked out of the key can still take inventory.
 
 The engine's own keys — each person's data key, each provider session's refresh token, the identity directory's blind-index key — share the store and are **counted, never named**, on a line after the table. No `crewlet secrets` command reads, writes or removes one: `get`, `set` and `unset` refuse a name in the engine's namespace (`iam/…`) before they open anything, and the node refuses it again with `403 reserved_name`. Remove a person with `crewlet iam remove`, end their sessions with `crewlet iam revoke`. See [the secret store](../concepts/secret-store.md#the-engines-own-keys-share-the-bucket-and-never-the-namespace).
 

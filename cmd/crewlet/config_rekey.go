@@ -139,8 +139,8 @@ func reseal(ctx context.Context, cs *configStore, parent store.Revision,
 		return "", errors.New("config: the keyring produced no sealed payload")
 	}
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
-		ParentID: parent.ID, Source: "rekey", CreatedBy: currentOperator(),
-		Summary: summary, Payload: payload,
+		ParentID: parent.ID, Source: "rekey", CreatedBy: hostActor().Name,
+		CreatedByKind: string(hostActor().Kind), Summary: summary, Payload: payload,
 	})
 	if err != nil {
 		return "", fmt.Errorf("store the re-sealed revision: %w", err)

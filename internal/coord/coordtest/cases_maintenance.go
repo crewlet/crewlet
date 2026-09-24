@@ -29,6 +29,13 @@ var maintenanceCases = []fleetCase{
 			h.t.Fatal("the opened operation came back with no revision, so no " +
 				"later mutation can be conditional on anything")
 		}
+		// WHO OPENED IT, both halves: the author and the credential they
+		// opened it through, which a backend that dropped the second would
+		// report as the owner's own gesture.
+		if got.By != mine.By || got.OperatorID != mine.OperatorID {
+			h.t.Fatalf("the opened operation names %q through %q, want %q "+
+				"through %q", got.By, got.OperatorID, mine.By, mine.OperatorID)
+		}
 
 		theirs := window("op-2")
 		held, won, err := h.f.OpenMaintenance(h.ctx, theirs)
@@ -310,6 +317,7 @@ func window(id string) coord.MaintenanceOperation {
 		Attempt:          1,
 		Participants:     []string{"node-1", "node-2"},
 		EnteredAt:        time.Now().UTC(),
-		By:               "ops-3",
+		By:               "jane.doe",
+		OperatorID:       "pat:0192f00d-0000-7000-8000-00000000000a",
 	}
 }

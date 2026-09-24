@@ -163,7 +163,7 @@ func TestASeatWhoseCredentialWentWithItsAccountIsNotSatisfied(t *testing.T) {
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}
@@ -218,7 +218,7 @@ func TestASeatIsNotSatisfiedOnASurfaceTheCompanyDoesNotDeclare(t *testing.T) {
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}
@@ -265,7 +265,7 @@ func TestASeatTheLoopFoundBrokenIsNotSatisfied(t *testing.T) {
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}
@@ -306,7 +306,7 @@ func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, "test", pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}

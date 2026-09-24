@@ -578,6 +578,13 @@ type Activation struct {
 	RevisionID string
 	At         time.Time
 	Summary    string
+
+	// CreatedBy, CreatedByKind and OperatorID are the revision's author —
+	// see [ActivationRequest.CreatedBy]. Empty on a pointer a build that
+	// did not carry them published.
+	CreatedBy     string
+	CreatedByKind string
+	OperatorID    string
 }
 
 // MaxApplyErrorLength bounds the failure text a node publishes.
@@ -637,6 +644,18 @@ type ActivationRequest struct {
 	RevisionID string
 
 	Summary string
+
+	// CreatedBy is the revision's AUTHOR, CreatedByKind what sort of author
+	// (internal/iam's actor kind), and OperatorID the credential it was
+	// written through — the three a stored revision records, carried with
+	// the pointer for the reason Summary is: every node that adopts the
+	// revision keeps its own copy of it, and that copy has to say who wrote
+	// it. It used to say `peer`, so a revision written on one node named
+	// its author there and nobody on every other node — the history an
+	// operator reads depended on which node answered.
+	CreatedBy     string
+	CreatedByKind string
+	OperatorID    string
 
 	// Payload is the SEALED body, travelling with the pointer so a peer
 	// can apply the revision it names.
@@ -957,13 +976,20 @@ type SandboxRuns interface {
 // fleet's shared store carry credentials at all. KeyID rides denormalised
 // beside it so a rotation sweep can find rows sealed under a retired key
 // without opening any of them.
+//
+// PROVENANCE IS FOUR FIELDS — who wrote it, what sort of author, the
+// credential they acted through, and the surface it arrived by — because a
+// record that named only the credential lost its author the week the
+// credential's own row was swept. See internal/secrets' Author.
 type SecretRecord struct {
-	Name      string
-	Value     string
-	KeyID     string
-	UpdatedAt time.Time
-	UpdatedBy string
-	Source    string
+	Name          string
+	Value         string
+	KeyID         string
+	UpdatedAt     time.Time
+	UpdatedBy     string
+	UpdatedByKind string
+	OperatorID    string
+	Source        string
 
 	// Version is the store's own revision of the row, set on every read
 	// and ignored on every write: what [Secrets.UpdateSecret] and

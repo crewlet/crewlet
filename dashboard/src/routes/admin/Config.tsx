@@ -58,6 +58,7 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { authorLabel, throughOf } from "~/lib/attribution.ts";
 import type { FleetNode, RevisionMeta } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -130,7 +131,10 @@ const NO_REVISION = {
 function revisionFacts(revision: RevisionMeta, now: number): Fact[] {
   return [
     { label: "Created", value: <DateCell at={revision.created_at} now={now} /> },
-    { label: "By", value: revision.created_by || "nobody recorded" },
+    {
+      label: "By",
+      value: authorLabel(revision.created_by, revision.operator_id) || "nobody recorded",
+    },
     { label: "Source", value: revision.source },
     {
       label: "Activated",
@@ -302,6 +306,12 @@ function RevisionBody({
             },
             { label: "Source", value: revision.source },
             { label: "Created by", value: revision.created_by || undefined },
+            {
+              label: "Through",
+              value: throughOf(revision.created_by, revision.operator_id) || undefined,
+              code: true,
+              title: "the credential the revision was written through",
+            },
             { label: "Created", value: fmtDateTime(revision.created_at) },
             {
               label: "Activated",
@@ -815,7 +825,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                     sortValue: (r) => r.created_by,
                     cell: (r) =>
                       r.created_by ? (
-                        <TextCell>{r.created_by}</TextCell>
+                        <TextCell>{authorLabel(r.created_by, r.operator_id)}</TextCell>
                       ) : (
                         <EmptyValue label="Nobody recorded" />
                       ),

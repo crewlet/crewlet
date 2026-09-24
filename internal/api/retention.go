@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -61,9 +62,14 @@ type retentionWriter interface {
 // nil to a genuine one before handing it over: a nil *tracker.Writer inside a
 // non-nil interface passes this route's own check and panics on the first
 // press.
+//
+// BY IS WHO PRESSED, and the gate record is written AS them: an eviction's
+// history names the person and the credential they pressed it through, where
+// it used to name this node's own writer — so "who stopped node-3 writing"
+// had one answer, the node that happened to serve the request.
 type NodeGate interface {
-	EvictNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
-	ReadmitNode(ctx context.Context, opID, nodeID string) (tracker.WriteResult, error)
+	EvictNode(ctx context.Context, opID, nodeID string, by iam.Actor) (tracker.WriteResult, error)
+	ReadmitNode(ctx context.Context, opID, nodeID string, by iam.Actor) (tracker.WriteResult, error)
 }
 
 // serveRetentionAck answers POST /work/retention/ack.
@@ -109,7 +115,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	operator := auth.OperatorID(caller)
+	by := iam.ActorFor(caller)
 	point := coord.BackupPoint{
 		Owner: coord.OperatorBackupOwner,
 		At:    time.Now().UTC(),
@@ -126,7 +132,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeAckFailed)
 		return
 	}
-	log.Info("retention_acknowledged", "operator", operator,
+	log.Info("retention_acknowledged", "by", by.Name, "operator", by.OperatorID,
 		"stream", stream, "position", position, "generation", generation)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stream": stream, "position": position, "generation": generation,
@@ -215,7 +221,7 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		operator := auth.OperatorID(caller)
+		by := iam.ActorFor(caller)
 		// A FRESH ID PER PRESS, unlike the chart apply's derived one:
 		// every node computes the chart's id from the revision so the
 		// losers collapse, but two operators evicting one node are two
@@ -224,9 +230,9 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 		var result tracker.WriteResult
 		var err error
 		if evict {
-			result, err = a.nodes.EvictNode(r.Context(), opID, node)
+			result, err = a.nodes.EvictNode(r.Context(), opID, node, by)
 		} else {
-			result, err = a.nodes.ReadmitNode(r.Context(), opID, node)
+			result, err = a.nodes.ReadmitNode(r.Context(), opID, node, by)
 		}
 		if err != nil {
 			log.Warn("api_retention_gate_failed", "node", node,
@@ -235,7 +241,8 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 				map[string]string{"detail": err.Error()})
 			return
 		}
-		log.Info("retention_gate", "operator", operator, "node", node, "evict", evict)
+		log.Info("retention_gate", "by", by.Name, "operator", by.OperatorID,
+			"node", node, "evict", evict)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"node": node, "evicted": evict,
 			// THE THREE-VALUED OUTCOME, whole. A gate the caller
@@ -322,9 +329,9 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	operator := auth.OperatorID(caller)
+	by := iam.ActorFor(caller)
 	gen, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
-		Stream: stream, Confirm: confirm, By: operator,
+		Stream: stream, Confirm: confirm, By: by.Name,
 		Force: r.URL.Query().Get("force") == "true",
 	})
 	if err != nil {
@@ -333,7 +340,8 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"detail": err.Error()})
 		return
 	}
-	log.Warn("reanchored", "operator", operator, "stream", stream, "generation", gen)
+	log.Warn("reanchored", "by", by.Name, "operator", by.OperatorID,
+		"stream", stream, "generation", gen)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stream": stream, "generation": gen,
 	})
@@ -362,9 +370,10 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	operator := auth.OperatorID(caller)
+	by := iam.ActorFor(caller)
 	op, err := a.capacity.SetCapacity(r.Context(), engine.CapacityRequest{
-		Stream: stream, TargetMaxBytes: target, By: operator,
+		Stream: stream, TargetMaxBytes: target,
+		By: by.Name, OperatorID: by.OperatorID,
 		Assert: r.URL.Query().Get("assert_excluded") == "true",
 	})
 	if err != nil {
@@ -379,7 +388,8 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	log.Info("capacity_requested", "operator", operator, "stream", stream,
+	log.Info("capacity_requested", "by", by.Name, "operator", by.OperatorID,
+		"stream", stream,
 		"target", target, "phase", op.Phase)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"operation": operationOrNil(op), "mode": a.capacity.Mode(),
@@ -460,18 +470,20 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what strin
 	if !ok {
 		return
 	}
-	operator := auth.OperatorID(caller)
+	by := iam.ActorFor(caller)
 	op, err := run(r.Context(), stream)
 	if err != nil {
 		log.Warn("api_capacity_gesture_refused", "gesture", what,
-			"stream", stream, "operator", operator, "error", err)
+			"stream", stream, "by", by.Name, "operator", by.OperatorID,
+			"error", err)
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeCapacityRefused, httpjson.Detail{
 			"detail":    err.Error(),
 			"operation": operationOrNil(op),
 		})
 		return
 	}
-	log.Info("capacity_gesture", "operator", operator, "gesture", what, "stream", stream)
+	log.Info("capacity_gesture", "by", by.Name, "operator", by.OperatorID,
+		"gesture", what, "stream", stream)
 	writeJSON(w, http.StatusOK, map[string]any{"operation": operationOrNil(op)})
 }
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A write made by this build keeps what this build cannot represent.
@@ -453,7 +454,8 @@ func TestAnEntityWriteAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 			Kind: configapi.EntityLLMProviders, ID: "zulu",
 			Body: []byte(`{"type": "anthropic", "model": "claude-sonnet-5",
 			  "api_keys": ["sk-` + strings.ReplaceAll(name, " ", "-") + `"]}`),
-			Summary: "an entity", Operator: "operator", Expect: spell(current.ID),
+			Summary: "an entity", By: iam.Actor{Name: "operator", Kind: iam.ActorOperator},
+			Expect: spell(current.ID),
 		}); err != nil {
 			t.Errorf("ApplyEntity with %s = %v", name, err)
 		}

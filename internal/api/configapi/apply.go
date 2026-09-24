@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -155,8 +156,10 @@ type ApplyRequest struct {
 	// what it was for matters most here.
 	Summary string
 
-	// Operator is who the revision records as its author.
-	Operator string
+	// By is who the revision records as its author: the name, the kind and
+	// the credential it was written through, [iam.ActorFor]'s whole answer
+	// for the party — or the engine's own name for a write a timer made.
+	By iam.Actor
 
 	// Expect is the revision the caller built this edit on. Empty is
 	// unconditional, which is what a first import and a script that owns
@@ -185,7 +188,7 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 	if err != nil {
 		return Applied{}, err
 	}
-	return s.commit(ctx, prepared, req.Summary, req.Operator)
+	return s.commit(ctx, prepared, req.Summary, req.By)
 }
 
 // base is the active revision a write is built on, opened.
@@ -310,14 +313,22 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 //
 // The plane is there: [Service.prepare] refused the write otherwise, and a
 // prepared write comes from nowhere else.
-func (s *Service) commit(ctx context.Context, p *prepared, summary, operator string) (Applied, error) {
+//
+// BY IS THE AUTHOR AND THE CREDENTIAL BOTH, and the revision keeps both: a
+// revision is kept for ever, and one that named only the credential — a
+// person's machine token, `pat:<id>` — named something the identity sweep
+// deletes a week after it lapses, and with it the only record of whose it was.
+func (s *Service) commit(ctx context.Context, p *prepared, summary string,
+	by iam.Actor) (Applied, error) {
+
 	payload, err := secrets.Seal(s.cipher, p.document)
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)
 	}
 	at := s.now()
 	id, err := s.configs.Insert(ctx, store.Revision{
-		ParentID: p.base, Source: "api", CreatedBy: operator,
+		ParentID: p.base, Source: "api", CreatedBy: by.Name,
+		CreatedByKind: string(by.Kind), OperatorID: by.OperatorID,
 		Summary: summary, Payload: payload, CreatedAt: at,
 	})
 	if err != nil {
@@ -325,6 +336,10 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 	}
 	published, err := s.plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: summary, Payload: payload, At: at, Expect: p.base,
+		// THE AUTHOR RIDES THE POINTER, so every node that adopts this
+		// revision records who wrote it rather than `peer`.
+		CreatedBy: by.Name, CreatedByKind: string(by.Kind),
+		OperatorID: by.OperatorID,
 		// A WRITE BUILT ON NOTHING SAYS SO. Every write here names what it
 		// was built on as the activation's expectation, and a write with no
 		// base was built on an empty store: on a node that has not caught up
@@ -340,7 +355,8 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 		// while this node goes on serving what it served, and its
 		// reconciler adopts whichever revision won.
 		log.InfoContext(ctx, "config_activation_raced",
-			"revision", id, "expected", p.base, "by", operator)
+			"revision", id, "expected", p.base, "by", by.Name,
+			"operator", by.OperatorID)
 		raced := &RacedError{Base: p.base, Stored: id}
 		if current, _, terr := s.plane.Target(ctx); terr == nil {
 			raced.Current = current.RevisionID
@@ -360,9 +376,10 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 			"detail", "the fleet is running this revision; this node marks "+
 				"it active when its reconciler applies the epoch")
 	}
-	s.nudge(ctx, id, summary, operator)
+	s.nudge(ctx, id, summary, by)
 	log.InfoContext(ctx, "config_revision_written",
-		"revision", id, "epoch", published.Epoch, "by", operator, "summary", summary)
+		"revision", id, "epoch", published.Epoch, "by", by.Name,
+		"operator", by.OperatorID, "summary", summary)
 	return Applied{
 		RevisionID: id, Epoch: published.Epoch, Parent: p.base,
 		Warnings: p.warnings,
@@ -566,7 +583,7 @@ func onlyUnknownField(_ *config.Company, err error) error {
 // A NEW revision rather than a re-pointed old one, for the same reason revert
 // writes one: the history stays append-only, so "the credentials were
 // reloaded at 04:12" is a fact somebody can find later.
-func (s *Service) Reload(ctx context.Context, summary, operator string) (Applied, error) {
+func (s *Service) Reload(ctx context.Context, summary string, by iam.Actor) (Applied, error) {
 	prepared, err := s.prepare(ctx, draft{
 		requireActive: true,
 		// VALIDATED, because a reload is an apply: every node rebuilds its
@@ -593,5 +610,5 @@ func (s *Service) Reload(ctx context.Context, summary, operator string) (Applied
 	if summary == "" {
 		summary = "reload configuration"
 	}
-	return s.commit(ctx, prepared, summary, operator)
+	return s.commit(ctx, prepared, summary, by)
 }

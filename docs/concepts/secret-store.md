@@ -32,9 +32,27 @@ _secrets (a coordination KV bucket, no TTL)
   value       "enc:v1:<key_id>:<base64>"
   key_id      which keyring entry sealed it
   updated_at
-  updated_by
-  source      "cli" | "api" | "gitlab-provision" | "rekey" | "migrated"
+  updated_by       the author: a seat's handle for a person bound to one, a
+                   login otherwise, `token:<id>` for a Tier A token, the
+                   engine's own name for a key or a pass it wrote itself
+  updated_by_kind  agent | human | operator | system
+  operator_id      the credential it was stored through — `pat:<id>`,
+                   `session:<lineage>`, a Tier A token's login — and empty
+                   for a write no credential made
+  source      "cli" (or `-source`'s value) | "api" (or `?source=`'s) |
+              "provision" | "setup" | "chart" | "llm-login" | "migrated",
+              and "iam" on the engine's own keys
 ```
+
+**Who stored a value is three facts, and a rekey keeps all of them.** The author
+is whose authority the write exercised and the credential is what it was
+exercised through; a row that kept only one used to keep the credential, so a
+value stored through a person's machine token named `pat:<id>` — and that
+token's own row, the only thing saying whose it was, is swept a week after it
+lapses. A **rekey** re-seals a value it did not choose, so it leaves every
+provenance field as it found it: it used to stamp its own caller and `rekey`
+over each row, and after a rotation every credential in the company read as
+set by whoever rotated the keyring.
 
 **The name is the reference grammar's, and a write that is not one is refused.** A record is keyed by the name a `${VAR}` resolves through, so the two rules are one rule: letters, digits and underscores, starting with a letter or an underscore. A store that accepted `gitlab-token` would seal the value, list it, report the write as done, and resolve it from nowhere: the operator's only evidence a provider failing to authenticate hours later, far from the name they chose. Every write path checks: `PUT /secrets/{name}` answers `400 invalid_name`, and `crewlet secrets set` refuses against a running node and a stopped one alike. Reading and removing take the name as given, so nothing becomes unremovable.
 

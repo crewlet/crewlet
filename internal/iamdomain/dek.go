@@ -60,7 +60,8 @@ import (
 // none of which a real coordination backend makes easy to arrange.
 type Keys interface {
 	Get(ctx context.Context, name string) (string, error)
-	Set(ctx context.Context, name, value, by, source string, now time.Time) error
+	Set(ctx context.Context, name, value string, by secrets.Author,
+		source string, now time.Time) error
 	Unset(ctx context.Context, name string) (bool, error)
 }
 
@@ -81,8 +82,10 @@ type Keys interface {
 //     no longer the key it judged.
 type PersonKeys interface {
 	Keys
-	Create(ctx context.Context, name, value, by, source string, now time.Time) (bool, error)
-	Touch(ctx context.Context, name, by, source string, now time.Time) (bool, error)
+	Create(ctx context.Context, name, value string, by secrets.Author, source string,
+		now time.Time) (bool, error)
+	Touch(ctx context.Context, name string, by secrets.Author, source string,
+		now time.Time) (bool, error)
 	UnsetAt(ctx context.Context, name string, version uint64) (bool, error)
 }
 
@@ -220,9 +223,14 @@ const mintAttempts = 3
 // sealed under the destroyed key stay unreadable, which is what destroying it
 // promised.
 //
+// BY IS THE PARTY WHOSE GESTURE MINTED IT — the enrolment or the invitation
+// that needed a key — recorded as the secret store records every author, on
+// the create and on every touch.
+//
 // Every failure is the unknown answer: a store that cannot be reached is never
 // read as "no key here".
-func (s *Sealer) Mint(ctx context.Context, personID, by string, now time.Time) error {
+func (s *Sealer) Mint(ctx context.Context, personID string, by secrets.Author,
+	now time.Time) error {
 	if err := s.check(personID); err != nil {
 		return err
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -450,6 +451,28 @@ func TestALiteralInASecretFieldIsSealedAndAReferenceIsNot(t *testing.T) {
 	if got, sealed := r.sealer.get(name); !sealed || got != "sarah.chen@example.com" {
 		t.Errorf("the literal reached the store as (%q, %v), want the address",
 			got, sealed)
+	}
+	// THE SEAT'S WRITER IS THE VALUE'S AUTHOR, and the credential they wrote
+	// it through rides beside them. It was the NODE the write landed on, so
+	// every credential a founder typed into a seat read as set by a machine
+	// nobody chose. Mutation: seal under the node and both checks fail.
+	if got := r.sealer.author(name); got != (secrets.Author{Name: "ana",
+		Kind: string(chart.AuthorHuman)}) {
+		t.Errorf("the sealed value records %+v, want the seat's writer ana", got)
+	}
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	through := r.writer.As("jane.doe", chart.AuthorOperator,
+		[]iam.Grant{iam.GrantConfigWrite}, chart.Provenance{OperatorID: pat})
+	if _, err := through.WriteSeat(r.t.Context(), "op-literal-token",
+		chart.SeatContent{Handle: "sarah-chen", Kind: chart.SeatHuman,
+			Name: "Sarah Chen", Email: "s.chen@example.com"}); err != nil {
+		t.Fatalf("write through a token: %v", err)
+	}
+	r.drain()
+	if got := r.sealer.author(name); got != (secrets.Author{Name: "jane.doe",
+		Kind: string(chart.AuthorOperator), OperatorID: pat}) {
+		t.Errorf("a value sealed through a token records %+v, want jane.doe "+
+			"through %s", got, pat)
 	}
 	stored := r.column(`SELECT email FROM chart_seats WHERE handle = 'sarah-chen'`)
 	if len(stored) != 1 || stored[0] != chart.SecretRef(

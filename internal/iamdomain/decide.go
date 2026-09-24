@@ -184,7 +184,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		}
 	}
 
-	if err := w.sealer.Mint(ctx, in.PersonID, w.Actor, w.Now()); err != nil {
+	if err := w.sealer.Mint(ctx, in.PersonID, w.secretAuthor(), w.Now()); err != nil {
 		return statelog.Result{}, err
 	}
 	sealedName, err := w.sealer.Seal(ctx, in.PersonID, FieldName, in.Name)
@@ -2230,7 +2230,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	// its row — so an address somebody typed and never sent leaves no
 	// cleartext anywhere, which is the same promise a removal makes, one
 	// object earlier.
-	if err := w.sealer.Mint(ctx, in.ID, w.Actor, w.Now()); err != nil {
+	if err := w.sealer.Mint(ctx, in.ID, w.secretAuthor(), w.Now()); err != nil {
 		return statelog.Result{}, fmt.Errorf("iamdomain: mint an "+
 			"invitation's key: %w", err)
 	}

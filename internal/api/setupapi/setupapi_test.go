@@ -44,6 +44,9 @@ import (
 
 var pinned = time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 
+// testAuthor is who a row a case seeds directly records.
+var testAuthor = secrets.Author{Name: "test", Kind: string(iam.ActorOperator)}
+
 // A company with no Datadog block at all: the state an operator pressing
 // Connect for the first time is in.
 const companyDoc = `{
@@ -61,22 +64,33 @@ const companyDoc = `{
 type vault struct {
 	mu     sync.Mutex
 	values map[string]string
-	order  []string
-	fail   error
+	// authors is who each row records, which is what a case about
+	// attribution asserts.
+	authors map[string]secrets.Author
+	fail    error
 }
 
-func (v *vault) Set(_ context.Context, name, value, by, source string, _ time.Time) error {
+func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
+	_ string, _ time.Time) error {
+
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.fail != nil {
 		return v.fail
 	}
 	if v.values == nil {
-		v.values = map[string]string{}
+		v.values, v.authors = map[string]string{}, map[string]secrets.Author{}
 	}
 	v.values[name] = value
-	v.order = append(v.order, name+"|"+by+"|"+source)
+	v.authors[name] = by
 	return nil
+}
+
+// author is who the row under name records.
+func (v *vault) author(name string) secrets.Author {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.authors[name]
 }
 
 func (v *vault) get(name string) (string, bool) {
@@ -109,6 +123,10 @@ type surface struct {
 	// unless a case about authority narrows them, so a case about what the
 	// surface DOES is never quietly a case about who may.
 	grants []iam.Grant
+
+	// caller replaces the Tier A token [surface.as] attaches, for a case
+	// about who a write is recorded as.
+	caller *iam.Principal
 }
 
 func newSurface(t *testing.T) *surface {
@@ -172,8 +190,8 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 		opts.Passes = setup.NewRunner(nil, nil, func() time.Time { return pinned })
 	}
 	if opts.Sink == nil {
-		opts.Sink = func(operator string) (provision.TokenSink, error) {
-			return provision.NewSecretStoreSink(sinkStore{v}, operator), nil
+		opts.Sink = func(by iam.Actor) (provision.TokenSink, error) {
+			return provision.NewSecretStoreSink(sinkStore{v}, authorOf(by)), nil
 		}
 	}
 	if opts.Status == nil {
@@ -214,7 +232,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 			Secrets:     v,
 			Resolve:     v.get,
 			Passes:      setup.NewRunner(nil, nil, nil),
-			Sink:        func(string) (provision.TokenSink, error) { return nil, nil },
+			Sink:        func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
 			Status:      &statusStore{},
 			SlackApps:   func() map[string]string { return nil },
 			StateClaims: coordmemory.NewFleet(),
@@ -311,6 +329,9 @@ func (s *surface) as(req *http.Request) *http.Request {
 	grants := s.grants
 	if grants == nil {
 		grants = iam.AllGrants
+	}
+	if s.caller != nil {
+		return req.WithContext(iam.WithPrincipal(req.Context(), *s.caller))
 	}
 	// FRESH IN BOTH STEP-UP WINDOWS, as the guard stamps every Tier A
 	// token, so a case here is decided on its grants alone.
@@ -955,8 +976,8 @@ func (s *surface) withPass(
 		Company: s.company, Config: s.config, Secrets: s.vault,
 		Resolve: s.vault.get,
 		Passes:  runner,
-		Sink: func(operator string) (provision.TokenSink, error) {
-			return provision.NewSecretStoreSink(sinkStore{s.vault}, operator), nil
+		Sink: func(by iam.Actor) (provision.TokenSink, error) {
+			return provision.NewSecretStoreSink(sinkStore{s.vault}, authorOf(by)), nil
 		},
 		Status:       status,
 		StateKeys:    runtoken.OneKey("k1", "test-material"),
@@ -970,8 +991,15 @@ func (s *surface) withPass(
 // sinkStore adapts the vault to what a secret-store sink needs.
 type sinkStore struct{ v *vault }
 
-func (s sinkStore) Set(ctx context.Context, name, value, by, source string, at time.Time) error {
+func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Author,
+	source string, at time.Time) error {
+
 	return s.v.Set(ctx, name, value, by, source, at)
+}
+
+// authorOf is a party as the secret store records it.
+func authorOf(by iam.Actor) secrets.Author {
+	return secrets.Author{Name: by.Name, Kind: string(by.Kind), OperatorID: by.OperatorID}
 }
 
 func (s sinkStore) Get(_ context.Context, name string) (string, error) {
@@ -1005,7 +1033,7 @@ func (s *surface) seedGitHub(t *testing.T) {
 	}
 	// The secret has to RESOLVE, or the requirement is outstanding and the
 	// pass is refused before it runs, which is a different test.
-	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", "test", "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, "test", pinned); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1099,7 +1127,7 @@ func TestACheckWithNoExternalURLRunsAndReportsIt(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("seed = %d: %s", res.Code, res.Body)
 	}
-	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", "test", "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, "test", pinned); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1170,7 +1198,7 @@ func TestAProvisionPassNeedsAnExternalURL(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("seed = %d: %s", res.Code, res.Body)
 	}
-	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", "test", "test", pinned); err != nil {
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", testAuthor, "test", pinned); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1412,6 +1440,62 @@ func TestAPerSeatSubmissionLeavesTheOtherSeatsAlone(t *testing.T) {
 	doc := s.do(t, http.MethodGet, "/config", "", nil)
 	if strings.Contains(doc.Body.String(), "SLACK_BOT_TOKEN_SRE_LEAD") {
 		t.Fatalf("a per-seat write reached the settings revision: %s", doc.Body)
+	}
+}
+
+// A SETUP WRITE THROUGH A PERSON'S TOKEN IS THE PERSON'S, WITH THE TOKEN BESIDE
+// THEM — on the sealed rows, on the seat's chart record and on the revision.
+//
+// The seat write was handed one name and recorded it as both the chart's
+// author and its credential, and the name was the credential's: `pat:<id>`
+// authored the seat, of kind operator, and nothing in the chart's history said
+// whose token it was once the token's row was swept. Mutation: hand the seat
+// write the credential as its author and the chart half fails; record the
+// secret under the credential and the sealed half does.
+func TestASetupWriteThroughATokenIsItsOwners(t *testing.T) {
+	t.Parallel()
+	const pat = "pat:0192f00d-0000-7000-8000-00000000000a"
+	s := newSurface(t)
+	s.seed(t)
+	s.caller = &iam.Principal{
+		ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: iam.AllGrants, Via: pat,
+		ReauthAt:          time.Now().Add(time.Hour),
+		SensitiveReauthAt: time.Now().Add(time.Hour),
+	}
+	want := iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator, OperatorID: pat}
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/slack/inputs", `{
+		"seat": "sre-lead",
+		"values": {"bot_token": "xoxb-one", "signing_secret": "sig-one"}
+	}`, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	if got := s.seats.by["sre-lead"]; got != want {
+		t.Errorf("the seat's chart record is written as %+v, want %+v", got, want)
+	}
+	if got := s.vault.author("SLACK_BOT_TOKEN_SRE_LEAD"); got != authorOf(want) {
+		t.Errorf("the sealed row records %+v, want %+v", got, authorOf(want))
+	}
+
+	// A SETTINGS WRITE is the same party on the revision it stores.
+	res = s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", `{
+		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com",
+			"api_key": "dd-api", "app_key": "dd-app"},
+		"generate": ["webhook_token"]
+	}`, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("datadog status = %d: %s", res.Code, res.Body)
+	}
+	active, found, err := s.configs.Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("Active: %v (found=%v)", err, found)
+	}
+	if got := (iam.Actor{Name: active.CreatedBy,
+		Kind:       iam.ActorKind(active.CreatedByKind),
+		OperatorID: active.OperatorID}); got != want {
+		t.Errorf("the revision records %+v, want %+v", got, want)
 	}
 }
 
@@ -2017,6 +2101,8 @@ type seatStore struct {
 	docs  map[string][]byte
 	err   error
 	wrote []string
+	// by is who each seat's latest write records.
+	by map[string]iam.Actor
 }
 
 func (s *seatStore) SeatDocument(_ context.Context, handle string) ([]byte, error) {
@@ -2030,7 +2116,7 @@ func (s *seatStore) SeatDocument(_ context.Context, handle string) ([]byte, erro
 }
 
 func (s *seatStore) SetSeatDocument(_ context.Context, handle string, body []byte,
-	_, _ string) (statelog.Position, error) {
+	_ string, by iam.Actor) (statelog.Position, error) {
 
 	if s.err != nil {
 		return statelog.Position{}, s.err
@@ -2038,7 +2124,11 @@ func (s *seatStore) SetSeatDocument(_ context.Context, handle string, body []byt
 	if s.docs == nil {
 		s.docs = map[string][]byte{}
 	}
+	if s.by == nil {
+		s.by = map[string]iam.Actor{}
+	}
 	s.docs[handle] = body
+	s.by[handle] = by
 	s.wrote = append(s.wrote, handle)
 	return statelog.Position{Stream: "CREWLET_CHART_LOG", Seq: uint64(len(s.wrote))}, nil
 }

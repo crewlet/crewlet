@@ -54,6 +54,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
+import { throughOf } from "~/lib/attribution.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useTimeRange, type Offer } from "~/lib/range.ts";
 import { rest } from "~/protocol/index.ts";
@@ -120,6 +121,13 @@ export interface AuditEntry {
   actor: string;
   /** `operator`, `human`, `agent`, `system` — empty where none was recorded. */
   actorKind: string;
+  /**
+   * The credential the write was made through, where it names something the
+   * actor does not — a person's machine token or browser session — and empty
+   * otherwise. Every source records one now, so a row a token wrote is never
+   * read as one its owner made by hand.
+   */
+  through: string;
   /** What it was done to, as a person would name it. */
   subject: string;
   /** Where that object lives, where it still has an address. */
@@ -251,6 +259,7 @@ export function Audit() {
         kind: record.kind,
         actor: record.actor ?? "",
         actorKind: record.actor_kind ?? "",
+        through: throughOf(record.actor ?? "", record.operator_id),
         ...workSubject(record),
         // FLATTENED AT THE ROW, so the grid cell and `auditCsv` cannot differ.
         // It also keeps a body's newlines out of a CSV field, where they are
@@ -266,6 +275,7 @@ export function Audit() {
         kind: change.kind,
         actor: change.actor ?? "",
         actorKind: change.actor_kind ?? "",
+        through: throughOf(change.actor ?? "", change.operator_id),
         subject: change.title || change.page_id,
         path:
           change.container && change.title
@@ -285,7 +295,12 @@ export function Audit() {
         // was created rather than what was done.
         kind: revision.source || "revision",
         actor: revision.created_by ?? "",
-        actorKind: "operator",
+        // THE RECORDED KIND, where there is one. This said `operator` for
+        // every revision, so a person bound to a seat, the reconcile loop and
+        // a Tier A token all read alike; a revision written before the kind
+        // was recorded shows none rather than a guess.
+        actorKind: revision.created_by_kind ?? "",
+        through: throughOf(revision.created_by ?? "", revision.operator_id),
         subject: revision.revision_id.slice(0, 8),
         path: ["admin", "config", "revisions", revision.revision_id],
         detail: revision.summary ?? "",
@@ -303,7 +318,8 @@ export function Audit() {
         // it was last stored.
         kind: "stored",
         actor: row.updated_by ?? "",
-        actorKind: "operator",
+        actorKind: row.updated_by_kind ?? "",
+        through: throughOf(row.updated_by ?? "", row.operator_id),
         subject: row.name,
         path: ["admin", "credentials"],
         detail: row.source ? `from ${row.source}` : "",
@@ -381,6 +397,7 @@ export function Audit() {
               <span className="muted">the engine</span>
             )}
             {row.actorKind && <Tag appearance="outline">{row.actorKind}</Tag>}
+            {row.through && <span className="muted">through {row.through}</span>}
           </span>
         ),
       },
@@ -531,7 +548,7 @@ function useSecrets(): { rows: SecretRow[] | null } {
  */
 export function auditCsv(rows: AuditEntry[]): string {
   const cell = (value: string) => `"${value.replaceAll('"', '""')}"`;
-  const lines = [["at", "where", "who", "who_kind", "what", "to", "detail"].join(",")];
+  const lines = [["at", "where", "who", "who_kind", "through", "what", "to", "detail"].join(",")];
   for (const row of rows) {
     lines.push(
       [
@@ -539,6 +556,7 @@ export function auditCsv(rows: AuditEntry[]): string {
         SOURCE_LABEL[row.source],
         row.actor,
         row.actorKind,
+        row.through,
         row.kind,
         row.subject,
         row.detail,

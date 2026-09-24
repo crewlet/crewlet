@@ -12,8 +12,21 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/secrets"
+)
+
+// founderParty is a person who pressed Connect through their own machine
+// token, so every part of what a rebuild is credited to is distinct; and
+// testParty is the party a case that is not about attribution runs a pass as.
+var (
+	founderParty = iam.Actor{Name: "founder", Kind: iam.ActorHuman,
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+	testParty = iam.Actor{Name: "test-operator", Kind: iam.ActorOperator,
+		OperatorID: "token:test-operator"}
+	testAuthor = secrets.Author{Name: testParty.Name, Kind: string(testParty.Kind),
+		OperatorID: testParty.OperatorID}
 )
 
 // WHAT A PROVISIONING PASS SEALS HAS TO REACH THE WIRING THAT WAS ALREADY
@@ -159,7 +172,7 @@ func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 		t.Fatal("precondition: the seat resolved before its token was ever minted")
 	}
 
-	sink, err := e.SetupSink("founder@example.com")
+	sink, err := e.SetupSink(founderParty)
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
@@ -198,9 +211,11 @@ func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 	if writer == nil {
 		t.Fatal("the config surface is not the one this test installed")
 	}
-	if got := writer.lastOperator(); got != "founder@example.com" {
-		t.Errorf("the rebuild was credited to %q, want the operator the pass "+
-			"ran for", got)
+	// WHOLE: the person, their kind and the credential they pressed
+	// Connect through, which is what the revision the rebuild writes keeps.
+	if got := writer.lastOperator(); got != founderParty {
+		t.Errorf("the rebuild was credited to %+v, want the party the pass "+
+			"ran for, %+v", got, founderParty)
 	}
 }
 
@@ -217,7 +232,7 @@ func TestAPassThatSealedNothingDoesNotReactivateTheRevision(t *testing.T) {
 	w := &reloadingWriter{}
 	e.UseConfigWriter(w)
 
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
@@ -289,7 +304,7 @@ func TestTheRebuildSurvivesTheCancelledPassAndStaysBounded(t *testing.T) {
 	}}
 	e.UseConfigWriter(w)
 
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
@@ -323,7 +338,7 @@ func TestSealingOnANodeWithNoConfigSurfaceIsLoggedRatherThanFatal(t *testing.T) 
 		t.Fatal("precondition: this node must have no config surface")
 	}
 
-	sink, err := e.SetupSink("test-operator")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		t.Fatalf("sink: %v", err)
 	}
@@ -355,7 +370,7 @@ type reloadingWriter struct {
 	// [reloadingWriter.lastOperator] and never directly: it is written on
 	// a TIMER's goroutine, so a bare field read from the test's own is a
 	// race with no happens-before edge to make it safe.
-	operator string
+	operator iam.Actor
 
 	// err is what the reload reported. The engine LOGS a failed
 	// re-activation rather than returning it — nothing above Flush can act
@@ -394,7 +409,7 @@ func (w *reloadingWriter) awaitReloads(t *testing.T, n int) {
 // on a timer's goroutine, so a case reading [reloadingWriter.operator]
 // directly races the write with nothing ordering the two. One did, and this
 // accessor sat unused beside it — a guard nobody took.
-func (w *reloadingWriter) lastOperator() string {
+func (w *reloadingWriter) lastOperator() iam.Actor {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.operator
@@ -407,7 +422,7 @@ func (w *reloadingWriter) failure() error {
 	return w.err
 }
 
-func (w *reloadingWriter) Reload(ctx context.Context, summary, operator string) error {
+func (w *reloadingWriter) Reload(ctx context.Context, summary string, operator iam.Actor) error {
 	w.mu.Lock()
 	w.calls++
 	w.operator = operator
@@ -477,7 +492,7 @@ func TestASealedCredentialIsVisibleWithoutAnApply(t *testing.T) {
 	// the resolver's snapshot is read from.
 	e.backends.Fleet = coordmem.NewFleet()
 
-	sink, err := e.SetupSink("test")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		// NOT A SKIP. Nothing here is environmental: the fixture always
 		// opens a temp-dir store and always installs a cipher, so a sink
@@ -514,7 +529,7 @@ func TestASealedCredentialIsVisibleWithoutAnApply(t *testing.T) {
 func TestAPassThatSealedNothingLeavesTheSnapshotAlone(t *testing.T) {
 	e, sv := engineWithSecrets(t)
 	e.backends.Fleet = coordmem.NewFleet()
-	sink, err := e.SetupSink("test")
+	sink, err := e.SetupSink(testParty)
 	if err != nil {
 		// NOT A SKIP. Nothing here is environmental: the fixture always
 		// opens a temp-dir store and always installs a cipher, so a sink
@@ -524,7 +539,7 @@ func TestAPassThatSealedNothingLeavesTheSnapshotAlone(t *testing.T) {
 	}
 
 	// Written behind the resolver's back, so a rebuild is observable.
-	if err := sv.Set(t.Context(), "UNSEEN", "value", "op", "cli", time.Now().UTC()); err != nil {
+	if err := sv.Set(t.Context(), "UNSEEN", "value", testAuthor, "cli", time.Now().UTC()); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if err := sink.Flush(t.Context()); err != nil {
@@ -559,7 +574,7 @@ func TestASecondPassSealingInTheSameBurstDoesNotRebuildAgain(t *testing.T) {
 	for _, name := range []string{"JIRA_AGENT_TOKEN", "CONFLUENCE_AGENT_TOKEN"} {
 		// A SINK PER PASS, which is what the engine hands out: SetupSink
 		// builds a fresh one for every request.
-		sink, err := e.SetupSink("founder@example.com")
+		sink, err := e.SetupSink(founderParty)
 		if err != nil {
 			t.Fatalf("sink: %v", err)
 		}

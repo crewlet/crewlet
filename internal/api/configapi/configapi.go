@@ -38,6 +38,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -585,7 +586,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		writeChecked(w, prepared)
 		return
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))
 	if err != nil {
 		s.refuseWrite(w, err, createOnly)
 		return
@@ -659,7 +660,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prepared, err := s.prepare(r.Context(), patchDraft(ApplyRequest{
-		Patch: sent.text, Summary: summary, Operator: operatorOf(r), Expect: active.ID,
+		Patch: sent.text, Summary: summary, By: attributionOf(r), Expect: active.ID,
 	}, sent.doc))
 	if err != nil {
 		s.refuseApply(w, err)
@@ -669,7 +670,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		writeChecked(w, prepared)
 		return
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -797,7 +798,7 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 	// HEADER ONLY, like revert: this route reads no body, and it already
 	// knows what it did, so an unset summary defaults rather than
 	// answering 400.
-	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")), operatorOf(r))
+	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")), attributionOf(r))
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -869,7 +870,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	if summary == "" {
 		summary = "revert to " + target.ID
 	}
-	applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+	applied, err := s.commit(r.Context(), prepared, summary, attributionOf(r))
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -877,15 +878,16 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	writeApplied(w, applied)
 }
 
-// operatorOf is who a write on this request is attributed to.
+// attributionOf is who a write on this request is attributed to: the author,
+// its kind and the credential beside it.
 //
 // TOTAL, never empty: every route on this surface is always guarded, so a
 // request reaching here carries a resolved principal — and the case that is
 // left, a handler somebody mounted outside the guard, records the name config
 // refuses to every real credential rather than an empty `created_by` that
 // reads as a revision nobody wrote.
-func operatorOf(r *http.Request) string {
-	return auth.OperatorOf(r.Context())
+func attributionOf(r *http.Request) iam.Actor {
+	return auth.AttributionOf(r.Context())
 }
 
 // nudge tells every node an activation happened.
@@ -895,15 +897,16 @@ func operatorOf(r *http.Request) string {
 // is what makes losing one cost a poll interval rather than a revision, and
 // what makes an ephemeral broadcast the right delivery: every node has to
 // hear it, and none of them has to.
-func (s *Service) nudge(ctx context.Context, revisionID, summary, operator string) {
+func (s *Service) nudge(ctx context.Context, revisionID, summary string, by iam.Actor) {
 	if s.queue == nil {
 		return
 	}
 	ev := events.New(types.ConfigRevisionActivated{
-		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: operator,
+		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: by.Name,
+		CreatedByKind: string(by.Kind), OperatorID: by.OperatorID,
 	}, tracing.TraceOf(ctx))
 	ev.Timestamp = s.now()
-	ev.Source = operator
+	ev.Source = by.Name
 	if err := s.queue.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
 		log.WarnContext(ctx, "activation_nudge_not_published", "revision", revisionID,
 			"error", err, "detail", "peers converge on their reconcile interval instead")
@@ -1060,9 +1063,14 @@ func meta(revision store.Revision) map[string]any {
 		"revision_id": revision.ID,
 		"created_at":  revision.CreatedAt.Format(time.RFC3339Nano),
 		"created_by":  revision.CreatedBy,
-		"source":      revision.Source,
-		"summary":     revision.Summary,
-		"is_active":   revision.Active,
+		// THE KIND AND THE CREDENTIAL BESIDE THE AUTHOR, as every other
+		// trail answers them — empty on a revision written before either
+		// was recorded, and the credential empty on one no credential made.
+		"created_by_kind": revision.CreatedByKind,
+		"operator_id":     revision.OperatorID,
+		"source":          revision.Source,
+		"summary":         revision.Summary,
+		"is_active":       revision.Active,
 	}
 	if revision.ParentID != "" {
 		body["parent_revision_id"] = revision.ParentID

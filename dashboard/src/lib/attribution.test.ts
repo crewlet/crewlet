@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from "vitest";
 
-import { CHANGE_FIELDS, attribution } from "./attribution.ts";
+import { CHANGE_FIELDS, attribution, authorLabel, throughOf } from "./attribution.ts";
 import type { WorkChange } from "~/protocol/index.ts";
 
 function change(over: Partial<WorkChange>): WorkChange {
@@ -114,4 +114,22 @@ test("every field name is one the engine writes, spelled its way", () => {
     "estimate",
     "points",
   ]);
+});
+
+describe("an author and the credential beside them", () => {
+  test("names a person's token beside the person", () => {
+    expect(authorLabel("jane.doe", "pat:0192f00d")).toBe("jane.doe (through pat:0192f00d)");
+    expect(throughOf("jane.doe", "session:0192f00d")).toBe("session:0192f00d");
+  });
+
+  test("does not repeat a credential that is the author's own name", () => {
+    // A Tier A token's login is both, and saying it twice says nothing.
+    expect(authorLabel("token:ops", "token:ops")).toBe("token:ops");
+    expect(throughOf("token:ops", "token:ops")).toBe("");
+  });
+
+  test("says nothing about a write no credential made, or nobody recorded", () => {
+    expect(authorLabel("node", undefined)).toBe("node");
+    expect(authorLabel("", "pat:0192f00d")).toBe("");
+  });
 });

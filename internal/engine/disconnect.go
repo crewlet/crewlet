@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -18,8 +19,8 @@ import (
 // compare-and-set) rather than a second path onto the document.
 type ConfigWriter interface {
 	// Apply merges patch into the active revision and activates the
-	// result.
-	Apply(ctx context.Context, patch []byte, summary, operator string) error
+	// result, recording by as its author.
+	Apply(ctx context.Context, patch []byte, summary string, by iam.Actor) error
 
 	// Seat reads one seat's whole document as JSON, and SetSeat writes it
 	// back under the same handle.
@@ -36,7 +37,8 @@ type ConfigWriter interface {
 	// a browser, which tells the engine nothing, so the loop discovers the
 	// installation and records it against that one seat.
 	Seat(ctx context.Context, handle string) ([]byte, error)
-	SetSeat(ctx context.Context, handle string, body []byte, summary, operator string) error
+	SetSeat(ctx context.Context, handle string, body []byte, summary string,
+		by iam.Actor) error
 
 	// Reload re-activates the CURRENT document unchanged, which advances the
 	// epoch and makes every node apply again.
@@ -46,7 +48,7 @@ type ConfigWriter interface {
 	// revision id: a pointer that deduplicated would rebuild nothing on
 	// precisely this operation. See [Engine.rebuildForSealedSecrets] for why
 	// a provisioning pass needs it.
-	Reload(ctx context.Context, summary, operator string) error
+	Reload(ctx context.Context, summary string, by iam.Actor) error
 }
 
 // UseConfigWriter installs the surface a disconnect removes a block through.
@@ -161,7 +163,7 @@ func (e *Engine) forgetRemoved(
 	if len(names) == 0 {
 		return nil
 	}
-	sink, err := e.SetupSink(reconcileOperator)
+	sink, err := e.SetupSink(loopActor())
 	if err != nil {
 		log.WarnContext(ctx, "removed_credentials_not_deleted",
 			"integration", kind.String(), "error", err, "secrets", names,
@@ -236,7 +238,7 @@ func (e *Engine) dropBlock(
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}
 	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
-	if err := writer.Apply(ctx, patch, "disconnect "+string(kind), "reconcile loop"); err != nil {
+	if err := writer.Apply(ctx, patch, "disconnect "+string(kind), loopActor()); err != nil {
 		// The third-party app work IS done and is durable, so a retry re-runs a
 		// teardown with nothing left to remove and then tries the block
 		// again. That is why every teardown is safe to repeat.
@@ -374,5 +376,5 @@ func (e *Engine) editGitHubSeat(
 	if err != nil {
 		return fmt.Errorf("engine: encode the seat %s: %w", handle, err)
 	}
-	return (*writer).SetSeat(ctx, handle, updated, summary, "reconcile loop")
+	return (*writer).SetSeat(ctx, handle, updated, summary, loopActor())
 }

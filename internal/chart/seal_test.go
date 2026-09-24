@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // SEALING AND THE MASK.
@@ -22,18 +23,28 @@ import (
 type fakeSealer struct {
 	mu     sync.Mutex
 	sealed map[string]string
+	// by is who each sealed value records as its author.
+	by map[string]secrets.Author
 }
 
 func newSealer(t *testing.T) *fakeSealer {
 	t.Helper()
-	return &fakeSealer{sealed: map[string]string{}}
+	return &fakeSealer{sealed: map[string]string{}, by: map[string]secrets.Author{}}
 }
 
-func (f *fakeSealer) Seal(_ context.Context, name, value string) error {
+func (f *fakeSealer) Seal(_ context.Context, name, value string, by secrets.Author) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sealed[name] = value
+	f.by[name] = by
 	return nil
+}
+
+// author is who the value under name records.
+func (f *fakeSealer) author(name string) secrets.Author {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.by[name]
 }
 
 func (f *fakeSealer) get(name string) (string, bool) {

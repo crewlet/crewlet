@@ -199,6 +199,31 @@ func (w *Writer) As(actor string, kind AuthorKind, grants []iam.Grant,
 	return &next
 }
 
+// AuthorKindOf maps the identity vocabulary's four actor kinds onto the
+// chart's three, for a surface handing a party to [Writer.As].
+//
+// THE ENGINE'S OWN WRITES ARE OPERATOR WRITES here, because the chart has no
+// fourth kind and inventing one would be a value migration for a distinction
+// this domain never makes: what a reader of a chart history asks is whether a
+// person, an agent or the deployment changed the structure, and the engine
+// seeding a chart at boot is the deployment.
+//
+// ONE MAPPING, HERE, because two surfaces write the chart as a resolved party
+// — `/chart` and the per-seat document `/setup` writes through — and the
+// second of them used to skip the mapping altogether, recording every author
+// as an operator: a person bound to a seat connecting that seat's integration
+// read in the chart's history as a deployment credential rather than as the
+// person.
+func AuthorKindOf(k iam.ActorKind) AuthorKind {
+	switch k {
+	case iam.ActorAgent:
+		return AuthorAgent
+	case iam.ActorHuman:
+		return AuthorHuman
+	}
+	return AuthorOperator
+}
+
 // After is this writer's next write waiting for an earlier one of its own.
 //
 // A GESTURE HANDS THE POSITION FROM STEP TO STEP rather than the writer

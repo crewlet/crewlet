@@ -975,8 +975,11 @@ func (o *APIOIDC) validate(path Path, ceiling []iam.Grant) error {
 // land as `token:<id>` with the operator kind, which is what keeps them
 // distinguishable in the audit trail from anything a person did.
 type APIToken struct {
-	// ID is a short label stamped into revision audit rows (created_by):
-	// "founder", "ops", "ci-pipeline".
+	// ID names the token — "founder", "ops", "ci-pipeline" — and the token
+	// acts under the login `token:<id>`, which is what every trail a write
+	// made with it lands in records as the author: a work item's and a
+	// page's actor, a revision's `created_by`, a stored secret's
+	// `updated_by`.
 	ID string `yaml:"id" json:"id" js:"required;pattern=^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)*$;maxlen=58" desc:"Short label; the token acts under the login token:<id>, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons, at most 58 characters so the login stays within 64."`
 
 	// Token is the value, or a ${VAR} reference to it. Resolved once at
@@ -1136,29 +1139,15 @@ func (a *APIAuth) validateTokens(path Path, api API) error {
 		tp := idx(at(path, "tokens"), i)
 		if t.ID == "" {
 			p.add(at(tp, "id"), ErrMissing,
-				"every token needs a label: it is what a revision's audit row records")
+				"every token needs a label: it names the login `token:<id>` every "+
+					"write made with the token is recorded under")
 		}
 		if _, dup := seen[t.ID]; dup && t.ID != "" {
 			// Two tokens sharing a label make the audit trail
-			// unreadable: every write says "founder" and no one can
-			// tell which credential made it, which is the whole
+			// unreadable: every write says `token:founder` and no one
+			// can tell which credential made it, which is the whole
 			// reason the label exists.
 			p.add(at(tp, "id"), ErrConflict, "duplicate token id %q", t.ID)
-		}
-		// THE UNATTRIBUTABLE NAME IS RESERVED, and it is a config rule
-		// because config is the only place a token id is chosen.
-		// [iam.AnonymousActor] is what an audit row records for an
-		// actor this build cannot name — a write made with nobody
-		// identified — so a real credential carrying it would put two
-		// different things under one name in the one trail that exists
-		// to tell them apart, and a reader filtering on it would get
-		// both.
-		if t.ID == iam.AnonymousActor {
-			p.add(at(tp, "id"), ErrConflict,
-				"token id %q is reserved: it is what an audit row records for "+
-					"a write nobody could be identified for, so a real "+
-					"credential under that name is indistinguishable from one. "+
-					"Pick a different id", iam.AnonymousActor)
 		}
 		// A TOKEN IS A MACHINE, so the login it acts under is held to the
 		// machine grammar — see [iam.ValidTokenID]. An id outside it

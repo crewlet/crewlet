@@ -466,6 +466,7 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 	// that reclaims a reservation.
 	op, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_PAGES_LOG", TargetMaxBytes: 6 << 30, By: "ops-3",
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a",
 	}, current, unstatedRoom)
 	if err != nil {
 		t.Fatalf("a target above the usage and under the ceiling was refused: %v", err)
@@ -473,6 +474,13 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 	if op.OriginalMaxBytes != current.MaxBytes {
 		t.Errorf("the window recorded an original ceiling of %d, want %d",
 			op.OriginalMaxBytes, current.MaxBytes)
+	}
+	// WHO OPENED IT, and through what: the operation is the one record of
+	// who is restarting the fleet three times, and one that named only
+	// the author could not tell their own gesture from their token's.
+	if op.By != "ops-3" || op.OperatorID != "pat:0192f00d-0000-7000-8000-00000000000a" {
+		t.Errorf("the window records %q through %q, want ops-3 through the "+
+			"token it was opened with", op.By, op.OperatorID)
 	}
 }
 

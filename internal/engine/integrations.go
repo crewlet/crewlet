@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 
@@ -378,7 +379,7 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	// integrations as a FAULT — "the last pass could not read this",
 	// retried for ever — on an ordinary deployment that keeps its ${VAR}s
 	// in the environment and has no secrets.keys at all.
-	sink, err := c.engine.SetupSink(reconcileOperator)
+	sink, err := c.engine.SetupSink(loopActor())
 	if err != nil {
 		// ONCE PER NODE, NOT ONCE PER SURFACE PER TICK. Whether this node
 		// holds a keyring is a fact about the NODE — identical for all
@@ -462,6 +463,9 @@ func reported(findings []integration.Finding) map[string]bool {
 	return seen
 }
 
-// reconcileOperator is who the loop's writes are attributed to, so an audit
-// row says a timer did this rather than naming a person who did not.
-const reconcileOperator = "reconcile loop"
+// loopActor is who the loop's writes are attributed to, so an audit row says a
+// timer did this rather than naming a person who did not: the ENGINE's kind,
+// and no credential, because none made the write.
+func loopActor() iam.Actor {
+	return iam.Actor{Name: "reconcile loop", Kind: iam.ActorSystem}
+}

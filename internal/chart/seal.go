@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // WHAT A CHART RECORD MAY AND MAY NOT CARRY IN PLAINTEXT.
@@ -61,7 +62,13 @@ type Sealer interface {
 	// NAME is the caller's, derived deterministically from the object and
 	// the field, so a re-seal of one field overwrites rather than
 	// accumulating a key per edit.
-	Seal(ctx context.Context, name, value string) error
+	//
+	// BY IS THE PARTY WRITING THE SEAT — the person who typed the
+	// credential into it, and the credential they typed it through — which
+	// the secret store records as the value's author. It used to record the
+	// NODE the write happened to land on, so every credential a founder put
+	// into a seat read as set by a machine nobody chose.
+	Seal(ctx context.Context, name, value string, by secrets.Author) error
 }
 
 // SecretRef is the name a sealed value is stored under, rendered as the
@@ -129,7 +136,9 @@ func (w *Writer) sealValue(ctx context.Context, object ObjectRef, field, value s
 			"the field a ${VAR} reference", field, object)
 	}
 	name := SecretName(object, field)
-	if err := w.seal.Seal(ctx, name, value); err != nil {
+	if err := w.seal.Seal(ctx, name, value, secrets.Author{
+		Name: w.Actor, Kind: string(w.ActorKind), OperatorID: w.OperatorID,
+	}); err != nil {
 		return "", fmt.Errorf("chart: seal %s on %s: %w", field, object, err)
 	}
 	return SecretRef(object, field), nil

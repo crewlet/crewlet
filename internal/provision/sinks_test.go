@@ -17,6 +17,50 @@ import (
 // ONE SUITE OVER ALL THREE SINKS, because the contract is what the
 // provisioning CLIs depend on and a sink that honours it differently is a
 // run whose safety depends on which flag the operator passed.
+// runFor is the party a run is for: a person through their own machine token,
+// so each part of what a sealed row records is distinct.
+var runFor = secrets.Author{Name: "jane.doe", Kind: "operator",
+	OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+
+// A MINTED CREDENTIAL RECORDS THE PARTY THE RUN WAS FOR, whole, and says it
+// was minted: an operator listing their secrets months later reads who
+// connected the integration and through what. Mutation: record the name
+// alone and the credential half fails.
+func TestAMintedCredentialRecordsWhoTheRunWasFor(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "s.db"),
+		store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": key},
+	})
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	values := db.SecretValues(cipher)
+	if err := provision.NewSecretStoreSink(values, runFor).Record(t.Context(),
+		"GL_BOT_TOKEN", "glpat-minted"); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	rows, err := values.List(t.Context())
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %+v (%v)", rows, err)
+	}
+	got := secrets.Author{Name: rows[0].UpdatedBy, Kind: rows[0].UpdatedByKind,
+		OperatorID: rows[0].OperatorID}
+	if got != runFor || rows[0].Source != "provision" {
+		t.Errorf("the row records %+v from %q, want %+v from provision", got,
+			rows[0].Source, runFor)
+	}
+}
+
 type sinkCase struct {
 	name string
 	// build returns the sink and a reader for what it holds, so the suite
@@ -46,7 +90,7 @@ func sinkCases() []sinkCase {
 					t.Fatalf("NewCipher: %v", err)
 				}
 				values := db.SecretValues(cipher)
-				return provision.NewSecretStoreSink(values, "operator"),
+				return provision.NewSecretStoreSink(values, runFor),
 					func(t *testing.T) map[string]string {
 						got, err := values.All(context.Background())
 						if err != nil {
@@ -469,7 +513,7 @@ func (refusingValues) Unset(context.Context, string) (bool, error) {
 // and the retry that would have caught it never runs.
 func TestForgettingReportsWhatItCouldNotDelete(t *testing.T) {
 	t.Parallel()
-	sink := provision.NewSecretStoreSink(refusingValues{}, "operator")
+	sink := provision.NewSecretStoreSink(refusingValues{}, runFor)
 
 	err := sink.Forget(t.Context(), "SRE_ATLASSIAN_TOKEN", "SRE_ATLASSIAN_EMAIL")
 
