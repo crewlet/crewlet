@@ -280,9 +280,15 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 > surface without a guard in front of it.
 >
 > **A cross-site write is refused by its `Origin`** with `403 csrf_origin`,
-> whatever credential it carries. The match is `api.external_url`'s own origin
-> plus every `api.auth.allowed_origins` entry; reads and the exempt routes are
-> never refused for theirs. See
+> whatever credential it carries — or none. The match is `api.external_url`'s
+> own origin plus every `api.auth.allowed_origins` entry. Reads are never
+> refused for theirs, and neither are the server-to-server edges (`/webhooks/*`,
+> `/otlp/*`, `/mcp/*`), which a server reaches with a credential of its own.
+> The sign-in routes are judged like every other write although no credential
+> guards them — `POST /auth/login`, `/auth/bootstrap` and `/auth/invite/{id}`
+> — because a sign-in posted from somebody else's
+> page is how an attacker leaves a victim's browser signed in as somebody the
+> attacker controls. See
 > [Identity and Access § A cross-site write is refused by its Origin](../concepts/identity-and-access.md#a-cross-site-write-is-refused-by-its-origin).
 >
 > **Every `/webhooks/*` route fails closed.** They are exempt from the bearer

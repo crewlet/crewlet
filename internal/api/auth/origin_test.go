@@ -158,6 +158,51 @@ func TestTheWebhookEdgeIsNotRefusedForItsOrigin(t *testing.T) {
 	}
 }
 
+// A SIGN-IN ROUTE IS A BROWSER ROUTE, AND IT IS JUDGED LIKE ONE.
+//
+// The routes a credential cannot guard — a login cannot require a login — are
+// exempt from the GUARD, and they used to be exempt from this check too, which
+// left login CSRF open: a form on somebody else's page could post an
+// attacker's credentials to the sign-in or redeem an attacker's invitation,
+// and leave the victim's browser signed in as somebody the attacker controls.
+// Walked over every one of them, with the controls beside each: the
+// deployment's own origin is served, and so is a client that sends no Origin
+// and holds no cookie — the operator CLI signing in — while a cookie with no
+// Origin is refused as it is everywhere.
+//
+// Mutation: exempt [auth.Unguarded] again and every cross-site case goes
+// through.
+func TestASignInRouteIsRefusedForACrossSiteOrigin(t *testing.T) {
+	t.Parallel()
+	c := csrfFixture(t)
+	for _, path := range []string{
+		auth.PathAuthLogin, auth.PathAuthBootstrap,
+		auth.AuthInvitePrefix + "an-invitation",
+	} {
+		status, ran := send(t, c, http.MethodPost, path,
+			map[string]string{"Origin": "https://evil.example.com"})
+		if status != http.StatusForbidden || ran {
+			t.Errorf("%s from another site = %d (ran %v), want 403 before "+
+				"the handler", path, status, ran)
+		}
+		if status, ran := send(t, c, http.MethodPost, path,
+			map[string]string{"Origin": "https://crewlet.example.com"}); status != http.StatusOK || !ran {
+			t.Errorf("%s from the deployment's own origin = %d (ran %v), "+
+				"want it served", path, status, ran)
+		}
+		if status, ran := send(t, c, http.MethodPost, path, nil); status != http.StatusOK || !ran {
+			t.Errorf("%s from a client sending no Origin and no cookie = %d "+
+				"(ran %v), want it served — that is the CLI signing in",
+				path, status, ran)
+		}
+		if status, ran := send(t, c, http.MethodPost, path, nil,
+			&http.Cookie{Name: session.CookieBaseName, Value: "a-session"}); status != http.StatusForbidden || ran {
+			t.Errorf("%s carrying a cookie and no Origin = %d (ran %v), want 403",
+				path, status, ran)
+		}
+	}
+}
+
 // A DEPLOYMENT THAT NAMES NO ADDRESS PERMITS NO ORIGIN, which is the
 // fail-closed direction: nobody has said where this deployment is reached, so
 // no cross-origin claim can be believed. A client sending none still passes,

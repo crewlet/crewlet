@@ -72,11 +72,13 @@
 //
 // # A login cannot require a login
 //
-// Four routes here are unguarded, because requiring a credential to obtain one
+// Some routes here are unguarded, because requiring a credential to obtain one
 // is a deployment nobody can enter: the posture read, the login itself, the
-// OIDC pair and the invitation GET. Each is admitted per SOURCE by the
-// throttle and each is origin-checked like every other state change — the
-// guard is what they are exempt from, not the cross-site rule.
+// first operator's bootstrap, the OIDC pair and the invitation pair. Each that
+// touches the store is admitted per SOURCE by the throttle, and each that
+// changes state is origin-checked like every other write (internal/api/auth's
+// CSRF gate) — the guard is what they are exempt from, not the cross-site
+// rule, and that gate exempting them too is what left login CSRF open.
 package authapi
 
 import (

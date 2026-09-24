@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
@@ -22,15 +23,15 @@ import (
 // the attacker's page may read the ANSWER, which on a state-changing request
 // is the part they do not need.
 //
-// # Why it arrives with this work rather than after it
+// # Why it landed before the first cookie did
 //
-// What a browser attaches automatically is a COOKIE. Today none exists — every
-// credential this API accepts is a bearer token, and a bearer is attached by
-// script, which a cross-site page cannot do without already holding the token.
-// So this check currently refuses nothing, and that is exactly when to add it:
-// the alternative is landing the cookie first and the check second, with a
-// window in between during which every write on this surface is forgeable by
-// any page an operator happens to visit.
+// What a browser attaches automatically is a COOKIE — the session cookie a
+// sign-in sets, and the flight cookie a provider round trip carries. A bearer
+// is attached by script, which a cross-site page cannot do without already
+// holding the token, so while bearers were the only credential this check
+// refused nothing, and that was exactly when to add it: landing the cookie
+// first and the check second would have left a window in which every write on
+// this surface was forgeable by any page an operator happened to visit.
 //
 // # The rule, and why each half of it is shaped the way it is
 //
@@ -109,6 +110,37 @@ func (c *CSRF) Permits(origin string) bool {
 	return slices.Contains(c.origins, origin)
 }
 
+// serverEdges are the paths this check does not judge, and they are exactly
+// the ones a SERVER reaches rather than a browser: a vendor's webhook delivery
+// and the two per-run token paths a sandbox box calls. Each verifies a
+// credential of its own that no browser attaches — a signature over the body,
+// a signed token in the path — so a page on another site cannot make one
+// travel, and refusing a delivery for the `Origin` a server never sends would
+// take every integration off the air.
+//
+// NOT [Unguarded], which it used to be, and the difference is the sign-in
+// surface. The routes that are unguarded because a login cannot require a
+// login — the sign-in, the first operator's bootstrap, an invitation's
+// redemption — are BROWSER routes that change state, and exempting them here
+// left login CSRF open: a form on somebody else's page could post an
+// attacker's credentials to `/auth/login`, or redeem an attacker's invitation,
+// and leave the victim's browser signed in as the attacker, doing their work in
+// an account the attacker can read. What stands in for the guard on those
+// routes is the throttle AND this check; the guard is what they are exempt
+// from, never the cross-site rule.
+var serverEdges = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix}
+
+// serverEdge reports whether a path is one this check does not judge — see
+// [serverEdges].
+func serverEdge(path string) bool {
+	for _, prefix := range serverEdges {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // Middleware refuses a cross-site state change.
 //
 // IT WRAPS INSIDE THE GUARD, unlike CORS, and the order is what makes the
@@ -117,13 +149,10 @@ func (c *CSRF) Permits(origin string) bool {
 // arrived.
 func (c *CSRF) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if IsRead(r.Method) || Unguarded(r.URL.Path) {
-			// A READ CHANGES NOTHING, and the exempt routes are the
-			// webhook edge and the per-run token paths, which are
-			// reached by servers rather than browsers and verify a
-			// signature of their own. Refusing a vendor's delivery
-			// for carrying no `Origin` would take every integration
-			// off the air.
+		if IsRead(r.Method) || serverEdge(r.URL.Path) {
+			// A READ CHANGES NOTHING, and a server edge is reached by
+			// a server verifying a credential of its own — see
+			// [serverEdges] for why that list is not [Unguarded].
 			next.ServeHTTP(w, r)
 			return
 		}

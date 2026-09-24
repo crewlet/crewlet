@@ -1391,9 +1391,20 @@ every write from precisely the deployment shape the path exists for.
 
 Reads are never refused for their origin — refusing one would break every
 cross-origin dashboard the CORS allowance exists to serve, to prevent a request
-that alters nothing. The exempt routes above are not refused either: a vendor's
-webhook delivery is a POST from a server carrying no `Origin` and verifying a
-signature of its own, and refusing it would take every integration off the air.
+that alters nothing. The **server-to-server edges** are not refused either —
+`/webhooks/…`, `/otlp/…` and `/mcp/…`: a vendor's webhook delivery is a POST
+from a server carrying no `Origin` and verifying a signature of its own, a
+sandbox box presents the signed token in its path, and refusing either would
+take every integration off the air.
+
+**The sign-in routes are judged, although no credential guards them.** A login
+cannot require a login, so `POST /auth/login`, `/auth/bootstrap` and
+`/auth/invite/{id}` are exempt from the *guard* — and from nothing else. They
+are routes a browser posts to, and each one ends with that browser holding a
+session: a form on somebody else's page that could post an attacker's password
+to the sign-in or redeem an attacker's invitation would leave the victim signed
+in as somebody the attacker controls, doing their work in an account the
+attacker can read (login CSRF). They used to be exempt from this check too.
 
 A deployment that names **no** address permits no origin at all, which is the
 fail-closed direction: nobody has said where this deployment is reached, so no
