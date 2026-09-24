@@ -121,7 +121,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		// THE WRITER'S OWN AUTHORITY, checked BEFORE the first claim:
 		// it reads nothing, so there is no reason to leave a claimed
 		// address behind a refusal that was knowable up front.
-		if err := w.mayConfer(nil, in.Grants); err != nil {
+		if err := w.MayConfer(nil, in.Grants); err != nil {
 			return statelog.Result{}, err
 		}
 	}
@@ -617,7 +617,7 @@ func (e Enrolment) validate() error {
 			}
 		}
 	}
-	return loginFits(e.Kind, e.Login)
+	return LoginFits(e.Kind, e.Login)
 }
 
 // redeemable refuses an enrolment its invitation does not cover, read inside
@@ -700,7 +700,7 @@ func colleagueWithin(asked, bound iam.Colleague) bool {
 	return mine >= 0 && theirs >= 0 && mine <= theirs
 }
 
-// loginFits refuses a login that is not in its holder's kind's grammar.
+// LoginFits refuses a login that is not in its holder's kind's grammar.
 //
 // THE GRAMMAR IS THE HOLDER'S, never "either one": [iam.ValidLoginFor] argues
 // the case, and it is the Tier A token namespace. A person who could take
@@ -710,7 +710,11 @@ func colleagueWithin(asked, bound iam.Colleague) bool {
 // Checked on the value AS TYPED rather than the folded subject id, so
 // `Sarah.Chen` is refused naming itself instead of being quietly lowered into
 // a login its holder never wrote.
-func loginFits(kind iam.Kind, login string) error {
+//
+// EXPORTED for the surface that has to ask it BEFORE a sequence's first record:
+// `PATCH /iam/people/{id}` moves a seat before a login, and a grammar met only
+// at the login's own record was met after the seat had already moved.
+func LoginFits(kind iam.Kind, login string) error {
 	if iam.ValidLoginFor(kind, login) {
 		return nil
 	}
@@ -864,7 +868,7 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 					return err
 				}
 			}
-			if err := loginFits(holderKind, token); err != nil {
+			if err := LoginFits(holderKind, token); err != nil {
 				return err
 			}
 		}
@@ -2011,7 +2015,7 @@ type CredentialSet struct {
 //     gestures that need a person present — revealing a credential and
 //     changing who may — and a token is what an attacker holding a pipeline's
 //     environment already has.
-//   - A grant the MINTING PARTY does not hold, for [Writer.mayConfer]'s rule:
+//   - A grant the MINTING PARTY does not hold, for [Writer.MayConfer]'s rule:
 //     whoever mints a token sees its value once, so minting one for somebody
 //     else is holding their grants oneself.
 //   - A PERSON's token minted by anybody but that person, and a service
@@ -2239,7 +2243,7 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 				"owner carries, and %s is not among %v", ErrRefused, g, owner)
 		}
 	}
-	if err := w.mayConfer(nil, grants); err != nil {
+	if err := w.MayConfer(nil, grants); err != nil {
 		return nil, err
 	}
 	return slices.Clone(grants), nil
@@ -2366,7 +2370,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	// redemption reads it back rather than deciding again — so this is
 	// the one place an invitation can be held to the rule every other
 	// grant change is: a caller may not confer what they do not hold.
-	if err := w.mayConfer(nil, in.Grants); err != nil {
+	if err := w.MayConfer(nil, in.Grants); err != nil {
 		return InviteIssued{}, err
 	}
 	switch {
@@ -2696,7 +2700,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		if err != nil {
 			return err
 		}
-		if err := w.mayConfer(person.Grants, updated.Grants); err != nil {
+		if err := w.MayConfer(person.Grants, updated.Grants); err != nil {
 			return err
 		}
 		before, after = slices.Clone(person.Grants), slices.Clone(updated.Grants)
@@ -2728,7 +2732,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	return result, err
 }
 
-// mayConfer refuses a change that ADDS a grant this writer's party does not
+// MayConfer refuses a change that ADDS a grant this writer's party does not
 // hold.
 //
 // ONLY THE ADDITIONS ARE CHECKED, which is the difference between a rule and
@@ -2739,7 +2743,13 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 // AN UNKNOWN GRANT IS REFUSED for [iam.Principal.Can]'s reason: a spelling a
 // newer peer wrote that this build cannot name answers false, and a denylist
 // would have admitted it.
-func (w *Writer) mayConfer(before, after []iam.Grant) error {
+//
+// EXPORTED for [LoginFits]'s reason: an edit that moves a seat or a login
+// before it changes grants asks this before its first record, so a grant the
+// caller may not confer is refused with nothing moved. The record's own decide
+// asks again in the snapshot the grants land from, and that answer is the
+// authority — the early one is read from rows that may be a moment old.
+func (w *Writer) MayConfer(before, after []iam.Grant) error {
 	for _, g := range after {
 		if slices.Contains(before, g) || w.Can(g) {
 			continue

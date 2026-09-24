@@ -182,6 +182,29 @@ func TestALinkConflictIsNamed(t *testing.T) {
 	}
 }
 
+// A PROVIDER ACCOUNT SOMEBODY ELSE HOLDS IS REFUSED BEFORE ANYTHING MOVES.
+//
+// The link is claimed after the seat, so a subject somebody else is pinned to,
+// met only at the link's own record, was refused with the seat already moved.
+// This node's rows can say who holds it, so the edit is refused first.
+func TestALinkSomebodyHoldsIsRefusedBeforeTheSeatMoves(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, withProvider(t))
+	row := r.directory.people[alice.String()]
+	row.Link = iamdomain.Link{Issuer: testIssuer, Blind: blindOf(t, "sub-held")}
+	r.directory.people[alice.String()] = row
+	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
+		map[string]any{"seat": "sre", "oidc_subject": "sub-held"})
+	if got.status != http.StatusConflict || got.body["holder"] != alice.String() {
+		t.Fatalf("answered %d %v, want 409 naming the holder", got.status,
+			got.body)
+	}
+	if len(r.writer.calls) != 0 {
+		t.Errorf("a link somebody holds published %v before it was refused",
+			r.writer.calls)
+	}
+}
+
 // THE DIRECTORY SAYS WHO IS LINKED, AND TO WHICH PROVIDER — NEVER THE SUBJECT.
 func TestThePersonViewNamesTheProviderAndNotTheSubject(t *testing.T) {
 	t.Parallel()

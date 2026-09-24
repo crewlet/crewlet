@@ -329,34 +329,48 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		claimed *iamdomain.ErrClaimed
 		refused *statelog.Unavailable
 	)
+	// A REFUSAL CARRIES WHAT THE CALLER PASSED TOO — the id it was about,
+	// and, for a sequence refused partway, the steps that landed before it
+	// and a hint at finishing the rest — but never over what the refusal
+	// itself says. It used to carry none of it, so a create whose seat bind
+	// was refused answered the bind's 409 alone and never said the person
+	// had been created.
+	refuse := func(status int, code httpjson.Code, fields httpjson.Detail) {
+		for k, v := range extra {
+			if _, taken := fields[k]; !taken {
+				fields[k] = v
+			}
+		}
+		httpjson.FailWithFields(w, status, code, fields)
+	}
 	switch {
 	case errors.Is(err, iamdomain.ErrRefused):
-		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			map[string]string{"detail": err.Error()})
+		refuse(http.StatusForbidden, httpjson.CodeUnauthorized,
+			httpjson.Detail{"detail": err.Error()})
 		return
 	case errors.As(err, &claimed) && claimed.Kind == iamdomain.KindLink:
 		// THE HOLDER AND NEVER THE BLIND: the administrator reading this
 		// may manage people and needs to know whose link it is; the
 		// blind is a keyed hash nobody can act on.
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeSubjectConflict,
-			map[string]string{"detail": "that identity provider account is " +
+		refuse(http.StatusConflict, httpjson.CodeSubjectConflict,
+			httpjson.Detail{"detail": "that identity provider account is " +
 				"already linked to person " + claimed.Holder + "; unlink them " +
 				"first if it is theirs no longer", "holder": claimed.Holder})
 		return
 	case errors.Is(err, iamdomain.ErrLinked):
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeSubjectConflict,
-			map[string]string{"detail": err.Error()})
+		refuse(http.StatusConflict, httpjson.CodeSubjectConflict,
+			httpjson.Detail{"detail": err.Error()})
 		return
 	case errors.Is(err, iamdomain.ErrOperationReused):
 		// A KEY THAT ALREADY NAMES SOMETHING ELSE: another request's
 		// invitation or person, or one no longer open. A conflict the
 		// caller resolves with a new key, never by waiting.
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
-			map[string]string{"detail": err.Error(), "op_id": opID})
+		refuse(http.StatusConflict, httpjson.CodeBadParams,
+			httpjson.Detail{"detail": err.Error(), "op_id": opID})
 		return
 	case errors.As(err, &claimed):
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
-			map[string]string{"detail": err.Error()})
+		refuse(http.StatusConflict, httpjson.CodeBadParams,
+			httpjson.Detail{"detail": err.Error()})
 		return
 	case errors.Is(err, iamdomain.ErrNotFindable),
 		errors.Is(err, iamdomain.ErrNotFound),
@@ -369,16 +383,16 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		// AND A VALUE OUTSIDE A BOUND — a reason past the cap, a colleague
 		// level this build cannot name — for the same reason.
 		errors.Is(err, iamdomain.ErrInvalid):
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+		refuse(http.StatusBadRequest, httpjson.CodeInvalidBody,
+			httpjson.Detail{"detail": err.Error()})
 		return
 	case errors.Is(err, statelog.ErrConflict):
 		// A LOST RACE — the write's snapshot kept moving under it — which
 		// the same request resolves once read again. `stale` says exactly
 		// that, as it does on /work; `bad_params` said the request could
 		// never succeed however often it was sent.
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeStale,
-			map[string]string{"detail": err.Error()})
+		refuse(http.StatusConflict, httpjson.CodeStale,
+			httpjson.Detail{"detail": err.Error()})
 		return
 	case errors.Is(err, statelog.ErrUnavailable):
 		if errors.As(err, &refused) && refused.OpID != "" {
@@ -390,8 +404,8 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 			withExtra(extra, httpjson.Detail{"detail": err.Error(), "op_id": opID}))
 		return
 	case err != nil:
-		httpjson.FailWith(w, http.StatusInternalServerError,
-			httpjson.CodeInternalError, map[string]string{"detail": err.Error()})
+		refuse(http.StatusInternalServerError, httpjson.CodeInternalError,
+			httpjson.Detail{"detail": err.Error()})
 		return
 	}
 

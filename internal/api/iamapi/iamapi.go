@@ -65,6 +65,14 @@ type Directory interface {
 	History(ctx context.Context, q iamdomain.HistoryQuery) (iamdomain.HistoryPage, error)
 	PositionAt(ctx context.Context, at time.Time) (uint64, error)
 
+	// PersonByLogin and PersonBySubjectBlind name who holds a login or a
+	// provider account on this node, which an edit asks BEFORE its first
+	// record: a claim move refused by somebody else holding the name,
+	// met only at its own record, was met after an earlier step landed.
+	PersonByLogin(ctx context.Context, login string) (iamdomain.Sighting, error)
+	PersonBySubjectBlind(ctx context.Context, blind string, now time.Time) (
+		iamdomain.Sighting, error)
+
 	// Claims and KeyCensus are the two identity duties' own readings,
 	// which the report shows on demand: a duplicate or an orphan the claim
 	// duty warns about, and a key the key duty has not yet destroyed — a
@@ -107,6 +115,11 @@ type Writer interface {
 	Rebind(ctx context.Context, personID, from, to, opID, reason string) (
 		statelog.Result, error)
 	Invite(ctx context.Context, in iamdomain.InviteMint) (iamdomain.InviteIssued, error)
+
+	// MayConfer is the record's own conferral rule, asked BEFORE the first
+	// record of an edit that moves a claim ahead of its grants — so a grant
+	// the caller may not confer is refused with nothing moved.
+	MayConfer(before, after []iam.Grant) error
 
 	// Link pins an identity provider subject to somebody who already
 	// exists, or moves them from one to another; Unlink takes it off

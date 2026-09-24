@@ -822,19 +822,35 @@ tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-se
 
 #### An edit moves a login or a seat, the new one first
 
-`PATCH /iam/people/{id}` is a sequence of records — a login and a seat each
-arbitrate on their own subject, and the person's document and stage on the
-person's — so it is ordered by what a refusal leaves behind. Everything the
-surface can judge alone is refused **before the first record**: a `login` of
-`""` (a login is never cleared, only changed), a `stage` or `colleague` level
-this build cannot name, and a `reason` past 256 bytes. A new `login` or `seat`
-is then **moved**: the new one is claimed first and the old one released after,
-so a login its holder's grammar refuses, a seat the chart does not hold, or
-either one somebody else holds is refused with the person exactly as they were.
 The claim **is** the move — once it lands the person holds the new one and not
 the old — so the release after it only closes the old one's trail, and one that
 does not land is logged (`iam_move_release_unrecorded`) rather than failing an
 edit that already happened. `seat: ""` unbinds.
+`PATCH /iam/people/{id}` is a sequence of records — a seat, a login and a link
+each arbitrate on their own subject, and the person's stage and document on the
+person's — so it is ordered by what a refusal leaves behind, and **everything
+the node can judge is refused before the first record**, so a body's later
+fields cannot be refused after its earlier ones have landed:
+- what the surface judges alone — a `login` of `""` (a login is never cleared,
+  only changed), a `stage` or `colleague` level this build cannot name, a
+  `reason` past 256 bytes;
+- what the node's rows already say a later record would refuse — a `login` its
+  holder's kind's grammar refuses (`400`), a `login` or an `oidc_subject`
+  somebody else holds (`409`, naming the holder), and `grants` the caller may
+  not confer (`403`).
+The seat moves **first**, so a seat the chart does not hold, or one somebody
+else is bound to, is refused before anything has landed. A new `login` or
+`seat` is **moved**: the new one is claimed first and the old one released
+after, so either refusal leaves the person exactly as they were. `seat: ""`
+unbinds.
+What only a record can decide — a login somebody took a moment ago, a seat
+removed from the chart since the read — is refused by that record, and the
+steps before it have landed. So a refusal met after the first record carries
+`landed`, the fields whose change was made (`seat`, `login`, `oidc_subject`,
+`stage`), and a `hint`; an `unknown` met partway carries `landed` too. A
+`POST /iam/people` whose seat bind is refused answers the bind's refusal with
+`landed: ["person"]` and the person's `id`: the person exists, unbound, and
+`PATCH` binds them.
 
 A `seat` may be named by **any handle it answers to** — its current one, one it
 used to have, the one it was created under — and the binding records the seat's

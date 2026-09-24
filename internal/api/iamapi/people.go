@@ -3,7 +3,9 @@ package iamapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -249,9 +251,13 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		bound, err := writer.Claim(r.Context(), iamdomain.KindSeat, in.Seat,
 			person, opID+":seat")
 		if err != nil {
+			// THE REFUSAL IS THE BIND'S, and it says the person exists:
+			// this answer used to carry the bind's 409 alone, so an
+			// administrator read a create that failed and made the person
+			// a second time under a new key.
 			s.answerWrite(w, r, opID, enrolled, err, map[string]any{
-				"id": person,
-				"detail": "the person was created and the seat binding was " +
+				"id": person, "landed": []string{"person"},
+				"hint": "the person was created and the seat binding was " +
 					"refused; bind them with PATCH /iam/people/" + person,
 			})
 			return
@@ -259,7 +265,7 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		if !landed(bound) {
 			s.answerWrite(w, r, opID, sequence(opID, enrolled, bound), nil,
 				map[string]any{
-					"id": person,
+					"id": person, "landed": []string{"person"},
 					"detail": "the person was created and nothing can say " +
 						"whether the seat binding landed; retry with the same " +
 						IdempotencyHeader + ", or bind them with PATCH " +
@@ -385,13 +391,26 @@ func (s *Service) linkTarget(r *http.Request, in patchBody,
 //
 // A sequence that meets a bad value halfway leaves the half before it landed.
 // So every value this surface can judge on its own — a stage, a colleague
-// level, a login being cleared — is refused before the first record, and a
-// login or a seat MOVES through the domain's own gesture, which claims the new
-// one before it releases the old. This used to release the old login first
-// and then claim the new: a new login the holder's grammar refused (`ops.bot`
-// for a machine, `Jane.Doe` for anybody) left the row with no login at all,
-// which recorded a person as nobody and silently unbound a Tier A token from
-// the seat its machine row named.
+// level, a login being cleared — is refused before the first record, and so is
+// everything this node's rows can already establish a LATER record would be
+// refused for ([Service.judgeEdit]): a login its holder's kind may not hold, a
+// login or a provider account somebody else holds, a grant the caller may not
+// confer. Those used to be met only at their own record, so `{"seat", "login":
+// "Bob.SRE"}` moved the seat and then answered 400 — refused, with the seat
+// already moved. A login or a seat MOVES through the domain's own gesture,
+// which claims the new one before it releases the old. This used to release
+// the old login first and then claim the new: a new login the holder's grammar
+// refused (`ops.bot` for a machine, `Jane.Doe` for anybody) left the row with
+// no login at all, which recorded a person as nobody and silently unbound a
+// Tier A token from the seat its machine row named.
+//
+// # What only a record can decide is answered with what landed
+//
+// A login taken between the read and its record, a seat removed from the
+// chart a moment ago: those are decided by the record, and a sequence cannot
+// un-land the steps before one. So a refusal or an unknown met after the first
+// record names the steps that landed (`landed`), rather than reading as an
+// edit that changed nothing.
 func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	in, ok := readBody[patchBody](w, r)
 	if !ok {
@@ -432,44 +451,75 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
 		return
 	}
+	refused, unreadable := s.judgeEdit(r.Context(), writer, id, in, held,
+		link, relink)
+	switch {
+	case unreadable != nil:
+		s.unavailable(w, r, "read who holds a login or a provider account",
+			unreadable)
+		return
+	case refused != nil:
+		s.answerWrite(w, r, opID, statelog.Result{}, refused,
+			map[string]any{"id": id})
+		return
+	}
 
 	// EVERY STEP'S ANSWER IS KEPT, and a step that did not land ends the
 	// sequence there: an unknown claim, stage or move is one the next
 	// record must not be built on, and the answer says unknown under the
-	// op id a retry re-derives every step's id from.
-	var steps []statelog.Result
-	step := func(result statelog.Result, err error) bool {
-		if err != nil {
-			s.answerWrite(w, r, opID, result, err, map[string]any{"id": id})
-			return false
+	// op id a retry re-derives every step's id from. Either way it names
+	// the steps that DID land before it, which is what the person now is.
+	var (
+		steps []statelog.Result
+		moved []string
+	)
+	partway := func(refusal error) map[string]any {
+		out := map[string]any{"id": id}
+		if len(moved) == 0 {
+			return out
 		}
-		steps = append(steps, result)
-		if !landed(result) {
-			s.answerWrite(w, r, opID, sequence(opID, steps...), nil,
-				map[string]any{"id": id})
-			return false
+		out["landed"] = slices.Clone(moved)
+		if refusal != nil {
+			out["hint"] = "the changes in `landed` were made and the rest " +
+				"were not; deal with the refusal and send the rest again"
 		}
-		return true
+		return out
+	}
+	step := func(name string) func(statelog.Result, error) bool {
+		return func(result statelog.Result, err error) bool {
+			if err != nil {
+				s.answerWrite(w, r, opID, result, err, partway(err))
+				return false
+			}
+			steps = append(steps, result)
+			if !landed(result) {
+				s.answerWrite(w, r, opID, sequence(opID, steps...), nil,
+					partway(nil))
+				return false
+			}
+			moved = append(moved, name)
+			return true
+		}
 	}
 	if in.Seat != nil && *in.Seat != held.Seat {
-		var moved statelog.Result
+		var bound statelog.Result
 		switch {
 		case *in.Seat == "":
-			moved, err = writer.Release(r.Context(), iamdomain.KindSeat,
+			bound, err = writer.Release(r.Context(), iamdomain.KindSeat,
 				held.Seat, id, opID+":unbind", reason)
 		case held.Seat == "":
-			moved, err = writer.Claim(r.Context(), iamdomain.KindSeat, *in.Seat,
+			bound, err = writer.Claim(r.Context(), iamdomain.KindSeat, *in.Seat,
 				id, opID+":bind")
 		default:
-			moved, err = writer.Rebind(r.Context(), id, held.Seat, *in.Seat,
+			bound, err = writer.Rebind(r.Context(), id, held.Seat, *in.Seat,
 				opID, reason)
 		}
-		if !step(moved, err) {
+		if !step("seat")(bound, err) {
 			return
 		}
 	}
 	if in.Login != nil && *in.Login != held.Login {
-		if !step(writer.Rename(r.Context(), id, held.Login, *in.Login,
+		if !step("login")(writer.Rename(r.Context(), id, held.Login, *in.Login,
 			opID, reason)) {
 			return
 		}
@@ -493,12 +543,12 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 				OpID: opID + ":link", Reason: reason,
 			})
 		}
-		if !step(linked, err) {
+		if !step("oidc_subject")(linked, err) {
 			return
 		}
 	}
 	if in.Stage != nil {
-		if !step(writer.SetStage(r.Context(), id, *in.Stage,
+		if !step("stage")(writer.SetStage(r.Context(), id, *in.Stage,
 			opID+":stage", reason)) {
 			return
 		}
@@ -536,12 +586,74 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		},
 		OpID: opID, Reason: reason,
 	})
+	extra := map[string]any{"id": id}
 	if err == nil && landed(updated) {
 		log.InfoContext(r.Context(), "api_iam_person_updated",
 			"person", id, "position", updated.Position.String())
+	} else {
+		// THE LAST RECORD DID NOT LAND, so the ones before it are what the
+		// person now is — named, as every step's failure names them.
+		extra = partway(err)
 	}
 	s.answerWrite(w, r, opID, sequence(opID, append(steps, updated)...), err,
-		map[string]any{"id": id})
+		extra)
+}
+
+// judgeEdit refuses, BEFORE THE FIRST RECORD, what a later record of an edit
+// would be refused for and this node's rows can already establish: a login its
+// holder's kind may not hold, a login or a provider account somebody else
+// holds, and a grant the caller may not confer. Each is the domain's own rule
+// ([iamdomain.LoginFits], [iamdomain.Writer.MayConfer]) or the holder the
+// claim's own decide would name, asked early — and each used to be met only at
+// its own record, after a seat or a login ahead of it had already moved.
+//
+// THE SEAT IS NOT HERE because it moves FIRST: a seat the chart does not hold,
+// or one somebody else is bound to, is refused before anything has landed.
+//
+// ADVISORY, as every read outside a decide is: a login taken between this read
+// and its record is refused by the record, which is the residue
+// [Service.PatchPerson] answers with the steps that landed before it.
+//
+// refused is answered as the domain's own refusal would be; unreadable is a
+// read this node could not make, with nothing judged.
+func (s *Service) judgeEdit(ctx context.Context, writer Writer, id string,
+	in patchBody, held iamdomain.PersonRow, link iamdomain.Link, relink bool) (
+	refused, unreadable error) {
+
+	if in.Login != nil && *in.Login != held.Login {
+		if err := iamdomain.LoginFits(held.Kind, *in.Login); err != nil {
+			return err, nil
+		}
+		holder, err := s.directory.PersonByLogin(ctx, *in.Login)
+		if err != nil {
+			return nil, err
+		}
+		if holder.ID != "" && holder.ID != id {
+			return &iamdomain.ErrClaimed{Kind: iamdomain.KindLogin,
+				Token: *in.Login, Holder: holder.ID}, nil
+		}
+	}
+	if relink && link.Blind != "" {
+		holder, err := s.directory.PersonBySubjectBlind(ctx, link.Blind, s.now())
+		switch {
+		case errors.Is(err, iamdomain.ErrSubjectAmbiguous):
+			// TWO PEOPLE HOLD IT ALREADY — a restore's residue, which the
+			// claim report names — so pinning it to anybody else is a
+			// conflict an administrator resolves by unlinking one of them.
+			return fmt.Errorf("%w: %w", statelog.ErrConflict, err), nil
+		case err != nil:
+			return nil, err
+		case holder.ID != "" && holder.ID != id:
+			return &iamdomain.ErrClaimed{Kind: iamdomain.KindLink,
+				Token: link.Blind, Holder: holder.ID}, nil
+		}
+	}
+	if in.Grants != nil {
+		if err := writer.MayConfer(held.Grants, *in.Grants); err != nil {
+			return err, nil
+		}
+	}
+	return nil, nil
 }
 
 // DeletePerson is `DELETE /iam/people/{id}`.

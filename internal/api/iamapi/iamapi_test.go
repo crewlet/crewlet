@@ -259,6 +259,38 @@ func (d *fakeDirectory) PositionAt(context.Context, time.Time) (uint64, error) {
 	return 0, d.err
 }
 
+// PersonByLogin and PersonBySubjectBlind answer the rows as the reader does:
+// nobody is the zero sighting, never an error.
+func (d *fakeDirectory) PersonByLogin(_ context.Context, login string) (
+	iamdomain.Sighting, error) {
+
+	if d.err != nil {
+		return iamdomain.Sighting{}, d.err
+	}
+	for _, row := range d.people {
+		if row.Login == login {
+			return iamdomain.Sighting{ID: row.ID, Kind: row.Kind,
+				Stage: row.Stage, Login: row.Login}, nil
+		}
+	}
+	return iamdomain.Sighting{}, nil
+}
+
+func (d *fakeDirectory) PersonBySubjectBlind(_ context.Context, blind string,
+	_ time.Time) (iamdomain.Sighting, error) {
+
+	if d.err != nil {
+		return iamdomain.Sighting{}, d.err
+	}
+	for _, row := range d.people {
+		if blind != "" && row.Link.Blind == blind {
+			return iamdomain.Sighting{ID: row.ID, Kind: row.Kind,
+				Stage: row.Stage, Login: row.Login}, nil
+		}
+	}
+	return iamdomain.Sighting{}, nil
+}
+
 func (d *fakeDirectory) Claims(context.Context, time.Time) (iamdomain.ClaimReport, error) {
 	if d.claimsErr != nil {
 		return iamdomain.ClaimReport{}, d.claimsErr
@@ -323,12 +355,19 @@ type fakeWriter struct {
 	// write nothing can establish, or one durable and not yet applied
 	// here.
 	outcomes map[string]statelog.Outcome
+
+	// refusals is what a named call REFUSES with — a record's own decide
+	// meeting what the surface's early read could not see.
+	refusals map[string]error
 }
 
 func (w *fakeWriter) did(what string) (statelog.Result, error) {
 	w.calls = append(w.calls, what)
 	if w.err != nil {
 		return statelog.Result{}, w.err
+	}
+	if err := w.refusals[what]; err != nil {
+		return statelog.Result{}, err
 	}
 	outcome := statelog.OutcomeApplied
 	if o, set := w.outcomes[what]; set {
@@ -432,6 +471,19 @@ func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 	}
 	return iamdomain.InviteIssued{Result: result, ID: id,
 		ExpiresAt: in.ExpiresAt}, err
+}
+
+// MayConfer is the record's own rule, over the grants the rig's authority
+// handed this writer: a case about a grant the caller may not confer is about
+// the surface asking it, and a fake that admitted everything would pass it.
+func (w *fakeWriter) MayConfer(before, after []iam.Grant) error {
+	for _, g := range after {
+		if !slices.Contains(before, g) && !slices.Contains(w.grants, g) {
+			return fmt.Errorf("%w: conferring %s needs the same grant",
+				iamdomain.ErrRefused, g)
+		}
+	}
+	return nil
 }
 
 func (w *fakeWriter) Link(_ context.Context, in iamdomain.LinkChange) (
@@ -1244,24 +1296,124 @@ func TestALoginOrASeatIsMovedNeverReleasedAndReclaimed(t *testing.T) {
 	if len(r.writer.releasedFrom) != 0 {
 		t.Errorf("a move published a bare release first: %v", r.writer.releasedFrom)
 	}
+	if got.body["landed"] != nil {
+		t.Errorf("an edit that landed whole names %v as landed — that list is "+
+			"for an edit stopped partway", got.body["landed"])
+	}
+	// AND ONE WHOSE LAST RECORD IS THE DOCUMENT, which answers on the other
+	// path: a seat move and a grants edit, both landed.
+	r = newRig(t)
+	got = r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
+		map[string]any{"seat": "sre", "grants": []string{"state:read"}})
+	if got.status != http.StatusOK || got.body["landed"] != nil {
+		t.Errorf("an edit whose every record landed answered %d %v, want 200 "+
+			"naming nothing as landed", got.status, got.body)
+	}
 
-	// AND WHAT THE SURFACE CAN JUDGE IS REFUSED BEFORE ANY RECORD: a login
-	// cleared, a stage or a colleague level this build cannot name, each
-	// beside a seat move that would otherwise already have landed.
-	for name, body := range map[string]map[string]any{
-		"a cleared login":         {"seat": "platform-lead", "login": ""},
-		"a stage nobody can name": {"seat": "platform-lead", "stage": "paused"},
-		"a colleague level":       {"seat": "platform-lead", "colleague": "admin"},
+	// AND WHAT THE SURFACE CAN JUDGE IS REFUSED BEFORE ANY RECORD, each
+	// beside a seat move that would otherwise already have landed: a login
+	// cleared, a stage or a colleague level this build cannot name — and
+	// what this node's rows can already establish a LATER record would
+	// refuse: a login outside its holder's grammar, a login somebody else
+	// holds, a grant the caller may not confer. Those four used to be met
+	// at their own record, after the seat had moved.
+	for name, tc := range map[string]struct {
+		body   map[string]any
+		status int
+	}{
+		"a cleared login": {map[string]any{"seat": "platform-lead",
+			"login": ""}, http.StatusBadRequest},
+		"a stage nobody can name": {map[string]any{"seat": "platform-lead",
+			"stage": "paused"}, http.StatusBadRequest},
+		"a colleague level": {map[string]any{"seat": "platform-lead",
+			"colleague": "admin"}, http.StatusBadRequest},
+		"a login outside the grammar": {map[string]any{"seat": "platform-lead",
+			"login": "Alice.Admin"}, http.StatusBadRequest},
+		"a login somebody holds": {map[string]any{"seat": "platform-lead",
+			"login": "bob.sre"}, http.StatusConflict},
+		"a grant the caller does not hold": {map[string]any{
+			"seat": "platform-lead", "grants": []string{"secrets:read"}},
+			http.StatusForbidden},
 	} {
 		r := newRig(t)
 		got := r.as(administrator(), http.MethodPatch,
-			"/iam/people/"+alice.String(), body)
-		if got.status != http.StatusBadRequest {
-			t.Errorf("%s answered %d, want 400 (body %v)", name, got.status, got.body)
+			"/iam/people/"+alice.String(), tc.body)
+		if got.status != tc.status {
+			t.Errorf("%s answered %d, want %d (body %v)", name, got.status,
+				tc.status, got.body)
 		}
 		if len(r.writer.calls) != 0 {
 			t.Errorf("%s published %v before it was refused", name, r.writer.calls)
 		}
+	}
+}
+
+// A REFUSAL ONLY A RECORD COULD DECIDE NAMES WHAT LANDED BEFORE IT.
+//
+// A login taken between the surface's read and its record is the one refusal
+// nothing can meet before the first record — and a sequence cannot un-land the
+// seat move ahead of it. It used to answer the login's 409 alone, which reads
+// as an edit that changed nothing while the seat had moved. Mutation: drop
+// `landed` from the partway answer and the seat move goes unreported.
+func TestARefusalPartwayNamesWhatLanded(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.writer.refusals = map[string]error{"rename": &iamdomain.ErrClaimed{
+		Kind: iamdomain.KindLogin, Token: "alice.ops", Holder: bob.String()}}
+	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
+		map[string]any{"seat": "platform-lead", "login": "alice.ops"})
+	if got.status != http.StatusConflict {
+		t.Fatalf("status %d (body %v), want 409", got.status, got.body)
+	}
+	landed, _ := got.body["landed"].([]any)
+	if len(landed) != 1 || landed[0] != "seat" {
+		t.Errorf("the refusal says %v landed, want the seat move alone",
+			got.body["landed"])
+	}
+	if got.body["hint"] == nil || got.body["id"] != alice.String() {
+		t.Errorf("the refusal carries no hint or id: %v", got.body)
+	}
+	if !slices.Equal(r.writer.calls, []string{"rebind", "rename"}) {
+		t.Errorf("calls %v, want the seat move and then the refused rename",
+			r.writer.calls)
+	}
+
+	// AND A REFUSAL AT THE FIRST RECORD LANDED NOTHING, so it says nothing
+	// landed rather than an empty list.
+	r = newRig(t)
+	r.writer.refusals = map[string]error{"rebind": &iamdomain.ErrClaimed{
+		Kind: iamdomain.KindSeat, Token: "platform-lead", Holder: bob.String()}}
+	got = r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
+		map[string]any{"seat": "platform-lead", "login": "alice.ops"})
+	if got.status != http.StatusConflict || got.body["landed"] != nil {
+		t.Errorf("a refused first record answered %d %v, want 409 naming "+
+			"nothing landed", got.status, got.body)
+	}
+}
+
+// A CREATE WHOSE SEAT BIND IS REFUSED SAYS THE PERSON EXISTS.
+//
+// The bind is its own record after the person's, and its refusal answered the
+// bind's 409 alone: the note that the person had been created was set on the
+// answer and never rendered, so an administrator read a create that failed
+// and made the person again under a new key. Mutation: drop the caller's
+// fields from a refusal and the note is gone.
+func TestACreateWhoseBindIsRefusedSaysThePersonExists(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.writer.refusals = map[string]error{"claim:seat": &iamdomain.ErrClaimed{
+		Kind: iamdomain.KindSeat, Token: "platform-lead", Holder: bob.String()}}
+	got := r.as(administrator(), http.MethodPost, "/iam/people",
+		map[string]any{"login": "dana.sre", "email": "dana@example.com",
+			"seat": "platform-lead"})
+	if got.status != http.StatusConflict {
+		t.Fatalf("status %d (body %v), want the bind's 409", got.status, got.body)
+	}
+	landed, _ := got.body["landed"].([]any)
+	if len(landed) != 1 || landed[0] != "person" ||
+		got.body["id"] != r.writer.enrolled.PersonID || got.body["hint"] == nil {
+		t.Errorf("the refused bind answered %v, want it to name the person "+
+			"%s it created", got.body, r.writer.enrolled.PersonID)
 	}
 }
 
@@ -1293,7 +1445,7 @@ func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 		return r.writer.updated.OpID
 	}
 	first := patch("", []iam.Grant{iam.GrantStateRead})
-	second := patch("", []iam.Grant{iam.GrantAuditRead})
+	second := patch("", []iam.Grant{iam.GrantPeopleManage})
 	if first == second {
 		t.Errorf("two different edits of one person were published under one "+
 			"op id %q, so the broker acknowledges the second as the first", first)
