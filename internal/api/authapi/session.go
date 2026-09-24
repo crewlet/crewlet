@@ -32,6 +32,16 @@ func providerLabel(issuer string) string {
 // per-bearer resolve, while session's is what a VALIDATION needs and carries
 // nothing else. Widening either to be the other would give a route access to
 // the half it has no business with.
+//
+// # And the guard's reading of the subject, never a second one
+//
+// A session exchanged from a Tier A token names the token's login, which no
+// person row holds; the guard answers that subject from the entry this node
+// holds ([auth.SessionSubjects]), and so does this. It used to validate
+// against the bare estate, so a token's session read as one whose person was
+// gone: [Service.Logout] cleared the cookie and closed nothing, while the guard
+// went on serving the same cookie — and a captured copy with it — until its
+// hour ran out.
 func (s *Service) directoryFor() session.Directory { return s.sessions }
 
 // configResponse is what a client reads before anybody has signed in.

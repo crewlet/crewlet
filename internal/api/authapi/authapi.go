@@ -378,6 +378,11 @@ type Options struct {
 	// on purpose: it carries one method and no lookup by login, so a
 	// validation path cannot reach the half a sign-in uses, and a
 	// sign-in path cannot resolve an arbitrary bearer.
+	//
+	// THE ESTATE'S ROWS AND NOTHING ELSE: [New] reads it through
+	// [auth.SessionSubjects] over this surface's own Tier A, so a session
+	// exchanged from a Tier A token is judged here exactly as the guard
+	// judges it — see [Service.directoryFor].
 	Sessions session.Directory
 
 	// Provider is the OIDC provider, or nil on a deployment that has
@@ -482,7 +487,11 @@ func New(opts Options) (*Service, error) {
 	s := &Service{
 		boot: opts.Bootstrap, directory: opts.Directory, writer: opts.Writer,
 		signer: opts.Signer, hasher: opts.Hasher, throttle: opts.Throttle,
-		blinder: opts.Blinder, sessions: opts.Sessions,
+		blinder: opts.Blinder,
+		// THE GUARD'S READING OF A BEARER'S SUBJECT, built from the same
+		// Tier A — see [Service.directoryFor] for what the bare estate
+		// cost a token's own sign-out.
+		sessions: auth.SessionSubjects(opts.Bootstrap, opts.Sessions),
 		opener:   opts.Opener,
 		cipher:   opts.Cipher,
 		provider: opts.Provider,

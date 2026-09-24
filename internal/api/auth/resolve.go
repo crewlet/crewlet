@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -344,17 +343,9 @@ func (g *Guard) exchanged(r *http.Request, entry config.APIToken, via string) (
 	return r.WithContext(withTierA(ctx, entry, false)), refusal
 }
 
-// tokenByLogin is the Tier A entry a token's login names, or false.
-//
-// BY THE ID IN THE LOGIN and never by value: what an exchanged session carries
-// is the token's NAME, and the entry this node holds under that name now is
-// what it answers to — so removing the entry, or renaming it, ends every
-// session exchanged from it on this node's next request.
+// tokenByLogin is the Tier A entry a token's login names, or false — the
+// guard's own table read through [tierATokens.byLogin], the one rule
+// [SessionSubjects] reads it through too.
 func (g *Guard) tokenByLogin(login string) (config.APIToken, bool) {
-	id, isToken := strings.CutPrefix(login, iam.TokenLoginPrefix)
-	if !isToken || id == "" {
-		return config.APIToken{}, false
-	}
-	entry, held := g.tokens[id]
-	return entry, held
+	return g.tokens.byLogin(login)
 }

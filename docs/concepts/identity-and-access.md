@@ -1288,9 +1288,12 @@ than a person, and every request re-composes it from the entry this node holds
 cut to the ceiling, the seat the directory binds the token to, and stepped up
 by construction. Its lifetime is one hour. Removing or renaming the entry ends
 it on the next request (and clears the cookie) wherever the node stands on the
-log, because a configuration entry is never late; `POST /auth/logout/all` from
-it ends every session that token opened; and `crewlet iam invalidate-all` ends
-it with everybody else's. Rotating the token's *value* under the same id keeps
+log, because a configuration entry is never late; `POST /auth/logout` from it
+closes it like any other session — the sign-in surface reads a token's session
+the way the guard does, from the entry, where the bare estate holds no row for
+a token's login and read it as already over; `POST /auth/logout/all` from it
+ends every session that token opened; and `crewlet iam invalidate-all` ends it
+with everybody else's. Rotating the token's *value* under the same id keeps
 its exchanged sessions to their hour, so a rotation that answers a leak
 renames the entry or invalidates.
 

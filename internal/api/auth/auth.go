@@ -249,7 +249,7 @@ type Guard struct {
 	// needs is a PRINCIPAL rather than an id: a credential's blast
 	// radius is stated where it is pinned, and the guard is the last
 	// frame that holds both the request and the entry it matched.
-	tokens map[string]config.APIToken
+	tokens tierATokens
 
 	// ceiling is this node's own `api.auth.max_grants`, intersected into
 	// every principal at the moment it is resolved. See
@@ -332,10 +332,7 @@ func New(b *config.Bootstrap) *Guard {
 		return &Guard{now: time.Now}
 	}
 	auth := b.API.Auth
-	tokens := make(map[string]config.APIToken, len(auth.Tokens))
-	for _, entry := range auth.Tokens {
-		tokens[entry.ID] = entry
-	}
+	tokens := tokensOf(b)
 	if len(tokens) > 0 {
 		log.Info("api_auth_tokens_loaded", "count", len(tokens),
 			"grant_ceiling", auth.CeilingHash())

@@ -286,6 +286,42 @@ func TestSigningOutEverywhereEndsATokensSessions(t *testing.T) {
 	}
 }
 
+// SIGNING OUT OF AN EXCHANGED SESSION ENDS IT, as it ends a person's: the close
+// is recorded under the token's login, and the cookie — and every captured
+// copy of it — then answers 401.
+//
+// The sign-in surface validated the presented cookie against the bare estate,
+// where a token's login is no person, so it read the session as already over:
+// it cleared this browser's cookie and closed nothing, while the guard went on
+// serving the same bearer for the rest of its hour. Mutation: validate the
+// sign-out against the estate alone and no close is written.
+func TestSigningOutOfAnExchangedSessionEndsIt(t *testing.T) {
+	t.Parallel()
+	r := newExchangeRig(t)
+	cookie, status := r.exchange(opsValue)
+	if status != http.StatusOK || cookie == nil {
+		t.Fatalf("the exchange answered %d", status)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	r.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the sign-out answered %d: %s", rec.Code, rec.Body.String())
+	}
+	closes := r.estate.closes()
+	if len(closes) != 1 || closes[0].person != iam.TokenLogin("ops") {
+		t.Fatalf("the sign-out wrote %v, want one close of the token's "+
+			"session under %s", closes, iam.TokenLogin("ops"))
+	}
+	// A CAPTURED COPY OF THE COOKIE IS WHAT THE CLOSE IS FOR: the browser
+	// that signed out has already dropped its own.
+	if _, after := r.probe(cookie); after.Code != http.StatusUnauthorized {
+		t.Errorf("the signed-out session's cookie answered %d, want 401",
+			after.Code)
+	}
+}
+
 // THE SESSION ROUTE SAYS WHEN THE SESSION ENDS.
 //
 // `expires_at` was declared and never filled, so every answer said the session
@@ -391,6 +427,7 @@ type sessionEstate struct {
 	sessions map[string]sessionRow
 	epochs   map[string]uint64
 	bindings map[string]session.PersonRow
+	closed   []closed
 }
 
 type sessionRow struct {
@@ -398,6 +435,9 @@ type sessionRow struct {
 	epoch  uint64
 	ended  bool
 }
+
+// closed is one CloseSession the surface wrote.
+type closed struct{ lineage, person string }
 
 func newSessionEstate() *sessionEstate {
 	return &sessionEstate{
@@ -448,6 +488,29 @@ func (e *sessionEstate) OpenSession(_ context.Context, in iamdomain.SessionStart
 		Result: applied(statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: e.seq}),
 		Epoch:  epoch,
 	}, nil
+}
+
+// CloseSession ends one session the way the applier would, and remembers the
+// close so a case can say it was written.
+func (e *sessionEstate) CloseSession(_ context.Context, lineage, person, _,
+	_ string) (statelog.Result, error) {
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.seq++
+	e.closed = append(e.closed, closed{lineage: lineage, person: person})
+	if row, ok := e.sessions[lineage]; ok {
+		row.ended = true
+		e.sessions[lineage] = row
+	}
+	return applied(statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: e.seq}), nil
+}
+
+// closes is every close written so far.
+func (e *sessionEstate) closes() []closed {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.closed)
 }
 
 func (e *sessionEstate) Revoke(_ context.Context, person, _, _ string) (

@@ -531,6 +531,63 @@ func (s *Sessions) reissue(w http.ResponseWriter, v session.Validation) {
 	}
 }
 
+// SessionSubjects is the directory a session bearer is validated against by
+// every frame that validates one: the identity estate's rows for a person's
+// session, and a session exchanged from a Tier A token answered from the
+// CONFIGURATION this node holds — see [tierASubjects].
+//
+// # One reading for the guard and the sign-in surface
+//
+// The guard composes it per request from its own token table, and
+// internal/api/authapi builds it once from the same Tier A through the same
+// table ([tokensOf]) — one PARSER rather than one instance, which is
+// [NewClients]' arrangement for the same reason. The sign-in surface used to
+// validate against the bare estate instead: a session exchanged from a token
+// names `token:<id>`, which no person row holds, so its own sign-out read it as
+// a session already over and never closed it, while the guard went on serving
+// the same cookie — a break-glass session that outlived the sign-out asked of
+// it, with a captured copy still working until its hour ran out.
+func SessionSubjects(b *config.Bootstrap, directory session.Directory) session.Directory {
+	return tierASubjects{directory: directory, tokens: tokensOf(b).byLogin}
+}
+
+// tierATokens is Tier A's `api.auth.tokens`, keyed by each entry's id — the
+// table a presented bearer is matched against and a session exchanged from
+// one is answered from.
+//
+// A TYPE OF ITS OWN so the two readers build it one way: the guard's match and
+// [SessionSubjects] each held a spelling of "which entry does this name", and
+// a second spelling is how one of them comes to answer a renamed entry
+// differently from the other.
+type tierATokens map[string]config.APIToken
+
+// tokensOf is the table Tier A declares, empty for no Tier A at all.
+func tokensOf(b *config.Bootstrap) tierATokens {
+	if b == nil {
+		return tierATokens{}
+	}
+	tokens := make(tierATokens, len(b.API.Auth.Tokens))
+	for _, entry := range b.API.Auth.Tokens {
+		tokens[entry.ID] = entry
+	}
+	return tokens
+}
+
+// byLogin is the entry a token's login names, or false.
+//
+// BY THE ID IN THE LOGIN and never by value: what an exchanged session carries
+// is the token's NAME, and the entry this node holds under that name now is
+// what it answers to — so removing the entry, or renaming it, ends every
+// session exchanged from it on this node's next request.
+func (t tierATokens) byLogin(login string) (config.APIToken, bool) {
+	id, isToken := strings.CutPrefix(login, iam.TokenLoginPrefix)
+	if !isToken || id == "" {
+		return config.APIToken{}, false
+	}
+	entry, held := t[id]
+	return entry, held
+}
+
 // tierASubjects is the directory a bearer is validated against, answering a
 // Tier A token's own subject from the CONFIGURATION rather than from a row.
 //
