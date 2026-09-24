@@ -816,7 +816,10 @@ this build cannot name, and a `reason` past 256 bytes. A new `login` or `seat`
 is then **moved**: the new one is claimed first and the old one released after,
 so a login its holder's grammar refuses, a seat the chart does not hold, or
 either one somebody else holds is refused with the person exactly as they were.
-`seat: ""` unbinds.
+The claim **is** the move — once it lands the person holds the new one and not
+the old — so the release after it only closes the old one's trail, and one that
+does not land is logged (`iam_move_release_unrecorded`) rather than failing an
+edit that already happened. `seat: ""` unbinds.
 
 A `seat` may be named by **any handle it answers to** — its current one, one it
 used to have, the one it was created under — and the binding records the seat's
@@ -842,7 +845,8 @@ the provider asserts is never a link. `"oidc_subject": ""` unlinks them.
 - A person holds **one** link. Linking somebody already linked **moves** them,
   naming the link they hold now as the one it replaces; if that link changed
   underneath the edit, the move is `409 subject_conflict` rather than a
-  relink nobody meant.
+  relink nobody meant. A move is made — and announced — once the new link's
+  claim lands, as a login's is.
 - Refused **before the first record**: a deployment with no provider (`400`,
   naming the setting), a subject carrying leading or trailing whitespace (it is
   matched byte for byte, so a pasted space links an account the provider never

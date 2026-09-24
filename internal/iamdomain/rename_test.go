@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // renameRig is a write rig holding three enrolled principals: the machine a
@@ -18,7 +19,16 @@ type renameRig struct {
 
 func newRenameRig(t *testing.T) renameRig {
 	t.Helper()
-	rig := renameRig{writeRig: newWriteRig(t),
+	return newRenameRigWith(t, nil)
+}
+
+// newRenameRigWith is [newRenameRig] with the publisher's appender wrapped,
+// for a case about a step the broker never confirms.
+func newRenameRigWith(t *testing.T,
+	wrap func(statelog.Appender) statelog.Appender) renameRig {
+
+	t.Helper()
+	rig := renameRig{writeRig: newWriteRigWith(t, wrap),
 		machine: "018f3a9c-0000-7000-8000-0000000006a1",
 		sarah:   "018f3a9c-0000-7000-8000-0000000006a2",
 		dana:    "018f3a9c-0000-7000-8000-0000000006a3",
@@ -212,5 +222,56 @@ func TestARenameClaimsTheNewLoginAndFreesTheOld(t *testing.T) {
 	if !slices.Equal(ops, want) {
 		t.Errorf("the old login's trail is %v, want %v — the enrolment's "+
 			"claim, the rename's release, the next holder's claim", ops, want)
+	}
+}
+
+// A RENAME WHOSE RELEASE DID NOT LAND IS STILL A RENAME.
+//
+// The claim is the move: its apply put the new login on the row and took the
+// old one off it. The release after it only closes the old login's trail, and
+// one the broker never confirmed used to fail the rename with an error
+// advising a retry under the same op id — which nothing could act on, since a
+// caller re-reads the person first, finds them renamed and publishes nothing.
+// It answers the claim's outcome now, under the gesture's op id; the old login
+// is free, and its trail is short the one record, which is the whole residue.
+//
+// Mutation: fail the move on a release that did not land, and the rename that
+// happened answers unknown.
+func TestARenameWhoseReleaseDidNotLandIsStillARename(t *testing.T) {
+	t.Parallel()
+	var broker *silentBroker
+	rig := newRenameRigWith(t, func(inner statelog.Appender) statelog.Appender {
+		broker = &silentBroker{Appender: inner,
+			on: iamdomain.LoginSubject("sarah.chen").Wire()}
+		return broker
+	})
+	broker.silent.Store(true)
+	var result statelog.Result
+	if err := rig.draining(func() error {
+		var err error
+		result, err = rig.writer.Rename(t.Context(), rig.sarah, "sarah.chen",
+			"sarah.c.chen", "op-rename", "a rename")
+		return err
+	}); err != nil {
+		t.Fatalf("a rename whose claim landed answered %v", err)
+	}
+	if !broker.asked.Load() {
+		t.Fatal("the release was never published, so this case proves nothing")
+	}
+	if result.Outcome == statelog.OutcomeUnknown || result.OpID != "op-rename" {
+		t.Fatalf("answered %+v, want the claim's landed outcome under the "+
+			"gesture's own op id", result)
+	}
+	rig.drain()
+	if got := rig.loginOf(rig.sarah); got != "sarah.c.chen" {
+		t.Errorf("the row's login is %q, want sarah.c.chen", got)
+	}
+	// THE OLD LOGIN IS FREE all the same — the claim's apply freed it.
+	broker.silent.Store(false)
+	if err := rig.rename(rig.dana, "dana.sre", "sarah.chen", "op-reuse"); err != nil {
+		t.Fatalf("the freed login could not be taken: %v", err)
+	}
+	if got := rig.loginOf(rig.dana); got != "sarah.chen" {
+		t.Errorf("dana's login is %q, want sarah.chen", got)
 	}
 }

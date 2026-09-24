@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -321,6 +322,10 @@ func (w *Writer) announce(ctx context.Context, result statelog.Result, err error
 // into the framework's empty decision, which answers `applied` with no record.
 var errNothingToPublish = errors.New("iamdomain: nothing to publish")
 
+// writeLog is where the writer says what it could not report as an outcome:
+// a record that closes a trail rather than one a gesture is built on.
+var writeLog = logging.Get("iam.write")
+
 // unresolved is a SEQUENCE's answer when one of its steps could not be
 // resolved: unknown, under the GESTURE's operation id.
 //
@@ -332,7 +337,9 @@ var errNothingToPublish = errors.New("iamdomain: nothing to publish")
 // would be built on a guess — so the gesture stops there and says unknown,
 // exactly as a single write would. It is answered under the gesture's own id
 // because that is what a caller retries under: every step's id is derived
-// from it, so the retry lands exactly the steps that did not.
+// from it, so the retry lands exactly the steps that did not. A move's release
+// is the one step this does not reach: nothing is built on it, so its outcome
+// is the old token's trail's and never the gesture's (see [Writer.replace]).
 func unresolved(opID string) statelog.Result {
 	return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: opID}
 }

@@ -38,7 +38,9 @@ import (
 // applier skips it and never deletes one) — so the arbitration and the row are
 // one fact. A person holds at most one link: pinning a second revokes the
 // first, which is the column semantics every other claim has, and the move
-// records the old subject's release after it.
+// records the old subject's release after it — the trail's closing record, so
+// one that does not land leaves the move made and announced ([Writer.Rename]
+// says why).
 //
 // A REMOVAL RELEASES IT with every other credential the person held, in its
 // own transaction, and its tombstone does not name it: the removal's payload is

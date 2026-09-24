@@ -997,7 +997,8 @@ func (w *Writer) release(ctx context.Context, at *statelog.Position,
 // trail ends in the release rather than in a claim naming somebody who no
 // longer holds it. A release refused because another writer took the freed
 // login in between is not a failure of the rename, and is not reported as
-// one: the name is no longer this person's either way.
+// one: the name is no longer this person's either way. Nor is a release that
+// did not land at all — see [Writer.replace] for why the move is its claim.
 func (w *Writer) Rename(ctx context.Context, personID, from, to, opID,
 	reason string) (statelog.Result, error) {
 
@@ -1021,6 +1022,25 @@ func (w *Writer) Rebind(ctx context.Context, personID, from, to, opID,
 //
 // payload is what the NEW claim states beside its token — a link's issuer —
 // and the empty claim for a login and a seat.
+//
+// # The claim IS the move, and the release is its trail
+//
+// Once the claim has landed the move has happened: its apply put the new token
+// on the person and took the old one off them, on every node, so the old token
+// is free and every later claim on it decides from rows that say so. The
+// release after it builds nothing — it closes the OLD subject's trail, so that
+// trail ends in the release rather than in a claim naming somebody who no
+// longer holds it. So a release that does not land is the trail's gap and
+// never the gesture's outcome: the gesture answers the claim's result, and the
+// gap is logged (`iam_move_release_unrecorded`) naming the op id it was
+// published under. It used to fail the whole move with an error advising a
+// retry under the same op id, which nothing could act on — a caller re-reads
+// the person before it moves them, found them already moved and published
+// nothing — while a link moved that way was never announced
+// ([types.IAMIdentityLinked]), because the error was all its caller saw. The
+// CLAIM is still a step nothing may be built on unconfirmed: one whose outcome
+// nobody can establish ends the gesture as unknown before any release is
+// published, which would leave the person holding neither token.
 func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 	to string, payload Claim, opID, reason string) (statelog.Result, error) {
 
@@ -1075,26 +1095,30 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 		claimed.OpID = opID
 		return claimed, nil
 	}
-	released, err := w.release(ctx, mark, kind, from, personID,
-		opID+":release-"+string(kind), reason, true)
+	releaseID := opID + ":release-" + string(kind)
+	released, err := w.release(ctx, mark, kind, from, personID, releaseID,
+		reason, true)
 	var taken *ErrClaimed
 	switch {
+	case err == nil && released.Outcome != statelog.OutcomeUnknown:
+		released.OpID = opID
+		return released, nil
 	case errors.As(err, &taken):
-		// TAKEN BETWEEN THE TWO — see [Writer.Rename]. The move landed.
-		claimed.OpID = opID
-		return claimed, nil
-	case err != nil:
-		return statelog.Result{}, fmt.Errorf("iamdomain: the %s moved to %q and "+
-			"the record closing %q did not land (retry with the same operation "+
-			"id): %w", kind, to, from, err)
-	case released.Outcome == statelog.OutcomeUnknown:
-		// THE CLOSE OF THE OLD TOKEN IS UNRESOLVED, and so is the
-		// gesture: a retry under the same operation id re-derives both
-		// steps' ids from it.
-		return unresolved(opID), nil
+		// TAKEN BETWEEN THE TWO — see [Writer.Rename]. The move landed,
+		// and the next holder's claim closes the old subject's trail.
+	default:
+		// THE MOVE LANDED WITH ITS CLAIM, and only the old subject's
+		// trail is short a record — see this function's doc.
+		attrs := []any{"kind", string(kind), "person", personID,
+			"released", from, "op_id", releaseID,
+			"outcome", string(released.Outcome)}
+		if err != nil {
+			attrs = append(attrs, "error", err.Error())
+		}
+		writeLog.WarnContext(ctx, "iam_move_release_unrecorded", attrs...)
 	}
-	released.OpID = opID
-	return released, nil
+	claimed.OpID = opID
+	return claimed, nil
 }
 
 // Revoke bumps a person's revocation epoch, ending every session they hold.

@@ -3,6 +3,7 @@ package iamdomain_test
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -312,6 +313,73 @@ func TestAPersonHoldsOneLinkAndAMoveFreesTheOld(t *testing.T) {
 	}
 }
 
+// A LINK MOVE WHOSE RELEASE DID NOT LAND IS STILL A MOVE, AND IT IS ANNOUNCED.
+//
+// The move's claim is what moves the person: its apply pins the new subject
+// and revokes the old one. The release after it only closes the old subject's
+// trail, and a release the broker never confirmed used to fail the whole move —
+// with an error advising a retry nothing could act on, because a caller
+// re-reads the person, finds them moved and publishes nothing — and so the link
+// that had moved was never announced. It answers the claim's outcome now and
+// says so on the trail.
+//
+// Mutation: fail the move on its release again, and nothing is announced.
+func TestALinkMoveWhoseReleaseDidNotLandIsStillAMove(t *testing.T) {
+	t.Parallel()
+	blinder, err := iamdomain.NewBlinder(testBlindKey)
+	if err != nil {
+		t.Fatalf("blinder: %v", err)
+	}
+	oldBlind, err := blinder.Subject(linkIssuer, "old")
+	if err != nil {
+		t.Fatalf("blind: %v", err)
+	}
+	var broker *silentBroker
+	rig := newLinkRigWith(t, func(inner statelog.Appender) statelog.Appender {
+		broker = &silentBroker{Appender: inner,
+			on: iamdomain.LinkSubject(oldBlind).Wire()}
+		return broker
+	})
+	ada := rig.person("ada.moving")
+	old, next := rig.subject("old"), rig.subject("new")
+	if err := rig.link(ada, old, "", "link-old"); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	rig.events.take()
+
+	broker.silent.Store(true)
+	var result statelog.Result
+	if err := rig.during(func() error {
+		var err error
+		result, err = rig.writer.Link(t.Context(), iamdomain.LinkChange{
+			PersonID: ada, Link: next, Replacing: old.Blind,
+			OpID: "link-new", Reason: "moved to a new account",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("a move whose claim landed answered %v", err)
+	}
+	if !broker.asked.Load() {
+		t.Fatal("the release was never published, so this case proves nothing")
+	}
+	if result.Outcome == statelog.OutcomeUnknown || result.OpID != "link-new" {
+		t.Fatalf("answered %+v, want the claim's landed outcome under the "+
+			"gesture's own op id", result)
+	}
+	if got := rig.resolves(next); got != ada {
+		t.Errorf("the subject moved to resolves to %q, want %q", got, ada)
+	}
+	if got := rig.resolves(old); got != "" {
+		t.Errorf("the subject moved off still resolves to %q", got)
+	}
+	linked, _ := linkEvents(rig.events.take())
+	want := types.IAMIdentityLinked{Person: ada, Issuer: linkIssuer,
+		Via: types.LinkViaAdmin, By: "ana.admin"}
+	if len(linked) != 1 || linked[0] != want {
+		t.Errorf("linked = %+v, want exactly %+v — the move happened", linked, want)
+	}
+}
+
 // TWO PINS RACING ON ONE PERSON LEAVE THEM WITH ONE LINK.
 //
 // Each pin arbitrates on its own SUBJECT, so two administrators pinning two
@@ -422,6 +490,64 @@ func TestAContentWriteNeverTouchesALink(t *testing.T) {
 	}
 	if got := rig.resolves(rig.subject("second")); got != "" {
 		t.Errorf("a smuggled link resolves to %q", got)
+	}
+}
+
+// A LINK IS NEVER TAKEN OR GIVEN BACK AS A BARE CLAIM.
+//
+// Writer.Link states the subject's issuer and announces the pin, and
+// Writer.Unlink announces its end; the generic claim and release do neither,
+// so reached with a link they would pin a subject nothing could say belongs to
+// which provider, or take somebody's provider sign-in away with nothing on
+// the trail saying so. Both refuse before anything is published, and the
+// subject stays exactly as it was.
+//
+// Mutation: drop either refusal and the bare gesture moves the link.
+func TestALinkIsNeverTakenOrGivenBackAsABareClaim(t *testing.T) {
+	t.Parallel()
+	rig := newLinkRig(t)
+	ada := rig.person("ada.bare")
+	held, loose := rig.subject("held"), rig.subject("loose")
+	if err := rig.link(ada, held, "", "link-held"); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	rig.events.take()
+
+	// EACH REFUSAL NAMES THE GESTURE THAT ANNOUNCES IT, which is what tells
+	// the claim's apart from the issuer check behind it: a bare claim
+	// carries no issuer either, so without its own refusal it would still
+	// be refused — for a reason that sends the caller to add an issuer to
+	// the wrong call.
+	for name, tc := range map[string]struct {
+		gesture func() error
+		names   string
+	}{
+		"a bare claim of a subject": {func() error {
+			_, err := rig.writer.Claim(t.Context(), iamdomain.KindLink,
+				loose.Blind, ada, "claim-loose")
+			return err
+		}, "Writer.Link"},
+		"a bare release of a link": {func() error {
+			_, err := rig.writer.Release(t.Context(), iamdomain.KindLink,
+				held.Blind, ada, "release-held", "gone")
+			return err
+		}, "Writer.Unlink"},
+	} {
+		err := rig.during(tc.gesture)
+		if !errors.Is(err, iamdomain.ErrInvalid) ||
+			!strings.Contains(err.Error(), tc.names) {
+			t.Errorf("%s answered %v, want ErrInvalid naming %s", name, err,
+				tc.names)
+		}
+	}
+	if got := rig.resolves(held); got != ada {
+		t.Errorf("a refused release moved the link: it resolves to %q", got)
+	}
+	if got := rig.resolves(loose); got != "" {
+		t.Errorf("a refused claim pinned a subject to %q", got)
+	}
+	if linked, unlinked := linkEvents(rig.events.take()); len(linked)+len(unlinked) != 0 {
+		t.Errorf("refused bare gestures announced %+v and %+v", linked, unlinked)
 	}
 }
 
