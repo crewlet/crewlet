@@ -465,9 +465,10 @@ Read that file on the host — it holds one line beginning `cwl_boot_` — and
 redeem it at `POST /auth/bootstrap` with a login
 (dotted, like `jane.doe` — every person has one, and it is the name your changes
 are recorded under until you bind a seat), your address and a password.
-Nothing ever serves the code — the log line carries its **path**, so reading it
-means having access to the machine, which is the only credential a company
-genuinely has before it has any. The file is removed when it is used, and the
+Nothing ever serves the code — the log line carries its **path**, and so does
+`GET /health` (`"identity": "unclaimed"`, `"bootstrap_code_path": …`) until
+somebody is enrolled, so reading it means having access to the machine, which
+is the only credential a company genuinely has before it has any. The file is removed when it is used, and the
 route closes for good the moment anybody is enrolled.
 
 **A code lasts 24 hours.** One that has run out — an install started on Friday

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
@@ -511,6 +512,24 @@ func danglingBindings(e *engine.Engine) iamapi.Bindings {
 // on a mint whose outcome was merely unknown, which took the node — and every
 // Tier A token that could have created the first person through it — down
 // over a file.
+// foundingOf is what /health says about the company's first person, or nil
+// where this node serves no sign-in surface — which the health body answers by
+// leaving the field out rather than calling the company unclaimed.
+//
+// NIL AND NEVER A FUNCTION OVER A NIL SERVICE: `auth` is nil exactly where
+// [signInSurface] decided this node serves no sign-in, and a closure over it
+// would panic on the first probe.
+func foundingOf(auth *authapi.Service) api.Founding {
+	if auth == nil {
+		return nil
+	}
+	return func(ctx context.Context) (api.FoundingState, error) {
+		got, err := auth.Founding(ctx)
+		return api.FoundingState{Claimed: got.Claimed, CodePath: got.CodePath,
+			CodeExpiresAt: got.CodeExpiresAt}, err
+	}
+}
+
 func openBootstrap(ctx context.Context, auth *authapi.Service, nodeID string) {
 	if auth == nil {
 		return

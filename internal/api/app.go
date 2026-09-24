@@ -102,6 +102,10 @@ type App struct {
 	// log's floor, for /ready. See [EstateFloor].
 	estate EstateFloor
 
+	// founding answers what /health says about the company's first
+	// person. See [Founding].
+	founding Founding
+
 	handler http.Handler
 }
 
@@ -136,6 +140,47 @@ type App struct {
 // three-valued answer collapsed into a bool that this codebase refuses
 // everywhere else.
 type EstateFloor func(ctx context.Context) (ok bool, refusal string)
+
+// Founding reports what /health says about this company's FIRST PERSON:
+// whether anybody is enrolled yet and, while nobody is, where THIS node's
+// founder code is.
+//
+// # Why /health carries it
+//
+// A fresh install has nobody in it, and the only way in is a one-time code in
+// a file on one node's host. Its path was in one log line at boot and in the
+// answer to a re-issue, and nowhere a screen could read it — so the dashboard
+// a founder opens first had nothing to say but a sign-in form nobody can use.
+// /health is the one surface an unclaimed company can reach: it is a probe,
+// exempt from the guard, and before the first person there is no credential
+// to present anywhere else.
+//
+// THE PATH AND NEVER THE VALUE, as every other surface that names the code:
+// reading the file needs shell on that host, which is the credential a company
+// has before it has any.
+//
+// A CONTEXT and a live read, for [EstateFloor]'s reason: the answer changes
+// the moment the founder lands, and a cached one would go on sending a
+// company that has started to a code that no longer exists.
+//
+// THREE-VALUED: an error is this node unable to read its identity estate,
+// which is `unknown` and never `unclaimed` — told there is nobody, a dashboard
+// would offer a founder route to a company that may have started.
+type Founding func(ctx context.Context) (FoundingState, error)
+
+// FoundingState is one reading of the founding.
+type FoundingState struct {
+	// Claimed is true once anybody is enrolled: the company has started,
+	// and no founder code will be honoured again.
+	Claimed bool
+
+	// CodePath and CodeExpiresAt are THIS node's code file and when the
+	// code in it stops working — set only while the company is unclaimed
+	// and only for a code the log still honours. A file on another node
+	// is that node's to name, and a dead one is not a way in.
+	CodePath      string
+	CodeExpiresAt time.Time
+}
 
 // authMounter is the /auth surface's own mount, over a mux it can NAME.
 //
@@ -435,6 +480,16 @@ type Options struct {
 	// names.
 	Backup backupTaker
 
+	// Founding says what /health reports about the company's first
+	// person. See [Founding].
+	//
+	// Optional, and nil is a real configuration: a node that serves no
+	// sign-in surface — one running no identity domain holds a
+	// legitimately empty copy of that estate — has nothing honest to say
+	// about who is in the company, so its health body leaves the field
+	// out rather than calling the company unclaimed.
+	Founding Founding
+
 	// Estate answers whether this node's replicated estate can be read at
 	// the log's floor, for /ready. See [EstateFloor].
 	//
@@ -491,6 +546,7 @@ func New(opts Options) (*App, error) {
 		company:  opts.Sources.Company,
 		seatHeld: opts.SeatHeld,
 		estate:   opts.Estate,
+		founding: opts.Founding,
 	}
 	var err error
 	a.stream, err = stream.NewService(state, stream.Options{

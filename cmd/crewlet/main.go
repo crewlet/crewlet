@@ -1949,6 +1949,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// the REQUEST's context, so a probe against a slow broker ends at
 		// its own deadline rather than at the process's.
 		Estate: e.SeatsServiceable,
+		// WHETHER THIS COMPANY HAS ITS FIRST PERSON, and while it does
+		// not where this node's founder code is — the one thing an
+		// unclaimed company's dashboard can read, since /health is the
+		// probe every visitor reaches. Nil where this node serves no
+		// sign-in surface, which leaves the field out; see [foundingOf].
+		Founding: foundingOf(authSurface),
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
 		// makes a delivery that lands on any node wake the seat's owner

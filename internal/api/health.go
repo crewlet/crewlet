@@ -25,6 +25,19 @@ const (
 	StatusShuttingDown = "shutting_down"
 )
 
+// The answers [Health.Identity] gives.
+//
+// `ready` once anybody is enrolled, `unclaimed` while nobody is — a fresh
+// install, waiting for the founder to redeem the one-time code — and
+// `unknown` where this node could not read its identity estate, which is never
+// folded into `unclaimed`: a dashboard told nobody is in would offer a founder
+// route to a company that may have started.
+const (
+	IdentityReady     = "ready"
+	IdentityUnclaimed = "unclaimed"
+	IdentityUnknown   = "unknown"
+)
+
 // Health is what the /health endpoint and the dashboard's health push both
 // carry.
 //
@@ -118,6 +131,26 @@ type Health struct {
 	// served it, so the only evidence of a seat out of service for a week
 	// was a log line re-raised every twenty heartbeats.
 	UnprovenSeconds map[string]float64 `json:"unproven_seconds,omitempty"`
+
+	// Identity is whether this company has its first person —
+	// [IdentityReady], [IdentityUnclaimed] or [IdentityUnknown]. See
+	// [Founding] for why it is on this body.
+	//
+	// ABSENT on a node that serves no sign-in surface: one running no
+	// identity domain holds a legitimately empty copy of that estate, and
+	// `unclaimed` from it would be the one false line this body carries.
+	// Like [Health.Consistency], IT DOES NOT MOVE Status — a company
+	// waiting for its founder is not a node that should leave rotation.
+	Identity string `json:"identity,omitempty"`
+
+	// BootstrapCodePath is THIS node's founder code file, and
+	// BootstrapCodeExpiresAt when the code in it stops working — present
+	// only while the company is unclaimed and the file holds a code the
+	// log still honours. The path and never the value: reading it needs
+	// shell on this host. A fleet's other codes are on other hosts, and
+	// each node names its own.
+	BootstrapCodePath      string `json:"bootstrap_code_path,omitempty"`
+	BootstrapCodeExpiresAt string `json:"bootstrap_code_expires_at,omitempty"`
 }
 
 // Consistency is the continuous report, summarised for a body that is read
@@ -222,6 +255,7 @@ func (a *App) health(ctx context.Context) Health {
 		body.IdentityDutySeconds[name] = every.Seconds()
 	}
 	body.Consistency = consistencyOf(a.report())
+	a.foundingOf(ctx, &body)
 	if state.StallLag > 0 {
 		// Only when there is something to say. A field that is always
 		// present and always 0 trains a reader to skip it, which is the
@@ -250,6 +284,28 @@ func (a *App) health(ctx context.Context) Health {
 		body.Status = state.Posture
 	}
 	return body
+}
+
+// foundingOf fills in what the body says about the company's first person,
+// leaving it out on a node that serves no sign-in surface.
+func (a *App) foundingOf(ctx context.Context, body *Health) {
+	if a.founding == nil {
+		return
+	}
+	got, err := a.founding(ctx)
+	switch {
+	case err != nil:
+		body.Identity = IdentityUnknown
+	case got.Claimed:
+		body.Identity = IdentityReady
+	default:
+		body.Identity = IdentityUnclaimed
+		body.BootstrapCodePath = got.CodePath
+		if got.CodePath != "" && !got.CodeExpiresAt.IsZero() {
+			body.BootstrapCodeExpiresAt = got.CodeExpiresAt.UTC().
+				Format(time.RFC3339)
+		}
+	}
 }
 
 // consistencyOf summarises one evaluation for the health body.

@@ -493,6 +493,63 @@ func (s *Service) bootstrapClosed(ctx context.Context) (string, error) {
 	return "", nil
 }
 
+// Founding is one reading of the company's first person, for a health body.
+type Founding struct {
+	// Claimed is true once anybody is enrolled.
+	Claimed bool
+
+	// CodePath and CodeExpiresAt are this node's code file and when the
+	// code in it stops working, set only while nobody is enrolled and the
+	// file holds a code the log still honours — live, or taken by a
+	// founding that has not finished.
+	CodePath      string
+	CodeExpiresAt time.Time
+}
+
+// Founding reads whether this company has its first person and, while it does
+// not, where this node's founder code is.
+//
+// THE PREDICATE THE ROUTE ASKS, [iamdomain.Reader.AnyPerson] — a reservation
+// is nobody, and a node holding a record it could not apply cannot say, which
+// is the error — and never the configuration: `api.auth.bootstrap: closed` on
+// an empty estate is still a company nobody is in, and it is the boot path
+// that removes this node's file there.
+//
+// NO LOCK, deliberately. A health read is a probe, and [Service.codeMu] is
+// held across a mint that waits on the log; the file is replaced by a rename,
+// so an unlocked read sees the old code or the new one, never half of either.
+// What it can see is a new file a moment before its mint lands, which reads as
+// no path until the mint does.
+//
+// A FILE THAT CANNOT BE READ IS NO PATH rather than an error: the company is
+// still unclaimed, and the boot path that owns the file is what reports and
+// replaces it.
+func (s *Service) Founding(ctx context.Context) (Founding, error) {
+	held, err := s.directory.AnyPerson(ctx)
+	if err != nil {
+		return Founding{}, fmt.Errorf("authapi: read whether this company "+
+			"has started: %w", err)
+	}
+	if held {
+		return Founding{Claimed: true}, nil
+	}
+	code, err := s.readBootstrapCode()
+	if err != nil {
+		return Founding{}, nil
+	}
+	row, err := s.directory.BootstrapCode(ctx, bootstrapCodeID(code))
+	if err != nil {
+		return Founding{}, fmt.Errorf("authapi: read whether the code in %s "+
+			"is live: %w", s.bootstrapCodePath(), err)
+	}
+	switch row.State(s.now()) {
+	case iamdomain.CodeLive, iamdomain.CodeTaken:
+		return Founding{CodePath: s.bootstrapCodePath(),
+			CodeExpiresAt: row.ExpiresAt}, nil
+	}
+	return Founding{}, nil
+}
+
 // bootstrapCodePath is where this node writes the one-time code.
 //
 // BESIDE THE STORE, because that is the directory an operator already has to

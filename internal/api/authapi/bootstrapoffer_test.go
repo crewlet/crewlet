@@ -43,6 +43,10 @@ type codeEstate struct {
 	now      func() time.Time
 	mintErr  error
 
+	// unreadable is what AnyPerson answers instead of reading: a node
+	// behind its identity log, or holding a record it could not apply.
+	unreadable error
+
 	mints, withdrawals, releases int
 }
 
@@ -53,6 +57,9 @@ func newCodeEstate(now func() time.Time) *codeEstate {
 func (e *codeEstate) AnyPerson(context.Context) (bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.unreadable != nil {
+		return false, e.unreadable
+	}
 	return e.enrolled, nil
 }
 
@@ -621,5 +628,69 @@ func TestAMintedCodeSaysTheExpiryItsRowHolds(t *testing.T) {
 	if want := at().Add(24 * time.Hour).Truncate(time.Second); !row.ExpiresAt.Equal(want) {
 		t.Errorf("the code expires at %s, want a day after its mint, %s",
 			row.ExpiresAt, want)
+	}
+}
+
+// A NODE SAYS WHERE ITS OWN FOUNDER CODE IS, AND ONLY WHILE IT WORKS.
+//
+// What /health tells an unclaimed company's dashboard. The path is this
+// node's file while nobody is enrolled and the log still honours the code in
+// it — live, or taken by a founding that has not finished — and nothing once a
+// code has died, since a dead file is not a way in. Once anybody is enrolled
+// the company is claimed and no file is named; and a node that cannot read its
+// identity estate says so, rather than calling the company unclaimed.
+//
+// Mutations: name the path whatever the log says of its code and the aged-out
+// step goes red; fold the unreadable estate into "nobody" and the last does.
+func TestANodeSaysWhereItsOwnFounderCodeIs(t *testing.T) {
+	t.Parallel()
+	now := clock
+	at := func() time.Time { return now }
+	estate := newCodeEstate(at)
+	node := newFounderNode(t, estate, at, nil)
+
+	reading := func(step string) authapi.Founding {
+		t.Helper()
+		got, err := node.svc.Founding(t.Context())
+		if err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		return got
+	}
+	if got := reading("before the boot"); got.Claimed || got.CodePath != "" {
+		t.Errorf("before any code the reading is %+v, want unclaimed and no path", got)
+	}
+
+	node.boot(t, "node-a")
+	row := estate.row(digestOf(node.code(t)))
+	if got := reading("after the boot"); got.Claimed || got.CodePath != node.path ||
+		!got.CodeExpiresAt.Equal(row.ExpiresAt) {
+		t.Errorf("after the boot the reading is %+v, want %s expiring %s", got,
+			node.path, row.ExpiresAt)
+	}
+	estate.take(row.ID)
+	if got := reading("mid-founding"); got.CodePath != node.path {
+		t.Errorf("a code a founding took is %+v, want its path — it is the "+
+			"code that finishes that founding", got)
+	}
+
+	now = clock.Add(25 * time.Hour)
+	if got := reading("aged out"); got.Claimed || got.CodePath != "" {
+		t.Errorf("an aged-out code is %+v, want no path", got)
+	}
+
+	estate.mu.Lock()
+	estate.enrolled = true
+	estate.mu.Unlock()
+	if got := reading("started"); !got.Claimed || got.CodePath != "" {
+		t.Errorf("a company that started reads %+v, want claimed and no path", got)
+	}
+
+	estate.mu.Lock()
+	estate.enrolled, estate.unreadable = false, errors.New("the identity log is behind")
+	estate.mu.Unlock()
+	if got, err := node.svc.Founding(t.Context()); err == nil {
+		t.Errorf("an unreadable estate read as %+v, want an error — never "+
+			"\"nobody is in\"", got)
 	}
 }

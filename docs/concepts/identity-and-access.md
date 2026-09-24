@@ -383,7 +383,9 @@ So a node that finds an empty estate mints a **one-time code** —
 instant it stops working — writes it beside its store at `0600`, and publishes
 the SHA-256 of the whole value on the identity log. Nothing ever
 serves the code: the log line carries its **path**, and so does the answer to a
-re-issue. Reading it means having access to the host, which is the only
+re-issue — and so does `GET /health`, which answers `identity: unclaimed` with
+this node's `bootstrap_code_path` until somebody is enrolled, because it is the
+one surface an install with nobody in it can reach. Reading it means having access to the host, which is the only
 credential a company genuinely has before it has any.
 
 ```mermaid

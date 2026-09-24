@@ -896,3 +896,79 @@ func TestHealthNamesTheIdentityDutiesThisNodeArmed(t *testing.T) {
 		})
 	}
 }
+
+// /HEALTH SAYS WHETHER THE COMPANY HAS ITS FIRST PERSON, AND WHERE THIS NODE'S
+// CODE IS WHILE IT DOES NOT — TO ANYBODY.
+//
+// A fresh install's only way in is a one-time code in a file on one node's
+// host, and its path was in one boot log line and in a re-issue's answer:
+// nothing a screen could read. /health is the probe every visitor reaches, and
+// before the first person there is no credential to present anywhere else, so
+// that is where the path goes — the path and never the value. `unknown` is its
+// own answer, never `unclaimed`: told nobody is in, a dashboard would offer a
+// founder route to a company that may have started. A node with no sign-in
+// surface says nothing at all, and none of it moves the status.
+//
+// Mutations: fold the seam's error into `unclaimed` and the unknown row goes
+// red; drop the path and the unclaimed row does; answer the field on a node
+// with no seam and the first row does.
+func TestHealthSaysWhetherTheCompanyHasItsFirstPerson(t *testing.T) {
+	t.Parallel()
+	expires := clock.Add(20 * time.Hour)
+	for _, tc := range []struct {
+		name     string
+		founding api.Founding
+		identity any
+		path     any
+		expires  any
+	}{
+		{"a node that serves no sign-in surface", nil, nil, nil, nil},
+		{"a node that cannot read its identity estate",
+			func(context.Context) (api.FoundingState, error) {
+				return api.FoundingState{}, fmt.Errorf("the identity log is behind")
+			}, api.IdentityUnknown, nil, nil},
+		{"a company that has started",
+			func(context.Context) (api.FoundingState, error) {
+				return api.FoundingState{Claimed: true}, nil
+			}, api.IdentityReady, nil, nil},
+		{"an unclaimed company, this node holding a code",
+			func(context.Context) (api.FoundingState, error) {
+				return api.FoundingState{CodePath: "/var/lib/crewlet/bootstrap-code",
+					CodeExpiresAt: expires}, nil
+			}, api.IdentityUnclaimed, "/var/lib/crewlet/bootstrap-code",
+			expires.Format(time.RFC3339)},
+		{"an unclaimed company, the code on another node",
+			func(context.Context) (api.FoundingState, error) {
+				return api.FoundingState{}, nil
+			}, api.IdentityUnclaimed, nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := newApp(t, api.Options{
+				Runtime:  &fakeRuntime{state: api.RuntimeState{Posture: "serve"}},
+				Sources:  queries.Sources{Company: active(t)},
+				Founding: tc.founding,
+			})
+			// NO CREDENTIAL: an unclaimed company has nobody to present one.
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+			var body map[string]any
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if rec.Code != http.StatusOK || body["status"] != api.StatusOK {
+				t.Errorf("an anonymous /health answered %d, status %v", rec.Code,
+					body["status"])
+			}
+			for key, want := range map[string]any{"identity": tc.identity,
+				"bootstrap_code_path":       tc.path,
+				"bootstrap_code_expires_at": tc.expires} {
+				if got, present := body[key]; got != want ||
+					present != (want != nil) {
+					t.Errorf("%s = %v (present %v), want %v", key, got,
+						present, want)
+				}
+			}
+		})
+	}
+}

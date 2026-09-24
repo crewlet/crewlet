@@ -335,3 +335,35 @@ func TestTheReissueRouteIsAbsentWhereTheDeploymentShutIt(t *testing.T) {
 		})
 	}
 }
+
+// /HEALTH'S FOUNDING READING, OVER A REAL NODE.
+//
+// The wiring half: the reading `crewlet run` hands the health body names this
+// node's code file once the boot has offered one, the same file the founder
+// redeems, and says the company is claimed once they have. A node with no
+// sign-in surface is handed NO reading — a function over a nil service would
+// panic on the first probe.
+//
+// Mutation: build the reading over a nil service and the first check goes red.
+func TestHealthNamesTheFounderCodeThisNodeOffered(t *testing.T) {
+	t.Parallel()
+	if foundingOf(nil) != nil {
+		t.Fatal("a node with no sign-in surface was handed a founding reading")
+	}
+	r := newFounderRig(t)
+	read := foundingOf(r.auth)
+	openBootstrap(t.Context(), r.auth, "node-a")
+	got, err := read(t.Context())
+	if err != nil || got.Claimed || got.CodePath != r.file ||
+		got.CodeExpiresAt.IsZero() {
+		t.Fatalf("after the boot offer the reading is %+v (%v), want this "+
+			"node's file %s and its expiry", got, err, r.file)
+	}
+	if rec := r.found(t, r.code(t)); rec.Code != http.StatusOK {
+		t.Fatalf("the founder was refused: %d %s", rec.Code, rec.Body.String())
+	}
+	if got, err := read(t.Context()); err != nil || !got.Claimed || got.CodePath != "" {
+		t.Errorf("after the founder landed the reading is %+v (%v), want "+
+			"claimed and no path", got, err)
+	}
+}
