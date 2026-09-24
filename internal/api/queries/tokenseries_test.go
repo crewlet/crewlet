@@ -53,7 +53,7 @@ func TestTheSeriesBucketsTheWindowItWasAsked(t *testing.T) {
 	seedSpend(t, log, "a", base.Add(10*time.Minute), "PM", "plan", 100, 0)
 	seedSpend(t, log, "b", base.Add(2*time.Hour+5*time.Minute), "PM", "execute", 40, 0.5)
 
-	r := registryOver(t, queries.Sources{Events: log})
+	r := registryOver(t, queries.Sources{Spend: log})
 	got := seriesOver(t, r, map[string]any{
 		"group":  "phase",
 		"bucket": "hour",
@@ -83,7 +83,7 @@ func TestTheSeriesBucketsTheWindowItWasAsked(t *testing.T) {
 // exactly how that happens.
 func TestAnUnknownDimensionIsRefusedRatherThanDefaulted(t *testing.T) {
 	t.Parallel()
-	r := registryOver(t, queries.Sources{Events: openStore(t).Events()})
+	r := registryOver(t, queries.Sources{Spend: openStore(t).Events()})
 	for _, params := range []map[string]any{
 		{"group": "project"},
 		{"bucket": "minute"},
@@ -112,7 +112,7 @@ func TestPreviousShiftsTheWindowByItsOwnLength(t *testing.T) {
 	seedSpend(t, log, "old", base.Add(-30*time.Minute), "PM", "plan", 7, 0)
 	seedSpend(t, log, "new", base.Add(30*time.Minute), "PM", "plan", 11, 0)
 
-	r := registryOver(t, queries.Sources{Events: log})
+	r := registryOver(t, queries.Sources{Spend: log})
 	params := map[string]any{
 		"since": base.Format(time.RFC3339),
 		"until": base.Add(time.Hour).Format(time.RFC3339),
@@ -136,7 +136,7 @@ func TestPreviousShiftsTheWindowByItsOwnLength(t *testing.T) {
 // AND IT NEEDS BOTH EDGES: the window before an open-ended one has no length.
 func TestPreviousWithoutAWindowIsRefused(t *testing.T) {
 	t.Parallel()
-	r := registryOver(t, queries.Sources{Events: openStore(t).Events()})
+	r := registryOver(t, queries.Sources{Spend: openStore(t).Events()})
 	_, err := r.Answer(t.Context(), "token_series", map[string]any{
 		"previous": true, "since": time.Now().UTC().Format(time.RFC3339),
 	}, "")
@@ -158,8 +158,8 @@ func TestAnOpenWindowDrawsTheQuietHoursAtTheEnd(t *testing.T) {
 	seedSpend(t, log, "quiet", now.Add(-6*time.Hour).Add(time.Minute), "PM", "plan", 3, 0)
 
 	r := registryOver(t, queries.Sources{
-		Events: log,
-		Now:    func() time.Time { return now.Add(30 * time.Minute) },
+		Spend: log,
+		Now:   func() time.Time { return now.Add(30 * time.Minute) },
 	})
 	got := seriesOver(t, r, map[string]any{
 		"since": now.Add(-6 * time.Hour).Format(time.RFC3339),
@@ -186,8 +186,8 @@ func TestAWindowBelowTheStoresFloorIsDrawnAndLabelledAtTheFloor(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC().Truncate(time.Hour)
 	r := registryOver(t, queries.Sources{
-		Events: openStore(t).Events(),
-		Now:    func() time.Time { return now },
+		Spend: openStore(t).Events(),
+		Now:   func() time.Time { return now },
 	})
 	asked := now.AddDate(-3, 0, 0)
 	got := seriesOver(t, r, map[string]any{

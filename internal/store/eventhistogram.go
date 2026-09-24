@@ -105,6 +105,24 @@ type HistogramQuery struct {
 	// accepted, never defaulted — an axis labelled by one width over
 	// another's bars is worse than an error.
 	Bucket EventBucket
+
+	// At is the instant the window is cut against — what an unbounded top
+	// edge means, and where the history floor sits. Zero is now.
+	//
+	// A FIELD rather than every log reading its own clock, because a fleet
+	// asks several logs for ONE axis (internal/eventfan) and sums their
+	// bars index by index: two nodes whose clocks straddle a minute would
+	// otherwise snap to windows one bar apart, and every bar of the sum
+	// would add one node's minute to the other's next one.
+	At time.Time
+}
+
+// at is the instant the window is cut against.
+func (q HistogramQuery) at() time.Time {
+	if q.At.IsZero() {
+		return now()
+	}
+	return q.At
 }
 
 // EventBar is one bucket of the axis.
@@ -212,7 +230,7 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 		return EventHistogram{}, ErrHistogramRelated
 	}
 	step := q.Bucket.Step()
-	since, until := q.Window(now())
+	since, until := q.Window(q.at())
 	bars := int(until.Sub(since) / step)
 	if bars > MaxHistogramBuckets {
 		return EventHistogram{}, fmt.Errorf("%w: %s over %s is %d buckets, and the "+

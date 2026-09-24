@@ -438,6 +438,67 @@ Changes are additive-only — new fields get defaults, existing fields are never
 
 ---
 
+## Reading the fleet's history
+
+Each node's event store holds what **that node** published and nothing else
+(see [Publish Listeners](#publish-listeners)), so no one store is the
+company's history. A read of turn-level detail — `events`, `event`,
+`event_series`, `trace`, `turn`, `turns`, `phases`, a seat's `llm_history`,
+and the integrations' delivery counts — is answered by **every live node at
+query time** (`internal/eventfan`, ADR-0021):
+
+```mermaid
+sequenceDiagram
+    participant D as Dashboard
+    participant A as node-a (serving)
+    participant B as node-b
+    participant C as node-c
+    D->>A: GET /turns
+    par this node's own store
+        A->>A: read its share
+    and every live peer, on crewlet.observe.read
+        A->>B: the same question
+        A->>C: the same question
+    end
+    B-->>A: its share
+    Note over C: no answer inside 2s
+    A->>D: merged turns + coverage{nodes, complete: false}
+```
+
+- **The question travels, not the data.** The asker reads its own store
+  directly and scatters the same question over the broker's ephemeral
+  request/reply — no stream, no consumer, no stored record, because a read of
+  the event log that wrote an event would grow the log every time somebody
+  looked at it. The roster is the fleet's live node leases.
+- **Every answer says who answered.** `coverage` is
+  `{nodes: [{id, answered, error}], complete}` on every one of these answers.
+  `complete` is true only when every live node answered; a node that did not
+  is named with the reason — no answer inside the **2-second** fleet read
+  budget, a build speaking another protocol version, a reply it could not
+  read, or its own read failing. A short answer that did not say so would
+  read exactly like a quiet company.
+- **The merges are exact.** A page is merged on `(timestamp, id)` and stops
+  at the newest point any node's page stopped at, so paging with the cursor
+  visits every row once; a histogram's window is pinned to the asker's clock
+  so every node cuts the same bars before they are summed; and a list of
+  turns is two scatters — every node's page, then every node's share of
+  exactly the turns listed — so a turn resumed on another node after a
+  restart is one row folded from both halves, not two half-turns.
+- **A departed node's detail is gone.** Nothing replicates it: a node that has
+  left the fleet cannot be asked, and its turns, phases and events leave with
+  it. The **aggregates** do not — spend, turn counts and page reads are the
+  replicated `usage` domain precisely so they survive a node's departure. Keep
+  a node's detail past its life by exporting to an OTLP sink.
+- **A reply too large for the transport is cut, not lost.** A node gives up
+  rows from the least important end — a long turn's middle before its ending —
+  and says it holds more, which the merge already handles.
+
+The `history_partial` [alarm](../reference/alarms.md) fires on the fraction
+of a node's history reads that came back without every node, at the fleet
+read budget it borrows rather than a threshold of its own.
+
+---
+
 ## Distributed Tracing
 
 Events carry **OpenTelemetry-compatible trace context** (W3C Trace Context format). Trace IDs propagate automatically through the system — no manual threading:

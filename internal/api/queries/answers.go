@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -55,8 +56,26 @@ const (
 // caller that asks a subset of the questions does, which is how this package's
 // own suite exercises one question at a time.
 type Sources struct {
-	State  *livestate.LiveState
-	Events *store.EventLog
+	State *livestate.LiveState
+
+	// Events is the FLEET's turn-level history: every node's own event
+	// store, asked at query time, with a [eventfan.Coverage] beside every
+	// answer saying which nodes it came from (ADR-0021).
+	//
+	// An interface every method of which answers a coverage, so a bare
+	// *store.EventLog does not compile here: a read of this node's store
+	// alone answered for a third of a three-node fleet and said nothing
+	// about the other two, which is exactly the answer a screen must never
+	// be handed without being told.
+	Events FleetEvents
+
+	// Spend is this node's own phase records, for the windowed spend
+	// rollup and its series — the two answers folded from phase costs
+	// rather than from turn detail. Nil leaves `token_series` unregistered
+	// and a named `tokens` window empty.
+	Spend interface {
+		PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, error)
+	}
 
 	// Health answers the stream question, which is deliberately not called
 	// health: a query must never share a name with a push kind, or a
@@ -344,12 +363,16 @@ func Register(r *Registry, s Sources) {
 		// serve this: its listing never selects the payload, and a phase
 		// record without one has no prompts, no response and no decision.
 		r.Register("phases", s.phases)
+	}
+	if s.Spend != nil {
 		// AND THE TIME AXIS. `tokens` is a breakdown whose every row is a
 		// sum over the whole window, so it cannot say WHEN — which is the
 		// question a cost explorer is for. Gated on the event store rather
 		// than on the projection: the projection holds a day, and an axis
 		// that changed source when a reader widened the range is a seam
-		// across the one comparison the screen exists to make.
+		// across the one comparison the screen exists to make. Gated on
+		// the phase records it folds rather than on the fleet's history,
+		// which is a different source.
 		r.Register("token_series", s.tokenSeries)
 	}
 	if s.Health != nil {
@@ -549,7 +572,7 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// configured and never spawned is exactly that, and a 404 there would
 	// make a healthy new company look broken. Its history is answered the
 	// same way.
-	history, next := s.phaseHistory(ctx, seat, role, p)
+	history, next, coverage := s.phaseHistory(ctx, seat, role, p)
 	answer := map[string]any{
 		"role": role,
 		"live": nil,
@@ -565,6 +588,11 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 		// rows with no way past them, while the events it was made of sat
 		// in the store addressable by id.
 		"next": next,
+		// WHICH NODES THE HISTORY CAME FROM. A seat moves between nodes,
+		// so its history is on every node that ever held it; null when it
+		// could not be read at all, which is not the same as a seat that
+		// has never run.
+		"coverage": coverage,
 	}
 	// ASSIGNED ONLY WHEN THERE IS ONE, because a nil *Overlay stored in an
 	// any is not nil: every `live != nil` check above this layer would read
@@ -593,9 +621,9 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 // envelope rather than inside it. The payload's price rides along, since the
 // row is the record as stored, and the dashboard reads none of it (rule 19 in
 // docs/reference/dashboard-design.md).
-func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) ([]store.EventRecord, string) {
+func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) ([]store.EventRecord, string, *eventfan.Coverage) {
 	if s.Events == nil {
-		return []store.EventRecord{}, ""
+		return []store.EventRecord{}, "", nil
 	}
 	var before *store.Cursor
 	if id := p.String("before_id"); id != "" {
@@ -608,30 +636,32 @@ func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) 
 		// over a bad query parameter would turn a paging bug into no
 		// screen at all.
 	}
-	records, err := s.Events.AgentPhases(ctx, s.agentIDOf(seat), role, before)
+	listing, coverage, err := s.Events.SeatPhases(ctx, s.agentIDOf(seat), role, before)
 	if err != nil {
 		log.WarnContext(ctx, "agent_history_unavailable", "seat", seat, "error", err)
-		return []store.EventRecord{}, ""
+		return []store.EventRecord{}, "", nil
 	}
+	records := listing.Rows
 	if len(records) == 0 {
 		// EMPTINESS, not nil-ness, and the two are not interchangeable here:
 		// `AgentPhases` answers a nil slice for a seat it cannot name, an
 		// allocated empty one for a seat with no phases yet, and the index
 		// below is out of range on BOTH. Testing for nil alone left a seat
 		// whose history read came back empty indexing a slice of length zero.
-		return []store.EventRecord{}, ""
+		return []store.EventRecord{}, "", &coverage
 	}
 	// The cursor is the LAST row's key, echoed rather than left for a client
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
 	// from a rendered timestamp would lose the sub-second precision the
-	// tiebreak depends on. Offered only on a FULL page — a short one is the
-	// end of the record, and a cursor there would page for ever.
+	// tiebreak depends on. Offered only when the fleet holds MORE — a page
+	// that filled, or one the merge cut at the newest point a node's page
+	// stopped at — since a cursor past the end would page for ever.
 	next := ""
-	if len(records) == store.AgentPhaseLimit {
+	if listing.More {
 		last := records[len(records)-1]
 		next = last.Time.UTC().Format(time.RFC3339Nano) + "|" + last.ID
 	}
-	return records, next
+	return records, next, &coverage
 }
 
 // firstOf returns the first non-empty value.
@@ -726,15 +756,15 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 	if since.IsZero() && until.IsZero() && days == live && opts.AgentRole == "" {
 		return tokens.Aggregate(s.State.SpendRecords(), opts), nil
 	}
-	if s.Events == nil {
-		// A registry wired without the event log (a caller asking only the
-		// projection's questions) cannot see this window. The honest answer
+	if s.Spend == nil {
+		// A registry wired without the phase records (a caller asking only
+		// the projection's questions) cannot see this window. The honest answer
 		// is an EMPTY rollup labelled with the window asked for, not the
 		// live one relabelled, which would put a week's heading over an
 		// hour's numbers.
 		return tokens.Aggregate(nil, opts), nil
 	}
-	records, err := s.Events.PhaseTokens(ctx, q)
+	records, err := s.Spend.PhaseTokens(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -799,10 +829,11 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		q.Before = &store.Cursor{Time: at, ID: before}
 	}
 
-	rows, err := s.Events.List(ctx, q)
+	listing, coverage, err := s.Events.List(ctx, q)
 	if err != nil {
 		return nil, err
 	}
+	rows := listing.Rows
 	return map[string]any{
 		"events": rows,
 		// The cursor the caller pages with next, echoed rather than left
@@ -815,6 +846,10 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		// over-fetches and post-filters, so only a zero-row page ends
 		// the walk. Saying so beats a client inferring it wrongly.
 		"exhausted": len(rows) == 0,
+		// WHICH NODES THE PAGE WAS MERGED FROM. A node that did not answer
+		// is named here, because its rows are simply absent from the page
+		// and nothing else on it could say so.
+		"coverage": coverage,
 	}, nil
 }
 
@@ -834,7 +869,7 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 		return nil, fmt.Errorf("%w: bucket %q is not one of %v",
 			ErrBadParams, bucket, store.EventBuckets)
 	}
-	got, err := s.Events.Histogram(ctx, store.HistogramQuery{ListQuery: filters, Bucket: bucket})
+	got, coverage, err := s.Events.Histogram(ctx, store.HistogramQuery{ListQuery: filters, Bucket: bucket})
 	switch {
 	case errors.Is(err, store.ErrHistogramBucket),
 		errors.Is(err, store.ErrHistogramSpan),
@@ -847,7 +882,7 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 	case err != nil:
 		return nil, err
 	}
-	return got, nil
+	return SeriesAnswer{EventHistogram: got, Coverage: coverage}, nil
 }
 
 // eventFilters reads the filters both the listing and its axis take.
@@ -961,7 +996,7 @@ func (s Sources) event(ctx context.Context, p Params) (any, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: event needs an id", ErrBadParams)
 	}
-	rec, err := s.Events.ByID(ctx, id)
+	rec, coverage, err := s.Events.ByID(ctx, id)
 	if err != nil {
 		// A DEAD LINK IS NOT A BROKEN NODE. `store.ErrNotFound` is not
 		// [ErrNotFound], so passing it through untranslated classified an id
@@ -970,12 +1005,15 @@ func (s Sources) event(ctx context.Context, p Params) (any, error) {
 		// a fault there is none of. Every event id on the dashboard is a link
 		// somebody can follow after the 30-day window has closed over it, so
 		// this is the ordinary case rather than the exotic one.
+		//
+		// The store's own sentence rides along, because across a fleet it
+		// is the one that names any node that could not be asked.
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, fmt.Errorf("%w: event %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
 		}
 		return nil, err
 	}
-	return rec, nil
+	return EventAnswer{EventRecord: rec, Coverage: coverage}, nil
 }
 
 // trace answers every row sharing one trace.
@@ -984,38 +1022,24 @@ func (s Sources) trace(ctx context.Context, p Params) (any, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: trace needs a trace_id", ErrBadParams)
 	}
-	rows, err := s.Events.Trace(ctx, id)
+	trace, coverage, err := s.Events.Trace(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	// SAYS WHEN IT CUT. EventLog.Trace stops at store.MaxTraceEvents — a
-	// trace shown short with no note reads as a complete causal chain that
-	// simply ends, which is the one thing a reader must not conclude from it.
+	// SAYS WHEN IT CUT. A trace stops at store.MaxTraceEvents — and one
+	// shown short with no note reads as a complete causal chain that simply
+	// ends, which is the one thing a reader must not conclude from it.
 	// Additive, so a client that predates the field is unaffected.
 	//
-	// ASKED, NOT INFERRED, for the reason the turn answer gives at length: a
-	// trace of exactly the cap holds every row it has, and `len(rows) == cap`
-	// reports it cut. That is a caution badge on a complete trace, which is
-	// the same class of lie as the note's absence and costs one indexed count
-	// on the reads that filled.
-	//
-	// DEGRADES like `turn`'s does: the rows are in hand, and failing the
-	// whole answer because a follow-up count could not be taken would turn
-	// the largest traces — the only ones that reach this branch — into
-	// `query_failed`. A missing caution badge beats a missing screen.
-	truncated := false
-	if len(rows) >= store.MaxTraceEvents {
-		total, err := s.Events.TraceEventCount(ctx, id)
-		if err != nil {
-			log.WarnContext(ctx, "trace_extent_unavailable", "trace", id, "error", err)
-		} else {
-			truncated = total > len(rows)
-		}
-	}
+	// ASKED, NOT INFERRED: each node counts what it holds when its read
+	// filled (see internal/eventfan), because a trace of exactly the cap
+	// holds every row it has and `len(rows) == cap` would badge a complete
+	// trace as cut.
 	return map[string]any{
 		"trace_id":  id,
-		"events":    rows,
-		"truncated": truncated,
+		"events":    trace.Rows,
+		"truncated": trace.Total > len(trace.Rows),
+		"coverage":  coverage,
 	}, nil
 }
 

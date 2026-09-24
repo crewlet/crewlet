@@ -36,7 +36,7 @@ func TestTheWorkItemFilterNarrowsEventsAndTurnsAndRefusesAKey(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r := registryOver(t, queries.Sources{Events: log})
+	r := registryOver(t, queries.Sources{Events: fleetOf(log)})
 
 	events := ask(t, r, "events", map[string]any{"work_item": "jira:10042"})["events"].([]store.EventRecord)
 	if len(events) != 1 || events[0].ID != "on" {
@@ -48,7 +48,7 @@ func TestTheWorkItemFilterNarrowsEventsAndTurnsAndRefusesAKey(t *testing.T) {
 	}
 
 	series := askRaw(t, r, "event_series", map[string]any{
-		"work_item": "jira:10042", "bucket": "hour"}).(store.EventHistogram)
+		"work_item": "jira:10042", "bucket": "hour"}).(queries.SeriesAnswer)
 	if series.Total != 1 {
 		t.Errorf("the axis on jira:10042 counts %d events, want the one the list shows",
 			series.Total)

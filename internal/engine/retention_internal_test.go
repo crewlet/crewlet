@@ -865,7 +865,7 @@ func TestTheSearchRosterIsWhoIsAliveRatherThanWhoHeldTheLogBack(t *testing.T) {
 		t.Fatalf("register the dead node: %v", err)
 	}
 
-	roster, err := e.searchRoster(t.Context())
+	roster, err := e.liveNodes(t.Context())
 	if err != nil {
 		t.Fatalf("roster: %v", err)
 	}

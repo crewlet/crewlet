@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -106,11 +107,11 @@ const suspendedExpr = "COALESCE(json_extract(payload, '$.suspended'), 0)"
 // THE NEWEST DECIDES, so the two answers are exclusive: a turn that parked and
 // then finished is complete, and one that parked again after a resume is
 // parked. A turn with neither record is neither — running, or died mid-flight.
-func segmentState(ended, parked sql.NullInt64) (complete, isParked bool) {
+func segmentState(ended, parked *time.Time) (complete, isParked bool) {
 	switch {
-	case ended.Valid && (!parked.Valid || ended.Int64 >= parked.Int64):
+	case ended != nil && (parked == nil || !ended.Before(*parked)):
 		return true, false
-	case parked.Valid:
+	case parked != nil:
 		return false, true
 	}
 	return false, false
@@ -245,10 +246,60 @@ type TurnQuery struct {
 	Failed *bool
 
 	// Before is an exclusive cursor on the turn's START, which is what the
-	// listing is ordered by.
+	// listing is ordered by. Meaningless under [TurnSortTokens], which is a
+	// ranking rather than a walk and has nothing to resume from.
 	Before time.Time
 
+	// Sort is the order the page is cut in. The zero value is
+	// [TurnSortStarted], newest first, which is what every caller that names
+	// none has always had.
+	Sort TurnSort
+
+	// IDs, when set, asks for this log's SHARE of exactly these turns
+	// rather than for a page — see [EventLog.TurnPartials]. Capped by the
+	// caller at [MaxTurnPage] per share: it is the ids of pages somebody
+	// else already cut.
+	IDs []string
+
 	Limit int
+}
+
+// TurnSort is the order a turns page is cut in.
+//
+// A CLOSED SET with a Valid method, for the reason every enum here is one: a
+// value off the wire that this build does not know is refused naming the ones
+// it does, never read as the default — a page asked for "the costliest" and
+// answered newest-first is a page of the wrong turns under the right heading.
+type TurnSort string
+
+const (
+	// TurnSortStarted is newest START first, and the only order a cursor
+	// can walk: the start is what [TurnQuery.Before] is a position on.
+	TurnSortStarted TurnSort = "-started"
+
+	// TurnSortTokens is the most TOTAL TOKENS first — the spend screen's
+	// "which turns cost the most" drill-down, per turn rather than per day,
+	// which is the one question the daily usage rows cannot answer. Ties
+	// break newest first, so two equal turns come back in a stable order.
+	TurnSortTokens TurnSort = "-tokens"
+)
+
+// TurnSorts is the closed set, in the order a screen offers them.
+var TurnSorts = []TurnSort{TurnSortStarted, TurnSortTokens}
+
+// Valid reports whether s is an order this build cuts pages in. The zero
+// value is valid and is [TurnSortStarted].
+func (s TurnSort) Valid() bool {
+	return s == "" || slices.Contains(TurnSorts, s)
+}
+
+// orderSQL is the ORDER BY the sort compiles to. The expressions are this
+// file's own constants, never the caller's text.
+func (s TurnSort) orderSQL() string {
+	if s == TurnSortTokens {
+		return "SUM(total_tokens) DESC, MIN(event_time) DESC"
+	}
+	return "MIN(event_time) DESC"
 }
 
 const (
@@ -274,6 +325,178 @@ const (
 
 // Turns lists one row per turn, newest first.
 func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
+	parts, err := l.TurnPartials(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Turn, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, p.Turn())
+	}
+	return out, nil
+}
+
+// TurnPartial is what ONE event log holds of one turn: the aggregate [Turn] is
+// folded from, before it is folded.
+//
+// # Why a turn has partials at all
+//
+// A turn's events are written to the event log of the node that PUBLISHED
+// them, and a turn is not always published by one node: a turn parked on a
+// detached coding run resumes wherever its seat is held when the run is
+// collected, which after a restart or a placement move is another node. So
+// the fleet's row for that turn is spread across two logs, and folding each
+// half into a finished [Turn] loses exactly what the whole needs — whether a
+// turn is complete is decided by which of its NEWEST end and its NEWEST park
+// is later, and two booleans computed apart cannot be compared.
+//
+// So a partial keeps every aggregate in the form its SQL computed it — sums,
+// minimums, maximums and the two instants — and [CombineTurnPartials] applies
+// the same aggregates across logs. It is the wire shape `internal/eventfan`
+// carries between nodes, which is why every field is tagged: two builds read
+// it, and it evolves additively.
+type TurnPartial struct {
+	TurnID    string    `json:"turn_id"`
+	WorkKey   string    `json:"work_key,omitempty"`
+	AgentID   string    `json:"agent_id,omitempty"`
+	AgentRole string    `json:"role,omitempty"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at"`
+
+	Phases     int  `json:"phases"`
+	Iterations int  `json:"iterations"`
+	Failed     bool `json:"failed"`
+
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+	CacheRead    int `json:"cache_read_tokens"`
+	CacheWrite   int `json:"cache_write_tokens"`
+
+	// Models is every distinct model, in the order the read produced them.
+	Models []string `json:"models,omitempty"`
+
+	// LastEnded and LastParked are the instants of the newest completion
+	// that ENDED the turn and the newest that PARKED it, or nil. What
+	// [segmentState] decides from — and the reason this type exists.
+	LastEnded  *time.Time `json:"last_ended,omitempty"`
+	LastParked *time.Time `json:"last_parked,omitempty"`
+
+	// DurationMS is the SUM of the completions' own measurements.
+	DurationMS int `json:"duration_ms"`
+
+	// Summary, WorkItem and Trigger are the MAXIMUM of their values, as
+	// the SQL takes them; WorkItem is the completion's work item AS
+	// STORED — JSON text — and is decoded only when the turn is finished,
+	// because the maximum is a maximum of that text.
+	Summary  string `json:"summary,omitempty"`
+	WorkItem string `json:"work_item,omitempty"`
+	Trigger  string `json:"trigger,omitempty"`
+}
+
+// Turn finishes a partial into the row a listing serves.
+func (p TurnPartial) Turn() Turn {
+	t := Turn{
+		TurnID: p.TurnID, WorkKey: p.WorkKey,
+		AgentID: p.AgentID, AgentRole: p.AgentRole,
+		StartedAt: p.StartedAt, EndedAt: p.EndedAt,
+		DurationMS: p.DurationMS,
+		Phases:     p.Phases, Iterations: p.Iterations, Failed: p.Failed,
+		InputTokens: p.InputTokens, OutputTokens: p.OutputTokens,
+		TotalTokens: p.TotalTokens,
+		CacheRead:   p.CacheRead, CacheWrite: p.CacheWrite,
+		Models:  strings.Join(p.Models, ","),
+		Summary: p.Summary, Trigger: p.Trigger,
+	}
+	t.Complete, t.Parked = segmentState(p.LastEnded, p.LastParked)
+	if p.WorkItem != "" {
+		// A record whose item does not decode is a row with no item,
+		// not a failed listing: the item is a label on the row, and
+		// one unreadable completion must not cost the page.
+		var named types.WorkItem
+		if json.Unmarshal([]byte(p.WorkItem), &named) == nil && named.ID != "" {
+			t.WorkItem = &named
+		}
+	}
+	return t
+}
+
+// CombineTurnPartials folds several logs' partials of ONE turn into the
+// partial one log holding every event would have produced.
+//
+// THE SQL'S OWN AGGREGATES, written for values: a sum is a sum, a MIN of the
+// start is a min, a MAX of a string is the byte-wise greatest (SQLite's
+// BINARY collation), and the distinct models are a union. Beside the query it
+// mirrors, because a rule applied in two places is the rule that stops
+// matching — an aggregate added to the SELECT and not here would be a column
+// the fleet's row reads as its first node's value.
+//
+// The partials are assumed to be of one turn; a caller grouping by turn id is
+// what guarantees it. Zero partials is the zero partial.
+func CombineTurnPartials(parts ...TurnPartial) TurnPartial {
+	if len(parts) == 0 {
+		return TurnPartial{}
+	}
+	out := parts[0]
+	out.Models = slices.Clone(out.Models)
+	for _, p := range parts[1:] {
+		out.WorkKey = max(out.WorkKey, p.WorkKey)
+		out.AgentID = max(out.AgentID, p.AgentID)
+		out.AgentRole = max(out.AgentRole, p.AgentRole)
+		if p.StartedAt.Before(out.StartedAt) {
+			out.StartedAt = p.StartedAt
+		}
+		if p.EndedAt.After(out.EndedAt) {
+			out.EndedAt = p.EndedAt
+		}
+		out.Phases += p.Phases
+		out.Iterations = max(out.Iterations, p.Iterations)
+		out.Failed = out.Failed || p.Failed
+		out.InputTokens += p.InputTokens
+		out.OutputTokens += p.OutputTokens
+		out.TotalTokens += p.TotalTokens
+		out.CacheRead += p.CacheRead
+		out.CacheWrite += p.CacheWrite
+		for _, m := range p.Models {
+			if !slices.Contains(out.Models, m) {
+				out.Models = append(out.Models, m)
+			}
+		}
+		out.LastEnded = laterOf(out.LastEnded, p.LastEnded)
+		out.LastParked = laterOf(out.LastParked, p.LastParked)
+		out.DurationMS += p.DurationMS
+		out.Summary = max(out.Summary, p.Summary)
+		out.WorkItem = max(out.WorkItem, p.WorkItem)
+		out.Trigger = max(out.Trigger, p.Trigger)
+	}
+	return out
+}
+
+// laterOf is MAX over two instants either of which may be absent.
+func laterOf(a, b *time.Time) *time.Time {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	case b.After(*a):
+		return b
+	}
+	return a
+}
+
+// TurnPartials is [EventLog.Turns] before the fold: this log's share of every
+// turn the query selects.
+//
+// With [TurnQuery.IDs] set it is the OTHER question a fleet asks — "your share
+// of exactly these turns" — which is how a turn selected on one node is made
+// whole from every other: the turn-level narrowing (a model, a work item, a
+// failure, the cursor) was already decided where the turn was selected, and
+// applying it again here would drop the half of the turn that did not match
+// it. The ROW-level filters — the seat and the work key — still apply,
+// because they narrow which records are folded, and a node answering a share
+// without them would fold rows the selecting node did not.
+func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) ([]TurnPartial, error) {
 	days := q.SinceDays
 	switch {
 	case days <= 0:
@@ -288,6 +511,15 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	case limit > MaxTurnPage:
 		limit = MaxTurnPage
 	}
+	if !q.Sort.Valid() {
+		return nil, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
+	}
+	shares := len(q.IDs) > 0
+	if shares {
+		// EVERY TURN NAMED, whatever the page size: the caller chose the
+		// turns and is asking for all of them.
+		limit = len(q.IDs)
+	}
 
 	// THE FLOOR IS THE HISTORY WINDOW as well as the caller's, for the
 	// reason `agentPhaseSQL`'s own comment gives: a read without it answers
@@ -301,6 +533,12 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 
 	where := []string{"turn_id != ''", "event_time >= ?"}
 	args := []any{EncodeTime(floor)}
+	if shares {
+		where = append(where, "turn_id IN (?"+strings.Repeat(",?", len(q.IDs)-1)+")")
+		for _, id := range q.IDs {
+			args = append(args, id)
+		}
+	}
 	// ONLY THE IDENTIFIERS THE CALLER HOLDS — binding an empty one matches
 	// every row that carries none, which is every non-agent event in the
 	// window. See [seatClause].
@@ -312,7 +550,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		where = append(where, "work_key = ?")
 		args = append(args, q.WorkKey)
 	}
-	if q.Model != "" {
+	if q.Model != "" && !shares {
 		// ON THE TURN, not on the row: a turn is selected when ANY of
 		// its phases used the model, which is what a reader means by
 		// "turns on the cheap model".
@@ -321,7 +559,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 				"WHERE model = ? AND event_time >= ? AND turn_id != '')")
 		args = append(args, q.Model, EncodeTime(floor))
 	}
-	if q.WorkItem != "" {
+	if q.WorkItem != "" && !shares {
 		// ON THE TURN, not on the row, for Model's reason and one more:
 		// filtering rows would fold only the records that carry the item,
 		// and a parked segment resolved before its sole write — or any
@@ -333,9 +571,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	}
 
 	having := []string{}
-	if q.Before.IsZero() {
-		// no cursor
-	} else {
+	if !q.Before.IsZero() && !shares && q.Sort != TurnSortTokens {
 		having = append(having, "MIN(event_time) < ?")
 		args = append(args, EncodeTime(q.Before))
 	}
@@ -345,7 +581,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	// describes.
 	failedExpr, failedArgs := failedRow()
 	failedAgg := "MAX(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END)"
-	if q.Failed != nil {
+	if q.Failed != nil && !shares {
 		want := "0"
 		if *q.Failed {
 			want = "1"
@@ -390,7 +626,7 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 		  FROM crewlet_events
 		 WHERE `+strings.Join(where, " AND ")+`
 		 GROUP BY turn_id`+havingSQL+`
-		 ORDER BY MIN(event_time) DESC
+		 ORDER BY `+q.Sort.orderSQL()+`
 		 LIMIT ?`,
 		// The SELECT list's own placeholders, in the order they appear
 		// in it: the phase count, then the failure predicate, then the
@@ -404,10 +640,10 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := []Turn{}
+	out := []TurnPartial{}
 	for rows.Next() {
 		var (
-			t                 Turn
+			p                 TurnPartial
 			workKey           sql.NullString
 			agentID, role     sql.NullString
 			started, ended    int64
@@ -419,38 +655,45 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 			ended1, parked1   sql.NullInt64
 			duration          sql.NullInt64
 		)
-		if err := rows.Scan(&t.TurnID, &workKey, &agentID, &role, &started, &ended,
-			&t.Phases, &t.Iterations, &failed, &in, &outTok, &total,
+		if err := rows.Scan(&p.TurnID, &workKey, &agentID, &role, &started, &ended,
+			&p.Phases, &p.Iterations, &failed, &in, &outTok, &total,
 			&cacheR, &cacheW, &models,
 			&ended1, &parked1, &duration, &summary, &item, &trigger); err != nil {
 
 			return nil, fmt.Errorf("store: scan a turn: %w", err)
 		}
-		t.WorkKey = workKey.String
-		t.AgentID, t.AgentRole = agentID.String, role.String
-		t.StartedAt, t.EndedAt = DecodeTime(started), DecodeTime(ended)
-		t.Failed = failed != 0
-		t.Complete, t.Parked = segmentState(ended1, parked1)
-		t.DurationMS = int(duration.Int64)
-		t.InputTokens = int(in.Int64)
-		t.OutputTokens = int(outTok.Int64)
-		t.TotalTokens = int(total.Int64)
-		t.CacheRead, t.CacheWrite = int(cacheR.Int64), int(cacheW.Int64)
-		t.Models, t.Summary = models.String, summary.String
-		t.Trigger = trigger.String
-		if item.Valid && item.String != "" {
-			// A record whose item does not decode is a row with no item,
-			// not a failed listing: the item is a label on the row, and
-			// one unreadable completion must not cost the page.
-			var named types.WorkItem
-			if json.Unmarshal([]byte(item.String), &named) == nil && named.ID != "" {
-				t.WorkItem = &named
-			}
+		p.WorkKey = workKey.String
+		p.AgentID, p.AgentRole = agentID.String, role.String
+		p.StartedAt, p.EndedAt = DecodeTime(started), DecodeTime(ended)
+		p.Failed = failed != 0
+		p.LastEnded, p.LastParked = instantOf(ended1), instantOf(parked1)
+		p.DurationMS = int(duration.Int64)
+		p.InputTokens = int(in.Int64)
+		p.OutputTokens = int(outTok.Int64)
+		p.TotalTokens = int(total.Int64)
+		p.CacheRead, p.CacheWrite = int(cacheR.Int64), int(cacheW.Int64)
+		if models.String != "" {
+			p.Models = strings.Split(models.String, ",")
 		}
-		out = append(out, t)
+		p.Summary, p.Trigger = summary.String, trigger.String
+		p.WorkItem = item.String
+		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: list turns: %w", err)
 	}
 	return out, nil
 }
+
+// instantOf decodes a nullable stored instant.
+func instantOf(v sql.NullInt64) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	at := DecodeTime(v.Int64)
+	return &at
+}
+
+// ErrTurnSort is returned for a sort this build does not know, naming the
+// ones it does.
+var ErrTurnSort = errors.New("store: unknown turn sort")

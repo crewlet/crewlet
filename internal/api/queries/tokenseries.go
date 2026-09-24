@@ -83,7 +83,7 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	// bars is a lie about the bars.
 	covered, coveredUntil := q.Window(s.clock())
 
-	records, err := s.Events.PhaseTokens(ctx, q)
+	records, err := s.Spend.PhaseTokens(ctx, q)
 	if err != nil {
 		return nil, err
 	}

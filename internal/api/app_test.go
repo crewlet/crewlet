@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -119,8 +120,11 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Sources.Company == nil {
 		opts.Sources.Company = func() *config.Company { return nil }
 	}
+	if opts.EventLog == nil {
+		opts.EventLog = sharedEvents
+	}
 	if opts.Sources.Events == nil {
-		opts.Sources.Events = sharedEvents
+		opts.Sources.Events = eventfan.Solo(config.DefaultNodeID, opts.EventLog)
 	}
 	if opts.Sources.NodeID == "" {
 		opts.Sources.NodeID = config.DefaultNodeID
@@ -190,7 +194,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		t.Fatal("an app wired to nothing was built")
 	}
 	for _, field := range []string{
-		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
+		"Runtime", "EventLog", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Retention", "Capacity", "Backup", "Audit",
 	} {

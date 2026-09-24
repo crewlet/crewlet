@@ -169,7 +169,7 @@ export function ModelActivity() {
       const full = await Promise.all(
         (page.events ?? []).map((row) => socket.query("event", { id: row.id }).catch(() => null)),
       );
-      setOlder((prev) => [...prev, ...full.filter((e): e is EventRecord => e !== null)]);
+      setOlder((prev) => [...prev, ...full.flatMap((e) => (e === null ? [] : [e]))]);
       setCursor(page.next ?? null);
       setExhausted(page.exhausted || !page.next);
     } catch (err) {

@@ -342,6 +342,18 @@ The consequences worth stating plainly:
   upgrade, and the retention sweep deletes the old bucket once no old node
   is live. See
   [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows).
+- **A node that leaves takes its turn-level history with it.** Every node's
+  event store holds the events it published, and the dashboard's turns,
+  traces and event log are read from every live node at query time. A node
+  you drain for good, or a node whose volume you discard, is a node whose
+  turns, phases and events no screen can show again — the spend, turn
+  counts and page reads it recorded survive it, in the replicated `usage`
+  domain. Export to an OTLP sink first if you need that detail kept. See
+  [Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history).
+- **Mid-rollout, a history read can name a node as speaking another
+  protocol.** The history scatter carries a version, and a node on a build
+  that reshaped it answers with its own version and nothing else, which
+  the answer's `coverage` names rather than merging rows it cannot read.
 
 ## Watching a fleet
 
@@ -349,6 +361,9 @@ The consequences worth stating plainly:
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector, or
   start a node that matches.
 - **`seat_claims_blocked_by_older_protocol`** — an unfinished upgrade.
+- **`history_partial`** — history reads are coming back without a node: it
+  did not answer inside the fleet read budget. Every such answer names the
+  node in its `coverage`.
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Fleet** screen puts every node's
   side by side, with seat ownership and per-node config epoch.

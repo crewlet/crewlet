@@ -4,6 +4,7 @@ package queries
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -52,6 +53,15 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 			return nil, badParams("failed", raw, []string{"true", "false"})
 		}
 	}
+	// THE ORDER, a closed set the store owns: newest first, or the most
+	// tokens first — the spend screen's "which turns cost the most", which
+	// the daily usage rows cannot answer because they hold no turn.
+	if raw := strings.TrimSpace(p.String("sort")); raw != "" {
+		q.Sort = store.TurnSort(raw)
+		if !q.Sort.Valid() {
+			return nil, badParams("sort", raw, names(store.TurnSorts))
+		}
+	}
 	// THE TURNS ON ONE WORK ITEM, by its identity across trackers — see
 	// workItemParam for why a malformed one is refused rather than matched.
 	item, err := workItemParam(p)
@@ -64,18 +74,27 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	q.Before = before
+	if q.Sort == store.TurnSortTokens && !before.IsZero() {
+		// A RANKING HAS NO POSITION TO RESUME FROM, and paging one by
+		// start time would mix two orders on one screen.
+		return nil, fmt.Errorf("%w: sort=%s is a ranking and takes no before=; "+
+			"narrow the window with days= instead", ErrBadParams, q.Sort)
+	}
 
-	rows, err := s.Events.Turns(ctx, q)
+	page, coverage, err := s.Events.Turns(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{"turns": rows, "next": nil}
-	if len(rows) > 0 {
+	out := map[string]any{"turns": page.Turns, "next": nil, "coverage": coverage}
+	if page.Next != nil {
 		// THE CURSOR THE CALLER RESUMES FROM, echoed rather than left for
 		// a client to assemble — the same rule the event list follows,
 		// because a client that built it from the last row's fields would
-		// be reimplementing the one thing that must not drift.
-		out["next"] = rows[len(rows)-1].StartedAt.UTC().Format(time.RFC3339Nano)
+		// be reimplementing the one thing that must not drift. It is the
+		// FLEET's, and so it can be present on an empty page: when a
+		// node's page filled before any turn above it could be shown,
+		// the cursor is where that node stopped rather than the end.
+		out["next"] = page.Next.UTC().Format(time.RFC3339Nano)
 	}
 	return out, nil
 }

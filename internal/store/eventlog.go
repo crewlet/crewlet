@@ -62,8 +62,8 @@ const (
 	// head is not.
 	MaxTraceEvents = 500
 
-	// defaultListLimit is the page size when a caller names none.
-	defaultListLimit = 50
+	// DefaultListLimit is the page size when a caller names none.
+	DefaultListLimit = 50
 
 	// THERE IS NO OVER-FETCH ANY MORE. The RelatedAgent filter used to pull
 	// five pages of raw history per page it wanted, capped at 500 rows, and
@@ -205,7 +205,7 @@ type Cursor struct {
 }
 
 // ListQuery selects a page of the event log. The zero value asks for the most
-// recent defaultListLimit events.
+// recent DefaultListLimit events.
 type ListQuery struct {
 	Limit    int
 	Type     string
@@ -558,7 +558,7 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error) {
 	limit := q.Limit
 	if limit <= 0 {
-		limit = defaultListLimit
+		limit = DefaultListLimit
 	}
 
 	from, where, args, col := q.predicate()
@@ -613,9 +613,41 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 // page. The old shape found siblings only among the rows it happened to have
 // over-fetched, which meant a cause older than that window was simply missing.
 func (l *EventLog) traceSiblings(ctx context.Context, direct []EventRecord, limit int) ([]EventRecord, error) {
-	traces := make([]any, 0, len(direct))
-	seen := make(map[string]struct{}, len(direct))
-	for _, rec := range direct {
+	return l.TraceRows(ctx, TraceIDsOf(direct), limit)
+}
+
+// TraceRows is the newest rows of any of these traces, newest first, up to
+// limit — the sibling half of [ListQuery.RelatedAgent], asked on its own.
+//
+// Exported for the one caller that has to ask it SEPARATELY: a fleet, whose
+// related-agent page is merged from several logs before anybody knows which
+// traces it holds, and whose siblings sit in logs that held no direct match at
+// all — the inbound webhook row lives on the node the delivery reached, and
+// the agent work it caused on the node that holds the seat.
+func (l *EventLog) TraceRows(ctx context.Context, traceIDs []string, limit int) ([]EventRecord, error) {
+	if len(traceIDs) == 0 {
+		return []EventRecord{}, nil
+	}
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	args := make([]any, 0, len(traceIDs)+2)
+	for _, id := range traceIDs {
+		args = append(args, id)
+	}
+	args = append(args, EncodeTime(now().Add(-EventHistory)), limit)
+	query := "SELECT " + listColumns + " FROM crewlet_events WHERE trace_id IN (?" +
+		strings.Repeat(",?", len(traceIDs)-1) +
+		") AND event_time >= ? ORDER BY event_time DESC, event_id DESC LIMIT ?"
+	return l.scanRows(ctx, query, args...)
+}
+
+// TraceIDsOf is the distinct non-empty traces of some rows, in first-seen
+// order.
+func TraceIDsOf(rows []EventRecord) []string {
+	out := make([]string, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, rec := range rows {
 		if rec.TraceID == "" {
 			continue
 		}
@@ -623,15 +655,9 @@ func (l *EventLog) traceSiblings(ctx context.Context, direct []EventRecord, limi
 			continue
 		}
 		seen[rec.TraceID] = struct{}{}
-		traces = append(traces, rec.TraceID)
+		out = append(out, rec.TraceID)
 	}
-	if len(traces) == 0 {
-		return nil, nil
-	}
-	query := "SELECT " + listColumns + " FROM crewlet_events WHERE trace_id IN (?" +
-		strings.Repeat(",?", len(traces)-1) +
-		") ORDER BY event_time DESC, event_id DESC LIMIT ?"
-	return l.scanRows(ctx, query, append(traces, limit)...)
+	return out
 }
 
 // mergeRelated folds the siblings into the direct matches, newest first.
@@ -727,7 +753,7 @@ func (l *EventLog) TurnEventCount(ctx context.Context, turnID string) (int, erro
 // range rather than a scan. Ordered by first appearance, because that is the
 // order a reader follows them in: the trace the turn started under comes
 // first.
-func (l *EventLog) TurnTraces(ctx context.Context, turnID string) ([]string, error) {
+func (l *EventLog) TurnTraces(ctx context.Context, turnID string) ([]TurnTrace, error) {
 	rows, err := l.db.sql.QueryContext(ctx,
 		"SELECT trace_id, MIN(event_time) AS first_at FROM crewlet_events "+
 			"WHERE turn_id = ? AND event_time >= ? AND trace_id != '' "+
@@ -738,19 +764,29 @@ func (l *EventLog) TurnTraces(ctx context.Context, turnID string) ([]string, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := []string{}
+	out := []TurnTrace{}
 	for rows.Next() {
 		var id string
 		var first int64
 		if err := rows.Scan(&id, &first); err != nil {
 			return nil, fmt.Errorf("store: scan the traces of turn %s: %w", turnID, err)
 		}
-		out = append(out, id)
+		out = append(out, TurnTrace{TraceID: id, FirstAt: DecodeTime(first)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: read the traces of turn %s: %w", turnID, err)
 	}
 	return out, nil
+}
+
+// TurnTrace is one trace a turn touched and when it first did.
+//
+// THE INSTANT TRAVELS WITH THE ID because the order is a property of every log
+// the turn wrote to: a turn resumed on another node has a trace on each, and
+// only the instants say which came first once the two lists meet.
+type TurnTrace struct {
+	TraceID string    `json:"trace_id"`
+	FirstAt time.Time `json:"first_at"`
 }
 
 // TraceEventCount is the same question about a trace. See [EventLog.TurnEventCount].
