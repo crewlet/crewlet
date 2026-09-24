@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -409,6 +410,9 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// page is capped rather than time-bounded, so there is no fixed
 		// window to name; null when nothing was counted.
 		"traffic_since": nil,
+		// WHICH NODES THE COUNTS WERE READ FROM, or null when no store
+		// could be read — the same case `traffic_known` false reports.
+		"coverage": seen.coverage,
 	}
 	if !seen.since.IsZero() {
 		body["traffic_since"] = seen.since.UTC().Format(time.RFC3339)
@@ -502,22 +506,30 @@ type traffic struct {
 	// bounded, so "42 inbound" alone could span an hour or a year; "42
 	// since Tuesday" is a measurement. Zero when nothing was counted.
 	since time.Time
+
+	// coverage is which nodes the counts were read from. A delivery is
+	// written to the store of the node the load balancer handed it to, so
+	// a count from one node is a third of a three-node fleet's traffic —
+	// and a node that did not answer is traffic the counts cannot see.
+	coverage *eventfan.Coverage
 }
 
 func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 	if s.Events == nil {
 		return traffic{}
 	}
-	rows, err := s.Events.List(ctx, store.ListQuery{
+	listing, coverage, err := s.Events.List(ctx, store.ListQuery{
 		Category: events.WebhookCategory, Limit: MaxEventPage,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "integration_counts_unreadable", "error", err)
 		return traffic{}
 	}
+	rows := listing.Rows
 	out := traffic{
 		known: true, count: map[string]int{}, last: map[string]time.Time{},
 		skipped: map[string]int{}, coalesced: map[string]int{},
+		coverage: &coverage,
 	}
 	for _, row := range rows {
 		out.count[row.Source]++
@@ -540,7 +552,7 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 // outcome counts absent rather than zero — see [traffic] — because a zero
 // that means "unreadable" is the number an operator would act on.
 func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
-	rows, err := s.Events.List(ctx, store.ListQuery{
+	listing, coverage, err := s.Events.List(ctx, store.ListQuery{
 		Category: "notification", Limit: MaxEventPage,
 	})
 	if err != nil {
@@ -548,7 +560,9 @@ func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
 		out.skipped, out.coalesced = nil, nil
 		return
 	}
-	for _, row := range rows {
+	merged := out.coverage.And(coverage)
+	out.coverage = &merged
+	for _, row := range listing.Rows {
 		// THE INTEGRATION, not the event's Source: the source of an
 		// engine-published event names the engine, and what the row has
 		// to line up with is the inbound count for one third-party app.

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // A FAILED NATIVE START MUST LEAVE NOTHING RUNNING.
@@ -57,15 +58,22 @@ type dialQueue struct {
 	dialed []*nats.Conn
 }
 
-// deafQueue is that broker with one verb broken: it refuses to register an
-// answerer.
+// deafQueue is that broker with one verb broken: it refuses to register the
+// search fan-out's answerer.
 //
 // Serve is the one verb a test can fail on demand AFTER the log is up, and it
-// is the exact failure the fan-out registration reports.
+// is the exact failure the fan-out registration reports. ONLY ON THE SEARCH
+// SLICE: the fleet history's answerer registers before the native start, and
+// refusing it too would fail the boot before the state log this case watches
+// ever started.
 type deafQueue struct{ *dialQueue }
 
-// Serve refuses, which is where startNative's slice registration fails.
-func (q *deafQueue) Serve(context.Context, string, queue.AnswerFunc) (queue.Unsubscribe, error) {
+// Serve refuses the slice subject, which is where startNative's registration
+// fails, and registers every other answerer for real.
+func (q *deafQueue) Serve(ctx context.Context, subject string, fn queue.AnswerFunc) (queue.Unsubscribe, error) {
+	if subject != topics.SearchSlice {
+		return q.Queue.Serve(ctx, subject, fn)
+	}
 	return nil, errors.New("jetstream: this broker registers no answerer")
 }
 

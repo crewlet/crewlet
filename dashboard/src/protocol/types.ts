@@ -28,6 +28,7 @@
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { BudgetState } from "../contract/spend.ts";
+import type { Coverage } from "../contract/coverage.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type {
   IntegrationsAnswer,
@@ -114,6 +115,8 @@ export interface EventsPage {
   next: { before_time: string; before_id: string } | null;
   /** True when the store itself has nothing older, as opposed to this page ending. */
   exhausted: boolean;
+  /** Which nodes the page was merged from; a node that did not answer is named. */
+  coverage: Coverage;
 }
 
 export interface TraceAnswer {
@@ -126,6 +129,8 @@ export interface TraceAnswer {
    * from it — and the store's own doc asks the caller to say so.
    */
   truncated: boolean;
+  /** Which nodes the trace was assembled from. */
+  coverage: Coverage;
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +539,8 @@ export interface EventSeries {
    * rendering the closed set reads a missing key as the zero it is.
    */
   by_category: Record<string, number>;
+  /** Which nodes the bars were summed over. */
+  coverage: Coverage;
 }
 
 /** The org-wide live meter, plus the identity of the engine run reporting it
@@ -2407,6 +2414,8 @@ export interface PhasesPage {
   /** Pass back verbatim to page further. Empty at the end of the record. */
   next: { before_time?: string; before_id?: string };
   exhausted: boolean;
+  /** Which nodes the page was merged from. */
+  coverage: Coverage;
 }
 
 /** Every stored event of one RUN of a turn, ordered oldest first. */
@@ -2450,6 +2459,10 @@ export interface TurnAnswer {
    * answer", never "this turn touched no trace".
    */
   trace_ids?: string[];
+  /** Which nodes the turn was assembled from — a turn resumed on another node
+   *  has rows on both, and a node that did not answer may hold the missing
+   *  part. */
+  coverage: Coverage;
 }
 
 /** A seat's phase history, newest first, with a cursor. */
@@ -2459,6 +2472,9 @@ export interface AgentAnswer {
   llm_history: EventRecord[];
   /** Pass back as `before` to page further into the record. */
   next: string;
+  /** Which nodes the history came from — a seat's history is on every node
+   *  that ever held it — or null when it could not be read at all. */
+  coverage: Coverage | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -3210,8 +3226,12 @@ export interface TurnWorkItem {
 
 export interface TurnsAnswer {
   turns: TurnRow[];
-  /** The cursor to resume from, on the turn's START. */
+  /** The cursor to resume from, on the turn's START. The fleet's, so it can be
+   *  present on an empty page: where a node's page stopped, with nothing above
+   *  it left to show. */
   next: string | null;
+  /** Which nodes the page was merged from. */
+  coverage: Coverage;
 }
 
 /** Who the presented credential belongs to — see `lib/viewer.ts`. */
@@ -3238,7 +3258,7 @@ export interface QueryMap {
   agent_memory: AgentMemory;
   events: EventsPage;
   event_series: EventSeries;
-  event: EventRecord;
+  event: EventRecord & { coverage: Coverage };
   trace: TraceAnswer;
   turn: TurnAnswer;
   turns: TurnsAnswer;

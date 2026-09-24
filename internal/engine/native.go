@@ -275,7 +275,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Self:   nodeID,
 			Local:  search.NodeScanner{Index: n.indexer},
 			Peers:  e.searchPeers(),
-			Roster: e.searchRoster,
+			Roster: e.liveNodes,
 			Corpus: n.indexer.Corpus,
 			Report: e.reportSearch,
 			Enter:  e.enterSearch,
@@ -326,7 +326,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Index: n.indexer, SkillsContainer: e.skillsContainer,
 			Node:   nodeID,
 			Peers:  e.searchPeers(),
-			Roster: e.searchRoster,
+			Roster: e.liveNodes,
 			Report: e.reportSearch,
 			Enter:  e.enterSearch,
 		})
@@ -1582,14 +1582,17 @@ func (e *Engine) searchPeers() search.Peers {
 	return search.Broker{Queue: e.backends.Queue}
 }
 
-// searchRoster answers which nodes may be given a bucket range.
+// liveNodes answers which nodes are in the fleet NOW: every node a fan-out may
+// hand a share of a question to — a search's bucket range, a history read.
 //
 // FROM THE LEASE VIEW rather than from the positions register, and the two
 // differ in exactly the way that matters here: a position row is held by every
 // node the trim has to wait for, INCLUDING one that has been gone for hours,
-// while a lease expires. A dead node in the roster costs every search on this
-// node a partial answer for as long as its row survives.
-func (e *Engine) searchRoster(ctx context.Context) ([]string, error) {
+// while a lease expires. A dead node in the roster costs every fanned answer on
+// this node a partial result for as long as its row survives — and a history
+// read would name it as missing on every screen, for a node nobody can bring
+// back.
+func (e *Engine) liveNodes(ctx context.Context) ([]string, error) {
 	if e.backends == nil || e.backends.Coord == nil {
 		return nil, nil
 	}

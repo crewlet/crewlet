@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -402,6 +403,12 @@ type Engine struct {
 	// chart per tick instead.
 	usage *usageLoop
 
+	// history is the fleet's turn-level history reader, and
+	// stopHistoryServe withdraws this node as one of its answerers. See
+	// history.go.
+	history          *eventfan.Fleet
+	stopHistoryServe queue.Unsubscribe
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for
@@ -660,6 +667,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// land on would be lost. Building it starts nothing.
 	if err = e.newSkillSync(nodeID); err != nil {
 		return nil, fmt.Errorf("engine: tool skills: %w", err)
+	}
+
+	// THIS NODE ANSWERS FOR ITS OWN HISTORY from the moment it has a store
+	// and a broker, whatever else it goes on to run — see history.go for
+	// why a maintenance-mode node answers too.
+	if err = e.armHistory(ctx); err != nil {
+		return nil, fmt.Errorf("engine: serve the fleet's history: %w", err)
 	}
 
 	// THE KEYRING AND THE SNAPSHOT BEFORE THE FIRST EPOCH, because the
@@ -1301,6 +1315,10 @@ func (e *Engine) teardown(ctx context.Context) {
 	// after the close would fail its transaction mid-batch and leave the
 	// cursor ahead of the rows it claims to describe.
 	e.stopNative(ctx)
+	// BEFORE backends.Close, which closes the store an answer reads: a
+	// peer's question arriving mid-teardown is declined rather than read
+	// from a closing file.
+	e.stopHistory(ctx)
 	if e.node != nil {
 		e.node.Stop(ctx)
 	}

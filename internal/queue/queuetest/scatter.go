@@ -263,6 +263,31 @@ func (s *suite) runScatter(t *testing.T) {
 		}
 	})
 
+	// A REPLY OVER THE CEILING IS A MISSING ANSWER, on every backend. The
+	// real broker's client refuses to publish it, so the asker hears
+	// nothing; a twin that delivered it would certify an answerer whose
+	// large replies are lost in production — which is exactly the reply a
+	// fleet's history read sends when a node holds a long turn.
+	t.Run("an_oversized_reply_is_a_missing_answer", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		subject := ns(t) + ".ask"
+		serve(ctx, t, q, subject, func(context.Context, []byte) ([]byte, error) {
+			return make([]byte, queue.MaxPayloadBytes+1), nil
+		})
+		serve(ctx, t, q, subject, echo("small"))
+		deadline, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		replies, err := q.Ask(deadline, subject, []byte("q"), 2)
+		if err != nil {
+			t.Fatalf("ask: %v", err)
+		}
+		if got := replyTexts(replies); !sameSet(got, []string{"small:q"}) {
+			t.Fatalf("the scatter returned %d replies (%v), want only the one "+
+				"inside the ceiling", len(replies), got)
+		}
+	})
+
 	if s.caps.Peer != nil {
 		t.Run("a_scatter_reaches_a_peer_process", func(t *testing.T) {
 			t.Parallel()

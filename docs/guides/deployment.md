@@ -831,10 +831,17 @@ dimensions (`event_type`, `source`, `category`, `agent_id`, `agent_role`,
 everything else.
 
 That inline write is also why a fleet's event store is *per node*: each holds
-what it published. The dashboard reads the node it is served by. A deployment
-that wants one queryable history across a fleet exports to an external sink
-over OTLP rather than pointing the nodes at one database, which the exclusive
-file ownership rules out by construction.
+what it published. A history read is therefore asked of **every live node**
+at query time — the node serving the dashboard reads its own store and
+scatters the same question to its peers, merges what comes back, and names
+any node that did not answer in the answer's `coverage` (see
+[Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
+A node that has LEFT the fleet takes its turn-level detail with it; the
+aggregates — spend, turn counts, page reads — survive it in the replicated
+`usage` domain. A deployment that wants to keep every node's detail past its
+departure exports to an external sink over OTLP rather than pointing the
+nodes at one database, which the exclusive file ownership rules out by
+construction.
 
 #### What gets stored, and under which category
 

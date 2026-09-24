@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -94,6 +95,11 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.KindSearchScoped,
 			statelog.Reading{SearchScopedFraction: 0.1},
 			"part of the",
+		},
+		"fleet history missing a node": {
+			statelog.KindHistoryPartial,
+			statelog.Reading{HistoryPartialFraction: 0.25},
+			"25% of fleet history reads",
 		},
 		"recall below its floor": {
 			statelog.KindRecallBelowFloor,
@@ -364,4 +370,31 @@ func gauge(t *testing.T, rec *metrics.Recorder, kind statelog.Kind) float64 {
 	}
 	t.Fatalf("no gauge series for %s", kind)
 	return -1
+}
+
+// THE HISTORY ALARM BORROWS THE READ BUDGET (ADR-0015).
+//
+// What makes a fleet history answer partial is a node that did not answer
+// inside [eventfan.FleetReadBudget] — so that budget IS the threshold, and the
+// alarm names it from the constant the scatter waits on. A second number here
+// would be a second opinion about one event, and the two would drift: an
+// operator told "every node had 5s" by a node that waited two would go looking
+// for a slowness that is not there.
+//
+// Mutation: spell the budget as a literal in the detail, change the constant,
+// and this fails.
+func TestHistoryPartialBorrowsTheReadBudget(t *testing.T) {
+	t.Parallel()
+	alarm, found := find(statelog.Evaluate(statelog.Reading{HistoryPartialFraction: 0.5}),
+		statelog.KindHistoryPartial)
+	if !found {
+		t.Fatal("a partial fleet read raised nothing")
+	}
+	if budget := eventfan.FleetReadBudget.String(); !strings.Contains(alarm.Detail, budget) {
+		t.Errorf("detail %q does not name the fleet read budget (%s) the scatter waits on",
+			alarm.Detail, budget)
+	}
+	if _, found := find(statelog.Evaluate(statelog.Reading{}), statelog.KindHistoryPartial); found {
+		t.Error("a node that read no fleet history alarmed about it")
+	}
 }

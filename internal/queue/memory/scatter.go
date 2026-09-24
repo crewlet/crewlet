@@ -156,5 +156,16 @@ func (s *serveSub) call(ctx context.Context, request []byte) (reply []byte, err 
 			err = fmt.Errorf("memory: scatter answerer on %s panicked: %v", s.subject, r)
 		}
 	}()
-	return s.answer(ctx, request)
+	reply, err = s.answer(ctx, request)
+	if err == nil && len(reply) > queue.MaxPayloadBytes {
+		// A REPLY OVER THE CEILING NEVER ARRIVES, which is what the real
+		// broker does with one: the client refuses to publish it and the
+		// asker sees an answerer that did not answer. Delivering it here
+		// would certify an answerer whose every large reply is lost in
+		// production — the ceiling is a CONTRACT number precisely so a
+		// payload this twin accepts is one the broker accepts.
+		return nil, fmt.Errorf("memory: reply on %s is %d bytes, over the %d-byte limit: %w",
+			s.subject, len(reply), queue.MaxPayloadBytes, queue.ErrTooLarge)
+	}
+	return reply, err
 }

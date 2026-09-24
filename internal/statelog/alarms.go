@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/eventfan"
 )
 
 // The thresholds an alarm fires at.
@@ -151,6 +152,7 @@ const (
 	KindSearchSlow       Kind = "search_slow"
 	KindSearchDegraded   Kind = "search_degraded"
 	KindSearchScoped     Kind = "search_scoped"
+	KindHistoryPartial   Kind = "history_partial"
 	KindRecallBelowFloor Kind = "recall_below_floor"
 	KindRecordsGated     Kind = "records_gated"
 	KindFeedUnreadable   Kind = "feed_unreadable"
@@ -230,6 +232,11 @@ type Reading struct {
 	// searches answered without the semantic half and without the whole
 	// corpus.
 	SearchDegradedFraction, SearchScopedFraction float64
+
+	// HistoryPartialFraction is the fraction of this node's fleet history
+	// reads answered without every live node — one did not answer inside
+	// [eventfan.FleetReadBudget].
+	HistoryPartialFraction float64
 
 	// SemanticCoverage is the fraction of the corpus with current vectors.
 	// A POINTER for the reason HeadroomFraction is one: a company with no
@@ -463,6 +470,26 @@ var table = []rule{
 			"few minutes ago looks like and clears itself. The answers were " +
 			"complete for what was searched and silent about what was not; the " +
 			"log line names who was absent.",
+	},
+	{
+		// THE BUDGET IS BORROWED (ADR-0015): what makes a history answer
+		// partial is a node that did not answer inside the fleet read
+		// budget, so that budget is the threshold — named in the detail
+		// from the constant the scatter waits on, never restated.
+		kind: KindHistoryPartial,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%.0f%% of fleet history reads were answered without "+
+					"every node, because one did not answer inside the %s fleet read budget",
+					r.HistoryPartialFraction*100, round(eventfan.FleetReadBudget)),
+				r.HistoryPartialFraction > 0
+		},
+		remedy: "Turn-level history lives only on the node that published it, so " +
+			"a partial answer is missing that node's rows — every answer names " +
+			"the node in its `coverage`. A node that has left the fleet is gone " +
+			"with its detail, and the aggregates survive it in the usage domain; " +
+			"a live node that keeps missing the budget is slow on its own store " +
+			"or its route, and its own `pool_starved` and `apply_lag` alarms say " +
+			"which.",
 	},
 	{
 		kind: KindRecallBelowFloor,

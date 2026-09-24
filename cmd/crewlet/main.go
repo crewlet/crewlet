@@ -1557,12 +1557,23 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// comes off an HTTP request's own credential.
 		Operator:     operators,
 		QueueBackend: e.Backends().Queue.Backend(),
-		// The read surface answers from this node's OWN store. A
-		// question it has no source for comes back unknown rather than
-		// empty, which is the difference between "this node has no
-		// event log" and "the company has done nothing".
+		// THIS NODE'S OWN event store, which the webhook edge writes the
+		// deliveries it accepts into.
+		EventLog: e.Backends().Store.Events(),
+		// A question the read surface has no source for comes back
+		// unknown rather than empty, which is the difference between
+		// "this node has no event log" and "the company has done
+		// nothing".
 		Sources: queries.Sources{
-			Events: e.Backends().Store.Events(),
+			// THE FLEET'S turn-level history: every live node's own
+			// store, asked at query time, with the nodes that did not
+			// answer named on every answer (ADR-0021). The ENGINE's,
+			// because the roster is its lease view and the answerer it
+			// registered is the other half of the same protocol.
+			Events: e.History(),
+			// The phase records the windowed spend rollup and its
+			// series fold, from this node's store.
+			Spend: e.Backends().Store.Events(),
 			// Read through the ENGINE's epoch rather than a captured
 			// company: an apply replaces it, and a screen bound to the
 			// one this process booted on would describe a company that

@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -52,9 +53,11 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	})
 
 	opts := api.Options{
-		State:   state,
-		Sources: queries.Sources{State: state, Events: db.Events()},
-		Now:     func() time.Time { return clock },
+		State:    state,
+		EventLog: db.Events(),
+		Sources: queries.Sources{State: state, Events: eventfan.Solo("node-a", db.Events()),
+			Spend: db.Events()},
+		Now: func() time.Time { return clock },
 	}
 	if mutate != nil {
 		mutate(&opts)

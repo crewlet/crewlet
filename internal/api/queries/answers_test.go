@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
@@ -63,6 +64,10 @@ func seedEvents(t *testing.T, log *store.EventLog, n int, mutate func(int, *stor
 		}
 	}
 }
+
+// fleetOf is one store read as the fleet it is: a node alone, with nobody
+// else to ask, so every answer is the store's with a complete coverage.
+func fleetOf(log *store.EventLog) *eventfan.Fleet { return eventfan.Solo("node-a", log) }
 
 func registryOver(t *testing.T, s queries.Sources) *queries.Registry {
 	t.Helper()
@@ -151,14 +156,18 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// of them, which the dashboard used to fake by paging the raw
 		// feed; `phases` is the company-wide phase record WITH its
 		// payloads, which the event listing deliberately cannot serve;
-		// `token_series` is the spend with a time axis, which the
-		// breakdown has no dimension for; and `event_series` is the log's
-		// own, which a page of rows has no dimension for either.
-		{"the event log alone", queries.Sources{Events: db.Events()},
-			[]string{"event", "event_series", "events", "phases", "token_series",
+		// and `event_series` is the log's own time axis, which a page of
+		// rows has no dimension for.
+		{"the fleet's history alone", queries.Sources{Events: fleetOf(db.Events())},
+			[]string{"event", "event_series", "events", "phases",
 				"trace", "turn", "turns", "viewer"}},
-		{"both, plus health", queries.Sources{
-			State: state, Events: db.Events(),
+		// `token_series` is the spend with a time axis, which the
+		// breakdown has no dimension for — folded from phase costs, a
+		// source of its own rather than the fleet's turn detail.
+		{"the phase costs alone", queries.Sources{Spend: db.Events()},
+			[]string{"token_series", "viewer"}},
+		{"all of them, plus health", queries.Sources{
+			State: state, Events: fleetOf(db.Events()), Spend: db.Events(),
 			Health: func(context.Context) any { return map[string]any{"status": "ok"} },
 		}, []string{"agent", "event", "event_series", "events", "phases", "stream",
 			"token_series", "tokens", "trace", "turn", "turns", "viewer"}},
@@ -270,7 +279,7 @@ func TestTokensOverAnotherWindowReadsTheStore(t *testing.T) {
 	write("s2", "Lead", "execute", 20)
 	write("s3", "Coder", "plan", 6)
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	r := registryOver(t, queries.Sources{State: livestate.New(), Spend: log})
 	got := askRaw(t, r, "tokens", map[string]any{"since_days": 3}).(tokens.Rollup)
 
 	if got.Totals.TotalTokens != 36 || got.Totals.Calls != 3 {
@@ -311,7 +320,7 @@ func TestOneRoleCanBeAskedForAlone(t *testing.T) {
 			t.Fatalf("append: %v", err)
 		}
 	}
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	r := registryOver(t, queries.Sources{State: livestate.New(), Spend: log})
 	got := askRaw(t, r, "tokens", map[string]any{"agent_role": "Lead"}).(tokens.Rollup)
 
 	if got.Totals.Calls != 1 || got.AgentRole != "Lead" {
@@ -359,7 +368,7 @@ func TestEventsAnswersAPageNewestFirst(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	seedEvents(t, db.Events(), 5, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	got := ask(t, r, "events", map[string]any{"limit": float64(3)})
 	rows, _ := got["events"].([]store.EventRecord)
@@ -378,7 +387,7 @@ func TestAPageEchoesTheCursorToResumeFrom(t *testing.T) {
 	// not drift.
 	db := openStore(t)
 	seedEvents(t, db.Events(), 5, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	first := ask(t, r, "events", map[string]any{"limit": float64(2)})
 	next, _ := first["next"].(map[string]any)
@@ -409,7 +418,7 @@ func TestACursorWithoutItsTimestampIsRefused(t *testing.T) {
 	// microsecond resolution — so a cursor missing half its key would skip
 	// or repeat whatever collided with it, silently.
 	db := openStore(t)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 	_, err := r.Answer(t.Context(), "events", map[string]any{"before_id": "e1"}, "")
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("err = %v, want ErrBadParams", err)
@@ -422,7 +431,7 @@ func TestTheLimitIsClampedNotObeyed(t *testing.T) {
 	// every other tab shares.
 	db := openStore(t)
 	seedEvents(t, db.Events(), 20, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	got := ask(t, r, "events", map[string]any{"limit": float64(1 << 20)})
 	rows, _ := got["events"].([]store.EventRecord)
@@ -447,7 +456,7 @@ func TestTheStoresOwnFiltersArePassedThrough(t *testing.T) {
 			rec.Actor = "CTO"
 		}
 	})
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	got := ask(t, r, "events", map[string]any{"type": "agent_turn_completed"})
 	rows, _ := got["events"].([]store.EventRecord)
@@ -474,7 +483,7 @@ func TestAnEmptyPageSaysHistoryIsExhausted(t *testing.T) {
 	// post-filters — so only a zero-row page ends it. Saying so beats a
 	// client inferring it wrongly.
 	db := openStore(t)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	got := ask(t, r, "events", nil)
 	if got["exhausted"] != true {
@@ -496,14 +505,15 @@ func TestEventAnswersOneRowWithItsPayload(t *testing.T) {
 	// one.
 	db := openStore(t)
 	seedEvents(t, db.Events(), 1, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	rows := ask(t, r, "events", nil)["events"].([]store.EventRecord)
 	got, err := r.Answer(t.Context(), "event", map[string]any{"id": rows[0].ID}, "")
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
-	rec, _ := got.(store.EventRecord)
+	answer, _ := got.(queries.EventAnswer)
+	rec := answer.EventRecord
 	if len(rec.Payload) == 0 {
 		t.Error("the single-row read carried no payload")
 	}
@@ -512,7 +522,7 @@ func TestEventAnswersOneRowWithItsPayload(t *testing.T) {
 func TestEventAndTraceNeedTheirIdentifiers(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 	for _, what := range []string{"event", "trace"} {
 		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%s: err = %v, want ErrBadParams", what, err)
@@ -522,28 +532,40 @@ func TestEventAndTraceNeedTheirIdentifiers(t *testing.T) {
 
 func TestTraceAnswersEverythingSharingOne(t *testing.T) {
 	t.Parallel()
-	db := openStore(t)
-	seedEvents(t, db.Events(), 4, func(i int, rec *store.EventRecord) {
+	// OVER TWO STORES, because a trace routinely is: the inbound delivery
+	// that started it is written by the node that received it, and the
+	// agent work it caused by the node holding the seat.
+	fleet, a, b := twoNodes(t)
+	seedEvents(t, a, 4, func(i int, rec *store.EventRecord) {
 		if i >= 2 {
 			rec.TraceID = "tr-2"
 		}
 	})
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	seedEvents(t, b, 1, func(_ int, rec *store.EventRecord) {
+		rec.ID = "on-b"
+		rec.Time = rec.Time.Add(time.Minute)
+	})
+	r := registryOver(t, queries.Sources{Events: fleet})
 
 	got := ask(t, r, "trace", map[string]any{"trace_id": "tr-1"})
 	rows, _ := got["events"].([]store.EventRecord)
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want the two sharing tr-1", len(rows))
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want the three sharing tr-1 — two on one node, one on "+
+			"the other", len(rows))
 	}
 	for _, row := range rows {
 		if row.TraceID != "tr-1" {
 			t.Errorf("a row from %q came back", row.TraceID)
 		}
 	}
+	if rows[len(rows)-1].ID != "on-b" {
+		t.Errorf("the trace ends at %s, want the other node's later row last — a "+
+			"trace is read oldest first across every node", rows[len(rows)-1].ID)
+	}
 	// A SHORT TRACE IS NOT A CUT ONE, and the flag has to say so explicitly:
 	// a client cannot tell an absent field from a false one.
 	if got["truncated"] != false {
-		t.Errorf("truncated = %#v on a two-event trace", got["truncated"])
+		t.Errorf("truncated = %#v on a three-event trace", got["truncated"])
 	}
 }
 
@@ -566,7 +588,7 @@ func TestATraceOfExactlyTheCapIsNotReportedCut(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r := registryOver(t, queries.Sources{Events: log})
+	r := registryOver(t, queries.Sources{Events: fleetOf(log)})
 
 	got := ask(t, r, "trace", map[string]any{"trace_id": "tr-exact"})
 	if rows, _ := got["events"].([]store.EventRecord); len(rows) != store.MaxTraceEvents {
@@ -958,7 +980,7 @@ func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	log := db.Events()
 	seedPhases(t, log, "Lead", "agent-lead")
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log)})
 	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
 
 	history, _ := got["llm_history"].([]store.EventRecord)
@@ -1004,7 +1026,7 @@ func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 	log := db.Events()
 	seedPhases(t, log, "Lead", "agent-lead")
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log)})
 	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
 	if history, _ := got["llm_history"].([]store.EventRecord); len(history) != 2 {
 		t.Fatalf("asking by role found %v", got["llm_history"])
@@ -1071,7 +1093,7 @@ func TestAMissingEventIsNotFoundRatherThanAFailure(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	seedEvents(t, db.Events(), 1, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	_, err := r.Answer(t.Context(), "event", map[string]any{"id": "ev-nobody-published"}, "")
 	if !errors.Is(err, queries.ErrNotFound) {
@@ -1097,7 +1119,7 @@ func TestAnEmptyTraceAnswersAnArrayNotNull(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	seedEvents(t, db.Events(), 1, nil)
-	r := registryOver(t, queries.Sources{Events: db.Events()})
+	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	for _, tc := range []struct {
 		what  string
@@ -1132,7 +1154,7 @@ func TestASeatWithNoFinishedPhasesAnswersRatherThanPanics(t *testing.T) {
 	// Seeded, so the log is readable and non-empty — the empty result has to
 	// come from this seat having no phases, not from an empty table.
 	seedEvents(t, db.Events(), 3, nil)
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: db.Events()})
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(db.Events())})
 
 	got := ask(t, r, "agent", map[string]any{"role": "NobodyHasThisRole"})
 	rows, ok := got["llm_history"].([]store.EventRecord)
@@ -1188,7 +1210,7 @@ func TestTokensTakeTheSameTwoInstantsTheSeriesDoes(t *testing.T) {
 	write("in", at.Add(time.Hour), 7)
 	write("new", time.Now().UTC(), 500)
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	r := registryOver(t, queries.Sources{State: livestate.New(), Spend: log})
 	got := askRaw(t, r, "tokens", map[string]any{
 		"since": at.Format(time.RFC3339),
 		"until": at.Add(24 * time.Hour).Format(time.RFC3339),

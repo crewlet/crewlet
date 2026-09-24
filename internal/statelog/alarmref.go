@@ -57,6 +57,9 @@ var alarmMeaning = map[Kind]string{
 		"half — the embeddings provider or the vector domain is failing.",
 	KindSearchScoped: "Searches are being answered over part of the corpus " +
 		"because a node did not answer its bucket range.",
+	KindHistoryPartial: "Fleet history reads — turns, traces, the event log — " +
+		"are being answered without every node, because one did not answer " +
+		"inside the fleet read budget.",
 	KindRecallBelowFloor: "Less of the corpus has current vectors than " +
 		"semantic recall claims to cover.",
 	KindRecordsGated: "An apply gate dropped a record. A gated record is " +

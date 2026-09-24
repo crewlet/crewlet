@@ -370,6 +370,23 @@ func (r *retention) observed(out *statelog.Reading) {
 		out.SearchDegradedFraction = float64(degraded) / float64(answers)
 	}
 
+	// AND THE FLEET'S HISTORY READS, the same fraction over a different
+	// counter: every question counts, because a partial turn and a partial
+	// event page are the same missing node.
+	var reads, partial uint64
+	for _, snapshot := range reading {
+		if snapshot.Name != metrics.HistoryAnswers {
+			continue
+		}
+		reads += snapshot.Total
+		if snapshot.Attrs["coverage"] == historyPartial {
+			partial += snapshot.Total
+		}
+	}
+	if reads > 0 {
+		out.HistoryPartialFraction = float64(partial) / float64(reads)
+	}
+
 	// THE DECLARED RATE, beside the observed one below. It is a constant
 	// rather than a configured value because it is a term in the log's own
 	// sizing: an operator who could set it would be silencing the alarm

@@ -112,6 +112,19 @@ const (
 	// SearchSlice is where one query's assignment table is scattered.
 	// Every node serves it and answers only for its own row.
 	SearchSlice = SearchPrefix + "slice"
+
+	// ObservePrefix prefixes the observability read scatter's subjects —
+	// the fleet's turn-level history, asked of every node's own event
+	// store at query time (internal/eventfan, ADR-0021).
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a history read is the
+	// ephemeral request and reply of [queue.EventQueue.Ask], and a read of
+	// the event log that itself wrote an event would add a row to the log
+	// for every time somebody looked at it.
+	ObservePrefix = "crewlet.observe."
+	// ObserveRead is where one history question is scattered. Every node
+	// serves it and answers from its own store; the asker merges.
+	ObserveRead = ObservePrefix + "read"
 )
 
 // AgentInbox returns the inbox subject for the seat with this handle.

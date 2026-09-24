@@ -8,6 +8,8 @@
  * reconcile report with findings, and reads these interfaces by name.
  */
 
+import type { Coverage } from "./coverage.ts";
+
 /** One observation a reconcile pass made that is not "fine". */
 export interface ReconcileFinding {
   kind: string;
@@ -148,4 +150,7 @@ export interface IntegrationsAnswer {
   /** The oldest delivery counted, or null when nothing was: the page is
    *  capped rather than time-bounded, so there is no fixed window to name. */
   traffic_since: string | null;
+  /** Which nodes the traffic counts were read from — a delivery is stored on
+   *  whichever node received it — or null when no store could be read. */
+  coverage: Coverage | null;
 }

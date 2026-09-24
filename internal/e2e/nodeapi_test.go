@@ -133,8 +133,13 @@ func wireAPI(
 		Bootstrap:    boot,
 		Runtime:      runtime,
 		QueueBackend: backends.Queue.Backend(),
+		EventLog:     backends.Store.Events(),
+		// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so the
+		// node the harness serves answers history the way a real node
+		// does — from every live member.
 		Sources: queries.Sources{
-			Events:  backends.Store.Events(),
+			Events:  e.History(),
+			Spend:   backends.Store.Events(),
 			Company: company,
 			NodeID:  nodeID,
 		},

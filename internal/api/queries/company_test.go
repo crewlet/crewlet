@@ -1354,7 +1354,7 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: log,
+		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	byKind := map[string]map[string]any{}
@@ -1417,7 +1417,7 @@ func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
 	}
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: log,
+		Company: func() *config.Company { return cfg }, Events: fleetOf(log),
 	}, "integrations", nil))
 	rows, _ := body["integrations"].([]any)
 	if len(rows) == 0 {

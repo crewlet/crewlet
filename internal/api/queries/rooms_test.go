@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -84,7 +85,8 @@ func everySeam(t *testing.T) queries.Sources {
 	cfg := company(t)
 	return queries.Sources{
 		State:    &livestate.LiveState{},
-		Events:   &store.EventLog{},
+		Events:   eventfan.Solo("node-a", &store.EventLog{}),
+		Spend:    &store.EventLog{},
 		Health:   func(context.Context) any { return nil },
 		Company:  func() *config.Company { return cfg },
 		Coord:    coordmemory.New(),
