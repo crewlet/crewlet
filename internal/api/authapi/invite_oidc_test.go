@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -65,10 +68,12 @@ func (d offeredInvitation) PersonBySubjectBlind(context.Context, string,
 	return iamdomain.Sighting{}, nil
 }
 
-// roundTrip runs a start with the given query, the provider, and the callback,
-// against one surface, and answers both responses.
+// roundTrip runs a start, the provider, and the callback against one surface,
+// and answers both responses. start is the request that begins it: an
+// invitation page's form post ([redemptionStart]) or a link to the sign-in
+// ([signInStart]).
 func roundTrip(t *testing.T, idp *provider, directory authapi.Directory,
-	writer authapi.Writer, audit *recordingAudit, query string,
+	writer authapi.Writer, audit *recordingAudit, start *http.Request,
 	callbackExtra string) (started, finished *httptest.ResponseRecorder) {
 
 	t.Helper()
@@ -99,9 +104,8 @@ func roundTrip(t *testing.T, idp *provider, directory authapi.Directory,
 	svc.Routes(mux)
 
 	started = httptest.NewRecorder()
-	mux.ServeHTTP(started, httptest.NewRequest(http.MethodGet,
-		auth.PathAuthOIDCStart+"?"+query, nil))
-	if started.Code != http.StatusFound {
+	mux.ServeHTTP(started, start)
+	if started.Code != http.StatusFound && started.Code != http.StatusSeeOther {
 		return started, nil
 	}
 	code, state := idp.authorize(t, started.Header().Get("Location"))
@@ -115,6 +119,21 @@ func roundTrip(t *testing.T, idp *provider, directory authapi.Directory,
 	finished = httptest.NewRecorder()
 	mux.ServeHTTP(finished, callback)
 	return started, finished
+}
+
+// redemptionStart is an invitation's page posting its form to the provider
+// redemption, as a browser encodes one.
+func redemptionStart(id string, form url.Values) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, auth.AuthInvitePrefix+id+"/provider",
+		strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.RemoteAddr = "198.51.100.7:5100"
+	return r
+}
+
+// signInStart is a link to the provider sign-in, carrying query.
+func signInStart(query string) *http.Request {
+	return httptest.NewRequest(http.MethodGet, auth.PathAuthOIDCStart+"?"+query, nil)
 }
 
 // AN INVITATION REDEEMED THROUGH THE PROVIDER ENROLS ITS PERSON AND LINKS THE
@@ -134,8 +153,14 @@ func TestAnInvitationRedeemedThroughTheProviderLinksItsSubject(t *testing.T) {
 	idp := newProvider(t)
 	writer := &redemptionWriter{}
 	audit := &recordingAudit{}
-	_, finished := roundTrip(t, idp, offeredInvitation{id: invitationID},
-		writer, audit, "invite="+invitationID+"&login=dana.ops&return_to=/welcome", "")
+	started, finished := roundTrip(t, idp, offeredInvitation{id: invitationID},
+		writer, audit, redemptionStart(invitationID, url.Values{
+			"login": {"dana.ops"}, "return_to": {"/welcome"},
+		}), "")
+	if started.Code != http.StatusSeeOther {
+		t.Errorf("the start answered %d, want 303: it answers a form post, "+
+			"which a browser follows with a GET", started.Code)
+	}
 	if finished == nil || finished.Code != http.StatusFound ||
 		finished.Header().Get("Location") != "/welcome" {
 		t.Fatalf("the callback answered %+v, want a redirect to /welcome", finished)
@@ -207,7 +232,9 @@ func TestAProviderRedemptionNobodyCanConfirmSignsNobodyIn(t *testing.T) {
 	unknown := statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op-unknown"}
 	writer := &redemptionWriter{outcome: &unknown}
 	_, finished := roundTrip(t, idp, offeredInvitation{id: invitationID},
-		writer, &recordingAudit{}, "invite="+invitationID+"&login=dana.ops", "")
+		writer, &recordingAudit{}, redemptionStart(invitationID, url.Values{
+			"login": {"dana.ops"},
+		}), "")
 	if finished == nil || finished.Code != http.StatusServiceUnavailable ||
 		finished.Header().Get("Retry-After") == "" {
 		t.Fatalf("an unconfirmed enrolment answered %+v, want 503 with a "+
@@ -231,7 +258,7 @@ func TestTheInvitationRedeemedIsTheOneSealedIntoTheFlight(t *testing.T) {
 	writer := &redemptionWriter{}
 	const elsewhere = "018f3a9c-4d2e-7000-8000-00000000ffff"
 	_, finished := roundTrip(t, idp, offeredInvitation{id: invitationID}, writer,
-		&recordingAudit{}, "invite="+invitationID, "&invite="+elsewhere)
+		&recordingAudit{}, redemptionStart(invitationID, nil), "&invite="+elsewhere)
 	if finished == nil || finished.Code != http.StatusFound {
 		t.Fatalf("the callback answered %+v", finished)
 	}
@@ -249,40 +276,162 @@ func TestTheInvitationRedeemedIsTheOneSealedIntoTheFlight(t *testing.T) {
 // A spent link and a login outside the grammar are refused before the person
 // is sent to the provider, so a mistake costs one page rather than a round
 // trip — and the spent link is the same counted 410 every other door answers.
+// A body in any encoding but a form's is refused rather than read as no
+// fields, which would have replaced the login it carried with the proposal.
 func TestARedemptionStartRefusesWhatItCouldNotFinish(t *testing.T) {
 	t.Parallel()
 	idp := newProvider(t)
+	asJSON := redemptionStart(invitationID, nil)
+	asJSON.Body = io.NopCloser(strings.NewReader(`{"login":"dana.ops"}`))
+	asJSON.Header.Set("Content-Type", "application/json")
 	for _, tc := range []struct {
 		name   string
-		query  string
+		start  *http.Request
 		status int
 	}{
-		{"an invitation nobody issued", "invite=018f3a9c-4d2e-7000-8000-000000000bad",
-			http.StatusGone},
-		{"a login outside a person's grammar", "invite=" + invitationID +
-			"&login=Not+A+Login", http.StatusBadRequest},
-		{"a machine's handle", "invite=" + invitationID + "&login=token:ops",
-			http.StatusBadRequest},
+		{"an invitation nobody issued", redemptionStart(
+			"018f3a9c-4d2e-7000-8000-000000000bad", nil), http.StatusGone},
+		{"a login outside a person's grammar", redemptionStart(invitationID,
+			url.Values{"login": {"Not A Login"}}), http.StatusBadRequest},
+		{"a machine's handle", redemptionStart(invitationID,
+			url.Values{"login": {"token:ops"}}), http.StatusBadRequest},
+		{"a body that is not a form", asJSON, http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			writer := &redemptionWriter{}
 			started, _ := roundTrip(t, idp, offeredInvitation{id: invitationID},
-				writer, &recordingAudit{}, tc.query, "")
+				writer, &recordingAudit{}, tc.start, "")
 			if started.Code != tc.status {
 				t.Fatalf("the start answered %d, want %d (%s)", started.Code,
 					tc.status, started.Body)
 			}
-			for _, c := range started.Result().Cookies() {
-				if c.Name == "crewlet_oidc_flight" && c.Value != "" {
-					t.Error("a refused start set a flight anyway")
-				}
+			if flight := flightSet(started); flight != "" {
+				t.Errorf("a refused start set a flight anyway: %q", flight)
 			}
 			if len(writer.enrolled) != 0 {
 				t.Errorf("a refused start enrolled %+v", writer.enrolled)
 			}
 		})
 	}
+}
+
+// A REDEMPTION IS NEVER STARTED BY A LINK.
+//
+// The callback pins whatever provider account comes back to the person the
+// invitation creates, and a browser signed in at its provider comes back with
+// nobody typing anything. The redemption used to start from
+// `GET /auth/oidc/start?invite=`, which any page can send a browser to: an
+// invitation anybody held — their own — put in front of a colleague pinned the
+// COLLEAGUE's provider account to a person the sender chose. It is the
+// invitation page's POST now, which the origin check judges; the link is
+// refused, sets no flight and reads no invitation, alone or beside a step-up.
+//
+// Mutation: drop the start's refusal of `invite` and the link sets a flight.
+func TestARedemptionIsNeverStartedByALink(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	for name, query := range map[string]string{
+		"a redemption":             "invite=" + invitationID + "&login=dana.ops",
+		"a redemption and a proof": "invite=" + invitationID + "&step_up=step_up",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			directory := &countingInvitations{offeredInvitation: offeredInvitation{
+				id: invitationID}}
+			writer := &redemptionWriter{}
+			started, finished := roundTrip(t, idp, directory, writer,
+				&recordingAudit{}, signInStart(query), "")
+			if started.Code != http.StatusBadRequest || finished != nil {
+				t.Fatalf("a link carrying an invitation answered %d (%s), want "+
+					"400 and no round trip", started.Code, started.Body)
+			}
+			if !strings.Contains(started.Body.String(), "/provider") {
+				t.Errorf("the refusal does not name the route a redemption "+
+					"starts from: %s", started.Body)
+			}
+			if flight := flightSet(started); flight != "" {
+				t.Errorf("a link carrying an invitation set a flight: %q", flight)
+			}
+			if directory.reads.Load() != 0 || len(writer.enrolled) != 0 {
+				t.Errorf("a refused link read %d invitations and enrolled %+v",
+					directory.reads.Load(), writer.enrolled)
+			}
+		})
+	}
+}
+
+// A REDEMPTION START IS ADMITTED BEFORE THE INVITATION IS READ.
+//
+// The id in the link is the credential, so the start is throttled per source
+// like the invitation's own routes — and the admission comes first, or a
+// source at the ceiling could still walk ids through this door and learn
+// which are live from the answers it was refused on.
+//
+// Mutation: drop the start's admission and the directory is read.
+func TestARedemptionStartIsAdmittedBeforeTheInvitationIsRead(t *testing.T) {
+	t.Parallel()
+	idp := newProvider(t)
+	b := bootstrapFor(t)
+	b.API.Auth.Backend = config.AuthBackendOIDC
+	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
+	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
+		Limit: 1, Now: func() time.Time { return clock },
+		Sleep: func(context.Context, time.Duration) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := redemptionStart(invitationID, url.Values{"login": {"dana.ops"}})
+	directory := &countingInvitations{offeredInvitation: offeredInvitation{
+		id: invitationID}}
+	mux := http.NewServeMux()
+	buildWith(t, b, oidc.NewProvider(oidc.Config{
+		Issuer: idp.URL, ClientID: idpClientID, ClientSecret: "not-a-real-secret",
+		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
+	}, idp.Client(), func() time.Time { return clock }), func(o *authapi.Options) {
+		o.Directory = directory
+		o.Throttle = throttle
+	}).Routes(mux)
+	throttle.Fail(context.Background(), "198.51.100.7")
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, start)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("a source at the ceiling answered %d (%s), want 429", rec.Code,
+			rec.Body)
+	}
+	if directory.reads.Load() != 0 {
+		t.Errorf("a source at the ceiling had %d invitations read for it",
+			directory.reads.Load())
+	}
+	if flight := flightSet(rec); flight != "" {
+		t.Errorf("a throttled start set a flight: %q", flight)
+	}
+}
+
+// countingInvitations is [offeredInvitation] counting how often an invitation
+// is read.
+type countingInvitations struct {
+	offeredInvitation
+	reads atomic.Int64
+}
+
+func (d *countingInvitations) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	d.reads.Add(1)
+	return d.offeredInvitation.InvitationByID(ctx, id)
+}
+
+// flightSet is the flight cookie a response set, or "" when it set none.
+func flightSet(rec *httptest.ResponseRecorder) string {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "crewlet_oidc_flight" && c.Value != "" {
+			return c.Value
+		}
+	}
+	return ""
 }
 
 // A PROVIDER ACCOUNT SOMEBODY ELSE HOLDS IS A CONFLICT, AND NOTHING IS SPENT.
@@ -308,7 +457,7 @@ func TestAProviderAccountSomebodyElseHoldsIsAConflict(t *testing.T) {
 			writer := &redemptionWriter{refusal: refusal}
 			audit := &recordingAudit{}
 			_, finished := roundTrip(t, idp, offeredInvitation{id: invitationID},
-				writer, audit, "invite="+invitationID, "")
+				writer, audit, redemptionStart(invitationID, nil), "")
 			if finished == nil || finished.Code != http.StatusConflict {
 				t.Fatalf("the callback answered %+v, want 409", finished)
 			}
@@ -345,7 +494,7 @@ func TestASubjectLinkedToTwoPeopleIsAConflictNotAnOutage(t *testing.T) {
 	t.Parallel()
 	idp := newProvider(t)
 	_, finished := roundTrip(t, idp, offeredInvitation{ambiguous: true},
-		&redemptionWriter{}, &recordingAudit{}, "return_to=/work", "")
+		&redemptionWriter{}, &recordingAudit{}, signInStart("return_to=/work"), "")
 	if finished == nil || finished.Code != http.StatusConflict ||
 		!strings.Contains(finished.Body.String(), "subject_conflict") {
 		t.Fatalf("the callback answered %+v, want 409 subject_conflict", finished)
@@ -389,9 +538,10 @@ func TestTheInvitationOffersTheProviderOnlyWhereThereIsOne(t *testing.T) {
 				}
 				return
 			}
-			if start != auth.PathAuthOIDCStart+"?invite="+invitationID {
-				t.Errorf("provider_start = %q, want the start carrying this "+
-					"invitation", start)
+			if start != auth.AuthInvitePrefix+invitationID+"/provider" {
+				t.Errorf("provider_start = %q, want the invitation's own "+
+					"redemption through the provider — a form action, never "+
+					"a link", start)
 			}
 		})
 	}

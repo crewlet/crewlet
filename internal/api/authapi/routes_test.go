@@ -44,7 +44,8 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	// this company does not sign in that way where a 503 would say it
 	// does and is broken. Their exemption is asserted below, on a surface
 	// that has one.
-	optional := []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback}
+	optional := []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback,
+		auth.AuthInvitePrefix + "{id}/provider"}
 	// EVERYTHING ELSE NEEDS A SESSION, and the list is spelled out rather
 	// than derived as "the rest": a route that went missing from the
 	// registration would otherwise pass silently, and one added would be
@@ -131,7 +132,8 @@ func TestTheProviderRoutesAreMountedAndExemptWhereThereIsOne(t *testing.T) {
 	mux := &recordingMux{}
 	withProvider(t).Routes(mux)
 
-	for _, want := range []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback} {
+	for _, want := range []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback,
+		auth.AuthInvitePrefix + "{id}/provider"} {
 		if !slices.ContainsFunc(mux.patterns, func(p string) bool {
 			return pathOf(p) == want
 		}) {
@@ -139,7 +141,7 @@ func TestTheProviderRoutesAreMountedAndExemptWhereThereIsOne(t *testing.T) {
 				"so its only way in does not exist", want)
 			continue
 		}
-		if !auth.Unguarded(want) {
+		if !auth.Unguarded(strings.Replace(want, "{id}", "abc", 1)) {
 			t.Errorf("%s is guarded: a provider round trip is a BROWSER "+
 				"following a redirect, which carries nothing this engine "+
 				"issued — so requiring a credential makes it unreachable", want)

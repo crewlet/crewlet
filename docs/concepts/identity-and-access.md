@@ -975,12 +975,20 @@ and the person it would link them to is whoever is most worth becoming. A
 subject is **linked** to a person in exactly two ways:
 
 - **An invitation redeemed through the provider.** The invitation's page
-  offers the provider (`provider_start`), and the round trip carries the
-  invitation sealed beside the PKCE verifier. When the person comes back, the
-  callback enrols the person the invitation creates — its grants, its reach,
-  its address, the login they chose, no password — and links the account the
-  provider came back with to them, then signs them in. The invitation is the
-  authority; the provider says only who arrived.
+  offers the provider (`provider_start`), and its form **posts** to
+  `POST /auth/invite/{id}/provider`, which sends the browser to the provider
+  with the invitation sealed beside the PKCE verifier. When the person comes
+  back, the callback enrols the person the invitation creates — its grants,
+  its reach, its address, the login they chose, no password — and links the
+  account the provider came back with to them, then signs them in. The
+  invitation is the authority; the provider says only who arrived. **It is a
+  POST from the invitation's own page and never a link**, because the account
+  it links is whichever one the browser is already signed in with at the
+  provider, which answers without anybody typing anything: started by a link,
+  anybody holding an invitation — their own — could send a colleague through
+  it and pin the *colleague's* account to a person they chose. A post is
+  origin-checked like every other change, so no other site can start one, and
+  the provider sign-in link refuses an invitation outright.
 - **An administrator.** `PATCH /iam/people/{id}` with `oidc_subject` (or
   `crewlet iam link ID SUBJECT`) pins the account whose `sub` claim that is,
   at the deployment's own provider.

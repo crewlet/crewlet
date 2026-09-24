@@ -2,8 +2,8 @@
 //
 // # What is here, and what is deliberately not
 //
-// Twelve routes, and every one of them is a step in the same sequence:
-// somebody proves who they are and leaves holding a session cookie. What
+// Every route here is a step in the same sequence: somebody proves who they
+// are and leaves holding a session cookie. What
 // decides whether that session may DO anything is internal/authz, reached
 // through the grant on each route it guards — this package establishes
 // identity and never authority.

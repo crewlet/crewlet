@@ -30,10 +30,12 @@ const Prefix = "/auth/"
 //
 // # The auth column, stated here because it is the whole security shape
 //
-// FOUR ARE UNGUARDED, because requiring a credential to obtain one is a
+// SOME ARE UNGUARDED, because requiring a credential to obtain one is a
 // deployment nobody can enter: the posture read, the sign-in, the bootstrap
-// and the OIDC pair. Every one is admitted per SOURCE by the throttle and
-// every one is origin-checked like any other state change.
+// and the OIDC pair — and the invitation's own three, its view, its
+// redemption and its redemption through the provider, because holding the
+// link is the credential. Every one is admitted per SOURCE by the throttle
+// and every one is origin-checked like any other state change.
 //
 // THE REST NEED A SESSION, and they are guarded by the same middleware every
 // other route is — reading what it resolved rather than validating a second
@@ -60,6 +62,12 @@ func (s *Service) Routes(mux auth.Mux) {
 		// sign in that way, where a 503 would say it does and is broken.
 		mux.HandleFunc("GET "+auth.PathAuthOIDCStart, s.OIDCStart)
 		mux.HandleFunc("GET "+auth.PathAuthOIDCCallback, s.OIDCCallback)
+		// A REDEMPTION THROUGH THE PROVIDER IS THE INVITATION'S OWN POST
+		// and never the start's query parameter: its callback binds a
+		// provider account, so it is started only where the origin check
+		// can refuse another site starting it.
+		mux.HandleFunc("POST "+auth.AuthInvitePrefix+"{id}"+providerRedemption,
+			s.StartProviderRedemption)
 	}
 
 	// Guarded.

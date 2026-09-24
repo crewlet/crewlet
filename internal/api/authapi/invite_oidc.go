@@ -2,7 +2,9 @@ package authapi
 
 import (
 	"errors"
+	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -51,24 +53,61 @@ import (
 // link to be spent by somebody else — and the invitation it decides about is
 // the one SEALED into the flight, never one the way back could name.
 
-// redemptionFlight is what a redemption START seals into the flight, answering
-// false once it has written the refusal.
-func (s *Service) redemptionFlight(w http.ResponseWriter, r *http.Request,
-	want oidc.Flight, invite string) (oidc.Flight, bool) {
+// providerRedemption is the path an invitation's page posts to, beneath the
+// invitation's own: `POST /auth/invite/{id}/provider`.
+//
+// UNDER THE INVITATION'S PREFIX, so the guard exempts it by the same entry it
+// exempts the invitation's other two routes by — holding the link is the
+// credential — and the origin check judges it as it judges them, which is the
+// point of it being a POST at all.
+const providerRedemption = "/provider"
 
+// formEncoding is how a browser encodes a form it posts.
+const formEncoding = "application/x-www-form-urlencoded"
+
+// StartProviderRedemption is `POST /auth/invite/{id}/provider`: the
+// invitation's page sending the person it was issued to through the identity
+// provider to redeem it there — the invitation and the login they chose
+// sealed into the flight, and the callback enrolling and linking them
+// ([Service.redeemThroughProvider]).
+//
+// # A POST from the invitation's own page, and never a link
+//
+// The callback pins whatever account the provider comes back with to the
+// person the invitation creates, and a browser already signed in at its
+// provider comes back without anybody typing anything. The redemption used to
+// start from `GET /auth/oidc/start?invite=`, a URL any page can send a browser
+// to: whoever held an unredeemed invitation — their own, most simply — could
+// put that link in front of a colleague, and the COLLEAGUE's provider account
+// was pinned to a person the sender chose, every later provider sign-in of
+// theirs landing as that person and an administrator linking their own
+// account told it was taken. A POST is ORIGIN-CHECKED like every other state
+// change (internal/api/auth's CSRF), so only this deployment's own page can
+// start one — the footing the password redemption beside it stands on.
+//
+// A FORM, encoded as a browser encodes one, rather than JSON: the answer is a
+// redirect to the provider, which only a top-level navigation follows. Its
+// fields are `login`, the login the person chose (the page's proposal when
+// absent), and `return_to`, where to land.
+//
+// ADMITTED PER SOURCE BEFORE THE INVITATION IS READ, like the invitation's
+// own routes: it reads the same row, and a lookup ahead of admission is a free
+// walk of ids the others are throttled against.
+func (s *Service) StartProviderRedemption(w http.ResponseWriter, r *http.Request) {
 	arrived := s.now()
 	source := s.sourceOf(r)
-	// ADMITTED LIKE THE INVITATION'S OWN ROUTES, because it reads the
-	// same row: an id walked through this door would otherwise be a free
-	// lookup the GET is throttled against.
 	if !s.admit(w, r, source, types.FailInvite) {
-		return oidc.Flight{}, false
+		return
 	}
-	held, ok := s.invitationByID(w, r, arrived, source, invite)
+	held, ok := s.invitation(w, r, arrived, source)
 	if !ok {
-		return oidc.Flight{}, false
+		return
 	}
-	login := strings.TrimSpace(r.URL.Query().Get("login"))
+	form, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	login := strings.TrimSpace(form.Get("login"))
 	if login == "" {
 		// THE LOGIN THE FORM WOULD HAVE PROPOSED, for a page that sent
 		// the person straight to the provider: it is derived from the
@@ -77,7 +116,7 @@ func (s *Service) redemptionFlight(w http.ResponseWriter, r *http.Request,
 		email, err := s.openSealed(r, held)
 		if err != nil {
 			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentitySeconds)
-			return oidc.Flight{}, false
+			return
 		}
 		login = iam.LoginFromAddress(email)
 	}
@@ -86,10 +125,45 @@ func (s *Service) redemptionFlight(w http.ResponseWriter, r *http.Request,
 			map[string]string{"detail": "choose a login — lowercase segments " +
 				"joined by dots (jane.doe). It is the name every change you make " +
 				"is recorded under while you hold no seat."})
-		return oidc.Flight{}, false
+		return
 	}
-	want.Invite, want.Login = held.ID, login
-	return want, true
+	s.launch(w, r, oidc.Flight{
+		Return: returnPath(form.Get("return_to")),
+		Invite: held.ID, Login: login,
+	}, http.StatusSeeOther)
+}
+
+// readForm reads a form post's fields — what a browser sends as
+// [formEncoding], bounded like every body on this surface — answering false
+// once it has written the refusal.
+//
+// A BODY IN ANY OTHER ENCODING IS REFUSED rather than read as no fields: a
+// client posting JSON here would otherwise have the login it chose silently
+// replaced by the proposal, a name recorded beside everything the person does.
+// An empty body is no fields, which is a form whose person kept the proposal.
+func readForm(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
+	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	if err != nil {
+		httpjson.Refuse(w, err)
+		return nil, false
+	}
+	if len(body) == 0 {
+		return url.Values{}, true
+	}
+	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || media != formEncoding {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": "this route takes the invitation " +
+				"page's form, encoded " + formEncoding})
+		return nil, false
+	}
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": "the form did not decode: " + err.Error()})
+		return nil, false
+	}
+	return values, true
 }
 
 // redeemThroughProvider finishes a redemption the flight carried, once the ID

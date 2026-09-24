@@ -55,14 +55,15 @@ type inviteView struct {
 	// MinPasswordLength is the floor, so a form refuses before it posts.
 	MinPasswordLength int `json:"min_password_length"`
 
-	// ProviderStart is where the form sends a person who would rather
+	// ProviderStart is where the form POSTS for a person who would rather
 	// redeem this invitation through the company's identity provider than
-	// set a password here: the provider's sign-in, carrying this
-	// invitation, and a `login` query parameter the form appends with the
-	// login the person chose (the proposal above when it appends none).
-	// The provider account they come back with is LINKED to the person the
-	// invitation creates — the one way a subject is pinned without an
-	// administrator. Absent on a deployment with no provider.
+	// set a password here — [Service.StartProviderRedemption], with a
+	// `login` field carrying the login the person chose (the proposal above
+	// when it carries none). A FORM ACTION and never a link, because a link
+	// is what another site can send a browser to. The provider account they
+	// come back with is LINKED to the person the invitation creates — the
+	// one way a subject is pinned without an administrator. Absent on a
+	// deployment with no provider.
 	ProviderStart string `json:"provider_start,omitempty"`
 }
 
@@ -101,9 +102,8 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 		MinPasswordLength: iam.MinPasswordChars,
 	}
 	if s.provider != nil {
-		view.ProviderStart = auth.PathAuthOIDCStart + "?" + url.Values{
-			"invite": {held.ID},
-		}.Encode()
+		view.ProviderStart = auth.AuthInvitePrefix + url.PathEscape(held.ID) +
+			providerRedemption
 	}
 	httpjson.Write(w, http.StatusOK, view)
 }

@@ -368,11 +368,10 @@ type Options struct {
 
 	// Auth serves /auth, normally an authapi.Service: how a person
 	// BECOMES a principal. It is the one surface here whose routes are
-	// not all guarded — five of them are how somebody obtains a
-	// credential, so requiring one would be a deployment nobody can
-	// enter — and which of the twelve is which is named in
-	// internal/api/auth's exemption list, held against the registration
-	// by a gate in authapi.
+	// not all guarded — the ones somebody obtains a credential through
+	// cannot require one, or it is a deployment nobody can enter — and
+	// which are which is named in internal/api/auth's exemption list,
+	// held against the registration by a gate in authapi.
 	//
 	// ITS OWN MOUNTER TYPE, which takes a mux it can NAME rather than
 	// *http.ServeMux: the standard mux does not report what was

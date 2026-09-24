@@ -178,6 +178,10 @@ func TestASignInRouteIsRefusedForACrossSiteOrigin(t *testing.T) {
 	for _, path := range []string{
 		auth.PathAuthLogin, auth.PathAuthBootstrap,
 		auth.AuthInvitePrefix + "an-invitation",
+		// THE REDEMPTION THROUGH THE PROVIDER, whose callback pins a
+		// provider account: started from another site, it pinned the
+		// victim's account to a person the attacker's invitation creates.
+		auth.AuthInvitePrefix + "an-invitation/provider",
 	} {
 		status, ran := send(t, c, http.MethodPost, path,
 			map[string]string{"Origin": "https://evil.example.com"})

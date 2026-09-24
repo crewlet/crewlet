@@ -24,13 +24,8 @@ import (
 // be a cookie whose meaning depends on which half of a round trip it is in.
 const flightCookieName = "crewlet_oidc_flight"
 
-// OIDCStart sends the browser to the provider.
-//
-// `?invite=<id>` starts a REDEMPTION rather than a sign-in: the invitation and
-// the login the person chose (`?login=`, or the one the invitation's page
-// proposed) are checked here and sealed into the flight, and the callback
-// enrols the person the invitation creates and links the subject the provider
-// comes back with to them — see invite_oidc.go.
+// OIDCStart sends the browser to the provider: an ordinary sign-in, or — with
+// `?step_up=` — a signed-in person confirming who they are.
 //
 // # It keeps its state in the BROWSER, sealed, and on no node
 //
@@ -40,31 +35,53 @@ const flightCookieName = "crewlet_oidc_flight"
 // makes a login begun on one node finishable on another, and what it seals —
 // the PKCE verifier — is the value that must not be readable, which is why it
 // is encrypted rather than signed.
+//
+// # A link any page can send a browser to, so it redeems nothing
+//
+// A GET is what a cross-site page can cause, and the round trip it starts
+// signs in whoever the provider says is at the browser — which is why a
+// sign-in and a confirmation are safe here: at worst they sign a person in as
+// themselves. A REDEMPTION is not, because its callback pins the account the
+// provider comes back with to the person an invitation creates, so it starts
+// from the invitation's own page by a POST the origin check covers
+// ([Service.StartProviderRedemption]). `?invite=` is REFUSED here rather than
+// ignored: ignored, an outdated link would start an ordinary sign-in and fail a
+// whole provider round trip later as an account nobody is linked to.
 func (s *Service) OIDCStart(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	if query.Has("invite") {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
+			map[string]string{"detail": "an invitation is redeemed through the " +
+				"identity provider from its own page, by POST " +
+				auth.AuthInvitePrefix + "{id}" + providerRedemption +
+				" — never by a link, which any site could send a browser to"})
+		return
+	}
+	want := oidc.Flight{Return: returnPath(query.Get("return_to"))}
+	if query.Get("step_up") != "" {
+		var ok bool
+		if want, ok = s.stepUpFlight(w, r, want); !ok {
+			return
+		}
+	}
+	s.launch(w, r, want, http.StatusFound)
+}
+
+// launch seals want into a flight and sends the browser to the provider,
+// answering status: 302 where a link was followed, and 303 where a form was
+// posted, which is what tells a browser to follow it with a GET.
+//
+// THE PROVIDER IS ASKED ONLY ONCE THE REQUEST IS ONE THIS SURFACE WOULD
+// SERVE, so a refusal a caller can act on — who they are, which invitation,
+// which login — is never hidden behind an outage at somebody else's provider.
+func (s *Service) launch(w http.ResponseWriter, r *http.Request, want oidc.Flight,
+	status int) {
+
 	metadata, err := s.provider.Metadata(r.Context())
 	if err != nil {
 		log.WarnContext(r.Context(), "api_oidc_discovery_failed", "error", err)
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentitySeconds)
 		return
-	}
-	want := oidc.Flight{Return: s.returnTo(r)}
-	invite, stepUp := r.URL.Query().Get("invite"), r.URL.Query().Get("step_up")
-	switch {
-	case invite != "" && stepUp != "":
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-			map[string]string{"detail": "a round trip redeems an invitation " +
-				"for somebody new or confirms who is signed in, never both"})
-		return
-	case invite != "":
-		var ok bool
-		if want, ok = s.redemptionFlight(w, r, want, invite); !ok {
-			return
-		}
-	case stepUp != "":
-		var ok bool
-		if want, ok = s.stepUpFlight(w, r, want); !ok {
-			return
-		}
 	}
 	redirect, sealed, err := s.provider.Config().Start(
 		s.cipher, metadata.AuthorizationEndpoint, want, s.now())
@@ -81,11 +98,10 @@ func (s *Service) OIDCStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, s.flightCookie(sealed, s.now().Add(oidc.FlightTTL)))
-	// A REDIRECT AND NOT A JSON BODY, because the caller is a BROWSER
-	// following a link: a body would need a script to act on it, and the
-	// page that starts a login is the one page a person may reach with
-	// nothing loaded.
-	http.Redirect(w, r, redirect, http.StatusFound)
+	// A REDIRECT AND NOT A JSON BODY, because the caller is a BROWSER: a
+	// body would need a script to act on it, and a script's fetch cannot
+	// follow a redirect to the provider's cross-origin page at all.
+	http.Redirect(w, r, redirect, status)
 }
 
 // OIDCCallback finishes the round trip.
@@ -314,17 +330,18 @@ func (s *Service) personForSubject(r *http.Request, claims oidc.Claims) (
 	return held, nil
 }
 
-// returnTo is where the browser goes once the login completes.
+// returnPath is where the browser goes once the login completes, from the
+// value the caller asked for.
 //
 // # An open redirect is the ordinary way a sign-in flow leaks a credential
 //
-// The value is a query parameter, which is to say the caller's, so it is
-// refused unless it is a PATH on this deployment: no scheme, no host, and a
-// leading single slash. `//evil.example.com` is a protocol-relative URL that
-// browsers follow off-site, which is exactly the shape a naive "starts with /"
-// check admits.
-func (s *Service) returnTo(r *http.Request) string {
-	want := strings.TrimSpace(r.URL.Query().Get("return_to"))
+// The value is the caller's — a query parameter on the sign-in start, a form
+// field on a redemption's — so it is refused unless it is a PATH on this
+// deployment: no scheme, no host, and a leading single slash.
+// `//evil.example.com` is a protocol-relative URL that browsers follow
+// off-site, which is exactly the shape a naive "starts with /" check admits.
+func returnPath(raw string) string {
+	want := strings.TrimSpace(raw)
 	if want == "" {
 		return "/dashboard"
 	}
