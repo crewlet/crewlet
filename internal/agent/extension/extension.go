@@ -54,6 +54,12 @@ type Decision struct {
 	InputTokens  int
 	OutputTokens int
 
+	// ProviderKey is the configured entry that answered — the operator's
+	// name beside the vendor's Model — for the same reason: the judge's
+	// record is a phase record, and one naming no entry is spend a
+	// by-provider rollup files under nobody.
+	ProviderKey string
+
 	// CacheRead and CacheWrite are the prompt cache's share of InputTokens
 	// on the judge's call, carried for the same reason the tokens are: the
 	// judge's record is a phase record like any other, and a breakdown the
@@ -66,7 +72,7 @@ type Decision struct {
 // that hands a judgement back makes, so a spend field added here reaches all
 // of them.
 func (d Decision) withSpend(s Decision) Decision {
-	d.Asked, d.Model = s.Asked, s.Model
+	d.Asked, d.Model, d.ProviderKey = s.Asked, s.Model, s.ProviderKey
 	d.InputTokens, d.OutputTokens = s.InputTokens, s.OutputTokens
 	d.CacheRead, d.CacheWrite = s.CacheRead, s.CacheWrite
 	return d

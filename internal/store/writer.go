@@ -136,7 +136,7 @@ const spendEventType = "agent_phase_completed"
 // Nil for every other event, which is what leaves the promoted columns at
 // their defaults — see schema/0015 for why they are columns.
 // It reads the SHALLOW form, like [extractTags] fifty lines below and unlike
-// the version this replaces: nine scalars are wanted, and decoding into
+// the version this replaces: thirteen scalars are wanted, and decoding into
 // map[string]any deep-decoded the engine's largest payload — a phase
 // completion carries the phase's whole prompt and tool log — on the
 // publishing goroutine of every LLM call. map[string]json.RawMessage leaves
@@ -166,6 +166,10 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		InputTokens:  jsonInt(body["input_tokens"]),
 		OutputTokens: jsonInt(body["output_tokens"]),
 		TotalTokens:  jsonInt(body["total_tokens"]),
+
+		CacheReadTokens:  jsonInt(body["cache_read_tokens"]),
+		CacheWriteTokens: jsonInt(body["cache_write_tokens"]),
+		ProviderKey:      jsonString(body["provider_key"]),
 	}
 	if spend.Model == "" {
 		// An entry that names no model is identified by the provider

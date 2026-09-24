@@ -595,7 +595,7 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider,
 	key string, meter toolloop.BudgetMeter, task resolved, deps []Result,
 ) (res Result) {
-	res.ID, res.Worker, res.ProviderKey = task.ID, task.Worker, key
+	res.ID, res.Worker = task.ID, task.Worker
 	res.StartedAt, res.MaxRounds = began.UTC(), task.maxTurns
 
 	// TELEMETRY ON EVERY PATH, including the panic the frame below
@@ -720,12 +720,15 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 
 	progress := &toolloop.Progress{}
 	loop, err := toolloop.Run(ctx, toolloop.Config{
-		Provider:  provider,
-		Surface:   surface,
-		MaxRounds: task.maxTurns,
-		Budget:    meter,
-		Fence:     cfg.Fence,
-		Progress:  progress,
+		Provider: provider,
+		// The resolved head, until a completion names the entry that
+		// actually served — which, on a seat's chain, can be a later one.
+		ProviderKey: key,
+		Surface:     surface,
+		MaxRounds:   task.maxTurns,
+		Budget:      meter,
+		Fence:       cfg.Fence,
+		Progress:    progress,
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: res.SystemPrompt},
 			{Role: llm.RoleUser, Content: res.UserPrompt},
@@ -748,6 +751,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		res.CacheRead, res.CacheWrite = loop.CacheRead, loop.CacheWrite
 		res.RoundRecords = loop.Rounds
 		res.Model = loop.Model
+		res.ProviderKey = loop.ProviderKey
 		res.Executions = loop.Executions
 		res.Narration = loop.Narration
 		res.Status, res.Output = submitted(submit)
@@ -769,6 +773,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	res.CacheRead, res.CacheWrite = partial.CacheRead, partial.CacheWrite
 	res.RoundRecords = partial.Rounds
 	res.Model = partial.Model
+	res.ProviderKey = partial.ProviderKey
 	res.Executions = partial.Executions
 	res.Narration = partial.Narration
 

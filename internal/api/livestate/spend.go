@@ -47,7 +47,15 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		InputTokens:  num(payload, "input_tokens"),
 		OutputTokens: num(payload, "output_tokens"),
 		TotalTokens:  num(payload, "total_tokens"),
-		CostUSD:      fraction(payload, "cost_usd"),
+		// Every value the store's columns carry (schema/0015, 0030):
+		// the live window and a queried one fold through one
+		// aggregation, and a value one producer carries and the other
+		// drops is a rollup that changes when the window crosses the
+		// live edge.
+		CacheReadTokens:  num(payload, "cache_read_tokens"),
+		CacheWriteTokens: num(payload, "cache_write_tokens"),
+		ProviderKey:      str(payload, "provider_key"),
+		CostUSD:          fraction(payload, "cost_usd"),
 	}})
 	s.pruneSpend(env.Timestamp)
 	return true

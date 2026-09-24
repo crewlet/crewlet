@@ -415,6 +415,7 @@ type Progress struct {
 	roundsUsed   int
 	maxRounds    int
 	model        string
+	providerKey  string
 }
 
 // Snapshot freezes the partial state into a Result.
@@ -437,6 +438,7 @@ func (p *Progress) Snapshot() Result {
 		RoundsUsed:   p.roundsUsed,
 		MaxRounds:    p.maxRounds,
 		Model:        p.model,
+		ProviderKey:  p.providerKey,
 		Messages:     append([]llm.Message(nil), p.messages...),
 	}
 }
@@ -454,6 +456,7 @@ func (p *Progress) record(res Result) {
 	p.inputTokens, p.outputTokens = res.InputTokens, res.OutputTokens
 	p.cacheRead, p.cacheWrite = res.CacheRead, res.CacheWrite
 	p.roundsUsed, p.maxRounds, p.model = res.RoundsUsed, res.MaxRounds, res.Model
+	p.providerKey = res.ProviderKey
 }
 
 // Result is one loop invocation's outcome.
@@ -464,6 +467,13 @@ type Result struct {
 	Executions   []Execution
 	RoundsUsed   int
 	Model        string
+
+	// ProviderKey is the configured entry that served the phase, latched
+	// with Model and by the same precedence: the first completion that
+	// names one wins, and [Config.ProviderKey] stands in until then. NOT
+	// the same question as Model — a chain serves several models under one
+	// key and one model can sit under several keys.
+	ProviderKey string
 
 	// CacheRead and CacheWrite total the rounds' own ([Round.CacheRead]):
 	// how much of InputTokens a provider's prompt cache served, and how
@@ -581,6 +591,14 @@ type Config struct {
 	Provider llm.Provider
 	Surface  Surface
 
+	// ProviderKey is the providers.llm key Provider was resolved under —
+	// a chain's HEAD. It stands in for the entry that served exactly as
+	// Provider.Model() stands in for the model: until a completion names
+	// one ([llm.Completion.ProviderKey]), and on a phase that never got a
+	// completion at all. Optional; empty leaves [Result.ProviderKey] to
+	// the completions alone.
+	ProviderKey string
+
 	// Messages is the starting conversation. The loop appends to a copy;
 	// the result carries the full conversation.
 	Messages []llm.Message
@@ -682,12 +700,12 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	var narration []Narration
 	var rounds []Round
 	var inTokens, outTokens, cacheRead, cacheWrite int
-	var model string
+	var model, providerKey string
 	// The latest round's start, for the live view; see Result.RoundStartedAt.
 	var roundStarted time.Time
 	// served distinguishes the model a COMPLETION named from the configured
 	// placeholder a streamed round shows before one exists.
-	var served bool
+	var served, keyServed bool
 	terminators := make(map[string]struct{}, len(cfg.TerminateAfter))
 	for _, name := range cfg.TerminateAfter {
 		terminators[name] = struct{}{}
@@ -713,6 +731,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			RoundsUsed:   used,
 			MaxRounds:    cfg.MaxRounds,
 			Model:        model,
+			ProviderKey:  providerKey,
 			Messages:     append([]llm.Message(nil), msgs...),
 		}
 	}
@@ -780,6 +799,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// actually served the call, which is the billable fact.
 		if model == "" {
 			model = cfg.Provider.Model()
+		}
+		if providerKey == "" {
+			providerKey = cfg.ProviderKey
 		}
 
 		// One partial per round, replaced by the round's real narration
@@ -869,6 +891,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			// has something to show while it writes, and the billable fact
 			// still wins the moment it exists.
 			model, served = completion.Model, true
+		}
+		if !keyServed && completion.ProviderKey != "" {
+			// The ENTRY that served, by the model's own precedence and
+			// latched on its own flag: a completion can name a model
+			// with no key (a bare backend) and the configured head then
+			// stays the answer, exactly as the model's placeholder did
+			// before it.
+			providerKey, keyServed = completion.ProviderKey, true
 		}
 		if model == "" {
 			model = cfg.Provider.Model()

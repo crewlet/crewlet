@@ -397,9 +397,9 @@ func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 	if got.Notes == "" {
 		t.Error("the judge's reason is missing, which is what makes a rescue readable")
 	}
-	if got.TotalTokens != 30 || got.Model != "judge-model" {
-		t.Errorf("the judge's own spend is unreported: %d tokens on %q",
-			got.TotalTokens, got.Model)
+	if got.TotalTokens != 30 || got.Model != "judge-model" || got.ProviderKey != "judge-entry" {
+		t.Errorf("the judge's own spend is unreported: %d tokens on %q under entry %q",
+			got.TotalTokens, got.Model, got.ProviderKey)
 	}
 	// AND CHARGED. The judge runs outside the tool loop, so nothing else
 	// meters it: a seat's reported cost was below what it actually cost by
@@ -445,7 +445,8 @@ type spendingJudge struct{}
 func (spendingJudge) Decide(context.Context, extension.Request) (extension.Decision, error) {
 	return extension.Decision{
 		Extend: true, Reason: "each call advances on the last",
-		Asked: true, Model: "judge-model", InputTokens: 20, OutputTokens: 10,
+		Asked: true, Model: "judge-model", ProviderKey: "judge-entry",
+		InputTokens: 20, OutputTokens: 10,
 	}, nil
 }
 

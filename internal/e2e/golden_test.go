@@ -510,6 +510,55 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			}
 		}
 	}
+
+	// --- and what the prompt cache served ----------------------------- //
+	// The provider reports a cached prefix on every round, so every phase
+	// record carries cache counts — and the rollup is folded from TWO
+	// producers that must both carry them: the live projection (the
+	// `tokens` frame above) and the event store's promoted columns
+	// (schema/0030). Either one dropping them reads, on every screen, as a
+	// cache that never hit.
+	var cacheRead, cacheWrite float64
+	keys := map[string]bool{}
+	for _, rec := range records {
+		r, _ := rec["cache_read_tokens"].(float64)
+		w, _ := rec["cache_write_tokens"].(float64)
+		cacheRead += r
+		cacheWrite += w
+		if key, _ := rec["provider_key"].(string); key != "" {
+			keys[key] = true
+		}
+	}
+	if cacheRead <= 0 || cacheWrite <= 0 {
+		t.Fatalf("the phase records carry %v cached / %v written tokens; the "+
+			"provider reported both on every round", cacheRead, cacheWrite)
+	}
+	if got, _ := totals["cache_read_tokens"].(float64); got != cacheRead {
+		t.Errorf("the live rollup counts %v cached tokens, want the records' %v",
+			got, cacheRead)
+	}
+	if got, _ := totals["cache_write_tokens"].(float64); got != cacheWrite {
+		t.Errorf("the live rollup counts %v cache-written tokens, want the "+
+			"records' %v", got, cacheWrite)
+	}
+	stored, err := n.engine.Backends().Store.Events().PhaseTokens(t.Context(),
+		store.PhaseTokenQuery{SinceDays: 1})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	var storedRead, storedWrite int
+	for _, r := range stored {
+		storedRead += r.CacheReadTokens
+		storedWrite += r.CacheWriteTokens
+		if !keys[r.ProviderKey] {
+			t.Errorf("a stored phase names provider key %q; the records named %v",
+				r.ProviderKey, keys)
+		}
+	}
+	if float64(storedRead) != cacheRead || float64(storedWrite) != cacheWrite {
+		t.Errorf("the store holds %d cached / %d written tokens, want the "+
+			"records' %v / %v", storedRead, storedWrite, cacheRead, cacheWrite)
+	}
 }
 
 // --- the client's half ----------------------------------------------------- //

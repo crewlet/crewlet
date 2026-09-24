@@ -278,6 +278,41 @@ func (c cachedModel) Complete(context.Context, llm.Request) (*llm.Completion, er
 	}, nil
 }
 
+// entryModel is a judge model behind a chain, which names the entry that
+// answered on the completion.
+type entryModel struct{}
+
+func (entryModel) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return &llm.Completion{
+		Content: "EXTEND 3\nprogressing", Model: "cheap-model", ProviderKey: "judge-backup",
+		InputTokens: 10, OutputTokens: 2,
+	}, nil
+}
+
+// THE JUDGE'S RECORD NAMES THE ENTRY THAT ANSWERED, as every phase record
+// does: the completion's own when a chain reported one, and the key the judge
+// was built over when a single backend could not — it never knows the key it
+// was configured under. Without it the judge's spend is filed under no entry.
+func TestTheJudgeNamesTheEntryThatAnswered(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		model extension.Completer
+		want  string
+	}{
+		{"a bare backend", cachedModel{answer: "EXTEND 3\nprogressing"}, "cheap"},
+		{"a chain", entryModel{}, "judge-backup"},
+	} {
+		j := extension.NewLLMJudge(tc.model, "cheap")
+		_, d := extension.Consider(t.Context(), j, extension.Policy{
+			Enabled: true, RoundStep: 4, Ceiling: 40,
+		}, judgeReq())
+		if d.ProviderKey != tc.want {
+			t.Errorf("%s: ProviderKey = %q, want %q", tc.name, d.ProviderKey, tc.want)
+		}
+	}
+}
+
 // THE JUDGE'S CACHE SHARE TRAVELS WITH ITS SPEND, on every path — including
 // the one where its answer was not a verdict and the policy rescues. Its record
 // is a phase record like any other, and a figure the completion reported and

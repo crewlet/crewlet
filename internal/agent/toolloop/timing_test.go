@@ -283,3 +283,47 @@ func TestARefusedChargeLeavesItsRoundOnTheFailureRecord(t *testing.T) {
 		t.Errorf("the failure record billed %d input / %d cached, want 600 / 400", snap.InputTokens, snap.CacheRead)
 	}
 }
+
+// THE PHASE NAMES THE ENTRY THAT SERVED IT, by the model's own precedence.
+//
+// Config.ProviderKey is the configured head, standing in the way
+// Provider.Model() stands in for the model; the first completion that names an
+// entry replaces it, and a later round served by another entry does not —
+// exactly as the phase's model latches. A completion from a bare backend names
+// no entry, so the head stays the answer rather than going blank.
+func TestThePhaseNamesTheEntryThatServedIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		turns []llm.Completion
+		want  string
+	}{
+		{name: "the completion names the entry", want: "backup", turns: []llm.Completion{
+			{Model: "m1", ProviderKey: "backup", ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+			{Model: "m2", ProviderKey: "third", Content: "done"},
+		}},
+		{name: "a bare backend names none", want: "head", turns: []llm.Completion{
+			{Model: "m1", Content: "done"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := &scriptedProvider{turns: tc.turns}
+			progress := &toolloop.Progress{}
+			res, err := toolloop.Run(t.Context(), toolloop.Config{
+				Provider: p, ProviderKey: "head", Surface: &timedSurface{},
+				MaxRounds: 6, Progress: progress,
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if res.ProviderKey != tc.want {
+				t.Errorf("ProviderKey = %q, want %q", res.ProviderKey, tc.want)
+			}
+			// The live snapshot a failure record is built from agrees.
+			if got := progress.Snapshot().ProviderKey; got != tc.want {
+				t.Errorf("the snapshot names %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

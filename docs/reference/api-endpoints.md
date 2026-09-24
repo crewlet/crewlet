@@ -3271,7 +3271,12 @@ Notes:
   stored. A **breakdown** of the input, never an addition to it —
   `input_tokens` already counts the cached prefix on every backend, so the
   cache's share of a bucket is `cache_read_tokens / input_tokens`, and
-  `total_tokens` stays input plus output.
+  `total_tokens` stays input plus output. Both producers carry them: the
+  live window reads them off each phase record, and a stored window off
+  the columns the event store promotes them into (with `provider_key`, the
+  entry that served the call), so a window that crosses the live edge
+  reads the same share on both sides of it. A phase recorded by a build
+  that did not count the cache reads 0.
 - Every bucket — the totals, each row, and each nested `by_phase` entry —
   also carries `cost_usd` and `priced_calls`. **Two numbers, because zero
   dollars is two different facts**: only a subscription coding CLI reports

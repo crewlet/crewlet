@@ -872,7 +872,10 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		loopCtx := toolloop.WithRoundOffset(ctx, prior.Rounds)
 		res, err := toolloop.Run(loopCtx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
-			MaxRounds: budget, Budget: r.cfg.Budget,
+			// The chain's head, standing in until a completion names the
+			// member that actually served — see toolloop.Config.
+			ProviderKey: members[0].Key,
+			MaxRounds:   budget, Budget: r.cfg.Budget,
 			Fence:        r.cfg.Fence,
 			ToolChoice:   in.toolChoice,
 			AllowSuspend: in.allowSuspend,
@@ -1125,6 +1128,10 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 	// never reached a provider.
 	if res.Model == "" {
 		res.Model = done.Result.Model
+	}
+	// The entry, by the same rule and for the same reason.
+	if res.ProviderKey == "" {
+		res.ProviderKey = done.Result.ProviderKey
 	}
 	return res
 }

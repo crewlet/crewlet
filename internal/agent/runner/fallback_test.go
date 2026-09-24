@@ -481,3 +481,48 @@ func userText(req llm.Request) string {
 	}
 	return b.String()
 }
+
+// A PHASE RECORD NAMES THE ENTRY THAT SERVED IT, which after a hand-off is not
+// the head of its chain.
+//
+// provider_key is the operator's name for what answered — the spend-by-provider
+// rollup is keyed on it — and the phase record left it empty on every turn
+// phase: only a delegated worker set it, and that one named the head it was
+// resolved under whatever took over. A phase that never reached a model names
+// no entry at all, exactly as it names no model.
+func TestAPhaseRecordNamesTheEntryThatServedIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		chain org.ProviderKeys
+		want  string
+		fails bool
+	}{
+		{name: "the head answers", chain: org.ProviderKeys{"executor", "benched"}, want: "executor"},
+		{name: "a hand-off", chain: org.ProviderKeys{"benched", "executor"}, want: "executor"},
+		// NAMES NOBODY, exactly as its model does: no entry served a
+		// phase whose every member failed, and naming the head would
+		// charge it for a call it refused.
+		{name: "nobody answers", chain: org.ProviderKeys{"benched", "also-benched"},
+			want: "", fails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pub := newCapture()
+			prov := &scriptedProvider{execute: deliver(t, "posted the weekly summary")}
+			r, _ := buildWith(t, []phase.Entry{
+				{Key: "benched", Provider: benched{model: "benched-model"}},
+				{Key: "also-benched", Provider: benched{model: "also-benched-model"}},
+				{Key: "executor", Provider: prov},
+			}, buildOpts{pub: pub, execChain: tc.chain})
+
+			_, _, err := r.Execute(context.Background(), 1, "", nil)
+			if (err != nil) != tc.fails {
+				t.Fatalf("Execute: %v, want a failure: %v", err, tc.fails)
+			}
+			if got := completedPhase(t, pub, "execute").ProviderKey; got != tc.want {
+				t.Errorf("provider_key = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

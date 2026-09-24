@@ -205,6 +205,53 @@ func TestTheCompletionNamesTheMemberThatActuallyServed(t *testing.T) {
 	}
 }
 
+// THE COMPLETION NAMES THE ENTRY THAT SERVED, and not the head.
+//
+// A backend never knows the key it was configured under, and every frame above
+// the chain sees one provider — so only this loop can say which entry answered,
+// and a call that fell through reads, without it, as the entry that failed it.
+// That is the entry a spend-by-provider rollup would then charge.
+func TestTheCompletionNamesTheEntryThatServed(t *testing.T) {
+	t.Parallel()
+	head := build(t, Options{},
+		member("primary", answering("head-model", "ok")),
+		member("backup", answering("backup-model", "unused")))
+	out, err := head.Complete(context.Background(), llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if out.ProviderKey != "primary" {
+		t.Errorf("ProviderKey = %q, want the head that answered", out.ProviderKey)
+	}
+
+	fell := build(t, Options{},
+		member("primary", failing("head-model", llm.KindRateLimit)),
+		member("backup", answering("backup-model", "ok")))
+	out, err = fell.Complete(context.Background(), llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if out.ProviderKey != "backup" {
+		t.Errorf("ProviderKey = %q after a fallback, want %q — the entry that "+
+			"answered, not the one that failed", out.ProviderKey, "backup")
+	}
+
+	// NESTED, the inner member's key survives the outer chain: it is the
+	// entry that actually answered, and the outer member is a group of them.
+	inner := build(t, Options{},
+		member("inner-primary", failing("inner-head", llm.KindServer)),
+		member("inner-backup", answering("inner-backup-model", "ok")))
+	outer := build(t, Options{}, member("inner", inner))
+	out, err = outer.Complete(context.Background(), llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if out.ProviderKey != "inner-backup" {
+		t.Errorf("ProviderKey = %q through two chains, want the innermost "+
+			"member that answered", out.ProviderKey)
+	}
+}
+
 // An exhausted credential pool is a retryable failure like any other. It needs
 // no dedicated error type and no dedicated catch: the classification carried on
 // the error is enough.

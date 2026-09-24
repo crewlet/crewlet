@@ -2568,8 +2568,15 @@ func TestAWorkersProviderHandOffIsPublishedAgainstTheParentTurn(t *testing.T) {
 	pub := &publisher{}
 	cfg.Publisher = pub
 
-	if res := one(t, cfg, request("read_file")); res.Status != subagent.StatusOK {
+	res := one(t, cfg, request("read_file"))
+	if res.Status != subagent.StatusOK {
 		t.Fatalf("worker did not finish on the second member: %+v", res)
+	}
+	// THE ENTRY THAT ANSWERED, not the head it was resolved under — which
+	// is what the worker's record named before the chain reported it, so
+	// every worker behind a benched head was charged to the benched key.
+	if res.ProviderKey != "default" {
+		t.Errorf("ProviderKey = %q, want %q — the member that served", res.ProviderKey, "default")
 	}
 
 	var got []*types.ProviderFallback

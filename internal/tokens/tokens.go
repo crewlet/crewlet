@@ -13,6 +13,19 @@
 // answers for a window other than the live one). Either of those importing the
 // other would be a cycle, and a second record type to bridge them would be the
 // same duplication one directory further out.
+//
+// BOTH PRODUCERS FILL EVERY FIELD OF [Record], and that is a contract rather
+// than a coincidence: the live projection reads the phase record's payload and
+// the event store reads the columns schema/0015 and schema/0030 promoted out of
+// it, so a field one of them carries and the other drops is a rollup whose
+// numbers change when a window crosses the live edge. The prompt-cache counts
+// were exactly that until 0030 — summed here and filled by neither — so every
+// bucket's cache share read zero.
+//
+// THE CACHE COUNTS ARE A BREAKDOWN OF THE INPUT, never an addition: every
+// backend reports input_tokens with the cached prefix included, so a reader
+// divides cache_read_tokens by input_tokens and adds neither cache count to
+// anything. See [Bucket.CacheReadTokens].
 package tokens
 
 import (
@@ -50,6 +63,13 @@ type Record struct {
 	// "auxiliary" — which is why the worker rollup keys on the pair.
 	Worker string `json:"worker"`
 	Model  string `json:"model"`
+	// ProviderKey is the configured provider entry that served the call.
+	// NOT the same question as Model: a fallback chain serves several
+	// models under one key, and one model can be configured under several
+	// keys, so "which of our entries did this" is answerable only here.
+	// Model falls back to it on a phase that named no model (the producers
+	// do that, not this package); this is always the key itself.
+	ProviderKey string `json:"provider_key,omitempty"`
 
 	// TurnID is the RUN the phase belonged to, and WorkKey the unit of
 	// work behind it. Both, because a turn that fails without acting is

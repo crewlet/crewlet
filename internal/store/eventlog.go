@@ -139,7 +139,7 @@ type EventRecord struct {
 	// Spend is what one LLM call cost, present only on a phase completion.
 	//
 	// Promoted out of the payload and into columns because the rollup that
-	// reads it is an AGGREGATION: it wants nine small values from every
+	// reads it is an AGGREGATION: it wants a dozen small values from every
 	// row in a window, and reaching them through the payload meant hauling
 	// each phase's whole prompt and response across the driver to decode
 	// them in Go. See schema/0015.
@@ -149,7 +149,7 @@ type EventRecord struct {
 // Spend is one LLM call's identity and its token cost.
 //
 // A pointer on [EventRecord] rather than flat fields: it is set on one event
-// type out of dozens, and flattening it would put nine always-empty fields on
+// type out of dozens, and flattening it would put thirteen always-empty fields on
 // every row the dashboard renders.
 type Spend struct {
 	// Phase is which phase ran; HostPhase is the phase a nested call ran
@@ -173,6 +173,21 @@ type Spend struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
 	TotalTokens  int `json:"total_tokens,omitempty"`
+
+	// CacheReadTokens and CacheWriteTokens are the share of InputTokens the
+	// provider's prompt cache served and stored — a BREAKDOWN of the input,
+	// never an addition to it (see tokens.Bucket). Columns since
+	// schema/0030, for the reason the counts above are: the rollup reads
+	// columns, so a count left in the payload is a count it reads as zero.
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+
+	// ProviderKey is the configured provider entry that served the call,
+	// as distinct from Model, the model that entry reported: a fallback
+	// chain serves several models under one key. Model falls back to it
+	// when a phase names no model; this is the key itself, never the
+	// fallback. schema/0030.
+	ProviderKey string `json:"provider_key,omitempty"`
 }
 
 // Cursor is an exclusive keyset position: the reader holds this row and wants
@@ -265,9 +280,10 @@ INSERT INTO crewlet_events (
 	agent_id, agent_role, task_id, channel_id, sender,
 	summary, actor, tags, payload,
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
-	input_tokens, output_tokens, total_tokens
+	input_tokens, output_tokens, total_tokens,
+	cache_read_tokens, cache_write_tokens, provider_key
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -379,6 +395,7 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 			spend.Phase, spend.HostPhase, spend.Worker, spend.Model,
 			spend.TurnID, spend.WorkKey, spend.Iteration,
 			spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
+			spend.CacheReadTokens, spend.CacheWriteTokens, spend.ProviderKey,
 		); err != nil {
 			return err
 		}
@@ -1049,7 +1066,7 @@ const (
 	// for any org past that many phase completions in the window, which
 	// this file's own arithmetic put at a third of a busy month.
 	//
-	// The numbers are columns now (schema/0015), so a row is nine narrow
+	// The numbers are columns now (schema/0015, 0030), so a row is a few narrow
 	// values instead of a document, and the whole window folds. A cap here
 	// would only reintroduce an undercount that looks like an underspend.
 )
@@ -1064,6 +1081,7 @@ const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role,
        phase, host_phase, worker, model, turn_id, work_key, iteration,
        input_tokens, output_tokens, total_tokens,
+       cache_read_tokens, cache_write_tokens, provider_key,
        COALESCE(json_extract(payload, '$.cost_usd'), 0)
 FROM crewlet_events
 WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
@@ -1218,11 +1236,12 @@ const MaxPhasePage = 60
 // so a rollup over seven days and a rollup over the live one cannot disagree
 // about what a phase costs.
 //
-// The token counts come out of the PAYLOAD rather than from columns of their
-// own. That is deliberate: they are five numbers on one event type, and
-// promoting them would mean a migration and five more columns that are NULL on
-// every other row in the table. The filterable dimensions — the ones a query
-// selects ON — are the promoted ones.
+// EVERY VALUE BUT THE PRICE IS A COLUMN — the counts since schema/0015, the
+// cache counts and the provider key since schema/0030 — so a month of phases
+// folds without reading one payload. A count left in the payload is a count
+// this reads as zero, which is what the cache share did until 0030: every
+// rollup reported a cache that never hit. The price stays in the payload for
+// the reason given at phaseTokenSQL.
 func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
 	since, until := q.Window(now())
 
@@ -1264,6 +1283,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
+			&rec.CacheReadTokens, &rec.CacheWriteTokens, &rec.ProviderKey,
 			&rec.CostUSD,
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)

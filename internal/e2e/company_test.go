@@ -511,7 +511,7 @@ func toolUse(name string, input map[string]any) string {
 		"id":"msg_1","type":"message","role":"assistant","model":"claude-golden",
 		"content":[{"type":"tool_use","id":"call_1","name":%q,"input":%s}],
 		"stop_reason":"tool_use",
-		"usage":{"input_tokens":120,"output_tokens":30}
+		"usage":{"input_tokens":120,"output_tokens":30,"cache_read_input_tokens":80,"cache_creation_input_tokens":15}
 	}`, name, args)
 }
 
@@ -523,7 +523,7 @@ func textReply(text string) string {
 		"id":"msg_2","type":"message","role":"assistant","model":"claude-golden",
 		"content":[{"type":"text","text":%s}],
 		"stop_reason":"end_turn",
-		"usage":{"input_tokens":90,"output_tokens":40}
+		"usage":{"input_tokens":90,"output_tokens":40,"cache_read_input_tokens":60,"cache_creation_input_tokens":25}
 	}`, body)
 }
 
