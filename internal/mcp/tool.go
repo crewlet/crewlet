@@ -22,6 +22,12 @@ type Result struct {
 	// that is the point — but a reader can tell a tool that ran from one that
 	// refused.
 	Failed bool
+
+	// Refusal classifies a failure for a reader that is not a model, and
+	// only a FIRST-PARTY tool sets it — see [Refusal] for why an MCP
+	// server's failure is left unclassified. Set implies Failed; empty on
+	// a Failed result means "unclassified", never "fine".
+	Refusal Refusal
 }
 
 // Callable is the least a phase surface needs to offer something to a model

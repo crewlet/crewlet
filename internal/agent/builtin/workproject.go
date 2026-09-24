@@ -228,7 +228,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		result, err := writer.WriteTags(ctx, opID, key,
 			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
 		if err != nil {
-			return failed(writeFailure(actor, tracker.WriteProjectTool, err)), nil
+			return writeFailure(actor, tracker.WriteProjectTool, err), nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
 			// See [writeWorkCatalogue]: the second half waits for the
@@ -238,7 +238,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				next = "The policy change was NOT written: the call stopped " +
 					"here, before it. " + next
 			}
-			return failed(unknownWrite(actor, tracker.WriteProjectTool,
+			return unknownOutcome(unknownWrite(actor, tracker.WriteProjectTool,
 				fmt.Sprintf("%s's tag change landed", key), opID,
 				result.Unvouched, next)), nil
 		}
@@ -256,14 +256,14 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		result, err := writer.WriteProject(ctx, opID, key,
 			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
 		if err != nil {
-			return failed(writeFailure(actor, tracker.WriteProjectTool, err)), nil
+			return writeFailure(actor, tracker.WriteProjectTool, err), nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
 			next := restateNext(fmt.Sprintf("Read %s with describe_project", key))
 			if !tagEdit.Empty() {
 				next = "The tag change WAS written. " + next
 			}
-			return failed(unknownWrite(actor, tracker.WriteProjectTool,
+			return unknownOutcome(unknownWrite(actor, tracker.WriteProjectTool,
 				fmt.Sprintf("%s's policy change landed", key), opID,
 				result.Unvouched, next)), nil
 		}

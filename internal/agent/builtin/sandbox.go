@@ -77,21 +77,21 @@ func (t *runSandbox) Parameters() map[string]any {
 // the work was done while the job was still running, and nothing would ever
 // collect its result. Refusing is the only safe answer, and it says why.
 func (t *runSandbox) Call(context.Context, map[string]any) (tools.Result, error) {
-	return tools.Result{
-		Output: "run_sandbox can only be called from an Execute phase that can " +
-			"suspend, because the coding job outlives the turn that starts it.",
-		Failed: true,
-	}, nil
+	return refused(tools.RefusalForbidden, "run_sandbox can only be called "+
+		"from an Execute phase that can suspend, because the coding job "+
+		"outlives the turn that starts it."), nil
 }
 
 func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.DetachedResult, error) {
 	brief := strings.TrimSpace(argString(args, "brief"))
 	if brief == "" {
-		return failedDetached("run_sandbox needs a non-empty `brief` describing the code task."), nil
+		return tools.DetachedResult{Result: failed("run_sandbox needs a " +
+			"non-empty `brief` describing the code task.")}, nil
 	}
 	if turn == nil || turn.RunID == "" {
-		return failedDetached("run_sandbox needs an active turn; it can only be " +
-			"called from within an Execute phase."), nil
+		return tools.DetachedResult{Result: refused(tools.RefusalForbidden,
+			"run_sandbox needs an active turn; it can only be called from "+
+				"within an Execute phase.")}, nil
 	}
 
 	res, err := t.launcher.Launch(ctx, turn, brief)
@@ -99,7 +99,8 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 		// A launch that failed is a TOOL FAILURE, not an engine one: the
 		// model asked for something the engine could not do, and telling it
 		// so lets it fall back to its own tools rather than losing the turn.
-		return failedDetached(fmt.Sprintf("the sandbox could not be started: %v", err)), nil
+		return tools.DetachedResult{Result: refused(tools.RefusalUnavailable,
+			fmt.Sprintf("the sandbox could not be started: %v", err))}, nil
 	}
 
 	log.InfoContext(ctx, "run_sandbox_suspended",
@@ -117,8 +118,4 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 			"sandbox_id": res.SandboxID,
 		},
 	}, nil
-}
-
-func failedDetached(msg string) tools.DetachedResult {
-	return tools.DetachedResult{Result: tools.Result{Output: msg, Failed: true}}
 }

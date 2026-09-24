@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -142,7 +143,7 @@ func (t *listProjects) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	q.Level = seatReadLevel
 	listing, err := reader.Projects(ctx, q)
 	if err != nil {
-		return failed(readFailure(tracker.ListProjectsTool, err)), nil
+		return readFailure(tracker.ListProjectsTool, err), nil
 	}
 	return jsonResult(listing)
 }
@@ -214,8 +215,18 @@ func (t *describeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Units:   t.deps.Units,
 		Level:   seatReadLevel,
 	})
-	if err != nil {
-		return failed(readFailure(tracker.DescribeProjectTool, err)), nil
+	switch {
+	case errors.Is(err, tracker.ErrNoProject):
+		// THE READER'S OWN SENTENCE, which names the nearest keys. This
+		// used to go through [readFailure], which told a model that
+		// typed a key wrong that the tracker could not be read and that
+		// it must not conclude the project does not exist — the one
+		// conclusion it needed to draw.
+		return refused(tools.RefusalNotFound, clip(err.Error())), nil
+	case errors.Is(err, tracker.ErrNoType):
+		return failed(clip(err.Error())), nil
+	case err != nil:
+		return readFailure(tracker.DescribeProjectTool, err), nil
 	}
 	return jsonResult(detail)
 }

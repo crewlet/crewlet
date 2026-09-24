@@ -40,6 +40,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -116,6 +117,14 @@ type ToolResult struct {
 	// carries the flag so a reader can tell a tool that ran from one that
 	// refused.
 	Failed bool
+
+	// Refusal is a failed call's machine-readable class, when the frame
+	// that refused wrote the sentence itself — see [mcp.Refusal]. Empty on
+	// success and on a third-party MCP server's failure, which the engine
+	// does not classify by guessing at prose it did not write. This loop
+	// never reads it — a model reads the sentence — so it is for a caller
+	// that dispatches through a surface with no model behind it.
+	Refusal mcp.Refusal
 
 	// Suspend stops the loop with this call UNANSWERED, for a tool whose
 	// work outlives the turn (the detached sandbox). Honoured only when

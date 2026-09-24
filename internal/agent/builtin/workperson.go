@@ -111,7 +111,7 @@ func (t *getPerson) Call(ctx context.Context, args map[string]any) (tools.Result
 		Who: t.deps.partyOf(handle), Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
-		return failed(readFailure(tracker.GetPersonTool, err)), nil
+		return readFailure(tracker.GetPersonTool, err), nil
 	}
 	return jsonResult(state)
 }
@@ -216,18 +216,18 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for _, ref := range items {
 		id, refusal := t.deps.resolveRef(ctx, tracker.SetPrioritiesTool,
 			"`items`", ref)
-		if refusal != "" {
-			return failed(refusal), nil
+		if refusal != nil {
+			return *refusal, nil
 		}
 		resolved = append(resolved, id)
 	}
 	opID := opIDFor(actor, t.Name(), "prio", handle, args)
 	result, err := writer.WritePriorities(ctx, opID, handle, resolved, authority)
 	if err != nil {
-		return failed(writeFailure(actor, tracker.SetPrioritiesTool, err)), nil
+		return writeFailure(actor, tracker.SetPrioritiesTool, err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		return failed(unknownWrite(actor, tracker.SetPrioritiesTool,
+		return unknownOutcome(unknownWrite(actor, tracker.SetPrioritiesTool,
 			fmt.Sprintf("%s's priorities were set", handle), opID,
 			result.Unvouched, unknownNext(result.Unvouched,
 				sameCall(actor, tracker.SetPrioritiesTool),
@@ -300,10 +300,10 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	result, err := writer.WritePins(ctx, opID, whose,
 		argStrings(args, "views"), favorites)
 	if err != nil {
-		return failed(writeFailure(actor, tracker.SetPinsTool, err)), nil
+		return writeFailure(actor, tracker.SetPinsTool, err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		return failed(unknownWrite(actor, tracker.SetPinsTool,
+		return unknownOutcome(unknownWrite(actor, tracker.SetPinsTool,
 			"your pins were set", opID, result.Unvouched,
 			unknownNext(result.Unvouched, sameCall(actor, tracker.SetPinsTool),
 				"Read them with get_person",
@@ -423,10 +423,10 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Seq:    uint64(argFloat(args, "seen_through")),
 		})
 	if err != nil {
-		return failed(writeFailure(actor, tracker.MarkInboxTool, err)), nil
+		return writeFailure(actor, tracker.MarkInboxTool, err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		return failed(unknownWrite(actor, tracker.MarkInboxTool,
+		return unknownOutcome(unknownWrite(actor, tracker.MarkInboxTool,
 			"the inbox was marked", opID, result.Unvouched,
 			unknownNext(result.Unvouched, sameCall(actor, tracker.MarkInboxTool),
 				"Read it with work_inbox",
@@ -635,7 +635,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 	}
 	answer, err := t.deps.Inbox.Inbox(ctx, q, t.deps.now())
 	if err != nil {
-		return failed(readFailure(tracker.WorkInboxTool, err)), nil
+		return readFailure(tracker.WorkInboxTool, err), nil
 	}
 	return jsonResult(answer)
 }

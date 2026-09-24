@@ -92,16 +92,16 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	key = ProjectKey(key)
 	switch {
 	case key == "":
-		return WriteResult{}, fmt.Errorf("tracker: a project edit names no project")
+		return WriteResult{}, invalid("tracker: a project edit names no project")
 	case edit.Empty():
-		return WriteResult{}, fmt.Errorf("tracker: a project edit of %s sets "+
+		return WriteResult{}, invalid("tracker: a project edit of %s sets "+
 			"nothing — the name, purpose and owning unit come from the org "+
 			"chart, and the tags are write_project(tags.add)", key)
 	case !authority.Lead && !authority.Operator:
 		return WriteResult{}, fmt.Errorf("tracker: %s's field declarations "+
 			"and default assignee are the project lead's or a person's own — "+
 			"they decide how everybody's work in it is filed, which is not a "+
-			"call one other seat makes for the team", key)
+			"call one other seat makes for the team: %w", key, ErrForbidden)
 	case edit.Archived != nil && !authority.Operator:
 		// NAMED SEPARATELY FROM THE LEAD GATE, because a lead who hit
 		// this one did have authority over the other two facets and
@@ -109,7 +109,7 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 		return WriteResult{}, fmt.Errorf("tracker: archiving %s takes a "+
 			"person's own credential — a project holds the company's tasks, "+
 			"and putting one out of circulation is a decision about the "+
-			"company rather than about how its work is filed", key)
+			"company rather than about how its work is filed: %w", key, ErrForbidden)
 	}
 	if edit.Fields != nil {
 		// BEFORE THE SNAPSHOT, because it is a property of the argument:

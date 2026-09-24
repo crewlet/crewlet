@@ -869,7 +869,7 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 	forType := strings.TrimSpace(q.ForType)
 	if forType != "" && !knownType(out.Types, forType) {
 		return fmt.Errorf("tracker: no type %q — this company files %s: %w",
-			forType, strings.Join(typeSlugs(out.Types), ", "), ErrNoProject)
+			forType, strings.Join(typeSlugs(out.Types), ", "), ErrNoType)
 	}
 
 	fields, _, err := readFieldCatalogue(ctx, tx)

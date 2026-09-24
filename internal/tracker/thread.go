@@ -236,23 +236,23 @@ func askAuthor(ctx context.Context, tx *sql.Tx, task, comment, author string) (s
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", fmt.Errorf("tracker: task %s has no comment %s, so there is "+
-			"nothing for this one to answer", task, comment)
+			"nothing for this one to answer: %w", task, comment, ErrNoComment)
 	case err != nil:
 		return "", fmt.Errorf("tracker: read the ask %s: %w", comment, err)
 	case asked == "":
-		return "", fmt.Errorf("tracker: comment %s on task %s asked nobody a "+
+		return "", invalid("tracker: comment %s on task %s asked nobody a "+
 			"question, so it cannot be answered — `answers` names an open ask",
 			comment, task)
 	case author != "" && asked != author:
 		return "", fmt.Errorf("tracker: comment %s on task %s asked %s rather "+
-			"than %s, and answering it would close somebody else's question",
-			comment, task, asked, author)
+			"than %s, and answering it would close somebody else's question: %w",
+			comment, task, asked, author, ErrForbidden)
 	case removed == 1:
-		return "", fmt.Errorf("tracker: comment %s on task %s was removed",
+		return "", invalid("tracker: comment %s on task %s was removed",
 			comment, task)
 	case resolved == 1 || answered.Valid:
 		return "", fmt.Errorf("tracker: the question in comment %s on task %s "+
-			"is already answered", comment, task)
+			"is already answered: %w", comment, task, ErrAlreadyAnswered)
 	}
 	return wrote, nil
 }

@@ -2,12 +2,14 @@ package builtin_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -232,5 +234,34 @@ func askable() []colleague.Seat {
 	return []colleague.Seat{
 		{Handle: "pm", Name: "Pat Manager", Kind: "agent"},
 		{Handle: "eng", Name: "Evan Engineer", Kind: "agent"},
+	}
+}
+
+// AN ANSWER THE READER REFUSES REACHES THE CALLER AS THAT REFUSAL, classed and
+// in the reader's own words, and posts nothing. It used to arrive as "could
+// not read the tracker … try again": a retry that refused identically, over a
+// sentence that no longer said which comment was wrong.
+func TestAnAnswerToAnAnsweredQuestionIsRefusedAsSuch(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.threadErr = fmt.Errorf("tracker: the question in comment c-1 on task "+
+		"t-1 is already answered: %w", tracker.ErrAlreadyAnswered)
+	reg := workRegistry(t, builtin.WorkDeps{
+		Reader: trk, Writer: trk.as, Seats: askable,
+	})
+	got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
+		"item": "ENG-1", "body": "yes, the second", "answers": "c-1",
+	})
+	if !got.Failed || got.Refusal != tools.RefusalAlreadyAnswered {
+		t.Fatalf("failed %v class %q, want %q: %s", got.Failed, got.Refusal,
+			tools.RefusalAlreadyAnswered, got.Output)
+	}
+	if !strings.Contains(got.Output, "already answered") ||
+		strings.Contains(got.Output, "could not read") {
+		t.Errorf("the refusal reads as a read failure rather than the "+
+			"reader's own sentence: %s", got.Output)
+	}
+	if len(trk.patched) != 0 {
+		t.Error("a refused answer still posted its comment")
 	}
 }

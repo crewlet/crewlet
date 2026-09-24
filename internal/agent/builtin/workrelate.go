@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -115,7 +116,7 @@ func refList(raw any) []string {
 // AT THE TOOL, for the reason [WorkDeps.resolveRef] gives: a relation stores an
 // ID, so a key stored in one resolves to nothing on every node for ever.
 func (d WorkDeps) resolveRefs(ctx context.Context, tool, field string,
-	in setArg) (setArg, string) {
+	in setArg) (setArg, *tools.Result) {
 
 	out := setArg{Whole: in.Whole}
 	for _, group := range []struct {
@@ -126,13 +127,13 @@ func (d WorkDeps) resolveRefs(ctx context.Context, tool, field string,
 	} {
 		for _, ref := range group.from {
 			id, refusal := d.resolveRef(ctx, tool, "`"+field+"`", ref)
-			if refusal != "" {
+			if refusal != nil {
 				return setArg{}, refusal
 			}
 			*group.into = append(*group.into, id)
 		}
 	}
-	return out, ""
+	return out, nil
 }
 
 // dependencyChange composes the two dependency arguments into the sequence's
@@ -144,7 +145,7 @@ func (d WorkDeps) resolveRefs(ctx context.Context, tool, field string,
 // right counterparty. A whole-set gesture that reached the writer as a set
 // would give it no way to tell one from the other.
 func (d WorkDeps) dependencyChange(ctx context.Context, tool string,
-	args map[string]any, task tracker.Task) (tracker.DependencyChange, string) {
+	args map[string]any, task tracker.Task) (tracker.DependencyChange, *tools.Result) {
 
 	change := tracker.DependencyChange{Task: task.ID, Project: task.Project}
 	change.Note = strings.TrimSpace(argString(args, "dependency_note"))
@@ -156,15 +157,15 @@ func (d WorkDeps) dependencyChange(ctx context.Context, tool string,
 		{"waiting_on", waitingOn(task), &change.WaitingOnAdd, &change.WaitingOnRemove},
 		{"blocking", task.Dependents, &change.BlockingAdd, &change.BlockingRemove},
 	} {
-		stated, held, refusal := parseSetArg(args, side.name)
-		if refusal != "" {
-			return change, refusal
+		stated, held, bad := parseSetArg(args, side.name)
+		if bad != "" {
+			return change, refusalOf(failed(bad))
 		}
 		if !held {
 			continue
 		}
 		resolved, refusal := d.resolveRefs(ctx, tool, side.name, stated)
-		if refusal != "" {
+		if refusal != nil {
 			return change, refusal
 		}
 		if !resolved.Whole {
@@ -173,7 +174,7 @@ func (d WorkDeps) dependencyChange(ctx context.Context, tool string,
 		}
 		*side.add, *side.remove = delta(side.have, resolved.Values)
 	}
-	return change, ""
+	return change, nil
 }
 
 // waitingOn is the ids a task's own dependency edges name.
@@ -216,7 +217,7 @@ func delta(have, want []string) (add, remove []string) {
 // page id, and there is no write to the pages family at all — which is why it
 // is a separate argument rather than a `kind` on one list.
 func (d WorkDeps) inertRelations(ctx context.Context, tool string,
-	args map[string]any, task tracker.Task) (*tracker.RelationIntent, string) {
+	args map[string]any, task tracker.Task) (*tracker.RelationIntent, *tools.Result) {
 
 	intent := &tracker.RelationIntent{}
 	touched := false
@@ -228,16 +229,16 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 		{"linked", tracker.RelationLinked, true},
 		{"linked_pages", tracker.RelationPage, false},
 	} {
-		stated, held, refusal := parseSetArg(args, side.name)
-		if refusal != "" {
-			return nil, refusal
+		stated, held, bad := parseSetArg(args, side.name)
+		if bad != "" {
+			return nil, refusalOf(failed(bad))
 		}
 		if !held {
 			continue
 		}
 		if side.resolve {
-			var refusal string
-			if stated, refusal = d.resolveRefs(ctx, tool, side.name, stated); refusal != "" {
+			var refusal *tools.Result
+			if stated, refusal = d.resolveRefs(ctx, tool, side.name, stated); refusal != nil {
 				return nil, refusal
 			}
 		}
@@ -278,7 +279,7 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 	// nothing downstream means.
 	if ref := strings.TrimSpace(argString(args, "duplicate_of")); ref != "" {
 		id, refusal := d.resolveRef(ctx, tool, "`duplicate_of`", ref)
-		if refusal != "" {
+		if refusal != nil {
 			return nil, refusal
 		}
 		touched = true
@@ -287,9 +288,9 @@ func (d WorkDeps) inertRelations(ctx context.Context, tool string,
 		})
 	}
 	if !touched || (len(intent.Add) == 0 && len(intent.Remove) == 0) {
-		return nil, ""
+		return nil, nil
 	}
-	return intent, ""
+	return intent, nil
 }
 
 // othersOfKind is the ids this task's relations of one kind name.
@@ -342,10 +343,10 @@ func (d WorkDeps) parentParty(ctx context.Context, task tracker.Task,
 // refuses the second — and the refusal is the reader's own text, which already
 // names the candidates when the ask is ambiguous.
 func (d WorkDeps) resolveThread(ctx context.Context,
-	q tracker.ThreadQuery) (tracker.ResolvedThread, string) {
+	q tracker.ThreadQuery) (tracker.ResolvedThread, *tools.Result) {
 
 	if d.Reader == nil {
-		return tracker.ResolvedThread{}, unconfiguredText(CommentOnWorkTool)
+		return tracker.ResolvedThread{}, refusalOf(unconfigured(CommentOnWorkTool))
 	}
 	if q.ReplyTo == "" && q.Answers == "" && q.Ask == "" {
 		// NOTHING TO RESOLVE. A top-level remark that asks nobody and
@@ -359,32 +360,66 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 	if err != nil {
 		var ambiguous *tracker.ErrAmbiguousAnswer
 		if errors.As(err, &ambiguous) {
-			return tracker.ResolvedThread{}, ambiguousText(ambiguous)
+			return tracker.ResolvedThread{}, refusalOf(failed(ambiguousText(ambiguous)))
 		}
-		return tracker.ResolvedThread{}, readFailure(CommentOnWorkTool, err)
+		if refusal, ok := answerRefusal(err); ok {
+			return tracker.ResolvedThread{}, refusalOf(refusal)
+		}
+		return tracker.ResolvedThread{}, refusalOf(readFailure(CommentOnWorkTool, err))
 	}
-	return resolved, ""
+	return resolved, nil
+}
+
+// answerRefusal is the reader's refusal of an `answers`, in its own words, or
+// false when the read itself failed.
+//
+// NOT A READ FAILURE, which is what every one of these used to be reported as:
+// a comment that answered a remark, somebody else's question or one already
+// answered was told "could not read the tracker … do not conclude the item
+// does not exist" and to try again — a retry that refused identically, over a
+// sentence that had dropped the one thing the reader said, which comment was
+// wrong and why. Each has its own class because each asks something different
+// of the caller: a mistyped id is not_found, a question that was somebody
+// else's is forbidden, an answered one is already_answered, and a remark or a
+// removed comment is an argument to change.
+func answerRefusal(err error) (tools.Result, bool) {
+	var class tools.Refusal
+	switch {
+	case errors.Is(err, tracker.ErrNoComment):
+		class = tools.RefusalNotFound
+	case errors.Is(err, tracker.ErrForbidden):
+		class = tools.RefusalForbidden
+	case errors.Is(err, tracker.ErrAlreadyAnswered):
+		class = tools.RefusalAlreadyAnswered
+	case errors.Is(err, tracker.ErrInvalid):
+		class = tools.RefusalInvalid
+	default:
+		return tools.Result{}, false
+	}
+	return refused(class, fmt.Sprintf("%s was refused: %v. Nothing was "+
+		"posted — change `answers` (or leave it out) and comment again.",
+		CommentOnWorkTool, err)), true
 }
 
 // inferOnly is the top-level case: no thread to read, but an open ask
 // addressed to this author still closes.
 func (d WorkDeps) inferOnly(ctx context.Context,
-	q tracker.ThreadQuery) (tracker.ResolvedThread, string) {
+	q tracker.ThreadQuery) (tracker.ResolvedThread, *tools.Result) {
 
 	resolved, err := d.Reader.Thread(ctx, q, seatRead)
 	if err != nil {
 		var ambiguous *tracker.ErrAmbiguousAnswer
 		if errors.As(err, &ambiguous) {
-			return tracker.ResolvedThread{}, ambiguousText(ambiguous)
+			return tracker.ResolvedThread{}, refusalOf(failed(ambiguousText(ambiguous)))
 		}
 		// BEST EFFORT ON THIS PATH ALONE. The caller asked for no
 		// answer and named no thread, so a read failure costs an
 		// inference nobody requested — failing their comment for it
 		// would refuse a write for a reason unrelated to what they
 		// asked.
-		return tracker.ResolvedThread{}, ""
+		return tracker.ResolvedThread{}, nil
 	}
-	return resolved, ""
+	return resolved, nil
 }
 
 // ambiguousText is the refusal that lists the open questions, because "which

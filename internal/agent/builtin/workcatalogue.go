@@ -88,7 +88,7 @@ func (t *getWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Level:    seatReadLevel,
 	})
 	if err != nil {
-		return failed(readFailure(tracker.GetWorkCatalogueTool, err)), nil
+		return readFailure(tracker.GetWorkCatalogueTool, err), nil
 	}
 	return jsonResult(answer)
 }
@@ -182,7 +182,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		opID := statelog.NewOpID(time.Now(), "types")
 		result, err := writer.WriteTypes(ctx, opID, types)
 		if err != nil {
-			return failed(writeFailure(actor, tracker.WriteWorkCatalogueTool, err)), nil
+			return writeFailure(actor, tracker.WriteWorkCatalogueTool, err), nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
 			// THE FIELDS WAIT FOR IT: a call answered with one half's
@@ -193,7 +193,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 				next = "The fields were NOT written: the call stopped here, " +
 					"before them. " + next
 			}
-			return failed(unknownWrite(actor, tracker.WriteWorkCatalogueTool,
+			return unknownOutcome(unknownWrite(actor, tracker.WriteWorkCatalogueTool,
 				"the types were written", opID, result.Unvouched, next)), nil
 		}
 		t.deps.settle(ctx, result.Position)
@@ -210,14 +210,14 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		opID := statelog.NewOpID(time.Now(), "fields")
 		result, err := writer.WriteFields(ctx, opID, fields)
 		if err != nil {
-			return failed(writeFailure(actor, tracker.WriteWorkCatalogueTool, err)), nil
+			return writeFailure(actor, tracker.WriteWorkCatalogueTool, err), nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
 			next := restateNext("Read the catalogue with get_work_catalogue")
 			if hasTypes {
 				next = "The types WERE written. " + next
 			}
-			return failed(unknownWrite(actor, tracker.WriteWorkCatalogueTool,
+			return unknownOutcome(unknownWrite(actor, tracker.WriteWorkCatalogueTool,
 				"the fields were written", opID, result.Unvouched, next)), nil
 		}
 		t.deps.settle(ctx, result.Position)

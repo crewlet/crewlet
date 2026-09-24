@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 )
 
-// Callable, Result and Annotations are the MCP package's, reused rather than
+// Callable, Result, Annotations and Refusal are the MCP package's, reused rather than
 // re-declared.
 //
 // Not because MCP is special, but because a second structurally-identical
@@ -32,6 +32,27 @@ type (
 	Result = mcp.Result
 	// Annotations are a tool's behavioural hints, tri-state.
 	Annotations = mcp.Annotations
+	// Refusal is a first-party failure's machine-readable class.
+	Refusal = mcp.Refusal
+)
+
+// The refusal classes, re-exported for the same reason as the types above: a
+// builtin names its class without knowing MCP exists, and one definition is
+// the only way the two spellings cannot drift. See [mcp.Refusal].
+const (
+	RefusalInvalid            = mcp.RefusalInvalid
+	RefusalNotFound           = mcp.RefusalNotFound
+	RefusalForbidden          = mcp.RefusalForbidden
+	RefusalStaleVersion       = mcp.RefusalStaleVersion
+	RefusalConflict           = mcp.RefusalConflict
+	RefusalExists             = mcp.RefusalExists
+	RefusalAlreadyAnswered    = mcp.RefusalAlreadyAnswered
+	RefusalReassignmentBudget = mcp.RefusalReassignmentBudget
+	RefusalInboxFull          = mcp.RefusalInboxFull
+	RefusalNotRunning         = mcp.RefusalNotRunning
+	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
+	RefusalUnavailable        = mcp.RefusalUnavailable
+	RefusalPeerUpgrading      = mcp.RefusalPeerUpgrading
 )
 
 // The tool-origin grammar: who put a tool in front of the agents.

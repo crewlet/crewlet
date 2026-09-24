@@ -86,6 +86,9 @@ func TestTagRenameAndArchiveAreTheLeads(t *testing.T) {
 			if !strings.Contains(err.Error(), "lead") {
 				t.Fatalf("the refusal does not name the lead: %v", err)
 			}
+			if !errors.Is(err, tracker.ErrForbidden) {
+				t.Fatalf("the refusal is %v, want an ErrForbidden", err)
+			}
 			if _, err := r.writer.WriteTags(t.Context(), "op-lead-"+c.name,
 				"ENG", c.edit, tracker.TagAuthority{Lead: true}); err != nil {
 

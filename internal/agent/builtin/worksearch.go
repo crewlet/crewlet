@@ -104,11 +104,12 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// NOT AN EMPTY ANSWER. "There is nothing" is what a model acts
 		// on by filing a duplicate, and the honest answer while a node
 		// is still building its index is that it cannot say yet.
-		return failed("This node is still building its search index, so it " +
-			"cannot answer that yet — it says nothing about whether the work " +
-			"exists. Try again shortly, or narrow it with list_work_items."), nil
+		return refused(tools.RefusalUnavailable, "This node is still building "+
+			"its search index, so it cannot answer that yet — it says nothing "+
+			"about whether the work exists. Try again shortly, or narrow it "+
+			"with list_work_items."), nil
 	case err != nil:
-		return failed(readFailure(tracker.SearchWorkItemsTool, err)), nil
+		return readFailure(tracker.SearchWorkItemsTool, err), nil
 	}
 	return jsonAnswer(map[string]any{
 		"query": text, "matches": hits, "count": len(hits),

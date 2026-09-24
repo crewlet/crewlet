@@ -91,7 +91,7 @@ func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Re
 		Level: seatReadLevel,
 	})
 	if err != nil {
-		return failed(readFailure(tracker.ListWorkViewsTool, err)), nil
+		return readFailure(tracker.ListWorkViewsTool, err), nil
 	}
 	return jsonResult(map[string]any{
 		"count": len(listing.Views), "views": listing.Views,
@@ -233,7 +233,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	opID := opIDFor(actor, t.Name(), "view", id, args)
 	result, err := t.deps.ViewWriter(actor).WriteView(ctx, opID, view)
 	if err != nil {
-		return failed(writeFailure(actor, tracker.SaveWorkViewTool, err)), nil
+		return writeFailure(actor, tracker.SaveWorkViewTool, err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
 		// NEVER THE ID OF A VIEW NOBODY CAN SAY WAS SAVED: handed back to
@@ -242,7 +242,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if container.ID != "" {
 			where += ":" + container.ID
 		}
-		return failed(unknownWrite(actor, tracker.SaveWorkViewTool,
+		return unknownOutcome(unknownWrite(actor, tracker.SaveWorkViewTool,
 			fmt.Sprintf("the view %q was saved", view.Name), opID,
 			result.Unvouched, unknownNext(result.Unvouched,
 				sameCall(actor, tracker.SaveWorkViewTool),

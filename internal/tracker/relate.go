@@ -51,7 +51,7 @@ func (w *Writer) settleRelations(current Task, patch TaskPatch) (TaskPatch, erro
 		// than resolved in some order: one of them is a delta and the
 		// other is the whole set, and whichever won would silently
 		// discard the other.
-		return patch, fmt.Errorf("tracker: this patch on task %s carries both a "+
+		return patch, invalid("tracker: this patch on task %s carries both a "+
 			"relation gesture and a whole relation set — a caller states one "+
 			"or the other", current.ID)
 	}
@@ -91,7 +91,7 @@ func (w *Writer) settleRelations(current Task, patch TaskPatch) (TaskPatch, erro
 func (r *RelationIntent) resolve(current Task) ([]Relation, error) {
 	if r.Set != nil {
 		if len(r.Add) > 0 || len(r.Remove) > 0 || len(r.Final) > 0 {
-			return nil, fmt.Errorf("tracker: a relation gesture on task %s "+
+			return nil, invalid("tracker: a relation gesture on task %s "+
 				"states both a whole set and a delta of %d added and %d "+
 				"removed — a caller states one or the other",
 				current.ID, len(r.Add), len(r.Remove))
@@ -174,20 +174,20 @@ func checkRelations(taskID string, relations []Relation) error {
 	for _, r := range relations {
 		switch {
 		case !r.Kind.Valid():
-			return fmt.Errorf("tracker: task %s carries a relation of kind %q, "+
+			return invalid("tracker: task %s carries a relation of kind %q, "+
 				"and the kinds are: %s", taskID, r.Kind, relationKindList())
 		case r.Other == "":
-			return fmt.Errorf("tracker: task %s carries a %s relation naming no "+
+			return invalid("tracker: task %s carries a %s relation naming no "+
 				"other task", taskID, r.Kind)
 		case r.Other == taskID:
 			// A SELF-EDGE IS REFUSED RATHER THAN DROPPED. As a
 			// `waiting_on` it is a task that blocks itself, which
 			// the dependency table would read as permanently
 			// blocked and no close could ever clear.
-			return fmt.Errorf("tracker: task %s carries a %s relation to itself",
+			return invalid("tracker: task %s carries a %s relation to itself",
 				taskID, r.Kind)
 		case len(r.Note) > MaxRelationNote:
-			return fmt.Errorf("tracker: the note on task %s's %s relation to %s "+
+			return invalid("tracker: the note on task %s's %s relation to %s "+
 				"is %d bytes and the maximum is %d",
 				taskID, r.Kind, r.Other, len(r.Note), MaxRelationNote)
 		}
@@ -198,13 +198,13 @@ func checkRelations(taskID string, relations []Relation) error {
 		other++
 	}
 	if waiting > MaxWaitingOn {
-		return fmt.Errorf("tracker: task %s would wait on %d tasks and the "+
+		return invalid("tracker: task %s would wait on %d tasks and the "+
 			"maximum is %d — a task with more blockers than that is a "+
 			"milestone, and the milestone is the thing to track",
 			taskID, waiting, MaxWaitingOn)
 	}
 	if other > MaxOtherRelations {
-		return fmt.Errorf("tracker: task %s would carry %d links, duplicates "+
+		return invalid("tracker: task %s would carry %d links, duplicates "+
 			"and page references together and the maximum is %d — a set "+
 			"larger than that is a field rather than a relation",
 			taskID, other, MaxOtherRelations)
@@ -223,7 +223,7 @@ func settleDependents(current Task, patch TaskPatch) (TaskPatch, error) {
 		return patch, nil
 	}
 	if patch.Dependents != nil {
-		return patch, fmt.Errorf("tracker: this patch on task %s carries both a "+
+		return patch, invalid("tracker: this patch on task %s carries both a "+
 			"dependent gesture and a whole dependent set — a caller states one "+
 			"or the other", current.ID)
 	}
@@ -234,10 +234,10 @@ func settleDependents(current Task, patch TaskPatch) (TaskPatch, error) {
 	for _, add := range patch.Depend.Add {
 		switch {
 		case add == "":
-			return patch, fmt.Errorf("tracker: a dependent gesture on task %s "+
+			return patch, invalid("tracker: a dependent gesture on task %s "+
 				"names no task", current.ID)
 		case add == current.ID:
-			return patch, fmt.Errorf("tracker: task %s cannot wait on itself",
+			return patch, invalid("tracker: task %s cannot wait on itself",
 				current.ID)
 		case slices.Contains(next, add):
 			continue
@@ -262,7 +262,7 @@ func checkDependents(taskID string, dependents []string) error {
 	if len(dependents) <= MaxDependents {
 		return nil
 	}
-	return fmt.Errorf("tracker: %d tasks would wait on task %s and the maximum "+
+	return invalid("tracker: %d tasks would wait on task %s and the maximum "+
 		"is %d — every one of them is an object a close of this task has to "+
 		"name in its own scope", len(dependents), taskID, MaxDependents)
 }

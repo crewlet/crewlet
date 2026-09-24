@@ -125,10 +125,10 @@ func (t *useSkill) Call(ctx context.Context, args map[string]any) (tools.Result,
 func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	handle := turn.Handle()
 	if handle == "" {
-		return failed("use_skill can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, "use_skill can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
-		return failed("Skill synthesis is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Skill synthesis is not configured on this deployment."), nil
 	}
 	name := strings.TrimSpace(argString(args, "skill_name"))
 	if name == "" {
@@ -139,10 +139,10 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	// gets "you have no skill called that" rather than that agent's skill.
 	sk, found, err := t.skills.Get(ctx, handle, name)
 	if err != nil {
-		return failed(fmt.Sprintf("Could not load %q: %v", clip(name), err)), nil
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not load %q: %v", clip(name), err)), nil
 	}
 	if !found {
-		return failed(t.suggest(ctx, handle, name)), nil
+		return refused(tools.RefusalNotFound, t.suggest(ctx, handle, name)), nil
 	}
 
 	// Recorded BEFORE the content goes out, and its failure ignored: the
@@ -284,10 +284,10 @@ func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	handle := turn.Handle()
 	if handle == "" {
-		return failed("query_episodes can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, "query_episodes can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.episodes == nil {
-		return failed("Episode memory is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Episode memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", t.defaultLimit()), 1, maxEpisodeLimit)
 	outcome := strings.TrimSpace(argString(args, "outcome_filter"))
@@ -318,7 +318,7 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		found, err = t.episodes.Recent(ctx, handle, limit)
 	}
 	if err != nil {
-		return failed(fmt.Sprintf("Could not recall your turns: %v", err)), nil
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not recall your turns: %v", err)), nil
 	}
 	if outcome != "" {
 		found = keepOutcome(found, outcome, limit)
@@ -403,10 +403,10 @@ func (t *refreshMemory) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return failed("refresh_memory " + why), nil
+		return refused(tools.RefusalForbidden, "refresh_memory "+why), nil
 	}
 	if t.diary == nil {
-		return failed("Durable memory is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Durable memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", noteLimit), 1, maxEpisodeLimit)
 
@@ -415,7 +415,7 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	entries, err := t.diary.Recent(ctx, agentID, time.Now().UTC(), limit)
 	if err != nil {
-		return failed(fmt.Sprintf("Could not read your notes: %v", err)), nil
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not read your notes: %v", err)), nil
 	}
 	if len(entries) == 0 {
 		return tools.Result{Output: "You have no durable notes yet."}, nil
@@ -438,8 +438,8 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	agentID, hint string, limit int,
 ) (tools.Result, error) {
 	if t.recall == nil {
-		return failed("This deployment cannot re-filter your notes by " +
-			"relevance — call refresh_memory without `context_hint` for your " +
+		return refused(tools.RefusalUnavailable, "This deployment cannot re-filter your notes by "+
+			"relevance — call refresh_memory without `context_hint` for your "+
 			"most recent ones instead."), nil
 	}
 	take := t.hints.take(turn.RunID, hint, t.hintBudget())
@@ -462,7 +462,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 
 	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint)
 	if err != nil {
-		return failed(fmt.Sprintf("Could not re-filter your notes: %v", err)), nil
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not re-filter your notes: %v", err)), nil
 	}
 	// Kept even when the filter found nothing: "nothing bears on this" is
 	// an answer, and a repeat of the hint would otherwise cost another
@@ -540,10 +540,10 @@ func (t *reflectAndPersist) Call(ctx context.Context, args map[string]any) (tool
 func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return failed("reflect_and_persist " + why), nil
+		return refused(tools.RefusalForbidden, "reflect_and_persist "+why), nil
 	}
 	if t.diary == nil {
-		return failed("Durable memory is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Durable memory is not configured on this deployment."), nil
 	}
 	content := strings.TrimSpace(argString(args, "content"))
 	switch {
@@ -571,7 +571,7 @@ func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		TurnID: turn.RunID, CreatedAt: time.Now().UTC(),
 	}
 	if err := t.diary.Write(ctx, entry); err != nil {
-		return failed(fmt.Sprintf("Could not keep that note: %v", err)), nil
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not keep that note: %v", err)), nil
 	}
 	return tools.Result{Output: "Kept. You will see it in later turns."}, nil
 }
@@ -612,10 +612,10 @@ func (t *markOnboarded) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return failed("mark_onboarded " + why), nil
+		return refused(tools.RefusalForbidden, "mark_onboarded "+why), nil
 	}
 	if t.onboarding == nil {
-		return failed("Onboarding is not configured on this deployment."), nil
+		return refused(tools.RefusalUnavailable, "Onboarding is not configured on this deployment."), nil
 	}
 	// REFUSED, not clipped — the same bound reflect_and_persist enforces on
 	// the same store, by the same rule. This used to clip silently, so the
@@ -639,7 +639,7 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		Summary:   notes,
 	}, time.Now().UTC())
 	if err != nil {
-		return failed(fmt.Sprintf("Could not record that: %v", err)), nil
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("Could not record that: %v", err)), nil
 	}
 	return tools.Result{Output: "Recorded. The onboarding block will not appear again."}, nil
 }

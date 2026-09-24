@@ -113,9 +113,9 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
 	case err != nil:
-		return failed(readFailure(tracker.MoveWorkItemTool, err)), nil
+		return readFailure(tracker.MoveWorkItemTool, err), nil
 	}
 	// THE GATE IS ON THE OPERATION, NOT ON THE STATE IT PRODUCED. An item
 	// already in the target is either this operation's own move answered
@@ -132,7 +132,7 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	} else {
 		lead := t.leads != nil && t.leads(ctx, actor.Record(), before.Task.Project)
 		if !lead && !actor.Kind.Person() {
-			return failed(fmt.Sprintf("Moving %s out of %s is the lead of %s's "+
+			return refused(tools.RefusalForbidden, fmt.Sprintf("Moving %s out of %s is the lead of %s's "+
 				"decision, not yours. Ask them, or say in a comment where it "+
 				"belongs.", before.Task.Key, before.Task.Project,
 				before.Task.Project)), nil
@@ -150,14 +150,14 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Kind: tracker.ChangeMoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	if err != nil {
-		return failed(writeFailure(actor, tracker.MoveWorkItemTool, err)), nil
+		return writeFailure(actor, tracker.MoveWorkItemTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
 		// NEVER A NEW KEY FOR A MOVE NOBODY CAN SAY LANDED: the one this
 		// attempt minted is a gap if the root never moved. See
 		// [unknownWrite], and [mergeWorkItem] for why the seam's contract
 		// is held here.
-		return failed(unknownWrite(actor, tracker.MoveWorkItemTool,
+		return unknownOutcome(unknownWrite(actor, tracker.MoveWorkItemTool,
 			fmt.Sprintf("%s moved to %s", from, target), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, tracker.MoveWorkItemTool),
